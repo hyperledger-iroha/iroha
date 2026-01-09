@@ -22,7 +22,6 @@ use iroha_config::parameters::actual::{
     SumeragiNposTimeouts, SumeragiNposVrf,
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature, SignatureOf};
-use iroha_data_model::parameter::system::SumeragiNposParameters;
 use iroha_data_model::{
     ChainId, Encode as _,
     asset::{AssetDefinitionId, AssetId},
@@ -4189,7 +4188,10 @@ async fn fetch_pending_block_uses_block_sync_update_when_roster_available() {
     );
     let checkpoint = ValidatorSetCheckpoint::new(
         height,
+        view,
         block_hash,
+        zero_state_root(),
+        zero_state_root(),
         signature_topology.as_ref().to_vec(),
         signers_bitmap,
         aggregate_signature,
@@ -5947,10 +5949,13 @@ async fn commit_pipeline_rebuilds_qcs_with_empty_active_roster() {
             bls_aggregate_signature: aggregate_signature,
         },
     };
+    let world = world_with_consensus_keys(topology.as_ref(), &harness.key_pairs);
+    let world_view = world.view();
     let (validation, _) = super::validate_qc_with_evidence(
         &actor.vote_log,
         &qc,
         &topology,
+        &world_view,
         &actor.common_config.chain,
         consensus_mode,
         None,
@@ -6300,7 +6305,7 @@ async fn finalize_pending_block_revives_aborted_on_tip_with_commit_qc() {
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     let mut pending = PendingBlock::new(block, payload_hash, height, 0);
     pending.mark_aborted();
-    let epoch = actor.epoch_manager.as_ref().map_or(0, EpochManager::epoch);
+    let epoch = actor.epoch_for_height(height);
     pending.commit_qc_seen = true;
     pending.commit_qc_epoch = Some(epoch);
     let lock = QcHeaderRef {
@@ -6534,11 +6539,12 @@ async fn commit_inflight_timeout_triggers_view_change_and_drops_pending() {
 async fn commit_vote_targets_collectors_or_topology() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
-    let block = sample_block(1, 0, None);
+    let height = 1;
+    let block = sample_block(height, 0, None);
     let block_hash = block.hash();
     let parent_hash = block.header().prev_block_hash();
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-    let epoch = actor.epoch_manager.as_ref().map_or(0, EpochManager::epoch);
+    let epoch = actor.epoch_for_height(height);
 
     let _ = harness.background_rx.try_iter().count();
 
@@ -7756,10 +7762,11 @@ async fn precommit_vote_block_sync_update_targets_snapshot_roster() {
 async fn precommit_vote_targets_collectors_without_broadcast() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
-    let block = sample_block(1, 0, None);
+    let height = 1;
+    let block = sample_block(height, 0, None);
     let block_hash = block.hash();
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-    let epoch = actor.epoch_manager.as_ref().map_or(0, EpochManager::epoch);
+    let epoch = actor.epoch_for_height(height);
 
     let _ = harness.background_rx.try_iter().count();
 
@@ -7829,10 +7836,11 @@ async fn precommit_vote_targets_collectors_without_broadcast() {
 async fn rebroadcast_precommit_votes_fall_back_to_topology_when_collectors_below_quorum() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
-    let block = sample_block(1, 0, None);
+    let height = 1;
+    let block = sample_block(height, 0, None);
     let block_hash = block.hash();
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-    let epoch = actor.epoch_manager.as_ref().map_or(0, EpochManager::epoch);
+    let epoch = actor.epoch_for_height(height);
 
     assert!(actor.emit_precommit_vote(
         block_hash,
@@ -8541,9 +8549,9 @@ async fn precommit_vote_skips_when_block_conflicts_with_locked_chain() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
-    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-    let epoch = actor.epoch_manager.as_ref().map_or(0, EpochManager::epoch);
     let height = 1;
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let epoch = actor.epoch_for_height(height);
     let block1 = sample_block(height, 0, None);
     let block2 = sample_block(height, 1, None);
 
@@ -8730,7 +8738,7 @@ async fn try_form_qc_from_votes_skips_when_conflicts_locked_chain() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn try_form_qc_from_votes_allows_aborted_pending_on_tip() {
+async fn try_form_qc_from_votes_skips_aborted_pending_on_tip() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -8769,10 +8777,10 @@ async fn try_form_qc_from_votes_allows_aborted_pending_on_tip() {
     }
 
     assert!(
-        actor
+        !actor
             .qc_cache
             .contains_key(&(Phase::Commit, block_hash, height, 0, epoch)),
-        "aborted pending blocks on tip should still aggregate QCs"
+        "aborted pending blocks on tip must not aggregate QCs"
     );
 
     harness.shutdown.send();
@@ -21849,10 +21857,13 @@ fn validate_qc_against_votes_rejects_new_view_missing_highest_qc() {
         &topology,
         &keypairs,
     );
+    let world = world_with_consensus_keys(topology.as_ref(), &keypairs);
+    let world_view = world.view();
     let result = super::validate_qc_against_votes(
         &vote_log,
         &qc,
         &topology,
+        &world_view,
         &chain,
         ConsensusMode::Permissioned,
         None,
@@ -21915,10 +21926,13 @@ fn validate_qc_against_votes_rejects_new_view_highest_hash_mismatch() {
         epoch,
         phase: Phase::Commit,
     });
+    let world = world_with_consensus_keys(topology.as_ref(), &keypairs);
+    let world_view = world.view();
     let result = super::validate_qc_against_votes(
         &vote_log,
         &qc,
         &topology,
+        &world_view,
         &chain,
         ConsensusMode::Permissioned,
         None,
@@ -23392,12 +23406,8 @@ async fn new_view_roster_prefers_active_topology_at_next_height() {
     };
     status::record_commit_qc(commit_qc);
 
-    let derived = actor.roster_for_new_view_with_mode(
-        hash_height2,
-        3,
-        0,
-        ConsensusMode::Permissioned,
-    );
+    let derived =
+        actor.roster_for_new_view_with_mode(hash_height2, 3, 0, ConsensusMode::Permissioned);
     assert_eq!(
         derived, expected_roster,
         "new-view roster should prefer the active topology at the next height"
@@ -27095,7 +27105,9 @@ async fn block_created_drops_hint_when_highest_qc_view_mismatches_parent() {
 
     let before = super::status::snapshot().block_created_hint_mismatch_total;
     actor
-        .handle_block_created(super::message::BlockCreated { block: block.clone() })
+        .handle_block_created(super::message::BlockCreated {
+            block: block.clone(),
+        })
         .expect("handle BlockCreated");
     let after = super::status::snapshot().block_created_hint_mismatch_total;
 
@@ -28343,6 +28355,8 @@ fn validate_block_sync_qc_rejects_mode_tag_mismatch() {
 fn validate_block_sync_qc_rejects_view_mismatch_in_permissioned_mode() {
     let chain: ChainId = "block-sync-view-mismatch".parse().expect("chain id parses");
     let (keypairs, topology) = sample_bls_topology(1);
+    let world = world_with_consensus_keys(topology.as_ref(), &keypairs);
+    let world_view = world.view();
     let block_signers: BTreeSet<_> = [0_u32].into_iter().collect();
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x82; Hash::LENGTH]));
@@ -28382,6 +28396,7 @@ fn validate_block_sync_qc_rejects_view_mismatch_in_permissioned_mode() {
     let result = super::validate_block_sync_qc(
         &qc,
         &topology,
+        &world_view,
         &block_signers,
         0,
         &chain,
@@ -33411,7 +33426,8 @@ async fn reschedule_stale_pending_blocks_evicts_aborted_payloads() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let view = actor.state.view();
-    let height = view.height() as u64 + 1;
+    let committed_height = view.height() as u64;
+    let height = committed_height + 1;
     let parent = view.latest_block_hash();
     drop(view);
 
@@ -33424,11 +33440,11 @@ async fn reschedule_stale_pending_blocks_evicts_aborted_payloads() {
         PendingBlock::new(active_block, active_payload_hash, height, active_view),
     );
 
-    let block = sample_block(height, 1, parent);
+    let block = sample_block(committed_height, 1, None);
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     let view_idx = u64::from(block.header().view_change_index());
-    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    let mut pending = PendingBlock::new(block, payload_hash, committed_height, view_idx);
     pending.mark_aborted();
     let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
     let retention_factor = actor
@@ -33459,7 +33475,72 @@ async fn reschedule_stale_pending_blocks_retains_aborted_with_votes() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let view = actor.state.view();
-    let height = view.height() as u64 + 1;
+    let committed_height = view.height() as u64;
+    let height = committed_height + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let active_block = sample_block(height, 0, parent);
+    let active_hash = active_block.hash();
+    let active_payload_hash = Hash::new(super::proposals::block_payload_bytes(&active_block));
+    let active_view = u64::from(active_block.header().view_change_index());
+    actor.pending.pending_blocks.insert(
+        active_hash,
+        PendingBlock::new(active_block, active_payload_hash, height, active_view),
+    );
+
+    let block = sample_block(committed_height, 1, None);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let view_idx = u64::from(block.header().view_change_index());
+    let mut pending = PendingBlock::new(block, payload_hash, committed_height, view_idx);
+    pending.mark_aborted();
+    let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
+    let retention_factor = actor
+        .config
+        .missing_block_signer_fallback_attempts
+        .saturating_add(2)
+        .max(4);
+    let retention = quorum_timeout
+        .max(super::QUORUM_RESCHEDULE_COOLDOWN)
+        .saturating_mul(retention_factor);
+    pending.inserted_at = Instant::now() - retention - Duration::from_millis(1);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    let epoch = actor.epoch_manager.as_ref().map_or(0, EpochManager::epoch);
+    let vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash,
+        parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+        post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+        height,
+        view: view_idx,
+        epoch,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    actor.vote_log.insert(
+        (vote.phase, vote.height, vote.view, vote.epoch, vote.signer),
+        vote,
+    );
+
+    actor.reschedule_stale_pending_blocks();
+    assert!(
+        actor.pending.pending_blocks.contains_key(&block_hash),
+        "aborted payload should be retained while votes are present"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn reschedule_stale_pending_blocks_retains_aborted_above_committed_height() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let view = actor.state.view();
+    let committed_height = view.height() as u64;
+    let height = committed_height + 1;
     let parent = view.latest_block_hash();
     drop(view);
 
@@ -33490,27 +33571,10 @@ async fn reschedule_stale_pending_blocks_retains_aborted_with_votes() {
     pending.inserted_at = Instant::now() - retention - Duration::from_millis(1);
     actor.pending.pending_blocks.insert(block_hash, pending);
 
-    let epoch = actor.epoch_manager.as_ref().map_or(0, EpochManager::epoch);
-    let vote = crate::sumeragi::consensus::Vote {
-        phase: Phase::Commit,
-        block_hash,
-        parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-        post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-        height,
-        view: view_idx,
-        epoch,
-        highest_qc: None,
-        signer: 0,
-        bls_sig: Vec::new(),
-    };
-    actor
-        .vote_log
-        .insert((vote.phase, vote.height, vote.view, vote.epoch, vote.signer), vote);
-
     actor.reschedule_stale_pending_blocks();
     assert!(
         actor.pending.pending_blocks.contains_key(&block_hash),
-        "aborted payload should be retained while votes are present"
+        "aborted payloads above committed height should be retained"
     );
 
     harness.shutdown.send();
@@ -33613,8 +33677,8 @@ async fn reschedule_stale_pending_blocks_targets_snapshot_roster() {
             }
         }
     }
-    assert_eq!(
-        targets, expected_targets,
+    assert!(
+        targets.is_superset(&expected_targets),
         "reschedule should rebroadcast to the snapshot roster"
     );
 

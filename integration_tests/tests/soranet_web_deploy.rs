@@ -146,9 +146,7 @@ fn public_dns_settings_for_domain(
     records
 }
 
-fn build_manifest_and_plan(
-    payload: &[u8],
-) -> Result<(sorafs_manifest::ManifestV1, CarBuildPlan)> {
+fn build_manifest_and_plan(payload: &[u8]) -> Result<(sorafs_manifest::ManifestV1, CarBuildPlan)> {
     let descriptor = chunker_registry::default_descriptor();
     let plan = CarBuildPlan::single_file_with_profile(payload, descriptor.profile)?;
     let mut car_bytes = Vec::new();
@@ -323,8 +321,13 @@ async fn soranet_webpage_deploy_and_dns_settings() -> Result<()> {
     );
 
     let http = HttpClient::new();
-    let fetched = fetch_payload(&http, &client.torii_url, &manifest_id_hex, payload.len() as u64)
-        .await?;
+    let fetched = fetch_payload(
+        &http,
+        &client.torii_url,
+        &manifest_id_hex,
+        payload.len() as u64,
+    )
+    .await?;
     assert_eq!(fetched, payload, "fetched payload mismatch");
     let fetched_str = String::from_utf8(fetched)?;
     assert!(

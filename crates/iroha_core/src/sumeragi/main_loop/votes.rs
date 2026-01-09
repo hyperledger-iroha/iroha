@@ -198,11 +198,7 @@ impl Actor {
                     signer_peer.clone(),
                     highest,
                 );
-                crate::sumeragi::new_view_stats::note_receipt(
-                    vote.height,
-                    vote.view,
-                    signer_peer,
-                );
+                crate::sumeragi::new_view_stats::note_receipt(vote.height, vote.view, signer_peer);
                 debug!(
                     height = vote.height,
                     view = vote.view,

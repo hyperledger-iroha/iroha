@@ -470,11 +470,10 @@ mod tests {
             1u64,
             to.clone(),
         );
-        let t2 =
-            dm_isi::transfer::Transfer::asset_numeric(AssetId::of(def, from), 2u64, to);
-        let expected = meter_instruction(&InstructionBox::from(dm_isi::transfer::TransferBox::from(
-            t1,
-        )))
+        let t2 = dm_isi::transfer::Transfer::asset_numeric(AssetId::of(def, from), 2u64, to);
+        let expected = meter_instruction(&InstructionBox::from(
+            dm_isi::transfer::TransferBox::from(t1),
+        ))
         .saturating_add(meter_instruction(&InstructionBox::from(
             dm_isi::transfer::TransferBox::from(t2),
         )));
