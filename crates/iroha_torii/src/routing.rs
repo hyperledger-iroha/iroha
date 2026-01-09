@@ -5871,6 +5871,10 @@ pub async fn handle_post_contract_call(
         gas_limit,
     } = req;
 
+    if gas_limit == 0 {
+        return Err(conversion_error("gas_limit must be positive".to_owned()));
+    }
+
     let prepared = prepare_contract_call(&state, &namespace, &contract_id)?;
     let PreparedContractCall {
         code_bytes,
@@ -7132,7 +7136,7 @@ pub struct ContractCallDto {
     /// Optional gas asset id forwarded to transaction metadata.
     #[norito(default)]
     pub gas_asset_id: Option<String>,
-    /// Caller-specified gas limit forwarded to transaction metadata.
+    /// Caller-specified gas limit (must be > 0) forwarded to transaction metadata.
     pub gas_limit: u64,
 }
 

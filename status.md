@@ -1,6 +1,12 @@
 # Status
 
 ## Latest Updates
+- Sumeragi: process highest QC from stale NEW_VIEW votes without advancing view-change tracking, seed missing-block fetch, and add regression coverage.
+- Tests: not run (not requested).
+- IVM gas limits: require `gas_limit > 0` in admission and Torii contract calls, size IVM stacks from effective gas limits (tx, trigger, executor, access/overlay), and update docs/coverage.
+- Tests: not run (not requested).
+- Sumeragi: avoid falling back to mismatched commit-QC history when a parent hash is known for vote roster selection; add regression coverage.
+- Tests: not run (not requested).
 - Sumeragi: require commit quorum for NEW_VIEW gating and drop cached NEW_VIEW entries below the active round height; add regression coverage.
 - Tests: not run (not requested).
 - Docs: add public DNS delegation note to remaining localized devportal deploy guides (Hebrew, Urdu).

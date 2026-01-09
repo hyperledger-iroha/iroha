@@ -1006,9 +1006,8 @@ fn derive_from_ivm_dynamic<R: StateReadOnly>(
     gas_limit: u64,
 ) -> Result<AccessSet, String> {
     // Execute VM with CoreHost to collect queued ISIs; do not apply.
-    let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|e| format!("ivm.metadata: {e}"))?;
-    let stack_gas_limit = crate::smartcontracts::ivm::gas_limit_for_meta(&parsed.metadata);
-    let mut vm = ivm::IVM::new(stack_gas_limit);
+    ivm::ProgramMetadata::parse(bytecode).map_err(|e| format!("ivm.metadata: {e}"))?;
+    let mut vm = ivm::IVM::new(gas_limit);
     // Supply accounts snapshot for vendor helpers to become deterministic.
     let accounts = state_ro.accounts_snapshot();
     let mut host = crate::smartcontracts::ivm::host::CoreHost::with_accounts(
