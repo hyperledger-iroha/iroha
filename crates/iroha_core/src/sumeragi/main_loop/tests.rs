@@ -27161,6 +27161,21 @@ async fn block_created_drops_hint_when_highest_qc_view_mismatches_parent() {
         .expect("store parent block");
     let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
     state.push_block_hash_for_testing(parent.hash());
+    let cached_hint = actor
+        .subsystems
+        .propose
+        .proposal_cache
+        .get_hint(2, 0)
+        .copied()
+        .expect("cached hint");
+    let parent_view = actor
+        .local_block_height_view(parent.hash())
+        .map(|(_, view)| view);
+    eprintln!(
+        "hint_check: {:?}, parent_view: {:?}",
+        Actor::validate_block_against_hint(&block.hash(), &block.header(), &cached_hint, parent_view),
+        parent_view
+    );
 
     let before = super::status::snapshot().block_created_hint_mismatch_total;
     actor
@@ -27168,7 +27183,20 @@ async fn block_created_drops_hint_when_highest_qc_view_mismatches_parent() {
             block: block.clone(),
         })
         .expect("handle BlockCreated");
-    let after = super::status::snapshot().block_created_hint_mismatch_total;
+    let snapshot_after = super::status::snapshot();
+    let after = snapshot_after.block_created_hint_mismatch_total;
+    let session_key = Actor::session_key(
+        &block.hash(),
+        block.header().height().get(),
+        block.header().view_change_index(),
+    );
+    let pending_keys: Vec<_> = actor.pending.pending_blocks.keys().copied().collect();
+    eprintln!(
+        "pending_keys: {:?}, rbc_session: {}, proposal_mismatch_total: {}",
+        pending_keys,
+        actor.subsystems.da_rbc.rbc.sessions.contains_key(&session_key),
+        snapshot_after.block_created_proposal_mismatch_total
+    );
 
     assert!(
         after > before,
