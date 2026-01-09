@@ -333,6 +333,14 @@ node scripts/generate-dns-cutover-plan.mjs \
 
 يسحب المساعد تذكرة التغيير تلقائيا كمدخل TXT ويورث بداية نافذة القطع الى `effective_at` ما لم يتم تجاوزها. للمسار التشغيلي الكامل راجع `docs/source/sorafs_gateway_dns_owner_runbook.md`.
 
+### ملاحظة حول تفويض DNS العام
+
+هيكل zonefile يعرّف فقط سجلات المنطقة الموثوقة. ما زلت بحاجة لضبط تفويض NS/DS للمنطقة الام لدى المسجل او مزود DNS حتى يتمكن الانترنت العام من العثور على خوادم الاسماء.
+
+- لعمليات cutover عند apex/TLD استخدم ALIAS/ANAME (حسب المزود) او انشر سجلات A/AAAA تشير الى عناوين anycast الخاصة بالبوابة.
+- للنطاقات الفرعية، انشر CNAME الى الـ pretty host المشتق (`<fqdn>.gw.sora.name`).
+- المضيف القانوني (`<hash>.gw.sora.id`) يبقى تحت نطاق البوابة ولا يُنشر داخل نطاقك العام.
+
 ### قالب رؤوس البوابة
 
 ينتج مساعد النشر ايضا `portal.gateway.headers.txt` و`portal.gateway.binding.json` وهما artefacts تلبي متطلبات DG-3 لربط محتوى البوابة:

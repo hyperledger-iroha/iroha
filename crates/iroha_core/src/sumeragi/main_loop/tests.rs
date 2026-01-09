@@ -17460,7 +17460,7 @@ fn validate_commit_qc_roster_rejects_invalid_signature() {
 }
 
 #[test]
-fn validate_commit_qc_roster_requires_stake_snapshot_in_npos() {
+fn validate_commit_qc_roster_falls_back_without_stake_snapshot() {
     let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let peer = PeerId::new(kp.public_key().clone());
     let chain: ChainId = "commit-cert-npos-missing-stake"
@@ -17515,14 +17515,9 @@ fn validate_commit_qc_roster_requires_stake_snapshot_in_npos() {
         &world_view,
         &chain,
         super::NPOS_TAG,
-    );
-    assert!(
-        matches!(
-            result,
-            Err(super::RosterValidationError::StakeSnapshotUnavailable)
-        ),
-        "missing stake snapshot should reject NPoS commit certificate"
-    );
+    )
+    .expect("missing stake snapshot should fall back for NPoS commit certificate");
+    assert_eq!(result, vec![cert.validator_set[0].clone()]);
 }
 
 #[test]
@@ -22020,7 +22015,7 @@ fn validate_qc_against_votes_rejects_new_view_highest_hash_mismatch() {
 }
 
 #[test]
-fn validate_qc_against_votes_requires_stake_snapshot_in_npos() {
+fn validate_qc_against_votes_falls_back_without_stake_snapshot() {
     let chain: ChainId = "qc-npos-snapshot-missing".parse().expect("chain id parses");
     let (keypairs, topology) = sample_bls_topology(2);
     let block_hash =
@@ -22059,7 +22054,7 @@ fn validate_qc_against_votes_requires_stake_snapshot_in_npos() {
     };
 
     let vote_log = BTreeMap::new();
-    let result = validate_qc_against_votes_with_keys(
+    let outcome = validate_qc_against_votes_with_keys(
         &vote_log,
         &qc,
         &topology,
@@ -22069,11 +22064,9 @@ fn validate_qc_against_votes_requires_stake_snapshot_in_npos() {
         None,
         super::NPOS_TAG,
         None,
-    );
-    assert_eq!(
-        result,
-        Err(super::QcValidationError::StakeSnapshotUnavailable)
-    );
+    )
+    .expect("missing stake snapshot should fall back for NPoS QC");
+    assert_eq!(outcome.len(), 2);
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -23396,6 +23389,120 @@ async fn new_view_roster_rolls_forward_from_commit_qc_history() {
     assert_eq!(
         derived, expected_roster,
         "new-view roster should roll forward from the latest commit certificate"
+    );
+
+    status::reset_commit_certs_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn new_view_roster_ignores_commit_qc_hash_mismatch() {
+    use crate::sumeragi::status;
+
+    status::reset_commit_certs_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let hash_height1 =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x21; Hash::LENGTH]));
+    let hash_height2 =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x22; Hash::LENGTH]));
+    let hash_height2_alt =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x2A; Hash::LENGTH]));
+    let hash_height3 =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x23; Hash::LENGTH]));
+
+    {
+        let mut hashes = actor.state.block_hashes.block();
+        hashes.push(hash_height1);
+        hashes.push(hash_height2);
+        hashes.commit_for_tests();
+    }
+
+    let roster = actor.effective_commit_topology();
+    let mut signers = BTreeSet::new();
+    for idx in 0..roster.len() {
+        signers.insert(ValidatorIndex::try_from(idx).expect("signer index fits"));
+    }
+    let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let bls_aggregate_signature = aggregate_signature_for_bitmap(
+        &actor.common_config.chain,
+        PERMISSIONED_TAG,
+        Phase::Commit,
+        hash_height2,
+        2,
+        0,
+        0,
+        &signers_bitmap,
+        &topology,
+        &harness.key_pairs,
+    );
+    let commit_qc = Qc {
+        phase: Phase::Commit,
+        subject_block_hash: hash_height2,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: 2,
+        view: 0,
+        epoch: 0,
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&roster),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: roster.clone(),
+        aggregate: QcAggregate {
+            signers_bitmap: signers_bitmap.clone(),
+            bls_aggregate_signature,
+        },
+    };
+    let bls_aggregate_signature_conflict = aggregate_signature_for_bitmap(
+        &actor.common_config.chain,
+        PERMISSIONED_TAG,
+        Phase::Commit,
+        hash_height2_alt,
+        2,
+        1,
+        0,
+        &signers_bitmap,
+        &topology,
+        &harness.key_pairs,
+    );
+    let commit_qc_conflict = Qc {
+        phase: Phase::Commit,
+        subject_block_hash: hash_height2_alt,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: 2,
+        view: 1,
+        epoch: 0,
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&roster),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: roster.clone(),
+        aggregate: QcAggregate {
+            signers_bitmap,
+            bls_aggregate_signature: bls_aggregate_signature_conflict,
+        },
+    };
+    status::record_commit_qc(commit_qc);
+    status::record_commit_qc(commit_qc_conflict);
+
+    let expected_roster = {
+        let mut topo = super::network_topology::Topology::new(roster.clone());
+        topo.block_committed(roster.clone(), hash_height2);
+        let roster_height3 = topo.as_ref().to_vec();
+        let mut topo = super::network_topology::Topology::new(roster_height3.clone());
+        topo.block_committed(roster_height3, hash_height3);
+        topo.as_ref().to_vec()
+    };
+
+    let derived =
+        actor.roster_for_new_view_with_mode(hash_height3, 4, 0, ConsensusMode::Permissioned);
+    assert_eq!(
+        derived, expected_roster,
+        "new-view roster should ignore commit-QC history entries that mismatch the known chain"
     );
 
     status::reset_commit_certs_for_tests();
@@ -28492,7 +28599,7 @@ fn validate_block_sync_qc_rejects_view_mismatch_in_permissioned_mode() {
 }
 
 #[test]
-fn validate_block_sync_qc_requires_stake_snapshot_in_npos() {
+fn validate_block_sync_qc_falls_back_without_stake_snapshot() {
     let chain: ChainId = "block-sync-npos-missing-snapshot"
         .parse()
         .expect("chain id parses");
@@ -28535,7 +28642,7 @@ fn validate_block_sync_qc_requires_stake_snapshot_in_npos() {
         },
     };
 
-    let result = super::validate_block_sync_qc(
+    let (signers, present) = super::validate_block_sync_qc(
         &qc,
         &topology,
         &world_view,
@@ -28546,11 +28653,10 @@ fn validate_block_sync_qc_requires_stake_snapshot_in_npos() {
         None,
         super::NPOS_TAG,
         None,
-    );
-    assert_eq!(
-        result,
-        Err(super::QcValidationError::StakeSnapshotUnavailable)
-    );
+    )
+    .expect("missing stake snapshot should fall back for block sync QC");
+    assert_eq!(signers.len(), 2);
+    assert_eq!(present, 2);
 }
 
 #[test]

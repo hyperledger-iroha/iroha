@@ -17867,7 +17867,28 @@ impl StateTransaction<'_, '_> {
                     .get_original_contract(blob_hash)
                     .expect("INTERNAL BUG: contract is not present")
                     .clone();
-                let mut vm = self.ivm.clone();
+                let parsed = ivm::ProgramMetadata::parse(bytecode.as_ref())
+                    .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+                let meta = parsed.metadata;
+                let pipeline_cap = self.pipeline.ivm_max_cycles_upper_bound;
+                let mut eff_cycles = meta.max_cycles;
+                if eff_cycles == 0 {
+                    eff_cycles = u64::MAX;
+                }
+                if pipeline_cap > 0 {
+                    eff_cycles = eff_cycles.min(pipeline_cap);
+                }
+                if eff_cycles == u64::MAX {
+                    eff_cycles = 0;
+                }
+                let gas_cap_cycles = if eff_cycles == 0 {
+                    meta.max_cycles
+                } else {
+                    eff_cycles
+                };
+                let stack_gas_limit =
+                    crate::smartcontracts::ivm::gas_limit_for_cycles(gas_cap_cycles);
+                let mut vm = ivm::IVM::new(stack_gas_limit);
                 // Attach core IVM host adapter. Stateful syscalls enqueue ISIs
                 // which we collect after `vm.run()` and return as the trigger step.
                 let accounts = self.trigger_accounts_snapshot();
@@ -17884,32 +17905,27 @@ impl StateTransaction<'_, '_> {
                 host.set_crypto_config(self.crypto());
                 host.set_durable_state_snapshot_from_world(&self.world);
                 vm.set_host(host);
-                // Clamp the VM fuel budget using pipeline configuration and the remaining
-                // block-level gas allowance. When the pipeline cap is disabled (`0`),
-                // fall back to the remaining block budget and ultimately to a generous
-                // default so deterministic tests retain a usable gas limit.
-                let pipeline_cap = self.pipeline.ivm_max_cycles_upper_bound;
+                if let Err(e) = vm.load_program(bytecode.as_ref()) {
+                    return Err(ValidationFail::InternalError(e.to_string()).into());
+                }
+                if eff_cycles > 0 {
+                    vm.set_max_cycles(eff_cycles);
+                }
+                // Clamp the VM gas budget using the cycle-derived ceiling and remaining block
+                // allowance. If both caps are disabled, fall back to a deterministic default.
                 let remaining_block_budget = if self.gas_limit_per_block == 0 {
-                    DEFAULT_TRIGGER_GAS_LIMIT
+                    u64::MAX
                 } else {
                     self.gas_limit_per_block
                         .saturating_sub(self.gas_used_in_block_so_far)
                 };
-                let gas_limit = if pipeline_cap == 0 && self.gas_limit_per_block == 0 {
-                    DEFAULT_TRIGGER_GAS_LIMIT
-                } else if pipeline_cap == 0 {
-                    remaining_block_budget
-                } else if remaining_block_budget == 0 {
-                    0
-                } else {
-                    core::cmp::min(pipeline_cap, remaining_block_budget)
-                };
-                vm.set_gas_limit(gas_limit);
-                if let Err(e) = vm.load_program(bytecode.as_ref()) {
-                    return Err(ValidationFail::InternalError(e.to_string()).into());
+                let mut gas_limit = stack_gas_limit.min(remaining_block_budget);
+                if gas_limit == u64::MAX {
+                    gas_limit = DEFAULT_TRIGGER_GAS_LIMIT;
                 }
+                vm.set_gas_limit(gas_limit);
                 if let Err(e) = vm.run() {
-                    return Err(ValidationFail::InternalError(e.to_string()).into());
+                    return Err(crate::smartcontracts::ivm::map_vm_error_to_validation(e).into());
                 }
                 // Collect queued ISIs from the host, execute them via the executor,
                 // and return them as the step.
@@ -27836,7 +27852,7 @@ mod tests {
     }
 
     #[test]
-    fn ivm_trigger_respects_pipeline_gas_cap() {
+    fn ivm_trigger_respects_pipeline_cycle_cap() {
         use iroha_data_model::{
             events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter},
             transaction::{Executable, IvmBytecode},
@@ -27900,8 +27916,8 @@ mod tests {
             .execute_called_trigger(&trigger_id, &evt)
             .expect_err("trigger should exhaust the configured gas budget");
         match err {
-            TransactionRejectionReason::Validation(ValidationFail::InternalError(msg)) => {
-                assert!(msg.contains("out of gas"), "unexpected error: {msg}");
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg)) => {
+                assert!(msg.contains("max cycles"), "unexpected error: {msg}");
             }
             other => panic!("unexpected rejection: {other:?}"),
         }

@@ -46,7 +46,10 @@ use mv::storage::StorageReadOnly;
 use norito::{codec::Encode as NoritoEncode, streaming::CapabilityFlags};
 
 use crate::{
-    executor::{ensure_asset_definition_registration_allowed, extract_register_asset_definition},
+    executor::{
+        ensure_asset_definition_registration_allowed, extract_register_asset_definition,
+        parse_gas_limit,
+    },
     smartcontracts::{
         code,
         isi::settlement::{admission_validate_dvp, admission_validate_pvp},
@@ -199,6 +202,30 @@ fn apply_streaming_metadata(
     if let Some(flags) = metadata.negotiated {
         host.record_negotiated_caps_snapshot(flags);
     }
+}
+
+fn require_tx_gas_limit(tx: &SignedTransaction) -> Result<u64, OverlayBuildError> {
+    let gas_limit = parse_gas_limit(tx.metadata()).map_err(|err| {
+        let message = match err {
+            ValidationFail::NotPermitted(msg) => msg,
+            other => other.to_string(),
+        };
+        OverlayBuildError::GasLimit(message)
+    })?;
+    gas_limit.ok_or_else(|| {
+        OverlayBuildError::GasLimit("missing gas_limit in transaction metadata".to_owned())
+    })
+}
+
+#[cfg(test)]
+const TEST_GAS_LIMIT: u64 = 50_000_000;
+
+#[cfg(test)]
+fn insert_gas_limit(metadata: &mut iroha_data_model::metadata::Metadata) {
+    metadata.insert(
+        Name::from_str("gas_limit").expect("static gas_limit key"),
+        iroha_primitives::json::Json::new(TEST_GAS_LIMIT),
+    );
 }
 
 #[cfg(test)]
@@ -567,6 +594,7 @@ pub fn build_overlay_for_transaction_with_cache<R: StateReadOnly>(
                 bytecode.as_ref(),
             )?;
             validate_contract_binding(state_ro, tx, &summary)?;
+            let gas_limit = require_tx_gas_limit(tx)?;
 
             // Run CoreHost to collect queued ISIs
             // Snapshot of accounts for deterministic helpers
@@ -605,10 +633,7 @@ pub fn build_overlay_for_transaction_with_cache<R: StateReadOnly>(
             host.set_crypto_config(state_ro.crypto());
             host.set_chain_id(state_ro.chain_id());
             vm.set_host(host);
-            let gas_limit = crate::smartcontracts::ivm::gas_limit_for_meta(&meta);
-            if gas_limit > 0 {
-                vm.set_gas_limit(gas_limit);
-            }
+            vm.set_gas_limit(gas_limit);
             run_vm(&mut vm)?;
             let (mut queued, transport_caps_snapshot, negotiated_caps_snapshot) = if let Some(h) =
                 vm.host_mut_any()
@@ -706,9 +731,9 @@ pub fn build_overlay_for_transaction_with_accounts(
                 code_offset,
                 bytecode.as_ref(),
             )?;
-
-            let gas_limit = crate::smartcontracts::ivm::gas_limit_for_meta(&meta);
-            let mut vm = ivm::IVM::new(gas_limit);
+            let tx_gas_limit = require_tx_gas_limit(tx)?;
+            let stack_gas_limit = crate::smartcontracts::ivm::gas_limit_for_meta(&meta);
+            let mut vm = ivm::IVM::new(stack_gas_limit);
             let mut host = crate::smartcontracts::ivm::host::CoreHost::with_accounts(
                 tx.authority().clone(),
                 Arc::new(accounts.to_vec()),
@@ -717,9 +742,7 @@ pub fn build_overlay_for_transaction_with_accounts(
             vm.set_host(host);
             vm.load_program(bytecode.as_ref())
                 .map_err(OverlayBuildError::IvmLoad)?;
-            if gas_limit > 0 {
-                vm.set_gas_limit(gas_limit);
-            }
+            vm.set_gas_limit(tx_gas_limit);
             run_vm(&mut vm)?;
             let mut queued = if let Some(h) = vm.host_mut_any()
                 && let Some(host) = h.downcast_mut::<crate::smartcontracts::ivm::host::CoreHost>()
@@ -779,8 +802,9 @@ pub(crate) fn build_overlay_for_transaction_with_accounts_zk<R: StateReadOnly>(
                 code_offset,
                 bytecode.as_ref(),
             )?;
-            let gas_limit = crate::smartcontracts::ivm::gas_limit_for_meta(&meta);
-            let mut vm = ivm::IVM::new(gas_limit);
+            let tx_gas_limit = require_tx_gas_limit(tx)?;
+            let stack_gas_limit = crate::smartcontracts::ivm::gas_limit_for_meta(&meta);
+            let mut vm = ivm::IVM::new(stack_gas_limit);
             let mut host = crate::smartcontracts::ivm::host::CoreHost::with_accounts(
                 tx.authority().clone(),
                 Arc::new(accounts.to_vec()),
@@ -810,9 +834,7 @@ pub(crate) fn build_overlay_for_transaction_with_accounts_zk<R: StateReadOnly>(
             vm.set_host(host);
             vm.load_program(bytecode.as_ref())
                 .map_err(OverlayBuildError::IvmLoad)?;
-            if gas_limit > 0 {
-                vm.set_gas_limit(gas_limit);
-            }
+            vm.set_gas_limit(tx_gas_limit);
             run_vm(&mut vm)?;
             let (mut queued, transport_caps_snapshot, negotiated_caps_snapshot) = if let Some(h) =
                 vm.host_mut_any()
@@ -901,6 +923,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             }
             // Compute effective cycle cap before VM creation so the stack limit uses the
             // same gas-derived ceiling.
+            let tx_gas_limit = require_tx_gas_limit(tx)?;
             let mut eff = meta.max_cycles;
             if eff == 0 {
                 eff = u64::MAX;
@@ -915,8 +938,8 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                 eff = 0; // no cap
             }
             let gas_cap = if eff == 0 { meta.max_cycles } else { eff };
-            let gas_limit = crate::smartcontracts::ivm::gas_limit_for_cycles(gas_cap);
-            let mut vm = ivm::IVM::new(gas_limit);
+            let stack_gas_limit = crate::smartcontracts::ivm::gas_limit_for_cycles(gas_cap);
+            let mut vm = ivm::IVM::new(stack_gas_limit);
             let mut host = crate::smartcontracts::ivm::host::CoreHost::with_accounts(
                 tx.authority().clone(),
                 Arc::new(accounts.to_vec()),
@@ -928,9 +951,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             if eff > 0 {
                 vm.set_max_cycles(eff);
             }
-            if gas_limit > 0 {
-                vm.set_gas_limit(gas_limit);
-            }
+            vm.set_gas_limit(tx_gas_limit);
             // Run with a simple wall-clock budget check (post-hoc reject).
             #[cfg(feature = "telemetry")]
             let t_start = std::time::Instant::now();
@@ -1026,6 +1047,7 @@ mod tests_overlay_manifest {
         }
         .signed(&kp);
         let mut md = iroha_data_model::metadata::Metadata::default();
+        insert_gas_limit(&mut md);
         md.insert(
             iroha_data_model::smart_contract::manifest::MANIFEST_METADATA_KEY
                 .parse::<iroha_data_model::name::Name>()
@@ -1113,6 +1135,41 @@ mod tests {
     fn empty_overlay_is_noop() {
         let ovl = TxOverlay::default();
         assert!(ovl.is_empty());
+    }
+
+    #[test]
+    fn overlay_rejects_ivm_without_gas_limit() {
+        use iroha_crypto::KeyPair;
+        use iroha_data_model::{
+            account::Account,
+            domain::Domain,
+            prelude::{AccountId, IvmBytecode, TransactionBuilder},
+        };
+
+        let (program, _header_len, _meta) = sample_program();
+        let kp = KeyPair::random();
+        let authority = AccountId::new(
+            "wonderland".parse().expect("domain"),
+            kp.public_key().clone(),
+        );
+        let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let world = crate::state::World::with([domain], [account], []);
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query_handle = crate::query::store::LiveQueryStore::start_test();
+        let state =
+            crate::state::State::new_with_chain(world, kura, query_handle, ChainId::from("chain"));
+
+        let tx = TransactionBuilder::new(state.chain_id.clone(), authority)
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
+            .sign(kp.private_key());
+
+        let err = build_overlay_for_transaction(&tx, &state.view())
+            .expect_err("overlay should require gas_limit metadata");
+        assert!(matches!(
+            err,
+            OverlayBuildError::GasLimit(msg) if msg.contains("missing gas_limit")
+        ));
     }
 
     fn sample_program() -> (Vec<u8>, usize, ivm::ProgramMetadata) {
@@ -1216,6 +1273,7 @@ mod tests {
             Name::from_str("contract_id").expect("static name"),
             Json::new(contract_id.clone()),
         );
+        insert_gas_limit(&mut metadata);
 
         let tx = TransactionBuilder::new(state.chain_id.clone(), authority)
             .with_metadata(metadata)
@@ -1483,7 +1541,10 @@ mod tests {
             "expected empty AXT policy snapshot"
         );
 
+        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        insert_gas_limit(&mut metadata);
         let tx = TransactionBuilder::new(state.chain_id.clone(), authority)
+            .with_metadata(metadata)
             .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
             .sign(kp.private_key());
 
@@ -1763,7 +1824,10 @@ mod tests {
         );
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
 
+        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        insert_gas_limit(&mut metadata);
         let tx = TransactionBuilder::new(state.chain_id.clone(), authority)
+            .with_metadata(metadata)
             .with_executable(Executable::Ivm(
                 iroha_data_model::prelude::IvmBytecode::from_compiled(program),
             ))
@@ -1816,7 +1880,10 @@ mod tests {
         program.extend_from_slice(&[0x62, 0x00, 0x00, 0x00]);
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
 
+        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        insert_gas_limit(&mut metadata);
         let tx = TransactionBuilder::new(state.chain_id.clone(), authority)
+            .with_metadata(metadata)
             .with_executable(Executable::Ivm(
                 iroha_data_model::prelude::IvmBytecode::from_compiled(program),
             ))
@@ -1898,8 +1965,10 @@ mod tests {
         use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, load_sample_ivm};
 
         let chain: ChainId = "chain".parse().expect("valid chain id");
+        let mut metadata = Metadata::default();
+        insert_gas_limit(&mut metadata);
         let tx = TransactionBuilder::new(chain, ALICE_ID.clone())
-            .with_metadata(Metadata::default())
+            .with_metadata(metadata)
             .with_executable(Executable::Ivm(load_sample_ivm(
                 "smart_contract_can_filter_queries",
             )))
@@ -1923,10 +1992,7 @@ mod tests {
         );
         vm.set_host(host);
         vm.load_program(&bytes).expect("program loads");
-        let gas_limit = crate::smartcontracts::ivm::gas_limit_for_meta(&parsed.metadata);
-        if gas_limit > 0 {
-            vm.set_gas_limit(gas_limit);
-        }
+        vm.set_gas_limit(TEST_GAS_LIMIT);
         if let Err(err) = vm.run() {
             let code_bytes = vm.memory.read_code_bytes();
             let original_code = bytes[parsed.header_len..].to_vec();
@@ -2046,6 +2112,8 @@ pub enum OverlayBuildError {
     IvmHeaderParse,
     /// IVM header violated node policy (structured admission error).
     HeaderPolicy(IvmAdmissionError),
+    /// Missing or invalid `gas_limit` transaction metadata.
+    GasLimit(String),
     /// Loading the program into the VM failed.
     IvmLoad(IvmError),
     /// Running the VM to collect queued ISIs failed.
@@ -2063,6 +2131,7 @@ impl core::fmt::Display for OverlayBuildError {
         match self {
             OverlayBuildError::IvmHeaderParse => write!(f, "IVM header parse error"),
             OverlayBuildError::HeaderPolicy(e) => write!(f, "header policy: {e:?}"),
+            OverlayBuildError::GasLimit(msg) => write!(f, "{msg}"),
             OverlayBuildError::IvmLoad(e) => write!(f, "ivm.load_program: {e}"),
             OverlayBuildError::IvmRun(e) => write!(f, "ivm.run: {e}"),
             OverlayBuildError::AxtReject(ctx) => write!(f, "axt_reject: {ctx}"),

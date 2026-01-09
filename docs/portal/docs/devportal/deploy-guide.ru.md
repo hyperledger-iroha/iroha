@@ -332,6 +332,19 @@ Workflow GitHub Actions читает эти значения из secrets реп
 
 Helper автоматически переносит change ticket в TXT запись и наследует начало cutover window как `effective_at`, если не указано иное. Полный operational workflow см. в `docs/source/sorafs_gateway_dns_owner_runbook.md`.
 
+### Примечание о публичной DNS-делегации
+
+Скелет zonefile определяет только авторитативные записи зоны. Делегацию NS/DS
+родительской зоны нужно настроить у регистратора или DNS-провайдера, чтобы
+обычный интернет мог найти ваши nameserver'ы.
+
+- Для cutover на apex/TLD используйте ALIAS/ANAME (зависит от провайдера) или
+  публикуйте записи A/AAAA, указывающие на anycast-IP gateway.
+- Для поддоменов публикуйте CNAME на derived pretty host
+  (`<fqdn>.gw.sora.name`).
+- Канонический хост (`<hash>.gw.sora.id`) остается в домене gateway и не
+  публикуется в вашей публичной зоне.
+
 ### Шаблон заголовков gateway
 
 Deploy helper также генерирует `portal.gateway.headers.txt` и `portal.gateway.binding.json` - два артефакта, удовлетворяющие DG-3 требованиям gateway-content-binding:
