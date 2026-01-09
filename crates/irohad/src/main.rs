@@ -796,7 +796,7 @@ impl NetworkRelay {
                 (
                     "BlockCreated",
                     Some(header.height().get()),
-                    Some(u64::from(header.view_change_index())),
+                    Some(header.view_change_index()),
                 )
             }
             BlockSyncUpdate(block) => {
@@ -804,7 +804,7 @@ impl NetworkRelay {
                 (
                     "BlockSyncUpdate",
                     Some(header.height().get()),
-                    Some(u64::from(header.view_change_index())),
+                    Some(header.view_change_index()),
                 )
             }
             ConsensusParams(_) => ("ConsensusParams", None, None),
@@ -2929,7 +2929,7 @@ description = "lane overrides should be rejected when nexus is disabled"
     }
 
     const NEXUS_DEFAULTS_BLAKE2B: &str =
-        "039d3449a1528725faf8c126a43cb638525b08d9d4843e57697a92d999db9467";
+        "f1d56560c232c8be7f45e43acd99a38436b39baf3fc30e176097fc5fa49acccf";
 
     fn file_blake2b_hex(path: &Path) -> String {
         let bytes = std::fs::read(path).expect("read file");
@@ -3111,7 +3111,7 @@ description = "lane overrides should be rejected when nexus is disabled"
             .iter()
             .map(|entry| entry.alias.as_str())
             .collect();
-        assert_eq!(dataspace_aliases, ["global", "governance", "zk"]);
+        assert_eq!(dataspace_aliases, ["universal", "governance", "zk"]);
         assert!(nexus_topology_is_custom(&config.nexus));
         assert!(should_use_config_router(&config.nexus));
     }
@@ -3159,7 +3159,7 @@ description = "lane overrides should be rejected when nexus is disabled"
             .iter()
             .map(|entry| entry.alias.as_str())
             .collect();
-        assert_eq!(dataspace_aliases, ["global", "governance", "zk"]);
+        assert_eq!(dataspace_aliases, ["universal", "governance", "zk"]);
     }
 
     #[test]
@@ -3220,7 +3220,7 @@ description = "lane overrides should be rejected when nexus is disabled"
             .iter()
             .map(|entry| entry.alias.as_str())
             .collect();
-        assert_eq!(dataspace_aliases, ["global", "governance", "zk"]);
+        assert_eq!(dataspace_aliases, ["universal", "governance", "zk"]);
     }
 
     #[test]

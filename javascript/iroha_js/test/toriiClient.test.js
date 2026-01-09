@@ -13908,6 +13908,24 @@ test("callContract posts payload metadata and normalizes response", async () => 
   });
 });
 
+test("callContract rejects missing gasLimit", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("fetch should not be invoked");
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.callContract({
+        authority: "alice@wonderland",
+        privateKey: "ed25519:deadbeef",
+        namespace: "apps",
+        contractId: "calc",
+      }),
+    /contractCall\.gasLimit/,
+  );
+});
+
 test("callContract rejects non-object options", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {

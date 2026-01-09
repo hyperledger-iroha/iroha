@@ -12,11 +12,12 @@ pub mod host;
 /// enabled, charging one unit of gas per padded cycle in addition to the
 /// per‑instruction gas schedule. To ensure padding cannot exhaust gas after
 /// executing costlier instructions, use the worst-case instruction cost as the
-/// multiplier.
+/// multiplier. A zero cycle limit means "uncapped", so return an effectively
+/// unbounded gas budget.
 #[must_use]
 pub fn gas_limit_for_cycles(cycles: u64) -> u64 {
     if cycles == 0 {
-        0
+        u64::MAX
     } else {
         cycles.saturating_mul(ivm::gas::max_instruction_cost())
     }
@@ -26,4 +27,34 @@ pub fn gas_limit_for_cycles(cycles: u64) -> u64 {
 #[must_use]
 pub fn gas_limit_for_meta(meta: &ivm::ProgramMetadata) -> u64 {
     gas_limit_for_cycles(meta.max_cycles)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gas_limit_for_cycles_zero_is_unbounded() {
+        assert_eq!(gas_limit_for_cycles(0), u64::MAX);
+    }
+
+    #[test]
+    fn gas_limit_for_cycles_scales_by_max_instruction_cost() {
+        let cost = ivm::gas::max_instruction_cost();
+        assert_eq!(gas_limit_for_cycles(1), cost);
+        assert_eq!(gas_limit_for_cycles(2), cost.saturating_mul(2));
+    }
+
+    #[test]
+    fn gas_limit_for_meta_uses_cycle_budget() {
+        let meta = ivm::ProgramMetadata {
+            version_major: 1,
+            version_minor: 0,
+            mode: 0,
+            vector_length: 0,
+            max_cycles: 0,
+            abi_version: 1,
+        };
+        assert_eq!(gas_limit_for_meta(&meta), u64::MAX);
+    }
 }

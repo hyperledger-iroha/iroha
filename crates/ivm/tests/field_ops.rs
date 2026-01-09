@@ -1,6 +1,6 @@
 use ivm::{IVM, encoding, field, instruction};
 mod common;
-use common::assemble;
+use common::assemble_zk;
 
 const HALT: [u8; 4] = encoding::wide::encode_halt().to_le_bytes();
 
@@ -20,7 +20,7 @@ fn test_field_arithmetic() {
     let finv = encoding::wide::encode_rr(instruction::wide::zk::FINV, 6, 2, 0);
     prog.extend_from_slice(&finv.to_le_bytes());
     prog.extend_from_slice(&HALT); // HALT
-    let prog = assemble(&prog);
+    let prog = assemble_zk(&prog, 32);
     vm.load_program(&prog).unwrap();
     vm.run().expect("field ops");
     let expected_add = field::add(base, 5);
@@ -42,7 +42,7 @@ fn test_assert_range() {
     let mut prog = Vec::new();
     prog.extend_from_slice(&instr.to_le_bytes());
     prog.extend_from_slice(&HALT);
-    let prog = assemble(&prog);
+    let prog = assemble_zk(&prog, 16);
     vm.load_program(&prog).unwrap();
     vm.run().expect("range pass");
     // failing case
@@ -51,7 +51,7 @@ fn test_assert_range() {
     let mut prog2 = Vec::new();
     prog2.extend_from_slice(&instr.to_le_bytes());
     prog2.extend_from_slice(&HALT);
-    let prog2 = assemble(&prog2);
+    let prog2 = assemble_zk(&prog2, 16);
     vm2.load_program(&prog2).unwrap();
     let res = vm2.run();
     assert!(matches!(res, Err(ivm::VMError::AssertionFailed)));

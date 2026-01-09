@@ -36,14 +36,16 @@ lane_count = 2
 index = 0
 alias = "core"
 description = "Primary execution lane"
+dataspace = "universal"
 
 [[nexus.lane_catalog]]
 index = 1
 alias = "governance"
 description = "Governance lane"
+dataspace = "governance"
 
 [[nexus.dataspace_catalog]]
-alias = "global"
+alias = "universal"
 id = 0
 description = "Single-lane data space"
 
@@ -54,7 +56,7 @@ description = "Governance dataspace"
 
 [nexus.routing_policy]
 default_lane = 0
-default_dataspace = "global"
+default_dataspace = "universal"
 
 [[nexus.routing_policy.rules]]
 lane = 1
@@ -114,4 +116,3 @@ fn kura_prepares_multilane_storage_layout() -> Result<()> {
 
     Ok(())
 }
-

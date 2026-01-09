@@ -2695,7 +2695,7 @@ impl IVM {
             // Stop the loop if HALT was executed. When a cycle limit is set we
             // continue executing even after a failed assertion so the trace
             // length is independent of witness values.
-            if unlikely(self.halted || (self.max_cycles == 0 && self.constraint_failed)) {
+            if unlikely(self.halted || (!self.zk_mode && self.constraint_failed)) {
                 break;
             }
             // Gracefully stop exactly at end of code: treat as end-of-stream.
@@ -4647,9 +4647,6 @@ impl IVM {
                     continue;
                 }
                 instruction::wide::zk::ASSERT => {
-                    if unlikely(!self.zk_mode) {
-                        return Err(VMError::ZkExtensionDisabled);
-                    }
                     let rs = instruction::wide::rs1(instr);
                     self.constraints.record(Constraint::Zero {
                         reg: rs,
@@ -4664,9 +4661,6 @@ impl IVM {
                     continue;
                 }
                 instruction::wide::zk::ASSERT_EQ => {
-                    if unlikely(!self.zk_mode) {
-                        return Err(VMError::ZkExtensionDisabled);
-                    }
                     let rs1 = instruction::wide::rs1(instr);
                     let rs2 = instruction::wide::rs2(instr);
                     self.constraints.record(Constraint::Eq {
@@ -4800,7 +4794,7 @@ impl IVM {
         }
         // If we exit the loop early, pad the trace so that prover and verifier
         // observe exactly `max_cycles` steps when zero‑knowledge mode is enabled.
-        if self.max_cycles != 0 && self.cycles < self.max_cycles {
+        if self.zk_mode && self.max_cycles != 0 && self.cycles < self.max_cycles {
             // Append dummy cycles (treated as NOPs) until the target length is
             // reached. Each padded cycle still costs one unit of gas.
             let remaining = self.max_cycles - self.cycles;

@@ -15358,13 +15358,11 @@ function normalizeContractCallRequest(input) {
     );
   }
   const gasLimit = record.gas_limit ?? record.gasLimit;
-  if (gasLimit !== undefined && gasLimit !== null) {
-    normalized.gas_limit = ToriiClient._normalizeUnsignedInteger(
-      gasLimit,
-      "contractCall.gasLimit",
-      { allowZero: true },
-    );
-  }
+  normalized.gas_limit = ToriiClient._normalizeUnsignedInteger(
+    gasLimit,
+    "contractCall.gasLimit",
+    { allowZero: true },
+  );
   return normalized;
 }
 

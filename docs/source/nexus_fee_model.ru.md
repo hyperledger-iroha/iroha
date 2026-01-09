@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/nexus_fee_model.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e02872dbcb6d92d8be4d40fc2864f28fc6564391640a6ea67768a1f837b57e0f
-source_last_modified: "2025-11-15T20:09:59.438546+00:00"
-translation_last_reviewed: 2026-01-01
+source_hash: 532c57a0dae54224af0d30640edf8a3cbc8ac9a1df7d73b563bd16c3a635aec1
+source_last_modified: "2026-01-08T19:45:50.411145+00:00"
+translation_last_reviewed: 2026-01-08
 ---
 
 # Обновления модели комиссий Nexus
@@ -21,6 +21,10 @@ translation_last_reviewed: 2026-01-01
   `liquidity_profile` (`tier1`, `tier2`, или `tier3`) и `volatility_class` (`stable`, `elevated`,
   `dislocated`). Эти флаги подаются в settlement router, чтобы итоговая XOR котировка совпадала с
   каноническим TWAP и haircut tier для lane.
+- Транзакции IVM должны содержать метаданные `gas_limit` (`u64`), чтобы ограничить риск по комиссиям.
+  Эндпоинт `/v1/contracts/call` требует `gas_limit` явно, а некорректные значения отклоняются.
+- Когда транзакция задает метаданные `fee_sponsor`, спонсор должен выдать вызывающему
+  `CanUseFeeSponsor { sponsor }`. Попытки спонсирования без разрешения отклоняются и фиксируются.
 - Каждая транзакция, оплачивающая gas, записывает `LaneSettlementReceipt`. Каждый receipt хранит
   source identifier, переданный вызывающей стороной, локальную micro-amount, XOR к немедленной оплате,
   XOR после haircut, реализованный safety margin (`xor_variance_micro`) и timestamp блока в

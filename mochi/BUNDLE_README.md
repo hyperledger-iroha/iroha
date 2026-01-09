@@ -103,23 +103,23 @@ lane_count = 3
 [[nexus.lane_catalog]]
 index = 0
 alias = "core"
-dataspace = "global"
+dataspace = "universal"
 visibility = "public"
 
 [[nexus.lane_catalog]]
 index = 1
 alias = "governance"
-dataspace = "global"
+dataspace = "universal"
 visibility = "restricted"
 
 [[nexus.lane_catalog]]
 index = 2
 alias = "zk"
-dataspace = "global"
+dataspace = "universal"
 visibility = "restricted"
 
 [[nexus.dataspace_catalog]]
-alias = "global"
+alias = "universal"
 id = 0
 
 [sumeragi]

@@ -3094,7 +3094,7 @@ pub struct BlockSummary {
     /// Number of validator signatures attached to the block.
     pub signature_count: usize,
     /// View change index recorded by Sumeragi.
-    pub view_change_index: u32,
+    pub view_change_index: u64,
     /// Unix timestamp of block creation in milliseconds.
     pub creation_time_ms: u64,
     /// Whether the block is the genesis block.
@@ -5287,7 +5287,7 @@ mod tests {
         let witness = ExecWitnessMsg {
             block_hash: block.hash(),
             height: header.height().get(),
-            view: u64::from(header.view_change_index()),
+            view: header.view_change_index(),
             epoch: 0,
             witness: ExecWitness {
                 reads: Vec::new(),

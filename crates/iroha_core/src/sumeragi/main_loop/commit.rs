@@ -1124,6 +1124,7 @@ impl Actor {
                             lock,
                             proposer_idx,
                             pending_view,
+                            lock.epoch,
                         );
                         let reason = error.to_string();
                         let evidence = invalid_proposal_evidence(proposal, reason);
@@ -4415,7 +4416,7 @@ mod tests {
         query::store::LiveQueryStore,
         state::{State, StateReadOnly, World},
     };
-    use iroha_crypto::{Algorithm, Hash, KeyPair, Signature, SignatureOf};
+    use iroha_crypto::{Algorithm, Hash, KeyPair, MerkleTree, Signature, SignatureOf};
     use iroha_data_model::{
         ChainId, Registrable,
         block::{BlockSignature, SignedBlock},
@@ -4659,7 +4660,7 @@ mod tests {
         iroha_crypto::bls_normal_aggregate_signatures(&sig_refs).expect("aggregate signature")
     }
 
-    fn sample_block(height: u64, view: u32) -> SignedBlock {
+    fn sample_block(height: u64, view: u64) -> SignedBlock {
         let header = BlockHeader {
             height: core::num::NonZeroU64::new(height).expect("non-zero height"),
             prev_block_hash: None,
@@ -4801,10 +4802,14 @@ mod tests {
 
         update.commit_qc = None;
         update.stake_snapshot = None;
+        let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
         update.validator_checkpoint =
             Some(iroha_data_model::consensus::ValidatorSetCheckpoint::new(
                 4,
+                0,
                 block.hash(),
+                zero_root,
+                zero_root,
                 validator_set,
                 vec![0b0000_0001],
                 vec![0xBB; 96],
@@ -5269,8 +5274,19 @@ mod tests {
         let block = sample_block(7, 0);
         let block_hash = block.hash();
         let payload_hash = Hash::prehashed([0x55; 32]);
-        let chunk_root = Hash::prehashed([0x66; 32]);
-        let session = RbcSession::test_new(2, Some(payload_hash), Some(chunk_root), 0);
+        let chunk_digests = vec![[0x11; 32], [0x22; 32]];
+        let chunk_root = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(chunk_digests.clone())
+            .root()
+            .map(Hash::from)
+            .expect("chunk root");
+        let session = RbcSession::new(
+            2,
+            Some(payload_hash),
+            Some(chunk_root),
+            Some(chunk_digests.clone()),
+            0,
+        )
+        .expect("session");
         let roster = vec![PeerId::new(KeyPair::random().public_key().clone())];
 
         let (init, chunks) =
@@ -5279,6 +5295,7 @@ mod tests {
 
         assert_eq!(init.total_chunks, 2);
         assert_eq!(init.chunk_root, chunk_root);
+        assert_eq!(init.chunk_digests, chunk_digests);
         assert!(
             chunks.is_empty(),
             "missing cached chunks should still emit INIT"

@@ -91,7 +91,7 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
     let dataspace_catalog = DataSpaceCatalog::new(vec![
         DataSpaceMetadata {
             id: DataSpaceId::GLOBAL,
-            alias: "global".to_owned(),
+            alias: "universal".to_owned(),
             description: Some("Single-lane data space".to_owned()),
             fault_tolerance: 1,
         },

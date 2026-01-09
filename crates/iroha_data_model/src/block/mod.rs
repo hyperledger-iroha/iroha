@@ -653,8 +653,6 @@ pub mod error {
             LeaderSignatureMissing,
             /// Block signature check failed for an unspecified reason.
             OtherSignatureError,
-            /// View change index is larger than allowed.
-            ViewChangeIndexTooLarge,
             /// Genesis block validation failed.
             InvalidGenesis,
             /// Block creation time is earlier than previous block.
@@ -721,9 +719,6 @@ pub mod error {
                 BlockRejectionReason::OtherSignatureError => {
                     norito::json::write_json_string("OtherSignatureError", out);
                 }
-                BlockRejectionReason::ViewChangeIndexTooLarge => {
-                    norito::json::write_json_string("ViewChangeIndexTooLarge", out);
-                }
                 BlockRejectionReason::InvalidGenesis => {
                     norito::json::write_json_string("InvalidGenesis", out);
                 }
@@ -777,7 +772,6 @@ pub mod error {
                 "ProxyTailSignatureMissing" => Ok(BlockRejectionReason::ProxyTailSignatureMissing),
                 "LeaderSignatureMissing" => Ok(BlockRejectionReason::LeaderSignatureMissing),
                 "OtherSignatureError" => Ok(BlockRejectionReason::OtherSignatureError),
-                "ViewChangeIndexTooLarge" => Ok(BlockRejectionReason::ViewChangeIndexTooLarge),
                 "InvalidGenesis" => Ok(BlockRejectionReason::InvalidGenesis),
                 "BlockInThePast" => Ok(BlockRejectionReason::BlockInThePast),
                 "BlockInTheFuture" => Ok(BlockRejectionReason::BlockInTheFuture),
@@ -840,9 +834,6 @@ impl fmt::Display for error::BlockRejectionReason {
             }
             error::BlockRejectionReason::OtherSignatureError => {
                 f.write_str("Block signature verification failed for unspecified reason")
-            }
-            error::BlockRejectionReason::ViewChangeIndexTooLarge => {
-                f.write_str("Block view change index too large")
             }
             error::BlockRejectionReason::InvalidGenesis => f.write_str("Invalid genesis block"),
             error::BlockRejectionReason::BlockInThePast => {

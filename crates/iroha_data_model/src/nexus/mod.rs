@@ -814,7 +814,7 @@ impl Default for DataSpaceMetadata {
     fn default() -> Self {
         Self {
             id: DataSpaceId::GLOBAL,
-            alias: "global".to_string(),
+            alias: "universal".to_string(),
             description: None,
             fault_tolerance: 1,
         }
@@ -1110,6 +1110,7 @@ mod tests {
     fn dataspace_default_fault_tolerance_is_nonzero() {
         let entry = DataSpaceMetadata::default();
         assert_eq!(entry.fault_tolerance, 1);
+        assert_eq!(entry.alias, "universal");
     }
 
     #[test]

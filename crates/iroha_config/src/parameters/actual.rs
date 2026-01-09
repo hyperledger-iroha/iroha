@@ -209,7 +209,10 @@ impl Root {
         let is_default_catalog = catalog.lane_count().get() == 1
             && matches!(catalog.lanes(), [lane] if lane.id == LaneId::SINGLE && lane.alias == "default");
         let dataspace = &self.nexus.dataspace_catalog;
-        let is_default_dataspace = matches!(dataspace.entries(), [entry] if entry.id == DataSpaceId::GLOBAL && entry.alias == "global");
+        let is_default_dataspace = matches!(dataspace.entries(), [entry]
+            if entry.id == DataSpaceId::GLOBAL
+                && entry.alias == defaults::nexus::DEFAULT_DATASPACE_ALIAS
+        );
         let policy = &self.nexus.routing_policy;
         let is_default_policy = policy.default_lane == LaneId::SINGLE
             && policy.default_dataspace == DataSpaceId::GLOBAL
@@ -315,7 +318,7 @@ pub(crate) fn sora_lane_catalog() -> LaneCatalog {
         },
         LaneConfigMetadata {
             id: LaneId::new(1),
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::new(1),
             alias: "governance".to_string(),
             description: Some("Governance & parliament traffic".to_string()),
             visibility: LaneVisibility::Restricted,
@@ -328,7 +331,7 @@ pub(crate) fn sora_lane_catalog() -> LaneCatalog {
         },
         LaneConfigMetadata {
             id: LaneId::new(2),
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::new(2),
             alias: "zk".to_string(),
             description: Some("Zero-knowledge attachments".to_string()),
             visibility: LaneVisibility::Restricted,
@@ -347,7 +350,7 @@ pub(crate) fn sora_dataspace_catalog() -> DataSpaceCatalog {
     let entries = vec![
         DataSpaceMetadata {
             id: DataSpaceId::GLOBAL,
-            alias: "global".to_string(),
+            alias: defaults::nexus::DEFAULT_DATASPACE_ALIAS.to_string(),
             description: Some("Single-lane data space".to_string()),
             fault_tolerance: defaults::nexus::dataspace::FAULT_TOLERANCE,
         },

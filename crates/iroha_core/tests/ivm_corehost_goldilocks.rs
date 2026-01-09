@@ -80,7 +80,7 @@ mod goldilocks {
         let gas = host
             .syscall(ivm_sys::SYSCALL_ZK_VOTE_VERIFY_BALLOT, &mut vm)
             .expect("syscall ok");
-        assert_eq!(gas, 0);
+        assert!(gas > 0);
         assert_eq!(vm.register(10), 1);
         assert_eq!(vm.register(11), 0);
     }

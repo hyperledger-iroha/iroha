@@ -798,6 +798,9 @@ pub mod domain {
                 permission.asset.definition().domain() == domain_id
                     || permission.asset.account().domain() == domain_id
             }
+            AnyPermission::CanUseFeeSponsor(permission) => {
+                permission.sponsor.domain() == domain_id
+            }
             AnyPermission::CanRegisterNft(permission) => &permission.domain == domain_id,
             AnyPermission::CanUnregisterNft(permission) => permission.nft.domain() == domain_id,
             AnyPermission::CanTransferNft(permission) => permission.nft.domain() == domain_id,
@@ -991,6 +994,7 @@ pub mod account {
             AnyPermission::CanModifyAssetMetadata(permission) => {
                 permission.asset.account() == account_id
             }
+            AnyPermission::CanUseFeeSponsor(permission) => permission.sponsor == *account_id,
             AnyPermission::CanRegisterTrigger(permission) => permission.authority == *account_id,
             AnyPermission::CanUnregisterTrigger(_)
             | AnyPermission::CanExecuteTrigger(_)
@@ -1291,7 +1295,8 @@ pub mod asset_definition {
             | AnyPermission::CanRegisterSorafsProviderOwner(_)
             | AnyPermission::CanUnregisterSorafsProviderOwner(_)
             | AnyPermission::CanIngestSoranetPrivacy(_)
-            | AnyPermission::CanPublishSpaceDirectoryManifest(_) => false,
+            | AnyPermission::CanPublishSpaceDirectoryManifest(_)
+            | AnyPermission::CanUseFeeSponsor(_) => false,
         }
     }
 }
@@ -2438,7 +2443,8 @@ pub mod trigger {
             | AnyPermission::CanRegisterSorafsProviderOwner(_)
             | AnyPermission::CanUnregisterSorafsProviderOwner(_)
             | AnyPermission::CanIngestSoranetPrivacy(_)
-            | AnyPermission::CanPublishSpaceDirectoryManifest(_) => false,
+            | AnyPermission::CanPublishSpaceDirectoryManifest(_)
+            | AnyPermission::CanUseFeeSponsor(_) => false,
         }
     }
 
@@ -2448,6 +2454,7 @@ pub mod trigger {
 
         use iroha_executor_data_model::permission::{
             asset::{CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition},
+            nexus::CanUseFeeSponsor,
             sorafs::{
                 CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
                 CanDeclareSorafsCapacity, CanFileSorafsCapacityDispute,
@@ -2552,6 +2559,51 @@ pub mod trigger {
                     "Sora-specific permissions must not bind to asset definitions"
                 );
             }
+        }
+
+        #[test]
+        fn fee_sponsor_permission_associations() {
+            let sponsor = AccountId::from_str("sponsor@test").expect("account id must be valid");
+            let other_account =
+                AccountId::from_str("other@test").expect("account id must be valid");
+            let domain_id = DomainId::from_str("test").expect("domain id must be valid");
+            let other_domain = DomainId::from_str("other").expect("domain id must be valid");
+            let asset_definition_id = AssetDefinitionId::from_str("token#test")
+                .expect("asset definition id must be valid");
+            let trigger_id =
+                TriggerId::from_str("fee_sponsor_trigger").expect("trigger id must be valid");
+
+            let permission = Permission::from(AnyPermission::CanUseFeeSponsor(CanUseFeeSponsor {
+                sponsor: sponsor.clone(),
+            }));
+
+            assert!(
+                domain::is_permission_domain_associated(&permission, &domain_id),
+                "fee sponsor permission should bind to sponsor domain"
+            );
+            assert!(
+                !domain::is_permission_domain_associated(&permission, &other_domain),
+                "fee sponsor permission should not bind to unrelated domains"
+            );
+            assert!(
+                account::is_permission_account_associated(&permission, &sponsor),
+                "fee sponsor permission should bind to sponsor account"
+            );
+            assert!(
+                !account::is_permission_account_associated(&permission, &other_account),
+                "fee sponsor permission should not bind to unrelated accounts"
+            );
+            assert!(
+                !asset_definition::is_permission_asset_definition_associated(
+                    &permission,
+                    &asset_definition_id
+                ),
+                "fee sponsor permission should not bind to asset definitions"
+            );
+            assert!(
+                !is_permission_trigger_associated(&permission, &trigger_id),
+                "fee sponsor permission should not bind to triggers"
+            );
         }
     }
 }

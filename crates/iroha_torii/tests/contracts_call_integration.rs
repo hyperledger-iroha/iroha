@@ -149,6 +149,22 @@ async fn contracts_call_enqueues_transaction() {
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
     assert_eq!(applied_activate, 1);
 
+    let missing_limit_payload = iroha_torii::json_object(vec![
+        iroha_torii::json_entry("authority", creds.account.clone()),
+        iroha_torii::json_entry("private_key", creds.private_key.to_string()),
+        iroha_torii::json_entry("namespace", "apps"),
+        iroha_torii::json_entry("contract_id", "calc.v1"),
+    ]);
+    let missing_limit_body = json::to_json(&missing_limit_payload).expect("serialize call request");
+    let missing_limit_req = http::Request::builder()
+        .method("POST")
+        .uri("/v1/contracts/call")
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(missing_limit_body))
+        .unwrap();
+    let missing_limit_resp = app.clone().oneshot(missing_limit_req).await.unwrap();
+    assert_eq!(missing_limit_resp.status(), http::StatusCode::BAD_REQUEST);
+
     let payload = norito::json!({ "note": "integration-test" });
     let call_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
@@ -159,7 +175,7 @@ async fn contracts_call_enqueues_transaction() {
             entrypoint: Some("main"),
             payload: Some(&payload),
             gas_asset_id: None,
-            gas_limit: Some(5_000),
+            gas_limit: 5_000,
         },
     );
     let call_req = http::Request::builder()

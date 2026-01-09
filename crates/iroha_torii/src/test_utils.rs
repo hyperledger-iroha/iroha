@@ -33,7 +33,7 @@ pub struct ContractCallOptions<'a> {
     /// Gas-paying asset identifier to attach to the request.
     pub gas_asset_id: Option<&'a str>,
     /// Upper bound on gas consumption for the call.
-    pub gas_limit: Option<u64>,
+    pub gas_limit: u64,
 }
 
 /// Drain queued transactions and apply a single block at the given height.
@@ -260,9 +260,7 @@ pub fn contract_call_request_json(
     if let Some(asset) = options.gas_asset_id {
         entries.push(crate::json_entry("gas_asset_id", asset));
     }
-    if let Some(limit) = options.gas_limit {
-        entries.push(crate::json_entry("gas_limit", limit));
-    }
+    entries.push(crate::json_entry("gas_limit", options.gas_limit));
     let value = crate::json_object(entries);
     norito::json::to_json(&value).expect("serialize contract call request")
 }

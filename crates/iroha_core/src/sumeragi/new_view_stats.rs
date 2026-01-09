@@ -7,13 +7,15 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
+use iroha_data_model::prelude::PeerId;
+
 type Key = (u64, u64); // (height, view)
 
 const NEW_VIEW_STATS_CAP: usize = 1024;
 
 #[derive(Default)]
 struct Store {
-    by_hv: BTreeMap<Key, BTreeSet<u32>>, // sender indices per (h,v)
+    by_hv: BTreeMap<Key, BTreeSet<PeerId>>, // sender peers per (h,v)
 }
 
 static GLOBAL: OnceLock<Mutex<Store>> = OnceLock::new();
@@ -23,7 +25,7 @@ fn global() -> &'static Mutex<Store> {
 }
 
 /// Note a `NEW_VIEW` receipt from `sender` for (height, view). Returns the current count.
-pub fn note_receipt(height: u64, view: u64, sender: u32) -> u64 {
+pub fn note_receipt(height: u64, view: u64, sender: PeerId) -> u64 {
     let mut g = global().lock().unwrap();
     let key = (height, view);
     {
@@ -48,6 +50,7 @@ pub fn snapshot_counts() -> Vec<(u64, u64, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_crypto::KeyPair;
     use std::sync::{Mutex, OnceLock};
 
     static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -69,9 +72,11 @@ mod tests {
         let _guard = test_guard();
         reset_store();
 
-        assert_eq!(note_receipt(10, 0, 1), 1);
-        assert_eq!(note_receipt(10, 0, 1), 1);
-        assert_eq!(note_receipt(10, 0, 2), 2);
+        let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+        assert_eq!(note_receipt(10, 0, peer_a.clone()), 1);
+        assert_eq!(note_receipt(10, 0, peer_a.clone()), 1);
+        assert_eq!(note_receipt(10, 0, peer_b), 2);
     }
 
     #[test]
@@ -79,9 +84,10 @@ mod tests {
         let _guard = test_guard();
         reset_store();
 
+        let peer = PeerId::new(KeyPair::random().public_key().clone());
         let total = NEW_VIEW_STATS_CAP + 4;
         for view in 0..total {
-            note_receipt(7, view as u64, 0);
+            note_receipt(7, view as u64, peer.clone());
         }
 
         let snapshot = snapshot_counts();

@@ -228,7 +228,7 @@ pub fn compute_consensus_handshake_caps_from_view(
                     k_aggregators: u16::try_from(npos_cfg.k_aggregators)
                         .expect("npos.k_aggregators must fit into u16"),
                     redundant_send_r: npos_cfg.redundant_send_r,
-                    epoch_seed: [0u8; 32],
+                    epoch_seed: super::chain_epoch_seed(&common_config.chain),
                     vrf_commit_window_blocks: npos_cfg.vrf.commit_window_blocks,
                     vrf_reveal_window_blocks: npos_cfg.vrf.reveal_window_blocks,
                     max_validators: npos_cfg.election.max_validators,

@@ -146,6 +146,7 @@ impl Actor {
         let parent = pending.block.header().prev_block_hash();
         let txs = pending.block.transactions_vec().clone();
         let reason_label = validation_reject_reason_label(&err);
+        let proposal_epoch = self.epoch_for_height(height);
         pending.validation_status = ValidationStatus::Invalid;
         pending.mark_aborted();
         warn!(
@@ -162,6 +163,7 @@ impl Actor {
                     &pending.block,
                     pending.payload_hash,
                     qc,
+                    proposal_epoch,
                     err.to_string(),
                 )
             })

@@ -34,7 +34,7 @@ Endpoints temporarios de auditoria para evidencia de Sumeragi.
   - Envie evidencia Norito codificada em hex para o actor Sumeragi (`ControlFlow::Evidence`).
   - Corpo da requisicao (JSON): `{ "evidence_hex": "<hex string>" }`; a string hex representa bytes `ConsensusEvidence` com framing Norito e espacos em branco sao ignorados.
   - Resposta (JSON): `{ "status": "accepted", "kind": "<variant>" }` em sucesso.
-  - A validacao cobre igualdade de signer/height/view/epoch para payloads de double-vote, exige payloads de um so signatario nao vazios, aplica quoruns de receipts para evidencia `Censorship` (payloads assinados de `TransactionSubmissionReceipt`), e rejeita registros `InvalidProposal` que nao avancam height/view ou cujo hash pai diverge do commit certificate embutido.
+  - A validacao cobre igualdade de signer/height/view/epoch para payloads de double-vote, exige payloads de um so signatario nao vazios, aplica quoruns de receipts para evidencia `Censorship` (payloads assinados de `TransactionSubmissionReceipt`), e rejeita registros `InvalidProposal` que nao avancam height ou cujo hash pai diverge do commit certificate embutido.
   - Helper CLI: `iroha sumeragi evidence submit --evidence-hex <hex>` ou `--evidence-hex-file <path>`.
 
 Status adicional de consenso e provas de execucao

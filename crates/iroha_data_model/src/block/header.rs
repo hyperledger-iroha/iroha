@@ -72,7 +72,7 @@ mod model {
         pub creation_time_ms: u64,
         /// Value of view change index. Used to resolve soft forks.
         #[getset(get_copy = "pub", set = "pub")]
-        pub view_change_index: u32,
+        pub view_change_index: u64,
         /// Optional digest advertising the confidential feature set applied in this block.
         #[getset(get_copy = "pub", set = "pub")]
         pub confidential_features: Option<ConfidentialFeatureDigest>,
@@ -118,7 +118,7 @@ pub mod wire {
         /// Block creation timestamp in milliseconds since Unix epoch.
         pub u64,
         /// View change index recorded in the block header.
-        pub u32,
+        pub u64,
         /// Optional hash of the DA commitment bundle embedded in the block payload.
         pub Option<[u8; 32]>,
         /// Optional hash of the DA pin intent bundle embedded in the block payload.
@@ -139,7 +139,7 @@ pub mod wire {
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 u64,
-                u32,
+                u64,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<ConfidentialFeatureDigestWire>,
@@ -156,7 +156,7 @@ pub mod wire {
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 u64,
-                u32,
+                u64,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<ConfidentialFeatureDigestWire>,
@@ -173,7 +173,7 @@ pub mod wire {
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 u64,
-                u32,
+                u64,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<ConfidentialFeatureDigestWire>,
@@ -190,7 +190,7 @@ pub mod wire {
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 u64,
-                u32,
+                u64,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<ConfidentialFeatureDigestWire>,
@@ -201,7 +201,7 @@ pub mod wire {
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 u64,
-                u32,
+                u64,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<ConfidentialFeatureDigestWire>,
@@ -425,7 +425,7 @@ impl BlockHeader {
         merkle_root: Option<HashOf<MerkleTree<TransactionEntrypoint>>>,
         result_merkle_root: Option<HashOf<MerkleTree<TransactionResult>>>,
         creation_time_ms: u64,
-        view_change_index: u32,
+        view_change_index: u64,
     ) -> Self {
         Self {
             height,
@@ -476,7 +476,7 @@ impl BlockHeader {
             /// Optional DA pin intent bundle hash.
             da_pin_intents_hash: Option<HashOf<DaPinIntentBundle>>,
             creation_time_ms: u64,
-            view_change_index: u32,
+            view_change_index: u64,
             confidential_features: Option<ConfidentialFeatureDigest>,
         }
 

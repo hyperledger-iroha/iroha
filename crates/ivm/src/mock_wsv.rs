@@ -4469,12 +4469,16 @@ impl IVMHost for WsvHost {
                 }
             }
             syscalls::SYSCALL_REGISTER_ASSET => {
-                // r10 = &AssetDefinitionId
+                // r10 = &AssetDefinitionId, or &Name (asset name) scoped to caller domain.
                 let id = match vm.memory.validate_tlv(vm.register(10)) {
-                    Ok(tlv) if tlv.type_id == PointerType::AssetDefinitionId => {
-                        self.decode_asset_payload(tlv.payload)?
-                    }
-                    Ok(_) => return Err(VMError::NoritoInvalid),
+                    Ok(tlv) => match tlv.type_id {
+                        PointerType::AssetDefinitionId => self.decode_asset_payload(tlv.payload)?,
+                        PointerType::Name | PointerType::Blob => {
+                            let name = self.decode_name_payload(tlv.payload)?;
+                            AssetDefinitionId::new(self.caller.domain().clone(), name)
+                        }
+                        _ => return Err(VMError::NoritoInvalid),
+                    },
                     Err(_) => self.decode_asset_reg(vm, 10)?,
                 };
                 // Determine mintability from r13 (0 → Infinitely, 1 → Once, otherwise Not)

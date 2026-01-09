@@ -109,6 +109,7 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::{
     asset_definition::CanRegisterAssetDefinition,
+    nexus::CanUseFeeSponsor,
     trigger::{CanExecuteTrigger, CanRegisterTrigger},
 };
 use iroha_logger::prelude::*;
@@ -706,6 +707,7 @@ struct AccountPermissionSummary {
     reg_trigger_authorities: std::collections::BTreeSet<iroha_data_model::account::AccountId>,
     exec_trigger_ids: std::collections::BTreeSet<iroha_data_model::trigger::TriggerId>,
     reg_asset_domains: std::collections::BTreeSet<iroha_data_model::domain::DomainId>,
+    fee_sponsors: std::collections::BTreeSet<iroha_data_model::account::AccountId>,
 }
 
 impl AccountPermissionSummary {
@@ -714,6 +716,7 @@ impl AccountPermissionSummary {
         self.reg_trigger_authorities.clear();
         self.exec_trigger_ids.clear();
         self.reg_asset_domains.clear();
+        self.fee_sponsors.clear();
     }
 
     fn apply_grant(&mut self, permission: &Permission) {
@@ -741,6 +744,14 @@ impl AccountPermissionSummary {
                     .try_into_any_norito::<CanRegisterAssetDefinition>()
                 {
                     self.reg_asset_domains.insert(decoded.domain.clone());
+                }
+            }
+            "CanUseFeeSponsor" => {
+                if let Ok(decoded) = permission
+                    .payload()
+                    .try_into_any_norito::<CanUseFeeSponsor>()
+                {
+                    self.fee_sponsors.insert(decoded.sponsor.clone());
                 }
             }
             _ => {}
@@ -10313,6 +10324,16 @@ impl State {
             );
             return false;
         }
+        if checkpoint.view != commit_qc.view {
+            warn!(
+                height = commit_qc.height,
+                view = commit_qc.view,
+                block = %commit_qc.subject_block_hash,
+                checkpoint_view = checkpoint.view,
+                "skipping commit roster record: checkpoint view mismatch"
+            );
+            return false;
+        }
         if checkpoint.validator_set_hash_version != commit_qc.validator_set_hash_version
             || checkpoint.validator_set_hash != commit_qc.validator_set_hash
             || checkpoint.validator_set != commit_qc.validator_set
@@ -12611,7 +12632,7 @@ impl State {
                     }
                     lane_tips.push(envelope.block_header.hash());
                     merge_hint_roots.push(*envelope.settlement_hash);
-                    let view = u64::from(envelope.block_header.view_change_index());
+                    let view = envelope.block_header.view_change_index();
                     if view > max_view {
                         max_view = view;
                     }
@@ -14565,7 +14586,10 @@ impl<'state> StateBlock<'state> {
                 } else {
                     let checkpoint = ValidatorSetCheckpoint::new(
                         block_height,
+                        commit_cert.view,
                         block_hash,
+                        commit_cert.parent_state_root,
+                        commit_cert.post_state_root,
                         commit_cert.validator_set.clone(),
                         commit_cert.aggregate.signers_bitmap.clone(),
                         commit_cert.aggregate.bls_aggregate_signature.clone(),
@@ -15318,7 +15342,7 @@ pub fn replay_blocks_from_kura_range(
         let signed_block = (*block_arc).clone();
         let roster = replay_roster_for_block(state, kura, &signed_block, topology);
         let mut block_topology = crate::sumeragi::network_topology::Topology::new(roster.clone());
-        let view = u64::from(signed_block.header().view_change_index());
+        let view = signed_block.header().view_change_index();
         let height = signed_block.header().height().get();
         let (effective_mode, prf_seed) = {
             let view = state.view();
@@ -15432,7 +15456,7 @@ mod replay_validation_tests {
         ChainId,
         block::SignedBlock,
         isi::Log,
-        prelude::{Account, Domain},
+        prelude::{Account, Domain, DomainId},
         transaction::TransactionBuilder,
     };
     use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
@@ -15496,6 +15520,12 @@ mod replay_validation_tests {
             leader.public_key().clone(),
         )]);
 
+        let user_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let user_domain_id: DomainId = "users".parse().expect("domain id");
+        let user_id = iroha_data_model::account::AccountId::new(
+            user_domain_id.clone(),
+            user_keypair.public_key().clone(),
+        );
         let tx_genesis = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
             .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
             .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
@@ -15506,9 +15536,9 @@ mod replay_validation_tests {
             None,
         );
 
-        let tx_block2 = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
+        let tx_block2 = TransactionBuilder::new(chain_id.clone(), user_id.clone())
             .with_instructions([Log::new(iroha_logger::Level::INFO, "block2".to_owned())])
-            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+            .sign(user_keypair.private_key());
         let accepted_block2 =
             crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx_block2));
         let block2 = crate::block::BlockBuilder::new(vec![accepted_block2])
@@ -15517,9 +15547,9 @@ mod replay_validation_tests {
             .unpack(|_| {});
         let signed_block2: SignedBlock = block2.into();
 
-        let tx_block3 = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
+        let tx_block3 = TransactionBuilder::new(chain_id.clone(), user_id.clone())
             .with_instructions([Log::new(iroha_logger::Level::INFO, "block3".to_owned())])
-            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+            .sign(user_keypair.private_key());
         let accepted_block3 =
             crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx_block3));
         let block3 = crate::block::BlockBuilder::new(vec![accepted_block3])
@@ -15537,8 +15567,14 @@ mod replay_validation_tests {
             .expect("store block3");
 
         let world = World::with(
-            [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
-            [Account::new(genesis_id.clone()).build(&genesis_id)],
+            [
+                Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id),
+                Domain::new(user_domain_id).build(&genesis_id),
+            ],
+            [
+                Account::new(genesis_id.clone()).build(&genesis_id),
+                Account::new(user_id.clone()).build(&genesis_id),
+            ],
             [],
         );
         let mut state = State::new_with_chain(
@@ -15830,7 +15866,10 @@ mod replay_validation_tests {
         };
         let checkpoint = ValidatorSetCheckpoint::new(
             2,
+            commit_cert.view,
             block_hash,
+            commit_cert.parent_state_root,
+            commit_cert.post_state_root,
             roster,
             signers_bitmap,
             Vec::new(),
@@ -15884,6 +15923,7 @@ mod permission_cache_tests {
     };
     use iroha_executor_data_model::permission::{
         asset_definition::CanRegisterAssetDefinition,
+        nexus::CanUseFeeSponsor,
         trigger::{CanExecuteTrigger, CanRegisterTrigger},
     };
     use iroha_primitives::json::Json;
@@ -16086,6 +16126,51 @@ mod permission_cache_tests {
         assert!(
             !stx.can_register_asset_definition_in_domain(&delegate, &domain_id),
             "revoking permission should invalidate cache and deny registration"
+        );
+    }
+
+    #[test]
+    fn fee_sponsor_permission_cache_grant_and_revoke() {
+        let (sponsor, _) = gen_account_in("wonderland");
+        let (caller, _) = gen_account_in("wonderland");
+
+        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&sponsor);
+        let sponsor_account = Account::new(sponsor.clone()).build(&sponsor);
+        let caller_account = Account::new(caller.clone()).build(&sponsor);
+        let world = World::with([domain], [sponsor_account, caller_account], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new(world, kura, query);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+
+        assert!(
+            !stx.can_use_fee_sponsor(&caller, &sponsor),
+            "fee sponsor permission should be denied by default"
+        );
+
+        let permission = CanUseFeeSponsor {
+            sponsor: sponsor.clone(),
+        };
+        Grant::account_permission(permission.clone(), caller.clone())
+            .execute(&sponsor, &mut stx)
+            .expect("grant fee sponsor permission");
+
+        assert!(
+            stx.can_use_fee_sponsor(&caller, &sponsor),
+            "granting permission should allow sponsorship"
+        );
+        assert!(stx.can_use_fee_sponsor(&caller, &sponsor));
+
+        Revoke::account_permission(permission, caller.clone())
+            .execute(&sponsor, &mut stx)
+            .expect("revoke fee sponsor permission");
+
+        assert!(
+            !stx.can_use_fee_sponsor(&caller, &sponsor),
+            "revoking permission should invalidate cache and deny sponsorship"
         );
     }
 
@@ -17883,6 +17968,14 @@ impl StateTransaction<'_, '_> {
         &self.ensure_permission_summary(account).reg_asset_domains
     }
 
+    /// Build or fetch cached set of sponsor accounts this account can charge fees to.
+    fn cached_fee_sponsors(
+        &mut self,
+        account: &AccountId,
+    ) -> &std::collections::BTreeSet<iroha_data_model::account::AccountId> {
+        &self.ensure_permission_summary(account).fee_sponsors
+    }
+
     /// Fast check: does `caller` have `CanRegisterAssetDefinition{domain}`?
     pub fn can_register_asset_definition_in_domain(
         &mut self,
@@ -17897,6 +17990,12 @@ impl StateTransaction<'_, '_> {
     pub fn can_execute_trigger_for(&mut self, caller: &AccountId, id: &TriggerId) -> bool {
         let set = self.cached_exec_trigger_ids(caller);
         set.contains(id)
+    }
+
+    /// Fast check: does `caller` have `CanUseFeeSponsor{sponsor}` for `sponsor`?
+    pub fn can_use_fee_sponsor(&mut self, caller: &AccountId, sponsor: &AccountId) -> bool {
+        let set = self.cached_fee_sponsors(caller);
+        set.contains(sponsor)
     }
 
     fn ensure_synthetic_batch_hash_with<F>(&mut self, extra: F) -> iroha_crypto::Hash
@@ -19976,7 +20075,7 @@ mod tests {
             None,
             None,
             1_700_000_000_000,
-            u32::try_from(view).expect("view index fits u32"),
+            view,
         );
         let parent_state_root = Hash::new([0xBC; 4]);
         let post_state_root = Hash::new([0xAB; 4]);
@@ -20270,7 +20369,7 @@ mod tests {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: DataSpaceId::GLOBAL,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -20335,7 +20434,7 @@ mod tests {
             },
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: DataSpaceId::GLOBAL,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -20479,7 +20578,7 @@ mod tests {
             },
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: DataSpaceId::GLOBAL,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -20590,7 +20689,7 @@ mod tests {
             },
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: DataSpaceId::GLOBAL,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -20641,7 +20740,7 @@ mod tests {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: DataSpaceId::GLOBAL,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -20696,7 +20795,7 @@ mod tests {
             },
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: DataSpaceId::GLOBAL,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -20749,7 +20848,7 @@ mod tests {
             },
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: DataSpaceId::GLOBAL,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -22421,7 +22520,10 @@ mod tests {
         };
         let checkpoint = ValidatorSetCheckpoint::new(
             2,
+            commit_cert.view,
             block_hash,
+            commit_cert.parent_state_root,
+            commit_cert.post_state_root,
             roster,
             vec![0b0000_0001],
             Vec::new(),
@@ -22480,7 +22582,7 @@ mod tests {
         let signers_bitmap = signer_bitmap(&[0, 1], roster.len());
         let zero_root = iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]);
         let height = committed.as_ref().header().height().get();
-        let view = u64::from(committed.as_ref().header().view_change_index());
+        let view = committed.as_ref().header().view_change_index();
         let vote = crate::sumeragi::consensus::Vote {
             phase: crate::sumeragi::consensus::Phase::Commit,
             block_hash: committed.as_ref().hash(),
@@ -22608,7 +22710,10 @@ mod tests {
         };
         let checkpoint = ValidatorSetCheckpoint::new(
             2,
+            commit_cert.view,
             block_hash,
+            commit_cert.parent_state_root,
+            commit_cert.post_state_root,
             roster,
             signers_bitmap,
             bls_aggregate_signature,

@@ -30,8 +30,14 @@ pub const VALIDATOR_SET_HASH_VERSION_V1: u16 = 1;
 pub struct ValidatorSetCheckpoint {
     /// Block height covered by the checkpoint.
     pub height: u64,
+    /// Block view (view-change index) covered by the checkpoint.
+    pub view: u64,
     /// Block hash bound into the checkpoint.
     pub block_hash: HashOf<crate::block::BlockHeader>,
+    /// Parent state root bound into the checkpoint.
+    pub parent_state_root: Hash,
+    /// Post-state root bound into the checkpoint.
+    pub post_state_root: Hash,
     /// Stable hash of the validator set encoded with [`VALIDATOR_SET_HASH_VERSION_V1`].
     pub validator_set_hash: HashOf<Vec<crate::peer::PeerId>>,
     /// Version of the validator-set hashing scheme.
@@ -52,7 +58,10 @@ impl ValidatorSetCheckpoint {
     #[must_use]
     pub fn new(
         height: u64,
+        view: u64,
         block_hash: HashOf<crate::block::BlockHeader>,
+        parent_state_root: Hash,
+        post_state_root: Hash,
         validator_set: Vec<crate::peer::PeerId>,
         signers_bitmap: Vec<u8>,
         bls_aggregate_signature: Vec<u8>,
@@ -62,7 +71,10 @@ impl ValidatorSetCheckpoint {
         let validator_set_hash = HashOf::new(&validator_set);
         Self {
             height,
+            view,
             block_hash,
+            parent_state_root,
+            post_state_root,
             validator_set_hash,
             validator_set_hash_version,
             validator_set,
@@ -448,9 +460,14 @@ mod tests {
         let block_hash = HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
             iroha_crypto::Hash::prehashed([0xAA; 32]),
         );
+        let parent_state_root = iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]);
+        let post_state_root = iroha_crypto::Hash::prehashed([1u8; iroha_crypto::Hash::LENGTH]);
         let checkpoint = ValidatorSetCheckpoint::new(
             42,
+            7,
             block_hash,
+            parent_state_root,
+            post_state_root,
             validator_set.clone(),
             vec![0x01],
             vec![0xAA, 0xBB],
@@ -465,6 +482,9 @@ mod tests {
         let decoded =
             ValidatorSetCheckpoint::decode(&mut &buf[..]).expect("validator checkpoint decodes");
         assert_eq!(decoded.height, 42);
+        assert_eq!(decoded.view, 7);
+        assert_eq!(decoded.parent_state_root, parent_state_root);
+        assert_eq!(decoded.post_state_root, post_state_root);
         assert_eq!(decoded.validator_set_hash, expected_hash);
         assert_eq!(decoded.validator_set, validator_set);
     }

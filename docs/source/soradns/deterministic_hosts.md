@@ -57,6 +57,36 @@ inherits the user-controlled labels, the normalisation rules above are enforced
 verbatim to keep certificates reproducible and ensure GAR policy remains
 deterministic.
 
+### Public DNS delegation (regular internet)
+
+SoraDNS host derivation does not replace public DNS delegation. The regular
+internet finds your nameserver through standard DNS hierarchy:
+
+1. A recursive resolver (e.g. 1.1.1.1, 8.8.8.8) asks the root servers.
+2. The root refers the resolver to the TLD servers (your parent zone).
+3. The parent zone returns NS records (and DS for DNSSEC) that point to your
+   authoritative nameservers.
+4. Your authoritative nameservers answer with A/AAAA/CNAME/TXT records for the
+   domain.
+
+That parent-zone NS/DS delegation is set at your registrar or DNS provider and
+is not managed by this repository.
+
+For public DNS records that point at the SoraDNS gateway:
+
+- For subdomains, publish a CNAME from your public name to the derived pretty
+  host (for example, `app.sora.example` -> `<fqdn>.gw.sora.name`).
+- For an apex/TLD (for example, `example` or `example.tld`), use your DNS
+  provider's ALIAS/ANAME feature or publish A/AAAA records to the gateway
+  anycast IPs. CNAME is not valid at the apex.
+- The canonical host (`<hash>.gw.sora.id`) lives under the SoraDNS gateway
+  domain and is not published inside your public zone; clients use it for
+  gateway verification and GAR policy checks.
+
+The `tools/soradns-resolver` binary is a recursive resolver prototype that
+serves configured static zones for testing. It does not register NS/DS
+delegations or act as a public authoritative DNS service.
+
 ## 5. GAR Requirements
 
 Gateway Authorisation Records must authorise the following host patterns for
