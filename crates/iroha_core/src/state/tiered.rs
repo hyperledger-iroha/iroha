@@ -413,7 +413,8 @@ impl TieredStateBackend {
         let mut hot_demotions = 0usize;
         for entry in &scores {
             let meta = self.entries.get(&entry.id).expect("metadata populated");
-            let was_hot_last = meta.last_hot_snapshot == snapshot_idx.saturating_sub(1);
+            let was_hot_last = meta.last_hot_snapshot > 0
+                && meta.last_hot_snapshot == snapshot_idx.saturating_sub(1);
             let is_hot_now = hot_ids.contains(&entry.id);
             if was_hot_last && !is_hot_now {
                 hot_demotions = hot_demotions.saturating_add(1);
@@ -424,7 +425,8 @@ impl TieredStateBackend {
 
         for id in &hot_list {
             if let Some(meta) = self.entries.get_mut(id) {
-                let was_hot_last = meta.last_hot_snapshot == snapshot_idx.saturating_sub(1);
+                let was_hot_last = meta.last_hot_snapshot > 0
+                    && meta.last_hot_snapshot == snapshot_idx.saturating_sub(1);
                 if self.hot_retained_grace_snapshots > 0 && !was_hot_last {
                     meta.hot_until_snapshot =
                         snapshot_idx.saturating_add(self.hot_retained_grace_snapshots);

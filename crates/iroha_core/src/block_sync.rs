@@ -3172,6 +3172,37 @@ pub mod message {
             State::new_for_testing(world, kura, query)
         }
 
+        fn state_with_consensus_key_pops(keypairs: &[&KeyPair]) -> State {
+            let world = World::new();
+            {
+                let mut block = world.block();
+                for keypair in keypairs {
+                    let pk = keypair.public_key();
+                    let pop = iroha_crypto::bls_normal_pop_prove(keypair.private_key())
+                        .expect("pop for peer key");
+                    let id = crate::state::derive_validator_key_id(pk);
+                    let record = ConsensusKeyRecord {
+                        id: id.clone(),
+                        public_key: pk.clone(),
+                        pop: Some(pop),
+                        activation_height: 0,
+                        expiry_height: None,
+                        hsm: None,
+                        replaces: None,
+                        status: ConsensusKeyStatus::Active,
+                    };
+                    block.consensus_keys.insert(id.clone(), record);
+                    block
+                        .consensus_keys_by_pk
+                        .insert(pk.to_string(), vec![id]);
+                }
+                block.commit();
+            }
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            State::new_for_testing(world, kura, query)
+        }
+
         fn unique_dummy_block(
             leader_private_key: &PrivateKey,
             f: impl FnOnce(&mut iroha_data_model::block::BlockHeader),
@@ -3298,11 +3329,7 @@ pub mod message {
             block.sign(&kp_validator, &topology);
             let block: SignedBlock = block.into();
 
-            let state = State::new_for_testing(
-                World::new(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
+            let state = state_with_consensus_key_pops(&[&kp_leader, &kp_validator]);
             let state_view = state.view();
             let (_, mode_tag) = test_chain_config();
             let context =
@@ -3329,11 +3356,7 @@ pub mod message {
             block.sign(&kp_validator, &topology);
             let block: SignedBlock = block.into();
 
-            let state = State::new_for_testing(
-                World::new(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
+            let state = state_with_consensus_key_pops(&[&kp_leader, &kp_validator]);
             let state_view = state.view();
             let (chain_id, mode_tag) = test_chain_config();
             let signers = super::Message::commit_role_signers(&block, &topology)
@@ -3379,11 +3402,7 @@ pub mod message {
             block.sign(&kp_validator, &topology);
             let block: SignedBlock = block.into();
 
-            let state = State::new_for_testing(
-                World::new(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
+            let state = state_with_consensus_key_pops(&[&kp_leader, &kp_validator]);
             let state_view = state.view();
             let (chain_id, mode_tag) = test_chain_config();
             let signers = super::Message::commit_role_signers(&block, &topology)
@@ -3441,11 +3460,7 @@ pub mod message {
                 .replace_signatures(signatures)
                 .expect("signature replacement succeeds");
 
-            let state = State::new_for_testing(
-                World::new(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
+            let state = state_with_consensus_key_pops(&[&kp_leader, &kp_validator]);
             let state_view = state.view();
             let (chain_id, mode_tag) = test_chain_config();
             let signers = super::Message::commit_role_signers(&block, &topology)
@@ -3502,11 +3517,7 @@ pub mod message {
             let insufficient_block: SignedBlock =
                 unique_dummy_block(kp_leader.private_key(), |_| {}).into();
 
-            let state = State::new_for_testing(
-                World::new(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
+            let state = state_with_consensus_key_pops(&[&kp_leader, &kp_validator]);
             let state_view = state.view();
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(insufficient_block, None), (valid_block.clone(), None)],
@@ -3541,11 +3552,7 @@ pub mod message {
                 .replace_signatures(signatures)
                 .expect("signature replacement succeeds");
 
-            let state = State::new_for_testing(
-                World::new(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
+            let state = state_with_consensus_key_pops(&[&kp_leader]);
             let state_view = state.view();
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(invalid_block, None), (valid_block.clone(), None)],
@@ -3577,11 +3584,7 @@ pub mod message {
             block.sign(&kp_a, &rotated);
             let block: SignedBlock = block.into();
 
-            let state = State::new_for_testing(
-                World::new(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
+            let state = state_with_consensus_key_pops(&[&kp_a, &kp_b]);
             let state_view = state.view();
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(block.clone(), None)],
@@ -3723,11 +3726,7 @@ pub mod message {
                 },
             );
 
-            let state = State::new_for_testing(
-                World::new(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
+            let state = state_with_consensus_key_pops(&[&kp_a, &kp_b]);
             let state_view = state.view();
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(block.clone(), None)],
@@ -3874,11 +3873,7 @@ pub mod message {
             let block: SignedBlock = block.into();
             let block_hash = block.hash();
 
-            let state = State::new_for_testing(
-                World::new(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
+            let state = state_with_consensus_key_pops(&[&kp_leader, &kp_proxy]);
             let state_view = state.view();
             let (chain_id, mode_tag) = test_chain_config();
 
@@ -3953,11 +3948,7 @@ pub mod message {
             block.sign(&kp_validator, &topology);
             let block: SignedBlock = block.into();
 
-            let state = State::new_for_testing(
-                World::new(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
+            let state = state_with_consensus_key_pops(&[&kp_leader, &kp_validator]);
             let state_view = state.view();
             let (chain_id, mode_tag) = test_chain_config();
             let mut recorded_signers = BTreeSet::new();
@@ -4045,11 +4036,12 @@ pub mod message {
             block.sign(&kp_validator, &topology);
             let block: SignedBlock = block.into();
 
-            let state = State::new_for_testing(
-                World::new(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
+            let state = state_with_consensus_key_pops(&[
+                &kp_leader,
+                &kp_validator,
+                &kp_proxy,
+                &kp_extra,
+            ]);
             let state_view = state.view();
             let (chain_id, mode_tag) = test_chain_config();
             let mut recorded_signers = BTreeSet::new();
@@ -4170,11 +4162,7 @@ pub mod message {
                 &[kp_leader.clone(), kp_validator.clone()],
             );
 
-            let state = State::new_for_testing(
-                World::new(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
+            let state = state_with_consensus_key_pops(&[&kp_leader, &kp_validator]);
             let state_view = state.view();
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(block.clone(), Some(qc.clone()))],
@@ -4222,11 +4210,7 @@ pub mod message {
                 &[kp_leader.clone(), kp_validator.clone(), kp_proxy.clone()],
             );
 
-            let state = State::new_for_testing(
-                World::new(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
+            let state = state_with_consensus_key_pops(&[&kp_leader, &kp_validator, &kp_proxy]);
             let state_view = state.view();
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(block, Some(forged_qc))],
@@ -4307,11 +4291,12 @@ pub mod message {
                 "precommit signer record should be visible to block sync QC builder"
             );
 
-            let state = State::new_for_testing(
-                World::new(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
+            let state = state_with_consensus_key_pops(&[
+                &kp_leader,
+                &kp_validator,
+                &kp_proxy,
+                &kp_extra,
+            ]);
             let state_view = state.view();
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(block.clone(), None)],

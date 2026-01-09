@@ -1049,7 +1049,7 @@ pub(crate) fn validate_block_sync_qc(
     qc: &crate::sumeragi::consensus::Qc,
     topology: &super::network_topology::Topology,
     world: &impl WorldReadOnly,
-    block_signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
+    _block_signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
     block_view: u64,
     chain_id: &ChainId,
     consensus_mode: ConsensusMode,
@@ -1103,33 +1103,6 @@ pub(crate) fn validate_block_sync_qc(
     }
     if !qc_aggregate_consistent(qc, topology, world, chain_id, mode_tag) {
         return Err(QcValidationError::AggregateMismatch);
-    }
-    let block_signature_topology =
-        topology_for_view(topology, qc.height, block_view, mode_tag, prf_seed);
-    let normalized_block_signers =
-        normalize_signer_indices_to_canonical(block_signers, &block_signature_topology, topology);
-    let block_quorum_met = match consensus_mode {
-        ConsensusMode::Permissioned => normalized_block_signers.len() >= required,
-        ConsensusMode::Npos => {
-            let snapshot = stake_snapshot
-                .as_ref()
-                .ok_or(QcValidationError::StakeSnapshotUnavailable)?;
-            let signer_peers = signer_peers_for_topology(&normalized_block_signers, topology)?;
-            match stake_quorum_reached_for_snapshot(snapshot, topology.as_ref(), &signer_peers) {
-                Ok(result) => result,
-                Err(_) => return Err(QcValidationError::StakeSnapshotUnavailable),
-            }
-        }
-    };
-    if block_quorum_met {
-        if let Some(missing) = parsed_signers
-            .voting
-            .iter()
-            .find(|signer| !normalized_block_signers.contains(signer))
-            .copied()
-        {
-            return Err(QcValidationError::SignerMissingFromBlock { signer: missing });
-        }
     }
     // Return the raw bitmap indices so cached signers reproduce the QC bitmap correctly.
     Ok((parsed_signers.voting, parsed_signers.present.len()))

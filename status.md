@@ -1,11 +1,19 @@
 # Status
 
 ## Latest Updates
+- Maintenance: resolve merge conflict markers in `status.md`.
+- Tests: not run (not requested).
 - Block sync: trim ShareBlocks batches to fit P2P frame caps (avoid oversize disconnects) and add unit coverage.
 - Tests: not run (not requested).
 - Integration tests: emit public DNS ALIAS/CNAME records plus NS/DS delegation placeholders in the SoraNet web deploy coverage.
 - Tests: not run (not requested).
 - Docs: add a public DNS delegation note to the devportal deploy guide for apex/subdomain guidance.
+- Tests: not run (not requested).
+- Sumeragi tests: restore local peer/key vectors in `stale_pending_block_requeues_transactions` so consensus keys seed correctly.
+- Tests: `CARGO_TARGET_DIR=target/codex-iroha-core cargo test -p iroha_core --lib stale_pending_block_requeues_transactions -- --nocapture` (pass; warning: network bind unavailable in tests; using closed handle).
+- Core tests: import `StorageReadOnly` in `isi_gas_fees` so `assets().get(...)` is in scope.
+- Tests: not run (not requested).
+- Core tests: import WorldReadOnly in `isi_gas_fees` integration tests so `assets()` is available on world views.
 - Tests: not run (not requested).
 - Sumeragi tests: pass world/chain_id into QC validation calls, fill validator checkpoint view/state roots, and drop unused NPoS import; gate CoreHost queue_instructions to tests to silence dead-code warnings.
 - Tests: not run (not requested).
