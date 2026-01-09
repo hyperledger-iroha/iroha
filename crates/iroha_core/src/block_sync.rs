@@ -2051,6 +2051,7 @@ pub mod message {
         if let Err(err) = crate::sumeragi::main_loop::validate_block_sync_qc(
             &qc,
             topology,
+            state_view.world(),
             block_signers,
             context.block_view,
             state_view.chain_id(),

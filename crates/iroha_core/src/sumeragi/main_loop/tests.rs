@@ -22,7 +22,6 @@ use iroha_config::parameters::actual::{
     SumeragiNposTimeouts, SumeragiNposVrf,
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature, SignatureOf};
-use iroha_data_model::parameter::system::SumeragiNposParameters;
 use iroha_data_model::{
     ChainId, Encode as _,
     asset::{AssetDefinitionId, AssetId},
@@ -4189,7 +4188,10 @@ async fn fetch_pending_block_uses_block_sync_update_when_roster_available() {
     );
     let checkpoint = ValidatorSetCheckpoint::new(
         height,
+        view,
         block_hash,
+        zero_state_root(),
+        zero_state_root(),
         signature_topology.as_ref().to_vec(),
         signers_bitmap,
         aggregate_signature,
@@ -5947,10 +5949,13 @@ async fn commit_pipeline_rebuilds_qcs_with_empty_active_roster() {
             bls_aggregate_signature: aggregate_signature,
         },
     };
+    let world = world_with_consensus_keys(topology.as_ref(), &harness.key_pairs);
+    let world_view = world.view();
     let (validation, _) = super::validate_qc_with_evidence(
         &actor.vote_log,
         &qc,
         &topology,
+        &world_view,
         &actor.common_config.chain,
         consensus_mode,
         None,
@@ -21852,10 +21857,13 @@ fn validate_qc_against_votes_rejects_new_view_missing_highest_qc() {
         &topology,
         &keypairs,
     );
+    let world = world_with_consensus_keys(topology.as_ref(), &keypairs);
+    let world_view = world.view();
     let result = super::validate_qc_against_votes(
         &vote_log,
         &qc,
         &topology,
+        &world_view,
         &chain,
         ConsensusMode::Permissioned,
         None,
@@ -21918,10 +21926,13 @@ fn validate_qc_against_votes_rejects_new_view_highest_hash_mismatch() {
         epoch,
         phase: Phase::Commit,
     });
+    let world = world_with_consensus_keys(topology.as_ref(), &keypairs);
+    let world_view = world.view();
     let result = super::validate_qc_against_votes(
         &vote_log,
         &qc,
         &topology,
+        &world_view,
         &chain,
         ConsensusMode::Permissioned,
         None,
@@ -28344,6 +28355,8 @@ fn validate_block_sync_qc_rejects_mode_tag_mismatch() {
 fn validate_block_sync_qc_rejects_view_mismatch_in_permissioned_mode() {
     let chain: ChainId = "block-sync-view-mismatch".parse().expect("chain id parses");
     let (keypairs, topology) = sample_bls_topology(1);
+    let world = world_with_consensus_keys(topology.as_ref(), &keypairs);
+    let world_view = world.view();
     let block_signers: BTreeSet<_> = [0_u32].into_iter().collect();
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x82; Hash::LENGTH]));
@@ -28383,6 +28396,7 @@ fn validate_block_sync_qc_rejects_view_mismatch_in_permissioned_mode() {
     let result = super::validate_block_sync_qc(
         &qc,
         &topology,
+        &world_view,
         &block_signers,
         0,
         &chain,
