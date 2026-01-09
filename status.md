@@ -1,6 +1,8 @@
 # Status
 
 ## Latest Updates
+- Sumeragi: avoid re-entrant state view locking when computing the committed QC epoch and add coverage for the view-based helper.
+- Tests: not run (not requested).
 - Maintenance: resolve merge conflict markers in `status.md`.
 - Tests: not run (not requested).
 - Block sync: trim ShareBlocks batches to fit P2P frame caps (avoid oversize disconnects) and add unit coverage.
