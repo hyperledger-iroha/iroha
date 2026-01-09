@@ -101,7 +101,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
         let publicInputs = try NoritoJSON([
             "owner": owner,
             "amount": "1",
-            "duration_blocks": 1,
+            "duration_blocks": "1",
             "root_hint": "not-hex",
         ])
         let request = CastZkBallotRequest(chainId: "chain",
@@ -127,7 +127,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
         let publicInputs = try NoritoJSON([
             "owner": owner,
             "amount": "1",
-            "duration_blocks": 1,
+            "duration_blocks": "1",
             "root_hint_hex": "0x" + String(repeating: "Cc", count: 32),
         ])
         let request = CastZkBallotRequest(chainId: "chain",
@@ -150,7 +150,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
         let publicInputs = try NoritoJSON([
             "owner": owner,
             "amount": "1",
-            "duration_blocks": 1,
+            "duration_blocks": "1",
             "root_hint": "0x" + String(repeating: "Cc", count: 32),
             "nullifier": "blake2b32:" + String(repeating: "DD", count: 32),
         ])
@@ -174,7 +174,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
         let publicInputs = try NoritoJSON([
             "owner": owner,
             "amount": "1",
-            "duration_blocks": 1,
+            "duration_blocks": "1",
         ])
         let request = CastZkBallotRequest(chainId: "chain",
                                           authority: "alice@wonderland",

@@ -162,7 +162,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 
 15. **IZANAMI-SUMERAGI-FRAME-CAP — Validate consensus frame cap + RBC chunk clamp** (Consensus/QA, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈺 In Progress, target TBD)
  - [ ] Re-run Izanami 4-peer DA runs to confirm no `FrameTooLarge` disconnects and consensus reaches target blocks.
- - [ ] Re-run `cargo test --workspace` after resolving current build errors in `iroha_data_model`/`iroha_crypto` (see `status.md`).
+ - [ ] Re-run `cargo test --workspace` (latest attempt timed out after 600s during compilation; see `status.md`).
  - [x] Size consensus frames using NetworkMessage wire lengths, trim BlockSyncUpdate payloads to fit caps, and guard background consensus sends against oversize frames.
  - [x] Harden Norito length decoding to reject u64→usize overflows across core and AoS columnar views; add regression coverage.
  - [x] Tighten Norito StreamMapIter packed-seq offset validation and payload length accounting; add regression coverage.

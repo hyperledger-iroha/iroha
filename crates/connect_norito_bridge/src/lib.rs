@@ -8385,8 +8385,7 @@ mod offline_fastpq_proof_tests {
     fn offline_fastpq_sum_proof_matches_generator() {
         let request = sample_sum_request();
         let sum_json = json::to_vec(&request).expect("sum json");
-        let parsed: OfflineProofRequestSum =
-            json::from_slice(&sum_json).expect("sum json parse");
+        let parsed: OfflineProofRequestSum = json::from_slice(&sum_json).expect("sum json parse");
         assert_eq!(parsed, request);
         let proof_a = call_proof_sum(&sum_json);
         let proof_b = call_proof_sum(&sum_json);

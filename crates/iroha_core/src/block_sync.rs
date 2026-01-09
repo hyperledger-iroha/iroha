@@ -2254,14 +2254,13 @@ pub mod message {
             qcs: &[Option<Qc>],
             rosters: &[RosterMetadata],
         ) -> usize {
-            let payload = NetworkMessage::BlockSync(Box::new(Message::ShareBlocks(
-                ShareBlocks::new(
+            let payload =
+                NetworkMessage::BlockSync(Box::new(Message::ShareBlocks(ShareBlocks::new(
                     blocks.to_vec(),
                     origin.clone(),
                     qcs.to_vec(),
                     rosters.to_vec(),
-                ),
-            )));
+                ))));
             iroha_p2p::network::data_frame_wire_len(
                 origin,
                 Some(target),
@@ -2693,20 +2692,19 @@ pub mod message {
             let mut rosters = vec![roster.clone(), roster];
             let ttl = 8;
 
-            let cap_one =
-                Self::share_blocks_wire_len(
-                    &origin,
-                    &target,
-                    ttl,
-                    &blocks[..1],
-                    &qcs[..1],
-                    &rosters[..1],
-                );
+            let cap_one = Message::share_blocks_wire_len(
+                &origin,
+                &target,
+                ttl,
+                &blocks[..1],
+                &qcs[..1],
+                &rosters[..1],
+            );
             let cap_two =
-                Self::share_blocks_wire_len(&origin, &target, ttl, &blocks, &qcs, &rosters);
+                Message::share_blocks_wire_len(&origin, &target, ttl, &blocks, &qcs, &rosters);
             assert!(cap_two > cap_one);
 
-            let trimmed = Self::trim_share_blocks_to_frame_cap(
+            let trimmed = Message::trim_share_blocks_to_frame_cap(
                 &origin,
                 &target,
                 ttl,
@@ -3200,9 +3198,7 @@ pub mod message {
                         status: ConsensusKeyStatus::Active,
                     };
                     block.consensus_keys.insert(id.clone(), record);
-                    block
-                        .consensus_keys_by_pk
-                        .insert(pk.to_string(), vec![id]);
+                    block.consensus_keys_by_pk.insert(pk.to_string(), vec![id]);
                 }
                 block.commit();
             }
@@ -4044,12 +4040,8 @@ pub mod message {
             block.sign(&kp_validator, &topology);
             let block: SignedBlock = block.into();
 
-            let state = state_with_consensus_key_pops(&[
-                &kp_leader,
-                &kp_validator,
-                &kp_proxy,
-                &kp_extra,
-            ]);
+            let state =
+                state_with_consensus_key_pops(&[&kp_leader, &kp_validator, &kp_proxy, &kp_extra]);
             let state_view = state.view();
             let (chain_id, mode_tag) = test_chain_config();
             let mut recorded_signers = BTreeSet::new();
@@ -4299,12 +4291,8 @@ pub mod message {
                 "precommit signer record should be visible to block sync QC builder"
             );
 
-            let state = state_with_consensus_key_pops(&[
-                &kp_leader,
-                &kp_validator,
-                &kp_proxy,
-                &kp_extra,
-            ]);
+            let state =
+                state_with_consensus_key_pops(&[&kp_leader, &kp_validator, &kp_proxy, &kp_extra]);
             let state_view = state.view();
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(block.clone(), None)],

@@ -131,10 +131,7 @@ fn delegation_records_for_zone(zone: &str) -> Vec<DnsRecord> {
 }
 
 // Regular DNS deployments use ALIAS/ANAME for apex/TLDs and CNAME for subdomains.
-fn public_dns_settings_for_domain(
-    bindings: &GatewayHostBindings,
-    zone: &str,
-) -> Vec<DnsRecord> {
+fn public_dns_settings_for_domain(bindings: &GatewayHostBindings, zone: &str) -> Vec<DnsRecord> {
     let pretty = bindings.pretty_host().to_string();
     let normalized = bindings.normalized_name().to_string();
     let mut records = Vec::new();

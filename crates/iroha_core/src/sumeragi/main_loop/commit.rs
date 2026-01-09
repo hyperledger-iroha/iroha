@@ -4284,6 +4284,7 @@ impl Actor {
         self.pending.pending_processing.set(None);
         self.pending.pending_processing_parent.set(None);
         self.vote_log.clear();
+        self.vote_roster_cache.clear();
         self.qc_cache.clear();
         self.qc_signer_tally.clear();
         self.voting_block = None;

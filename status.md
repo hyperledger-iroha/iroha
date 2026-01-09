@@ -1,6 +1,11 @@
 # Status
 
 ## Latest Updates
+- Build: `cargo check --workspace` (pass; warnings: unused `MissingQc` variant in `mochi/mochi-ui-egui/src/main.rs:10917`, unused `SignerMissingFromBlock` variant in `crates/iroha_core/src/sumeragi/main_loop.rs:484`).
+- Sumeragi: continued unit test coverage runs to smoke test the full suite and isolate the long-running fuzz case.
+- Tests: `cargo test -p iroha_core --lib sumeragi:: -- --nocapture` (timed out after 600s; no failures observed before timeout); `cargo test -p iroha_core --lib sumeragi::evidence::tests::fuzz_invalid_double_vote_mutations_are_rejected -- --nocapture` (pass).
+- Sumeragi: build DA-valid heartbeat blocks in the hint-mismatch BlockCreated test so proof-policy validation no longer rejects the payload; block-sync tests now call ShareBlocks sizing/trim helpers via the associated `Message` APIs.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test -p iroha_core --lib sumeragi::main_loop::tests::block_created_drops_hint_when_highest_qc_view_mismatches_parent -- --nocapture` (pass); `cargo test -p iroha_core --lib sumeragi::main_loop::tests::block_sync_ -- --nocapture` (pass); `cargo test -p iroha_core --lib sumeragi::main_loop::tests:: -- --nocapture` (timed out after 600s; no failures observed before timeout).
 - Connect Norito bridge: assert offline FASTPQ sum request JSON roundtrip before FFI proof generation to keep the JSON contract validated.
 - Tests: `cargo test -p connect_norito_bridge offline_fastpq_sum_proof_matches_generator -- --nocapture`; `cargo test -p connect_norito_bridge -- --nocapture`.
 - Sumeragi: avoid re-entrant state view locking when computing the committed QC epoch and add coverage for the view-based helper.
@@ -1931,6 +1936,8 @@
 - Tests: `cargo test -p integration_tests trigger_completion_failure_reports_error -- --nocapture` (timed out after 600s; compile finished; test `events::notification::trigger_completion_failure_reports_error` still running).
 - Sumeragi NEW_VIEW quorum selection now filters senders against the active roster (only counts local if it is in-roster), with coverage for non-roster senders.
 - Sumeragi now rejects NEW_VIEW votes with mismatched highest QC hashes/heights before recording, with regressions for invalid highest fields.
+- Sumeragi now caches the first validated roster per block hash to keep vote validation stable across commit-topology reordering; resets/prunes clear the cache, and a regression covers reordering after a vote is recorded.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options); `cargo test --workspace` (timed out after 120s and 600s during compilation; warnings about unused `MissingQc` in `mochi/mochi-ui-egui/src/main.rs:10917`, `SignerMissingFromBlock` in `crates/iroha_core/src/sumeragi/main_loop.rs:484`, and unused import in `crates/iroha_cli/src/bin/../contracts.rs:337`).
 - Sumeragi rejects NEW_VIEW QCs with missing/mismatched highest certificates and validates highest QC epochs in NEW_VIEW votes, with regressions covering invalid QC/vote inputs.
 - Sumeragi now blocks aggregate-based QC recovery for NEW_VIEW certificates with mismatched highest epochs (added regression coverage).
 - NEW_VIEW receipt stats now deduplicate by peer ID instead of rotated indices to avoid misleading operator counts after view changes.
