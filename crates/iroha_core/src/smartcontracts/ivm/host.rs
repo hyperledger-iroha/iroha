@@ -2044,6 +2044,7 @@ impl CoreHost {
         gas
     }
 
+    #[cfg(test)]
     fn queue_instructions<I>(&mut self, instrs: I) -> u64
     where
         I: IntoIterator<Item = InstructionBox>,

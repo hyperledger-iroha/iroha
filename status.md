@@ -1,6 +1,8 @@
 # Status
 
 ## Latest Updates
+- Sumeragi tests: pass world/chain_id into QC validation calls, fill validator checkpoint view/state roots, and drop unused NPoS import; gate CoreHost queue_instructions to tests to silence dead-code warnings.
+- Tests: not run (not requested).
 - Crypto/BLS: blstrs backend verify now enforces canonical/non-identity encodings via pairing checks to align with aggregate paths; add identity-signature parse-error tests.
 - Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test --workspace` (timed out after 300s while compiling; warning about unused `MissingQc` variant in `mochi/mochi-ui-egui/src/main.rs:10917`); `cargo test -p iroha_crypto --features bls verify_rejects_identity_signature_as_parse_error` (pass).
 - Executor permissions: classify `CanUseFeeSponsor` as domain/account-associated, and add association coverage; IVM host queueing uses explicit `u64` gas accumulation and avoids borrow conflicts; SoraNet web deploy integration test uses `norito::json!`, base64 decode, and captures response status safely.
