@@ -17886,9 +17886,18 @@ impl StateTransaction<'_, '_> {
                 } else {
                     eff_cycles
                 };
-                let stack_gas_limit =
-                    crate::smartcontracts::ivm::gas_limit_for_cycles(gas_cap_cycles);
-                let mut vm = ivm::IVM::new(stack_gas_limit);
+                let gas_cap = crate::smartcontracts::ivm::gas_limit_for_cycles(gas_cap_cycles);
+                let remaining_block_budget = if self.gas_limit_per_block == 0 {
+                    u64::MAX
+                } else {
+                    self.gas_limit_per_block
+                        .saturating_sub(self.gas_used_in_block_so_far)
+                };
+                let mut gas_limit = gas_cap.min(remaining_block_budget);
+                if gas_limit == u64::MAX {
+                    gas_limit = DEFAULT_TRIGGER_GAS_LIMIT;
+                }
+                let mut vm = ivm::IVM::new(gas_limit);
                 // Attach core IVM host adapter. Stateful syscalls enqueue ISIs
                 // which we collect after `vm.run()` and return as the trigger step.
                 let accounts = self.trigger_accounts_snapshot();
@@ -17910,18 +17919,6 @@ impl StateTransaction<'_, '_> {
                 }
                 if eff_cycles > 0 {
                     vm.set_max_cycles(eff_cycles);
-                }
-                // Clamp the VM gas budget using the cycle-derived ceiling and remaining block
-                // allowance. If both caps are disabled, fall back to a deterministic default.
-                let remaining_block_budget = if self.gas_limit_per_block == 0 {
-                    u64::MAX
-                } else {
-                    self.gas_limit_per_block
-                        .saturating_sub(self.gas_used_in_block_so_far)
-                };
-                let mut gas_limit = stack_gas_limit.min(remaining_block_budget);
-                if gas_limit == u64::MAX {
-                    gas_limit = DEFAULT_TRIGGER_GAS_LIMIT;
                 }
                 vm.set_gas_limit(gas_limit);
                 if let Err(e) = vm.run() {

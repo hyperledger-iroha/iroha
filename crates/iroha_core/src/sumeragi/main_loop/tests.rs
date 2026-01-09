@@ -23339,6 +23339,77 @@ async fn new_view_vote_rejects_mismatched_highest_view_when_parent_known() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn stale_new_view_vote_updates_highest_qc_without_tracking() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let local_view = 2;
+    let stale_view = 1;
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor.phase_tracker.on_view_change(height, local_view, now);
+
+    let epoch = actor.epoch_for_height(height);
+    let mut highest_qc = sample_qc_ref(committed_height, 0);
+    highest_qc.phase = Phase::Commit;
+    highest_qc.epoch = actor.epoch_for_height(committed_height);
+    actor.highest_qc = None;
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let signature_topology =
+        super::topology_for_view(&topology, height, stale_view, PERMISSIONED_TAG, None);
+    let signer = actor
+        .local_validator_index_for_topology(&signature_topology)
+        .expect("local peer in topology");
+
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::NewView,
+        block_hash: highest_qc.subject_block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view: stale_view,
+        epoch,
+        highest_qc: Some(highest_qc),
+        signer,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view(
+        &mut vote,
+        &actor.common_config.chain,
+        &topology,
+        &harness.key_pairs,
+    );
+    actor.handle_vote(vote);
+
+    assert_eq!(
+        actor
+            .subsystems
+            .propose
+            .new_view_tracker
+            .count(height, stale_view),
+        0,
+        "stale NEW_VIEW votes should not advance view-change tracking"
+    );
+    assert_eq!(
+        actor.highest_qc,
+        Some(highest_qc),
+        "stale NEW_VIEW vote should update highest QC"
+    );
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .contains_key(&highest_qc.subject_block_hash),
+        "stale NEW_VIEW vote should seed missing-block fetch"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn new_view_tracker_corrects_highest_view_after_parent_arrives() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -23735,6 +23806,97 @@ async fn vote_roster_empty_for_gap_without_history() {
     assert!(
         derived.is_empty(),
         "vote roster should be empty when history is missing for a gap height"
+    );
+
+    status::reset_commit_certs_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn vote_roster_empty_when_parent_hash_known_but_history_mismatched() {
+    use crate::sumeragi::status;
+
+    status::reset_commit_certs_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let block1 = sample_block(1, 0, None);
+    let block2 = sample_block(2, 0, Some(block1.hash()));
+    let block3 = sample_block(3, 0, Some(block2.hash()));
+    actor
+        .kura
+        .store_block(block1.clone())
+        .expect("store block 1");
+    actor
+        .kura
+        .store_block(block2.clone())
+        .expect("store block 2");
+    actor
+        .kura
+        .store_block(block3.clone())
+        .expect("store block 3");
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(block1.hash());
+    state.push_block_hash_for_testing(block2.hash());
+    state.push_block_hash_for_testing(block3.hash());
+
+    let block4 = sample_block(4, 0, Some(block3.hash()));
+    let block5 = sample_block(5, 0, Some(block4.hash()));
+    let block6 = sample_block(6, 0, Some(block5.hash()));
+    for block in [block4.clone(), block5.clone(), block6.clone()] {
+        let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+        let height = block.header().height().get();
+        let block_hash = block.hash();
+        actor.pending.pending_blocks.insert(
+            block_hash,
+            PendingBlock::new(block, payload_hash, height, 0),
+        );
+    }
+
+    let roster = actor.effective_commit_topology();
+    let mut signers = BTreeSet::new();
+    for idx in 0..roster.len() {
+        signers.insert(ValidatorIndex::try_from(idx).expect("signer index fits"));
+    }
+    let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let hash_height5_alt =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x5A; Hash::LENGTH]));
+    let bls_aggregate_signature = aggregate_signature_for_bitmap(
+        &actor.common_config.chain,
+        PERMISSIONED_TAG,
+        Phase::Commit,
+        hash_height5_alt,
+        5,
+        0,
+        0,
+        &signers_bitmap,
+        &topology,
+        &harness.key_pairs,
+    );
+    status::record_commit_qc(Qc {
+        phase: Phase::Commit,
+        subject_block_hash: hash_height5_alt,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: 5,
+        view: 0,
+        epoch: 0,
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&roster),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: roster,
+        aggregate: QcAggregate {
+            signers_bitmap,
+            bls_aggregate_signature,
+        },
+    });
+
+    let derived = actor.roster_for_vote_with_mode(block6.hash(), 6, 0, ConsensusMode::Permissioned);
+    assert!(
+        derived.is_empty(),
+        "vote roster should be empty when commit-QC history mismatches the known parent hash"
     );
 
     status::reset_commit_certs_for_tests();
@@ -25229,10 +25391,7 @@ async fn pacemaker_requires_commit_quorum_for_new_view() {
 
     let local = actor.common_config.peer.id().clone();
     let mut roster = actor.effective_commit_topology();
-    assert!(
-        roster.len() >= 3,
-        "test requires at least three validators"
-    );
+    assert!(roster.len() >= 3, "test requires at least three validators");
     let local_pos = roster
         .iter()
         .position(|peer| peer == &local)
@@ -25275,7 +25434,9 @@ async fn pacemaker_requires_commit_quorum_for_new_view() {
     let start = now
         .checked_sub(offline_grace + Duration::from_millis(1))
         .unwrap_or(now);
-    actor.phase_tracker.on_view_change(tracked_height, view, start);
+    actor
+        .phase_tracker
+        .on_view_change(tracked_height, view, start);
 
     let proposed = actor.on_pacemaker_propose_ready(now);
     assert!(
@@ -26398,9 +26559,9 @@ async fn pacemaker_prunes_new_view_entries_below_active_height() {
     state.push_block_hash_for_testing(block1.hash());
 
     actor.highest_qc = Some(QcHeaderRef {
-        subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([
-            0xA1; Hash::LENGTH,
-        ])),
+        subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0xA1; Hash::LENGTH],
+        )),
         height: 2,
         view: 0,
         epoch: 0,
@@ -26408,7 +26569,11 @@ async fn pacemaker_prunes_new_view_entries_below_active_height() {
     });
 
     let committed_height = actor.state.view().height() as u64;
-    let tracked_height = committed_height.saturating_add(2);
+    let tracked_height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
     let view = 1;
     let sender = actor
         .effective_commit_topology()
@@ -26433,7 +26598,9 @@ async fn pacemaker_prunes_new_view_entries_below_active_height() {
     let start = now
         .checked_sub(offline_grace + Duration::from_millis(1))
         .unwrap_or(now);
-    actor.phase_tracker.on_view_change(tracked_height, view, start);
+    actor
+        .phase_tracker
+        .on_view_change(tracked_height, view, start);
 
     let _ = actor.on_pacemaker_propose_ready(now);
 

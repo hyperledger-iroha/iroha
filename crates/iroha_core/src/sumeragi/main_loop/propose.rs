@@ -1058,6 +1058,7 @@ impl Actor {
         let committed_qc = self.latest_committed_qc();
         let precommit_qc = precommit_qc_for_view_change(self.highest_qc, committed_qc);
         let tracked_height = active_round_height(self.highest_qc, committed_qc, committed_height);
+        // Drop stale NEW_VIEW entries so proposals cannot regress after higher QCs arrive.
         self.subsystems
             .propose
             .new_view_tracker

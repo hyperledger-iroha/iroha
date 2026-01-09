@@ -1,11 +1,21 @@
 # Status
 
 ## Latest Updates
+- Sumeragi/localnet: add throttled status snapshot logging in the localnet smoke tests (per-peer height/view/QC counters) and fix NEW_VIEW receipt logging borrow in votes.
+- Tests: `cargo test -p integration_tests --test sumeragi_localnet_smoke --no-run` (pass).
+- Maintenance: resolve merge conflicts in status, IVM cache, and Sumeragi tests.
+- Tests: not run (not requested).
 - Build: `cargo check --workspace` (pass; warnings: unused `MissingQc` variant in `mochi/mochi-ui-egui/src/main.rs:10917`, unused `SignerMissingFromBlock` variant in `crates/iroha_core/src/sumeragi/main_loop.rs:484`).
 - Sumeragi: continued unit test coverage runs to smoke test the full suite and isolate the long-running fuzz case.
 - Tests: `cargo test -p iroha_core --lib sumeragi:: -- --nocapture` (timed out after 600s; no failures observed before timeout); `cargo test -p iroha_core --lib sumeragi::evidence::tests::fuzz_invalid_double_vote_mutations_are_rejected -- --nocapture` (pass).
 - Sumeragi: build DA-valid heartbeat blocks in the hint-mismatch BlockCreated test so proof-policy validation no longer rejects the payload; block-sync tests now call ShareBlocks sizing/trim helpers via the associated `Message` APIs.
 - Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test -p iroha_core --lib sumeragi::main_loop::tests::block_created_drops_hint_when_highest_qc_view_mismatches_parent -- --nocapture` (pass); `cargo test -p iroha_core --lib sumeragi::main_loop::tests::block_sync_ -- --nocapture` (pass); `cargo test -p iroha_core --lib sumeragi::main_loop::tests:: -- --nocapture` (timed out after 600s; no failures observed before timeout).
+- Sumeragi: process highest QC from stale NEW_VIEW votes without advancing view-change tracking, seed missing-block fetch, and add regression coverage.
+- Tests: not run (not requested).
+- IVM gas limits: require `gas_limit > 0` in admission and Torii contract calls, size IVM stacks from effective gas limits (tx, trigger, executor, access/overlay), and update docs/coverage.
+- Tests: not run (not requested).
+- Sumeragi: avoid falling back to mismatched commit-QC history when a parent hash is known for vote roster selection; add regression coverage.
+- Tests: not run (not requested).
 - Sumeragi: require commit quorum for NEW_VIEW gating and drop cached NEW_VIEW entries below the active round height; add regression coverage.
 - Tests: not run (not requested).
 - Docs: add public DNS delegation note to remaining localized devportal deploy guides (Hebrew, Urdu).

@@ -22,7 +22,7 @@ puedan reconciliar los debitos de gas con el modelo de tarifas de Nexus.
   un `liquidity_profile` (`tier1`, `tier2`, o `tier3`), y un `volatility_class` (`stable`, `elevated`,
   `dislocated`). Estas banderas alimentan el settlement router para que la cotizacion XOR resultante
   coincida con el TWAP canonico y el tier de haircut de la lane.
-- Las transacciones IVM deben incluir el metadato `gas_limit` (`u64`) para limitar la exposicion a tarifas.
+- Las transacciones IVM deben incluir el metadato `gas_limit` (`u64`, > 0) para limitar la exposicion a tarifas.
   El endpoint `/v1/contracts/call` exige `gas_limit` explicitamente y se rechazan los valores invalidos.
 - Cuando una transaccion establece el metadato `fee_sponsor`, el sponsor debe otorgar
   `CanUseFeeSponsor { sponsor }` al llamante. Los intentos de sponsorship no autorizados se rechazan y

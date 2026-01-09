@@ -21,7 +21,7 @@ translation_last_reviewed: 2026-01-08
   `liquidity_profile` (`tier1`, `tier2`, или `tier3`) и `volatility_class` (`stable`, `elevated`,
   `dislocated`). Эти флаги подаются в settlement router, чтобы итоговая XOR котировка совпадала с
   каноническим TWAP и haircut tier для lane.
-- Транзакции IVM должны содержать метаданные `gas_limit` (`u64`), чтобы ограничить риск по комиссиям.
+- Транзакции IVM должны содержать метаданные `gas_limit` (`u64`, > 0), чтобы ограничить риск по комиссиям.
   Эндпоинт `/v1/contracts/call` требует `gas_limit` явно, а некорректные значения отклоняются.
 - Когда транзакция задает метаданные `fee_sponsor`, спонсор должен выдать вызывающему
   `CanUseFeeSponsor { sponsor }`. Попытки спонсирования без разрешения отклоняются и фиксируются.

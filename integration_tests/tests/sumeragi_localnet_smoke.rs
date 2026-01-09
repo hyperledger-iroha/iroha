@@ -20,6 +20,7 @@ use tokio::time::sleep;
 static LOCALNET_SMOKE_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
 const SMOKE_PIPELINE_TIME: Duration = Duration::from_secs(2);
 const STATUS_POLL_TIMEOUT: Duration = Duration::from_secs(5);
+const STATUS_LOG_INTERVAL: Duration = Duration::from_secs(2);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
@@ -247,13 +248,32 @@ async fn collect_statuses(
 ) -> Result<Vec<iroha::client::Status>> {
     try_join_all(network.peers().iter().map(|peer| async move {
         match tokio::time::timeout(status_timeout, peer.status()).await {
-            Ok(result) => result
-                .wrap_err_with(|| format!("status request failed for peer {}", peer.mnemonic())),
-            Err(_) => Err(eyre!(
+            Ok(result) => result.map_err(|err| {
+                eprintln!(
+                    "status request failed for peer {}: {err:?} (best_effort={:?}, last_known_peers={:?}, stdout={:?})",
+                    peer.mnemonic(),
+                    peer.best_effort_block_height(),
+                    peer.last_known_peers(),
+                    peer.latest_stdout_log_path()
+                );
+                err
+            })
+            .wrap_err_with(|| format!("status request failed for peer {}", peer.mnemonic())),
+            Err(_) => {
+                eprintln!(
+                    "status request timed out for peer {} after {:?} (best_effort={:?}, last_known_peers={:?}, stdout={:?})",
+                    peer.mnemonic(),
+                    status_timeout,
+                    peer.best_effort_block_height(),
+                    peer.last_known_peers(),
+                    peer.latest_stdout_log_path()
+                );
+                Err(eyre!(
                 "status request timed out after {:?} for peer {}",
                 status_timeout,
                 peer.mnemonic()
-            )),
+                ))
+            }
         }
     }))
     .await
@@ -261,10 +281,20 @@ async fn collect_statuses(
 
 async fn wait_for_status_responses(network: &Network, timeout: Duration) -> Result<()> {
     let deadline = Instant::now() + timeout;
+    let mut last_log = Instant::now()
+        .checked_sub(STATUS_LOG_INTERVAL)
+        .unwrap_or_else(Instant::now);
     loop {
         match collect_statuses(network, STATUS_POLL_TIMEOUT).await {
             Ok(_) => return Ok(()),
             Err(err) => {
+                if last_log.elapsed() >= STATUS_LOG_INTERVAL {
+                    eprintln!(
+                        "waiting for status responses (timeout={:?}): last_error={err:?}",
+                        timeout
+                    );
+                    last_log = Instant::now();
+                }
                 if Instant::now() >= deadline {
                     return Err(eyre!(
                         "status responses did not converge within {:?}; last_error={err:?}",
@@ -284,11 +314,21 @@ async fn wait_for_converged_height(
 ) -> Result<()> {
     let deadline = Instant::now() + timeout;
     let mut last_snapshot: Vec<StatusSnapshot> = Vec::new();
+    let mut last_log = Instant::now()
+        .checked_sub(STATUS_LOG_INTERVAL)
+        .unwrap_or_else(Instant::now);
     loop {
         match collect_statuses(network, STATUS_POLL_TIMEOUT).await {
             Ok(statuses) => {
-                last_snapshot.clear();
-                last_snapshot.extend(statuses.iter().map(StatusSnapshot::from_status));
+                let snapshot: Vec<StatusSnapshot> =
+                    statuses.iter().map(StatusSnapshot::from_status).collect();
+                if snapshot != last_snapshot || last_log.elapsed() >= STATUS_LOG_INTERVAL {
+                    eprintln!(
+                        "localnet status snapshot (target_height={target_height}): {snapshot:?}"
+                    );
+                    last_log = Instant::now();
+                }
+                last_snapshot = snapshot;
                 if statuses.iter().all(|status| status.blocks >= target_height) {
                     let first_height = statuses.first().map(|s| s.blocks);
                     if statuses
@@ -323,7 +363,7 @@ fn scale_duration(duration: Duration, factor: u64) -> Duration {
     Duration::from_millis(u64::try_from(total_ms).unwrap_or(u64::MAX))
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 #[allow(dead_code)]
 struct StatusSnapshot {
     blocks: u64,
