@@ -1045,11 +1045,28 @@ pub(crate) fn validated_block_signers(
     Ok(signers)
 }
 
+fn resolve_stake_snapshot_for_roster(
+    stake_snapshot: Option<&CommitStakeSnapshot>,
+    world: &impl WorldReadOnly,
+    roster: &[PeerId],
+) -> Option<CommitStakeSnapshot> {
+    if let Some(snapshot) = stake_snapshot {
+        if snapshot.matches_roster(roster) {
+            return Some(snapshot.clone());
+        }
+        warn!(
+            roster_len = roster.len(),
+            "stake snapshot roster mismatch; recomputing"
+        );
+    }
+    CommitStakeSnapshot::from_roster(world, roster)
+}
+
 pub(crate) fn validate_block_sync_qc(
     qc: &crate::sumeragi::consensus::Qc,
     topology: &super::network_topology::Topology,
     world: &impl WorldReadOnly,
-    _block_signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
+    block_signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
     block_view: u64,
     chain_id: &ChainId,
     consensus_mode: ConsensusMode,
@@ -1074,10 +1091,19 @@ pub(crate) fn validate_block_sync_qc(
         return Err(QcValidationError::ValidatorSetMismatch);
     }
     let parsed_signers = qc_signer_indices(qc, roster_len, voting_len)?;
-    let stake_snapshot = match consensus_mode {
+    if block_signers.len() >= parsed_signers.voting.len() {
+        if let Some(missing) = parsed_signers
+            .voting
+            .iter()
+            .find(|signer| !block_signers.contains(*signer))
+        {
+            return Err(QcValidationError::SignerMissingFromBlock { signer: *missing });
+        }
+    }
+    let resolved_snapshot = match consensus_mode {
         ConsensusMode::Permissioned => None,
         ConsensusMode::Npos => {
-            Some(stake_snapshot.ok_or(QcValidationError::StakeSnapshotUnavailable)?)
+            resolve_stake_snapshot_for_roster(stake_snapshot, world, topology.as_ref())
         }
     };
     match consensus_mode {
@@ -1090,7 +1116,7 @@ pub(crate) fn validate_block_sync_qc(
             }
         }
         ConsensusMode::Npos => {
-            let snapshot = stake_snapshot
+            let snapshot = resolved_snapshot
                 .as_ref()
                 .ok_or(QcValidationError::StakeSnapshotUnavailable)?;
             let signer_peers = signer_peers_for_topology(&parsed_signers.voting, topology)?;
@@ -1374,7 +1400,11 @@ fn validate_qc_against_votes(
             }
         }
         ConsensusMode::Npos => {
-            let snapshot = stake_snapshot.ok_or(QcValidationError::StakeSnapshotUnavailable)?;
+            let resolved_snapshot =
+                resolve_stake_snapshot_for_roster(stake_snapshot, world, topology.as_ref());
+            let snapshot = resolved_snapshot
+                .as_ref()
+                .ok_or(QcValidationError::StakeSnapshotUnavailable)?;
             let signer_peers = signer_peers_for_topology(&parsed_signers.voting, topology)?;
             match stake_quorum_reached_for_snapshot(snapshot, topology.as_ref(), &signer_peers) {
                 Ok(true) => {}
@@ -4101,8 +4131,13 @@ fn block_sync_update_with_roster(
             })
         }
     });
-    if let Some(selection) = selection {
-        apply_roster_selection_to_block_sync_update(&mut update, &selection);
+    if let Some(selection) = selection.as_ref() {
+        apply_roster_selection_to_block_sync_update(&mut update, selection);
+    }
+    if matches!(consensus_mode, ConsensusMode::Npos) && update.stake_snapshot.is_none() {
+        if let Some(roster) = selection.as_ref().map(|sel| sel.roster.as_slice()) {
+            update.stake_snapshot = CommitStakeSnapshot::from_roster(state.view().world(), roster);
+        }
     }
     update
 }
@@ -4212,7 +4247,11 @@ fn validate_commit_qc_roster(
             }
         }
         ConsensusMode::Npos => {
-            let snapshot = stake_snapshot.ok_or(RosterValidationError::StakeSnapshotUnavailable)?;
+            let resolved_snapshot =
+                resolve_stake_snapshot_for_roster(stake_snapshot, world, &cert.validator_set);
+            let snapshot = resolved_snapshot
+                .as_ref()
+                .ok_or(RosterValidationError::StakeSnapshotUnavailable)?;
             match stake_quorum_reached_for_snapshot(snapshot, &cert.validator_set, &signer_peers) {
                 Ok(true) => {}
                 Ok(false) => return Err(RosterValidationError::StakeQuorumMissing),
@@ -4353,7 +4392,11 @@ fn validate_checkpoint_roster(
             }
         }
         ConsensusMode::Npos => {
-            let snapshot = stake_snapshot.ok_or(RosterValidationError::StakeSnapshotUnavailable)?;
+            let resolved_snapshot =
+                resolve_stake_snapshot_for_roster(stake_snapshot, world, &checkpoint.validator_set);
+            let snapshot = resolved_snapshot
+                .as_ref()
+                .ok_or(RosterValidationError::StakeSnapshotUnavailable)?;
             match stake_quorum_reached_for_snapshot(
                 snapshot,
                 &checkpoint.validator_set,

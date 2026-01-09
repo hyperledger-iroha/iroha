@@ -1154,8 +1154,10 @@ impl IVMHost for DefaultHost {
                 let sig_tlv = vm.memory.validate_tlv(vm.register(11))?;
                 let pk_tlv = vm.memory.validate_tlv(vm.register(12))?;
 
-                if msg_tlv.type_id != PointerType::Blob
-                    || sig_tlv.type_id != PointerType::Blob
+                if !matches!(
+                    msg_tlv.type_id,
+                    PointerType::Blob | PointerType::NoritoBytes
+                ) || sig_tlv.type_id != PointerType::Blob
                     || pk_tlv.type_id != PointerType::Blob
                 {
                     return Err(VMError::NoritoInvalid);

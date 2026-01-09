@@ -13,7 +13,9 @@ use clap::{Args as ClapArgs, ValueEnum};
 use color_eyre::eyre::{Result, WrapErr as _, eyre};
 use iroha_crypto::{ExposedPrivateKey, KeyPair};
 use iroha_data_model::{
-    parameter::system::{SumeragiConsensusMode, SumeragiParameter, SumeragiParameters},
+    parameter::system::{
+        SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter, SumeragiParameters,
+    },
     peer::PeerId,
     prelude::*,
 };
@@ -267,6 +269,8 @@ const LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MIN_MS: u64 = 5_000;
 const LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MAX_MS: u64 = 15_000;
 /// Minimum peer count for Sora profile localnets (multi-lane/dataspace defaults).
 const LOCALNET_SORA_MIN_PEERS: u16 = 4;
+/// Divisor applied to derive the localnet NPoS aggregator fallback timeout.
+const LOCALNET_NPOS_AGGREGATOR_DIVISOR: u64 = 4;
 const STREAM_ID_PUBLIC: &str =
     "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B";
 const STREAM_ID_PRIVATE: &str =
@@ -531,7 +535,14 @@ fn generate_localnet_with_line<T: Write>(
     if opts.extra_accounts > 0 || !opts.assets.is_empty() {
         genesis = extend_genesis(genesis, seed_bytes, opts.extra_accounts, &opts.assets)?;
     }
-    genesis = apply_parameter_overrides(genesis, block_time_ms, commit_time_ms, redundant_send_r);
+    genesis = apply_parameter_overrides(
+        genesis,
+        block_time_ms,
+        commit_time_ms,
+        redundant_send_r,
+        opts.consensus_mode,
+        opts.next_consensus_mode,
+    );
     genesis = append_peer_pop(genesis, &peers);
     let genesis_json_path = out_dir.join("genesis.json");
     let genesis_signed_path = out_dir.join("genesis.signed.nrt");
@@ -1008,13 +1019,46 @@ fn extend_genesis(
     Ok(builder.build_raw())
 }
 
+fn apply_localnet_npos_overrides(parameters: &mut Parameters, redundant_send_r: Option<u8>) {
+    let block_time_ms = parameters.sumeragi.block_time_ms;
+    let commit_time_ms = parameters.sumeragi.commit_time_ms.max(block_time_ms);
+    let base_ms = commit_time_ms.max(block_time_ms);
+    let aggregator_ms = (base_ms / LOCALNET_NPOS_AGGREGATOR_DIVISOR).max(1);
+
+    let mut npos = parameters
+        .custom()
+        .get(&SumeragiNposParameters::parameter_id())
+        .and_then(SumeragiNposParameters::from_custom_parameter)
+        .unwrap_or_default();
+    npos.block_time_ms = block_time_ms;
+    npos.timeout_propose_ms = base_ms;
+    npos.timeout_prevote_ms = base_ms;
+    npos.timeout_precommit_ms = base_ms;
+    npos.timeout_commit_ms = commit_time_ms;
+    npos.timeout_da_ms = base_ms;
+    npos.timeout_aggregator_ms = aggregator_ms;
+    if let Some(redundant_send_r) = redundant_send_r {
+        npos.redundant_send_r = redundant_send_r;
+    }
+
+    parameters.set_parameter(Parameter::Custom(npos.into_custom_parameter()));
+}
+
 fn apply_parameter_overrides(
     genesis: RawGenesisTransaction,
     block_time_ms: Option<u64>,
     commit_time_ms: Option<u64>,
     redundant_send_r: Option<u8>,
+    consensus_mode: SumeragiConsensusMode,
+    next_consensus_mode: Option<SumeragiConsensusMode>,
 ) -> RawGenesisTransaction {
-    if block_time_ms.is_none() && commit_time_ms.is_none() && redundant_send_r.is_none() {
+    let include_npos = matches!(consensus_mode, SumeragiConsensusMode::Npos)
+        || matches!(next_consensus_mode, Some(SumeragiConsensusMode::Npos));
+    if block_time_ms.is_none()
+        && commit_time_ms.is_none()
+        && redundant_send_r.is_none()
+        && !include_npos
+    {
         return genesis;
     }
 
@@ -1027,6 +1071,9 @@ fn apply_parameter_overrides(
     }
     if let Some(redundant_send_r) = redundant_send_r {
         parameters.sumeragi.collectors_redundant_send_r = redundant_send_r;
+    }
+    if include_npos {
+        apply_localnet_npos_overrides(&mut parameters, redundant_send_r);
     }
 
     // Use structured parameters so overrides land in the manifest parameters block.
@@ -1355,7 +1402,9 @@ mod tests {
         isi::SetParameter,
         parameter::{
             Parameter,
-            system::{Parameters, SumeragiConsensusMode, consensus_metadata},
+            system::{
+                Parameters, SumeragiConsensusMode, SumeragiNposParameters, consensus_metadata,
+            },
         },
         transaction::Executable,
     };
@@ -1851,6 +1900,55 @@ mod tests {
         let params = manifest.effective_parameters();
         assert_eq!(params.sumeragi().block_time_ms(), 1_000);
         assert_eq!(params.sumeragi().commit_time_ms(), 1_000);
+    }
+
+    #[test]
+    fn npos_localnet_updates_timeouts_and_redundant_send() {
+        let temp = tempfile::tempdir().expect("tmp dir");
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
+            peers: NonZeroU16::new(2).expect("non-zero"),
+            seed: Some("npos-timeouts".to_owned()),
+            bind_host: DEFAULT_BIND_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 38080,
+            base_p2p_port: 38337,
+            out_dir: temp.path().to_path_buf(),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: Some(1_200),
+            commit_time_ms: Some(1_600),
+            redundant_send_r: Some(3),
+            consensus_mode: SumeragiConsensusMode::Npos,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
+
+        let genesis_path = temp.path().join("genesis.json");
+        let genesis_contents = fs::read_to_string(&genesis_path).expect("read genesis");
+        let manifest: iroha_genesis::RawGenesisTransaction =
+            norito::json::from_str(&genesis_contents).expect("parse genesis manifest");
+
+        let params = manifest.effective_parameters();
+        let npos = params
+            .custom()
+            .get(&SumeragiNposParameters::parameter_id())
+            .and_then(SumeragiNposParameters::from_custom_parameter)
+            .expect("npos parameters must be present");
+        assert_eq!(npos.block_time_ms(), 1_200);
+        assert_eq!(npos.timeout_propose_ms(), 1_600);
+        assert_eq!(npos.timeout_prevote_ms(), 1_600);
+        assert_eq!(npos.timeout_precommit_ms(), 1_600);
+        assert_eq!(npos.timeout_commit_ms(), 1_600);
+        assert_eq!(npos.timeout_da_ms(), 1_600);
+        assert_eq!(
+            npos.timeout_aggregator_ms(),
+            1_600 / LOCALNET_NPOS_AGGREGATOR_DIVISOR
+        );
+        assert_eq!(npos.redundant_send_r(), 3);
     }
 
     #[test]
