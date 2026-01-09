@@ -1,6 +1,10 @@
 # Status
 
 ## Latest Updates
+- Integration tests: emit public DNS ALIAS/CNAME records plus NS/DS delegation placeholders in the SoraNet web deploy coverage.
+- Tests: not run (not requested).
+- Docs: add a public DNS delegation note to the devportal deploy guide for apex/subdomain guidance.
+- Tests: not run (not requested).
 - Executor permissions: classify `CanUseFeeSponsor` as domain/account-associated, and add association coverage; IVM host queueing uses explicit `u64` gas accumulation and avoids borrow conflicts; SoraNet web deploy integration test uses `norito::json!`, base64 decode, and captures response status safely.
 - Tests: `CARGO_TARGET_DIR=target/codex-workspace cargo test --workspace` (failed: merge conflict markers in `crates/iroha_core/src/sumeragi/main_loop.rs`); `CARGO_TARGET_DIR=target/codex-workspace cargo test -p iroha_executor` (failed: `OfflineSpendReceipt.invoice_id` private field in `crates/iroha_executor/src/default/offline.rs`).
 - Docs: add public DNS delegation guidance to the SoraDNS registry RFC and clarify registrar delegation in the DNS owner runbook.

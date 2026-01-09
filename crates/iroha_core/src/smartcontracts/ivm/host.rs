@@ -5481,6 +5481,85 @@ mod tests {
         assert_eq!(host.queued, vec![instr_one, instr_two]);
     }
 
+    #[test]
+    fn fastpq_batch_entry_syscall_returns_transfer_gas() {
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority.clone());
+        let mut vm = IVM::new(1_000);
+        vm.load_program(&ivm::ProgramMetadata::default().encode())
+            .expect("load meta");
+
+        host.syscall(ivm_sys::SYSCALL_TRANSFER_V1_BATCH_BEGIN, &mut vm)
+            .expect("begin batch");
+
+        let from = authority.clone();
+        let to: AccountId = "bob@wonderland".parse().unwrap();
+        let asset_def: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+        let amount = 7_u64;
+
+        let from_tlv = make_tlv(PointerType::AccountId as u16, &from.encode());
+        let to_tlv = make_tlv(PointerType::AccountId as u16, &to.encode());
+        let asset_tlv = make_tlv(PointerType::AssetDefinitionId as u16, &asset_def.encode());
+        vm.memory
+            .preload_input(0, &from_tlv)
+            .expect("preload from");
+        vm.memory
+            .preload_input(256, &to_tlv)
+            .expect("preload to");
+        vm.memory
+            .preload_input(512, &asset_tlv)
+            .expect("preload asset");
+        vm.set_register(10, ivm::Memory::INPUT_START);
+        vm.set_register(11, ivm::Memory::INPUT_START + 256);
+        vm.set_register(12, ivm::Memory::INPUT_START + 512);
+        vm.set_register(13, amount);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_TRANSFER_ASSET, &mut vm)
+            .expect("batch entry");
+        let asset_id = AssetId::of(asset_def, from.clone());
+        let isi = Transfer::asset_numeric(asset_id, amount, to);
+        let expected = crate::gas::meter_instruction(&InstructionBox::from(TransferBox::from(isi)));
+        assert_eq!(gas, expected);
+        assert!(host.queued.is_empty());
+        assert_eq!(
+            host.fastpq_batch_entries.as_ref().map(|entries| entries.len()),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn fastpq_batch_apply_syscall_returns_batch_gas() {
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority.clone());
+        let mut vm = IVM::new(1_000);
+        vm.load_program(&ivm::ProgramMetadata::default().encode())
+            .expect("load meta");
+
+        let from = authority;
+        let to: AccountId = "bob@wonderland".parse().unwrap();
+        let asset_def: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+        let entries = vec![
+            TransferAssetBatchEntry::new(from.clone(), to.clone(), asset_def.clone(), 1_u64),
+            TransferAssetBatchEntry::new(from.clone(), to.clone(), asset_def.clone(), 2_u64),
+        ];
+        let batch = TransferAssetBatch::new(entries);
+        let payload = norito::to_bytes(&batch).expect("encode batch");
+        let tlv = make_tlv(PointerType::NoritoBytes as u16, &payload);
+        vm.memory
+            .preload_input(0, &tlv)
+            .expect("preload batch");
+        vm.set_register(10, ivm::Memory::INPUT_START);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_TRANSFER_V1_BATCH_APPLY, &mut vm)
+            .expect("apply batch");
+        let expected = InstructionBox::from(batch.clone());
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(gas, expected_gas);
+        assert_eq!(host.queued, vec![expected]);
+    }
+
     pub(super) fn make_policy_snapshot(
         dsid: DataSpaceId,
         manifest_root: [u8; 32],
