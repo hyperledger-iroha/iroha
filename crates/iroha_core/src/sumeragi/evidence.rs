@@ -369,7 +369,7 @@ pub enum EvidenceValidationError {
     SignatureInvalid,
     /// Proposal evidence references a highest certificate from an unexpected height.
     InvalidProposalHeight,
-    /// Proposal evidence references a highest certificate from an unexpected view.
+    /// Proposal evidence view invariant (reserved; view resets per height are expected).
     InvalidProposalView,
     /// Proposal evidence references a certificate whose subject does not match the proposal parent hash.
     InvalidProposalParentMismatch,
@@ -410,9 +410,7 @@ impl std::fmt::Display for EvidenceValidationError {
             InvalidProposalHeight => {
                 "invalid proposal evidence must advance height beyond the referenced certificate"
             }
-            InvalidProposalView => {
-                "invalid proposal evidence must advance view beyond the referenced certificate"
-            }
+            InvalidProposalView => "invalid proposal evidence view invariant violated",
             InvalidProposalParentMismatch => {
                 "invalid proposal evidence certificate subject must match header parent hash"
             }
@@ -571,9 +569,7 @@ fn validate_invalid_proposal(proposal: &Proposal) -> Result<(), EvidenceValidati
     if proposal.header.height <= qc.height {
         return Err(EvidenceValidationError::InvalidProposalHeight);
     }
-    if proposal.header.view <= qc.view {
-        return Err(EvidenceValidationError::InvalidProposalView);
-    }
+    // View numbers reset per height, so only the height ordering is meaningful here.
     if proposal.header.parent_hash != qc.subject_block_hash {
         return Err(EvidenceValidationError::InvalidProposalParentMismatch);
     }
@@ -1759,27 +1755,24 @@ mod tests {
     }
 
     #[test]
-    fn persist_record_rejects_invalid_proposal_view_invariant() {
+    fn persist_record_accepts_invalid_proposal_view_reset() {
         let ctx = test_context();
         let context = ctx.validation_context();
+        let parent = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA5; 32]));
         let proposal = Proposal {
             header: ConsensusBlockHeader {
-                parent_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
-                    [0xA5; 32],
-                )),
+                parent_hash: parent,
                 tx_root: Hash::prehashed([0xA6; 32]),
                 state_root: Hash::prehashed([0xA7; 32]),
                 proposer: 4,
                 height: 41,
-                view: 6,
+                view: 0,
                 epoch: 1,
                 highest_qc: QcHeaderRef {
                     height: 40,
                     view: 6,
                     epoch: 1,
-                    subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(
-                        Hash::prehashed([0xA8; 32]),
-                    ),
+                    subject_block_hash: parent,
                     phase: Phase::Commit,
                 },
             },
@@ -1789,14 +1782,12 @@ mod tests {
             kind: EvidenceKind::InvalidProposal,
             payload: EvidencePayload::InvalidProposal {
                 proposal,
-                reason: "non-advancing view".to_owned(),
+                reason: "view reset after height advance".to_owned(),
             },
         };
-        assert_invalid_evidence_rejected(
-            &context,
-            &evidence,
-            EvidenceValidationError::InvalidProposalView,
-        );
+        assert!(validate_evidence(&evidence, &context).is_ok());
+        let mut store = EvidenceStore::new();
+        assert!(store.insert(&evidence, &context));
     }
 
     #[test]

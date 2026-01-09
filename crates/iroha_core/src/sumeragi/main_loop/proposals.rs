@@ -153,7 +153,7 @@ pub(super) fn detect_proposal_mismatch(
     payload_hash: &Hash,
 ) -> Option<ProposalMismatch> {
     let block_height = header.height().get();
-    let block_view = u64::from(header.view_change_index());
+    let block_view = header.view_change_index();
     if proposal.header.height != block_height {
         return Some(ProposalMismatch::Height {
             proposal: proposal.header.height,

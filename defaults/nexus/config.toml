@@ -70,22 +70,25 @@ soravpn_bps = 500
 index = 0
 alias = "core"
 description = "Primary execution lane"
+dataspace = "universal"
 metadata = {}
 
 [[nexus.lane_catalog]]
 index = 1
 alias = "governance"
 description = "Governance & parliament traffic"
+dataspace = "governance"
 metadata = {}
 
 [[nexus.lane_catalog]]
 index = 2
 alias = "zk"
 description = "Zero-knowledge attachments"
+dataspace = "zk"
 metadata = {}
 
 [[nexus.dataspace_catalog]]
-alias = "global"
+alias = "universal"
 id = 0
 description = "Single-lane data space"
 fault_tolerance = 1
@@ -104,7 +107,7 @@ fault_tolerance = 1
 
 [nexus.routing_policy]
 default_lane = 0
-default_dataspace = "global"
+default_dataspace = "universal"
 
 [[nexus.routing_policy.rules]]
 lane = 1

@@ -4,9 +4,9 @@ direction: rtl
 source: docs/source/nexus_fee_model.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e02872dbcb6d92d8be4d40fc2864f28fc6564391640a6ea67768a1f837b57e0f
-source_last_modified: "2025-11-15T20:09:59.438546+00:00"
-translation_last_reviewed: 2026-01-01
+source_hash: 532c57a0dae54224af0d30640edf8a3cbc8ac9a1df7d73b563bd16c3a635aec1
+source_last_modified: "2026-01-08T19:45:50.411145+00:00"
+translation_last_reviewed: 2026-01-08
 ---
 
 <div dir="rtl">
@@ -25,6 +25,10 @@ translation_last_reviewed: 2026-01-01
   و`liquidity_profile` (`tier1`, `tier2`, او `tier3`)، و`volatility_class` (`stable`, `elevated`,
   `dislocated`). تغذي هذه الاعلام موجّه التسوية كي يطابق تسعير XOR الناتج TWAP القياسي و
   طبقة haircut الخاصة بالـ lane.
+- يجب ان تتضمن معاملات IVM بيانات وصفية `gas_limit` (`u64`) للحد من التعرض للرسوم. تتطلب نقطة النهاية
+  `/v1/contracts/call` وجود `gas_limit` صراحة، وتُرفض القيم غير الصحيحة.
+- عند ضبط البيانات الوصفية `fee_sponsor`، يجب على الراعي منح
+  `CanUseFeeSponsor { sponsor }` للجهة المستدعية. تُرفض محاولات الرعاية غير المصرح بها ويجري تسجيلها.
 - كل معاملة تدفع gas تسجل `LaneSettlementReceipt`. يحفظ كل ايصال معرّف المصدر الذي يقدمه المستدعي،
   مقدار الميكرو المحلي، قيمة XOR المستحقة فورا، وقيمة XOR المتوقعة بعد haircut،
   هامش الامان المحقق (`xor_variance_micro`)، والطابع الزمني للكتلة بالميلي ثانية.

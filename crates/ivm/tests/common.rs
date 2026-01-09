@@ -105,6 +105,7 @@ pub fn syscall_registers_compact_bundle(
 }
 
 pub const MODE_VECTOR: u8 = 0x02;
+pub const MODE_ZK: u8 = ivm::ivm_mode::ZK;
 
 pub fn assemble_with_mode(code: &[u8], mode: u8) -> Vec<u8> {
     let vector_length = if (mode & MODE_VECTOR) != 0 { 4 } else { 0 };
@@ -136,7 +137,7 @@ pub fn assemble_syscalls(syscalls: &[u8]) -> Vec<u8> {
 }
 
 pub fn assemble_zk(code: &[u8], max_cycles: u64) -> Vec<u8> {
-    let mut header = assemble_with_mode(code, 0);
+    let mut header = assemble_with_mode(code, MODE_ZK);
     // overwrite max_cycles in header (bytes 8..16)
     header[8..16].copy_from_slice(&max_cycles.to_le_bytes());
     header

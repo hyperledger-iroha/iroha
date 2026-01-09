@@ -1062,7 +1062,7 @@ fn minimal_config_snapshot() {
                             id: DataSpaceId(
                                 0,
                             ),
-                            alias: "global",
+                            alias: "universal",
                             description: None,
                             fault_tolerance: 1,
                         },
@@ -2218,7 +2218,7 @@ fn nexus_profile_template_enables_multilane_defaults() {
         .iter()
         .map(|entry| entry.alias.as_str())
         .collect();
-    assert_eq!(dataspace_aliases, ["global", "governance", "zk"]);
+    assert_eq!(dataspace_aliases, ["universal", "governance", "zk"]);
     assert_eq!(config.nexus.routing_policy.rules.len(), 2);
     assert!(
         !config.nexus.lane_relay_emergency.enabled,
@@ -2392,13 +2392,23 @@ fn routing_policy_dataspace_resolution() {
 
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
-        lane_count: NonZeroU32::new(1).expect("nonzero"),
-        lane_catalog: vec![LaneDescriptor {
-            index: Some(0),
-            alias: Some("primary".into()),
-            description: None,
-            ..LaneDescriptor::default()
-        }],
+        lane_count: NonZeroU32::new(2).expect("nonzero"),
+        lane_catalog: vec![
+            LaneDescriptor {
+                index: Some(0),
+                alias: Some("primary".into()),
+                dataspace: Some("universal".into()),
+                description: None,
+                ..LaneDescriptor::default()
+            },
+            LaneDescriptor {
+                index: Some(1),
+                alias: Some("alpha".into()),
+                dataspace: Some("alpha".into()),
+                description: None,
+                ..LaneDescriptor::default()
+            },
+        ],
         dataspace_catalog: vec![DataSpaceDescriptor {
             alias: Some("alpha".into()),
             id: Some(1),
@@ -2407,11 +2417,11 @@ fn routing_policy_dataspace_resolution() {
             fault_tolerance: None,
         }],
         routing_policy: RoutingPolicy {
-            default_lane: Some(0),
+            default_lane: Some(1),
             default_dataspace: Some("alpha".into()),
             rules: vec![RoutingRule {
                 lane: Some(0),
-                dataspace: Some("global".into()),
+                dataspace: Some("universal".into()),
                 matcher: RouteMatcher::default(),
             }],
         },
@@ -2427,6 +2437,55 @@ fn routing_policy_dataspace_resolution() {
     assert_eq!(
         parsed.routing_policy.rules[0].dataspace,
         Some(DataSpaceId::GLOBAL)
+    );
+}
+
+#[test]
+fn routing_policy_lane_dataspace_mismatch_rejected() {
+    use std::num::NonZeroU32;
+
+    use iroha_config::parameters::user::{
+        DataSpaceDescriptor, LaneDescriptor, Nexus, RoutingPolicy,
+    };
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        lane_count: NonZeroU32::new(1).expect("nonzero"),
+        lane_catalog: vec![LaneDescriptor {
+            index: Some(0),
+            alias: Some("primary".into()),
+            dataspace: Some("universal".into()),
+            description: None,
+            ..LaneDescriptor::default()
+        }],
+        dataspace_catalog: vec![DataSpaceDescriptor {
+            alias: Some("alpha".into()),
+            id: Some(1),
+            manifest_hash: None,
+            description: None,
+            fault_tolerance: None,
+        }],
+        routing_policy: RoutingPolicy {
+            default_lane: Some(0),
+            default_dataspace: Some("alpha".into()),
+            rules: Vec::new(),
+        },
+        ..Nexus::default()
+    };
+
+    let parsed = nexus.parse(&mut emitter);
+    assert!(
+        parsed.is_none(),
+        "mismatched default dataspace must be rejected"
+    );
+    let err = emitter
+        .into_result()
+        .expect_err("routing policy mismatch should surface parse errors");
+    let debug = format!("{err:?}");
+    assert!(
+        debug.contains("routing default dataspace"),
+        "error should mention mismatched default dataspace (got {debug})"
     );
 }
 

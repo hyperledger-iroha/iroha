@@ -118,7 +118,7 @@ returns HTTP 429; any handler error increments
 - `iroha_cli contract build-manifest --code-file <path> [--sign-with <hex>]` computes
   `code_hash`/`abi_hash` for compiled `.to` and optionally signs the manifest,
   printing JSON or writing to `--out`.
-- `iroha_cli contract simulate --authority <id> --private-key <hex> --code-file <path> [--gas-limit <u64>]`
+- `iroha_cli contract simulate --authority <id> --private-key <hex> --code-file <path> --gas-limit <u64>`
   runs an offline VM pass and reports ABI/hash metadata plus the queued ISIs
   (counts and instruction ids) without touching the network. Attach
   `--namespace/--contract-id` to mirror call-time metadata.

@@ -47,7 +47,7 @@ pub(super) fn reset_qcs_after_kura_abort(
             .latest_block()
             .map(|block| crate::sumeragi::consensus::QcHeaderRef {
                 height: block.header().height().get(),
-                view: u64::from(block.header().view_change_index()),
+                view: block.header().view_change_index(),
                 epoch: 0,
                 subject_block_hash: block.hash(),
                 phase: crate::sumeragi::consensus::Phase::Commit,

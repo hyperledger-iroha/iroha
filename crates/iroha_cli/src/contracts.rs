@@ -334,6 +334,10 @@ fn program_summary_from_bytes(bytes: &[u8]) -> Result<ProgramSummary> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine as _;
+    use iroha_crypto::Algorithm;
+    use iroha_i18n::{Bundle, Language, Localizer};
+    use url::Url;
 
     fn minimal_program() -> Vec<u8> {
         let meta = ivm::ProgramMetadata {
@@ -357,6 +361,109 @@ mod tests {
             Hash::prehashed(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))
         );
     }
+
+    #[test]
+    fn simulate_emits_gas_limit_metadata_key() {
+        let authority: AccountId = "alice@wonderland".parse().expect("authority");
+        let mut ctx = TestContext::new(authority.clone());
+        let program = minimal_program();
+        let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
+        let private_key = KeyPair::from_seed(vec![1u8; 32], Algorithm::Ed25519)
+            .private_key()
+            .to_string();
+        let args = SimulateArgs {
+            authority: authority.to_string(),
+            private_key,
+            code_file: None,
+            code_b64: Some(code_b64),
+            gas_limit: 42,
+            namespace: None,
+            contract_id: None,
+        };
+        args.run(&mut ctx).expect("simulate");
+        let output = ctx.take_output().expect("output");
+        let metadata_keys = output
+            .get("metadata_keys")
+            .and_then(norito::json::Value::as_array)
+            .expect("metadata_keys");
+        let has_gas_limit = metadata_keys
+            .iter()
+            .any(|value| value.as_str() == Some("gas_limit"));
+        assert!(has_gas_limit, "metadata_keys missing gas_limit: {metadata_keys:?}");
+    }
+
+    struct TestContext {
+        cfg: iroha::config::Config,
+        output: Option<norito::json::Value>,
+        i18n: Localizer,
+    }
+
+    impl TestContext {
+        fn new(account: AccountId) -> Self {
+            let key_pair = KeyPair::from_seed(vec![0u8; 32], Algorithm::Ed25519);
+            let cfg = iroha::config::Config {
+                chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
+                account,
+                key_pair,
+                basic_auth: None,
+                torii_api_url: Url::parse("http://127.0.0.1/").unwrap(),
+                torii_api_version: iroha::config::default_torii_api_version(),
+                torii_api_min_proof_version:
+                    iroha::config::DEFAULT_TORII_API_MIN_PROOF_VERSION.to_string(),
+                torii_request_timeout: iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT,
+                transaction_ttl: iroha::config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
+                transaction_status_timeout: iroha::config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,
+                transaction_add_nonce: iroha::config::DEFAULT_TRANSACTION_NONCE,
+                connect_queue_root: iroha::config::default_connect_queue_root(),
+                sorafs_alias_cache: crate::config_utils::default_alias_cache_policy(),
+                sorafs_anonymity_policy: crate::config_utils::default_anonymity_policy(),
+                sorafs_rollout_phase: crate::config_utils::default_rollout_phase(),
+            };
+            Self {
+                cfg,
+                output: None,
+                i18n: Localizer::new(Bundle::Cli, Language::English),
+            }
+        }
+
+        fn take_output(&mut self) -> Option<norito::json::Value> {
+            self.output.take()
+        }
+    }
+
+    impl RunContext for TestContext {
+        fn config(&self) -> &iroha::config::Config {
+            &self.cfg
+        }
+
+        fn transaction_metadata(&self) -> Option<&Metadata> {
+            None
+        }
+
+        fn input_instructions(&self) -> bool {
+            false
+        }
+
+        fn output_instructions(&self) -> bool {
+            false
+        }
+
+        fn i18n(&self) -> &Localizer {
+            &self.i18n
+        }
+
+        fn print_data<T>(&mut self, data: &T) -> Result<()>
+        where
+            T: norito::json::JsonSerialize + ?Sized,
+        {
+            self.output = Some(norito::json::to_value(data)?);
+            Ok(())
+        }
+
+        fn println(&mut self, _data: impl std::fmt::Display) -> Result<()> {
+            Ok(())
+        }
+    }
 }
 
 #[derive(clap::Args, Debug)]
@@ -373,9 +480,9 @@ pub struct SimulateArgs {
     /// Base64-encoded code (mutually exclusive with --code-file)
     #[arg(long, conflicts_with = "code_file")]
     pub code_b64: Option<String>,
-    /// Optional `gas_limit` metadata to include in the simulated transaction
+    /// Required `gas_limit` metadata to include in the simulated transaction
     #[arg(long)]
-    pub gas_limit: Option<u64>,
+    pub gas_limit: u64,
     /// Optional contract namespace metadata for call-time binding checks
     #[arg(long)]
     pub namespace: Option<String>,
@@ -392,12 +499,10 @@ impl Run for SimulateArgs {
         let summary = program_summary_from_bytes(&code)?;
 
         let mut metadata = Metadata::default();
-        if let Some(gas) = self.gas_limit {
-            metadata.insert(
-                Name::from_str("gas_limit")?,
-                iroha_primitives::json::Json::from(gas),
-            );
-        }
+        metadata.insert(
+            Name::from_str("gas_limit")?,
+            iroha_primitives::json::Json::from(self.gas_limit),
+        );
         if let Some(ns) = self.namespace.as_ref() {
             metadata.insert(
                 Name::from_str("contract_namespace")?,

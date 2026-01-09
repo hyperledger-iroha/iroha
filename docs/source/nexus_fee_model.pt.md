@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/nexus_fee_model.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e02872dbcb6d92d8be4d40fc2864f28fc6564391640a6ea67768a1f837b57e0f
-source_last_modified: "2025-11-15T20:09:59.438546+00:00"
-translation_last_reviewed: 2026-01-01
+source_hash: 532c57a0dae54224af0d30640edf8a3cbc8ac9a1df7d73b563bd16c3a635aec1
+source_last_modified: "2026-01-08T19:45:50.411145+00:00"
+translation_last_reviewed: 2026-01-08
 ---
 
 # Atualizacoes do modelo de taxas Nexus
@@ -21,6 +21,11 @@ reconciliem os debitos de gas com o modelo de taxas Nexus.
   um `liquidity_profile` (`tier1`, `tier2`, ou `tier3`), e um `volatility_class` (`stable`,
   `elevated`, `dislocated`). Esses flags alimentam o settlement router para que a cotacao XOR resultante
   coincida com o TWAP canonico e o tier de haircut da lane.
+- As transacoes IVM devem incluir o metadado `gas_limit` (`u64`) para limitar a exposicao a taxas.
+  O endpoint `/v1/contracts/call` exige `gas_limit` explicitamente e valores invalidos sao rejeitados.
+- Quando uma transacao define o metadado `fee_sponsor`, o sponsor deve conceder
+  `CanUseFeeSponsor { sponsor }` ao chamador. Tentativas de sponsorship nao autorizadas sao rejeitadas
+  e registradas.
 - Cada transacao que paga gas registra um `LaneSettlementReceipt`. Cada recibo armazena o
   identificador de origem fornecido pelo chamador, o micro-montante local, o XOR devido
   imediatamente, o XOR esperado apos o haircut, a margem de seguranca realizada

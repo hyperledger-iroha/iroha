@@ -399,6 +399,15 @@ fn parse_fee_sponsor(metadata: &Metadata) -> Result<Option<AccountId>, Validatio
     Ok(None)
 }
 
+fn parse_gas_limit(metadata: &Metadata) -> Result<Option<u64>, ValidationFail> {
+    let Some(raw) = metadata.get("gas_limit") else {
+        return Ok(None);
+    };
+    raw.try_into_any_norito::<u64>()
+        .map(Some)
+        .map_err(|err| ValidationFail::NotPermitted(format!("invalid gas_limit metadata: {err}")))
+}
+
 fn parse_executor_additional_fuel(metadata: &Metadata) -> Result<u64, ValidationFail> {
     let Some(raw) = metadata.get(EXECUTOR_ADDITIONAL_FUEL_KEY) else {
         return Ok(0);
@@ -460,7 +469,7 @@ impl Executor {
         if !state_transaction.nexus.enabled {
             return Ok(());
         }
-        let cfg = &state_transaction.nexus.fees;
+        let cfg = state_transaction.nexus.fees.clone();
         let tx_bytes_u128 = u128::try_from(tx_bytes_len).map_err(|_| {
             ValidationFail::InternalError("transaction too large for fee accounting".to_owned())
         })?;
@@ -509,6 +518,24 @@ impl Executor {
                 );
                 return Err(ValidationFail::NotPermitted(
                     "fee sponsorship is disabled".to_owned(),
+                ));
+            }
+            if !state_transaction.can_use_fee_sponsor(authority, &sponsor) {
+                let sponsor_id = sponsor.to_string();
+                let authority_id = authority.to_string();
+                sumeragi_status::record_nexus_fee_event(NexusFeeEvent::SponsorUnauthorized {
+                    sponsor_id: sponsor_id.clone(),
+                    authority_id: authority_id.clone(),
+                });
+                warn!(
+                    target: "economics",
+                    sponsor = %sponsor_id,
+                    authority = %authority_id,
+                    fee_amount = fee_u128,
+                    "nexus fee sponsor rejected: missing permission"
+                );
+                return Err(ValidationFail::NotPermitted(
+                    "fee sponsor is not authorized".to_owned(),
                 ));
             }
             if cfg.sponsor_max_fee > 0 && fee_u128 > u128::from(cfg.sponsor_max_fee) {
@@ -748,9 +775,7 @@ impl Executor {
         let md = transaction.metadata();
         let gas_asset_opt = md.get("gas_asset_id").map(|j| j.as_ref().to_string());
         // Payer-provided gas limit (optional for non-VM transactions); used to cap fee exposure
-        let gas_limit_md: Option<u64> = md
-            .get("gas_limit")
-            .and_then(|j| j.try_into_any_norito::<u64>().ok());
+        let gas_limit_md = parse_gas_limit(md)?;
         configure_executor_fuel_budget(self, state_transaction, md)?;
         let pipeline_gas = &state_transaction.pipeline.gas;
         if !pipeline_gas.accepted_assets.is_empty() {
@@ -2293,6 +2318,7 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         executor::{self as data_model_executor, ExecutorDataModel},
+        isi::Grant,
         name::Name,
         parameter::{CustomParameter, CustomParameterId},
         prelude::*,
@@ -2300,6 +2326,7 @@ mod tests {
         transaction::executable::IvmBytecode,
     };
     use iroha_executor_data_model::isi::multisig::{DEFAULT_MULTISIG_TTL_MS, MultisigSpec};
+    use iroha_executor_data_model::permission::nexus::CanUseFeeSponsor;
     use iroha_primitives::json::Json;
     #[cfg(feature = "telemetry")]
     use iroha_telemetry::metrics::Metrics;
@@ -2553,6 +2580,164 @@ mod tests {
         assert!(
             matches!(res, Err(ValidationFail::NotPermitted(_))),
             "sponsorship should be rejected when disabled"
+        );
+    }
+
+    #[test]
+    fn nexus_fee_sponsor_rejected_without_permission() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+        let (authority_id, authority_kp) = gen_account_in("wonderland");
+        let (sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
+        let domain: Domain =
+            Domain::new("wonderland".parse().expect("domain id")).build(&authority_id);
+        let authority_account = Account::new(authority_id.clone()).build(&authority_id);
+        let sponsor_account = Account::new(sponsor_id.clone()).build(&sponsor_id);
+        let world = World::with([domain], [authority_account, sponsor_account], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+        let nexus = state.nexus.get_mut();
+        nexus.enabled = true;
+        nexus.fees.base_fee = 1;
+        nexus.fees.sponsorship_enabled = true;
+        nexus.fees.fee_asset_id = "xor#wonderland".to_string();
+        nexus.fees.fee_sink_account_id = "sink@wonderland".to_string();
+
+        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        metadata.insert(
+            Name::from_str("fee_sponsor").expect("static name"),
+            Json::new(sponsor_id.to_string()),
+        );
+        let chain: iroha_data_model::ChainId = "test-chain".parse().unwrap();
+        let tx = TransactionBuilder::new(chain, authority_id.clone())
+            .with_metadata(metadata)
+            .with_executable(Executable::Instructions(Vec::new().into()))
+            .sign(authority_kp.private_key());
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let executor = super::Executor::Initial;
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+
+        let mut stx = block.transaction();
+        let res = executor.execute_transaction(&mut stx, &authority_id, tx, &mut ivm_cache);
+        assert!(
+            matches!(res, Err(ValidationFail::NotPermitted(_))),
+            "sponsorship should be rejected without permission"
+        );
+
+        let snap = crate::sumeragi::status::nexus_fee_snapshot();
+        assert_eq!(snap.sponsor_unauthorized_total, 1);
+    }
+
+    #[test]
+    fn nexus_fee_sponsor_allowed_with_permission() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let (authority_id, authority_kp) = gen_account_in("wonderland");
+        let (sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
+        let (sink_id, _sink_kp) = gen_account_in("wonderland");
+        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&authority_id);
+        let authority_account = Account::new(authority_id.clone()).build(&authority_id);
+        let sponsor_account = Account::new(sponsor_id.clone()).build(&sponsor_id);
+        let sink_account = Account::new(sink_id.clone()).build(&sink_id);
+        let asset_def_id: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+        let ad: AssetDefinition =
+            AssetDefinition::numeric(asset_def_id.clone()).build(&authority_id);
+        let sponsor_asset = Asset::new(
+            AssetId::of(asset_def_id.clone(), sponsor_id.clone()),
+            Numeric::new(10_000, 0),
+        );
+        let sink_asset = Asset::new(
+            AssetId::of(asset_def_id.clone(), sink_id.clone()),
+            Numeric::new(0, 0),
+        );
+        let world = World::with_assets(
+            [domain],
+            [authority_account, sponsor_account, sink_account],
+            [ad],
+            [sponsor_asset, sink_asset],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = 1;
+            nexus.fees.per_byte_fee = 0;
+            nexus.fees.per_instruction_fee = 0;
+            nexus.fees.per_gas_unit_fee = 0;
+            nexus.fees.sponsorship_enabled = true;
+            nexus.fees.fee_asset_id = asset_def_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+        }
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+
+        let permission = CanUseFeeSponsor {
+            sponsor: sponsor_id.clone(),
+        };
+        Grant::account_permission(permission, authority_id.clone())
+            .execute(&sponsor_id, &mut stx)
+            .expect("grant fee sponsor permission");
+
+        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        metadata.insert(
+            Name::from_str("fee_sponsor").expect("static name"),
+            Json::new(sponsor_id.to_string()),
+        );
+        let chain: iroha_data_model::ChainId = "test-chain".parse().unwrap();
+        let tx = TransactionBuilder::new(chain, authority_id.clone())
+            .with_metadata(metadata)
+            .with_executable(Executable::Instructions(Vec::new().into()))
+            .sign(authority_kp.private_key());
+
+        let executor = super::Executor::Initial;
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        executor
+            .execute_transaction(&mut stx, &authority_id, tx, &mut ivm_cache)
+            .expect("execution");
+
+        let sponsor_balance_after = stx
+            .world
+            .assets()
+            .get(&AssetId::of(asset_def_id.clone(), sponsor_id.clone()))
+            .expect("sponsor asset exists")
+            .0
+            .try_mantissa_u128()
+            .unwrap();
+        let sink_balance_after = stx
+            .world
+            .assets()
+            .get(&AssetId::of(asset_def_id.clone(), sink_id.clone()))
+            .expect("sink asset exists")
+            .0
+            .try_mantissa_u128()
+            .unwrap();
+        assert_eq!(sponsor_balance_after, 9_999);
+        assert_eq!(sink_balance_after, 1);
+
+        let snap = crate::sumeragi::status::nexus_fee_snapshot();
+        assert_eq!(snap.charged_total, 0);
+
+        stx.apply();
+
+        let snap = crate::sumeragi::status::nexus_fee_snapshot();
+        assert_eq!(snap.charged_total, 1);
+        assert_eq!(snap.charged_via_sponsor_total, 1);
+        assert_eq!(
+            snap.last_payer,
+            Some(crate::sumeragi::status::NexusFeePayer::Sponsor)
         );
     }
 

@@ -159,6 +159,7 @@ declare_permissions! {
     iroha_executor_data_model::permission::sorafs::{CanUnregisterSorafsProviderOwner},
     iroha_executor_data_model::permission::soranet::{CanIngestSoranetPrivacy},
     iroha_executor_data_model::permission::nexus::{CanPublishSpaceDirectoryManifest},
+    iroha_executor_data_model::permission::nexus::{CanUseFeeSponsor},
 }
 
 /// Trait that enables using permissions on the blockchain
@@ -310,7 +311,9 @@ mod smart_contract {
 }
 
 mod nexus {
-    use iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifest;
+    use iroha_executor_data_model::permission::nexus::{
+        CanPublishSpaceDirectoryManifest, CanUseFeeSponsor,
+    };
 
     use super::*;
 
@@ -326,6 +329,45 @@ mod nexus {
             host: &Iroha,
         ) -> Result {
             OnlyGenesis::from(self).validate(authority, host, context)
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    struct SponsorAccount<'a> {
+        sponsor: &'a AccountId,
+    }
+
+    impl PassCondition for SponsorAccount<'_> {
+        fn validate(&self, authority: &AccountId, _host: &Iroha, _context: &Context) -> Result {
+            if authority == self.sponsor {
+                return Ok(());
+            }
+            Err(ValidationFail::NotPermitted(
+                "only the sponsor account may grant or revoke fee sponsorship".to_owned(),
+            ))
+        }
+    }
+
+    impl<'a> From<&'a CanUseFeeSponsor> for SponsorAccount<'a> {
+        fn from(value: &'a CanUseFeeSponsor) -> Self {
+            Self {
+                sponsor: &value.sponsor,
+            }
+        }
+    }
+
+    impl ValidateGrantRevoke for CanUseFeeSponsor {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            SponsorAccount::from(self).validate(authority, host, context)
+        }
+
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            SponsorAccount::from(self).validate(authority, host, context)
         }
     }
 }

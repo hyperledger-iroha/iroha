@@ -520,6 +520,8 @@ pub struct NexusFeeSnapshot {
     pub charged_via_sponsor_total: u64,
     /// Rejections because sponsorship was disabled.
     pub sponsor_disabled_total: u64,
+    /// Rejections because the sponsor did not authorize the payer.
+    pub sponsor_unauthorized_total: u64,
     /// Rejections because the fee exceeded `sponsor_max_fee`.
     pub sponsor_cap_exceeded_total: u64,
     /// Failures due to config/asset parsing errors.
@@ -556,6 +558,13 @@ pub enum NexusFeeEvent {
     SponsorDisabled {
         /// Account attempting to sponsor the fee.
         payer_id: String,
+    },
+    /// Sponsor did not authorize the payer.
+    SponsorUnauthorized {
+        /// Sponsor account that was requested.
+        sponsor_id: String,
+        /// Transaction authority that attempted to use the sponsor.
+        authority_id: String,
     },
     /// Sponsorship exceeded configured cap.
     SponsorCapExceeded {
@@ -1798,6 +1807,17 @@ pub fn record_nexus_fee_event(event: NexusFeeEvent) {
             guard.last_payer = Some(NexusFeePayer::Sponsor);
             guard.last_payer_id = Some(payer_id);
             guard.last_error = Some("sponsorship disabled".to_string());
+        }
+        NexusFeeEvent::SponsorUnauthorized {
+            sponsor_id,
+            authority_id,
+        } => {
+            guard.sponsor_unauthorized_total = guard.sponsor_unauthorized_total.saturating_add(1);
+            guard.last_payer = Some(NexusFeePayer::Sponsor);
+            guard.last_payer_id = Some(sponsor_id);
+            guard.last_error = Some(format!(
+                "sponsor not authorized for authority {authority_id}"
+            ));
         }
         NexusFeeEvent::SponsorCapExceeded {
             payer_id,
@@ -5572,7 +5592,10 @@ mod tests {
         for height in 0..(super::VALIDATOR_CHECKPOINT_HISTORY_CAP as u64 + 5) {
             let checkpoint = ValidatorSetCheckpoint::new(
                 height,
+                0,
                 block_hash,
+                UntypedHash::prehashed([0u8; UntypedHash::LENGTH]),
+                UntypedHash::prehashed([0u8; UntypedHash::LENGTH]),
                 vec![peer_a.clone(), peer_b.clone()],
                 Vec::new(),
                 Vec::new(),
@@ -6431,12 +6454,20 @@ mod tests {
         super::record_nexus_fee_event(super::NexusFeeEvent::SponsorDisabled {
             payer_id: "sponsor@test".to_owned(),
         });
+        super::record_nexus_fee_event(super::NexusFeeEvent::SponsorUnauthorized {
+            sponsor_id: "sponsor@test".to_owned(),
+            authority_id: "payer@test".to_owned(),
+        });
         let snap = super::nexus_fee_snapshot();
         assert_eq!(snap.charged_total, 1);
         assert_eq!(snap.charged_via_payer_total, 1);
         assert_eq!(snap.sponsor_disabled_total, 1);
+        assert_eq!(snap.sponsor_unauthorized_total, 1);
         assert_eq!(snap.last_payer, Some(super::NexusFeePayer::Sponsor));
-        assert_eq!(snap.last_error.as_deref(), Some("sponsorship disabled"));
+        assert_eq!(
+            snap.last_error.as_deref(),
+            Some("sponsor not authorized for authority payer@test")
+        );
     }
 
     #[test]

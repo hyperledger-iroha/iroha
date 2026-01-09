@@ -35,7 +35,7 @@ use iroha_primitives::time::TimeSource;
 use mv::storage::StorageReadOnly;
 
 use crate::{
-    queue::evaluate_policy,
+    queue::evaluate_policy_with_catalog,
     smartcontracts::ivm::cache::IvmCache,
     state::{StateBlock, StateReadOnlyWithTransactions, StateTransaction, WorldReadOnly},
 };
@@ -1404,7 +1404,12 @@ impl StateBlock<'_> {
         }
 
         if !is_heartbeat {
-            let routing_decision = evaluate_policy(&state_transaction.nexus.routing_policy, &tx);
+            let routing_decision = evaluate_policy_with_catalog(
+                &state_transaction.nexus.routing_policy,
+                &state_transaction.nexus.lane_catalog,
+                &state_transaction.nexus.dataspace_catalog,
+                &tx,
+            );
             let lane_assignment = LaneAssignment {
                 lane_id: routing_decision.lane_id,
                 dataspace_id: routing_decision.dataspace_id,

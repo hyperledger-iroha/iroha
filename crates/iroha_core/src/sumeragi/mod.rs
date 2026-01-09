@@ -376,6 +376,12 @@ fn latest_epoch_seed(view: &StateView<'_>) -> [u8; 32] {
     latest_epoch_seed_from_world(&view.world, view.chain_id())
 }
 
+fn chain_epoch_seed(chain_id: &ChainId) -> [u8; 32] {
+    let chain = chain_id.clone().into_inner();
+    let hash = CryptoHash::new(chain.as_bytes());
+    <[u8; 32]>::from(hash)
+}
+
 fn latest_epoch_seed_from_world(world: &impl WorldReadOnly, chain_id: &ChainId) -> [u8; 32] {
     let mut seed_opt = None;
     for (_epoch, record) in world.vrf_epochs().iter() {
@@ -387,11 +393,7 @@ fn latest_epoch_seed_from_world(world: &impl WorldReadOnly, chain_id: &ChainId) 
                 .sumeragi_npos_parameters()
                 .map(|params| params.epoch_seed())
         })
-        .unwrap_or_else(|| {
-            let chain = chain_id.clone().into_inner();
-            let hash = CryptoHash::new(chain.as_bytes());
-            <[u8; 32]>::from(hash)
-        })
+        .unwrap_or_else(|| chain_epoch_seed(chain_id))
 }
 
 fn next_epoch_seed_from_record(record: &VrfEpochRecord) -> [u8; 32] {
@@ -4388,7 +4390,7 @@ impl SumeragiHandle {
                     let header = created.block.header();
                     iroha_logger::warn!(
                         height = header.height().get(),
-                        view = u64::from(header.view_change_index()),
+                        view = header.view_change_index(),
                         block = %created.block.hash(),
                         queue = ?queue,
                         reason,
@@ -4409,7 +4411,7 @@ impl SumeragiHandle {
                     let header = update.block.header();
                     iroha_logger::warn!(
                         height = header.height().get(),
-                        view = u64::from(header.view_change_index()),
+                        view = header.view_change_index(),
                         block = %update.block.hash(),
                         queue = ?queue,
                         reason,
@@ -4576,7 +4578,7 @@ impl SumeragiHandle {
             BlockMessage::BlockCreated(created) => {
                 let header = created.block.header();
                 let height = header.height().get();
-                let view = u64::from(header.view_change_index());
+                let view = header.view_change_index();
                 let block_hash = created.block.hash();
                 let duplicate = !self.dedup_block_payload(BlockPayloadDedupKey::BlockCreated {
                     height,

@@ -10614,6 +10614,30 @@ impl Nexus {
         } else {
             DataSpaceId::GLOBAL
         };
+        let lane_dataspaces: BTreeMap<LaneId, DataSpaceId> = lane_catalog
+            .lanes()
+            .iter()
+            .map(|lane| (lane.id, lane.dataspace_id))
+            .collect();
+        let default_lane_dataspace = match lane_dataspaces.get(&default_lane) {
+            Some(id) => *id,
+            None => {
+                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                    "routing default lane {} is missing from lane_catalog",
+                    default_lane.as_u32()
+                )));
+                return None;
+            }
+        };
+        if default_lane_dataspace != default_dataspace {
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                "routing default dataspace {} does not match lane {} dataspace {}",
+                default_dataspace.as_u64(),
+                default_lane.as_u32(),
+                default_lane_dataspace.as_u64()
+            )));
+            return None;
+        }
 
         let mut routing_errors = false;
         let mut rules = Vec::new();
@@ -10659,6 +10683,28 @@ impl Nexus {
             } else {
                 None
             };
+            let lane_dataspace = match lane_dataspaces.get(&lane) {
+                Some(id) => *id,
+                None => {
+                    routing_errors = true;
+                    emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                        "routing rule[{idx}] references lane {} not present in lane_catalog",
+                        lane.as_u32()
+                    )));
+                    continue;
+                }
+            };
+            let effective_dataspace = dataspace.unwrap_or(default_dataspace);
+            if lane_dataspace != effective_dataspace {
+                routing_errors = true;
+                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                    "routing rule[{idx}] dataspace {} does not match lane {} dataspace {}",
+                    effective_dataspace.as_u64(),
+                    lane.as_u32(),
+                    lane_dataspace.as_u64()
+                )));
+                continue;
+            }
 
             rules.push(actual::LaneRoutingRule {
                 lane,

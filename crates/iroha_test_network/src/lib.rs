@@ -5350,7 +5350,7 @@ mod sora_profile_tests {
         policy.insert("default_lane".into(), toml::Value::Integer(0));
         policy.insert(
             "default_dataspace".into(),
-            toml::Value::String("global".into()),
+            toml::Value::String("universal".into()),
         );
 
         let mut nexus = toml::map::Map::new();

@@ -37,6 +37,7 @@ lane_count = 5
 index = 3
 alias = "cbdc"
 description = "Central bank CBDC lane"
+dataspace = "cbdc.core"
 visibility = "restricted"
 lane_type = "cbdc_private"
 governance = "central_bank_multisig"
@@ -68,7 +69,7 @@ fault_tolerance = 1
 
 [nexus.routing_policy]
 default_lane = 0
-default_dataspace = "global"
+default_dataspace = "universal"
 
 [[nexus.routing_policy.rules]]
 lane = 3

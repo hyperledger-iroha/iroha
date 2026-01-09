@@ -48,6 +48,9 @@ impl Default for RoutingDecision {
 }
 
 /// Evaluate the configured routing policy for a transaction, returning the lane and dataspace.
+///
+/// This does not validate the decision against the lane or dataspace catalogs. Use
+/// [`evaluate_policy_with_catalog`] when catalog alignment is required.
 pub fn evaluate_policy(
     policy: &LaneRoutingPolicy,
     tx: &AcceptedTransaction<'_>,
@@ -57,6 +60,91 @@ pub fn evaluate_policy(
     let dataspace_id = matched_rule
         .and_then(|rule| rule.dataspace)
         .unwrap_or(policy.default_dataspace);
+    RoutingDecision::new(lane_id, dataspace_id)
+}
+
+/// Evaluate the routing policy and align the decision to the configured catalogs.
+pub fn evaluate_policy_with_catalog(
+    policy: &LaneRoutingPolicy,
+    lane_catalog: &LaneCatalog,
+    dataspace_catalog: &DataSpaceCatalog,
+    tx: &AcceptedTransaction<'_>,
+) -> RoutingDecision {
+    let decision = evaluate_policy(policy, tx);
+    normalize_routing_decision(decision, policy, lane_catalog, dataspace_catalog)
+}
+
+fn normalize_routing_decision(
+    decision: RoutingDecision,
+    policy: &LaneRoutingPolicy,
+    lane_catalog: &LaneCatalog,
+    dataspace_catalog: &DataSpaceCatalog,
+) -> RoutingDecision {
+    let lane_id = if lane_catalog
+        .lanes()
+        .iter()
+        .any(|lane| lane.id == decision.lane_id)
+    {
+        decision.lane_id
+    } else if lane_catalog
+        .lanes()
+        .iter()
+        .any(|lane| lane.id == policy.default_lane)
+    {
+        policy.default_lane
+    } else {
+        lane_catalog
+            .lanes()
+            .iter()
+            .min_by_key(|lane| lane.id.as_u32())
+            .map_or(policy.default_lane, |lane| lane.id)
+    };
+
+    let dataspace_known = |dataspace_id: DataSpaceId| {
+        dataspace_catalog
+            .entries()
+            .iter()
+            .any(|entry| entry.id == dataspace_id)
+    };
+    let fallback_dataspace = dataspace_catalog
+        .entries()
+        .iter()
+        .find(|entry| entry.id == DataSpaceId::GLOBAL)
+        .map(|entry| entry.id)
+        .or_else(|| {
+            dataspace_catalog
+                .entries()
+                .iter()
+                .min_by_key(|entry| entry.id.as_u64())
+                .map(|entry| entry.id)
+        })
+        .unwrap_or(policy.default_dataspace);
+    let default_dataspace = if dataspace_known(policy.default_dataspace) {
+        policy.default_dataspace
+    } else {
+        fallback_dataspace
+    };
+
+    let dataspace_id = if dataspace_known(decision.dataspace_id) {
+        decision.dataspace_id
+    } else {
+        default_dataspace
+    };
+
+    let lane_dataspace = lane_catalog
+        .lanes()
+        .iter()
+        .find(|lane| lane.id == lane_id)
+        .map(|lane| lane.dataspace_id)
+        .filter(|dataspace_id| dataspace_known(*dataspace_id))
+        .unwrap_or(default_dataspace);
+
+    let dataspace_id = if dataspace_id == lane_dataspace {
+        dataspace_id
+    } else {
+        lane_dataspace
+    };
+
     RoutingDecision::new(lane_id, dataspace_id)
 }
 
@@ -281,37 +369,18 @@ impl ConfigLaneRouter {
             lane_catalog: Arc::new(lane_catalog),
         }
     }
-
-    fn lane_known(&self, lane_id: LaneId) -> bool {
-        self.lane_catalog
-            .lanes()
-            .iter()
-            .any(|lane| lane.id == lane_id)
-    }
-
-    fn dataspace_known(&self, dataspace_id: DataSpaceId) -> bool {
-        self.dataspace_catalog
-            .entries()
-            .iter()
-            .any(|entry| entry.id == dataspace_id)
-    }
 }
 
 impl LaneRouter for ConfigLaneRouter {
     fn route(&self, tx: &AcceptedTransaction<'_>, state_view: &StateView<'_>) -> RoutingDecision {
         let _ = state_view;
         let decision = evaluate_policy(&self.policy, tx);
-        let lane_id = if self.lane_known(decision.lane_id) {
-            decision.lane_id
-        } else {
-            self.policy.default_lane
-        };
-        let dataspace_id = if self.dataspace_known(decision.dataspace_id) {
-            decision.dataspace_id
-        } else {
-            self.policy.default_dataspace
-        };
-        RoutingDecision::new(lane_id, dataspace_id)
+        normalize_routing_decision(
+            decision,
+            self.policy.as_ref(),
+            self.lane_catalog.as_ref(),
+            self.dataspace_catalog.as_ref(),
+        )
     }
 }
 
@@ -364,19 +433,32 @@ mod tests {
         .expect("tx should be accepted")
     }
 
-    fn catalog_with_lanes(lanes: &[LaneId]) -> LaneCatalog {
-        let max_lane = lanes.iter().map(|lane| lane.as_u32()).max().unwrap_or(0);
+    fn catalog_with_lane_dataspaces(entries: &[(LaneId, DataSpaceId)]) -> LaneCatalog {
+        let max_lane = entries
+            .iter()
+            .map(|(lane, _)| lane.as_u32())
+            .max()
+            .unwrap_or(0);
         let lane_count =
             std::num::NonZeroU32::new(max_lane + 1).expect("catalog requires nonzero lanes");
-        let entries = lanes
+        let lanes = entries
             .iter()
-            .map(|lane_id| LaneConfig {
+            .map(|(lane_id, dataspace_id)| LaneConfig {
                 id: *lane_id,
+                dataspace_id: *dataspace_id,
                 alias: format!("lane-{}", lane_id.as_u32()),
                 ..LaneConfig::default()
             })
             .collect();
-        LaneCatalog::new(lane_count, entries).expect("valid lane catalog")
+        LaneCatalog::new(lane_count, lanes).expect("valid lane catalog")
+    }
+
+    fn catalog_with_lanes(lanes: &[LaneId]) -> LaneCatalog {
+        let entries: Vec<(LaneId, DataSpaceId)> = lanes
+            .iter()
+            .map(|lane_id| (*lane_id, DataSpaceId::GLOBAL))
+            .collect();
+        catalog_with_lane_dataspaces(&entries)
     }
 
     fn blank_state() -> crate::state::State {
@@ -483,7 +565,10 @@ mod tests {
         .expect("valid dataspace catalog");
 
         let policy_for_helper = policy.clone();
-        let lane_catalog = catalog_with_lanes(&[LaneId::SINGLE, LaneId::new(5)]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (LaneId::new(5), DataSpaceId::new(7)),
+        ]);
         let router = ConfigLaneRouter::new(policy, catalog, lane_catalog);
 
         let tx = sample_transaction(
@@ -499,6 +584,225 @@ mod tests {
         assert_eq!(decision.dataspace_id, DataSpaceId::new(7));
 
         let helper_decision = evaluate_policy(&policy_for_helper, &tx);
+        assert_eq!(helper_decision, decision);
+    }
+
+    #[test]
+    fn aligns_dataspace_with_lane_binding_on_mismatch() {
+        use iroha_data_model::nexus::DataSpaceMetadata;
+
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::GLOBAL,
+            rules: vec![LaneRoutingRule {
+                lane: LaneId::new(4),
+                dataspace: Some(DataSpaceId::new(9)),
+                matcher: LaneRoutingMatcher {
+                    account: Some(alice_id.to_string()),
+                    instruction: None,
+                    description: None,
+                },
+            }],
+        };
+
+        let catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: DataSpaceId::new(7),
+                alias: "beta".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            DataSpaceMetadata {
+                id: DataSpaceId::new(9),
+                alias: "gamma".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("valid dataspace catalog");
+
+        let policy_for_helper = policy.clone();
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (LaneId::new(4), DataSpaceId::new(7)),
+        ]);
+        let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog.clone());
+
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(Register::domain(Domain::new(
+                "override".parse().expect("domain"),
+            )))],
+        );
+
+        let decision = router.route(&tx, &blank_state().view());
+        assert_eq!(decision.lane_id, LaneId::new(4));
+        assert_eq!(decision.dataspace_id, DataSpaceId::new(7));
+
+        let helper_decision =
+            evaluate_policy_with_catalog(&policy_for_helper, &lane_catalog, &catalog, &tx);
+        assert_eq!(helper_decision, decision);
+    }
+
+    #[test]
+    fn unknown_lane_rule_falls_back_to_default_dataspace() {
+        use iroha_data_model::nexus::DataSpaceMetadata;
+
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::GLOBAL,
+            rules: vec![LaneRoutingRule {
+                lane: LaneId::new(9),
+                dataspace: Some(DataSpaceId::new(7)),
+                matcher: LaneRoutingMatcher {
+                    account: Some(alice_id.to_string()),
+                    instruction: None,
+                    description: None,
+                },
+            }],
+        };
+
+        let catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: DataSpaceId::new(7),
+                alias: "alpha".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("valid dataspace catalog");
+
+        let policy_for_helper = policy.clone();
+        let lane_catalog = catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::GLOBAL)]);
+        let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog.clone());
+
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(Register::domain(Domain::new(
+                "fallback".parse().expect("domain"),
+            )))],
+        );
+
+        let decision = router.route(&tx, &blank_state().view());
+        assert_eq!(decision.lane_id, LaneId::SINGLE);
+        assert_eq!(decision.dataspace_id, DataSpaceId::GLOBAL);
+
+        let helper_decision =
+            evaluate_policy_with_catalog(&policy_for_helper, &lane_catalog, &catalog, &tx);
+        assert_eq!(helper_decision, decision);
+    }
+
+    #[test]
+    fn missing_default_lane_falls_back_to_lowest_lane() {
+        use iroha_data_model::nexus::DataSpaceMetadata;
+
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::new(9),
+            default_dataspace: DataSpaceId::GLOBAL,
+            rules: vec![LaneRoutingRule {
+                lane: LaneId::new(11),
+                dataspace: None,
+                matcher: LaneRoutingMatcher {
+                    account: Some(alice_id.to_string()),
+                    instruction: None,
+                    description: None,
+                },
+            }],
+        };
+
+        let catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: DataSpaceId::new(7),
+                alias: "alpha".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            DataSpaceMetadata {
+                id: DataSpaceId::new(9),
+                alias: "beta".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("valid dataspace catalog");
+
+        let policy_for_helper = policy.clone();
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::new(2), DataSpaceId::new(7)),
+            (LaneId::new(4), DataSpaceId::new(9)),
+        ]);
+        let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog.clone());
+
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(Register::domain(Domain::new(
+                "fallback".parse().expect("domain"),
+            )))],
+        );
+
+        let decision = router.route(&tx, &blank_state().view());
+        assert_eq!(decision.lane_id, LaneId::new(2));
+        assert_eq!(decision.dataspace_id, DataSpaceId::new(7));
+
+        let helper_decision =
+            evaluate_policy_with_catalog(&policy_for_helper, &lane_catalog, &catalog, &tx);
+        assert_eq!(helper_decision, decision);
+    }
+
+    #[test]
+    fn missing_default_dataspace_falls_back_to_catalog() {
+        use iroha_data_model::nexus::DataSpaceMetadata;
+
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::new(11),
+            rules: vec![LaneRoutingRule {
+                lane: LaneId::SINGLE,
+                dataspace: None,
+                matcher: LaneRoutingMatcher {
+                    account: Some(alice_id.to_string()),
+                    instruction: None,
+                    description: None,
+                },
+            }],
+        };
+
+        let catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+            id: DataSpaceId::new(7),
+            alias: "alpha".to_string(),
+            description: None,
+            fault_tolerance: 1,
+        }])
+        .expect("valid dataspace catalog");
+
+        let policy_for_helper = policy.clone();
+        let lane_catalog = catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::new(9))]);
+        let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog.clone());
+
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(Register::domain(Domain::new(
+                "fallback".parse().expect("domain"),
+            )))],
+        );
+
+        let decision = router.route(&tx, &blank_state().view());
+        assert_eq!(decision.lane_id, LaneId::SINGLE);
+        assert_eq!(decision.dataspace_id, DataSpaceId::new(7));
+
+        let helper_decision =
+            evaluate_policy_with_catalog(&policy_for_helper, &lane_catalog, &catalog, &tx);
         assert_eq!(helper_decision, decision);
     }
 

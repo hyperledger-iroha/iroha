@@ -5612,7 +5612,7 @@ impl MochiApp {
                                 &mut self.settings_nexus_lane_catalog_input,
                             )
                             .desired_rows(6)
-                            .hint_text("[[lane_catalog]]\nindex = 0\nalias = \"core\"\ndataspace = \"global\""),
+                            .hint_text("[[lane_catalog]]\nindex = 0\nalias = \"core\"\ndataspace = \"universal\""),
                         );
                         ui.add_space(6.0);
                         ui.label("Dataspace catalog (TOML using [[dataspace_catalog]] entries):");
@@ -5621,7 +5621,7 @@ impl MochiApp {
                                 &mut self.settings_nexus_dataspace_catalog_input,
                             )
                             .desired_rows(4)
-                            .hint_text("[[dataspace_catalog]]\nalias = \"global\"\nid = 0"),
+                            .hint_text("[[dataspace_catalog]]\nalias = \"universal\"\nid = 0"),
                         );
                         ui.add_space(6.0);
                         ui.add_enabled(
@@ -10759,7 +10759,7 @@ impl LaneCatalogSnapshot {
             .cloned()
             .or_else(|| {
                 if dataspace_id == 0 {
-                    Some("global".to_owned())
+                    Some("universal".to_owned())
                 } else {
                     None
                 }
@@ -10901,7 +10901,7 @@ fn lane_catalog_snapshot(nexus: Option<&TomlTable>) -> LaneCatalogSnapshot {
     snapshot
         .dataspace_aliases
         .entry(0)
-        .or_insert_with(|| "global".to_owned());
+        .or_insert_with(|| "universal".to_owned());
 
     let lane_ids = snapshot.lane_ids();
     for lane_id in lane_ids {
@@ -11680,7 +11680,7 @@ mod tests {
         let mut lane0 = TomlTable::new();
         lane0.insert("index".into(), TomlValue::Integer(0));
         lane0.insert("alias".into(), TomlValue::String("core".into()));
-        lane0.insert("dataspace".into(), TomlValue::String("global".into()));
+        lane0.insert("dataspace".into(), TomlValue::String("universal".into()));
         let mut lane1 = TomlTable::new();
         lane1.insert("index".into(), TomlValue::Integer(1));
         lane1.insert("alias".into(), TomlValue::String("ops".into()));
@@ -11691,7 +11691,7 @@ mod tests {
         );
 
         let mut global = TomlTable::new();
-        global.insert("alias".into(), TomlValue::String("global".into()));
+        global.insert("alias".into(), TomlValue::String("universal".into()));
         global.insert("id".into(), TomlValue::Integer(0));
         let mut private = TomlTable::new();
         private.insert("alias".into(), TomlValue::String("private".into()));
@@ -11730,7 +11730,7 @@ mod tests {
         let mut lane = TomlTable::new();
         lane.insert("index".into(), TomlValue::Integer(2));
         lane.insert("alias".into(), TomlValue::String("alpha".into()));
-        lane.insert("dataspace".into(), TomlValue::String("global".into()));
+        lane.insert("dataspace".into(), TomlValue::String("universal".into()));
         lane.insert("visibility".into(), TomlValue::String("restricted".into()));
         lane.insert(
             "storage".into(),
@@ -11746,7 +11746,7 @@ mod tests {
             TomlValue::Array(vec![TomlValue::Table(lane)]),
         );
         let mut dataspace = TomlTable::new();
-        dataspace.insert("alias".into(), TomlValue::String("global".into()));
+        dataspace.insert("alias".into(), TomlValue::String("universal".into()));
         dataspace.insert("id".into(), TomlValue::Integer(0));
         nexus.insert(
             "dataspace_catalog".into(),
@@ -13919,9 +13919,9 @@ mod tests {
         app.settings_nexus_enabled = true;
         app.settings_nexus_lane_count_input = "2".to_owned();
         app.settings_nexus_lane_catalog_input =
-            "[[lane_catalog]]\nindex = 0\nalias = \"core\"\ndataspace = \"global\"".to_owned();
+            "[[lane_catalog]]\nindex = 0\nalias = \"core\"\ndataspace = \"universal\"".to_owned();
         app.settings_nexus_dataspace_catalog_input =
-            "[[dataspace_catalog]]\nalias = \"global\"\nid = 0".to_owned();
+            "[[dataspace_catalog]]\nalias = \"universal\"\nid = 0".to_owned();
         app.settings_sumeragi_da_enabled = true;
         let replay_dir = temp.path().join("da-replay");
         let manifest_dir = temp.path().join("da-manifests");
@@ -13982,7 +13982,7 @@ mod tests {
         let dataspace = dataspace_catalog[0].as_table().expect("dataspace table");
         assert_eq!(
             dataspace.get("alias").and_then(TomlValue::as_str),
-            Some("global")
+            Some("universal")
         );
         let sumeragi = bundle.config.sumeragi.as_ref().expect("sumeragi config");
         assert_eq!(

@@ -108,6 +108,31 @@ impl Actor {
         if self.drop_stale_view(height, view, "ProposalHint") {
             return Ok(());
         }
+        let expected_highest_height = height.saturating_sub(1);
+        if highest_qc.height != expected_highest_height {
+            warn!(
+                height,
+                view,
+                highest_height = highest_qc.height,
+                expected_highest_height,
+                block = %highest_qc.subject_block_hash,
+                "dropping proposal hint: highest QC height does not match proposal height"
+            );
+            return Ok(());
+        }
+        let expected_epoch = self.epoch_for_height(highest_qc.height);
+        if highest_qc.epoch != expected_epoch {
+            warn!(
+                height,
+                view,
+                highest_height = highest_qc.height,
+                highest_epoch = highest_qc.epoch,
+                expected_epoch,
+                block = %highest_qc.subject_block_hash,
+                "dropping proposal hint: highest QC epoch mismatch"
+            );
+            return Ok(());
+        }
         let committed_height = self.latest_committed_qc().map_or(0, |qc| qc.height);
 
         if let Some(existing) = self
@@ -205,6 +230,33 @@ impl Actor {
                 block = %highest_qc.subject_block_hash,
                 "caching proposal hint without local highest QC block; awaiting sync"
             );
+        }
+        if let Some((local_height, local_view)) =
+            self.local_block_height_view(highest_qc.subject_block_hash)
+        {
+            if local_height != highest_qc.height {
+                warn!(
+                    height,
+                    view,
+                    highest_height = highest_qc.height,
+                    local_height,
+                    block = %highest_qc.subject_block_hash,
+                    "dropping proposal hint: highest QC height does not match local block height"
+                );
+                return Ok(());
+            }
+            if local_view != highest_qc.view {
+                warn!(
+                    height,
+                    view,
+                    highest_height = highest_qc.height,
+                    highest_view = highest_qc.view,
+                    local_view,
+                    block = %highest_qc.subject_block_hash,
+                    "dropping proposal hint: highest QC view does not match local block view"
+                );
+                return Ok(());
+            }
         }
 
         self.update_prf_context_for_hint(&hint);
@@ -335,6 +387,86 @@ impl Actor {
         if self.drop_stale_view(height, view, "Proposal") {
             return Ok(());
         }
+        let expected_epoch = self.epoch_for_height(height);
+        if proposal.header.epoch != expected_epoch {
+            warn!(
+                height,
+                view,
+                expected_epoch,
+                proposal_epoch = proposal.header.epoch,
+                payload = %proposal.payload_hash,
+                "dropping proposal with mismatched epoch"
+            );
+            return Ok(());
+        }
+        let highest_qc = proposal.header.highest_qc;
+        let expected_highest_height = height.saturating_sub(1);
+        if highest_qc.height != expected_highest_height {
+            warn!(
+                height,
+                view,
+                highest_height = highest_qc.height,
+                expected_highest_height,
+                block = %highest_qc.subject_block_hash,
+                payload = %proposal.payload_hash,
+                "dropping proposal: highest QC height does not match proposal height"
+            );
+            return Ok(());
+        }
+        let expected_highest_epoch = self.epoch_for_height(highest_qc.height);
+        if highest_qc.epoch != expected_highest_epoch {
+            warn!(
+                height,
+                view,
+                highest_height = highest_qc.height,
+                highest_epoch = highest_qc.epoch,
+                expected_highest_epoch,
+                block = %highest_qc.subject_block_hash,
+                payload = %proposal.payload_hash,
+                "dropping proposal: highest QC epoch mismatch"
+            );
+            return Ok(());
+        }
+        if proposal.header.parent_hash != highest_qc.subject_block_hash {
+            warn!(
+                height,
+                view,
+                parent = %proposal.header.parent_hash,
+                highest_hash = %highest_qc.subject_block_hash,
+                payload = %proposal.payload_hash,
+                "dropping proposal: parent hash does not match highest QC"
+            );
+            return Ok(());
+        }
+        if let Some((local_height, local_view)) =
+            self.local_block_height_view(highest_qc.subject_block_hash)
+        {
+            if local_height != highest_qc.height {
+                warn!(
+                    height,
+                    view,
+                    highest_height = highest_qc.height,
+                    local_height,
+                    block = %highest_qc.subject_block_hash,
+                    payload = %proposal.payload_hash,
+                    "dropping proposal: highest QC height does not match local block height"
+                );
+                return Ok(());
+            }
+            if local_view != highest_qc.view {
+                warn!(
+                    height,
+                    view,
+                    highest_height = highest_qc.height,
+                    highest_view = highest_qc.view,
+                    local_view,
+                    block = %highest_qc.subject_block_hash,
+                    payload = %proposal.payload_hash,
+                    "dropping proposal: highest QC view does not match local block view"
+                );
+                return Ok(());
+            }
+        }
         self.note_proposal_seen(height, view, proposal.payload_hash);
         self.subsystems
             .propose
@@ -444,7 +576,7 @@ impl Actor {
         let block_hash = block.hash();
         let header = block.header();
         let height = header.height().get();
-        let view = u64::from(header.view_change_index());
+        let view = header.view_change_index();
         let (committed_height, committed_hash) = {
             let state_view = self.state.view();
             (
@@ -582,8 +714,12 @@ impl Actor {
             .proposal_cache
             .get_hint(height, view)
             .copied();
+        let parent_view = header
+            .prev_block_hash()
+            .and_then(|parent_hash| self.local_block_height_view(parent_hash))
+            .map(|(_, view)| view);
         if let Some(hint) = cached_hint {
-            match Self::validate_block_against_hint(&block_hash, &header, &hint) {
+            match Self::validate_block_against_hint(&block_hash, &header, &hint, parent_view) {
                 Ok(()) => {}
                 Err(HintMismatch::BlockHash) => {
                     super::status::inc_block_created_hint_mismatch();
@@ -598,15 +734,16 @@ impl Actor {
                     );
                     cached_hint = Some(super::message::ProposalHint { block_hash, ..hint });
                 }
-                Err(HintMismatch::HighestQcParentHash) => {
+                Err(reason @ (HintMismatch::HighestQcParentHash | HintMismatch::HighestQcView)) => {
                     super::status::inc_block_created_hint_mismatch();
                     #[cfg(feature = "telemetry")]
                     self.telemetry.inc_block_created_hint_mismatch();
                     warn!(
+                        ?reason,
                         ?block_hash,
                         height,
                         view,
-                        "BlockCreated hint parent mismatch; dropping cached hint and continuing"
+                        "BlockCreated hint mismatch; dropping cached hint and continuing"
                     );
                     self.subsystems
                         .propose
@@ -713,6 +850,64 @@ impl Actor {
                 height,
                 view, "BlockCreated arrived without cached ProposalHint"
             );
+            if let Some(lock) = self.locked_qc {
+                let locked_hash = lock.subject_block_hash;
+                if self.block_known_locally(locked_hash) {
+                    let parent_hash = header.prev_block_hash();
+                    let extends = super::chain_extends_tip(
+                        block_hash,
+                        height,
+                        lock.height,
+                        locked_hash,
+                        |hash, height| {
+                            if hash == block_hash {
+                                parent_hash
+                            } else {
+                                self.parent_hash_for(hash, height)
+                            }
+                        },
+                    );
+                    match extends {
+                        Some(false) => {
+                            super::status::inc_block_created_dropped_by_lock();
+                            #[cfg(feature = "telemetry")]
+                            self.telemetry.inc_block_created_dropped_by_lock();
+                            warn!(
+                                locked_qc_height = lock.height,
+                                locked_qc_view = lock.view,
+                                locked_qc_hash = %locked_hash,
+                                height,
+                                view,
+                                block = %block_hash,
+                                "BlockCreated rejected without hint: block does not extend locked chain"
+                            );
+                            return Ok(());
+                        }
+                        Some(true) => {}
+                        None => {
+                            debug!(
+                                locked_qc_height = lock.height,
+                                locked_qc_view = lock.view,
+                                locked_qc_hash = %locked_hash,
+                                height,
+                                view,
+                                block = %block_hash,
+                                "accepting BlockCreated without hint: locked ancestry unknown"
+                            );
+                        }
+                    }
+                } else {
+                    debug!(
+                        locked_qc_height = lock.height,
+                        locked_qc_view = lock.view,
+                        locked_qc_hash = %locked_hash,
+                        height,
+                        view,
+                        block = %block_hash,
+                        "skipping locked QC check for BlockCreated without hint: locked block missing locally"
+                    );
+                }
+            }
         }
         let payload_bytes = block_payload_bytes(&block);
         let payload_hash = Hash::new(&payload_bytes);

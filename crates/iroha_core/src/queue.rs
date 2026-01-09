@@ -56,6 +56,7 @@ use mv::storage::StorageReadOnly;
 use parking_lot::RwLock;
 pub use router::{
     ConfigLaneRouter, LaneRouter, RoutingDecision, SingleLaneRouter, evaluate_policy,
+    evaluate_policy_with_catalog,
 };
 use thiserror::Error;
 use tokio::{

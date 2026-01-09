@@ -1322,7 +1322,7 @@ final class ToriiClientTests: XCTestCase {
           "dataspaces":[
             {
               "dataspace_id":0,
-              "dataspace_alias":"global",
+              "dataspace_alias":"universal",
               "accounts":[
                 {
                   "account_id":"holder@global",
@@ -1357,7 +1357,7 @@ final class ToriiClientTests: XCTestCase {
         {
           "uaid":"uaid:\(uaidHex)",
           "dataspaces":[
-            {"dataspace_id":0,"dataspace_alias":"global","accounts":["holder@global"]},
+            {"dataspace_id":0,"dataspace_alias":"universal","accounts":["holder@global"]},
             {"dataspace_id":11,"dataspace_alias":"cbdc","accounts":[]}
           ]
         }

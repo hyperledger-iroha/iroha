@@ -9614,7 +9614,7 @@ pub mod isi {
         fn configure_global_dataspace(stx: &mut StateTransaction<'_, '_>) {
             stx.nexus.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: DataSpaceId::GLOBAL,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])

@@ -1,8 +1,79 @@
 # Status
 
 ## Latest Updates
-- Sumeragi/NPoS: make mode-aware timing use NPoS block/commit timeouts across pacemaker/rebroadcast/commit paths, include `epoch_seed` in the genesis consensus fingerprint payload, and add unit coverage + docs updates.
-- Tests: `cargo test --workspace` (timed out after 5m while waiting for build dir lock; rerun recommended).
+- Docs: explain public DNS delegation and apex/subdomain record guidance for SoraDNS gateway hosts.
+- Tests: not run (not requested).
+- Sumeragi: drop NEW_VIEW votes/QCs whose highest QC view/height mismatches a locally known parent block; add regression coverage and document the rule.
+- Tests: not run (not requested).
+- Sumeragi: prefer the active commit topology for NEW_VIEW roster selection at the next height (honoring roster changes) and add regression coverage.
+- Tests: not run (not requested).
+- Sumeragi/NPoS tests: seed genesis before activation-height vote handling/emission so commit rosters are available for height 2 validation.
+- Tests: `CARGO_TARGET_DIR=target/codex-sumeragi cargo test -p iroha_core --lib handle_vote_uses_activation_height_mode_tag` (pass); `CARGO_TARGET_DIR=target/codex-sumeragi cargo test -p iroha_core --lib emit_precommit_vote_uses_activation_height_mode_tag` (pass).
+- Integration tests: update SoraNet web deploy coverage to emit public DNS CNAME settings for regular internet zones and use the authoritative DNS stub.
+- Tests: not run (not requested).
+- Sumeragi: reject proposals/hints whose highest QC view does not match locally known parent blocks, and drop BlockCreated hints with parent-view mismatches; add unit coverage and document the validation rule.
+- Tests: not run (not requested).
+- IVM gas budgeting: treat `max_cycles=0` as an unbounded budget when deriving gas limits, and add unit coverage for the conversion helper.
+- Tests: not run (not requested).
+- Integration tests: add SoraNet web deploy + DNS reference gateway coverage for SoraFS pin/fetch and derived SoraDNS CNAME settings.
+- Tests: not run (not requested).
+- Sumeragi: reject NEW_VIEW QCs with mismatched highest-epoch values even when recovering from aggregate signatures; enforce highest-epoch checks on NEW_VIEW QC ingress.
+- Tests: not run (not requested).
+- Sumeragi/RBC tests: build payload bundles from expected chunk digests when cached chunks are missing, validate BlockCreated-without-hint using a properly signed block, and keep block-sync updates aligned by pre-seeding the pending candidate.
+- Tests: `cargo test -p iroha_core --lib rbc_payload_bundle_allows_empty_chunks` (pass); `cargo test -p iroha_core --lib block_created_without_hint_accepts_extending_lock` (pass); `cargo test -p iroha_core --lib block_sync_update_allows_nonextending_qc_without_commit_qc` (pass).
+- Tests: `cargo test -p iroha_core --lib sumeragi::main_loop` (timed out after 180s; no failures observed before timeout).
+- Sumeragi/NPoS tests: fix replay validation to use a non-genesis Ed25519 signer, build valid commit-QC blocks in tests, and align RBC chunk commit cooldown with mode-aware block time.
+- Tests: `cargo test -p iroha_core --lib rbc_chunk_commit_pipeline_runs_on_completion` (pass); `cargo test -p iroha_core --lib commit_qc_uses_exec_roots_from_view_votes` (pass); `cargo test -p iroha_core --lib apply_without_execution_canonicalizes_commit_roster_signatures` (pass); `cargo test -p iroha_core --lib replay_from_height_catches_up_state` (pass).
+- Block sync (share path): validate commit QCs (hash/height/view/epoch/mode/aggregate) before letting them bypass signature checks; add permissioned view-mismatch regression coverage and document the stricter QC validation.
+- Tests: `cargo test -p iroha_core sanitize_block_sync_qc_drops_view_mismatch -- --nocapture` (timed out after 120s during compilation).
+- Tx fees: require `gasLimit` in the JS SDK contract-call helper, require `--gas-limit` for CLI contract simulation, and update docs/tests accordingly.
+- Tests: `cargo test -p iroha_cli simulate_emits_gas_limit_metadata_key -- --nocapture` (timed out after 120s during compilation).
+- Sumeragi: accept BlockCreated without hints when locked ancestry is unknown, while still rejecting provable lock conflicts; add regression coverage and clarify docs.
+- Tests: not run (not requested).
+- Nexus dataspaces: rename the default alias from `global` to `universal` across defaults, configs, SDK fixtures, and docs; refresh the Nexus defaults hash entry.
+- Tests: not run (not requested).
+- Sumeragi/permissioned block sync: reject commit QCs whose view mismatches the block header, emit a QC view-mismatch reason, and document the stricter validation with regression coverage.
+- Tests: `cargo test -p iroha_core validate_block_sync_qc_rejects_view_mismatch_in_permissioned_mode -- --nocapture` (pass).
+- Sumeragi: enforce locked-chain checks on BlockCreated even when proposal hints are missing, with regression coverage.
+- Tests: not run (not requested).
+- Nexus configs: add dataspace bindings to Sora Nexus configs, wizard output, and multilane Kura layout fixture to keep routing policy aligned with lane catalogs.
+- Tests: not run (not requested).
+- Nexus fees: require `CanUseFeeSponsor` grants for fee sponsorship, reject unauthorized sponsors with new status counters, and enforce `gas_limit` metadata (contract calls require it); update Nexus fee model docs.
+- Tests: not run (not requested).
+- Sumeragi: drop proposals with highest-QC height/epoch/parent mismatches, allow invalid-proposal evidence when views reset across heights, and add coverage + docs updates.
+- Tests: not run (not requested).
+- Tests: `cargo test -p iroha_data_model validator_set_checkpoint_roundtrip_and_hash -- --nocapture` (pass).
+- Tests: `cargo test -p iroha_core validate_checkpoint_roster_rejects_view_mismatch -- --nocapture` (pass).
+- Queue routing: fall back to a catalog dataspace when routing defaults or lane bindings reference unknown dataspaces; add regression coverage for missing dataspace handling.
+- Tests: not run (not requested).
+- Queue routing: fall back to the lowest configured lane when routing policy points at a missing default lane, and add regression coverage.
+- Tests: not run (not requested).
+- Queue routing: align policy evaluation with lane/dataspace catalogs across block validation, fraud checks, and proposal assembly; add catalog-aware routing helper and mismatch/unknown lane coverage.
+- Tests: `cargo test -p iroha_core aligns_dataspace_with_lane_binding_on_mismatch -- --nocapture` (timed out after 120s during compilation).
+- Sumeragi: reject proposal hints whose highest QC height or epoch does not match the target height, and add regression coverage.
+- Sumeragi: reject NEW_VIEW QCs whose highest QC epoch does not match the height-derived epoch, with regression coverage.
+- Tests: not run (not requested).
+- Sumeragi: reject proposals whose header epoch does not match the height-derived epoch; add proposal-epoch mismatch coverage.
+- Tests: not run (not requested).
+- Sumeragi: build proposals with the height-derived epoch (not the highest QC epoch), thread epochs through invalid-proposal evidence, and update proposal tests to assert header epochs.
+- Tests: not run (not requested).
+- Nexus config: require routing-policy dataspaces to match lane dataspace bindings, update Sora lane catalog + default Nexus config + quickstart/CBDC docs to set lane dataspaces, and add mismatch rejection coverage.
+- Tests: `cargo test -p iroha_config routing_policy_lane_dataspace_mismatch_rejected -- --nocapture` (pass).
+- Tests: `cargo test -p iroha_data_model --no-run` (pass); `cargo test -p iroha_core --no-run` (pass); `cargo test --workspace --no-run` (timed out after 10m during compilation; warning: `mochi-ui-egui` has unused `MissingQc` variant).
+- Sumeragi/permissioned block sync: gate quorum availability and roster updates on validated commit evidence (QC/cert/checkpoint), embed view + parent/post state roots in validator checkpoints, drop mismatched checkpoint roots, and reject invalid QCs below quorum; update block-sync docs and tests.
+- Data model: promote `BlockHeader.view_change_index` to u64 end-to-end (wire format, system params, Torii summaries), remove u32 limit/rejection, and refresh golden bytes + large-index coverage.
+- Tests: `cargo test --workspace` (failed: `integration_tests --test address_canonicalisation` where test-network peers exit with `Nexus requires the global NPoS validator set; set sumeragi.consensus_mode = "npos" or disable nexus.enabled`).
+- Tests: `cargo test -p iroha_data_model block_header_golden_bytes -- --nocapture` (pass).
+- Sumeragi/tests: align view-change indices to u64 in commit/test helpers (sample blocks, block-sync header assembly, and heartbeat paths) to match `BlockHeader::new`.
+- Tests: `cargo test -p iroha_core handshake_fingerprint_uses_chain_seed_without_npos_params -- --nocapture` (timed out after 120s: waiting for build directory lock).
+- Tests: `CARGO_TARGET_DIR=target/codex-sumeragi cargo test -p iroha_core handshake_fingerprint_uses_chain_seed_without_npos_params -- --nocapture` (timed out after 180s during compilation).
+- Tests: `CARGO_TARGET_DIR=target/codex-sumeragi cargo test -p iroha_core handshake_fingerprint_uses_chain_seed_without_npos_params -- --nocapture` (timed out after 300s during compilation).
+- Tests: `CARGO_TARGET_DIR=target/codex-sumeragi cargo test -p iroha_core handshake_fingerprint_uses_chain_seed_without_npos_params -- --nocapture` (pass).
+- Tests: `CARGO_TARGET_DIR=target/codex-sumeragi cargo test -p iroha_core` (timed out after 600s; observed failures in `sumeragi::main_loop::commit::tests::rbc_payload_bundle_allows_empty_chunks`, `sumeragi::main_loop::tests::assemble_proposal_skips_view_overflow`, `sumeragi::main_loop::tests::block_created_rebuilds_qc_with_snapshot_roster`, `state::replay_validation_tests::replay_from_height_catches_up_state`, `state::tests::apply_without_execution_canonicalizes_commit_roster_signatures`, `sumeragi::main_loop::tests::block_sync_update_accepts_pre_activation_signature_after_mode_flip`, `sumeragi::main_loop::tests::block_sync_update_known_block_records_commit_votes_without_roster_hint`, `sumeragi::main_loop::tests::commit_pipeline_rebuilds_qcs_with_empty_active_roster`, `sumeragi::main_loop::tests::commit_pipeline_reschedules_without_da_gate_blocking`, `sumeragi::main_loop::tests::commit_pipeline_uses_epoch_for_height_when_emitting_votes`, `sumeragi::main_loop::tests::commit_pipeline_votes_lowest_view_first_for_same_height`, `sumeragi::main_loop::tests::commit_qc_uses_exec_roots_from_view_votes`, `sumeragi::main_loop::tests::commit_quorum_timeout_uses_npos_timeouts`).
+- Telemetry: clear the Nexus dataspace TEU status cache when Nexus telemetry is disabled to avoid stale `/status` snapshots, and align scheduler TEU label names in telemetry docs.
+- Tests: `cargo test --workspace` (failed: `ValidatorSetCheckpoint::new` signature changes not applied across core/tests, missing `SumeragiNposParameters` import, missing `pacemaker_base_interval`, and BlockHeader wire type mismatch in `iroha_data_model`).
+- Sumeragi/NPoS: make mode-aware timing use NPoS block/commit timeouts across pacemaker/rebroadcast/commit paths, include `epoch_seed` in the genesis consensus fingerprint payload (chain-derived fallback when on-chain NPoS params are absent), and add unit coverage + docs updates.
+- Tests: `cargo test -p iroha_core handshake_fingerprint_uses_chain_seed_without_npos_params -- --nocapture` (failed: compile errors in `crates/iroha_core/src/sumeragi/consensus.rs` resolved afterward plus unrelated signature/type/import errors in `crates/iroha_core/src/block_sync.rs`, `crates/iroha_core/src/state.rs`, `crates/iroha_core/src/sumeragi/main_loop/tests.rs`, `crates/iroha_core/src/sumeragi/status.rs`, `crates/iroha_core/src/sumeragi/main_loop/propose.rs`, `crates/iroha_core/src/block.rs`).
 - Sumeragi/block sync: treat validator checkpoints as commit evidence for block-sync quorum gating (so trimmed signatures still sync) and add unit coverage.
 - Tests: not run (not requested).
 - Kagami/localnet: require NPoS when `--sora-profile` is set, enable Nexus only for Sora profiles, and add localnet validation/config coverage; refresh Kagami profile + Sumeragi guidance.
@@ -1830,3 +1901,6 @@
 - Tests: `cargo test -p integration_tests trigger_completion_failure_reports_error -- --nocapture` (timed out after 600s; compile finished; test `events::notification::trigger_completion_failure_reports_error` still running).
 - Sumeragi NEW_VIEW quorum selection now filters senders against the active roster (only counts local if it is in-roster), with coverage for non-roster senders.
 - Sumeragi now rejects NEW_VIEW votes with mismatched highest QC hashes/heights before recording, with regressions for invalid highest fields.
+- Sumeragi rejects NEW_VIEW QCs with missing/mismatched highest certificates and validates highest QC epochs in NEW_VIEW votes, with regressions covering invalid QC/vote inputs.
+- Sumeragi now blocks aggregate-based QC recovery for NEW_VIEW certificates with mismatched highest epochs (added regression coverage).
+- NEW_VIEW receipt stats now deduplicate by peer ID instead of rotated indices to avoid misleading operator counts after view changes.
