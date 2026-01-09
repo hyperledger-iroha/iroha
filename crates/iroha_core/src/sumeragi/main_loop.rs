@@ -5391,11 +5391,13 @@ impl Actor {
     }
 
     fn reconcile_new_view_tracker_with_local_blocks(&mut self) {
-        let mut drop_keys = Vec::new();
-        for (key, entry) in self.subsystems.propose.new_view_tracker.entries.iter_mut() {
+        let entries = std::mem::take(&mut self.subsystems.propose.new_view_tracker.entries);
+        let mut updated_entries = BTreeMap::new();
+        for (key, mut entry) in entries {
             let Some((local_height, local_view)) =
                 self.local_block_height_view(entry.highest_qc.subject_block_hash)
             else {
+                updated_entries.insert(key, entry);
                 continue;
             };
             if local_height != entry.highest_qc.height {
@@ -5407,7 +5409,6 @@ impl Actor {
                     block = %entry.highest_qc.subject_block_hash,
                     "dropping NEW_VIEW entry with highest QC height mismatch against local block"
                 );
-                drop_keys.push(*key);
                 continue;
             }
             if local_view != entry.highest_qc.view {
@@ -5421,10 +5422,9 @@ impl Actor {
                 );
                 entry.highest_qc.view = local_view;
             }
+            updated_entries.insert(key, entry);
         }
-        for key in drop_keys {
-            self.subsystems.propose.new_view_tracker.entries.remove(&key);
-        }
+        self.subsystems.propose.new_view_tracker.entries = updated_entries;
     }
 
     fn highest_qc_extends_locked(&self, highest: crate::sumeragi::consensus::QcHeaderRef) -> bool {

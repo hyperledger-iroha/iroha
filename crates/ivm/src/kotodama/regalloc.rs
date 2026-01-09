@@ -301,16 +301,11 @@ fn block_uses_defs(block: &BasicBlock) -> (HashSet<Temp>, HashSet<Temp>) {
     (uses, defs)
 }
 
-fn block_successors(
-    block: &BasicBlock,
-    label_to_idx: &HashMap<Label, usize>,
-) -> Vec<usize> {
+fn block_successors(block: &BasicBlock, label_to_idx: &HashMap<Label, usize>) -> Vec<usize> {
     match block.terminator {
         Terminator::Jump(label) => label_to_idx.get(&label).copied().into_iter().collect(),
         Terminator::Branch {
-            then_bb,
-            else_bb,
-            ..
+            then_bb, else_bb, ..
         } => {
             let mut out = Vec::with_capacity(2);
             if let Some(idx) = label_to_idx.get(&then_bb).copied() {
@@ -321,9 +316,7 @@ fn block_successors(
             }
             out
         }
-        Terminator::Return(_)
-        | Terminator::Return2(_, _)
-        | Terminator::ReturnN(_) => Vec::new(),
+        Terminator::Return(_) | Terminator::Return2(_, _) | Terminator::ReturnN(_) => Vec::new(),
     }
 }
 

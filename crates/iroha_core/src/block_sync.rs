@@ -161,6 +161,8 @@ pub struct BlockSynchronizer {
     gossip_period: Duration,
     gossip_size: NonZeroU32,
     network: IrohaNetwork,
+    relay_ttl: u8,
+    block_sync_frame_cap: usize,
     state: Arc<State>,
     seen_blocks: BTreeSet<(NonZeroU64, HashOf<BlockHeader>)>,
     latest_height: u64,
@@ -299,6 +301,8 @@ impl BlockSynchronizer {
         network: IrohaNetwork,
         state: Arc<State>,
         fallback_consensus_mode: ConsensusMode,
+        relay_ttl: u8,
+        block_sync_frame_cap: usize,
     ) -> Self {
         Self {
             peer,
@@ -307,6 +311,8 @@ impl BlockSynchronizer {
             gossip_period: config.gossip_period,
             gossip_size: config.gossip_size,
             network,
+            relay_ttl,
+            block_sync_frame_cap,
             state,
             seen_blocks: BTreeSet::new(),
             latest_height: 0,
@@ -2051,6 +2057,7 @@ pub mod message {
         if let Err(err) = crate::sumeragi::main_loop::validate_block_sync_qc(
             &qc,
             topology,
+            state_view.world(),
             block_signers,
             context.block_view,
             state_view.chain_id(),
@@ -2239,6 +2246,96 @@ pub mod message {
             selected
         }
 
+        fn share_blocks_wire_len(
+            origin: &PeerId,
+            target: &PeerId,
+            ttl: u8,
+            blocks: &[SignedBlock],
+            qcs: &[Option<Qc>],
+            rosters: &[RosterMetadata],
+        ) -> usize {
+            let payload = NetworkMessage::BlockSync(Box::new(Message::ShareBlocks(
+                ShareBlocks::new(
+                    blocks.to_vec(),
+                    origin.clone(),
+                    qcs.to_vec(),
+                    rosters.to_vec(),
+                ),
+            )));
+            iroha_p2p::network::data_frame_wire_len(
+                origin,
+                Some(target),
+                ttl,
+                iroha_p2p::Priority::Low,
+                &payload,
+            )
+        }
+
+        fn trim_share_blocks_to_frame_cap(
+            origin: &PeerId,
+            target: &PeerId,
+            ttl: u8,
+            frame_cap: usize,
+            blocks: &mut Vec<SignedBlock>,
+            qcs: &mut Vec<Option<Qc>>,
+            rosters: &mut Vec<RosterMetadata>,
+        ) -> bool {
+            if blocks.is_empty() {
+                return false;
+            }
+            if let Err(err) = validate_share_blocks_lengths(blocks.len(), qcs.len(), rosters.len())
+            {
+                warn!(
+                    error = ?err,
+                    "block sync response has mismatched lengths; dropping"
+                );
+                return false;
+            }
+            if frame_cap == 0 {
+                warn!(
+                    peer = %target,
+                    "block sync response dropped because frame cap is zero"
+                );
+                return false;
+            }
+
+            let initial_size = share_blocks_wire_len(origin, target, ttl, blocks, qcs, rosters);
+            if initial_size <= frame_cap {
+                return true;
+            }
+
+            let total = blocks.len();
+            while blocks.len() > 1 {
+                blocks.pop();
+                qcs.pop();
+                rosters.pop();
+                let size = share_blocks_wire_len(origin, target, ttl, blocks, qcs, rosters);
+                if size <= frame_cap {
+                    let dropped = total - blocks.len();
+                    debug!(
+                        peer = %target,
+                        kept = blocks.len(),
+                        dropped,
+                        initial_bytes = initial_size,
+                        final_bytes = size,
+                        cap = frame_cap,
+                        "trimmed block sync response to fit frame cap"
+                    );
+                    return true;
+                }
+            }
+
+            let size = share_blocks_wire_len(origin, target, ttl, blocks, qcs, rosters);
+            warn!(
+                peer = %target,
+                initial_bytes = initial_size,
+                final_bytes = size,
+                cap = frame_cap,
+                "block sync response exceeds frame cap even with single block; dropping"
+            );
+            false
+        }
+
         /// Handles the incoming message.
         #[iroha_futures::telemetry_future]
         pub(super) async fn handle_message(&self, block_sync: &mut BlockSynchronizer) {
@@ -2332,6 +2429,20 @@ pub mod message {
                                 })
                             })
                             .collect();
+                        let mut blocks = blocks;
+                        let mut qcs = qcs;
+                        let mut rosters = rosters;
+                        if !trim_share_blocks_to_frame_cap(
+                            block_sync.peer.id(),
+                            peer_id,
+                            block_sync.relay_ttl,
+                            block_sync.block_sync_frame_cap,
+                            &mut blocks,
+                            &mut qcs,
+                            &mut rosters,
+                        ) {
+                            return;
+                        }
                         Message::ShareBlocks(ShareBlocks::new(
                             blocks,
                             block_sync.peer.id().clone(),
@@ -2500,6 +2611,7 @@ pub mod message {
         use std::{collections::BTreeSet, num::NonZeroU64, sync::Arc};
 
         use iroha_crypto::{KeyPair, PrivateKey};
+        use iroha_data_model::peer::PeerId;
 
         use super::*;
         use crate::block::ValidBlock;
@@ -2561,6 +2673,46 @@ pub mod message {
                 .map(|block| block.header().height().get())
                 .collect();
             assert_eq!(heights, vec![1, 2, 3, 4]);
+        }
+
+        #[test]
+        fn trim_share_blocks_to_frame_cap_truncates() {
+            let keypair = KeyPair::random();
+            let origin = PeerId::new(KeyPair::random().public_key().clone());
+            let target = PeerId::new(KeyPair::random().public_key().clone());
+            let block1 = make_block(keypair.private_key(), 1, None);
+            let block2 = make_block(keypair.private_key(), 2, Some(block1.hash()));
+            let mut blocks = vec![block1.clone(), block2];
+            let mut qcs = vec![None, None];
+            let roster = RosterMetadata {
+                commit_qc: None,
+                validator_checkpoint: None,
+                stake_snapshot: None,
+            };
+            let mut rosters = vec![roster.clone(), roster];
+            let ttl = 8;
+
+            let cap_one =
+                share_blocks_wire_len(&origin, &target, ttl, &blocks[..1], &qcs[..1], &rosters[..1]);
+            let cap_two =
+                share_blocks_wire_len(&origin, &target, ttl, &blocks, &qcs, &rosters);
+            assert!(cap_two > cap_one);
+
+            let trimmed = trim_share_blocks_to_frame_cap(
+                &origin,
+                &target,
+                ttl,
+                cap_one,
+                &mut blocks,
+                &mut qcs,
+                &mut rosters,
+            );
+
+            assert!(trimmed);
+            assert_eq!(blocks.len(), 1);
+            assert_eq!(qcs.len(), 1);
+            assert_eq!(rosters.len(), 1);
+            assert_eq!(blocks[0].hash(), block1.hash());
         }
     }
 
