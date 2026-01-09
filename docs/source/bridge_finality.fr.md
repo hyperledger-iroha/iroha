@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7236dfe86175ff89f660be4cb4dd2c90df20a05f9606d2707407465f639b1a1c
-source_last_modified: "2025-12-05T06:21:36.529838+00:00"
-translation_last_reviewed: 2026-01-01
+source_hash: 2e4c6ed5974f623906f51259a634bcad5df703bcec899630ae29f4669b289ab6
+source_last_modified: "2026-01-08T21:52:45.509525+00:00"
+translation_last_reviewed: 2026-01-08
 ---
 
 <!--
@@ -28,6 +28,8 @@ qu un bloc Iroha est finalise sans calcul off-chain ni relays de confiance.
 - `block_header`: `BlockHeader` canonique.
 - `block_hash`: hash du header (les clients le recomputent pour valider).
 - `commit_certificate`: ensemble des validateurs + signatures qui finalisent le bloc.
+- `validator_set_pops`: preuves de possession (PoP) alignees avec l ordre du validator set
+  (requises pour la verification BLS agregée).
 
 La preuve est auto-contenue; aucun manifest externe ou blob opaque n est requis.
 Retention: Torii sert les preuves de finalite pour la fenetre recente des commit certificates
@@ -71,18 +73,20 @@ justification pour les protocoles bridge qui preferent la separation.
 3. Verifier que `chain_id` correspond a la chaine Iroha attendue.
 4. Recompute `validator_set_hash` depuis `commit_certificate.validator_set` et verifier
    qu il correspond au hash/version enregistres.
-5. Verifier les signatures du commit certificate contre le hash du header en utilisant les
+5. Verifier que la longueur de `validator_set_pops` correspond au validator set et valider
+   chaque PoP contre sa cle publique BLS.
+6. Verifier les signatures du commit certificate contre le hash du header en utilisant les
    cles publiques et indices de validateurs references; appliquer le quorum
    (`2f+1` quand `n>3`, sinon `n`) et rejeter les indices dupliques/hors plage.
-6. Optionnellement lier a un checkpoint de confiance en comparant le hash du validator set
+7. Optionnellement lier a un checkpoint de confiance en comparant le hash du validator set
    a une valeur ancree (anchor de weak-subjectivity).
-7. Optionnellement lier a un anchor d epoch attendu pour rejeter les preuves d epochs
+8. Optionnellement lier a un anchor d epoch attendu pour rejeter les preuves d epochs
    plus anciens/nouveaux jusqu a rotation intentionnelle de l anchor.
 
 `BridgeFinalityVerifier` (dans `iroha_data_model::bridge`) applique ces controles, rejetant
-chain-id/height drift, mismatch hash/version du validator set, signataires dupliques/hors
-plage, signatures invalides, et epochs inattendus avant de compter le quorum, afin que
-les light clients puissent reutiliser un seul verificateur.
+chain-id/height drift, mismatch hash/version du validator set, PoPs manquantes ou invalides,
+signataires dupliques/hors plage, signatures invalides, et epochs inattendus avant de
+compter le quorum, afin que les light clients puissent reutiliser un seul verificateur.
 
 ## Verificateur de reference
 

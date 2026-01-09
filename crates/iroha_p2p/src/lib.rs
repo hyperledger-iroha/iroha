@@ -5,6 +5,7 @@
 #![allow(clippy::all)]
 use std::{io, net::AddrParseError};
 
+use aead::{Nonce, Tag};
 use iroha_crypto::{
     blake2::{
         Blake2bVar,
@@ -56,6 +57,14 @@ pub(crate) mod sampler {
 
 /// The main type to use for secure communication.
 pub type NetworkHandle<T> = network::NetworkBaseHandle<T, X25519Sha256, ChaCha20Poly1305>;
+
+const P2P_ENCRYPTION_OVERHEAD_BYTES: usize =
+    core::mem::size_of::<Nonce<ChaCha20Poly1305>>() + core::mem::size_of::<Tag<ChaCha20Poly1305>>();
+
+/// Return the maximum plaintext payload that fits inside an encrypted P2P frame.
+pub fn frame_plaintext_cap(max_frame_bytes: usize) -> usize {
+    max_frame_bytes.saturating_sub(P2P_ENCRYPTION_OVERHEAD_BYTES)
+}
 
 pub mod boilerplate {
     //! Module containing trait shorthands. Remove when trait aliases
@@ -137,6 +146,23 @@ impl From<io::Error> for Error {
 
 /// Result shorthand.
 pub type Result<T, E = Error> = core::result::Result<T, E>;
+
+#[cfg(test)]
+mod frame_tests {
+    use super::*;
+
+    #[test]
+    fn frame_plaintext_cap_subtracts_overhead() {
+        let cap = P2P_ENCRYPTION_OVERHEAD_BYTES + 64;
+        assert_eq!(frame_plaintext_cap(cap), 64);
+    }
+
+    #[test]
+    fn frame_plaintext_cap_saturates_when_too_small() {
+        let cap = P2P_ENCRYPTION_OVERHEAD_BYTES.saturating_sub(1);
+        assert_eq!(frame_plaintext_cap(cap), 0);
+    }
+}
 
 /// Optional consensus handshake capabilities exchanged during p2p handshake.
 ///

@@ -40,7 +40,7 @@ pub struct IzanamiArgs {
     /// Wall-clock duration for which the scenario should run.
     #[arg(long, default_value = "120s", value_parser = parse_duration)]
     pub duration: Duration,
-    /// Optional total consensus pipeline time (block production + commit).
+    /// Optional total consensus pipeline time (block production + commit), minimum 2ms.
     #[arg(long, value_parser = parse_duration)]
     pub pipeline_time: Option<Duration>,
     /// Target total block height required across all running peers before stopping.
@@ -98,6 +98,8 @@ impl Default for WorkloadProfile {
 
 pub const DEFAULT_PROGRESS_INTERVAL: Duration = Duration::from_secs(15);
 pub const DEFAULT_PROGRESS_TIMEOUT: Duration = Duration::from_secs(120);
+/// Minimum pipeline time accepted by the test-network builder (must stay in sync).
+pub const MIN_PIPELINE_TIME: Duration = Duration::from_millis(2);
 
 /// CLI fault toggles controlling which fault injectors run.
 #[derive(Debug, Clone, Args)]
@@ -250,9 +252,12 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
         }
         if args
             .pipeline_time
-            .is_some_and(|duration| duration.is_zero())
+            .is_some_and(|duration| duration < MIN_PIPELINE_TIME)
         {
-            return Err(eyre!("pipeline_time must be greater than zero"));
+            return Err(eyre!(
+                "pipeline_time must be at least {} ms",
+                MIN_PIPELINE_TIME.as_millis()
+            ));
         }
         if args.target_blocks == Some(0) {
             return Err(eyre!("target_blocks must be greater than zero"));
@@ -826,6 +831,41 @@ mod tests {
             nexus: false,
         };
         assert!(ChaosConfig::try_from(args).is_err());
+    }
+
+    #[test]
+    fn chaos_config_rejects_pipeline_time_under_minimum() {
+        let args = IzanamiArgs {
+            tui: false,
+            allow_net: true,
+            peers: 1,
+            faulty: 0,
+            duration: Duration::from_secs(1),
+            pipeline_time: Some(
+                MIN_PIPELINE_TIME
+                    .checked_sub(Duration::from_millis(1))
+                    .unwrap_or(Duration::ZERO),
+            ),
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            seed: None,
+            tps: 1.0,
+            max_inflight: 1,
+            workload_profile: WorkloadProfile::Stable,
+            log_filter: "info".to_string(),
+            fault_interval_min: Duration::from_secs(1),
+            fault_interval_max: Duration::from_secs(1),
+            faults: FaultArgs::default(),
+            nexus: false,
+        };
+        let Err(err) = ChaosConfig::try_from(args) else {
+            panic!("pipeline_time below minimum should fail");
+        };
+        assert!(
+            err.to_string().contains("pipeline_time must be at least"),
+            "error should mention pipeline_time minimum: {err}"
+        );
     }
 
     #[test]

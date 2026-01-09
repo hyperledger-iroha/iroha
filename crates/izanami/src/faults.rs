@@ -649,7 +649,10 @@ mod tests {
 
     use iroha_primitives::unique_vec::UniqueVec;
     use iroha_test_network::genesis_factory;
-    use tokio::{sync::{Mutex as AsyncMutex, Notify}, time::{sleep, timeout}};
+    use tokio::{
+        sync::{Mutex as AsyncMutex, Notify},
+        time::{sleep, timeout},
+    };
 
     use super::*;
 

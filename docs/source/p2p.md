@@ -358,7 +358,9 @@ Because queues are always bounded, overflow counters rise whenever a channel dro
   The limit now applies uniformly to TCP, TLS, QUIC, and Torii `/p2p` WebSocket
   accepts as well as outbound dialers, with `p2p_post_overflow_by_topic`
   counters incremented whenever an inbound frame is dropped by the topic caps.
-- Topic caps (post-decode enforcement, tightened defaults):
+  This cap is enforced on encrypted frames, so AEAD overhead (nonce + tag) counts
+  toward the limit (currently 28 bytes for ChaCha20-Poly1305).
+- Topic caps (post-decode enforcement, tightened defaults) apply to decrypted payload sizes:
   - `[network].max_frame_bytes_consensus` (default 1 MiB)
   - `[network].max_frame_bytes_control` (default 128 KiB)
   - `[network].max_frame_bytes_block_sync` (default = global cap)

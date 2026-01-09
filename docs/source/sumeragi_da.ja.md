@@ -56,6 +56,8 @@ cargo test -p integration_tests \
 
 既定の `sumeragi.rbc_chunk_max_bytes = 64 KiB` と命令サイズ 10.5 MiB（11 010 048 バイト）に加え、`force_deliver_quorum_one` を有効化した前提で次の不変条件が成り立ちます。
 
+注記: `sumeragi.rbc_chunk_max_bytes` は起動時にクランプされ、`network.max_frame_bytes_consensus` から暗号化オーバーヘッドを差し引いた平文上限に収まるよう調整されます。
+
 | シナリオ | チャンク数 | READY 閾値 | ピアごとのカウンタ | タイミング予算 |
 | --- | --- | --- | --- | --- |
 | 4 ピア | 168 チャンク（全て必要） | READY 投票 ≥1（デバッグ強制；通常は `f=1` の 2f+1 で ≥3） | `payload_bytes_delivered_total ≥ 11 010 048`、`deliver_broadcasts_total = 1`、`ready_broadcasts_total = 1` | `commit_ms` と `rbc_deliver_ms` が `commit_time_ms`（既定 `4000`）の範囲に収まること |

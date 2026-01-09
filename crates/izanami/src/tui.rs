@@ -13,7 +13,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
 
-use crate::config::{ChaosConfig, IzanamiArgs, WorkloadProfile};
+use crate::config::{ChaosConfig, IzanamiArgs, MIN_PIPELINE_TIME, WorkloadProfile};
 
 const HELP_TEXT: &str = "↑/↓ or Tab/Shift+Tab move  •  Enter edit/run  •  Esc/q exit";
 
@@ -407,8 +407,11 @@ impl App {
                 } else {
                     let dur = parse_duration(trimmed)
                         .map_err(|e| format!("Invalid pipeline time: {e}"))?;
-                    if dur.is_zero() {
-                        return Err("Pipeline time must be greater than zero".into());
+                    if dur < MIN_PIPELINE_TIME {
+                        return Err(format!(
+                            "Pipeline time must be at least {} ms",
+                            MIN_PIPELINE_TIME.as_millis()
+                        ));
                     }
                     Some(dur)
                 };
@@ -665,6 +668,19 @@ mod tests {
             .expect_err("non-finite tps should be rejected");
         assert!(
             err.contains("TPS must be finite"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn apply_input_rejects_pipeline_time_under_minimum() {
+        let args = IzanamiArgs::defaults();
+        let mut app = App::new(args);
+        let err = app
+            .apply_input(Field::PipelineTime, "1ms")
+            .expect_err("pipeline_time below minimum should be rejected");
+        assert!(
+            err.contains("Pipeline time must be at least"),
             "unexpected error: {err}"
         );
     }

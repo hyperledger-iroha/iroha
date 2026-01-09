@@ -42,11 +42,12 @@ mod varint;
 /// signatures and keeps verification simple and efficient.
 ///
 /// Determinism and cross-arch stability:
-/// - The message prehash uses `iroha_crypto::Hash` (Blake2b-256) over
-///   `b"iroha:vrf:v1:input" || input`.
+/// - The message prehash uses raw Blake2b-256 over
+///   `b"iroha:vrf:v1:input|" || chain_id || "|" || input`.
 /// - Proofs are BLS signatures produced by the canonical BLS implementation in
 ///   this crate; verification accepts the same bytes.
-/// - Outputs are computed as `Hash(b"iroha:vrf:v1:output" || proof_bytes)`.
+/// - Outputs are computed as raw Blake2b-256 over
+///   `b"iroha:vrf:v1:output" || proof_bytes`.
 pub mod vrf;
 
 #[cfg(feature = "sm")]
@@ -591,10 +592,11 @@ pub struct PublicKeyCompact {
 // Batch verification helpers (deterministic), exposed for admission-time grouping
 // across transaction signatures.
 
-/// Deterministic Ed25519 batch verification wrapper.
+/// Deterministic Ed25519 batch verification wrapper (per-signature).
+/// The `seed32` parameter is reserved for API compatibility and is ignored.
 /// # Errors
-/// Returns `Err(Error::BadSignature)` if any `(message, signature, public_key)` tuple fails verification
-/// or if the input slices have mismatched lengths.
+/// Returns `Err(Error::BadSignature)` if any `(message, signature, public_key)` tuple fails verification,
+/// if the input slices have mismatched lengths, or if the input is empty.
 pub fn ed25519_verify_batch_deterministic(
     messages: &[&[u8]],
     signatures: &[&[u8]],
@@ -614,7 +616,7 @@ pub fn ed25519_verify_batch_deterministic(
 /// The `seed32` parameter is reserved for future deterministic MSM batching.
 /// # Errors
 /// Returns `Err(Error::BadSignature)` if any `(message, signature, public_key)` tuple fails verification
-/// or if the input slices have mismatched lengths.
+/// or if the input slices have mismatched lengths or are empty.
 pub fn secp256k1_verify_batch_deterministic(
     messages: &[&[u8]],
     signatures: &[&[u8]],
@@ -645,7 +647,8 @@ pub fn secp256k1_verify_batch_deterministic(
 /// Compiles only with the `ml-dsa` feature. Verifies each signature independently.
 ///
 /// # Errors
-/// Returns [`Error::BadSignature`] when the input lengths differ or when signature validation fails.
+/// Returns [`Error::BadSignature`] when the input is empty, the input lengths differ,
+/// or when signature validation fails.
 #[cfg(feature = "ml-dsa")]
 pub fn pqc_verify_batch_deterministic(
     messages: &[&[u8]],
@@ -656,7 +659,9 @@ pub fn pqc_verify_batch_deterministic(
     use pqcrypto_dilithium::dilithium3 as dilithium;
     use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _};
 
-    if !(messages.len() == signatures.len() && signatures.len() == public_keys.len()) {
+    if messages.is_empty()
+        || !(messages.len() == signatures.len() && signatures.len() == public_keys.len())
+    {
         return Err(Error::BadSignature);
     }
     let exp_sig = dilithium::signature_bytes();
@@ -688,8 +693,8 @@ pub fn pqc_verify_batch_deterministic(
 /// Verifies each signature independently using `w3f_bls` (public key in G1, signature in G2).
 ///
 /// # Errors
-/// Returns `Err(Error::BadSignature)` on length mismatches or if any signature or
-/// public key fails to parse or verify.
+/// Returns `Err(Error::BadSignature)` on empty input, length mismatches, or if any
+/// signature or public key fails to parse or verify.
 #[cfg(feature = "bls")]
 pub fn bls_normal_verify_batch_deterministic(
     messages: &[&[u8]],
@@ -697,7 +702,9 @@ pub fn bls_normal_verify_batch_deterministic(
     public_keys: &[&[u8]],
     _seed32: [u8; 32],
 ) -> Result<(), Error> {
-    if !(messages.len() == signatures.len() && signatures.len() == public_keys.len()) {
+    if messages.is_empty()
+        || !(messages.len() == signatures.len() && signatures.len() == public_keys.len())
+    {
         return Err(Error::BadSignature);
     }
     for ((m, s), pk) in messages
@@ -715,8 +722,8 @@ pub fn bls_normal_verify_batch_deterministic(
 /// Verifies each signature independently using `w3f_bls` tiny variant.
 ///
 /// # Errors
-/// Returns `Err(Error::BadSignature)` on length mismatches or if any signature or
-/// public key fails to parse or verify.
+/// Returns `Err(Error::BadSignature)` on empty input, length mismatches, or if any
+/// signature or public key fails to parse or verify.
 #[cfg(feature = "bls")]
 pub fn bls_small_verify_batch_deterministic(
     messages: &[&[u8]],
@@ -724,7 +731,9 @@ pub fn bls_small_verify_batch_deterministic(
     public_keys: &[&[u8]],
     _seed32: [u8; 32],
 ) -> Result<(), Error> {
-    if !(messages.len() == signatures.len() && signatures.len() == public_keys.len()) {
+    if messages.is_empty()
+        || !(messages.len() == signatures.len() && signatures.len() == public_keys.len())
+    {
         return Err(Error::BadSignature);
     }
     for ((m, s), pk) in messages
@@ -738,7 +747,36 @@ pub fn bls_small_verify_batch_deterministic(
     Ok(())
 }
 
+#[cfg(feature = "bls")]
+fn bls_collect_pks_with_pop<'a>(
+    public_keys: &[&'a PublicKey],
+    pops: &[&'a [u8]],
+    algorithm: Algorithm,
+    pop_verify: fn(&PublicKey, &[u8]) -> Result<(), Error>,
+) -> Result<Vec<&'a [u8]>, Error> {
+    use std::collections::BTreeSet;
+
+    if public_keys.len() != pops.len() || public_keys.is_empty() {
+        return Err(Error::BadSignature);
+    }
+    let mut seen = BTreeSet::new();
+    let mut pk_bytes = Vec::with_capacity(public_keys.len());
+    for (pk, pop) in public_keys.iter().zip(pops.iter()) {
+        if pk.algorithm() != algorithm {
+            return Err(Error::BadSignature);
+        }
+        pop_verify(pk, pop)?;
+        let (_, bytes) = pk.to_bytes();
+        if !seen.insert(bytes) {
+            return Err(Error::BadSignature);
+        }
+        pk_bytes.push(bytes);
+    }
+    Ok(pk_bytes)
+}
+
 /// Attempt aggregate verification for BLS (normal) when all messages are identical.
+/// Requires a valid Proof-of-Possession (PoP) per public key to prevent rogue-key attacks.
 /// Fallback: per-signature verify inside this function. Deterministic and hardware-stable.
 ///
 /// # Errors
@@ -748,28 +786,26 @@ pub fn bls_small_verify_batch_deterministic(
 pub fn bls_normal_verify_aggregate_same_message(
     message: &[u8],
     signatures: &[&[u8]],
-    public_keys: &[&[u8]],
+    public_keys: &[&PublicKey],
+    pops: &[&[u8]],
 ) -> Result<(), Error> {
     if signatures.len() != public_keys.len() || signatures.is_empty() {
         return Err(Error::BadSignature);
     }
-    {
-        use std::collections::BTreeSet;
-        let mut seen = BTreeSet::new();
-        for &pk in public_keys {
-            if !seen.insert(pk) {
-                return Err(Error::BadSignature);
-            }
-        }
-    }
+    let pk_bytes = bls_collect_pks_with_pop(
+        public_keys,
+        pops,
+        Algorithm::BlsNormal,
+        bls_normal_pop_verify,
+    )?;
     // Preferred: aggregate-style helper; internal path may be per-sig today.
     if let Ok(()) =
-        signature::bls::verify_aggregate_same_message_normal(message, signatures, public_keys)
+        signature::bls::verify_aggregate_same_message_normal(message, signatures, &pk_bytes)
     {
         Ok(())
     } else {
         // Fallback: per-signature
-        for (s, pk) in signatures.iter().zip(public_keys.iter()) {
+        for (s, pk) in signatures.iter().zip(pk_bytes.iter()) {
             let vk = signature::bls::BlsNormal::parse_public_key(pk)?;
             signature::bls::BlsNormal::verify(message, s, &vk)?;
         }
@@ -952,6 +988,7 @@ pub fn bls_small_verify_aggregate_multi_message(
     }
 }
 /// Attempt aggregate verification for BLS (small) when all messages are identical.
+/// Requires a valid Proof-of-Possession (PoP) per public key to prevent rogue-key attacks.
 /// Fallback: per-signature verify inside this function.
 ///
 /// # Errors
@@ -961,26 +998,20 @@ pub fn bls_small_verify_aggregate_multi_message(
 pub fn bls_small_verify_aggregate_same_message(
     message: &[u8],
     signatures: &[&[u8]],
-    public_keys: &[&[u8]],
+    public_keys: &[&PublicKey],
+    pops: &[&[u8]],
 ) -> Result<(), Error> {
     if signatures.len() != public_keys.len() || signatures.is_empty() {
         return Err(Error::BadSignature);
     }
-    {
-        use std::collections::BTreeSet;
-        let mut seen = BTreeSet::new();
-        for &pk in public_keys {
-            if !seen.insert(pk) {
-                return Err(Error::BadSignature);
-            }
-        }
-    }
+    let pk_bytes =
+        bls_collect_pks_with_pop(public_keys, pops, Algorithm::BlsSmall, bls_small_pop_verify)?;
     if let Ok(()) =
-        signature::bls::verify_aggregate_same_message_small(message, signatures, public_keys)
+        signature::bls::verify_aggregate_same_message_small(message, signatures, &pk_bytes)
     {
         Ok(())
     } else {
-        for (s, pk) in signatures.iter().zip(public_keys.iter()) {
+        for (s, pk) in signatures.iter().zip(pk_bytes.iter()) {
             let vk = signature::bls::BlsSmall::parse_public_key(pk)?;
             signature::bls::BlsSmall::verify(message, s, &vk)?;
         }
@@ -998,6 +1029,7 @@ pub fn bls_normal_aggregate_signatures(signatures: &[&[u8]]) -> Result<Vec<u8>, 
 }
 
 /// Verify a pre-aggregated BLS (normal) signature for the same-message case against a set of public keys.
+/// Requires a valid Proof-of-Possession (PoP) per public key to prevent rogue-key attacks.
 ///
 /// # Errors
 /// Returns `Err(Error::BadSignature)` on parse/verify failure.
@@ -1005,12 +1037,19 @@ pub fn bls_normal_aggregate_signatures(signatures: &[&[u8]]) -> Result<Vec<u8>, 
 pub fn bls_normal_verify_preaggregated_same_message(
     message: &[u8],
     aggregated_signature: &[u8],
-    public_keys: &[&[u8]],
+    public_keys: &[&PublicKey],
+    pops: &[&[u8]],
 ) -> Result<(), Error> {
+    let pk_bytes = bls_collect_pks_with_pop(
+        public_keys,
+        pops,
+        Algorithm::BlsNormal,
+        bls_normal_pop_verify,
+    )?;
     signature::bls::verify_preaggregated_same_message_normal(
         message,
         aggregated_signature,
-        public_keys,
+        &pk_bytes,
     )
 }
 
@@ -1124,41 +1163,15 @@ pub fn bls_small_pop_prove(sk: &PrivateKey) -> Result<Vec<u8>, Error> {
     }
 }
 
-/// Aggregate-style check for Ed25519: uses deterministic batch verify under the hood.
-/// Maintains the same security properties as `verify_batch_deterministic`.
+/// Aggregate-style check for Ed25519: per-signature verification wrapper.
 /// # Errors
-/// Returns `Err(Error::BadSignature)` if aggregate verification fails for any tuple.
+/// Returns `Err(Error::BadSignature)` if aggregate verification fails for any tuple or the input is empty.
 pub fn ed25519_verify_aggregate(
     messages: &[&[u8]],
     signatures: &[&[u8]],
     public_keys: &[&[u8]],
 ) -> Result<(), Error> {
-    use sha2::{Digest as _, Sha256};
-    if !(messages.len() == signatures.len() && signatures.len() == public_keys.len()) {
-        return Err(Error::BadSignature);
-    }
-    let mut tuples: Vec<Vec<u8>> = messages
-        .iter()
-        .zip(signatures.iter())
-        .zip(public_keys.iter())
-        .map(|((m, s), pk)| {
-            let mut v = Vec::with_capacity(pk.len() + m.len() + s.len());
-            v.extend_from_slice(pk);
-            v.extend_from_slice(m);
-            v.extend_from_slice(s);
-            v
-        })
-        .collect();
-    tuples.sort_unstable();
-    let mut hasher = Sha256::new();
-    hasher.update(b"iroha:ecc_batch:v1:ed25519");
-    for t in &tuples {
-        hasher.update(t);
-    }
-    let out = hasher.finalize();
-    let mut seed = [0u8; 32];
-    seed.copy_from_slice(&out);
-    ed25519_verify_batch_deterministic(messages, signatures, public_keys, seed)
+    ed25519_verify_batch_deterministic(messages, signatures, public_keys, [0u8; 32])
 }
 
 /// Aggregate-style check for ML‑DSA (Dilithium3): verifies each signature on the shared or unique message.

@@ -1,11 +1,11 @@
 //! BLS-based Verifiable Random Function (VRF)
 //!
 //! Design
-//! - Proof: BLS signature bytes `sigma` over `msg = Hash(b"iroha:vrf:v1:input" || input)`.
-//! - Output: `y = Hash(b"iroha:vrf:v1:output" || sigma)`.
-//! - Hash is the canonical `iroha_crypto::Hash` (Blake2b-256). This separates
-//!   the VRF transcript from regular signatures and is deterministic across
-//!   hardware.
+//! - Proof: BLS signature bytes `sigma` over
+//!   `msg = Blake2b-256(b"iroha:vrf:v1:input|" || chain_id || "|" || input)`.
+//! - Output: `y = Blake2b-256(b"iroha:vrf:v1:output" || sigma)`.
+//! - Blake2b outputs are raw 32-byte digests (no Hash LSB tweak) to keep the
+//!   VRF output unbiased and deterministic across hardware.
 //! - Canonicalization: `sigma` MUST be the canonical compressed encoding for
 //!   the chosen variant (G1: 48 bytes, G2: 96 bytes). Non-canonical encodings,
 //!   infinity, or wrong-subgroup points must be rejected during verification.
@@ -27,15 +27,16 @@
 use core::convert::TryInto;
 use std::vec::Vec;
 
+use blake2::{
+    Blake2bVar,
+    digest::{Update, VariableOutput},
+};
 use group::{Curve, prime::PrimeCurveAffine};
 #[allow(unused_imports)]
 use w3f_bls::SerializableToBytes as _;
 
-use crate::{
-    hash::Hash,
-    signature::bls::{
-        BlsNormalPrivateKey, BlsNormalPublicKey, BlsSmallPrivateKey, BlsSmallPublicKey,
-    },
+use crate::signature::bls::{
+    BlsNormalPrivateKey, BlsNormalPublicKey, BlsSmallPrivateKey, BlsSmallPublicKey,
 };
 
 // Domain separation tags (DST) for VRF hash_to_curve operations
@@ -72,15 +73,24 @@ fn prehash_input_with_chain(chain_id: &[u8], input: &[u8]) -> Vec<u8> {
     buf.extend_from_slice(chain_id);
     buf.push(b'|');
     buf.extend_from_slice(input);
-    let h: [u8; 32] = Hash::new(&buf).into();
-    h.to_vec()
+    blake2b_256(&buf).to_vec()
 }
 
 fn output_from_sigma(sigma: &[u8]) -> VrfOutput {
     let mut buf = Vec::with_capacity(b"iroha:vrf:v1:output".len() + sigma.len());
     buf.extend_from_slice(b"iroha:vrf:v1:output");
     buf.extend_from_slice(sigma);
-    VrfOutput(*Hash::new(&buf).as_ref())
+    VrfOutput(blake2b_256(&buf))
+}
+
+fn blake2b_256(bytes: &[u8]) -> [u8; 32] {
+    let vec_hash = Blake2bVar::new(32)
+        .expect("Failed to initialize variable size hash")
+        .chain(bytes)
+        .finalize_boxed();
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&vec_hash);
+    out
 }
 
 /// Produce a VRF proof and output using the BLS Normal variant.
@@ -427,5 +437,51 @@ mod tests {
     fn vrf_to_g2_rejects_invalid_length() {
         assert!(to_g2(&[0u8; 95]).is_none());
         assert!(to_g2(&[0u8; 97]).is_none());
+    }
+
+    #[test]
+    fn vrf_prehash_uses_raw_blake2b() {
+        let chain_id = b"chain-vrf";
+        let mut input = vec![0u8];
+        let mut tries = 0u16;
+        let expected = loop {
+            let mut buf =
+                Vec::with_capacity(b"iroha:vrf:v1:input|".len() + chain_id.len() + 1 + input.len());
+            buf.extend_from_slice(b"iroha:vrf:v1:input|");
+            buf.extend_from_slice(chain_id);
+            buf.push(b'|');
+            buf.extend_from_slice(&input);
+            let candidate = blake2b_256(&buf);
+            if candidate[31] & 1 == 0 {
+                break candidate;
+            }
+            input[0] = input[0].wrapping_add(1);
+            tries = tries.wrapping_add(1);
+            assert!(tries < 256, "failed to find raw digest with LSB=0");
+        };
+        let prehashed = prehash_input_with_chain(chain_id, &input);
+        assert_eq!(prehashed, expected.to_vec());
+        assert_eq!(prehashed[31] & 1, 0);
+    }
+
+    #[test]
+    fn vrf_output_uses_raw_blake2b() {
+        let mut sigma = [0u8; 96];
+        let mut tries = 0u16;
+        let expected = loop {
+            let mut buf = Vec::with_capacity(b"iroha:vrf:v1:output".len() + sigma.len());
+            buf.extend_from_slice(b"iroha:vrf:v1:output");
+            buf.extend_from_slice(&sigma);
+            let candidate = blake2b_256(&buf);
+            if candidate[31] & 1 == 0 {
+                break candidate;
+            }
+            sigma[0] = sigma[0].wrapping_add(1);
+            tries = tries.wrapping_add(1);
+            assert!(tries < 256, "failed to find raw digest with LSB=0");
+        };
+        let output = output_from_sigma(&sigma).0;
+        assert_eq!(output, expected);
+        assert_eq!(output[31] & 1, 0);
     }
 }

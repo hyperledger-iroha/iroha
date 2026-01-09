@@ -3592,6 +3592,9 @@ pub async fn handle_v1_bridge_finality(
             iroha_core::bridge::BridgeFinalityError::QcHashMismatch { .. } => Error::Query(
                 iroha_data_model::ValidationFail::InternalError(format!("{err:?}")),
             ),
+            iroha_core::bridge::BridgeFinalityError::MissingValidatorPop { .. } => Error::Query(
+                iroha_data_model::ValidationFail::InternalError(format!("{err:?}")),
+            ),
         })?;
 
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
@@ -3630,6 +3633,9 @@ pub async fn handle_v1_bridge_finality_bundle(
                 ))
             }
             iroha_core::bridge::BridgeFinalityError::QcHashMismatch { .. } => Error::Query(
+                iroha_data_model::ValidationFail::InternalError(format!("{err:?}")),
+            ),
+            iroha_core::bridge::BridgeFinalityError::MissingValidatorPop { .. } => Error::Query(
                 iroha_data_model::ValidationFail::InternalError(format!("{err:?}")),
             ),
         })?;
