@@ -220,6 +220,7 @@ impl Actor {
             source = selection.source.as_str(),
             "block sync roster selected"
         );
+        self.cache_vote_roster(block_hash, selection.roster.clone());
         let topology = super::network_topology::Topology::new(selection.roster.clone());
         if let Some(checkpoint) = selection.checkpoint.clone() {
             super::status::record_validator_checkpoint(checkpoint);

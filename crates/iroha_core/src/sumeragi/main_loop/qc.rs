@@ -82,6 +82,79 @@ pub(super) fn select_commit_root_signers(
 }
 
 impl Actor {
+    fn defer_qc_for_roster(
+        &mut self,
+        qc: crate::sumeragi::consensus::Qc,
+        reason: &'static str,
+    ) {
+        let key = Self::qc_tally_key(&qc);
+        if self.deferred_qcs.contains_key(&key) {
+            debug!(
+                phase = ?qc.phase,
+                height = qc.height,
+                view = qc.view,
+                block = %qc.subject_block_hash,
+                reason,
+                "deferring duplicate QC while roster is unresolved"
+            );
+            return;
+        }
+        let phase = qc.phase;
+        let height = qc.height;
+        let view = qc.view;
+        let block_hash = qc.subject_block_hash;
+        self.deferred_qcs.insert(key, qc);
+        info!(
+            phase = ?phase,
+            height,
+            view,
+            block = %block_hash,
+            deferred = self.deferred_qcs.len(),
+            reason,
+            "deferring QC until commit roster is available"
+        );
+    }
+
+    pub(super) fn try_replay_deferred_qcs(&mut self) -> bool {
+        if self.deferred_qcs.is_empty() {
+            return false;
+        }
+        let mut to_replay = Vec::new();
+        for (key, qc) in &self.deferred_qcs {
+            let (consensus_mode, _, _) = self.consensus_context_for_height(qc.height);
+            let roster = if matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView) {
+                self.roster_for_new_view_with_mode(
+                    qc.subject_block_hash,
+                    qc.height,
+                    qc.view,
+                    consensus_mode,
+                )
+            } else {
+                self.roster_for_vote_with_mode(
+                    qc.subject_block_hash,
+                    qc.height,
+                    qc.view,
+                    consensus_mode,
+                )
+            };
+            if !roster.is_empty() {
+                to_replay.push((*key, qc.subject_block_hash, roster));
+            }
+        }
+        if to_replay.is_empty() {
+            return false;
+        }
+        for (key, block_hash, roster) in to_replay {
+            self.cache_vote_roster(block_hash, roster);
+            if let Some(qc) = self.deferred_qcs.remove(&key) {
+                if let Err(err) = self.handle_qc(qc) {
+                    warn!(?err, "failed to replay deferred QC");
+                }
+            }
+        }
+        true
+    }
+
     pub(super) fn request_missing_block(
         &self,
         block_hash: HashOf<BlockHeader>,
@@ -1654,12 +1727,7 @@ impl Actor {
             )
         };
         if commit_topology.is_empty() {
-            debug!(
-                height = qc.height,
-                view = qc.view,
-                phase = ?qc.phase,
-                "dropping QC: empty commit topology"
-            );
+            self.defer_qc_for_roster(qc, "commit topology missing");
             return Ok(());
         }
         let topology = super::network_topology::Topology::new(commit_topology.clone());
@@ -1926,14 +1994,40 @@ impl Actor {
             "cached validated QC"
         );
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) && block_known {
-            let _ = self.rehydrate_pending_from_kura_for_qc(&qc);
-            self.apply_commit_qc(
-                &qc,
-                &commit_topology,
-                qc.subject_block_hash,
-                qc.height,
-                qc.view,
-            );
+            let commit_ready = self
+                .pending
+                .pending_blocks
+                .get(&qc.subject_block_hash)
+                .and_then(|pending| {
+                    let (state_height, tip_hash) = {
+                        let view = self.state.view();
+                        (view.height(), view.latest_block_hash())
+                    };
+                    let parent = pending.block.header().prev_block_hash();
+                    super::pending_extends_tip(pending.height, parent, state_height, tip_hash)
+                        .then_some(())
+                })
+                .is_some();
+            if commit_ready {
+                let _ = self.rehydrate_pending_from_kura_for_qc(&qc);
+                self.apply_commit_qc(
+                    &qc,
+                    &commit_topology,
+                    qc.subject_block_hash,
+                    qc.height,
+                    qc.view,
+                );
+            } else if let Some(pending) = self.pending.pending_blocks.get_mut(&qc.subject_block_hash)
+            {
+                pending.commit_qc_seen = true;
+                pending.commit_qc_epoch = Some(qc.epoch);
+                info!(
+                    height = qc.height,
+                    view = qc.view,
+                    block = %qc.subject_block_hash,
+                    "deferring commit QC application until block extends committed tip"
+                );
+            }
         }
         if !block_known {
             if let Some(lock) = self.locked_qc {

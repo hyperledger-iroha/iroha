@@ -2712,6 +2712,10 @@ async fn block_sync_update_accepts_uncertified_next_height_in_permissioned_mode(
         .handle_block_sync_update(update)
         .expect("block sync update");
 
+    assert!(
+        actor.vote_roster_cache.get(&block.hash()).is_some(),
+        "block sync roster should be cached for vote validation"
+    );
     let pending = actor.pending.pending_blocks.get(&block.hash());
     assert!(pending.is_some(), "pending block should be inserted");
     assert!(
@@ -6932,6 +6936,83 @@ async fn rebroadcast_stalled_rbc_payloads_flushes_pending_with_roster() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn rebroadcast_stalled_rbc_payloads_derives_roster_before_flush() {
+    let mut harness = test_actor_harness(4).await;
+    let key = session_key();
+    let payload = b"payload".to_vec();
+    let payload_hash = Hash::new(&payload);
+    let epoch = harness.actor.epoch_for_height(key.1);
+    let session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
+        .expect("session");
+
+    let chunk = crate::sumeragi::consensus::RbcChunk {
+        block_hash: key.0,
+        height: key.1,
+        view: key.2,
+        epoch,
+        idx: 0,
+        bytes: payload.clone(),
+    };
+    harness
+        .actor
+        .handle_rbc_chunk(chunk)
+        .expect("chunk stashed");
+    assert!(
+        harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .pending
+            .contains_key(&key)
+    );
+
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session);
+
+    let progress = harness
+        .actor
+        .rebroadcast_stalled_rbc_payloads(Instant::now());
+    assert!(progress);
+    assert!(
+        harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .session_rosters
+            .contains_key(&key),
+        "rebroadcast should derive the RBC roster for pending sessions"
+    );
+    assert!(
+        !harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .pending
+            .contains_key(&key),
+        "pending chunks should flush once the roster is derivable"
+    );
+    let stored = harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session");
+    assert_eq!(stored.received_chunks(), 1);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn rbc_ready_rebroadcast_is_rate_limited_per_session() {
     let mut harness = test_actor_harness(4).await;
     let key = session_key();
@@ -8956,6 +9037,441 @@ async fn handle_vote_accepts_committed_block_commit_vote() {
         "commit votes for committed blocks should be recorded"
     );
 
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn handle_vote_defers_until_roster_available() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = u64::try_from(actor.state.view().height()).unwrap_or(0);
+    let height = committed_height.saturating_add(2);
+    let view = 0;
+    let parent_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0x44; 32]));
+    let block = sample_block(height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor
+        .pending
+        .pending_blocks
+        .insert(block_hash, PendingBlock::new(block, payload_hash, height, view));
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let chain = actor.common_config.chain.clone();
+    let epoch = actor.epoch_for_height(height);
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view,
+        epoch,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view(&mut vote, &chain, &topology, &harness.key_pairs);
+
+    let before = actor.vote_log.len();
+    actor.handle_vote(vote);
+    assert_eq!(
+        actor.vote_log.len(),
+        before,
+        "vote should be deferred until roster is available"
+    );
+    assert!(
+        actor.deferred_votes.get(&block_hash).is_some(),
+        "vote should be retained for roster resolution"
+    );
+
+    actor.cache_vote_roster(block_hash, topology.as_ref().to_vec());
+
+    assert!(
+        actor
+            .vote_log
+            .contains_key(&(Phase::Commit, height, view, epoch, 0)),
+        "deferred vote should be replayed once roster is cached"
+    );
+    assert!(
+        actor.deferred_votes.get(&block_hash).is_none(),
+        "deferred votes should be cleared after replay"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn deferred_votes_replay_after_commit_roster_history_arrives() {
+    use crate::sumeragi::status;
+
+    status::reset_commit_certs_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let hash_height1 =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x21; Hash::LENGTH]));
+    let hash_height2 =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x22; Hash::LENGTH]));
+    {
+        let mut hashes = actor.state.block_hashes.block();
+        hashes.push(hash_height1);
+        hashes.push(hash_height2);
+        hashes.commit_for_tests();
+    }
+
+    let active_roster = actor.effective_commit_topology();
+    assert!(
+        active_roster.len() >= 2,
+        "test needs at least two validators"
+    );
+    let mut history_roster = active_roster.clone();
+    history_roster.rotate_left(1);
+
+    let block_height3 = sample_block(3, 0, Some(hash_height2));
+    let hash_height3 = block_height3.hash();
+    let block_height4 = sample_block(4, 0, Some(hash_height3));
+    let hash_height4 = block_height4.hash();
+    let block_height5 = sample_block(5, 0, Some(hash_height4));
+    let hash_height5 = block_height5.hash();
+
+    let payload_hash = Hash::prehashed([0xA5; 32]);
+    actor.pending.pending_blocks.insert(
+        hash_height3,
+        PendingBlock::new(block_height3, payload_hash, 3, 0),
+    );
+    actor.pending.pending_blocks.insert(
+        hash_height4,
+        PendingBlock::new(block_height4, payload_hash, 4, 0),
+    );
+    actor.pending.pending_blocks.insert(
+        hash_height5,
+        PendingBlock::new(block_height5, payload_hash, 5, 0),
+    );
+
+    let expected_roster = {
+        let mut topo = super::network_topology::Topology::new(history_roster.clone());
+        topo.block_committed(history_roster.clone(), hash_height2);
+        let roster_height3 = topo.as_ref().to_vec();
+        let mut topo = super::network_topology::Topology::new(roster_height3.clone());
+        topo.block_committed(roster_height3.clone(), hash_height3);
+        let roster_height4 = topo.as_ref().to_vec();
+        let mut topo = super::network_topology::Topology::new(roster_height4.clone());
+        topo.block_committed(roster_height4, hash_height4);
+        topo.as_ref().to_vec()
+    };
+    assert!(
+        !expected_roster.is_empty(),
+        "derived roster should be non-empty"
+    );
+
+    let topology = super::network_topology::Topology::new(expected_roster.clone());
+    let chain = actor.common_config.chain.clone();
+    let height = 5u64;
+    let view = 0u64;
+    let epoch = actor.epoch_for_height(height);
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash: hash_height5,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view,
+        epoch,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view(&mut vote, &chain, &topology, &harness.key_pairs);
+
+    let before = actor.vote_log.len();
+    actor.handle_vote(vote);
+    assert_eq!(
+        actor.vote_log.len(),
+        before,
+        "vote should be deferred until roster history is available"
+    );
+    assert!(
+        actor.deferred_votes.get(&hash_height5).is_some(),
+        "deferred vote should be buffered"
+    );
+
+    let mut signers = BTreeSet::new();
+    for idx in 0..history_roster.len() {
+        signers.insert(ValidatorIndex::try_from(idx).expect("signer index fits"));
+    }
+    let signers_bitmap = super::build_signers_bitmap(&signers, history_roster.len());
+    let history_topology = super::network_topology::Topology::new(history_roster.clone());
+    let bls_aggregate_signature = aggregate_signature_for_bitmap(
+        &actor.common_config.chain,
+        PERMISSIONED_TAG,
+        Phase::Commit,
+        hash_height2,
+        2,
+        0,
+        0,
+        &signers_bitmap,
+        &history_topology,
+        &harness.key_pairs,
+    );
+    let commit_qc = Qc {
+        phase: Phase::Commit,
+        subject_block_hash: hash_height2,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: 2,
+        view: 0,
+        epoch: 0,
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&history_roster),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: history_roster.clone(),
+        aggregate: QcAggregate {
+            signers_bitmap,
+            bls_aggregate_signature,
+        },
+    };
+    status::record_commit_qc(commit_qc);
+
+    let replayed = actor.try_replay_deferred_votes();
+    assert!(replayed, "expected deferred votes to replay");
+    assert!(
+        actor
+            .vote_log
+            .contains_key(&(Phase::Commit, height, view, epoch, 0)),
+        "deferred vote should be recorded after roster resolution"
+    );
+    assert!(
+        actor.deferred_votes.get(&hash_height5).is_none(),
+        "deferred vote should be cleared after replay"
+    );
+
+    status::reset_commit_certs_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn deferred_qcs_replay_after_commit_roster_history_arrives() {
+    use crate::sumeragi::status;
+
+    status::reset_commit_certs_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let hash_height1 =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x41; Hash::LENGTH]));
+    let hash_height2 =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x42; Hash::LENGTH]));
+    {
+        let mut hashes = actor.state.block_hashes.block();
+        hashes.push(hash_height1);
+        hashes.push(hash_height2);
+        hashes.commit_for_tests();
+    }
+
+    let active_roster = actor.effective_commit_topology();
+    assert!(
+        active_roster.len() >= 2,
+        "test needs at least two validators"
+    );
+    let mut history_roster = active_roster.clone();
+    history_roster.rotate_left(1);
+
+    let block_height3 = sample_block(3, 0, Some(hash_height2));
+    let hash_height3 = block_height3.hash();
+    let block_height4 = sample_block(4, 0, Some(hash_height3));
+    let hash_height4 = block_height4.hash();
+    let block_height5 = sample_block(5, 0, Some(hash_height4));
+    let hash_height5 = block_height5.hash();
+
+    let payload_hash = Hash::prehashed([0xB5; 32]);
+    actor.pending.pending_blocks.insert(
+        hash_height3,
+        PendingBlock::new(block_height3, payload_hash, 3, 0),
+    );
+    actor.pending.pending_blocks.insert(
+        hash_height4,
+        PendingBlock::new(block_height4, payload_hash, 4, 0),
+    );
+    actor.pending.pending_blocks.insert(
+        hash_height5,
+        PendingBlock::new(block_height5, payload_hash, 5, 0),
+    );
+
+    let expected_roster = {
+        let mut topo = super::network_topology::Topology::new(history_roster.clone());
+        topo.block_committed(history_roster.clone(), hash_height2);
+        let roster_height3 = topo.as_ref().to_vec();
+        let mut topo = super::network_topology::Topology::new(roster_height3.clone());
+        topo.block_committed(roster_height3.clone(), hash_height3);
+        let roster_height4 = topo.as_ref().to_vec();
+        let mut topo = super::network_topology::Topology::new(roster_height4.clone());
+        topo.block_committed(roster_height4, hash_height4);
+        topo.as_ref().to_vec()
+    };
+    assert!(
+        !expected_roster.is_empty(),
+        "derived roster should be non-empty"
+    );
+
+    let mut signers = BTreeSet::new();
+    for idx in 0..expected_roster.len() {
+        signers.insert(ValidatorIndex::try_from(idx).expect("signer index fits"));
+    }
+    let signers_bitmap = super::build_signers_bitmap(&signers, expected_roster.len());
+    let topology = super::network_topology::Topology::new(expected_roster.clone());
+    let expected_epoch = actor.epoch_for_height(5);
+    let bls_aggregate_signature = aggregate_signature_for_bitmap(
+        &actor.common_config.chain,
+        PERMISSIONED_TAG,
+        Phase::Commit,
+        hash_height5,
+        5,
+        0,
+        expected_epoch,
+        &signers_bitmap,
+        &topology,
+        &harness.key_pairs,
+    );
+    let qc = Qc {
+        phase: Phase::Commit,
+        subject_block_hash: hash_height5,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: 5,
+        view: 0,
+        epoch: expected_epoch,
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&expected_roster),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: expected_roster.clone(),
+        aggregate: QcAggregate {
+            signers_bitmap,
+            bls_aggregate_signature,
+        },
+    };
+
+    actor.handle_qc(qc.clone()).expect("qc handled");
+    assert!(
+        actor
+            .deferred_qcs
+            .contains_key(&(Phase::Commit, hash_height5, 5, 0, expected_epoch)),
+        "QC should be deferred until roster history is available"
+    );
+    assert!(
+        !actor
+            .qc_cache
+            .contains_key(&(Phase::Commit, hash_height5, 5, 0, expected_epoch)),
+        "deferred QC should not be cached yet"
+    );
+
+    let history_epoch = actor.epoch_for_height(2);
+    let mut history_signers = BTreeSet::new();
+    for idx in 0..history_roster.len() {
+        history_signers.insert(ValidatorIndex::try_from(idx).expect("signer index fits"));
+    }
+    let history_bitmap = super::build_signers_bitmap(&history_signers, history_roster.len());
+    let history_topology = super::network_topology::Topology::new(history_roster.clone());
+    let history_signature = aggregate_signature_for_bitmap(
+        &actor.common_config.chain,
+        PERMISSIONED_TAG,
+        Phase::Commit,
+        hash_height2,
+        2,
+        0,
+        history_epoch,
+        &history_bitmap,
+        &history_topology,
+        &harness.key_pairs,
+    );
+    let history_qc = Qc {
+        phase: Phase::Commit,
+        subject_block_hash: hash_height2,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: 2,
+        view: 0,
+        epoch: history_epoch,
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&history_roster),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: history_roster,
+        aggregate: QcAggregate {
+            signers_bitmap: history_bitmap,
+            bls_aggregate_signature: history_signature,
+        },
+    };
+    status::record_commit_qc(history_qc);
+
+    let height = 5u64;
+    let view = 0u64;
+    let committed_height = u64::try_from(actor.state.view().height()).unwrap_or(0);
+    assert!(
+        committed_height >= 2,
+        "committed height should reflect seeded hashes"
+    );
+    let derived_roster = actor.roster_for_vote(hash_height5, height, view);
+    assert_eq!(
+        derived_roster, expected_roster,
+        "roster roll-forward should match the expected derived roster"
+    );
+    {
+        let topology = super::network_topology::Topology::new(derived_roster.clone());
+        let view = actor.state.view();
+        assert!(
+            super::qc_aggregate_consistent(
+                &qc,
+                &topology,
+                view.world(),
+                &actor.common_config.chain,
+                PERMISSIONED_TAG
+            ),
+            "QC aggregate signature should validate against the derived roster"
+        );
+    }
+
+    let replayed = actor.try_replay_deferred_qcs();
+    assert!(replayed, "expected deferred QCs to replay");
+    let qc_key = (Phase::Commit, hash_height5, 5, 0, expected_epoch);
+    let qc_cached = actor.qc_cache.contains_key(&qc_key);
+    let pending_snapshot = actor.pending.pending_blocks.get(&hash_height5);
+    let pending_commit_seen = pending_snapshot.is_some_and(|pending| pending.commit_qc_seen);
+    let pending_aborted = pending_snapshot.is_some_and(|pending| pending.aborted);
+    let pending_status = pending_snapshot.map(|pending| pending.validation_status);
+    let pending_present = pending_snapshot.is_some();
+    let kura_committed = actor.kura.get_block_height_by_hash(hash_height5).is_some();
+    assert!(
+        qc_cached,
+        "replayed QC should be cached; cached={:?} deferred={:?} commit_seen={} pending_present={} pending_aborted={} pending_status={:?} kura_committed={} locked={:?}",
+        actor.qc_cache.keys().collect::<Vec<_>>(),
+        actor.deferred_qcs.keys().collect::<Vec<_>>(),
+        pending_commit_seen,
+        pending_present,
+        pending_aborted,
+        pending_status,
+        kura_committed,
+        actor.locked_qc,
+    );
+    assert!(
+        pending_present && !kura_committed,
+        "pending block should remain queued until tip advances; commit_seen={} pending_present={} pending_aborted={} pending_status={:?} kura_committed={} locked={:?}",
+        pending_commit_seen,
+        pending_present,
+        pending_aborted,
+        pending_status,
+        kura_committed,
+        actor.locked_qc,
+    );
+    assert!(
+        actor.deferred_qcs.is_empty(),
+        "deferred QCs should be cleared after replay"
+    );
+
+    status::reset_commit_certs_for_tests();
     harness.shutdown.send();
 }
 

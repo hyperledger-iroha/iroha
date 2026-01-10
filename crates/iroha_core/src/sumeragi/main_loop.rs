@@ -2966,6 +2966,11 @@ pub(super) struct Actor {
         ),
         crate::sumeragi::consensus::Vote,
     >,
+    deferred_votes: BTreeMap<
+        HashOf<BlockHeader>,
+        BTreeMap<votes::VoteLogKey, crate::sumeragi::consensus::Vote>,
+    >,
+    deferred_qcs: BTreeMap<QcVoteKey, crate::sumeragi::consensus::Qc>,
     vote_roster_cache: BTreeMap<HashOf<BlockHeader>, Vec<PeerId>>,
     qc_cache: BTreeMap<QcVoteKey, crate::sumeragi::consensus::Qc>,
     qc_signer_tally: BTreeMap<QcVoteKey, QcSignerTally>,
@@ -6093,6 +6098,8 @@ impl Actor {
             invalid_sig_log: InvalidSigThrottle::default(),
             genesis_account,
             vote_log: BTreeMap::new(),
+            deferred_votes: BTreeMap::new(),
+            deferred_qcs: BTreeMap::new(),
             vote_roster_cache: BTreeMap::new(),
             qc_cache: BTreeMap::new(),
             qc_signer_tally: BTreeMap::new(),
@@ -6563,6 +6570,8 @@ impl Actor {
             let progress = self.poll_committed_blocks();
             (progress, step_start.elapsed())
         };
+        let deferred_qc_progress = self.try_replay_deferred_qcs();
+        let deferred_vote_progress = self.try_replay_deferred_votes();
         let (missing_block_progress, missing_block_cost) = {
             let step_start = Instant::now();
             let progress = self.retry_missing_block_requests(now);
@@ -6586,6 +6595,8 @@ impl Actor {
             || adaptive_progress
             || refresh_progress
             || committed_progress
+            || deferred_qc_progress
+            || deferred_vote_progress
             || missing_block_progress
             || reschedule_progress
             || idle_view_progress
@@ -8004,7 +8015,10 @@ impl Actor {
         if !self.subsystems.da_rbc.rbc.pending.contains_key(&key) {
             return false;
         }
-        let roster = self.rbc_session_roster(key);
+        let mut roster = self.rbc_session_roster(key);
+        if roster.is_empty() {
+            roster = self.ensure_rbc_session_roster(key);
+        }
         if roster.is_empty() {
             return false;
         }

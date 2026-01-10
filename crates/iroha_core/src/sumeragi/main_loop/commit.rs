@@ -3691,6 +3691,9 @@ impl Actor {
             &self.subsystems.da_rbc.rbc.status_handle,
             chunk_store,
         );
+        self.deferred_votes.remove(&block_hash);
+        self.deferred_qcs
+            .retain(|(_, hash, _, _, _), _| *hash != block_hash);
         let payload_keys: Vec<_> = self
             .subsystems
             .da_rbc
@@ -4289,6 +4292,8 @@ impl Actor {
         self.pending.pending_processing.set(None);
         self.pending.pending_processing_parent.set(None);
         self.vote_log.clear();
+        self.deferred_votes.clear();
+        self.deferred_qcs.clear();
         self.vote_roster_cache.clear();
         self.qc_cache.clear();
         self.qc_signer_tally.clear();
