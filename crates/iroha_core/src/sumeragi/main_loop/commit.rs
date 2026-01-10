@@ -1470,6 +1470,21 @@ impl Actor {
             self.pending.pending_blocks.insert(block_hash, pending);
             return false;
         }
+        if !super::pending_extends_tip(
+            pending_height,
+            pending.block.header().prev_block_hash(),
+            state_height,
+            state_tip_hash,
+        ) {
+            debug!(
+                height = pending_height,
+                view = pending_view,
+                block = %block_hash,
+                "commit certificate received before tip; deferring finalize"
+            );
+            self.pending.pending_blocks.insert(block_hash, pending);
+            return false;
+        }
         if kura_has_block && !pending.kura_persisted {
             info!(
                 height = pending_height,

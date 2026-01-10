@@ -1730,8 +1730,10 @@ pub fn set_locked_qc(height: u64, view: u64, subject: Option<HashOf<BlockHeader>
         return;
     }
     if (height, view) == (cur_h, cur_v) {
-        if subject.is_some() && locked_qc_hash().is_none() {
-            set_locked_qc_hash(subject);
+        if let Some(subject) = subject {
+            if locked_qc_hash() != Some(subject) {
+                set_locked_qc_hash(Some(subject));
+            }
         }
     }
 }
@@ -5465,13 +5467,17 @@ mod tests {
         let hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
             [3; UntypedHash::LENGTH],
         ));
+        let hash_2 = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
+            [4; UntypedHash::LENGTH],
+        ));
         super::set_locked_qc(0, 0, None);
         super::set_locked_qc(10, 2, None);
         super::set_locked_qc(10, 2, Some(hash));
+        super::set_locked_qc(10, 2, Some(hash_2));
         let snap = super::snapshot();
         assert_eq!(snap.locked_qc_height, 10);
         assert_eq!(snap.locked_qc_view, 2);
-        assert_eq!(snap.locked_qc_subject, Some(hash));
+        assert_eq!(snap.locked_qc_subject, Some(hash_2));
     }
 
     #[test]
