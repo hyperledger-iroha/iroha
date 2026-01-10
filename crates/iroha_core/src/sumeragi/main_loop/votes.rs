@@ -8,7 +8,7 @@ use crate::sumeragi::consensus::Phase;
 
 use super::*;
 
-type VoteLogKey = (
+pub(super) type VoteLogKey = (
     crate::sumeragi::consensus::Phase,
     u64,
     u64,
@@ -69,14 +69,7 @@ impl Actor {
             self.roster_for_vote_with_mode(vote.block_hash, vote.height, vote.view, consensus_mode)
         };
         if topology_peers.is_empty() {
-            warn!(
-                phase = ?vote.phase,
-                height = vote.height,
-                view = vote.view,
-                signer = vote.signer,
-                block_hash = %vote.block_hash,
-                "dropping vote: empty commit topology"
-            );
+            self.defer_vote_for_roster(vote, "commit topology missing");
             return;
         }
         let topology = super::network_topology::Topology::new(topology_peers.clone());
@@ -718,7 +711,11 @@ impl Actor {
         true
     }
 
-    fn cache_vote_roster(&mut self, block_hash: HashOf<BlockHeader>, roster: Vec<PeerId>) {
+    pub(super) fn cache_vote_roster(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        roster: Vec<PeerId>,
+    ) {
         if roster.is_empty() {
             return;
         }
@@ -737,6 +734,93 @@ impl Actor {
                 }
             }
         }
+        self.replay_deferred_votes_for_block(block_hash);
+    }
+
+    fn defer_vote_for_roster(
+        &mut self,
+        vote: crate::sumeragi::consensus::Vote,
+        reason: &'static str,
+    ) {
+        let key = vote_key(&vote);
+        let phase = vote.phase;
+        let height = vote.height;
+        let view = vote.view;
+        let signer = vote.signer;
+        let block_hash = vote.block_hash;
+        let entry = self.deferred_votes.entry(block_hash).or_default();
+        if entry.contains_key(&key) {
+            debug!(
+                phase = ?phase,
+                height,
+                view,
+                signer,
+                block_hash = %block_hash,
+                reason,
+                "deferring duplicate vote while roster is unresolved"
+            );
+            return;
+        }
+        entry.insert(key, vote);
+        info!(
+            phase = ?phase,
+            height,
+            view,
+            signer,
+            block_hash = %block_hash,
+            deferred = entry.len(),
+            reason,
+            "deferring vote until commit roster is available"
+        );
+    }
+
+    fn replay_deferred_votes_for_block(&mut self, block_hash: HashOf<BlockHeader>) {
+        let Some(deferred) = self.deferred_votes.remove(&block_hash) else {
+            return;
+        };
+        let count = deferred.len();
+        if count == 0 {
+            return;
+        }
+        info!(
+            block = %block_hash,
+            deferred = count,
+            "replaying deferred votes after roster resolution"
+        );
+        for (_, vote) in deferred {
+            self.handle_vote(vote);
+        }
+    }
+
+    pub(super) fn try_replay_deferred_votes(&mut self) -> bool {
+        if self.deferred_votes.is_empty() {
+            return false;
+        }
+        let mut resolved = Vec::new();
+        for (block_hash, votes) in &self.deferred_votes {
+            let Some(vote) = votes.values().next() else {
+                continue;
+            };
+            let (consensus_mode, _, _) = self.consensus_context_for_height(vote.height);
+            let roster = if matches!(vote.phase, Phase::NewView) {
+                self.roster_for_new_view_with_mode(
+                    *block_hash,
+                    vote.height,
+                    vote.view,
+                    consensus_mode,
+                )
+            } else {
+                self.roster_for_vote_with_mode(*block_hash, vote.height, vote.view, consensus_mode)
+            };
+            if !roster.is_empty() {
+                resolved.push((*block_hash, roster));
+            }
+        }
+        let replayed = !resolved.is_empty();
+        for (block_hash, roster) in resolved {
+            self.cache_vote_roster(block_hash, roster);
+        }
+        replayed
     }
 
     fn note_double_vote(

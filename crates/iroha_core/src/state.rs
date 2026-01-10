@@ -14643,11 +14643,20 @@ impl<'state> StateBlock<'state> {
         self.prev_commit_topology
             .mutate_vec(|vec| *vec = prev_topology);
         let checkpoint_topology = topology.clone();
-        let next_topology = if topology.is_empty() {
+        let world_peers: Vec<PeerId> = self.world.peers().iter().cloned().collect();
+        let next_topology = if world_peers.is_empty() {
             Vec::new()
         } else {
-            let mut topo = crate::sumeragi::network_topology::Topology::new(topology);
-            let world_peers = self.world.peers().iter().cloned();
+            if topology.is_empty() {
+                warn!(
+                    height = block_height,
+                    block = %block_hash,
+                    "commit topology missing during block apply; deriving from world peers"
+                );
+            }
+            // Always derive commit topology from the current world peer set to avoid
+            // clearing the roster when commit QC metadata is unavailable.
+            let mut topo = crate::sumeragi::network_topology::Topology::new(world_peers.clone());
             topo.block_committed(world_peers, block_hash);
             topo.as_ref().to_vec()
         };
@@ -27084,6 +27093,57 @@ mod tests {
         let mut world_peers = base_topology.clone();
         world_peers.push(new_peer);
         expected_topology.block_committed(world_peers, prev_hash);
+        let expected = expected_topology.as_ref().to_vec();
+
+        let view = state.view();
+        let actual: Vec<_> = view.commit_topology().iter().cloned().collect();
+        assert_eq!(actual, expected);
+        let prev: Vec<_> = view.prev_commit_topology().iter().cloned().collect();
+        assert_eq!(prev, base_topology);
+    }
+
+    #[test]
+    fn apply_without_execution_derives_commit_topology_when_roster_missing() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+
+        let keypairs = configure_commit_topology(&state, 4);
+        let base_topology: Vec<_> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+        let new_peer = PeerId::new(
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+
+        let block = BlockBuilder::new(Vec::new())
+            .chain(0, None)
+            .sign(keypairs[0].private_key())
+            .unpack(|_| {});
+        let signed_block: SignedBlock = block.into();
+        let mut state_block = state.block(signed_block.header());
+
+        {
+            let mut peers = state_block.world.peers_mut_for_testing().transaction();
+            peers.clear();
+            peers.extend(base_topology.clone());
+            peers.push(new_peer.clone());
+            peers.apply();
+        }
+
+        let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        let block_hash = committed.as_ref().hash();
+        let _ = state_block.apply_without_execution(&committed, Vec::new());
+        state_block.commit().expect("commit state block");
+
+        let mut expected_topology = Topology::new(base_topology.clone());
+        let mut world_peers = base_topology.clone();
+        world_peers.push(new_peer);
+        expected_topology.block_committed(world_peers, block_hash);
         let expected = expected_topology.as_ref().to_vec();
 
         let view = state.view();

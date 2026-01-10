@@ -1,6 +1,16 @@
 # Status
 
 ## Latest Updates
+- Sumeragi/localnet: defer QCs when the roster is missing, replay them once roster history becomes available, and add regression coverage for commit-QC replay.
+- Tests: not run (not requested).
+- Sumeragi/block sync: expose vote roster caching to block-sync handlers to fix a private-method build error.
+- Tests: not run (not requested).
+- Sumeragi/localnet: replay deferred votes once roster history becomes available (tick-level replay) and add regression coverage for commit-QC history roll-forward.
+- Tests: not run (not requested).
+- Sumeragi/localnet: derive RBC rosters during stalled-payload rebroadcasts so pending RBC messages flush once rosters become available; add regression coverage.
+- Tests: not run (not requested).
+- Sumeragi/localnet: defer votes when the commit roster is missing, replay deferred votes once a roster is cached, and cache block-sync rosters early; add a regression test for deferred vote replay.
+- Tests: not run (not requested).
 - Sumeragi/localnet: add throttled status snapshot logging in the localnet smoke tests (per-peer height/view/QC counters) and fix NEW_VIEW receipt logging borrow in votes.
 - Tests: `cargo test -p integration_tests --test sumeragi_localnet_smoke --no-run` (pass).
 - Maintenance: resolve merge conflicts in status, IVM cache, and Sumeragi tests.
@@ -1954,6 +1964,12 @@
 - Tests: `cargo test -p integration_tests trigger_completion_failure_reports_error -- --nocapture` (timed out after 600s; compile finished; test `events::notification::trigger_completion_failure_reports_error` still running).
 - Sumeragi NEW_VIEW quorum selection now filters senders against the active roster (only counts local if it is in-roster), with coverage for non-roster senders.
 - Sumeragi now rejects NEW_VIEW votes with mismatched highest QC hashes/heights before recording, with regressions for invalid highest fields.
+- Sumeragi now defers applying commit QCs until the pending block extends the committed tip, keeping the QC cached and marking the pending entry for later finalize instead of committing out-of-order; updated deferred-QC replay coverage.
+- Tests: `cargo test -p iroha_core --lib deferred_qcs_replay_after_commit_roster_history_arrives -- --nocapture` (passed; warning about network bind in tests).
+- Tests: `cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` (timed out after 300s; `permissioned_localnet_produces_blocks_within_bound` passed; `permissioned_localnet_reaches_100_blocks` still running).
+- Sumeragi apply-without-execution now derives commit topology from the current world peer set even when commit roster metadata is missing, preventing empty-roster stalls; added a regression covering the empty-roster fallback.
+- Localnet smoke run (escalated) stalled with repeated `dropping vote: empty commit topology` and RBC READY quorum deferrals; artifacts kept under `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_utsOJR`.
+- Tests: `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` (timed out after 180s; logs captured); `cargo test -p iroha_core apply_without_execution_derives_commit_topology_when_roster_missing -- --nocapture` (timed out after 180s while enumerating other test bins; targeted test passed).
 - Sumeragi now caches the first validated roster per block hash to keep vote validation stable across commit-topology reordering; resets/prunes clear the cache, and a regression covers reordering after a vote is recorded.
 - Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options); `cargo test --workspace` (timed out after 120s and 600s during compilation; warnings about unused `MissingQc` in `mochi/mochi-ui-egui/src/main.rs:10917`, `SignerMissingFromBlock` in `crates/iroha_core/src/sumeragi/main_loop.rs:484`, and unused import in `crates/iroha_cli/src/bin/../contracts.rs:337`).
 - Sumeragi rejects NEW_VIEW QCs with missing/mismatched highest certificates and validates highest QC epochs in NEW_VIEW votes, with regressions covering invalid QC/vote inputs.
