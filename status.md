@@ -1,6 +1,9 @@
 # Status
 
 ## Latest Updates
+- Sumeragi: add a pacemaker NEW_VIEW status regression test to confirm highest-QC status updates from NEW_VIEW selection.
+- Tests: `cargo test -p iroha_core --lib block_created_updates_locked_status_when_lock_missing -- --nocapture` (pass); `cargo test -p iroha_core --lib pacemaker_updates_highest_qc_status_from_new_view -- --nocapture` (pass); `cargo test -p iroha_core --lib qc_extends_locked_if_present_allows_missing_lock_locally -- --nocapture` (pass); `cargo test -p iroha_core --lib locked_qc_subject_updates_for_same_height_view -- --nocapture` (pass).
+- Tests: `cargo test -p iroha_core --lib pacemaker_bootstraps_with_commit_qc_when_active_roster_empty -- --nocapture` (failed: assertion `pacemaker should bootstrap from commit QC roster when active roster is empty`).
 - Integration tests/asset: make the local assert_balance closure mutable so it can call the client-rotating fetch helper.
 - Tests: not run (not requested).
 - Integration tests/asset: rotate test clients across peers, treat tx-confirmation fallback timeouts as non-fatal, and add helper checks for transient-request detection.

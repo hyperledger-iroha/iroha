@@ -26736,12 +26736,6 @@ async fn pacemaker_bootstraps_with_commit_qc_when_active_roster_empty() {
     use crate::sumeragi::status;
 
     status::reset_commit_certs_for_tests();
-    let _qc_guard = status::qc_status_test_guard();
-    status::set_locked_qc(0, 0, None);
-    status::set_highest_qc(0, 0);
-    status::set_highest_qc_hash(HashOf::from_untyped_unchecked(Hash::prehashed(
-        [0; Hash::LENGTH],
-    )));
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da_enabled = true;
@@ -26870,32 +26864,100 @@ async fn pacemaker_bootstraps_with_commit_qc_when_active_roster_empty() {
         .unwrap_or(now);
     actor.phase_tracker.start_new_round(tracked_height, start);
 
-    let proposed = actor.on_pacemaker_propose_ready(now);
+    let proposal_roster = actor
+        .roster_from_commit_qc_history_roll_forward(tracked_height, Some(parent_hash))
+        .expect("commit QC roster should be available");
     assert!(
-        proposed,
-        "pacemaker should bootstrap from commit QC roster when active roster is empty"
+        !proposal_roster.is_empty(),
+        "commit QC roster should not be empty"
     );
-    assert!(
-        actor
-            .subsystems
-            .propose
-            .proposal_cache
-            .get_proposal(tracked_height, 0)
-            .is_some(),
-        "proposal should be assembled using commit QC roster despite empty active topology"
-    );
+    let mut topology = super::network_topology::Topology::new(proposal_roster);
+    let leader_index = actor
+        .leader_index_for(&mut topology, tracked_height, 0)
+        .expect("leader index should resolve");
+    let local_pos = topology.position(actor.common_config.peer.id().public_key());
+    let local_is_leader = local_pos == Some(leader_index);
 
-    let snapshot = status::snapshot();
-    assert_eq!(snapshot.highest_qc_height, 2);
-    assert_eq!(snapshot.highest_qc_view, 0);
-    assert_eq!(snapshot.highest_qc_subject, Some(parent_hash));
+    let proposed = actor.on_pacemaker_propose_ready(now);
+    if local_is_leader {
+        assert!(
+            proposed,
+            "pacemaker should bootstrap from commit QC roster when local is leader"
+        );
+        assert!(
+            actor
+                .subsystems
+                .propose
+                .proposal_cache
+                .get_proposal(tracked_height, 0)
+                .is_some(),
+            "proposal should be assembled using commit QC roster despite empty active topology"
+        );
+    } else {
+        assert!(
+            !proposed,
+            "pacemaker should defer when local is not leader for the commit QC roster"
+        );
+        assert!(
+            actor
+                .subsystems
+                .propose
+                .proposal_cache
+                .get_proposal(tracked_height, 0)
+                .is_none(),
+            "non-leader should not assemble a proposal"
+        );
+    }
 
     status::reset_commit_certs_for_tests();
-    status::set_locked_qc(0, 0, None);
-    status::set_highest_qc(0, 0);
-    status::set_highest_qc_hash(HashOf::from_untyped_unchecked(Hash::prehashed(
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pacemaker_updates_highest_qc_status_from_new_view() {
+    let _guard = super::status::qc_status_test_guard();
+    super::status::set_locked_qc(0, 0, None);
+    super::status::set_highest_qc(0, 0);
+    super::status::set_highest_qc_hash(HashOf::from_untyped_unchecked(Hash::prehashed(
         [0; Hash::LENGTH],
     )));
+
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+    actor.highest_qc = None;
+
+    let committed_height = actor.state.view().height() as u64;
+    let tracked_height = committed_height.saturating_add(1);
+    let view = 0u64;
+    let mut highest_qc = sample_qc_ref(committed_height, view);
+    highest_qc.phase = Phase::Commit;
+
+    let local_peer = actor.common_config.peer.id().clone();
+    actor
+        .subsystems
+        .propose
+        .new_view_tracker
+        .record(tracked_height, view, local_peer, highest_qc);
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(tracked_height, now);
+    let _ = actor.on_pacemaker_propose_ready(now);
+
+    let snapshot = super::status::snapshot();
+    assert_eq!(snapshot.highest_qc_height, highest_qc.height);
+    assert_eq!(snapshot.highest_qc_view, highest_qc.view);
+    assert_eq!(
+        snapshot.highest_qc_subject,
+        Some(highest_qc.subject_block_hash)
+    );
+
+    super::status::set_locked_qc(0, 0, None);
+    super::status::set_highest_qc(0, 0);
+    super::status::set_highest_qc_hash(HashOf::from_untyped_unchecked(Hash::prehashed(
+        [0; Hash::LENGTH],
+    )));
+
     harness.shutdown.send();
 }
 
