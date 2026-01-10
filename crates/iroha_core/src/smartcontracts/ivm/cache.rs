@@ -233,7 +233,11 @@ impl IvmCache {
         }
         let mut vm = ivm::IVM::new(stack_gas_limit);
         vm.set_host(ivm::host::DefaultHost::default());
-        let key = RuntimeKey::new(runtime.summary.code_hash, runtime.summary.meta_hash, stack_limit);
+        let key = RuntimeKey::new(
+            runtime.summary.code_hash,
+            runtime.summary.meta_hash,
+            stack_limit,
+        );
         if vm.load_program(&runtime.bytecode).is_ok() {
             if stack_gas_limit > 0 {
                 vm.set_gas_limit(stack_gas_limit);

@@ -32,6 +32,56 @@ const QUERY_RETRIES: usize = 240;
 const QUERY_RETRY_DELAY: Duration = Duration::from_millis(500);
 const NON_EMPTY_BLOCK_TIMEOUT: Duration = Duration::from_secs(600);
 
+struct ClientPool {
+    clients: Vec<Client>,
+    index: usize,
+}
+
+impl ClientPool {
+    fn new(network: &Network) -> Self {
+        let clients = network
+            .peers()
+            .iter()
+            .map(NetworkPeer::client)
+            .collect::<Vec<_>>();
+        let clients = if clients.is_empty() {
+            vec![network.client()]
+        } else {
+            clients
+        };
+        Self { clients, index: 0 }
+    }
+
+    fn len(&self) -> usize {
+        self.clients.len()
+    }
+
+    fn current(&self) -> &Client {
+        &self.clients[self.index]
+    }
+
+    fn next(&mut self) -> &Client {
+        let idx = self.index;
+        self.index = (self.index + 1) % self.clients.len();
+        &self.clients[idx]
+    }
+}
+
+fn is_transient_client_error(err: &Report) -> bool {
+    const NEEDLES: [&str; 6] = [
+        "Failed to send http",
+        "error sending request for url",
+        "operation timed out",
+        "Connection refused",
+        "connection closed",
+        "connection reset",
+    ];
+    err.chain().any(|cause| {
+        let text = cause.to_string();
+        NEEDLES.iter().any(|needle| text.contains(needle))
+    })
+}
+
 fn retry_query<T, F>(mut f: F) -> Result<T>
 where
     F: FnMut() -> Result<T>,
@@ -46,8 +96,35 @@ where
     unreachable!()
 }
 
+fn asset_value(clients: &mut ClientPool, asset_id: &AssetId) -> Result<Numeric> {
+    retry_query(|| {
+        let client = clients.next();
+        client
+            .query_single(FindAssetById {
+                id: asset_id.clone(),
+            })
+            .map(|asset| asset.value().clone())
+            .map_err(Report::new)
+    })
+}
+
+fn asset_exists(clients: &mut ClientPool, asset_id: &AssetId) -> Result<bool> {
+    retry_query(|| {
+        let client = clients.next();
+        match client.query_single(FindAssetById {
+            id: asset_id.clone(),
+        }) {
+            Ok(_) => Ok(true),
+            Err(QueryError::Validation(ValidationFail::QueryFailed(
+                QueryExecutionFail::Find(FindError::Asset(_)) | QueryExecutionFail::NotFound,
+            ))) => Ok(false),
+            Err(err) => Err(eyre!(err)),
+        }
+    })
+}
+
 fn wait_for_asset_definition_owner(
-    client: &Client,
+    clients: &mut ClientPool,
     asset_definition_id: &AssetDefinitionId,
     expected_owner: &AccountId,
     not_found_msg: &'static str,
@@ -56,6 +133,7 @@ fn wait_for_asset_definition_owner(
 ) -> Result<()> {
     let deadline = Instant::now() + NON_EMPTY_BLOCK_TIMEOUT;
     loop {
+        let client = clients.next();
         let last_err = match client.query(FindAssetsDefinitions::new()).execute_all() {
             Ok(definitions) => definitions
                 .into_iter()
@@ -90,13 +168,14 @@ fn wait_for_asset_definition_owner(
 }
 
 fn wait_for_asset_value(
-    client: &Client,
+    clients: &mut ClientPool,
     asset_id: &AssetId,
     expected: &Numeric,
     context: &'static str,
 ) -> Result<()> {
     let deadline = Instant::now() + NON_EMPTY_BLOCK_TIMEOUT;
     loop {
+        let client = clients.next();
         match client.query_single(FindAssetById::new(asset_id.clone())) {
             Ok(asset) if asset.value() == expected => return Ok(()),
             Ok(_) => {}
@@ -114,9 +193,14 @@ fn wait_for_asset_value(
     }
 }
 
-fn wait_for_asset_absent(client: &Client, asset_id: &AssetId, context: &'static str) -> Result<()> {
+fn wait_for_asset_absent(
+    clients: &mut ClientPool,
+    asset_id: &AssetId,
+    context: &'static str,
+) -> Result<()> {
     let deadline = Instant::now() + NON_EMPTY_BLOCK_TIMEOUT;
     loop {
+        let client = clients.next();
         match client.query_single(FindAssetById::new(asset_id.clone())) {
             Ok(_) => {}
             Err(QueryError::Validation(ValidationFail::QueryFailed(
@@ -172,56 +256,82 @@ fn quiet_network_builder() -> NetworkBuilder {
 }
 
 fn submit_or_skip(
-    client: &iroha::client::Client,
+    clients: &mut ClientPool,
     instruction: impl Into<InstructionBox>,
     context: &str,
 ) -> Result<Option<()>> {
-    submit_or_tolerate_timeout(client, instruction, context)
+    submit_or_tolerate_timeout(clients, instruction, context)
 }
 
 fn submit_tx_or_skip(
-    client: &iroha::client::Client,
+    clients: &mut ClientPool,
     tx: &iroha::data_model::transaction::SignedTransaction,
     context: &str,
 ) -> Result<Option<()>> {
-    match client.submit_transaction_blocking(tx) {
-        Ok(_) => Ok(Some(())),
-        Err(err) => {
-            if is_tx_confirmation_timeout(&err) {
-                eprintln!(
-                    "warning: {context} confirmation timed out; continuing with state checks"
-                );
-                return Ok(Some(()));
+    let mut last_err = None;
+    for _ in 0..clients.len() {
+        let client = clients.next();
+        match client.submit_transaction_blocking(tx) {
+            Ok(_) => return Ok(Some(())),
+            Err(err) => {
+                if is_tx_confirmation_timeout(&err) {
+                    eprintln!(
+                        "warning: {context} confirmation timed out; continuing with state checks"
+                    );
+                    return Ok(Some(()));
+                }
+                if is_transient_client_error(&err) {
+                    last_err = Some(err);
+                    continue;
+                }
+                return sandbox::handle_result::<()>(Err(err), context);
             }
-            sandbox::handle_result::<()>(Err(err), context)
         }
     }
+    sandbox::handle_result::<()>(
+        Err(last_err.unwrap_or_else(|| eyre!("all peers unreachable"))),
+        context,
+    )
 }
 
 fn submit_or_tolerate_timeout(
-    client: &iroha::client::Client,
+    clients: &mut ClientPool,
     instruction: impl Into<InstructionBox>,
     context: &str,
 ) -> Result<Option<()>> {
-    match client.submit_blocking(instruction) {
-        Ok(_) => Ok(Some(())),
-        Err(err) => {
-            if is_tx_confirmation_timeout(&err) {
-                eprintln!(
-                    "warning: {context} confirmation timed out; continuing with state checks"
-                );
-                return Ok(Some(()));
+    let instruction = instruction.into();
+    let mut last_err = None;
+    for _ in 0..clients.len() {
+        let client = clients.next();
+        match client.submit_blocking(instruction.clone()) {
+            Ok(_) => return Ok(Some(())),
+            Err(err) => {
+                if is_tx_confirmation_timeout(&err) {
+                    eprintln!(
+                        "warning: {context} confirmation timed out; continuing with state checks"
+                    );
+                    return Ok(Some(()));
+                }
+                if is_transient_client_error(&err) {
+                    last_err = Some(err);
+                    continue;
+                }
+                return sandbox::handle_result::<()>(Err(err), context);
             }
-            sandbox::handle_result::<()>(Err(err), context)
         }
     }
+    sandbox::handle_result::<()>(
+        Err(last_err.unwrap_or_else(|| eyre!("all peers unreachable"))),
+        context,
+    )
 }
 
 fn is_tx_confirmation_timeout(err: &Report) -> bool {
-    const NEEDLES: [&str; 3] = [
+    const NEEDLES: [&str; 4] = [
         "haven't got tx confirmation within",
         "transaction queued for too long",
         "Connection dropped without `Committed/Applied` or `Rejected` event",
+        "fallback status check failed",
     ];
     err.chain().any(|cause| {
         let text = cause.to_string();
@@ -321,16 +431,16 @@ fn client_add_asset_quantity_to_existing_asset_should_increase_asset_amount() ->
     let Some((network, rt)) = start_test_network_with_builder(builder) else {
         return Ok(());
     };
-    let test_client = network.client();
+    let mut clients = ClientPool::new(&network);
     let mut last_non_empty_height = match status_or_skip(
-        get_status_with_retry_or_storage(&network, &test_client, "initial status"),
+        get_status_with_retry_or_storage(&network, clients.next(), "initial status"),
         "initial status",
     )? {
         Some(status) => status.blocks_non_empty,
         None => return Ok(()),
     };
 
-    if submit_or_tolerate_timeout(&test_client, create_asset, "register asset definition")?
+    if submit_or_tolerate_timeout(&mut clients, create_asset, "register asset definition")?
         .is_none()
     {
         return Ok(());
@@ -339,7 +449,7 @@ fn client_add_asset_quantity_to_existing_asset_should_increase_asset_amount() ->
         sync_after_submission(
             &network,
             &rt,
-            &test_client,
+            clients.next(),
             last_non_empty_height,
             "register asset definition",
         ),
@@ -349,7 +459,7 @@ fn client_add_asset_quantity_to_existing_asset_should_increase_asset_amount() ->
         None => return Ok(()),
     };
     wait_for_asset_definition_owner(
-        &test_client,
+        &mut clients,
         &asset_definition_id,
         &account_id,
         "asset definition not found after registration",
@@ -363,15 +473,15 @@ fn client_add_asset_quantity_to_existing_asset_should_increase_asset_amount() ->
     let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
     let mint = Mint::asset_numeric(quantity.clone(), asset_id.clone());
     let instructions: [InstructionBox; 1] = [mint.into()];
-    let tx = test_client.build_transaction(instructions, metadata);
-    if submit_tx_or_skip(&test_client, &tx, "mint asset")?.is_none() {
+    let tx = clients.current().build_transaction(instructions, metadata);
+    if submit_tx_or_skip(&mut clients, &tx, "mint asset")?.is_none() {
         return Ok(());
     }
     if status_or_skip(
         sync_after_submission(
             &network,
             &rt,
-            &test_client,
+            clients.next(),
             last_non_empty_height,
             "mint asset",
         ),
@@ -382,7 +492,7 @@ fn client_add_asset_quantity_to_existing_asset_should_increase_asset_amount() ->
         return Ok(());
     }
 
-    wait_for_asset_value(&test_client, &asset_id, &quantity, "mint asset")?;
+    wait_for_asset_value(&mut clients, &asset_id, &quantity, "mint asset")?;
     Ok(())
 }
 
@@ -399,16 +509,16 @@ fn client_add_big_asset_quantity_to_existing_asset_should_increase_asset_amount(
     let Some((network, rt)) = start_test_network_with_builder(builder) else {
         return Ok(());
     };
-    let test_client = network.client();
+    let mut clients = ClientPool::new(&network);
     let mut last_non_empty_height = match status_or_skip(
-        get_status_with_retry_or_storage(&network, &test_client, "initial status"),
+        get_status_with_retry_or_storage(&network, clients.next(), "initial status"),
         "initial status",
     )? {
         Some(status) => status.blocks_non_empty,
         None => return Ok(()),
     };
 
-    if submit_or_tolerate_timeout(&test_client, create_asset, "register asset definition")?
+    if submit_or_tolerate_timeout(&mut clients, create_asset, "register asset definition")?
         .is_none()
     {
         return Ok(());
@@ -417,7 +527,7 @@ fn client_add_big_asset_quantity_to_existing_asset_should_increase_asset_amount(
         sync_after_submission(
             &network,
             &rt,
-            &test_client,
+            clients.next(),
             last_non_empty_height,
             "register asset definition",
         ),
@@ -427,7 +537,7 @@ fn client_add_big_asset_quantity_to_existing_asset_should_increase_asset_amount(
         None => return Ok(()),
     };
     wait_for_asset_definition_owner(
-        &test_client,
+        &mut clients,
         &asset_definition_id,
         &account_id,
         "asset definition not found after registration",
@@ -441,15 +551,15 @@ fn client_add_big_asset_quantity_to_existing_asset_should_increase_asset_amount(
     let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
     let mint = Mint::asset_numeric(quantity.clone(), asset_id.clone());
     let instructions: [InstructionBox; 1] = [mint.into()];
-    let tx = test_client.build_transaction(instructions, metadata);
-    if submit_tx_or_skip(&test_client, &tx, "mint large asset")?.is_none() {
+    let tx = clients.current().build_transaction(instructions, metadata);
+    if submit_tx_or_skip(&mut clients, &tx, "mint large asset")?.is_none() {
         return Ok(());
     }
     if status_or_skip(
         sync_after_submission(
             &network,
             &rt,
-            &test_client,
+            clients.next(),
             last_non_empty_height,
             "mint large asset",
         ),
@@ -460,7 +570,7 @@ fn client_add_big_asset_quantity_to_existing_asset_should_increase_asset_amount(
         return Ok(());
     }
 
-    wait_for_asset_value(&test_client, &asset_id, &quantity, "mint large asset")?;
+    wait_for_asset_value(&mut clients, &asset_id, &quantity, "mint large asset")?;
     Ok(())
 }
 
@@ -479,17 +589,17 @@ fn client_add_asset_with_decimal_should_increase_asset_amount() -> Result<()> {
         return Ok(());
     };
     let env_dir = network.env_dir().to_path_buf();
-    let test_client = network.client();
-    let torii = test_client.torii_url.clone();
+    let mut clients = ClientPool::new(&network);
+    let torii = clients.current().torii_url.clone();
     let mut last_non_empty_height = match status_or_skip(
-        get_status_with_retry_or_storage(&network, &test_client, "initial status"),
+        get_status_with_retry_or_storage(&network, clients.next(), "initial status"),
         "initial status",
     )? {
         Some(status) => status.blocks_non_empty,
         None => return Ok(()),
     };
 
-    if submit_or_skip(&test_client, create_asset, "register asset definition")
+    if submit_or_skip(&mut clients, create_asset, "register asset definition")
         .map_err(|err| {
             err.wrap_err(format!(
                 "register asset definition; torii={torii}, env_dir={}",
@@ -504,7 +614,7 @@ fn client_add_asset_with_decimal_should_increase_asset_amount() -> Result<()> {
         sync_after_submission(
             &network,
             &rt,
-            &test_client,
+            clients.next(),
             last_non_empty_height,
             "register asset definition",
         ),
@@ -514,7 +624,7 @@ fn client_add_asset_with_decimal_should_increase_asset_amount() -> Result<()> {
         None => return Ok(()),
     };
     wait_for_asset_definition_owner(
-        &test_client,
+        &mut clients,
         &asset_definition_id,
         &account_id,
         "asset definition not found after registration",
@@ -535,8 +645,8 @@ fn client_add_asset_with_decimal_should_increase_asset_amount() -> Result<()> {
     let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
     let mint = Mint::asset_numeric(quantity.clone(), asset_id.clone());
     let instructions: [InstructionBox; 1] = [mint.into()];
-    let tx = test_client.build_transaction(instructions, metadata);
-    if submit_tx_or_skip(&test_client, &tx, "mint decimal asset")
+    let tx = clients.current().build_transaction(instructions, metadata);
+    if submit_tx_or_skip(&mut clients, &tx, "mint decimal asset")
         .map_err(|err| {
             err.wrap_err(format!(
                 "mint decimal asset; torii={torii}, env_dir={}",
@@ -551,7 +661,7 @@ fn client_add_asset_with_decimal_should_increase_asset_amount() -> Result<()> {
         sync_after_submission(
             &network,
             &rt,
-            &test_client,
+            clients.next(),
             last_non_empty_height,
             "mint decimal asset",
         ),
@@ -561,7 +671,7 @@ fn client_add_asset_with_decimal_should_increase_asset_amount() -> Result<()> {
         None => return Ok(()),
     };
 
-    wait_for_asset_value(&test_client, &asset_id, &quantity, "mint decimal asset")?;
+    wait_for_asset_value(&mut clients, &asset_id, &quantity, "mint decimal asset")?;
 
     // Add some fractional part
     let quantity2 = numeric!(0.55);
@@ -570,7 +680,7 @@ fn client_add_asset_with_decimal_should_increase_asset_amount() -> Result<()> {
     let sum = quantity
         .checked_add(quantity2)
         .ok_or_else(|| eyre::eyre!("overflow"))?;
-    if submit_or_skip(&test_client, mint, "mint fractional asset")
+    if submit_or_skip(&mut clients, mint, "mint fractional asset")
         .map_err(|err| {
             err.wrap_err(format!(
                 "mint fractional asset; torii={torii}, env_dir={}",
@@ -585,7 +695,7 @@ fn client_add_asset_with_decimal_should_increase_asset_amount() -> Result<()> {
         sync_after_submission(
             &network,
             &rt,
-            &test_client,
+            clients.next(),
             last_non_empty_height,
             "mint fractional asset",
         ),
@@ -596,7 +706,7 @@ fn client_add_asset_with_decimal_should_increase_asset_amount() -> Result<()> {
         return Ok(());
     }
 
-    wait_for_asset_value(&test_client, &asset_id, &sum, "mint fractional asset")?;
+    wait_for_asset_value(&mut clients, &asset_id, &sum, "mint fractional asset")?;
 
     Ok(())
 }
@@ -636,9 +746,9 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
         let Some((network, rt)) = start_test_network_with_builder(builder) else {
             return Ok(());
         };
-        let test_client = network.client();
+        let mut clients = ClientPool::new(&network);
         let mut status = match status_or_skip(
-            get_status_with_retry_or_storage(&network, &test_client, "initial status"),
+            get_status_with_retry_or_storage(&network, clients.next(), "initial status"),
             "initial status",
         )? {
             Some(status) => status,
@@ -651,15 +761,17 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
             Mint::asset_numeric(10_u32, seller_btc.clone()).into(),
             Mint::asset_numeric(200_u32, buyer_eth.clone()).into(),
         ];
-        let seed_tx = test_client.build_transaction(seed_instructions, Metadata::default());
-        if submit_tx_or_skip(&test_client, &seed_tx, "seed exchange balances")?.is_none() {
+        let seed_tx = clients
+            .current()
+            .build_transaction(seed_instructions, Metadata::default());
+        if submit_tx_or_skip(&mut clients, &seed_tx, "seed exchange balances")?.is_none() {
             return Ok(());
         }
         status = match status_or_skip(
             sync_after_submission(
                 &network,
                 &rt,
-                &test_client,
+                clients.next(),
                 last_non_empty_height,
                 "seed exchange balances",
             ),
@@ -671,80 +783,88 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
         last_non_empty_height = status.blocks_non_empty;
 
         let alice_id = ALICE_ID.clone();
-        let mut alice_can_transfer_asset = |asset_id: AssetId,
-                                            owner_key_pair: KeyPair|
-         -> Result<()> {
-            let permission = CanTransferAsset {
-                asset: asset_id.clone(),
+        {
+            let mut alice_can_transfer_asset =
+                |asset_id: AssetId, owner_key_pair: KeyPair| -> Result<()> {
+                    let permission = CanTransferAsset {
+                        asset: asset_id.clone(),
+                    };
+                    let instruction = Grant::account_permission(permission, alice_id.clone());
+                    let transaction = TransactionBuilder::new(
+                        ChainId::from("00000000-0000-0000-0000-000000000000"),
+                        asset_id.account().clone(),
+                    )
+                    .with_instructions([instruction])
+                    .sign(owner_key_pair.private_key());
+
+                    if submit_tx_or_skip(&mut clients, &transaction, "grant transfer permission")?
+                        .is_none()
+                    {
+                        return Ok(());
+                    }
+                    status = match status_or_skip(
+                        sync_after_submission(
+                            &network,
+                            &rt,
+                            clients.next(),
+                            last_non_empty_height,
+                            "grant transfer permission",
+                        ),
+                        "grant transfer permission",
+                    )? {
+                        Some(status) => status,
+                        None => return Ok(()),
+                    };
+                    last_non_empty_height = status.blocks_non_empty;
+                    Ok::<(), eyre::Report>(())
+                };
+            alice_can_transfer_asset(seller_btc.clone(), seller_keypair)?;
+            alice_can_transfer_asset(buyer_eth.clone(), buyer_keypair)?;
+        }
+
+        let rate: u32 = {
+            let mut fetch_asset = |asset_id: &AssetId| -> Option<iroha_data_model::asset::Asset> {
+                let client = clients.next();
+                match client.query_single(FindAssetById::new(asset_id.clone())) {
+                    Ok(asset) => Some(asset),
+                    Err(QueryError::Validation(ValidationFail::QueryFailed(
+                        QueryExecutionFail::Find(FindError::Asset(_))
+                        | QueryExecutionFail::NotFound,
+                    ))) => None,
+                    Err(err) => panic!("query should succeed: {err:?}"),
+                }
             };
-            let instruction = Grant::account_permission(permission, alice_id.clone());
-            let transaction = TransactionBuilder::new(
-                ChainId::from("00000000-0000-0000-0000-000000000000"),
-                asset_id.account().clone(),
-            )
-            .with_instructions([instruction])
-            .sign(owner_key_pair.private_key());
 
-            if submit_tx_or_skip(&test_client, &transaction, "grant transfer permission")?.is_none()
-            {
-                return Ok(());
-            }
-            status = match status_or_skip(
-                sync_after_submission(
-                    &network,
-                    &rt,
-                    &test_client,
-                    last_non_empty_height,
-                    "grant transfer permission",
-                ),
-                "grant transfer permission",
-            )? {
-                Some(status) => status,
-                None => return Ok(()),
+            let mut assert_balance = |asset_id: AssetId, expected: Numeric| {
+                let got = fetch_asset(&asset_id).expect("asset should exist");
+                assert_eq!(*got.value(), expected);
             };
-            last_non_empty_height = status.blocks_non_empty;
-            Ok::<(), eyre::Report>(())
-        };
-        alice_can_transfer_asset(seller_btc.clone(), seller_keypair)?;
-        alice_can_transfer_asset(buyer_eth.clone(), buyer_keypair)?;
+            // before: seller has $BTC10 and buyer has $ETH200
+            assert_balance(seller_btc.clone(), numeric!(10));
+            assert_balance(buyer_eth.clone(), numeric!(200));
 
-        let fetch_asset = |asset_id: &AssetId| -> Option<iroha_data_model::asset::Asset> {
-            match test_client.query_single(FindAssetById::new(asset_id.clone())) {
-                Ok(asset) => Some(asset),
-                Err(QueryError::Validation(ValidationFail::QueryFailed(
-                    QueryExecutionFail::Find(FindError::Asset(_)) | QueryExecutionFail::NotFound,
-                ))) => None,
-                Err(err) => panic!("query should succeed: {err:?}"),
-            }
+            let rate_numeric = fetch_asset(&rate).expect("asset should exist");
+            rate_numeric
+                .value()
+                .clone()
+                .try_into()
+                .expect("numeric should be u32 originally")
         };
-
-        let assert_balance = |asset_id: AssetId, expected: Numeric| {
-            let got = fetch_asset(&asset_id).expect("asset should exist");
-            assert_eq!(*got.value(), expected);
-        };
-        // before: seller has $BTC10 and buyer has $ETH200
-        assert_balance(seller_btc.clone(), numeric!(10));
-        assert_balance(buyer_eth.clone(), numeric!(200));
-
-        let rate_numeric = fetch_asset(&rate).expect("asset should exist");
-        let rate: u32 = rate_numeric
-            .value()
-            .clone()
-            .try_into()
-            .expect("numeric should be u32 originally");
         let transfer_instructions: [InstructionBox; 2] = [
             Transfer::asset_numeric(seller_btc.clone(), 10_u32, buyer_id.clone()).into(),
             Transfer::asset_numeric(buyer_eth.clone(), 10_u32 * rate, seller_id.clone()).into(),
         ];
-        let transfer_tx = test_client.build_transaction(transfer_instructions, Metadata::default());
-        if submit_tx_or_skip(&test_client, &transfer_tx, "exchange transfers")?.is_none() {
+        let transfer_tx = clients
+            .current()
+            .build_transaction(transfer_instructions, Metadata::default());
+        if submit_tx_or_skip(&mut clients, &transfer_tx, "exchange transfers")?.is_none() {
             return Ok(());
         }
         if let Some(_status) = status_or_skip(
             sync_after_submission(
                 &network,
                 &rt,
-                &test_client,
+                clients.next(),
                 last_non_empty_height,
                 "exchange transfers",
             ),
@@ -761,15 +881,15 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
             .parse()
             .expect("should be valid");
         // after: seller has $ETH200 and buyer has $BTC10
-        wait_for_asset_absent(&test_client, &seller_btc, "seller BTC purge")?;
-        wait_for_asset_absent(&test_client, &buyer_eth, "buyer ETH purge")?;
+        wait_for_asset_absent(&mut clients, &seller_btc, "seller BTC purge")?;
+        wait_for_asset_absent(&mut clients, &buyer_eth, "buyer ETH purge")?;
         wait_for_asset_value(
-            &test_client,
+            &mut clients,
             &seller_eth,
             &numeric!(200),
             "seller ETH balance",
         )?;
-        wait_for_asset_value(&test_client, &buyer_btc, &numeric!(10), "buyer BTC balance")?;
+        wait_for_asset_value(&mut clients, &buyer_btc, &numeric!(10), "buyer BTC balance")?;
 
         Ok(())
     })();
@@ -797,9 +917,9 @@ fn transfer_asset_definition() -> Result<()> {
     let Some((network, _rt)) = start_test_network_with_builder(builder) else {
         return Ok(());
     };
-    let test_client = network.client();
+    let mut clients = ClientPool::new(&network);
     if status_or_skip(
-        get_status_with_retry_or_storage(&network, &test_client, "initial status"),
+        get_status_with_retry_or_storage(&network, clients.next(), "initial status"),
         "initial status",
     )?
     .is_none()
@@ -808,7 +928,7 @@ fn transfer_asset_definition() -> Result<()> {
     }
 
     if submit_or_tolerate_timeout(
-        &test_client,
+        &mut clients,
         Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone())),
         "register transferable asset definition",
     )?
@@ -818,7 +938,7 @@ fn transfer_asset_definition() -> Result<()> {
     }
 
     wait_for_asset_definition_owner(
-        &test_client,
+        &mut clients,
         &asset_definition_id,
         &alice_id,
         "asset definition not found after registration",
@@ -827,7 +947,7 @@ fn transfer_asset_definition() -> Result<()> {
     )?;
 
     if submit_or_tolerate_timeout(
-        &test_client,
+        &mut clients,
         Transfer::asset_definition(alice_id, asset_definition_id.clone(), new_owner_id.clone()),
         "transfer asset definition",
     )?
@@ -837,7 +957,7 @@ fn transfer_asset_definition() -> Result<()> {
     }
 
     wait_for_asset_definition_owner(
-        &test_client,
+        &mut clients,
         &asset_definition_id,
         &new_owner_id,
         "asset definition not found after transfer",
@@ -871,10 +991,10 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
             return Ok(());
         };
         let env_dir = network.env_dir().to_path_buf();
-        let test_client = network.client();
-        let torii = test_client.torii_url.clone();
+        let mut clients = ClientPool::new(&network);
+        let torii = clients.current().torii_url.clone();
         let mut last_non_empty_height = match status_or_skip(
-            get_status_with_retry_or_storage(&network, &test_client, "initial status"),
+            get_status_with_retry_or_storage(&network, clients.next(), "initial status"),
             "initial status",
         )
         .map_err(|err| {
@@ -889,7 +1009,7 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
 
         // Register and seed the asset definition under Alice's authority after genesis.
         if submit_or_tolerate_timeout(
-            &test_client,
+            &mut clients,
             Register::asset_definition(asset_definition),
             "register integer-only asset definition",
         )?
@@ -901,7 +1021,7 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
             sync_after_submission(
                 &network,
                 &rt,
-                &test_client,
+                clients.next(),
                 last_non_empty_height,
                 "register asset definition",
             ),
@@ -917,7 +1037,7 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
             None => return Ok(()),
         };
         if submit_or_skip(
-            &test_client,
+            &mut clients,
             Mint::asset_numeric(numeric!(1), asset_id.clone()),
             "seed mint integer asset",
         )
@@ -935,7 +1055,7 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
             sync_after_submission(
                 &network,
                 &rt,
-                &test_client,
+                clients.next(),
                 last_non_empty_height,
                 "seed mint",
             ),
@@ -950,27 +1070,6 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
             Some(status) => status.blocks_non_empty,
             None => return Ok(()),
         };
-        let get_value = |id: &AssetId| -> Result<Numeric> {
-            retry_query(|| {
-                test_client
-                    .query_single(FindAssetById { id: id.clone() })
-                    .map(|asset| asset.value().clone())
-                    .map_err(eyre::Report::new)
-            })
-        };
-        let asset_exists = |id: &AssetId| -> Result<bool> {
-            retry_query(
-                || match test_client.query_single(FindAssetById { id: id.clone() }) {
-                    Ok(_) => Ok(true),
-                    Err(QueryError::Validation(ValidationFail::QueryFailed(
-                        QueryExecutionFail::Find(FindError::Asset(_))
-                        | QueryExecutionFail::NotFound,
-                    ))) => Ok(false),
-                    Err(err) => Err(eyre!(err)),
-                },
-            )
-        };
-
         let isi = |value: Numeric| {
             [
                 Mint::asset_numeric(value.clone(), asset_id.clone()).into(),
@@ -983,10 +1082,11 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         let fractional_value = numeric!(0.01);
 
         // No fractional operations should change the state
-        let before = get_value(&asset_id)?;
+        let before = asset_value(&mut clients, &asset_id)?;
         let dest_asset_id = AssetId::new(asset_definition_id.clone(), dest_id.clone());
         for op in isi(fractional_value) {
-            match test_client.submit_blocking::<InstructionBox>(op) {
+            let client = clients.next();
+            match client.submit_blocking::<InstructionBox>(op) {
                 Ok(_) => panic!("Should be rejected due to non integer value"),
                 Err(err) => {
                     if let Some(reason) = sandbox::sandbox_reason(&eyre!(err.to_string())) {
@@ -1000,7 +1100,7 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
                 sync_after_submission(
                     &network,
                     &rt,
-                    &test_client,
+                    clients.next(),
                     last_non_empty_height,
                     "fractional rejection",
                 ),
@@ -1011,9 +1111,9 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
             };
 
             // State unchanged for source and no asset created for destination
-            let now = get_value(&asset_id)?;
+            let now = asset_value(&mut clients, &asset_id)?;
             assert_eq!(now, before, "fractional op must not change balance");
-            let dest_exists = asset_exists(&dest_asset_id)?;
+            let dest_exists = asset_exists(&mut clients, &dest_asset_id)?;
             assert!(
                 !dest_exists,
                 "fractional transfer must not create destination asset"
@@ -1021,18 +1121,6 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         }
 
         // Everything works fine when submitting proper integer value
-        let mut sync_after = |context: &str| -> Result<Option<()>> {
-            match status_or_skip(
-                sync_after_submission(&network, &rt, &test_client, last_non_empty_height, context),
-                context,
-            )? {
-                Some(status) => {
-                    last_non_empty_height = status.blocks_non_empty;
-                    Ok(Some(()))
-                }
-                None => Ok(None),
-            }
-        };
         let integer_value = numeric!(1);
         let expected_after_mint = before
             .clone()
@@ -1044,7 +1132,7 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
             .ok_or_else(|| eyre!("integer transfer underflow"))?;
 
         if submit_or_tolerate_timeout(
-            &test_client,
+            &mut clients,
             Mint::asset_numeric(integer_value.clone(), asset_id.clone()),
             "integer mint",
         )?
@@ -1052,18 +1140,38 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         {
             return Ok(());
         }
-        if sync_after("integer mint")?.is_none() {
-            return Ok(());
+        {
+            let mut sync_after = |context: &str| -> Result<Option<()>> {
+                match status_or_skip(
+                    sync_after_submission(
+                        &network,
+                        &rt,
+                        clients.next(),
+                        last_non_empty_height,
+                        context,
+                    ),
+                    context,
+                )? {
+                    Some(status) => {
+                        last_non_empty_height = status.blocks_non_empty;
+                        Ok(Some(()))
+                    }
+                    None => Ok(None),
+                }
+            };
+            if sync_after("integer mint")?.is_none() {
+                return Ok(());
+            }
         }
         wait_for_asset_value(
-            &test_client,
+            &mut clients,
             &asset_id,
             &expected_after_mint,
             "integer mint",
         )?;
 
         if submit_or_tolerate_timeout(
-            &test_client,
+            &mut clients,
             Burn::asset_numeric(integer_value.clone(), asset_id.clone()),
             "integer burn",
         )?
@@ -1071,13 +1179,33 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         {
             return Ok(());
         }
-        if sync_after("integer burn")?.is_none() {
-            return Ok(());
+        {
+            let mut sync_after = |context: &str| -> Result<Option<()>> {
+                match status_or_skip(
+                    sync_after_submission(
+                        &network,
+                        &rt,
+                        clients.next(),
+                        last_non_empty_height,
+                        context,
+                    ),
+                    context,
+                )? {
+                    Some(status) => {
+                        last_non_empty_height = status.blocks_non_empty;
+                        Ok(Some(()))
+                    }
+                    None => Ok(None),
+                }
+            };
+            if sync_after("integer burn")?.is_none() {
+                return Ok(());
+            }
         }
-        wait_for_asset_value(&test_client, &asset_id, &before, "integer burn")?;
+        wait_for_asset_value(&mut clients, &asset_id, &before, "integer burn")?;
 
         if submit_or_tolerate_timeout(
-            &test_client,
+            &mut clients,
             Transfer::asset_numeric(asset_id.clone(), integer_value, dest_id.clone()),
             "integer transfer",
         )?
@@ -1085,15 +1213,38 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         {
             return Ok(());
         }
-        if sync_after("integer transfer")?.is_none() {
-            return Ok(());
+        {
+            let mut sync_after = |context: &str| -> Result<Option<()>> {
+                match status_or_skip(
+                    sync_after_submission(
+                        &network,
+                        &rt,
+                        clients.next(),
+                        last_non_empty_height,
+                        context,
+                    ),
+                    context,
+                )? {
+                    Some(status) => {
+                        last_non_empty_height = status.blocks_non_empty;
+                        Ok(Some(()))
+                    }
+                    None => Ok(None),
+                }
+            };
+            if sync_after("integer transfer")?.is_none() {
+                return Ok(());
+            }
         }
 
         // After integer ops: asset moved to destination, zero at source (purged)
         let deadline = Instant::now() + NON_EMPTY_BLOCK_TIMEOUT;
         let mut last_err = None;
         loop {
-            match (get_value(&dest_asset_id), asset_exists(&asset_id)) {
+            match (
+                asset_value(&mut clients, &dest_asset_id),
+                asset_exists(&mut clients, &asset_id),
+            ) {
                 (Ok(dest_val), Ok(source_exists))
                     if dest_val == numeric!(1)
                         && ((expected_after_transfer.is_zero() && !source_exists)
@@ -1124,16 +1275,16 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         }
 
         drop(last_err);
-        let dest_val = get_value(&dest_asset_id)?;
+        let dest_val = asset_value(&mut clients, &dest_asset_id)?;
         assert_eq!(dest_val, numeric!(1));
         if expected_after_transfer.is_zero() {
-            let source_exists = asset_exists(&asset_id)?;
+            let source_exists = asset_exists(&mut clients, &asset_id)?;
             assert!(
                 !source_exists,
                 "zero assets are purged from accounts; source should be gone"
             );
         } else {
-            let source_val = get_value(&asset_id)?;
+            let source_val = asset_value(&mut clients, &asset_id)?;
             assert_eq!(source_val, expected_after_transfer);
         }
 
@@ -1163,5 +1314,24 @@ mod register {
         Register::asset_definition(AssetDefinition::numeric(
             id.parse().expect("should parse to AssetDefinitionId"),
         ))
+    }
+}
+
+#[cfg(test)]
+mod helper_tests {
+    use super::*;
+
+    #[test]
+    fn tx_confirmation_timeout_includes_fallback_status() {
+        let err = eyre!("transaction confirmation timed out; fallback status check failed");
+        assert!(is_tx_confirmation_timeout(&err));
+    }
+
+    #[test]
+    fn transient_client_error_detects_request_failures() {
+        let err = eyre!("Failed to send http POST request to http://127.0.0.1:1/query");
+        assert!(is_transient_client_error(&err));
+        let non_transient = eyre!("Transaction rejected");
+        assert!(!is_transient_client_error(&non_transient));
     }
 }

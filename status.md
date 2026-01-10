@@ -1,6 +1,12 @@
 # Status
 
 ## Latest Updates
+- Integration tests/asset: make the local assert_balance closure mutable so it can call the client-rotating fetch helper.
+- Tests: not run (not requested).
+- Integration tests/asset: rotate test clients across peers, treat tx-confirmation fallback timeouts as non-fatal, and add helper checks for transient-request detection.
+- Tests: not run (not requested).
+- Sumeragi/localnet: guard commit-QC application/finalization until pending blocks extend the committed tip, and refresh QC unit tests to seed committed height/roster resolution (including activation-height mode-tag handling).
+- Tests: `cargo test -p iroha_core --lib handle_qc_ -- --nocapture` (pass; warnings about network bind unavailable in tests).
 - Sumeragi/localnet: defer QCs when the roster is missing, replay them once roster history becomes available, and add regression coverage for commit-QC replay.
 - Tests: not run (not requested).
 - Sumeragi/block sync: expose vote roster caching to block-sync handlers to fix a private-method build error.
@@ -1965,7 +1971,9 @@
 - Sumeragi NEW_VIEW quorum selection now filters senders against the active roster (only counts local if it is in-roster), with coverage for non-roster senders.
 - Sumeragi now rejects NEW_VIEW votes with mismatched highest QC hashes/heights before recording, with regressions for invalid highest fields.
 - Sumeragi now defers applying commit QCs until the pending block extends the committed tip, keeping the QC cached and marking the pending entry for later finalize instead of committing out-of-order; updated deferred-QC replay coverage.
+- Sumeragi finalize now defers when a commit certificate arrives before the pending block extends the committed tip, keeping the pending entry queued; added `finalize_pending_block_defers_until_tip_extends` coverage.
 - Tests: `cargo test -p iroha_core --lib deferred_qcs_replay_after_commit_roster_history_arrives -- --nocapture` (passed; warning about network bind in tests).
+- Tests: `cargo test -p iroha_core --lib finalize_pending_block_defers_until_tip_extends -- --nocapture` (passed; warning about network bind in tests).
 - Tests: `cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` (timed out after 300s; `permissioned_localnet_produces_blocks_within_bound` passed; `permissioned_localnet_reaches_100_blocks` still running).
 - Sumeragi apply-without-execution now derives commit topology from the current world peer set even when commit roster metadata is missing, preventing empty-roster stalls; added a regression covering the empty-roster fallback.
 - Localnet smoke run (escalated) stalled with repeated `dropping vote: empty commit topology` and RBC READY quorum deferrals; artifacts kept under `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_utsOJR`.

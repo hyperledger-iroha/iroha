@@ -82,11 +82,7 @@ pub(super) fn select_commit_root_signers(
 }
 
 impl Actor {
-    fn defer_qc_for_roster(
-        &mut self,
-        qc: crate::sumeragi::consensus::Qc,
-        reason: &'static str,
-    ) {
+    fn defer_qc_for_roster(&mut self, qc: crate::sumeragi::consensus::Qc, reason: &'static str) {
         let key = Self::qc_tally_key(&qc);
         if self.deferred_qcs.contains_key(&key) {
             debug!(
@@ -2017,7 +2013,8 @@ impl Actor {
                     qc.height,
                     qc.view,
                 );
-            } else if let Some(pending) = self.pending.pending_blocks.get_mut(&qc.subject_block_hash)
+            } else if let Some(pending) =
+                self.pending.pending_blocks.get_mut(&qc.subject_block_hash)
             {
                 pending.commit_qc_seen = true;
                 pending.commit_qc_epoch = Some(qc.epoch);

@@ -1195,6 +1195,8 @@ impl Actor {
                                 && current.phase != crate::sumeragi::consensus::Phase::Commit)
                     }) {
                         self.highest_qc = Some(qc);
+                        super::status::set_highest_qc(qc.height, qc.view);
+                        super::status::set_highest_qc_hash(qc.subject_block_hash);
                     }
                     self.subsystems.propose.new_view_tracker.record(
                         qc.height.saturating_add(1),
@@ -1512,6 +1514,8 @@ impl Actor {
             (highest_qc.height, highest_qc.view) > (current.height, current.view)
         }) {
             self.highest_qc = Some(highest_qc);
+            super::status::set_highest_qc(highest_qc.height, highest_qc.view);
+            super::status::set_highest_qc_hash(highest_qc.subject_block_hash);
         }
 
         if let Err(reason) = ensure_locked_qc_allows(self.locked_qc, highest_qc) {
@@ -1544,6 +1548,11 @@ impl Actor {
                             "clearing locked QC that is missing from kura"
                         );
                         self.locked_qc = Some(highest_qc);
+                        super::status::set_locked_qc(
+                            highest_qc.height,
+                            highest_qc.view,
+                            Some(highest_qc.subject_block_hash),
+                        );
                     } else {
                         iroha_logger::info!(
                             ?reason,

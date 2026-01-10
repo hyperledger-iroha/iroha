@@ -785,6 +785,11 @@ impl Actor {
                         "locked QC missing from kura; accepting BlockCreated and replacing lock"
                     );
                     self.locked_qc = Some(hint.highest_qc);
+                    super::status::set_locked_qc(
+                        hint.highest_qc.height,
+                        hint.highest_qc.view,
+                        Some(hint.highest_qc.subject_block_hash),
+                    );
                 } else {
                     super::status::inc_block_created_dropped_by_lock();
                     #[cfg(feature = "telemetry")]
@@ -991,6 +996,22 @@ impl Actor {
             }
             Entry::Vacant(vac) => {
                 vac.insert(PendingBlock::new(block, payload_hash, height, view));
+            }
+        }
+        if let Some(qc) = qc_cache_for_subject(&self.qc_cache, block_hash)
+            .filter(|qc| {
+                qc.phase == crate::sumeragi::consensus::Phase::Commit && qc.height == height
+            })
+            .max_by_key(|qc| qc.view)
+            .cloned()
+        {
+            if self.process_precommit_qc(&qc, true, false) {
+                debug!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    "applied cached precommit QC after block became known"
+                );
             }
         }
 
