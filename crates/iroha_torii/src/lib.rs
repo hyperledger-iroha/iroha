@@ -16756,6 +16756,7 @@ impl Error {
                 Expired => StatusCode::GONE,
                 AuthorityQuotaExceeded => StatusCode::TOO_MANY_REQUESTS,
                 CapacityLimit => StatusCode::TOO_MANY_REQUESTS,
+                GasBudgetExceeded => StatusCode::TOO_MANY_REQUESTS,
             },
             TooComplex => StatusCode::UNPROCESSABLE_ENTITY,
             InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,

@@ -2006,6 +2006,8 @@ pub mod pipeline {
     pub const IVM_MAX_DECODED_BYTES: u64 = 4 * 1024 * 1024;
     /// Default cursor mode for query endpoints ("ephemeral" or "stored").
     pub const QUERY_DEFAULT_CURSOR_MODE: &str = "ephemeral";
+    /// Maximum fetch size for iterable queries executed inside the IVM.
+    pub const QUERY_MAX_FETCH_SIZE: u64 = super::torii::APP_API_MAX_FETCH_SIZE as u64;
     /// Maximum number of transactions allowed in the quarantine lane per block (0 = disabled).
     pub const QUARANTINE_MAX_TXS_PER_BLOCK: usize = 0;
     /// Per-transaction cycle cap enforced for the quarantine lane (0 = unlimited).

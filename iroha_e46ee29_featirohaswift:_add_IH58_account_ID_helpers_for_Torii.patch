@@ -1,0 +1,201 @@
+From e46ee29a22ad34a9ea81c4c528e2e57a66f8bba7 Mon Sep 17 00:00:00 2001
+From: Nikolai Zhukov <coderobjc@gmail.com>
+Date: Sun, 11 Jan 2026 18:41:21 +0400
+Subject: [PATCH] feat(irohaswift): add IH58 account ID helpers for Torii API
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Torii API requires account IDs in IH58 format, not `ed0120<hex>@domain`
+or `alias@domain`. Added helpers to simplify this conversion:
+
+- `AccountId.defaultNetworkPrefix` - public constant (0x02F1)
+- `AccountId.makeIH58(publicKey:domain:algorithm:networkPrefix:)` - static method
+- `Keypair.accountId(domain:networkPrefix:)` - instance method
+
+Example usage:
+```swift
+let keypair = try Keypair.generate()
+let accountId = try keypair.accountId(domain: "wonderland")
+// Returns: "34mSYnDgba...@wonderland" (IH58 format)
+
+// Or with explicit parameters:
+let accountId = try AccountId.makeIH58(
+    publicKey: publicKeyData,
+    domain: "wonderland",
+    algorithm: "ed25519",  // or "secp256k1"
+    networkPrefix: 0x02F1
+)
+```
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+---
+ IrohaSwift/Sources/IrohaSwift/Crypto.swift    | 38 ++++++++
+ .../IrohaSwiftTests/AccountIdTests.swift      | 96 +++++++++++++++++++
+ 2 files changed, 134 insertions(+)
+ create mode 100644 IrohaSwift/Tests/IrohaSwiftTests/AccountIdTests.swift
+
+diff --git a/IrohaSwift/Sources/IrohaSwift/Crypto.swift b/IrohaSwift/Sources/IrohaSwift/Crypto.swift
+index f52ccf403..b32ba35ea 100644
+--- a/IrohaSwift/Sources/IrohaSwift/Crypto.swift
++++ b/IrohaSwift/Sources/IrohaSwift/Crypto.swift
+@@ -366,14 +366,52 @@ public struct Keypair {
+     public func sign(_ message: Data) throws -> Data {
+         return try privateKey.signature(for: message)
+     }
++
++    /// Build IH58 format account ID for this keypair.
++    ///
++    /// - Parameters:
++    ///   - domain: Account domain (e.g., "wonderland")
++    ///   - networkPrefix: Network prefix for IH58 encoding (defaults to Iroha mainnet)
++    /// - Returns: Account ID in format `<ih58>@<domain>`
++    /// - Throws: `AccountAddressError` if conversion fails
++    @available(macOS 10.15, iOS 13.0, *)
++    public func accountId(domain: String, networkPrefix: UInt16 = AccountId.defaultNetworkPrefix) throws -> String {
++        try AccountId.makeIH58(publicKey: publicKey, domain: domain, networkPrefix: networkPrefix)
++    }
+ }
+ 
+ public enum AccountId {
++    /// Default network prefix for IH58 encoding (Iroha mainnet).
++    public static let defaultNetworkPrefix: UInt16 = 0x02F1
++
+     /// Build v2 account id string: ed0120 + UPPER_HEX(pub) + "@" + domain
+     public static func make(publicKey: Data, domain: String) -> String {
+         let hex = publicKey.map { String(format: "%02X", $0) }.joined()
+         return "ed0120" + hex + "@" + domain
+     }
++
++    /// Build IH58 format account ID string required by Torii API.
++    ///
++    /// Torii API requires account IDs in IH58 format, not `ed0120<hex>@domain`
++    /// or `alias@domain`. This method converts a public key to the correct format.
++    ///
++    /// - Parameters:
++    ///   - publicKey: Public key bytes (32 bytes for ed25519, 33 for secp256k1)
++    ///   - domain: Account domain (e.g., "wonderland")
++    ///   - algorithm: Signing algorithm ("ed25519" or "secp256k1"), defaults to "ed25519"
++    ///   - networkPrefix: Network prefix for IH58 encoding (defaults to Iroha mainnet)
++    /// - Returns: Account ID in format `<ih58>@<domain>`
++    /// - Throws: `AccountAddressError` if conversion fails
++    public static func makeIH58(
++        publicKey: Data,
++        domain: String,
++        algorithm: String = "ed25519",
++        networkPrefix: UInt16 = defaultNetworkPrefix
++    ) throws -> String {
++        let address = try AccountAddress.fromAccount(domain: domain, publicKey: publicKey, algorithm: algorithm)
++        let ih58 = try address.toIH58(networkPrefix: networkPrefix)
++        return "\(ih58)@\(domain)"
++    }
+ }
+ 
+ public enum Secp256k1Error: Error, LocalizedError, Sendable {
+diff --git a/IrohaSwift/Tests/IrohaSwiftTests/AccountIdTests.swift b/IrohaSwift/Tests/IrohaSwiftTests/AccountIdTests.swift
+new file mode 100644
+index 000000000..c4ffb3081
+--- /dev/null
++++ b/IrohaSwift/Tests/IrohaSwiftTests/AccountIdTests.swift
+@@ -0,0 +1,96 @@
++import XCTest
++@testable import IrohaSwift
++
++@available(macOS 10.15, iOS 13.0, *)
++final class AccountIdTests: XCTestCase {
++
++    func testDefaultNetworkPrefix() {
++        XCTAssertEqual(AccountId.defaultNetworkPrefix, 0x02F1)
++    }
++
++    func testMakeProducesEd0120Format() {
++        let publicKey = Data(repeating: 0xAB, count: 32)
++        let accountId = AccountId.make(publicKey: publicKey, domain: "wonderland")
++
++        XCTAssertTrue(accountId.hasPrefix("ed0120"))
++        XCTAssertTrue(accountId.hasSuffix("@wonderland"))
++        XCTAssertEqual(accountId, "ed0120ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB@wonderland")
++    }
++
++    func testMakeIH58ProducesValidFormat() throws {
++        let publicKey = Data(repeating: 0xAB, count: 32)
++        let accountId = try AccountId.makeIH58(publicKey: publicKey, domain: "wonderland")
++
++        // IH58 format should NOT start with ed0120
++        XCTAssertFalse(accountId.hasPrefix("ed0120"))
++        XCTAssertTrue(accountId.hasSuffix("@wonderland"))
++
++        // Should be parseable back
++        let parts = accountId.split(separator: "@")
++        XCTAssertEqual(parts.count, 2)
++
++        let ih58Part = String(parts[0])
++        // IH58 addresses are base58 encoded, typically 40-50 chars
++        XCTAssertGreaterThan(ih58Part.count, 30)
++    }
++
++    func testMakeIH58WithCustomNetworkPrefix() throws {
++        let publicKey = Data(repeating: 0xCD, count: 32)
++        let customPrefix: UInt16 = 753
++
++        let accountId = try AccountId.makeIH58(
++            publicKey: publicKey,
++            domain: "testdomain",
++            networkPrefix: customPrefix
++        )
++
++        XCTAssertFalse(accountId.hasPrefix("ed0120"))
++        XCTAssertTrue(accountId.hasSuffix("@testdomain"))
++    }
++
++    func testMakeIH58ThrowsForInvalidPublicKey() {
++        let invalidPublicKey = Data(repeating: 0x00, count: 16) // Too short
++
++        XCTAssertThrowsError(
++            try AccountId.makeIH58(publicKey: invalidPublicKey, domain: "wonderland")
++        )
++    }
++
++    func testKeypairAccountIdMethod() throws {
++        let keypair = try Keypair.generate()
++        let accountId = try keypair.accountId(domain: "wonderland")
++
++        XCTAssertFalse(accountId.hasPrefix("ed0120"))
++        XCTAssertTrue(accountId.hasSuffix("@wonderland"))
++
++        // Verify consistency - calling twice should produce same result
++        let accountId2 = try keypair.accountId(domain: "wonderland")
++        XCTAssertEqual(accountId, accountId2)
++    }
++
++    func testKeypairAccountIdWithCustomPrefix() throws {
++        let keypair = try Keypair.generate()
++        let customPrefix: UInt16 = 753
++
++        let accountId = try keypair.accountId(domain: "test", networkPrefix: customPrefix)
++
++        XCTAssertTrue(accountId.hasSuffix("@test"))
++    }
++
++    func testMakeAndMakeIH58ProduceDifferentFormats() throws {
++        let publicKey = Data(repeating: 0xEF, count: 32)
++        let domain = "wonderland"
++
++        let ed0120AccountId = AccountId.make(publicKey: publicKey, domain: domain)
++        let ih58AccountId = try AccountId.makeIH58(publicKey: publicKey, domain: domain)
++
++        // They should be different formats
++        XCTAssertNotEqual(ed0120AccountId, ih58AccountId)
++
++        // ed0120 format
++        XCTAssertTrue(ed0120AccountId.hasPrefix("ed0120"))
++
++        // IH58 format
++        XCTAssertFalse(ih58AccountId.hasPrefix("ed0120"))
++    }
++}
+-- 
+2.50.1
+

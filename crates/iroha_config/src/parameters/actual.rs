@@ -2892,6 +2892,8 @@ pub struct Pipeline {
     pub quarantine_tx_max_millis: u64,
     /// Default cursor mode for server-facing query endpoints.
     pub query_default_cursor_mode: QueryCursorMode,
+    /// Maximum fetch size for iterable queries executed inside the IVM.
+    pub query_max_fetch_size: u64,
     /// Minimum gas units required to use stored cursor mode (0 = disabled).
     pub query_stored_min_gas_units: u64,
     /// AMX per-dataspace execution budget in milliseconds.

@@ -2609,6 +2609,12 @@ pub struct Pipeline {
         default = "defaults::pipeline::QUERY_DEFAULT_CURSOR_MODE.parse().unwrap()"
     )]
     pub query_default_cursor_mode: QueryCursorMode,
+    /// Maximum fetch size for iterable queries executed inside the IVM.
+    #[config(
+        env = "PIPELINE_QUERY_MAX_FETCH_SIZE",
+        default = "defaults::pipeline::QUERY_MAX_FETCH_SIZE"
+    )]
+    pub query_max_fetch_size: u64,
     /// Minimum gas units required to use stored cursor mode (0 = disabled).
     #[config(
         env = "PIPELINE_QUERY_STORED_MIN_GAS_UNITS",
@@ -3359,6 +3365,7 @@ impl Pipeline {
             quarantine_tx_max_cycles: self.quarantine_tx_max_cycles,
             quarantine_tx_max_millis: self.quarantine_tx_max_millis,
             query_default_cursor_mode: self.query_default_cursor_mode.into_actual(),
+            query_max_fetch_size: self.query_max_fetch_size,
             query_stored_min_gas_units: self.query_stored_min_gas_units,
             amx_per_dataspace_budget_ms: self.amx_per_dataspace_budget_ms,
             amx_group_budget_ms: self.amx_group_budget_ms,
@@ -3447,6 +3454,7 @@ mod pipeline_tests {
             quarantine_tx_max_cycles: defaults::pipeline::QUARANTINE_TX_MAX_CYCLES,
             quarantine_tx_max_millis: defaults::pipeline::QUARANTINE_TX_MAX_MILLIS,
             query_default_cursor_mode: QueryCursorMode::Ephemeral,
+            query_max_fetch_size: defaults::pipeline::QUERY_MAX_FETCH_SIZE,
             query_stored_min_gas_units: defaults::pipeline::QUERY_STORED_MIN_GAS_UNITS,
             amx_per_dataspace_budget_ms: defaults::pipeline::AMX_PER_DATASPACE_BUDGET_MS,
             amx_group_budget_ms: defaults::pipeline::AMX_GROUP_BUDGET_MS,

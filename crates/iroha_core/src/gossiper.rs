@@ -59,6 +59,8 @@ const OUTCOME_PUBLIC_OVERLAY_FORWARD: &str = "restricted_public_overlay_forward"
 const SURFACE_PUBLIC_OVERLAY: &str = "public_overlay";
 const GOSSIP_SEED_PUBLIC_DOMAIN: u64 = 0x5055_424C_4943_5F00;
 const GOSSIP_SEED_RESTRICTED_DOMAIN: u64 = 0x5245_5354_5249_4354;
+// Reserve headroom for NetworkMessage + RelayMessage overhead in tx gossip frames.
+const TX_GOSSIP_FRAME_HEADROOM_BYTES: usize = 512;
 
 fn splitmix64(mut state: u64) -> u64 {
     state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
@@ -220,8 +222,9 @@ impl TransactionGossiper {
             dataspace_cfg.restricted_target_reshuffle,
             now,
         );
-        // Keep gossip batches below the encrypted per-topic cap by reserving AEAD overhead.
-        let tx_frame_cap = iroha_p2p::frame_plaintext_cap(network_cfg.max_frame_bytes_tx_gossip);
+        // Keep gossip batches below the encrypted per-topic cap by reserving AEAD + envelope overhead.
+        let tx_frame_cap = iroha_p2p::frame_plaintext_cap(network_cfg.max_frame_bytes_tx_gossip)
+            .saturating_sub(TX_GOSSIP_FRAME_HEADROOM_BYTES);
         Self {
             chain_id,
             gossip_period,
@@ -1397,7 +1400,8 @@ mod tests {
         let mut network_cfg = test_network_config(socket_addr!(127.0.0.1:0));
         network_cfg.max_frame_bytes = 512;
         network_cfg.max_frame_bytes_tx_gossip = 1024;
-        let expected = iroha_p2p::frame_plaintext_cap(network_cfg.max_frame_bytes_tx_gossip);
+        let expected = iroha_p2p::frame_plaintext_cap(network_cfg.max_frame_bytes_tx_gossip)
+            .saturating_sub(TX_GOSSIP_FRAME_HEADROOM_BYTES);
 
         let (network, _child) = IrohaNetwork::start(
             KeyPair::random(),

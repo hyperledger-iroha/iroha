@@ -1674,7 +1674,10 @@ impl IVMHost for CoreHost {
         }
     }
 
-    fn as_any(&mut self) -> &mut dyn core::any::Any {
+    fn as_any(&mut self) -> &mut dyn core::any::Any
+    where
+        Self: 'static,
+    {
         self
     }
 

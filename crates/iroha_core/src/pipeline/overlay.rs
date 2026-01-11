@@ -53,7 +53,10 @@ use crate::{
     smartcontracts::{
         code,
         isi::settlement::{admission_validate_dvp, admission_validate_pvp},
-        ivm::{cache::ProgramSummary, host::AmxBudgetViolation},
+        ivm::{
+            cache::ProgramSummary,
+            host::{AmxBudgetViolation, QueryStateSource},
+        },
     },
     state::{StateReadOnly, StateTransaction, WorldReadOnly},
     streaming,
@@ -141,6 +144,7 @@ fn default_pipeline_config() -> iroha_config::parameters::actual::Pipeline {
         quarantine_tx_max_cycles: defaults::pipeline::QUARANTINE_TX_MAX_CYCLES,
         quarantine_tx_max_millis: defaults::pipeline::QUARANTINE_TX_MAX_MILLIS,
         query_default_cursor_mode: QueryCursorMode::Ephemeral,
+        query_max_fetch_size: defaults::pipeline::QUERY_MAX_FETCH_SIZE,
         query_stored_min_gas_units: defaults::pipeline::QUERY_STORED_MIN_GAS_UNITS,
         amx_per_dataspace_budget_ms: defaults::pipeline::AMX_PER_DATASPACE_BUDGET_MS,
         amx_group_budget_ms: defaults::pipeline::AMX_GROUP_BUDGET_MS,
@@ -192,8 +196,8 @@ pub(crate) fn resolve_streaming_metadata<R: StateReadOnly>(
     metadata
 }
 
-fn apply_streaming_metadata(
-    host: &mut crate::smartcontracts::ivm::host::CoreHost,
+fn apply_streaming_metadata<QS: Default + crate::smartcontracts::ivm::host::QueryStateAccess>(
+    host: &mut crate::smartcontracts::ivm::host::CoreHostImpl<QS>,
     metadata: StreamingOverlayMetadata,
 ) {
     if let Some(snapshot) = metadata.transport {
@@ -542,10 +546,13 @@ impl TxOverlay {
 ///
 /// # Errors
 /// Returns an error when the IVM header fails policy checks, loading fails, or VM execution fails.
-pub fn build_overlay_for_transaction<R: StateReadOnly>(
+pub fn build_overlay_for_transaction<R>(
     tx: &SignedTransaction,
     state_ro: &R,
-) -> Result<TxOverlay, OverlayBuildError> {
+) -> Result<TxOverlay, OverlayBuildError>
+where
+    R: StateReadOnly + QueryStateSource,
+{
     let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
     build_overlay_for_transaction_with_cache(tx, state_ro, &mut ivm_cache)
 }
@@ -555,11 +562,14 @@ pub fn build_overlay_for_transaction<R: StateReadOnly>(
 /// # Errors
 /// Returns an error when the IVM header fails policy checks, loading fails, or VM execution fails.
 #[allow(clippy::too_many_lines)]
-pub fn build_overlay_for_transaction_with_cache<R: StateReadOnly>(
+pub fn build_overlay_for_transaction_with_cache<R>(
     tx: &SignedTransaction,
     state_ro: &R,
     ivm_cache: &mut crate::smartcontracts::ivm::cache::IvmCache,
-) -> Result<TxOverlay, OverlayBuildError> {
+) -> Result<TxOverlay, OverlayBuildError>
+where
+    R: StateReadOnly + QueryStateSource,
+{
     match tx.instructions() {
         Executable::Instructions(batch) => {
             // We already have fully-formed owned instructions; just clone boxes.
@@ -606,7 +616,7 @@ pub fn build_overlay_for_transaction_with_cache<R: StateReadOnly>(
                     .collect::<Vec<_>>(),
             );
             let streaming_meta = resolve_streaming_metadata(state_ro, tx.authority());
-            let mut host = crate::smartcontracts::ivm::host::CoreHost::with_accounts(
+            let mut host = crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
                 tx.authority().clone(),
                 Arc::clone(&accounts),
             );
@@ -625,6 +635,7 @@ pub fn build_overlay_for_transaction_with_cache<R: StateReadOnly>(
             host.set_axt_timing(state_ro.nexus().axt);
             host.hydrate_axt_replay_ledger(state_ro);
             host.set_durable_state_snapshot_from_world(state_ro.world());
+            host.set_query_state(state_ro);
             let snapshot = state_ro.axt_policy_snapshot();
             host = host.with_axt_policy_snapshot(&snapshot);
             apply_streaming_metadata(&mut host, streaming_meta);
@@ -632,19 +643,11 @@ pub fn build_overlay_for_transaction_with_cache<R: StateReadOnly>(
             host.set_telemetry(state_ro.metrics().clone());
             host.set_crypto_config(state_ro.crypto());
             host.set_chain_id(state_ro.chain_id());
-            vm.set_host(host);
             vm.set_gas_limit(gas_limit);
-            run_vm(&mut vm)?;
-            let (mut queued, transport_caps_snapshot, negotiated_caps_snapshot) = if let Some(h) =
-                vm.host_mut_any()
-                && let Some(host) = h.downcast_mut::<crate::smartcontracts::ivm::host::CoreHost>()
-            {
-                let transport = host.transport_caps_snapshot().copied();
-                let negotiated = host.negotiated_caps_snapshot().copied();
-                (host.drain_instructions(), transport, negotiated)
-            } else {
-                (Vec::new(), None, None)
-            };
+            run_vm_with_host(&mut vm, &mut host)?;
+            let transport_caps_snapshot = host.transport_caps_snapshot().copied();
+            let negotiated_caps_snapshot = host.negotiated_caps_snapshot().copied();
+            let mut queued = host.drain_instructions();
             // Emit a ZK-lane job with the formal trace (non-forking background verification)
             if state_ro.zk().halo2.enabled && vm.zk_mode_enabled() {
                 let trace = vm.register_trace();
@@ -770,14 +773,17 @@ pub fn build_overlay_for_transaction_with_accounts(
 /// # Errors
 /// Returns an error if the IVM header fails policy checks or running the VM fails.
 #[allow(clippy::too_many_lines)]
-pub(crate) fn build_overlay_for_transaction_with_accounts_zk<R: StateReadOnly>(
+pub(crate) fn build_overlay_for_transaction_with_accounts_zk<R>(
     tx: &SignedTransaction,
     accounts: &[AccountId],
     state_ro: &R,
     zk_enabled: bool,
     header: &BlockHeader,
     streaming_meta: StreamingOverlayMetadata,
-) -> Result<TxOverlay, OverlayBuildError> {
+) -> Result<TxOverlay, OverlayBuildError>
+where
+    R: StateReadOnly + QueryStateSource,
+{
     match tx.instructions() {
         Executable::Instructions(batch) => {
             let instrs: Vec<InstructionBox> = batch.iter().cloned().collect();
@@ -803,7 +809,7 @@ pub(crate) fn build_overlay_for_transaction_with_accounts_zk<R: StateReadOnly>(
             )?;
             let tx_gas_limit = require_tx_gas_limit(tx)?;
             let mut vm = ivm::IVM::new(tx_gas_limit);
-            let mut host = crate::smartcontracts::ivm::host::CoreHost::with_accounts(
+            let mut host = crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
                 tx.authority().clone(),
                 Arc::new(accounts.to_vec()),
             );
@@ -822,6 +828,7 @@ pub(crate) fn build_overlay_for_transaction_with_accounts_zk<R: StateReadOnly>(
             host.set_axt_timing(state_ro.nexus().axt);
             host.hydrate_axt_replay_ledger(state_ro);
             host.set_durable_state_snapshot_from_world(state_ro.world());
+            host.set_query_state(state_ro);
             let snapshot = state_ro.axt_policy_snapshot();
             host = host.with_axt_policy_snapshot(&snapshot);
             apply_streaming_metadata(&mut host, streaming_meta);
@@ -829,21 +836,13 @@ pub(crate) fn build_overlay_for_transaction_with_accounts_zk<R: StateReadOnly>(
             host.set_telemetry(state_ro.metrics().clone());
             host.set_crypto_config(state_ro.crypto());
             host.set_chain_id(state_ro.chain_id());
-            vm.set_host(host);
             vm.load_program(bytecode.as_ref())
                 .map_err(OverlayBuildError::IvmLoad)?;
             vm.set_gas_limit(tx_gas_limit);
-            run_vm(&mut vm)?;
-            let (mut queued, transport_caps_snapshot, negotiated_caps_snapshot) = if let Some(h) =
-                vm.host_mut_any()
-                && let Some(host) = h.downcast_mut::<crate::smartcontracts::ivm::host::CoreHost>()
-            {
-                let transport = host.transport_caps_snapshot().copied();
-                let negotiated = host.negotiated_caps_snapshot().copied();
-                (host.drain_instructions(), transport, negotiated)
-            } else {
-                (Vec::new(), None, None)
-            };
+            run_vm_with_host(&mut vm, &mut host)?;
+            let transport_caps_snapshot = host.transport_caps_snapshot().copied();
+            let negotiated_caps_snapshot = host.negotiated_caps_snapshot().copied();
+            let mut queued = host.drain_instructions();
             if zk_enabled && vm.zk_mode_enabled() {
                 let trace = vm.register_trace();
                 if !trace.is_empty() {
@@ -2078,6 +2077,40 @@ fn run_vm(vm: &mut ivm::IVM) -> Result<(), OverlayBuildError> {
                 return Err(OverlayBuildError::AxtReject(reject));
             }
             extract_amx_budget_violation(vm)
+                .map(OverlayBuildError::AmxBudgetViolation)
+                .map_or_else(|| Err(OverlayBuildError::IvmRun(err)), Err)
+        }
+    }
+}
+
+fn run_vm_with_host<QS: crate::smartcontracts::ivm::host::QueryStateAccess + Default>(
+    vm: &mut ivm::IVM,
+    host: &mut crate::smartcontracts::ivm::host::CoreHostImpl<QS>,
+) -> Result<(), OverlayBuildError> {
+    host.clear_axt_reject();
+    match vm.run_with_host(host) {
+        Ok(()) => Ok(()),
+        Err(ivm::VMError::AmxBudgetExceeded {
+            dataspace,
+            stage,
+            elapsed_ms,
+            budget_ms,
+        }) => {
+            let violation = AmxBudgetViolation {
+                dataspace,
+                stage,
+                elapsed_ms: u32::try_from(elapsed_ms.min(u64::from(u32::MAX)))
+                    .expect("elapsed_ms clamped to u32::MAX"),
+                budget_ms: u32::try_from(budget_ms.min(u64::from(u32::MAX)))
+                    .expect("budget_ms clamped to u32::MAX"),
+            };
+            Err(OverlayBuildError::AmxBudgetViolation(violation))
+        }
+        Err(err) => {
+            if let Some(reject) = host.take_axt_reject() {
+                return Err(OverlayBuildError::AxtReject(reject));
+            }
+            host.take_amx_budget_violation()
                 .map(OverlayBuildError::AmxBudgetViolation)
                 .map_or_else(|| Err(OverlayBuildError::IvmRun(err)), Err)
         }

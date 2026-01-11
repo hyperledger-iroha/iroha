@@ -69,6 +69,9 @@ impl Actor {
             self.roster_for_vote_with_mode(vote.block_hash, vote.height, vote.view, consensus_mode)
         };
         if topology_peers.is_empty() {
+            if matches!(vote.phase, Phase::Prepare | Phase::Commit) {
+                self.maybe_request_missing_block_for_unresolved_roster(&vote);
+            }
             self.defer_vote_for_roster(vote, "commit topology missing");
             return;
         }
@@ -774,6 +777,99 @@ impl Actor {
         );
     }
 
+    fn maybe_request_missing_block_for_unresolved_roster(
+        &mut self,
+        vote: &crate::sumeragi::consensus::Vote,
+    ) {
+        if self.block_known_locally(vote.block_hash) {
+            return;
+        }
+        let roster = self.effective_commit_topology();
+        if roster.is_empty() {
+            debug!(
+                height = vote.height,
+                view = vote.view,
+                phase = ?vote.phase,
+                block_hash = %vote.block_hash,
+                "skipping missing-block fetch: empty commit topology"
+            );
+            return;
+        }
+        let topology = super::network_topology::Topology::new(roster);
+        let retry_window = self.quorum_timeout(self.runtime_da_enabled());
+        let now = Instant::now();
+        let signers = BTreeSet::new();
+        let decision = plan_missing_block_fetch(
+            &mut self.pending.missing_block_requests,
+            vote.block_hash,
+            vote.height,
+            vote.view,
+            vote.phase,
+            MissingBlockPriority::Consensus,
+            &signers,
+            &topology,
+            now,
+            retry_window,
+            None,
+            self.config.missing_block_signer_fallback_attempts,
+        );
+        let dwell = self
+            .pending
+            .missing_block_requests
+            .get(&vote.block_hash)
+            .map(|stats| now.saturating_duration_since(stats.first_seen))
+            .unwrap_or_default();
+        let dwell_ms = dwell.as_millis();
+        let targets_len = match &decision {
+            MissingBlockFetchDecision::Requested { targets, .. } => targets.len(),
+            _ => 0,
+        };
+        self.note_missing_block_fetch_metrics(&decision, retry_window, targets_len, dwell);
+        match decision {
+            MissingBlockFetchDecision::Requested {
+                targets,
+                target_kind,
+            } => {
+                self.request_missing_block(vote.block_hash, &targets);
+                iroha_logger::info!(
+                    height = vote.height,
+                    view = vote.view,
+                    phase = ?vote.phase,
+                    block = ?vote.block_hash,
+                    targets = ?targets,
+                    target_kind = target_kind.label(),
+                    retry_window_ms = retry_window.as_millis(),
+                    dwell_ms,
+                    "requested missing block payload after empty commit topology"
+                );
+            }
+            MissingBlockFetchDecision::NoTargets => {
+                iroha_logger::warn!(
+                    height = vote.height,
+                    view = vote.view,
+                    phase = ?vote.phase,
+                    block = ?vote.block_hash,
+                    retry_window_ms = retry_window.as_millis(),
+                    dwell_ms,
+                    targets = targets_len,
+                    "unable to request missing block payload after empty commit topology: no peers available"
+                );
+            }
+            MissingBlockFetchDecision::Backoff => {
+                iroha_logger::info!(
+                    height = vote.height,
+                    view = vote.view,
+                    phase = ?vote.phase,
+                    block = ?vote.block_hash,
+                    retry_window_ms = retry_window.as_millis(),
+                    dwell_ms,
+                    targets = targets_len,
+                    "skipping missing-block fetch after empty commit topology during backoff"
+                );
+            }
+        }
+    }
+
     fn replay_deferred_votes_for_block(&mut self, block_hash: HashOf<BlockHeader>) {
         let Some(deferred) = self.deferred_votes.remove(&block_hash) else {
             return;
@@ -878,6 +974,7 @@ impl Actor {
             self.config.consensus_mode,
             self.common_config.trusted_peers.value(),
             self.common_config.peer.id(),
+            &self.roster_validation_cache,
         );
         Self::apply_cached_qcs_to_block_sync_update(
             &mut update,
@@ -1081,14 +1178,16 @@ impl Actor {
                 roster_height,
                 block_hash,
                 roster_view,
+                &self.roster_validation_cache,
             )
             .or_else(|| {
                 super::block_sync_history_roster_for_block(
-                    self.state.as_ref(),
                     consensus_mode,
                     block_hash,
                     roster_height,
                     roster_view,
+                    &self.chain_id,
+                    &self.roster_validation_cache,
                 )
             })
         };
@@ -1290,6 +1389,10 @@ mod tests {
         > = BTreeMap::new();
 
         let (trusted, me_id) = trusted_self();
+        let roster_cache = {
+            let view = state.view();
+            super::RosterValidationCache::from_view(&view, super::EPOCH_LENGTH_BLOCKS)
+        };
         let mut update = super::block_sync_update_with_roster(
             &block,
             &state,
@@ -1297,6 +1400,7 @@ mod tests {
             ConsensusMode::Permissioned,
             &trusted,
             &me_id,
+            &roster_cache,
         );
         Actor::apply_cached_qcs_to_block_sync_update(
             &mut update,

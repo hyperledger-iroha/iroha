@@ -112,7 +112,9 @@ pub trait IVMHost {
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError>;
 
     /// Downcast support for hosts with extra methods/state.
-    fn as_any(&mut self) -> &mut dyn Any;
+    fn as_any(&mut self) -> &mut dyn Any
+    where
+        Self: 'static;
 
     /// Whether this host is safe to share across worker threads during block execution.
     /// Hosts with internal mutable state should override and return `false` so the VM
@@ -1904,7 +1906,10 @@ impl IVMHost for DefaultHost {
     }
 
     /// Downcast support for hosts with extra methods/state.
-    fn as_any(&mut self) -> &mut dyn Any {
+    fn as_any(&mut self) -> &mut dyn Any
+    where
+        Self: 'static,
+    {
         self
     }
 

@@ -2153,6 +2153,43 @@ impl Compiler {
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                         }
+                        Instr::VendorExecuteQuery { dest, payload } => {
+                            if let Some(pstr) = string_map.get(&(func_idx, *payload)) {
+                                let key = DataKey(DataKind::NoritoBytes, pstr.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r = src_reg(payload, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
+                            }
+                            // Mirror into INPUT to satisfy pointer‑ABI validation
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
+                            spill_back(dest, rd, spilled, imm, &mut code);
+                        }
+                        Instr::SubscriptionBill => {
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_SUBSCRIPTION_BILL as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                        }
+                        Instr::SubscriptionRecordUsage => {
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                        }
                         Instr::BuildSubmitBallotInline {
                             dest,
                             election_id,
@@ -4744,6 +4781,9 @@ fn record_isi_access(
         ir::Instr::RegisterPeer { .. }
         | ir::Instr::UnregisterPeer { .. }
         | ir::Instr::VendorExecuteInstruction { .. }
+        | ir::Instr::VendorExecuteQuery { .. }
+        | ir::Instr::SubscriptionBill
+        | ir::Instr::SubscriptionRecordUsage
         | ir::Instr::BuildSubmitBallotInline { .. }
         | ir::Instr::BuildUnshieldInline { .. }
         | ir::Instr::AxtBegin { .. }
@@ -4948,6 +4988,9 @@ fn instr_queues_isi(instr: &ir::Instr) -> bool {
             | ir::Instr::RevokeRole { .. }
             | ir::Instr::TransferDomain { .. }
             | ir::Instr::VendorExecuteInstruction { .. }
+            | ir::Instr::VendorExecuteQuery { .. }
+            | ir::Instr::SubscriptionBill
+            | ir::Instr::SubscriptionRecordUsage
             | ir::Instr::BuildSubmitBallotInline { .. }
             | ir::Instr::BuildUnshieldInline { .. }
             | ir::Instr::AxtBegin { .. }

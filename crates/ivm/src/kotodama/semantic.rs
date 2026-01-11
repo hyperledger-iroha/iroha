@@ -2154,6 +2154,37 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         ty: Type::Unit,
                     })
                 }
+                // Vendor bridge helper: execute query via SMARTCONTRACT_EXECUTE_QUERY.
+                "execute_query" => {
+                    if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
+                        return Err(SemanticError {
+                            message: format!(
+                                "{name} expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT"
+                            ),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Bytes,
+                    })
+                }
+                "subscription_bill" | "subscription_record_usage" => {
+                    if !arg_typed.is_empty() {
+                        return Err(SemanticError {
+                            message: format!("{name} expects no arguments"),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Unit,
+                    })
+                }
                 "Map::new" => {
                     if !arg_typed.is_empty() {
                         return Err(SemanticError {

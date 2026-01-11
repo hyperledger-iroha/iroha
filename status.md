@@ -1,9 +1,73 @@
 # Status
 
 ## Latest Updates
+- Subscriptions: biller now suspends at `failure_count >= max_failures`, records failed invoices, adds retry/suspension unit coverage, and ships Kotodama wrapper samples for billing/usage triggers.
+- IVM: add subscription syscalls to the ABI golden list and regenerate syscall docs/gas assets from `syscalls.toml`.
+- Docs: align the subscription API design with invoice metadata stored on the subscription NFT.
+- Tooling: `CARGO_TARGET_DIR=target/codex-syscall-doc cargo run -p ivm --bin gen_syscalls_doc --locked -- --write` (pass; warnings about prose gas tokens missing in generated assets).
+- Tests: not run (not requested).
+- Sumeragi/localnet: keep aborted inflight payloads in pending storage with bounded retention for late commit-QC block sync, prune `proposals_seen` on view changes and commit height advances, and preserve `proposals_seen` when commit topology order changes without membership changes; add roster-validation caching to avoid holding StateView locks during block-sync roster selection.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Tests: `cargo test --workspace` (timed out after 120s during compilation; warnings in `crates/ivm/src/schema_registry.rs` about unused imports and dead code).
+- Tests: `CARGO_TARGET_DIR=target/codex-trigger cargo test --workspace` (timed out after 1200s during compilation; warnings in `crates/iroha_core/src/smartcontracts/ivm/host.rs`, `mochi/mochi-ui-egui/src/main.rs`, `crates/iroha_cli/src/contracts.rs`, `integration_tests/tests/asset.rs`).
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test -p iroha_data_model query_request_json_roundtrip_singular -- --nocapture` (timed out after 300s during compilation).
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test -p ivm query_request_roundtrip -- --nocapture` (timed out after 180s during compilation).
+- IVM/Kotodama: add QueryRequest/QueryResponse JSON encode/decode support via the schema registry and expose QueryRequest JSON conversion helpers in `iroha_data_model`; document schema usage in `docs/source/kotodama_grammar.md`.
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test -p ivm --test kotodama_zk_syscalls -- --nocapture` (pass).
+- Kotodama: fix regalloc dest tracking for `VendorExecuteQuery` to avoid unreachable pattern warnings.
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test -p iroha_core --lib execute_query_syscall_charges_sorted_queries_by_scanned_items -- --nocapture` (pass); `CARGO_TARGET_DIR=target-codex cargo test -p iroha_core --lib execute_query_syscall_returns_norito_response_and_gas -- --nocapture` (pass).
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test -p iroha_core --lib execute_query_syscall_sorted_offset_ignores_offset_penalty -- --nocapture` (pass); `CARGO_TARGET_DIR=target-codex cargo test -p iroha_core --lib postprocessing_reports_processed_items_for_sorted_queries -- --nocapture` (pass).
+- IVM/queries: charge sorted queries by full scan count without double-charging pagination offsets, expose `QueryExecutionResult` (response + processed item count) for query gas accounting, and remove the unused ephemeral budget wrapper.
+- Tests: `cargo test -p iroha_core --lib execute_query_syscall_sorted_offset_ignores_offset_penalty -- --nocapture` (blocked: `cargo test --workspace` holds the build lock); `CARGO_TARGET_DIR=target-codex cargo test -p iroha_core --lib execute_query_syscall_sorted_offset_ignores_offset_penalty -- --nocapture` (timed out after 120s during compilation).
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- IVM/queries: apply `pipeline.query_max_fetch_size` in IVM validation, preflight per-byte gas using exact Norito length when available, and document the pipeline knob in `crates/ivm/docs/syscalls.md` and `docs/source/references/configuration.md`.
+- Tests: update query-limit minimal configs with Torii address + streaming identity, and make state tests use mutable state for pipeline/trigger mutations.
+- Tests: `cargo test -p iroha_core --lib execute_query_syscall_out_of_gas_when_response_bytes_exceed_budget -- --nocapture` (pass); `cargo test -p iroha_core --lib query_limits_from_pipeline_uses_configured_max_fetch -- --nocapture` (pass; warning: unused mut in `crates/iroha_core/src/state.rs:28100`).
+- Tests: `cargo test --workspace` (failed: `integration_tests --test iterable_queries_torii` timed out on `find_active_trigger_ids_includes_registered`, `burn_trigger_repetitions_removes_from_active_ids`, `burn_then_execute_trigger_is_rejected`; warnings: unused `MissingQc` variant in `mochi/mochi-ui-egui/src/main.rs`, unused `base64::Engine` import in `crates/iroha_cli/src/contracts.rs` and `crates/iroha_cli/src/bin/../contracts.rs`, unused assignment in `integration_tests/tests/asset.rs:1242`, unused mut in `crates/iroha_core/src/state.rs`).
+- Triggers: repair trigger storage on load by dropping missing-bytecode/duplicate entries, rebuilding ids, and recomputing bytecode counts; skip missing trigger bytecode during execution while pruning the trigger, treat depleted by-call entries as missing, and clean up missing/depleted data triggers without panicking. Docs updated in `docs/source/data_model_and_isi_spec.md`.
+- Tests: `CARGO_TARGET_DIR=target/codex-trigger cargo test -p iroha_core --lib set_dto_repairs_inconsistent_storage -- --nocapture` (pass); `cargo test -p iroha_core --lib execute_called_trigger_skips_missing_bytecode_and_removes_trigger -- --nocapture` (pass); `cargo test -p iroha_core --lib execute_data_triggers_dfs_skips_missing_trigger_after_bytecode_drop -- --nocapture` (pass); `CARGO_TARGET_DIR=target/codex-trigger cargo test -p iroha_core --lib execute_called_trigger_rejects_depleted_entry_and_prunes_trigger -- --nocapture` (pass).
+- Sumeragi/localnet: allow block-sync history to synthesize commit QCs from cached precommit signers when QC history is missing, tighten permissioned block-sync uncertified roster acceptance to only the next height, and add coverage for the precommit-signer QC path; also update the query max fetch size const cast for stable builds.
+- Tests: `cargo test -p iroha_core block_sync_update_includes_commit_qc_from_precommit_signers -- --nocapture` (failed to compile due to existing errors in `crates/iroha_core/src/smartcontracts/isi/query.rs` missing `budget_items` and `crates/iroha_core/src/smartcontracts/isi/triggers/set.rs` missing `Storage::get`).
+- Smart contracts/triggers: avoid panics in trigger lookup/inspection/removal when storage is inconsistent (missing action or entry), log warnings instead, and skip missing entries in FindTriggers; add coverage for missing trigger entries.
+- Tests: `cargo test -p iroha_core --lib inspect_by_id_skips_missing_entry -- --nocapture` (pass); `cargo test -p iroha_core --lib inspect_by_id_mut_skips_missing_entry -- --nocapture` (pass); `cargo test -p iroha_core --lib iter_dispatch_find_triggers_full -- --nocapture` (pass); `cargo test -p integration_tests --test iterable_queries_torii find_triggers_includes_registered -- --nocapture` (pass).
+- Tests: `cargo test --workspace` (timed out after ~6h while running tests; warnings: unused `MissingQc` variant in `mochi/mochi-ui-egui/src/main.rs:10917`, unused assignment in `integration_tests/tests/asset.rs:274`, unused `base64::Engine` import in `crates/iroha_cli/src/contracts.rs:61` and `crates/iroha_cli/src/bin/../contracts.rs:61`).
+- IVM/queries: enforce per-item gas-budget aborts during query materialization, surface `QueryExecutionFail::GasBudgetExceeded` for budget overages, and update query/syscall docs + roadmap.
+- Tests: `cargo check -p iroha_core` (pass); `cargo test -p iroha_core --lib execute_query_syscall_out_of_gas_when_budget_exhausted -- --nocapture` (pass); `cargo fmt --all` (stable rustfmt warns about unstable options).
+- IVM/queries: tighten query-state GAT bounds, make `QueryStateExecute` public with docs, remove redundant lifetime bounds, and require explicit `as_any` implementations to fix query-prepass host wiring; `cargo check -p iroha_core` (pass).
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Docs: note aborted pending-payload retention (bounded window for late commit certificates/missing-block recovery) in the Sumeragi commit rules.
+- Tests: `cargo test -p integration_tests --test mod network_stable_after_add_and_after_remove_peer -- --nocapture` (pass).
+- Integration tests/DA: enable Nexus and set `sumeragi.consensus_mode = "npos"` in the DA replication-policy test config so DA ingest runs under the required consensus mode.
+- Tests: `cargo test -p integration_tests --test da replication_policy::da_replication_policy_is_enforced -- --nocapture` (pass); `cargo test -p integration_tests --test da replication_policy::da_manifest_sampling_plan_matches_assignment_hash -- --nocapture` (pass).
+- Tests: `cargo test --workspace` (timed out after 600s while running tests; warnings: unused `MissingQc` variant in `mochi/mochi-ui-egui/src/main.rs`, unused assignment in `integration_tests/tests/asset.rs`, unused `base64::Engine` import in `crates/iroha_cli/src/contracts.rs` and `crates/iroha_cli/src/bin/../contracts.rs`).
+- Subscriptions: mark cadence/billing as `Copy`, keep cadence/pricing detail structs for styleguide-compliant tagged enums, and update subscription API examples to include tagged enum `value: null` fields for unit variants.
+- Tests: `cargo test --workspace` (timed out after 120s during compilation).
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Subscriptions: refactor cadence/pricing to tagged enums with detail structs (styleguide-compliant), re-export detail types, and update subscription API examples to `kind`/`detail` plus `bill_for.period` semantics.
+- Tests: `cargo test --workspace` (terminated by sandbox signal 15).
+- Tests: `cargo test -p iroha_data_model --no-run` (terminated by sandbox signal 15).
+- Subscriptions: export `iroha_data_model::subscription` schema types (plan/subscription/invoice/trigger ref), note the schema in the subscription API doc, and mark the metadata-spec task complete in `roadmap.md`.
+- Tests: not run (not requested).
+- Sumeragi/localnet: retain aborted pending payloads after inflight timeouts for late QC block sync; keep `proposals_seen` through timeout/divergence and prune older views on view change to cap growth; add regression coverage for view-change pruning and roster input collection.
+- Tests: not run (not requested).
+- Sumeragi/localnet: precompute roster validation inputs outside the StateView lock to reduce contention and sort canonical roster ordering to avoid spurious topology hash changes.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Subscriptions: add deterministic UTC calendar helper for monthly anchors and billing periods with unit coverage.
+- Tests: not run (not requested).
+- Docs: add trigger-based subscription API design and reference it in the data model/ISI spec.
+- Tests: not run (not requested).
+- Roadmap: add trigger-based subscription API design + task breakdown covering arrears and fixed monthly billing in `roadmap.md`.
+- Tests: not run (not requested).
+- Integration tests/asset: wait for integer transfer state to converge across peers before asserting zero-asset purge in `fail_if_dont_satisfy_spec`.
+- Tests: not run (not requested).
+- Sumeragi/localnet: keep `proposals_seen` when aborting inflight commit timeouts so leaders do not re-propose in the same view; add regression coverage.
+- Tests: `cargo test -p iroha_core --lib commit_inflight_timeout_triggers_view_change_and_retains_aborted_pending -- --nocapture` (pass).
+- Sumeragi/localnet: keep `proposals_seen` when pruning divergent pending blocks/proposals so leaders do not re-propose in the same view; add regression coverage.
+- Tests: `cargo test -p iroha_core --lib prune_descendants_keeps_view_seen_after_divergent_proposal_drop -- --nocapture` (pass).
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
 - Sumeragi: add a pacemaker NEW_VIEW status regression test to confirm highest-QC status updates from NEW_VIEW selection.
 - Tests: `cargo test -p iroha_core --lib block_created_updates_locked_status_when_lock_missing -- --nocapture` (pass); `cargo test -p iroha_core --lib pacemaker_updates_highest_qc_status_from_new_view -- --nocapture` (pass); `cargo test -p iroha_core --lib qc_extends_locked_if_present_allows_missing_lock_locally -- --nocapture` (pass); `cargo test -p iroha_core --lib locked_qc_subject_updates_for_same_height_view -- --nocapture` (pass).
-- Tests: `cargo test -p iroha_core --lib pacemaker_bootstraps_with_commit_qc_when_active_roster_empty -- --nocapture` (failed: assertion `pacemaker should bootstrap from commit QC roster when active roster is empty`).
+- Tests: `cargo test -p iroha_core --lib pacemaker_bootstraps_with_commit_qc_when_active_roster_empty -- --nocapture` (pass).
 - Integration tests/asset: make the local assert_balance closure mutable so it can call the client-rotating fetch helper.
 - Tests: not run (not requested).
 - Integration tests/asset: rotate test clients across peers, treat tx-confirmation fallback timeouts as non-fatal, and add helper checks for transient-request detection.
@@ -1973,6 +2037,10 @@
 - Tests: `cargo test -p integration_tests trigger_completion_failure_reports_error -- --nocapture` (timed out after 600s; compile finished; test `events::notification::trigger_completion_failure_reports_error` still running).
 - Sumeragi NEW_VIEW quorum selection now filters senders against the active roster (only counts local if it is in-roster), with coverage for non-roster senders.
 - Sumeragi now rejects NEW_VIEW votes with mismatched highest QC hashes/heights before recording, with regressions for invalid highest fields.
+- Permissioned block sync now accepts missing-block roster requests beyond next height when commit-quorum signatures are present; roster validation inputs can be built from world views in tests, and roster-change resets are exposed to main-loop tests.
+- Core host constructors now initialize `current_trigger_id` so integration-test `irohad` builds succeed.
+- Tests: `cargo fmt --all` (stable warns about unstable rustfmt options); `ENABLE_RANS_BUNDLES=1 NORITO_SKIP_BINDINGS_SYNC=1 cargo build -p irohad --bin iroha3d` (warn: `current_trigger_id` unused); `IROHA_TEST_NETWORK_PARALLELISM=5 cargo test -p integration_tests --test genesis_json genesis_asset_minted_across_peers -- --nocapture` (pass); `IROHA_TEST_NETWORK_PARALLELISM=5 cargo test -p integration_tests --test address_canonicalisation -- --nocapture` (timed out after 12m; tests still running, waiting on network permits).
+- Added an ignored localnet soak test that drives thousands of blocks/transactions with stall detection and documented the run command.
 - Sumeragi now defers applying commit QCs until the pending block extends the committed tip, keeping the QC cached and marking the pending entry for later finalize instead of committing out-of-order; updated deferred-QC replay coverage.
 - Sumeragi finalize now defers when a commit certificate arrives before the pending block extends the committed tip, keeping the pending entry queued; added `finalize_pending_block_defers_until_tip_extends` coverage.
 - Tests: `cargo test -p iroha_core --lib deferred_qcs_replay_after_commit_roster_history_arrives -- --nocapture` (passed; warning about network bind in tests).

@@ -87,6 +87,7 @@ Defaults first: configuration values are curated for typical Iroha blockchain de
   - `ivm_max_cycles_upper_bound` caps the `max_cycles` header value accepted from Kotodama bytecode. Set to `0` to disable the admission guard (still clamped at execution time by the VM).
   - `ivm_max_decoded_instructions` limits the number of decoded VM instructions per contract. `0` disables the check.
   - `ivm_max_decoded_bytes` limits the decoded byte length after instruction expansion. `0` disables the check.
+  - `query_max_fetch_size` caps iterable query `fetch_size` for IVM query syscalls (0 clamps to 1). Torii endpoints continue to use `torii.app_api.max_fetch_size`.
 - `[norito]`: Serialization tuning for Norito (compression sizes/levels and adaptive layout toggles). Deterministic by design.
 - `[streaming]`: Control-plane key material for Norito streaming (HPKE + control signatures).
   - `identity_public_key` / `identity_private_key` (optional): Ed25519 multihash strings that override the node’s main key pair for streaming signatures—useful when the validator key is GOST or another non-Ed25519 algorithm.

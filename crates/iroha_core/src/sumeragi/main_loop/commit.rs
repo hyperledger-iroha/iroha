@@ -880,6 +880,7 @@ impl Actor {
                     self.config.consensus_mode,
                     self.common_config.trusted_peers.value(),
                     self.common_config.peer.id(),
+                    &self.roster_validation_cache,
                 );
                 let expected_epoch = self.epoch_for_height(pending_height);
                 Self::apply_cached_qcs_to_block_sync_update(
@@ -1339,6 +1340,7 @@ impl Actor {
             let retention_floor = pending_height.saturating_sub(1);
             self.vote_log
                 .retain(|(_, height, _, _, _), _| *height >= retention_floor);
+            self.try_replay_deferred_votes();
 
             if let Some(child_qc) = post_commit_qc {
                 let previous_lock = self.locked_qc;
@@ -1649,6 +1651,7 @@ impl Actor {
             );
         }
         pending.mark_aborted();
+        pending.tx_batch = None;
         self.clean_rbc_sessions_for_block(block_hash, height);
         self.qc_cache
             .retain(|(_, hash, _, _, _), _| hash != &block_hash);
@@ -1662,10 +1665,7 @@ impl Actor {
             .propose
             .proposal_cache
             .pop_proposal(height, view);
-        self.subsystems
-            .propose
-            .proposals_seen
-            .remove(&(height, view));
+        // Keep proposals_seen so we don't re-propose in the same view after timeout.
         self.pending.pending_replay_last_sent.remove(&block_hash);
         let session_key = Self::session_key(&block_hash, height, view);
         self.subsystems
@@ -1678,7 +1678,8 @@ impl Actor {
             .rbc
             .ready_rebroadcast_last_sent
             .remove(&session_key);
-        drop(pending);
+        // Retain the aborted payload so late commit QCs can still recover via block sync.
+        self.pending.pending_blocks.insert(block_hash, pending);
         super::status::record_commit_inflight_timeout(height, view, block_hash, elapsed);
         super::status::record_commit_inflight_finish(inflight.id);
         self.trigger_view_change_after_commit_failure(height, view);
@@ -3218,6 +3219,7 @@ impl Actor {
                 self.config.consensus_mode,
                 self.common_config.trusted_peers.value(),
                 self.common_config.peer.id(),
+                &self.roster_validation_cache,
             );
             let expected_epoch = qc.epoch;
             Self::apply_cached_qcs_to_block_sync_update(
@@ -3624,14 +3626,11 @@ impl Actor {
             }
         }
         for (height, view) in stale_hints {
+            // Keep proposals_seen so we don't re-propose in the same view after divergence.
             self.subsystems
                 .propose
                 .proposal_cache
                 .pop_hint(height, view);
-            self.subsystems
-                .propose
-                .proposals_seen
-                .remove(&(height, view));
         }
 
         let mut stale_proposals = Vec::new();
@@ -3657,14 +3656,11 @@ impl Actor {
             }
         }
         for (height, view) in stale_proposals {
+            // Keep proposals_seen so we don't re-propose in the same view after divergence.
             self.subsystems
                 .propose
                 .proposal_cache
                 .pop_proposal(height, view);
-            self.subsystems
-                .propose
-                .proposals_seen
-                .remove(&(height, view));
         }
 
         let mut stale_qcs: Vec<QcVoteKey> = Vec::new();
@@ -3891,6 +3887,7 @@ impl Actor {
 
     #[allow(clippy::too_many_lines)]
     pub(super) fn on_block_commit(&mut self, height: u64) -> Result<()> {
+        self.refresh_roster_validation_cache();
         self.subsystems.propose.new_view_tracker.prune(height);
         self.subsystems
             .propose
@@ -3909,14 +3906,23 @@ impl Actor {
             .retain(|_, request| request.height > height);
         self.refresh_p2p_topology();
         let commit_topology = self.effective_commit_topology();
-        let commit_topology_hash = HashOf::new(&commit_topology);
-        if self.refresh_commit_topology_state(commit_topology_hash) {
-            self.reset_consensus_state_for_roster_change();
-            debug!(
-                height,
-                roster_len = commit_topology.len(),
-                "commit topology changed; cleared consensus caches"
-            );
+        match self.refresh_commit_topology_state(&commit_topology) {
+            CommitTopologyChange::None => {}
+            CommitTopologyChange::Membership => {
+                self.reset_consensus_state_for_roster_change(false);
+                debug!(
+                    height,
+                    roster_len = commit_topology.len(),
+                    "commit topology changed; cleared consensus caches"
+                );
+            }
+            CommitTopologyChange::OrderOnly => {
+                debug!(
+                    height,
+                    roster_len = commit_topology.len(),
+                    "commit topology order changed; retaining consensus caches"
+                );
+            }
         }
         self.update_missing_block_gauges();
         let committed_block = usize::try_from(height)
@@ -4287,20 +4293,47 @@ impl Actor {
         Ok(())
     }
 
-    pub(super) fn refresh_commit_topology_state(
-        &mut self,
-        topology_hash: HashOf<Vec<PeerId>>,
-    ) -> bool {
-        if self.last_commit_topology_hash == Some(topology_hash) {
-            return false;
-        }
-        self.last_commit_topology_hash = Some(topology_hash);
-        self.subsystems.propose.new_view_tracker = NewViewTracker::default();
-        self.subsystems.propose.forced_view_after_timeout = None;
-        true
+    fn refresh_roster_validation_cache(&mut self) {
+        let view = self.state.view();
+        self.roster_validation_cache
+            .refresh_from_view(&view, self.config.epoch_length_blocks);
     }
 
-    fn reset_consensus_state_for_roster_change(&mut self) {
+    pub(super) fn refresh_commit_topology_state(
+        &mut self,
+        topology: &[PeerId],
+    ) -> CommitTopologyChange {
+        let order_hash = HashOf::new(&topology.to_vec());
+        let mut membership = topology.to_vec();
+        membership.sort();
+        let membership_hash = HashOf::new(&membership);
+
+        if self.last_commit_topology_hash == Some(order_hash) {
+            return CommitTopologyChange::None;
+        }
+
+        let membership_changed = self
+            .last_commit_topology_membership_hash
+            .map_or(true, |last| last != membership_hash);
+        self.last_commit_topology_hash = Some(order_hash);
+        self.last_commit_topology_membership_hash = Some(membership_hash);
+
+        if membership_changed {
+            // Only reset view-change state when the validator set changes; order-only rotations
+            // are expected as part of leader selection.
+            self.subsystems.propose.new_view_tracker = NewViewTracker::default();
+            self.subsystems.propose.forced_view_after_timeout = None;
+            CommitTopologyChange::Membership
+        } else {
+            CommitTopologyChange::OrderOnly
+        }
+    }
+
+    /// Resets consensus caches when the validator roster changes.
+    pub(super) fn reset_consensus_state_for_roster_change(
+        &mut self,
+        preserve_proposals_seen: bool,
+    ) {
         self.pending.pending_blocks.clear();
         self.pending.pending_replay_last_sent.clear();
         self.pending.missing_block_requests.clear();
@@ -4313,7 +4346,9 @@ impl Actor {
         self.qc_cache.clear();
         self.qc_signer_tally.clear();
         self.voting_block = None;
-        self.subsystems.propose.proposals_seen.clear();
+        if !preserve_proposals_seen {
+            self.subsystems.propose.proposals_seen.clear();
+        }
         self.subsystems.propose.proposal_cache = ProposalCache::new(PROPOSAL_CACHE_LIMIT);
         self.reset_collector_state();
         self.subsystems.propose.last_empty_child_attempt = None;
@@ -5280,6 +5315,10 @@ mod tests {
         );
 
         let (trusted, me_id) = trusted_self();
+        let roster_cache = {
+            let view = state.view();
+            super::RosterValidationCache::from_view(&view, super::EPOCH_LENGTH_BLOCKS)
+        };
         let mut update = block_sync_update_with_roster(
             &block,
             &state,
@@ -5287,6 +5326,7 @@ mod tests {
             ConsensusMode::Permissioned,
             &trusted,
             &me_id,
+            &roster_cache,
         );
         let qc_cache: BTreeMap<
             (

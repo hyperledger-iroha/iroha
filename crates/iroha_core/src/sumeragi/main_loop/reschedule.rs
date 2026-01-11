@@ -484,6 +484,7 @@ impl Actor {
                 self.config.consensus_mode,
                 self.common_config.trusted_peers.value(),
                 self.common_config.peer.id(),
+                &self.roster_validation_cache,
             );
             let expected_epoch = self.epoch_for_height(height);
             Self::apply_cached_qcs_to_block_sync_update(

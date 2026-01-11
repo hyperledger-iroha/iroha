@@ -1188,6 +1188,8 @@ mod tests {
                     iroha_config::parameters::defaults::pipeline::QUARANTINE_TX_MAX_MILLIS,
                 query_default_cursor_mode:
                     iroha_config::parameters::actual::QueryCursorMode::Ephemeral,
+                query_max_fetch_size:
+                    iroha_config::parameters::defaults::pipeline::QUERY_MAX_FETCH_SIZE,
                 query_stored_min_gas_units:
                     iroha_config::parameters::defaults::pipeline::QUERY_STORED_MIN_GAS_UNITS,
                 amx_per_dataspace_budget_ms:
