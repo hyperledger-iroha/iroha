@@ -640,17 +640,13 @@ pub mod query {
             let triggers = state_ro.world().triggers();
 
             Ok(triggers
-                   .ids_iter()
-                   .map(|id| {
-                       let action = triggers.inspect_by_id(id, |action| action.clone_and_box())
-                           .expect("INTERNAL BUG: Trigger Id is in the list of ids but not in the triggers map");
-
-                       let action = triggers.get_original_action(action)
-                           .into();
-
-                       Trigger::new(id.clone(), action)
-                   })
-                   .filter(move |trigger| filter.applies(trigger)))
+                .ids_iter()
+                .filter_map(|id| {
+                    let action = triggers.inspect_by_id(id, |action| action.clone_and_box())?;
+                    let action = triggers.get_original_action(action)?;
+                    Some(Trigger::new(id.clone(), action.into()))
+                })
+                .filter(move |trigger| filter.applies(trigger)))
         }
     }
 }

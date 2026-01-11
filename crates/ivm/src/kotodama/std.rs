@@ -93,8 +93,8 @@ pub fn vendor_execute_instruction_bytes(
         .expect("syscall ok")
 }
 
-/// Vendor bridge helper for queries (JSON envelope path). Accepts arbitrary
-/// Norito bytes and performs `SMARTCONTRACT_EXECUTE_QUERY`.
+/// Vendor bridge helper for queries. Accepts Norito-encoded `QueryRequest`
+/// bytes and performs `SMARTCONTRACT_EXECUTE_QUERY`.
 pub fn vendor_execute_query_bytes(host: &mut dyn IVMHost, vm: &mut IVM, query_bytes: &[u8]) -> u64 {
     let ptr = input_tlv_norito_bytes(vm, query_bytes);
     vm.set_register(10, ptr);

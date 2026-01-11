@@ -22,6 +22,7 @@ use iroha_crypto::{Hash, streaming::TransportCapabilityResolutionSnapshot};
 use iroha_data_model::{
     DataSpaceId, ValidationFail,
     errors::{AmxStage, AmxTimeout, CanonicalErrorKind},
+    events::time::Schedule,
     isi::{
         Burn, BurnBox, InstructionBox, Mint, MintBox, Register, RegisterBox, SetKeyValue,
         SetKeyValueBox, SetParameter, Transfer, TransferAssetBatch, TransferAssetBatchEntry,
@@ -36,7 +37,11 @@ use iroha_data_model::{
     },
     prelude::{AccountId, *},
     proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
-    query::parameters::ForwardCursor,
+    query::{QueryRequest, QueryResponse, error::QueryExecutionFail, parameters::ForwardCursor},
+    subscription::{
+        SUBSCRIPTION_INVOICE_METADATA_KEY, SUBSCRIPTION_METADATA_KEY, SUBSCRIPTION_PLAN_METADATA_KEY,
+        SUBSCRIPTION_TRIGGER_REF_METADATA_KEY,
+    },
     zk::BackendTag,
 };
 #[cfg(test)]
@@ -49,12 +54,27 @@ use ivm::{
     is_type_allowed_for_policy,
 };
 use mv::storage::StorageReadOnly;
-use norito::{codec::Decode as NoritoDecode, decode_from_bytes, streaming::CapabilityFlags};
+use iroha_primitives::calendar;
+use norito::{
+    codec::Decode as NoritoDecode,
+    core::{Archived, Header, NoritoSerialize},
+    decode_from_bytes,
+    streaming::CapabilityFlags,
+};
 use sha2::{Digest, Sha256};
 
-use crate::state::{StateReadOnly, StateTransaction, WorldReadOnly, current_axt_slot_from_block};
 #[cfg(feature = "telemetry")]
 use crate::telemetry::StateTelemetry;
+use crate::{
+    smartcontracts::isi::{
+        query::{IvmQueryValidator, QueryLimits, ValidQueryRequest},
+        triggers::set::SetReadOnly,
+    },
+    state::{
+        StateBlock, StateReadOnly, StateTransaction, StateView, WorldReadOnly,
+        current_axt_slot_from_block,
+    },
+};
 
 const AXT_PROOF_CACHE_HIT: &str = "hit";
 const AXT_PROOF_CACHE_MISS: &str = "miss";
@@ -170,7 +190,7 @@ fn apply_sm_openssl_preview(_: bool) {}
 /// Stateful operations must be translated into ISIs and executed via the
 /// executor. Durable-state syscalls are only forwarded to an in-memory
 /// overlay when access logging is enabled for prepass execution.
-pub struct CoreHost {
+pub struct CoreHostImpl<QS> {
     authority: AccountId,
     default: ivm::host::DefaultHost,
     codec_host: IvmCodecHost,
@@ -181,10 +201,16 @@ pub struct CoreHost {
     fastpq_batch_entries: Option<Vec<TransferAssetBatchEntry>>,
     // Snapshot of accounts available for simple iteration helpers used by samples.
     accounts_snapshot: Arc<Vec<AccountId>>,
+    // Live read-only state view used to execute queries during IVM runs.
+    query_state: QS,
     // Simple counter for sentinel-generated NFT ids to guarantee uniqueness across calls.
     nft_seq: u64,
     // Optional trigger arguments for by-call entrypoints.
     args: Option<iroha_primitives::json::Json>,
+    // Trigger identifier for the current execution (time/by-call triggers).
+    current_trigger_id: Option<TriggerId>,
+    // Block creation timestamp (UTC ms) for the current execution.
+    current_block_time_ms: Option<u64>,
     // Snapshot of durable smart-contract state persisted in WSV.
     durable_state_base: BTreeMap<Name, Vec<u8>>,
     // Overlay of durable state updates staged by the current VM execution.
@@ -247,6 +273,298 @@ pub struct CoreHost {
     telemetry: Option<StateTelemetry>,
 }
 
+/// Core host variant without query support (default for VM-attached hosts).
+pub type CoreHost = CoreHostImpl<NoQueryState>;
+
+/// Marker query slot for hosts that do not run queries.
+#[derive(Default, Copy, Clone)]
+pub struct NoQueryState;
+
+/// Slot storing a live queryable state reference for a host run.
+pub(crate) struct QueryStateSlot<QRef> {
+    state: Option<QRef>,
+}
+
+impl<QRef> Default for QueryStateSlot<QRef> {
+    fn default() -> Self {
+        Self { state: None }
+    }
+}
+
+/// Borrowed query-state reference used during IVM query syscalls.
+#[derive(Copy, Clone)]
+pub enum QueryStateRef<'block, 'tx, 'state> {
+    /// Query against a state view snapshot.
+    View(&'block StateView<'state>),
+    /// Query against a state block snapshot.
+    Block(&'block StateBlock<'state>),
+    /// Query against a state transaction snapshot.
+    Transaction(&'block StateTransaction<'tx, 'state>),
+}
+
+/// Adapter for state containers that can serve IVM queries.
+pub trait QueryStateSource {
+    /// Query-state reference type for a given borrow lifetime.
+    type Ref<'a>: Copy + QueryStateExecute + QueryStateRefOps + 'a
+    where
+        Self: 'a;
+    /// Borrow the state as a query-state reference.
+    fn as_query_state_ref<'a>(&'a self) -> Self::Ref<'a>;
+}
+
+impl<'state> QueryStateSource for StateView<'state> {
+    type Ref<'a>
+        = QueryStateRef<'a, 'state, 'state>
+    where
+        Self: 'a;
+
+    fn as_query_state_ref<'a>(&'a self) -> Self::Ref<'a> {
+        QueryStateRef::View(self)
+    }
+}
+
+impl<'state> QueryStateSource for StateBlock<'state> {
+    type Ref<'a>
+        = QueryStateRef<'a, 'state, 'state>
+    where
+        Self: 'a;
+
+    fn as_query_state_ref<'a>(&'a self) -> Self::Ref<'a> {
+        QueryStateRef::Block(self)
+    }
+}
+
+impl<'block, 'state> QueryStateSource for StateTransaction<'block, 'state>
+where
+    'state: 'block,
+{
+    type Ref<'a>
+        = QueryStateRef<'a, 'block, 'state>
+    where
+        Self: 'a;
+
+    fn as_query_state_ref<'a>(&'a self) -> Self::Ref<'a> {
+        QueryStateRef::Transaction(self)
+    }
+}
+
+/// Execute a query against a concrete state reference.
+pub trait QueryStateExecute {
+    /// Execute a query request for the provided authority.
+    ///
+    /// Returns the query response and processed item count or a VM error.
+    fn execute_query(
+        self,
+        authority: &AccountId,
+        request: QueryRequest,
+    ) -> Result<QueryExecutionResult, ivm::VMError>
+    where
+        Self: Sized;
+
+    /// Execute a query request with a budget for post-offset items.
+    ///
+    /// Implementations may ignore the budget if they do not support early aborts.
+    /// Returns the query response and processed item count or a VM error.
+    fn execute_query_with_budget(
+        self,
+        authority: &AccountId,
+        request: QueryRequest,
+        budget_items: Option<u64>,
+    ) -> Result<QueryExecutionResult, ivm::VMError>
+    where
+        Self: Sized,
+    {
+        let _ = budget_items;
+        self.execute_query(authority, request)
+    }
+}
+
+impl QueryStateExecute for QueryStateRef<'_, '_, '_> {
+    fn execute_query(
+        self,
+        authority: &AccountId,
+        request: QueryRequest,
+    ) -> Result<QueryExecutionResult, ivm::VMError> {
+        QueryStateRef::execute_query(self, authority, request)
+    }
+
+    fn execute_query_with_budget(
+        self,
+        authority: &AccountId,
+        request: QueryRequest,
+        budget_items: Option<u64>,
+    ) -> Result<QueryExecutionResult, ivm::VMError> {
+        QueryStateRef::execute_query_with_budget(self, authority, request, budget_items)
+    }
+}
+
+/// Query-state access shim for host types that may or may not carry a state reference.
+pub trait QueryStateAccess {
+    /// Query-state reference type for a given borrow lifetime.
+    type Ref<'a>: QueryStateExecute + QueryStateRefOps
+    where
+        Self: 'a;
+
+    /// Fetch the configured query-state reference, if any.
+    fn get<'a>(&'a self) -> Option<Self::Ref<'a>>;
+}
+
+impl QueryStateAccess for NoQueryState {
+    type Ref<'a>
+        = QueryStateRef<'a, 'a, 'a>
+    where
+        Self: 'a;
+
+    fn get<'a>(&'a self) -> Option<Self::Ref<'a>> {
+        None
+    }
+}
+
+impl<QRef> QueryStateAccess for QueryStateSlot<QRef>
+where
+    QRef: Copy + QueryStateExecute + QueryStateRefOps,
+{
+    type Ref<'a>
+        = QRef
+    where
+        Self: 'a;
+
+    fn get<'a>(&'a self) -> Option<Self::Ref<'a>> {
+        self.state
+    }
+}
+
+fn map_query_validation_error(error: ValidationFail) -> ivm::VMError {
+    match error {
+        ValidationFail::NotPermitted(_) => ivm::VMError::PermissionDenied,
+        _ => ivm::VMError::DecodeError,
+    }
+}
+
+fn map_query_execution_error(error: QueryExecutionFail) -> ivm::VMError {
+    match error {
+        QueryExecutionFail::GasBudgetExceeded => ivm::VMError::OutOfGas,
+        _ => ivm::VMError::DecodeError,
+    }
+}
+
+/// Query response plus processed item count for gas accounting.
+#[derive(Debug)]
+pub struct QueryExecutionResult {
+    /// Query response payload.
+    pub response: QueryResponse,
+    /// Number of items processed during query execution.
+    pub processed_items: u64,
+}
+
+fn execute_query_on_state_with_budget<R: StateReadOnly>(
+    state: &R,
+    authority: &AccountId,
+    request: QueryRequest,
+    budget_items: Option<u64>,
+) -> Result<QueryExecutionResult, ivm::VMError> {
+    struct Validator<'a, R: StateReadOnly> {
+        authority: &'a AccountId,
+        state: &'a R,
+    }
+
+    impl<R: StateReadOnly> IvmQueryValidator for Validator<'_, R> {
+        fn authority(&self) -> &AccountId {
+            self.authority
+        }
+
+        fn validate_query(
+            &mut self,
+            authority: &AccountId,
+            query: &QueryRequest,
+        ) -> Result<(), ValidationFail> {
+            self.state
+                .world()
+                .executor()
+                .validate_query(self.state, authority, query)
+        }
+    }
+
+    let mut validator = Validator { authority, state };
+    let limits = QueryLimits::from_pipeline(state.pipeline());
+    let validated = ValidQueryRequest::validate_for_ivm(request, &mut validator, limits)
+        .map_err(map_query_validation_error)?;
+    let (response, processed_items) = validated
+        .execute_ephemeral_with_stats(state.query_handle(), state, authority, budget_items)
+        .map_err(map_query_execution_error)?;
+    Ok(QueryExecutionResult {
+        response,
+        processed_items,
+    })
+}
+
+#[derive(Copy, Clone)]
+struct QueryGasContext {
+    base: u64,
+    per_item: u64,
+    offset_items: u64,
+}
+
+impl QueryGasContext {
+    fn from_request(request: &QueryRequest) -> Self {
+        let sort_requested = CoreHostImpl::<NoQueryState>::query_sort_requested(request);
+        let base = match request {
+            QueryRequest::Singular(_) => CoreHostImpl::<NoQueryState>::QUERY_GAS_BASE_SINGULAR,
+            QueryRequest::Start(_) | QueryRequest::Continue(_) => {
+                CoreHostImpl::<NoQueryState>::QUERY_GAS_BASE_ITERABLE
+            }
+        };
+        let per_item = if sort_requested {
+            CoreHostImpl::<NoQueryState>::QUERY_GAS_PER_ITEM
+                .saturating_mul(CoreHostImpl::<NoQueryState>::QUERY_GAS_SORT_MULTIPLIER)
+        } else {
+            CoreHostImpl::<NoQueryState>::QUERY_GAS_PER_ITEM
+        };
+        let offset_items = if sort_requested {
+            0
+        } else {
+            CoreHostImpl::<NoQueryState>::query_offset_items(request)
+        };
+        Self {
+            base,
+            per_item,
+            offset_items,
+        }
+    }
+}
+
+impl<'tx, 'state> QueryStateRef<'_, 'tx, 'state>
+where
+    'state: 'tx,
+{
+    fn execute_query(
+        self,
+        authority: &AccountId,
+        request: QueryRequest,
+    ) -> Result<QueryExecutionResult, ivm::VMError> {
+        self.execute_query_with_budget(authority, request, None)
+    }
+
+    fn execute_query_with_budget(
+        self,
+        authority: &AccountId,
+        request: QueryRequest,
+        budget_items: Option<u64>,
+    ) -> Result<QueryExecutionResult, ivm::VMError> {
+        match self {
+            QueryStateRef::View(view) => {
+                execute_query_on_state_with_budget(view, authority, request, budget_items)
+            }
+            QueryStateRef::Block(block) => {
+                execute_query_on_state_with_budget(block, authority, request, budget_items)
+            }
+            QueryStateRef::Transaction(tx) => {
+                execute_query_on_state_with_budget(tx, authority, request, budget_items)
+            }
+        }
+    }
+}
+
 struct DomainHashInputs<'a> {
     backend: &'a str,
     curve: &'a str,
@@ -255,6 +573,91 @@ struct DomainHashInputs<'a> {
     syscall_label: &'a str,
     manifest: &'a str,
     namespace: &'a str,
+}
+
+/// Snapshot of subscription-related data resolved from the current state.
+pub struct SubscriptionContext {
+    executable: Executable,
+    authority: AccountId,
+    trigger_metadata: Metadata,
+    subscription_nft_id: NftId,
+    subscription_state: SubscriptionState,
+    plan: SubscriptionPlan,
+    charge_asset_def: AssetDefinition,
+    subscriber_balance: Numeric,
+    nft_owner: AccountId,
+}
+
+/// Helpers for accessing subscription data through a query-state reference.
+pub trait QueryStateRefOps {
+    /// Resolve subscription context for a trigger identifier.
+    fn subscription_context_for_trigger(
+        &self,
+        trigger_id: &TriggerId,
+    ) -> Result<SubscriptionContext, ivm::VMError>;
+    /// Load subscription state from a subscription NFT.
+    fn subscription_state_for_nft(
+        &self,
+        nft_id: &NftId,
+    ) -> Result<SubscriptionState, ivm::VMError>;
+    /// Load a subscription plan from its asset definition metadata.
+    fn subscription_plan(
+        &self,
+        plan_id: &AssetDefinitionId,
+    ) -> Result<SubscriptionPlan, ivm::VMError>;
+}
+
+impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
+    fn subscription_context_for_trigger(
+        &self,
+        trigger_id: &TriggerId,
+    ) -> Result<SubscriptionContext, ivm::VMError> {
+        match *self {
+            QueryStateRef::View(view) => {
+                CoreHostImpl::<NoQueryState>::subscription_context_for_trigger(view, trigger_id)
+            }
+            QueryStateRef::Block(block) => {
+                CoreHostImpl::<NoQueryState>::subscription_context_for_trigger(block, trigger_id)
+            }
+            QueryStateRef::Transaction(tx) => {
+                CoreHostImpl::<NoQueryState>::subscription_context_for_trigger(tx, trigger_id)
+            }
+        }
+    }
+
+    fn subscription_state_for_nft(
+        &self,
+        nft_id: &NftId,
+    ) -> Result<SubscriptionState, ivm::VMError> {
+        match *self {
+            QueryStateRef::View(view) => {
+                CoreHostImpl::<NoQueryState>::subscription_state_for_nft(view, nft_id)
+            }
+            QueryStateRef::Block(block) => {
+                CoreHostImpl::<NoQueryState>::subscription_state_for_nft(block, nft_id)
+            }
+            QueryStateRef::Transaction(tx) => {
+                CoreHostImpl::<NoQueryState>::subscription_state_for_nft(tx, nft_id)
+            }
+        }
+    }
+
+    fn subscription_plan(
+        &self,
+        plan_id: &AssetDefinitionId,
+    ) -> Result<SubscriptionPlan, ivm::VMError> {
+        match *self {
+            QueryStateRef::View(view) => {
+                CoreHostImpl::<NoQueryState>::subscription_plan(view, plan_id)
+            }
+            QueryStateRef::Block(block) => {
+                CoreHostImpl::<NoQueryState>::subscription_plan(block, plan_id)
+            }
+            QueryStateRef::Transaction(tx) => {
+                CoreHostImpl::<NoQueryState>::subscription_plan(tx, plan_id)
+            }
+        }
+    }
 }
 
 /// Structured details about an AMX budget violation captured by the host.
@@ -283,6 +686,58 @@ impl AmxBudgetViolation {
     }
 }
 
+/// Execution artifacts extracted from a host run that can be applied to state later.
+pub(crate) struct HostExecutionArtifacts {
+    queued: Vec<InstructionBox>,
+    confidential_gas_delta: u64,
+    completed_axt: Vec<axt::HostAxtState>,
+    durable_state_overlay: BTreeMap<Name, Option<Vec<u8>>>,
+}
+
+impl HostExecutionArtifacts {
+    pub(crate) fn apply_to_transaction(
+        self,
+        tx: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+    ) -> Result<Vec<InstructionBox>, ValidationFail> {
+        let executor = tx.world.executor.clone();
+        for instr in &self.queued {
+            executor.execute_instruction(tx, authority, instr.clone())?;
+        }
+        if self.confidential_gas_delta > 0 {
+            tx.record_confidential_gas_delta(self.confidential_gas_delta);
+        }
+        if !self.completed_axt.is_empty() {
+            let lane = tx.current_lane_id.unwrap_or_else(|| LaneId::new(0));
+            let commit_height = tx.block_height();
+            let envelopes: Vec<_> = self
+                .completed_axt
+                .into_iter()
+                .map(|state| {
+                    CoreHostImpl::<NoQueryState>::materialize_axt_record(
+                        &state,
+                        lane,
+                        commit_height,
+                    )
+                })
+                .collect();
+            for envelope in envelopes {
+                tx.record_axt_envelope(envelope);
+            }
+        }
+        if !self.durable_state_overlay.is_empty() {
+            for (path, value) in self.durable_state_overlay {
+                if let Some(stored) = value {
+                    tx.world.smart_contract_state.insert(path.clone(), stored);
+                } else {
+                    tx.world.smart_contract_state.remove(path.clone());
+                }
+            }
+        }
+        Ok(self.queued)
+    }
+}
+
 #[allow(clippy::cast_possible_truncation)]
 const fn nanoseconds_to_millis(ns: u64) -> u32 {
     let millis = ns.saturating_add(999_999) / 1_000_000;
@@ -294,7 +749,7 @@ const fn nanoseconds_to_millis(ns: u64) -> u32 {
 }
 
 #[allow(clippy::used_underscore_binding)]
-impl CoreHost {
+impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// Create a new host for the given authority.
     pub fn new(authority: AccountId) -> Self {
         let default_crypto = iroha_config::parameters::actual::Crypto::default();
@@ -312,8 +767,11 @@ impl CoreHost {
             queued: Vec::new(),
             fastpq_batch_entries: None,
             accounts_snapshot: Arc::new(Vec::new()),
+            query_state: QS::default(),
             nft_seq: 0,
             args: None,
+            current_trigger_id: None,
+            current_block_time_ms: None,
             durable_state_base: BTreeMap::new(),
             durable_state_overlay: BTreeMap::new(),
             state_access_log: ivm::host::AccessLog::default(),
@@ -382,8 +840,11 @@ impl CoreHost {
             queued: Vec::new(),
             fastpq_batch_entries: None,
             accounts_snapshot: accounts,
+            query_state: QS::default(),
             nft_seq: 0,
             args: None,
+            current_trigger_id: None,
+            current_block_time_ms: None,
             durable_state_base: BTreeMap::new(),
             durable_state_overlay: BTreeMap::new(),
             state_access_log: ivm::host::AccessLog::default(),
@@ -443,8 +904,11 @@ impl CoreHost {
             queued: Vec::new(),
             fastpq_batch_entries: None,
             accounts_snapshot: accounts,
+            query_state: QS::default(),
             nft_seq: 0,
             args: Some(args),
+            current_trigger_id: None,
+            current_block_time_ms: None,
             durable_state_base: BTreeMap::new(),
             durable_state_overlay: BTreeMap::new(),
             state_access_log: ivm::host::AccessLog::default(),
@@ -1411,21 +1875,9 @@ impl CoreHost {
         self.zk_last_env_hash_tally.push_back(h);
     }
 
-    /// Apply queued ISIs via the executor, returning the executed instructions.
-    ///
-    /// # Errors
-    /// Returns a `ValidationFail` if an instruction fails permission checks or execution.
-    pub fn apply_queued(
-        &mut self,
-        tx: &mut StateTransaction<'_, '_>,
-        authority: &AccountId,
-    ) -> Result<Vec<InstructionBox>, ValidationFail> {
-        let queued = self.drain_instructions();
-        let executor = tx.world.executor.clone();
-        for instr in &queued {
-            let instr = instr.clone();
-            // Gate ZK ISIs on prior successful ZK_VERIFY
-            let any: &dyn iroha_data_model::isi::Instruction = &*instr;
+    fn validate_queued_for_zk(&mut self, queued: &[InstructionBox]) -> Result<(), ValidationFail> {
+        for instr in queued {
+            let any: &dyn iroha_data_model::isi::Instruction = &**instr;
             let any_ref = any.as_any();
             if let Some(z) = any_ref.downcast_ref::<DMZk::ZkTransfer>() {
                 let Some(expected_hash) = self.zk_verified_transfer.pop_front() else {
@@ -1497,6 +1949,43 @@ impl CoreHost {
                     ));
                 }
             }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn into_execution_artifacts(
+        mut self,
+    ) -> Result<HostExecutionArtifacts, ValidationFail> {
+        let queued = self.drain_instructions();
+        self.validate_queued_for_zk(&queued)?;
+        let confidential_gas_delta = queued
+            .iter()
+            .map(crate::gas::confidential_gas_cost)
+            .sum::<u64>();
+        let completed_axt = mem::take(&mut self.completed_axt);
+        let durable_state_overlay = mem::take(&mut self.durable_state_overlay);
+        Ok(HostExecutionArtifacts {
+            queued,
+            confidential_gas_delta,
+            completed_axt,
+            durable_state_overlay,
+        })
+    }
+
+    /// Apply queued ISIs via the executor, returning the executed instructions.
+    ///
+    /// # Errors
+    /// Returns a `ValidationFail` if an instruction fails permission checks or execution.
+    pub fn apply_queued(
+        &mut self,
+        tx: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+    ) -> Result<Vec<InstructionBox>, ValidationFail> {
+        let queued = self.drain_instructions();
+        self.validate_queued_for_zk(&queued)?;
+        let executor = tx.world.executor.clone();
+        for instr in &queued {
+            let instr = instr.clone();
             executor.execute_instruction(tx, authority, instr)?;
         }
         if !queued.is_empty() {
@@ -2025,6 +2514,500 @@ impl CoreHost {
 
     fn len_to_u32(len: usize) -> Result<u32, ivm::VMError> {
         u32::try_from(len).map_err(|_| ivm::VMError::NoritoInvalid)
+    }
+
+    const QUERY_GAS_BASE_SINGULAR: u64 = 1_000;
+    const QUERY_GAS_BASE_ITERABLE: u64 = 2_500;
+    const QUERY_GAS_PER_ITEM: u64 = 250;
+    const QUERY_GAS_SORT_MULTIPLIER: u64 = 4;
+    const QUERY_GAS_PER_BYTE: u64 = 2;
+
+    #[cfg(test)]
+    fn query_total_items(response: &QueryResponse) -> u64 {
+        match response {
+            QueryResponse::Singular(_) => 1,
+            QueryResponse::Iterable(output) => {
+                let returned = output
+                    .batch
+                    .iter()
+                    .map(|batch| u64::try_from(batch.len()).unwrap_or(u64::MAX))
+                    .fold(0_u64, u64::saturating_add);
+                returned.saturating_add(output.remaining_items)
+            }
+        }
+    }
+
+    fn query_sort_requested(request: &QueryRequest) -> bool {
+        match request {
+            QueryRequest::Start(start) => start.params.sorting.sort_by_metadata_key.is_some(),
+            QueryRequest::Singular(_) | QueryRequest::Continue(_) => false,
+        }
+    }
+
+    fn query_offset_items(request: &QueryRequest) -> u64 {
+        match request {
+            QueryRequest::Start(start) => start.params.pagination.offset_value(),
+            QueryRequest::Singular(_) | QueryRequest::Continue(_) => 0,
+        }
+    }
+
+    fn query_gas_cost(ctx: &QueryGasContext, processed_items: u64, response_bytes: u64) -> u64 {
+        ctx.base
+            .saturating_add(ctx.per_item.saturating_mul(processed_items))
+            .saturating_add(ctx.per_item.saturating_mul(ctx.offset_items))
+            .saturating_add(Self::QUERY_GAS_PER_BYTE.saturating_mul(response_bytes))
+    }
+
+    fn subscription_bill(&mut self) -> Result<u64, ivm::VMError> {
+        struct BillingWindow {
+            start_ms: u64,
+            end_ms: u64,
+        }
+
+        let trigger_id = self.current_trigger_id.clone().ok_or(ivm::VMError::NotImplemented {
+            syscall: ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL,
+        })?;
+        let context = {
+            let Some(state_ref) = self.query_state.get() else {
+                return Err(ivm::VMError::NotImplemented {
+                    syscall: ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL,
+                });
+            };
+            state_ref.subscription_context_for_trigger(&trigger_id)?
+        };
+
+        let mut subscription_state = context.subscription_state;
+        if subscription_state.subscriber != context.nft_owner {
+            return Err(ivm::VMError::NoritoInvalid);
+        }
+        if subscription_state.provider != context.plan.provider {
+            return Err(ivm::VMError::NoritoInvalid);
+        }
+        subscription_state.billing_trigger_id = trigger_id.clone();
+
+        if matches!(
+            subscription_state.status,
+            SubscriptionStatus::Paused
+                | SubscriptionStatus::Canceled
+                | SubscriptionStatus::Suspended
+        ) {
+            let instr = InstructionBox::from(UnregisterBox::from(Unregister::trigger(
+                trigger_id.clone(),
+            )));
+            return Ok(self.queue_instruction(instr));
+        }
+
+        let billing = context.plan.billing;
+        let scheduled_at_ms = subscription_state.next_charge_ms;
+        let now_ms = self.current_block_time_ms.unwrap_or(scheduled_at_ms);
+        let attempted_at_ms = now_ms.max(scheduled_at_ms);
+        let bill_for = match billing.bill_for {
+            SubscriptionBillFor::PreviousPeriod => calendar::BillingPeriod::Previous,
+            SubscriptionBillFor::NextPeriod => calendar::BillingPeriod::Next,
+        };
+
+        let (charge_period, next_period, next_charge_ms) = match billing.cadence {
+            SubscriptionCadence::MonthlyCalendar(cadence) => {
+                let charge = calendar::monthly_billing_period(
+                    scheduled_at_ms,
+                    cadence.anchor_day,
+                    cadence.anchor_time_ms,
+                    bill_for,
+                )
+                .map_err(|_| ivm::VMError::NoritoInvalid)?;
+                let next_charge = calendar::monthly_anchor_after(
+                    scheduled_at_ms,
+                    cadence.anchor_day,
+                    cadence.anchor_time_ms,
+                )
+                .map_err(|_| ivm::VMError::NoritoInvalid)?;
+                let next = calendar::monthly_billing_period(
+                    scheduled_at_ms,
+                    cadence.anchor_day,
+                    cadence.anchor_time_ms,
+                    calendar::BillingPeriod::Next,
+                )
+                .map_err(|_| ivm::VMError::NoritoInvalid)?;
+                (
+                    BillingWindow {
+                        start_ms: charge.start_ms,
+                        end_ms: charge.end_ms,
+                    },
+                    BillingWindow {
+                        start_ms: next.start_ms,
+                        end_ms: next.end_ms,
+                    },
+                    next_charge,
+                )
+            }
+            SubscriptionCadence::FixedPeriod(cadence) => {
+                if cadence.period_ms == 0 {
+                    return Err(ivm::VMError::NoritoInvalid);
+                }
+                let (start, end) = match billing.bill_for {
+                    SubscriptionBillFor::PreviousPeriod => (
+                        scheduled_at_ms
+                            .checked_sub(cadence.period_ms)
+                            .ok_or(ivm::VMError::NoritoInvalid)?,
+                        scheduled_at_ms,
+                    ),
+                    SubscriptionBillFor::NextPeriod => (
+                        scheduled_at_ms,
+                        scheduled_at_ms
+                            .checked_add(cadence.period_ms)
+                            .ok_or(ivm::VMError::NoritoInvalid)?,
+                    ),
+                };
+                let next_charge = scheduled_at_ms
+                    .checked_add(cadence.period_ms)
+                    .ok_or(ivm::VMError::NoritoInvalid)?;
+                (
+                    BillingWindow {
+                        start_ms: start,
+                        end_ms: end,
+                    },
+                    BillingWindow {
+                        start_ms: scheduled_at_ms,
+                        end_ms: next_charge,
+                    },
+                    next_charge,
+                )
+            }
+        };
+
+        let charge_spec = context.charge_asset_def.spec();
+        let (amount, usage_key) = match &context.plan.pricing {
+            SubscriptionPricing::Fixed(pricing) => {
+                let fixed_amount = pricing.amount.clone();
+                if fixed_amount < Numeric::zero() {
+                    return Err(ivm::VMError::NoritoInvalid);
+                }
+                if charge_spec.check(&fixed_amount).is_err() {
+                    return Err(ivm::VMError::NoritoInvalid);
+                }
+                (fixed_amount, None)
+            }
+            SubscriptionPricing::Usage(pricing) => {
+                let usage = subscription_state
+                    .usage_accumulated
+                    .get(&pricing.unit_key)
+                    .cloned()
+                    .unwrap_or_else(Numeric::zero);
+                let unit_price = pricing.unit_price.clone();
+                if usage < Numeric::zero() || unit_price < Numeric::zero() {
+                    return Err(ivm::VMError::NoritoInvalid);
+                }
+                let amount = usage
+                    .checked_mul(unit_price, charge_spec)
+                    .ok_or(ivm::VMError::NoritoInvalid)?;
+                if charge_spec.check(&amount).is_err() {
+                    return Err(ivm::VMError::NoritoInvalid);
+                }
+                (amount, Some(pricing.unit_key.clone()))
+            }
+        };
+
+        let can_pay = amount <= context.subscriber_balance;
+        let invoice_status = if can_pay {
+            SubscriptionInvoiceStatus::Paid
+        } else {
+            SubscriptionInvoiceStatus::Failed
+        };
+        let invoice = SubscriptionInvoice {
+            subscription_nft_id: context.subscription_nft_id.clone(),
+            period_start_ms: charge_period.start_ms,
+            period_end_ms: charge_period.end_ms,
+            attempted_at_ms,
+            amount: amount.clone(),
+            asset_definition: context.charge_asset_def.id.clone(),
+            status: invoice_status,
+            tx_hash: None,
+        };
+        let mut gas = 0_u64;
+
+        if can_pay {
+            if !amount.is_zero() {
+                let asset_id =
+                    AssetId::of(context.charge_asset_def.id.clone(), subscription_state.subscriber.clone());
+                let isi = Transfer::asset_numeric(asset_id, amount.clone(), context.plan.provider.clone());
+                let instr = InstructionBox::from(TransferBox::from(isi));
+                gas = gas.saturating_add(self.queue_instruction(instr));
+            }
+            subscription_state.failure_count = 0;
+            subscription_state.status = SubscriptionStatus::Active;
+            subscription_state.next_charge_ms = next_charge_ms;
+            let (period_start, period_end) = match billing.bill_for {
+                SubscriptionBillFor::PreviousPeriod => (next_period.start_ms, next_period.end_ms),
+                SubscriptionBillFor::NextPeriod => (charge_period.start_ms, charge_period.end_ms),
+            };
+            subscription_state.current_period_start_ms = period_start;
+            subscription_state.current_period_end_ms = period_end;
+            if let Some(key) = usage_key {
+                subscription_state.usage_accumulated.remove(&key);
+            }
+        } else {
+            subscription_state.failure_count =
+                subscription_state.failure_count.saturating_add(1);
+            let grace_deadline = scheduled_at_ms.saturating_add(billing.grace_ms);
+            let mut status = subscription_state.status;
+            if subscription_state.failure_count >= billing.max_failures {
+                status = SubscriptionStatus::Suspended;
+            } else if attempted_at_ms >= grace_deadline {
+                status = SubscriptionStatus::PastDue;
+            }
+            subscription_state.status = status;
+            if status != SubscriptionStatus::Suspended {
+                subscription_state.next_charge_ms =
+                    attempted_at_ms.saturating_add(billing.retry_backoff_ms);
+            }
+        }
+
+        let subscription_key: Name = SUBSCRIPTION_METADATA_KEY
+            .parse()
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let subscription_json = iroha_primitives::json::Json::new(subscription_state.clone());
+        let isi = SetKeyValue::nft(context.subscription_nft_id.clone(), subscription_key, subscription_json);
+        let instr = InstructionBox::from(SetKeyValueBox::from(isi));
+        gas = gas.saturating_add(self.queue_instruction(instr));
+
+        let invoice_key: Name = SUBSCRIPTION_INVOICE_METADATA_KEY
+            .parse()
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let invoice_json = iroha_primitives::json::Json::new(invoice);
+        let invoice_isi =
+            SetKeyValue::nft(context.subscription_nft_id.clone(), invoice_key, invoice_json);
+        let invoice_instr = InstructionBox::from(SetKeyValueBox::from(invoice_isi));
+        gas = gas.saturating_add(self.queue_instruction(invoice_instr));
+
+        if subscription_state.status == SubscriptionStatus::Suspended {
+            let instr = InstructionBox::from(UnregisterBox::from(Unregister::trigger(
+                trigger_id.clone(),
+            )));
+            gas = gas.saturating_add(self.queue_instruction(instr));
+            return Ok(gas);
+        }
+
+        let schedule = Schedule {
+            start_ms: subscription_state.next_charge_ms,
+            period_ms: None,
+        };
+        let action = iroha_data_model::trigger::action::Action::new(
+            context.executable.clone(),
+            Repeats::Exactly(1),
+            context.authority.clone(),
+            TimeEventFilter(ExecutionTime::Schedule(schedule)),
+        )
+        .with_metadata(context.trigger_metadata.clone());
+        let trigger = Trigger::new(trigger_id.clone(), action);
+        let unregister = InstructionBox::from(UnregisterBox::from(Unregister::trigger(
+            trigger_id.clone(),
+        )));
+        gas = gas.saturating_add(self.queue_instruction(unregister));
+        let register = InstructionBox::from(RegisterBox::from(Register::trigger(trigger)));
+        gas = gas.saturating_add(self.queue_instruction(register));
+
+        Ok(gas)
+    }
+
+    fn subscription_record_usage(&mut self) -> Result<u64, ivm::VMError> {
+        let args = self.args.as_ref().ok_or(ivm::VMError::NoritoInvalid)?;
+        let delta: SubscriptionUsageDelta = args
+            .try_into_any_norito()
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        if delta.delta < Numeric::zero() {
+            return Err(ivm::VMError::NoritoInvalid);
+        }
+
+        let (mut subscription_state, plan) = {
+            let Some(state_ref) = self.query_state.get() else {
+                return Err(ivm::VMError::NotImplemented {
+                    syscall: ivm::syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE,
+                });
+            };
+            let subscription_state =
+                state_ref.subscription_state_for_nft(&delta.subscription_nft_id)?;
+            let plan = state_ref.subscription_plan(&subscription_state.plan_id)?;
+            (subscription_state, plan)
+        };
+
+        if !matches!(
+            subscription_state.status,
+            SubscriptionStatus::Active | SubscriptionStatus::PastDue
+        ) {
+            return Err(ivm::VMError::PermissionDenied);
+        }
+
+        match &plan.pricing {
+            SubscriptionPricing::Usage(pricing) => {
+                if pricing.unit_key != delta.unit_key {
+                    return Err(ivm::VMError::PermissionDenied);
+                }
+            }
+            SubscriptionPricing::Fixed(_) => {
+                return Err(ivm::VMError::PermissionDenied);
+            }
+        }
+
+        let entry = subscription_state
+            .usage_accumulated
+            .entry(delta.unit_key.clone())
+            .or_insert_with(Numeric::zero);
+        let updated = entry
+            .clone()
+            .checked_add(delta.delta.clone())
+            .ok_or(ivm::VMError::NoritoInvalid)?;
+        *entry = updated;
+
+        let subscription_key: Name = SUBSCRIPTION_METADATA_KEY
+            .parse()
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let subscription_json = iroha_primitives::json::Json::new(subscription_state);
+        let isi = SetKeyValue::nft(delta.subscription_nft_id, subscription_key, subscription_json);
+        let instr = InstructionBox::from(SetKeyValueBox::from(isi));
+        Ok(self.queue_instruction(instr))
+    }
+
+    fn subscription_context_for_trigger<S: StateReadOnly>(
+        state: &S,
+        trigger_id: &TriggerId,
+    ) -> Result<SubscriptionContext, ivm::VMError> {
+        let triggers = state.world().triggers();
+        let action = triggers
+            .time_triggers()
+            .get(trigger_id)
+            .cloned()
+            .ok_or(ivm::VMError::NoritoInvalid)?;
+        let action = triggers
+            .get_original_action(action)
+            .ok_or(ivm::VMError::NoritoInvalid)?;
+        let trigger_metadata = action.metadata.clone();
+        let trigger_ref_key: Name = SUBSCRIPTION_TRIGGER_REF_METADATA_KEY
+            .parse()
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let trigger_ref_json = trigger_metadata
+            .get(&trigger_ref_key)
+            .ok_or(ivm::VMError::NoritoInvalid)?;
+        let trigger_ref: SubscriptionTriggerRef = trigger_ref_json
+            .try_into_any_norito()
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+
+        let subscription_nft_id = trigger_ref.subscription_nft_id;
+        let (subscription_state, nft_owner) =
+            Self::subscription_state_and_owner(state, &subscription_nft_id)?;
+
+        let plan = Self::subscription_plan(state, &subscription_state.plan_id)?;
+        let charge_asset_def = {
+            let charge_asset_id = match &plan.pricing {
+                SubscriptionPricing::Fixed(pricing) => &pricing.asset_definition,
+                SubscriptionPricing::Usage(pricing) => &pricing.asset_definition,
+            };
+            state
+                .world()
+                .asset_definition(charge_asset_id)
+                .map_err(|_| ivm::VMError::NoritoInvalid)?
+        };
+
+        let balance = {
+            let asset_id = AssetId::of(charge_asset_def.id.clone(), subscription_state.subscriber.clone());
+            state
+                .world()
+                .asset(&asset_id)
+                .map(|entry| entry.value().clone().into_inner())
+                .unwrap_or_else(|_| Numeric::zero())
+        };
+
+        Ok(SubscriptionContext {
+            executable: action.executable.clone(),
+            authority: action.authority.clone(),
+            trigger_metadata,
+            subscription_nft_id,
+            subscription_state,
+            plan,
+            charge_asset_def,
+            subscriber_balance: balance,
+            nft_owner,
+        })
+    }
+
+    fn subscription_state_for_nft<S: StateReadOnly>(
+        state: &S,
+        nft_id: &NftId,
+    ) -> Result<SubscriptionState, ivm::VMError> {
+        let (state, _) = Self::subscription_state_and_owner(state, nft_id)?;
+        Ok(state)
+    }
+
+    fn subscription_state_and_owner<S: StateReadOnly>(
+        state: &S,
+        nft_id: &NftId,
+    ) -> Result<(SubscriptionState, AccountId), ivm::VMError> {
+        let entry = state
+            .world()
+            .nft(nft_id)
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let subscription_key: Name = SUBSCRIPTION_METADATA_KEY
+            .parse()
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let value = entry
+            .value()
+            .content
+            .get(&subscription_key)
+            .ok_or(ivm::VMError::NoritoInvalid)?;
+        let subscription_state = value
+            .try_into_any_norito::<SubscriptionState>()
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let owner = entry.value().owned_by.clone();
+        Ok((subscription_state, owner))
+    }
+
+    fn subscription_plan<S: StateReadOnly>(
+        state: &S,
+        plan_id: &AssetDefinitionId,
+    ) -> Result<SubscriptionPlan, ivm::VMError> {
+        let asset_def = state
+            .world()
+            .asset_definition(plan_id)
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let plan_key: Name = SUBSCRIPTION_PLAN_METADATA_KEY
+            .parse()
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let value = asset_def
+            .metadata()
+            .get(&plan_key)
+            .ok_or(ivm::VMError::NoritoInvalid)?;
+        value
+            .try_into_any_norito::<SubscriptionPlan>()
+            .map_err(|_| ivm::VMError::NoritoInvalid)
+    }
+
+    fn norito_encoded_len_exact<T: NoritoSerialize>(value: &T) -> Option<u64> {
+        let payload_len = NoritoSerialize::encoded_len_exact(value)?;
+        let header_len = Header::SIZE;
+        let align = mem::align_of::<Archived<T>>();
+        let padding = if align <= 1 {
+            0
+        } else {
+            let rem = header_len % align;
+            if rem == 0 { 0 } else { align - rem }
+        };
+        let total_len = header_len
+            .saturating_add(padding)
+            .saturating_add(payload_len);
+        u64::try_from(total_len).ok()
+    }
+
+    fn query_items_budget(ctx: &QueryGasContext, gas_remaining: u64) -> Result<u64, ivm::VMError> {
+        let base_cost = ctx
+            .base
+            .saturating_add(ctx.per_item.saturating_mul(ctx.offset_items));
+        if gas_remaining < base_cost {
+            return Err(ivm::VMError::OutOfGas);
+        }
+        let remaining = gas_remaining.saturating_sub(base_cost);
+        if ctx.per_item == 0 {
+            return Ok(u64::MAX);
+        }
+        Ok(remaining / ctx.per_item)
     }
 
     fn gas_for_zk_verify_payload(payload: &[u8]) -> u64 {
@@ -2918,7 +3901,32 @@ impl CoreHost {
     }
 }
 
-impl IVMHost for CoreHost {
+impl<QRef> CoreHostImpl<QueryStateSlot<QRef>>
+where
+    QRef: Copy + QueryStateExecute,
+{
+    /// Attach a read-only state view for query execution during this VM run.
+    pub(crate) fn set_query_state<'block, S>(&mut self, state: &'block S)
+    where
+        S: QueryStateSource<Ref<'block> = QRef>,
+    {
+        self.query_state.state = Some(state.as_query_state_ref());
+    }
+}
+
+impl<QS> CoreHostImpl<QS> {
+    /// Set the trigger identifier for the current execution.
+    pub(crate) fn set_trigger_id(&mut self, id: TriggerId) {
+        self.current_trigger_id = Some(id);
+    }
+
+    /// Set the current block creation timestamp (UTC ms).
+    pub(crate) fn set_block_time_ms(&mut self, time_ms: u64) {
+        self.current_block_time_ms = Some(time_ms);
+    }
+}
+
+impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
     #[allow(clippy::too_many_lines)]
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, ivm::VMError> {
         // Enforce central syscall policy (ABI-versioned) uniformly across hosts.
@@ -3309,6 +4317,53 @@ impl IVMHost for CoreHost {
                     Err(ivm::VMError::PermissionDenied)
                 }
             }
+            ivm::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY => {
+                let ptr = vm.register(10);
+                let request: QueryRequest =
+                    Self::decode_tlv_typed(vm, ptr, PointerType::NoritoBytes)?;
+                let gas_remaining = vm.remaining_gas();
+                let gas_ctx = QueryGasContext::from_request(&request);
+                let Some(state_ref) = self.query_state.get() else {
+                    return Err(ivm::VMError::NotImplemented { syscall: number });
+                };
+                let budget_items = Self::query_items_budget(&gas_ctx, gas_remaining)?;
+                if matches!(request, QueryRequest::Singular(_)) && budget_items == 0 {
+                    return Err(ivm::VMError::OutOfGas);
+                }
+                let query_result = state_ref.execute_query_with_budget(
+                    &self.authority,
+                    request,
+                    Some(budget_items),
+                )?;
+                let response = query_result.response;
+                let processed_items = query_result.processed_items;
+                if let Some(encoded_len) = Self::norito_encoded_len_exact(&response) {
+                    let gas = Self::query_gas_cost(&gas_ctx, processed_items, encoded_len);
+                    if gas > gas_remaining {
+                        return Err(ivm::VMError::OutOfGas);
+                    }
+                }
+                let response_bytes =
+                    norito::to_bytes(&response).map_err(|_| ivm::VMError::DecodeError)?;
+                let response_len_u64 = u64::try_from(response_bytes.len()).unwrap_or(u64::MAX);
+                let gas = Self::query_gas_cost(&gas_ctx, processed_items, response_len_u64);
+                if gas > gas_remaining {
+                    return Err(ivm::VMError::OutOfGas);
+                }
+                let payload_len = Self::len_to_u32(response_bytes.len())?;
+                let mut out = Vec::with_capacity(7 + response_bytes.len() + Hash::LENGTH);
+                out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
+                out.push(1);
+                out.extend_from_slice(&payload_len.to_be_bytes());
+                out.extend_from_slice(&response_bytes);
+                let h: [u8; Hash::LENGTH] = Hash::new(&response_bytes).into();
+                out.extend_from_slice(&h);
+                let p = vm.alloc_input_tlv(&out)?;
+                vm.set_register(10, p);
+                Ok(gas)
+            }
+            ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL => self.subscription_bill(),
+            ivm::syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE => self.subscription_record_usage(),
             // Helper syscalls forwarded to the default host implementation.
             // Intercept ZK_VERIFY syscalls to record success and gate ZK ISIs.
             ivm::syscalls::SYSCALL_ZK_VERIFY_TRANSFER => {
@@ -3598,7 +4653,10 @@ impl IVMHost for CoreHost {
     }
 
     /// Downcast support for hosts with extra methods/state.
-    fn as_any(&mut self) -> &mut dyn Any {
+    fn as_any(&mut self) -> &mut dyn Any
+    where
+        Self: 'static,
+    {
         self
     }
 
@@ -5405,20 +6463,36 @@ fn build_program(code: &[u8], vector_length: u8) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, sync::Arc};
 
     use iroha_data_model::{
         proof::{VerifyingKeyBox, VerifyingKeyId},
+        query::{QueryRequest, QueryResponse, SingularQueryBox, prelude::FindParameters},
         zk::BackendTag,
     };
     use ivm::{IVM, encoding, instruction, syscalls as ivm_sys};
     use norito::codec::Encode as NoritoEncode;
 
+    #[cfg(not(feature = "fast_dsl"))]
+    use iroha_data_model::query::account::prelude::FindAccounts;
+    use iroha_data_model::{
+        prelude::*,
+        query::{
+            QueryBox, QueryWithFilter, QueryWithParams,
+            dsl::prelude::{CompoundPredicate, SelectorTuple},
+            parameters::{FetchSize, Pagination, QueryParams, Sorting},
+        },
+    };
+    use nonzero_ext::nonzero;
+
     use super::*;
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
-        smartcontracts::ivm::host::pointer_abi_tests::make_tlv,
+        smartcontracts::{
+            isi::triggers::specialized::{SpecializedAction, SpecializedTrigger},
+            ivm::host::pointer_abi_tests::make_tlv,
+        },
         state::{State, World},
     };
 
@@ -5462,6 +6536,861 @@ mod tests {
     pub(super) fn store_tlv(vm: &mut IVM, ty: PointerType, payload: &[u8]) -> u64 {
         let tlv = make_tlv(ty as u16, payload);
         vm.alloc_input_tlv(&tlv).expect("allocate TLV input")
+    }
+
+    #[test]
+    fn execute_query_syscall_returns_norito_response_and_gas() {
+        crate::test_alias::ensure();
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority);
+        host.set_query_state(&view);
+        let mut vm = IVM::new(1_000_000);
+
+        let request = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters));
+        let request_bytes = norito::to_bytes(&request).expect("encode query request");
+        let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &request_bytes);
+        vm.set_register(10, ptr);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY, &mut vm)
+            .expect("query syscall");
+        let out_ptr = vm.register(10);
+        let tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
+        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+        let response: QueryResponse =
+            norito::decode_from_bytes(tlv.payload).expect("decode response");
+        assert!(matches!(response, QueryResponse::Singular(_)));
+
+        let response_len = u64::try_from(tlv.payload.len()).unwrap_or(u64::MAX);
+        let gas_ctx = QueryGasContext::from_request(&request);
+        let processed_items = CoreHost::query_total_items(&response);
+        let expected = CoreHost::query_gas_cost(&gas_ctx, processed_items, response_len);
+        assert_eq!(gas, expected);
+    }
+
+    #[test]
+    fn execute_query_syscall_charges_sorted_queries_by_scanned_items() {
+        crate::test_alias::ensure();
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
+        let accounts = vec![
+            Account::new(authority.clone()).build(&authority),
+            Account::new("bob@wonderland".parse().unwrap()).build(&authority),
+            Account::new("carol@wonderland".parse().unwrap()).build(&authority),
+        ];
+        let world = World::with([domain], accounts, []);
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority.clone());
+        host.set_query_state(&view);
+        let mut vm = IVM::new(1_000_000);
+
+        let sort_key: Name = "rank".parse().unwrap();
+        let params = QueryParams {
+            pagination: Pagination::new(Some(nonzero!(1_u64)), 0),
+            sorting: Sorting::by_metadata_key(sort_key),
+            fetch_size: FetchSize::new(Some(nonzero!(1_u64))),
+        };
+        let query_box = {
+            #[cfg(not(feature = "fast_dsl"))]
+            {
+                let query = QueryWithFilter::<Account>::new_with_query(
+                    Box::new(FindAccounts),
+                    CompoundPredicate::PASS,
+                    SelectorTuple::default(),
+                );
+                QueryBox::from(query)
+            }
+            #[cfg(feature = "fast_dsl")]
+            {
+                let query = QueryWithFilter::<Account>::new_with_query(
+                    (),
+                    CompoundPredicate::PASS,
+                    SelectorTuple::default(),
+                );
+                QueryBox::from(query)
+            }
+        };
+        let request = QueryRequest::Start({
+            #[cfg(feature = "fast_dsl")]
+            {
+                QueryWithParams::new(&query_box, params)
+            }
+            #[cfg(not(feature = "fast_dsl"))]
+            {
+                QueryWithParams::new(query_box, params)
+            }
+        });
+        let request_bytes = norito::to_bytes(&request).expect("encode query request");
+        let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &request_bytes);
+        vm.set_register(10, ptr);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY, &mut vm)
+            .expect("query syscall");
+        let out_ptr = vm.register(10);
+        let tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
+        let response: QueryResponse =
+            norito::decode_from_bytes(tlv.payload).expect("decode response");
+        let QueryResponse::Iterable(output) = response else {
+            panic!("expected iterable query response");
+        };
+        assert_eq!(output.batch.len(), 1);
+        assert_eq!(output.remaining_items, 0);
+
+        let response_len = u64::try_from(tlv.payload.len()).unwrap_or(u64::MAX);
+        let gas_ctx = QueryGasContext::from_request(&request);
+        let expected = CoreHost::query_gas_cost(&gas_ctx, 3, response_len);
+        assert_eq!(gas, expected);
+    }
+
+    #[test]
+    fn execute_query_syscall_sorted_offset_ignores_offset_penalty() {
+        crate::test_alias::ensure();
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
+        let accounts = vec![
+            Account::new(authority.clone()).build(&authority),
+            Account::new("bob@wonderland".parse().unwrap()).build(&authority),
+            Account::new("carol@wonderland".parse().unwrap()).build(&authority),
+        ];
+        let world = World::with([domain], accounts, []);
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority.clone());
+        host.set_query_state(&view);
+        let mut vm = IVM::new(1_000_000);
+
+        let sort_key: Name = "rank".parse().unwrap();
+        let params = QueryParams {
+            pagination: Pagination::new(Some(nonzero!(1_u64)), 2),
+            sorting: Sorting::by_metadata_key(sort_key),
+            fetch_size: FetchSize::new(Some(nonzero!(1_u64))),
+        };
+        let query_box = {
+            #[cfg(not(feature = "fast_dsl"))]
+            {
+                let query = QueryWithFilter::<Account>::new_with_query(
+                    Box::new(FindAccounts),
+                    CompoundPredicate::PASS,
+                    SelectorTuple::default(),
+                );
+                QueryBox::from(query)
+            }
+            #[cfg(feature = "fast_dsl")]
+            {
+                let query = QueryWithFilter::<Account>::new_with_query(
+                    (),
+                    CompoundPredicate::PASS,
+                    SelectorTuple::default(),
+                );
+                QueryBox::from(query)
+            }
+        };
+        let request = QueryRequest::Start({
+            #[cfg(feature = "fast_dsl")]
+            {
+                QueryWithParams::new(&query_box, params)
+            }
+            #[cfg(not(feature = "fast_dsl"))]
+            {
+                QueryWithParams::new(query_box, params)
+            }
+        });
+        let request_bytes = norito::to_bytes(&request).expect("encode query request");
+        let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &request_bytes);
+        vm.set_register(10, ptr);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY, &mut vm)
+            .expect("query syscall");
+        let out_ptr = vm.register(10);
+        let tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
+
+        let response_len = u64::try_from(tlv.payload.len()).unwrap_or(u64::MAX);
+        let gas_ctx = QueryGasContext::from_request(&request);
+        let expected = gas_ctx
+            .base
+            .saturating_add(gas_ctx.per_item.saturating_mul(3))
+            .saturating_add(CoreHost::QUERY_GAS_PER_BYTE.saturating_mul(response_len));
+        assert_eq!(gas, expected);
+    }
+
+    #[test]
+    fn execute_query_syscall_out_of_gas_when_budget_exhausted() {
+        crate::test_alias::ensure();
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority);
+        host.set_query_state(&view);
+        let mut vm = IVM::new(CoreHost::QUERY_GAS_BASE_SINGULAR - 1);
+
+        let request = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters));
+        let request_bytes = norito::to_bytes(&request).expect("encode query request");
+        let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &request_bytes);
+        vm.set_register(10, ptr);
+
+        let err = host
+            .syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY, &mut vm)
+            .expect_err("query should run out of gas");
+        assert!(matches!(err, ivm::VMError::OutOfGas));
+    }
+
+    #[test]
+    fn execute_query_syscall_out_of_gas_when_response_bytes_exceed_budget() {
+        crate::test_alias::ensure();
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority);
+        host.set_query_state(&view);
+        let mut vm = IVM::new(CoreHost::QUERY_GAS_BASE_SINGULAR + CoreHost::QUERY_GAS_PER_ITEM);
+
+        let request = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters));
+        let request_bytes = norito::to_bytes(&request).expect("encode query request");
+        let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &request_bytes);
+        vm.set_register(10, ptr);
+
+        let err = host
+            .syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY, &mut vm)
+            .expect_err("query should run out of gas on response bytes");
+        assert!(matches!(err, ivm::VMError::OutOfGas));
+    }
+
+    #[test]
+    fn subscription_bill_fixed_plan_transfers_and_reschedules() {
+        crate::test_alias::ensure();
+        let provider: AccountId = "acme@commerce".parse().unwrap();
+        let subscriber: AccountId = "alice@users".parse().unwrap();
+        let plan_id: AssetDefinitionId = "fixed_plan#commerce".parse().unwrap();
+        let charge_asset_id: AssetDefinitionId = "usd#pay".parse().unwrap();
+        let period_ms = 1_000_u64;
+        let scheduled_at_ms = 10_000_u64;
+        let trigger_id: TriggerId = "sub-bill".parse().unwrap();
+        let amount = Numeric::new(120_u32, 0);
+
+        let plan = SubscriptionPlan {
+            provider: provider.clone(),
+            billing: SubscriptionBilling {
+                cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
+                    period_ms,
+                }),
+                bill_for: SubscriptionBillFor::PreviousPeriod,
+                retry_backoff_ms: 500,
+                max_failures: 3,
+                grace_ms: 5_000,
+            },
+            pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
+                amount: amount.clone(),
+                asset_definition: charge_asset_id.clone(),
+            }),
+        };
+
+        let mut plan_def = AssetDefinition::new(plan_id.clone(), NumericSpec::integer())
+            .build(&provider);
+        let plan_key: Name = SUBSCRIPTION_PLAN_METADATA_KEY.parse().unwrap();
+        plan_def
+            .metadata
+            .insert(plan_key, Json::new(plan.clone()));
+        let charge_def = AssetDefinition::new(charge_asset_id.clone(), NumericSpec::integer())
+            .build(&provider);
+        let asset_id = AssetId::of(charge_asset_id.clone(), subscriber.clone());
+        let asset = Asset::new(asset_id.clone(), Numeric::new(500_u32, 0));
+
+        let subscription_state = SubscriptionState {
+            plan_id: plan_id.clone(),
+            provider: provider.clone(),
+            subscriber: subscriber.clone(),
+            status: SubscriptionStatus::Active,
+            current_period_start_ms: scheduled_at_ms - period_ms,
+            current_period_end_ms: scheduled_at_ms,
+            next_charge_ms: scheduled_at_ms,
+            failure_count: 0,
+            usage_accumulated: BTreeMap::new(),
+            billing_trigger_id: trigger_id.clone(),
+        };
+        let mut nft_meta = Metadata::default();
+        let subscription_key: Name = SUBSCRIPTION_METADATA_KEY.parse().unwrap();
+        nft_meta.insert(
+            subscription_key.clone(),
+            Json::new(subscription_state.clone()),
+        );
+        let nft_id: NftId = "sub-0$subscriptions".parse().unwrap();
+        let nft = Nft::new(nft_id.clone(), nft_meta).build(&subscriber);
+
+        let domains = vec![
+            Domain::new("commerce".parse().unwrap()).build(&provider),
+            Domain::new("users".parse().unwrap()).build(&provider),
+            Domain::new("pay".parse().unwrap()).build(&provider),
+            Domain::new("subscriptions".parse().unwrap()).build(&provider),
+        ];
+        let accounts = vec![
+            Account::new(provider.clone()).build(&provider),
+            Account::new(subscriber.clone()).build(&provider),
+        ];
+        let world =
+            World::with_assets(domains, accounts, [plan_def, charge_def], [asset], [nft]);
+
+        let bytecode = IvmBytecode::from_compiled(ivm::ProgramMetadata::default().encode());
+        let mut trigger_metadata = Metadata::default();
+        let trigger_ref_key: Name = SUBSCRIPTION_TRIGGER_REF_METADATA_KEY.parse().unwrap();
+        trigger_metadata.insert(
+            trigger_ref_key,
+            Json::new(SubscriptionTriggerRef {
+                subscription_nft_id: nft_id.clone(),
+            }),
+        );
+        let schedule = Schedule {
+            start_ms: scheduled_at_ms,
+            period_ms: None,
+        };
+        let mut action = SpecializedAction::new(
+            Executable::Ivm(bytecode.clone()),
+            Repeats::Exactly(1),
+            subscriber.clone(),
+            TimeEventFilter(ExecutionTime::Schedule(schedule)),
+        );
+        action.metadata = trigger_metadata.clone();
+        let trigger = SpecializedTrigger::new(trigger_id.clone(), action);
+        {
+            let mut block = world.triggers.block();
+            let mut tx = block.transaction();
+            tx.add_time_trigger(trigger).expect("add trigger");
+            tx.apply();
+            block.commit();
+        }
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let view = state.view();
+        let mut host = CoreHostImpl::new(subscriber.clone());
+        host.set_query_state(&view);
+        host.set_trigger_id(trigger_id.clone());
+        host.set_block_time_ms(scheduled_at_ms);
+        let mut vm = IVM::new(1_000_000);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_SUBSCRIPTION_BILL, &mut vm)
+            .expect("billing");
+
+        let mut expected_state = subscription_state.clone();
+        expected_state.current_period_start_ms = scheduled_at_ms;
+        expected_state.current_period_end_ms = scheduled_at_ms + period_ms;
+        expected_state.next_charge_ms = scheduled_at_ms + period_ms;
+        expected_state.failure_count = 0;
+        expected_state.status = SubscriptionStatus::Active;
+
+        let expected_transfer = InstructionBox::from(Transfer::asset_numeric(
+            asset_id,
+            amount.clone(),
+            provider.clone(),
+        ));
+        let expected_set = InstructionBox::from(SetKeyValue::nft(
+            nft_id.clone(),
+            subscription_key,
+            Json::new(expected_state),
+        ));
+        let expected_invoice = SubscriptionInvoice {
+            subscription_nft_id: nft_id.clone(),
+            period_start_ms: scheduled_at_ms - period_ms,
+            period_end_ms: scheduled_at_ms,
+            attempted_at_ms: scheduled_at_ms,
+            amount: amount.clone(),
+            asset_definition: charge_asset_id.clone(),
+            status: SubscriptionInvoiceStatus::Paid,
+            tx_hash: None,
+        };
+        let invoice_key: Name = SUBSCRIPTION_INVOICE_METADATA_KEY.parse().unwrap();
+        let expected_invoice_set = InstructionBox::from(SetKeyValue::nft(
+            nft_id.clone(),
+            invoice_key,
+            Json::new(expected_invoice),
+        ));
+        let expected_unregister =
+            InstructionBox::from(Unregister::trigger(trigger_id.clone()));
+        let expected_schedule = Schedule {
+            start_ms: scheduled_at_ms + period_ms,
+            period_ms: None,
+        };
+        let expected_action = iroha_data_model::trigger::action::Action::new(
+            Executable::Ivm(bytecode),
+            Repeats::Exactly(1),
+            subscriber.clone(),
+            TimeEventFilter(ExecutionTime::Schedule(expected_schedule)),
+        )
+        .with_metadata(trigger_metadata);
+        let expected_trigger = Trigger::new(trigger_id.clone(), expected_action);
+        let expected_register =
+            InstructionBox::from(Register::trigger(expected_trigger));
+
+        assert_eq!(
+            host.queued,
+            vec![
+                expected_transfer.clone(),
+                expected_set.clone(),
+                expected_invoice_set.clone(),
+                expected_unregister.clone(),
+                expected_register.clone()
+            ]
+        );
+        let expected_gas = crate::gas::meter_instruction(&expected_transfer)
+            .saturating_add(crate::gas::meter_instruction(&expected_set))
+            .saturating_add(crate::gas::meter_instruction(&expected_invoice_set))
+            .saturating_add(crate::gas::meter_instruction(&expected_unregister))
+            .saturating_add(crate::gas::meter_instruction(&expected_register));
+        assert_eq!(gas, expected_gas);
+    }
+
+    #[test]
+    fn subscription_record_usage_updates_metadata() {
+        crate::test_alias::ensure();
+        let provider: AccountId = "acme@commerce".parse().unwrap();
+        let subscriber: AccountId = "alice@users".parse().unwrap();
+        let plan_id: AssetDefinitionId = "usage_plan#commerce".parse().unwrap();
+        let charge_asset_id: AssetDefinitionId = "usd#pay".parse().unwrap();
+        let unit_key: Name = "compute_ms".parse().unwrap();
+        let trigger_id: TriggerId = "sub-usage".parse().unwrap();
+
+        let plan = SubscriptionPlan {
+            provider: provider.clone(),
+            billing: SubscriptionBilling {
+                cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
+                    period_ms: 1_000,
+                }),
+                bill_for: SubscriptionBillFor::PreviousPeriod,
+                retry_backoff_ms: 100,
+                max_failures: 3,
+                grace_ms: 500,
+            },
+            pricing: SubscriptionPricing::Usage(SubscriptionUsagePricing {
+                unit_price: Numeric::new(2_u32, 0),
+                unit_key: unit_key.clone(),
+                asset_definition: charge_asset_id.clone(),
+            }),
+        };
+
+        let mut plan_def = AssetDefinition::new(plan_id.clone(), NumericSpec::integer())
+            .build(&provider);
+        let plan_key: Name = SUBSCRIPTION_PLAN_METADATA_KEY.parse().unwrap();
+        plan_def.metadata.insert(plan_key, Json::new(plan));
+        let charge_def = AssetDefinition::new(charge_asset_id, NumericSpec::integer()).build(&provider);
+
+        let mut usage_accumulated = BTreeMap::new();
+        usage_accumulated.insert(unit_key.clone(), Numeric::new(10_u32, 0));
+        let subscription_state = SubscriptionState {
+            plan_id,
+            provider: provider.clone(),
+            subscriber: subscriber.clone(),
+            status: SubscriptionStatus::Active,
+            current_period_start_ms: 0,
+            current_period_end_ms: 1,
+            next_charge_ms: 1,
+            failure_count: 0,
+            usage_accumulated,
+            billing_trigger_id: trigger_id,
+        };
+        let mut nft_meta = Metadata::default();
+        let subscription_key: Name = SUBSCRIPTION_METADATA_KEY.parse().unwrap();
+        nft_meta.insert(
+            subscription_key.clone(),
+            Json::new(subscription_state.clone()),
+        );
+        let nft_id: NftId = "sub-usage$subscriptions".parse().unwrap();
+        let nft = Nft::new(nft_id.clone(), nft_meta).build(&subscriber);
+
+        let domains = vec![
+            Domain::new("commerce".parse().unwrap()).build(&provider),
+            Domain::new("users".parse().unwrap()).build(&provider),
+            Domain::new("pay".parse().unwrap()).build(&provider),
+            Domain::new("subscriptions".parse().unwrap()).build(&provider),
+        ];
+        let accounts = vec![
+            Account::new(provider.clone()).build(&provider),
+            Account::new(subscriber.clone()).build(&provider),
+        ];
+        let world =
+            World::with_assets(domains, accounts, [plan_def, charge_def], Vec::<Asset>::new(), [nft]);
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let view = state.view();
+
+        let delta = SubscriptionUsageDelta {
+            subscription_nft_id: nft_id.clone(),
+            unit_key: unit_key.clone(),
+            delta: Numeric::new(5_u32, 0),
+        };
+        let args = Json::new(delta);
+        let mut host = CoreHostImpl::with_accounts_and_args(
+            subscriber.clone(),
+            Arc::new(vec![provider, subscriber]),
+            args,
+        );
+        host.set_query_state(&view);
+        let mut vm = IVM::new(1_000_000);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_SUBSCRIPTION_RECORD_USAGE, &mut vm)
+            .expect("usage record");
+
+        let mut expected_state = subscription_state;
+        expected_state
+            .usage_accumulated
+            .insert(unit_key, Numeric::new(15_u32, 0));
+        let expected_set = InstructionBox::from(SetKeyValue::nft(
+            nft_id,
+            subscription_key,
+            Json::new(expected_state),
+        ));
+        assert_eq!(host.queued, vec![expected_set.clone()]);
+        assert_eq!(gas, crate::gas::meter_instruction(&expected_set));
+    }
+
+    #[test]
+    fn subscription_bill_failed_reschedules_and_records_invoice() {
+        crate::test_alias::ensure();
+        let provider: AccountId = "acme@commerce".parse().unwrap();
+        let subscriber: AccountId = "alice@users".parse().unwrap();
+        let plan_id: AssetDefinitionId = "fixed_plan#commerce".parse().unwrap();
+        let charge_asset_id: AssetDefinitionId = "usd#pay".parse().unwrap();
+        let period_ms = 1_000_u64;
+        let scheduled_at_ms = 10_000_u64;
+        let trigger_id: TriggerId = "sub-bill-fail".parse().unwrap();
+        let amount = Numeric::new(120_u32, 0);
+        let retry_backoff_ms = 500_u64;
+
+        let plan = SubscriptionPlan {
+            provider: provider.clone(),
+            billing: SubscriptionBilling {
+                cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
+                    period_ms,
+                }),
+                bill_for: SubscriptionBillFor::PreviousPeriod,
+                retry_backoff_ms,
+                max_failures: 3,
+                grace_ms: 0,
+            },
+            pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
+                amount: amount.clone(),
+                asset_definition: charge_asset_id.clone(),
+            }),
+        };
+
+        let mut plan_def = AssetDefinition::new(plan_id.clone(), NumericSpec::integer())
+            .build(&provider);
+        let plan_key: Name = SUBSCRIPTION_PLAN_METADATA_KEY.parse().unwrap();
+        plan_def.metadata.insert(plan_key, Json::new(plan));
+        let charge_def = AssetDefinition::new(charge_asset_id.clone(), NumericSpec::integer())
+            .build(&provider);
+        let asset_id = AssetId::of(charge_asset_id.clone(), subscriber.clone());
+        let asset = Asset::new(asset_id.clone(), Numeric::new(50_u32, 0));
+
+        let subscription_state = SubscriptionState {
+            plan_id: plan_id.clone(),
+            provider: provider.clone(),
+            subscriber: subscriber.clone(),
+            status: SubscriptionStatus::Active,
+            current_period_start_ms: scheduled_at_ms - period_ms,
+            current_period_end_ms: scheduled_at_ms,
+            next_charge_ms: scheduled_at_ms,
+            failure_count: 0,
+            usage_accumulated: BTreeMap::new(),
+            billing_trigger_id: trigger_id.clone(),
+        };
+        let mut nft_meta = Metadata::default();
+        let subscription_key: Name = SUBSCRIPTION_METADATA_KEY.parse().unwrap();
+        nft_meta.insert(subscription_key.clone(), Json::new(subscription_state.clone()));
+        let nft_id: NftId = "sub-fail$subscriptions".parse().unwrap();
+        let nft = Nft::new(nft_id.clone(), nft_meta).build(&subscriber);
+
+        let domains = vec![
+            Domain::new("commerce".parse().unwrap()).build(&provider),
+            Domain::new("users".parse().unwrap()).build(&provider),
+            Domain::new("pay".parse().unwrap()).build(&provider),
+            Domain::new("subscriptions".parse().unwrap()).build(&provider),
+        ];
+        let accounts = vec![
+            Account::new(provider.clone()).build(&provider),
+            Account::new(subscriber.clone()).build(&provider),
+        ];
+        let world =
+            World::with_assets(domains, accounts, [plan_def, charge_def], [asset], [nft]);
+
+        let bytecode = IvmBytecode::from_compiled(ivm::ProgramMetadata::default().encode());
+        let mut trigger_metadata = Metadata::default();
+        let trigger_ref_key: Name = SUBSCRIPTION_TRIGGER_REF_METADATA_KEY.parse().unwrap();
+        trigger_metadata.insert(
+            trigger_ref_key,
+            Json::new(SubscriptionTriggerRef {
+                subscription_nft_id: nft_id.clone(),
+            }),
+        );
+        let schedule = Schedule {
+            start_ms: scheduled_at_ms,
+            period_ms: None,
+        };
+        let mut action = SpecializedAction::new(
+            Executable::Ivm(bytecode.clone()),
+            Repeats::Exactly(1),
+            subscriber.clone(),
+            TimeEventFilter(ExecutionTime::Schedule(schedule)),
+        );
+        action.metadata = trigger_metadata.clone();
+        let trigger = SpecializedTrigger::new(trigger_id.clone(), action);
+        {
+            let mut block = world.triggers.block();
+            let mut tx = block.transaction();
+            tx.add_time_trigger(trigger).expect("add trigger");
+            tx.apply();
+            block.commit();
+        }
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let view = state.view();
+        let mut host = CoreHostImpl::new(subscriber.clone());
+        host.set_query_state(&view);
+        host.set_trigger_id(trigger_id.clone());
+        host.set_block_time_ms(scheduled_at_ms);
+        let mut vm = IVM::new(1_000_000);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_SUBSCRIPTION_BILL, &mut vm)
+            .expect("billing");
+
+        let mut expected_state = subscription_state.clone();
+        expected_state.failure_count = 1;
+        expected_state.status = SubscriptionStatus::PastDue;
+        expected_state.next_charge_ms = scheduled_at_ms + retry_backoff_ms;
+
+        let expected_set = InstructionBox::from(SetKeyValue::nft(
+            nft_id.clone(),
+            subscription_key,
+            Json::new(expected_state),
+        ));
+        let expected_invoice = SubscriptionInvoice {
+            subscription_nft_id: nft_id.clone(),
+            period_start_ms: scheduled_at_ms - period_ms,
+            period_end_ms: scheduled_at_ms,
+            attempted_at_ms: scheduled_at_ms,
+            amount: amount.clone(),
+            asset_definition: charge_asset_id.clone(),
+            status: SubscriptionInvoiceStatus::Failed,
+            tx_hash: None,
+        };
+        let invoice_key: Name = SUBSCRIPTION_INVOICE_METADATA_KEY.parse().unwrap();
+        let expected_invoice_set = InstructionBox::from(SetKeyValue::nft(
+            nft_id.clone(),
+            invoice_key,
+            Json::new(expected_invoice),
+        ));
+        let expected_unregister =
+            InstructionBox::from(Unregister::trigger(trigger_id.clone()));
+        let expected_schedule = Schedule {
+            start_ms: scheduled_at_ms + retry_backoff_ms,
+            period_ms: None,
+        };
+        let expected_action = iroha_data_model::trigger::action::Action::new(
+            Executable::Ivm(bytecode),
+            Repeats::Exactly(1),
+            subscriber.clone(),
+            TimeEventFilter(ExecutionTime::Schedule(expected_schedule)),
+        )
+        .with_metadata(trigger_metadata);
+        let expected_trigger = Trigger::new(trigger_id.clone(), expected_action);
+        let expected_register =
+            InstructionBox::from(Register::trigger(expected_trigger));
+
+        assert_eq!(
+            host.queued,
+            vec![
+                expected_set.clone(),
+                expected_invoice_set.clone(),
+                expected_unregister.clone(),
+                expected_register.clone()
+            ]
+        );
+        let expected_gas = crate::gas::meter_instruction(&expected_set)
+            .saturating_add(crate::gas::meter_instruction(&expected_invoice_set))
+            .saturating_add(crate::gas::meter_instruction(&expected_unregister))
+            .saturating_add(crate::gas::meter_instruction(&expected_register));
+        assert_eq!(gas, expected_gas);
+    }
+
+    #[test]
+    fn subscription_bill_suspends_after_max_failures() {
+        crate::test_alias::ensure();
+        let provider: AccountId = "acme@commerce".parse().unwrap();
+        let subscriber: AccountId = "alice@users".parse().unwrap();
+        let plan_id: AssetDefinitionId = "fixed_plan#commerce".parse().unwrap();
+        let charge_asset_id: AssetDefinitionId = "usd#pay".parse().unwrap();
+        let period_ms = 1_000_u64;
+        let scheduled_at_ms = 10_000_u64;
+        let trigger_id: TriggerId = "sub-bill-suspend".parse().unwrap();
+        let amount = Numeric::new(120_u32, 0);
+
+        let plan = SubscriptionPlan {
+            provider: provider.clone(),
+            billing: SubscriptionBilling {
+                cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
+                    period_ms,
+                }),
+                bill_for: SubscriptionBillFor::PreviousPeriod,
+                retry_backoff_ms: 500,
+                max_failures: 2,
+                grace_ms: 0,
+            },
+            pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
+                amount: amount.clone(),
+                asset_definition: charge_asset_id.clone(),
+            }),
+        };
+
+        let mut plan_def = AssetDefinition::new(plan_id.clone(), NumericSpec::integer())
+            .build(&provider);
+        let plan_key: Name = SUBSCRIPTION_PLAN_METADATA_KEY.parse().unwrap();
+        plan_def.metadata.insert(plan_key, Json::new(plan));
+        let charge_def = AssetDefinition::new(charge_asset_id.clone(), NumericSpec::integer())
+            .build(&provider);
+
+        let subscription_state = SubscriptionState {
+            plan_id: plan_id.clone(),
+            provider: provider.clone(),
+            subscriber: subscriber.clone(),
+            status: SubscriptionStatus::Active,
+            current_period_start_ms: scheduled_at_ms - period_ms,
+            current_period_end_ms: scheduled_at_ms,
+            next_charge_ms: scheduled_at_ms,
+            failure_count: 2,
+            usage_accumulated: BTreeMap::new(),
+            billing_trigger_id: trigger_id.clone(),
+        };
+        let mut nft_meta = Metadata::default();
+        let subscription_key: Name = SUBSCRIPTION_METADATA_KEY.parse().unwrap();
+        nft_meta.insert(subscription_key.clone(), Json::new(subscription_state.clone()));
+        let nft_id: NftId = "sub-suspend$subscriptions".parse().unwrap();
+        let nft = Nft::new(nft_id.clone(), nft_meta).build(&subscriber);
+
+        let domains = vec![
+            Domain::new("commerce".parse().unwrap()).build(&provider),
+            Domain::new("users".parse().unwrap()).build(&provider),
+            Domain::new("pay".parse().unwrap()).build(&provider),
+            Domain::new("subscriptions".parse().unwrap()).build(&provider),
+        ];
+        let accounts = vec![
+            Account::new(provider.clone()).build(&provider),
+            Account::new(subscriber.clone()).build(&provider),
+        ];
+        let world = World::with_assets(
+            domains,
+            accounts,
+            [plan_def, charge_def],
+            Vec::<Asset>::new(),
+            [nft],
+        );
+
+        let bytecode = IvmBytecode::from_compiled(ivm::ProgramMetadata::default().encode());
+        let mut trigger_metadata = Metadata::default();
+        let trigger_ref_key: Name = SUBSCRIPTION_TRIGGER_REF_METADATA_KEY.parse().unwrap();
+        trigger_metadata.insert(
+            trigger_ref_key,
+            Json::new(SubscriptionTriggerRef {
+                subscription_nft_id: nft_id.clone(),
+            }),
+        );
+        let schedule = Schedule {
+            start_ms: scheduled_at_ms,
+            period_ms: None,
+        };
+        let mut action = SpecializedAction::new(
+            Executable::Ivm(bytecode.clone()),
+            Repeats::Exactly(1),
+            subscriber.clone(),
+            TimeEventFilter(ExecutionTime::Schedule(schedule)),
+        );
+        action.metadata = trigger_metadata.clone();
+        let trigger = SpecializedTrigger::new(trigger_id.clone(), action);
+        {
+            let mut block = world.triggers.block();
+            let mut tx = block.transaction();
+            tx.add_time_trigger(trigger).expect("add trigger");
+            tx.apply();
+            block.commit();
+        }
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let view = state.view();
+        let mut host = CoreHostImpl::new(subscriber.clone());
+        host.set_query_state(&view);
+        host.set_trigger_id(trigger_id.clone());
+        host.set_block_time_ms(scheduled_at_ms);
+        let mut vm = IVM::new(1_000_000);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_SUBSCRIPTION_BILL, &mut vm)
+            .expect("billing");
+
+        let mut expected_state = subscription_state.clone();
+        expected_state.failure_count = 3;
+        expected_state.status = SubscriptionStatus::Suspended;
+
+        let expected_set = InstructionBox::from(SetKeyValue::nft(
+            nft_id.clone(),
+            subscription_key,
+            Json::new(expected_state),
+        ));
+        let expected_invoice = SubscriptionInvoice {
+            subscription_nft_id: nft_id.clone(),
+            period_start_ms: scheduled_at_ms - period_ms,
+            period_end_ms: scheduled_at_ms,
+            attempted_at_ms: scheduled_at_ms,
+            amount: amount.clone(),
+            asset_definition: charge_asset_id.clone(),
+            status: SubscriptionInvoiceStatus::Failed,
+            tx_hash: None,
+        };
+        let invoice_key: Name = SUBSCRIPTION_INVOICE_METADATA_KEY.parse().unwrap();
+        let expected_invoice_set = InstructionBox::from(SetKeyValue::nft(
+            nft_id.clone(),
+            invoice_key,
+            Json::new(expected_invoice),
+        ));
+        let expected_unregister =
+            InstructionBox::from(Unregister::trigger(trigger_id));
+
+        assert_eq!(
+            host.queued,
+            vec![
+                expected_set.clone(),
+                expected_invoice_set.clone(),
+                expected_unregister.clone(),
+            ]
+        );
+        let expected_gas = crate::gas::meter_instruction(&expected_set)
+            .saturating_add(crate::gas::meter_instruction(&expected_invoice_set))
+            .saturating_add(crate::gas::meter_instruction(&expected_unregister));
+        assert_eq!(gas, expected_gas);
     }
 
     #[test]

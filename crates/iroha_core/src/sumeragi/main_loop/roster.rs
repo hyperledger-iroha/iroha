@@ -15,8 +15,10 @@ use crate::{
 };
 
 pub(super) fn canonicalize_roster(roster: Vec<PeerId>) -> Vec<PeerId> {
-    // Preserve input ordering so topology rotation and config ordering remain stable.
-    dedup_preserving_order(roster)
+    // Sort to keep roster ordering deterministic across peers.
+    let mut roster = dedup_preserving_order(roster);
+    roster.sort();
+    roster
 }
 
 #[allow(dead_code)]
@@ -203,7 +205,12 @@ pub(super) fn derive_active_topology(
         guard_pop_quorum(filtered, &baseline, trusted.pops.len())
     };
 
-    roster = canonicalize_roster(roster);
+    roster = if use_commit {
+        // Commit topology is already deterministic (sorted + hash-rotated); keep its order.
+        dedup_preserving_order(roster)
+    } else {
+        canonicalize_roster(roster)
+    };
     if !roster.is_empty() {
         return roster;
     }
@@ -302,7 +309,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn canonicalize_roster_preserves_order_and_dedups() {
+    fn canonicalize_roster_sorts_and_dedups() {
         let first = PeerId::new(
             KeyPair::random_with_algorithm(Algorithm::BlsNormal)
                 .public_key()
@@ -317,7 +324,9 @@ mod tests {
         let roster = vec![first.clone(), second.clone(), first.clone()];
         let canonical = canonicalize_roster(roster);
 
-        assert_eq!(canonical, vec![first, second]);
+        let mut expected = vec![first, second];
+        expected.sort();
+        assert_eq!(canonical, expected);
     }
 
     #[test]

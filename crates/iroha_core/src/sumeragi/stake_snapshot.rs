@@ -50,44 +50,7 @@ impl CommitStakeSnapshot {
         }
         let fallback_stake = fallback_stake_for_world(world);
         let stake_map = stake_map_from_world(world);
-        if stake_map.is_empty() {
-            return Some(Self {
-                validator_set_hash: HashOf::new(&roster.to_vec()),
-                entries: roster
-                    .iter()
-                    .map(|peer| CommitStakeSnapshotEntry {
-                        peer_id: peer.clone(),
-                        stake: fallback_stake.clone(),
-                    })
-                    .collect(),
-            });
-        }
-        let mut entries = Vec::with_capacity(roster.len());
-        let mut missing = 0usize;
-        for peer in roster {
-            let stake = match stake_map.get(peer) {
-                Some(stake) => stake.clone(),
-                None => {
-                    missing = missing.saturating_add(1);
-                    fallback_stake.clone()
-                }
-            };
-            entries.push(CommitStakeSnapshotEntry {
-                peer_id: peer.clone(),
-                stake,
-            });
-        }
-        if missing > 0 {
-            warn!(
-                missing,
-                roster_len = roster.len(),
-                "missing stake entries for roster; using fallback stake"
-            );
-        }
-        Some(Self {
-            validator_set_hash: HashOf::new(&roster.to_vec()),
-            entries,
-        })
+        commit_stake_snapshot_from_map(roster, &stake_map, &fallback_stake)
     }
 
     /// Return true if the snapshot hash matches the provided roster.
@@ -236,12 +199,60 @@ pub(super) fn stake_map_from_world(world: &impl WorldReadOnly) -> BTreeMap<PeerI
     stake_map
 }
 
-fn fallback_stake_for_world(world: &impl WorldReadOnly) -> Numeric {
+pub(super) fn fallback_stake_for_world(world: &impl WorldReadOnly) -> Numeric {
     let min_self_bond = world
         .sumeragi_npos_parameters()
         .map(|params| params.min_self_bond)
         .unwrap_or(1);
     Numeric::from(min_self_bond.max(1))
+}
+
+pub(super) fn commit_stake_snapshot_from_map(
+    roster: &[PeerId],
+    stake_map: &BTreeMap<PeerId, Numeric>,
+    fallback_stake: &Numeric,
+) -> Option<CommitStakeSnapshot> {
+    if roster.is_empty() {
+        return None;
+    }
+    if stake_map.is_empty() {
+        return Some(CommitStakeSnapshot {
+            validator_set_hash: HashOf::new(&roster.to_vec()),
+            entries: roster
+                .iter()
+                .map(|peer| CommitStakeSnapshotEntry {
+                    peer_id: peer.clone(),
+                    stake: fallback_stake.clone(),
+                })
+                .collect(),
+        });
+    }
+    let mut entries = Vec::with_capacity(roster.len());
+    let mut missing = 0usize;
+    for peer in roster {
+        let stake = match stake_map.get(peer) {
+            Some(stake) => stake.clone(),
+            None => {
+                missing = missing.saturating_add(1);
+                fallback_stake.clone()
+            }
+        };
+        entries.push(CommitStakeSnapshotEntry {
+            peer_id: peer.clone(),
+            stake,
+        });
+    }
+    if missing > 0 {
+        warn!(
+            missing,
+            roster_len = roster.len(),
+            "missing stake entries for roster; using fallback stake"
+        );
+    }
+    Some(CommitStakeSnapshot {
+        validator_set_hash: HashOf::new(&roster.to_vec()),
+        entries,
+    })
 }
 
 #[cfg(test)]
@@ -340,6 +351,27 @@ mod tests {
         assert_eq!(snapshot.entries[0].peer_id, peer_b);
         assert_eq!(snapshot.entries[1].peer_id, peer_a);
         assert_eq!(snapshot.entries[1].stake, Numeric::new(25, 0));
+    }
+
+    #[test]
+    fn stake_snapshot_from_map_uses_fallback_for_missing_entries() {
+        let keypair_a = KeyPair::random();
+        let keypair_b = KeyPair::random();
+        let peer_a = PeerId::new(keypair_a.public_key().clone());
+        let peer_b = PeerId::new(keypair_b.public_key().clone());
+        let roster = vec![peer_a.clone(), peer_b.clone()];
+        let mut stake_map = BTreeMap::new();
+        stake_map.insert(peer_a.clone(), Numeric::from(10_u64));
+        let fallback = Numeric::from(3_u64);
+
+        let snapshot =
+            commit_stake_snapshot_from_map(&roster, &stake_map, &fallback).expect("snapshot");
+
+        assert_eq!(snapshot.entries.len(), 2);
+        assert_eq!(snapshot.entries[0].peer_id, peer_a);
+        assert_eq!(snapshot.entries[0].stake, Numeric::from(10_u64));
+        assert_eq!(snapshot.entries[1].peer_id, peer_b);
+        assert_eq!(snapshot.entries[1].stake, fallback);
     }
 
     #[test]

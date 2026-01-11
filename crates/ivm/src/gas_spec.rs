@@ -46,6 +46,8 @@ pub static GAS_ASSETS: &[GasAsset] = &[
     GasAsset { key: "G_set_detail", asset_id: "asset:gas/G_set_detail@ivm.core/v1", unit: "gas", version: "v1", group: "syscall" },
     GasAsset { key: "G_set_quorum", asset_id: "asset:gas/G_set_quorum@ivm.core/v1", unit: "gas", version: "v1", group: "syscall" },
     GasAsset { key: "G_set_trig", asset_id: "asset:gas/G_set_trig@ivm.core/v1", unit: "gas", version: "v1", group: "syscall" },
+    GasAsset { key: "G_sub_bill", asset_id: "asset:gas/G_sub_bill@ivm.core/v1", unit: "gas", version: "v1", group: "syscall" },
+    GasAsset { key: "G_sub_usage", asset_id: "asset:gas/G_sub_usage@ivm.core/v1", unit: "gas", version: "v1", group: "syscall" },
     GasAsset { key: "G_transfer", asset_id: "asset:gas/G_transfer@ivm.core/v1", unit: "gas", version: "v1", group: "syscall" },
     GasAsset { key: "G_unreg_acct", asset_id: "asset:gas/G_unreg_acct@ivm.core/v1", unit: "gas", version: "v1", group: "syscall" },
     GasAsset { key: "G_unreg_asset", asset_id: "asset:gas/G_unreg_asset@ivm.core/v1", unit: "gas", version: "v1", group: "syscall" },

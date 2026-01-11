@@ -24,6 +24,7 @@ QueryExecutionFail
 - NotFound: Missing live query cursor.
 - CursorMismatch / CursorDone: Cursor protocol errors.
 - FetchSizeTooBig: Server‑enforced limit exceeded.
+- GasBudgetExceeded: Query execution exceeded the gas/materialization budget.
 - InvalidSingularParameters: Unsupported parameters for singular queries.
 - CapacityLimit: Live query store capacity reached.
 

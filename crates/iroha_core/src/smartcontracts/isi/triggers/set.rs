@@ -9,7 +9,7 @@
 //! trigger hooks.
 
 use core::cmp::min;
-use std::{fmt, num::NonZeroU64};
+use std::{collections::BTreeMap, fmt, num::NonZeroU64};
 
 use iroha_crypto::HashOf;
 use iroha_data_model::{
@@ -399,8 +399,10 @@ pub trait SetReadOnly {
     }
 
     /// Convert [`LoadedAction`] to original [`Action`] by retrieving original
-    /// [`IvmBytecode`] if applicable
-    fn get_original_action<F>(&self, action: LoadedAction<F>) -> SpecializedAction<F>
+    /// [`IvmBytecode`] if applicable.
+    ///
+    /// Returns `None` when the original bytecode is missing.
+    fn get_original_action<F>(&self, action: LoadedAction<F>) -> Option<SpecializedAction<F>>
     where
         F: Clone + EnsureTriggerAuthority,
     {
@@ -414,10 +416,13 @@ pub trait SetReadOnly {
 
         let original_executable = match executable {
             ExecutableRef::Ivm(ref blob_hash) => {
-                let original_contract = self
-                    .get_original_contract(blob_hash)
-                    .cloned()
-                    .expect("No original smartcontract saved for trigger. This is a bug.");
+                let Some(original_contract) = self.get_original_contract(blob_hash).cloned() else {
+                    warn!(
+                        ?blob_hash,
+                        "missing original trigger bytecode; skipping trigger action"
+                    );
+                    return None;
+                };
                 Executable::Ivm(original_contract)
             }
             ExecutableRef::Instructions(isi) => Executable::Instructions(isi),
@@ -426,7 +431,7 @@ pub trait SetReadOnly {
         let mut specialized =
             SpecializedAction::new(original_executable, repeats, authority, filter);
         specialized.metadata = metadata;
-        specialized
+        Some(specialized)
     }
 
     /// Get all contained trigger ids without a particular order
@@ -440,36 +445,30 @@ pub trait SetReadOnly {
     fn get_executable(&self, id: &TriggerId) -> Option<&ExecutableRef> {
         let event_type = self.ids().get(id)?;
 
-        Some(match event_type {
+        let executable = match event_type {
             TriggeringEventType::Data => {
-                &self
-                    .data_triggers()
-                    .get(id)
-                    .expect("`Set::data_triggers` doesn't contain required id. This is a bug")
-                    .executable
+                self.data_triggers().get(id).map(|entry| &entry.executable)
             }
-            TriggeringEventType::Pipeline => {
-                &self
-                    .pipeline_triggers()
-                    .get(id)
-                    .expect("`Set::pipeline_triggers` doesn't contain required id. This is a bug")
-                    .executable
-            }
+            TriggeringEventType::Pipeline => self
+                .pipeline_triggers()
+                .get(id)
+                .map(|entry| &entry.executable),
             TriggeringEventType::Time => {
-                &self
-                    .time_triggers()
-                    .get(id)
-                    .expect("`Set::time_triggers` doesn't contain required id. This is a bug")
-                    .executable
+                self.time_triggers().get(id).map(|entry| &entry.executable)
             }
-            TriggeringEventType::ExecuteTrigger => {
-                &self
-                    .by_call_triggers()
-                    .get(id)
-                    .expect("`Set::by_call_triggers` doesn't contain required id. This is a bug")
-                    .executable
-            }
-        })
+            TriggeringEventType::ExecuteTrigger => self
+                .by_call_triggers()
+                .get(id)
+                .map(|entry| &entry.executable),
+        };
+        if executable.is_none() {
+            warn!(
+                trigger_id = %id,
+                ?event_type,
+                "trigger id missing from typed map while resolving executable"
+            );
+        }
+        executable
     }
 
     /// Apply `f` to triggers whose action satisfies the predicate.
@@ -484,29 +483,47 @@ pub trait SetReadOnly {
             .iter()
             .filter_map(move |(id, event_type)| match event_type {
                 TriggeringEventType::Data => {
-                    let action = self
-                        .data_triggers()
-                        .get(id)
-                        .expect("`Set::data_triggers` doesn't contain required id. This is a bug");
+                    let Some(action) = self.data_triggers().get(id) else {
+                        warn!(
+                            trigger_id = %id,
+                            ?event_type,
+                            "trigger id missing from typed map while iterating triggers"
+                        );
+                        return None;
+                    };
                     filter(action).then(|| f(id, action))
                 }
                 TriggeringEventType::Pipeline => {
-                    let action = self.pipeline_triggers().get(id).expect(
-                        "`Set::pipeline_triggers` doesn't contain required id. This is a bug",
-                    );
+                    let Some(action) = self.pipeline_triggers().get(id) else {
+                        warn!(
+                            trigger_id = %id,
+                            ?event_type,
+                            "trigger id missing from typed map while iterating triggers"
+                        );
+                        return None;
+                    };
                     filter(action).then(|| f(id, action))
                 }
                 TriggeringEventType::Time => {
-                    let action = self
-                        .time_triggers()
-                        .get(id)
-                        .expect("`Set::time_triggers` doesn't contain required id. This is a bug");
+                    let Some(action) = self.time_triggers().get(id) else {
+                        warn!(
+                            trigger_id = %id,
+                            ?event_type,
+                            "trigger id missing from typed map while iterating triggers"
+                        );
+                        return None;
+                    };
                     filter(action).then(|| f(id, action))
                 }
                 TriggeringEventType::ExecuteTrigger => {
-                    let action = self.by_call_triggers().get(id).expect(
-                        "`Set::by_call_triggers` doesn't contain required id. This is a bug",
-                    );
+                    let Some(action) = self.by_call_triggers().get(id) else {
+                        warn!(
+                            trigger_id = %id,
+                            ?event_type,
+                            "trigger id missing from typed map while iterating triggers"
+                        );
+                        return None;
+                    };
                     filter(action).then(|| f(id, action))
                 }
             })
@@ -522,28 +539,21 @@ pub trait SetReadOnly {
         let event_type = self.ids().get(id).copied()?;
 
         let result = match event_type {
-            TriggeringEventType::Data => self
-                .data_triggers()
-                .get(id)
-                .map(|entry| f(entry))
-                .expect("`Set::data_triggers` doesn't contain required id. This is a bug"),
-            TriggeringEventType::Pipeline => self
-                .pipeline_triggers()
-                .get(id)
-                .map(|entry| f(entry))
-                .expect("`Set::pipeline_triggers` doesn't contain required id. This is a bug"),
-            TriggeringEventType::Time => self
-                .time_triggers()
-                .get(id)
-                .map(|entry| f(entry))
-                .expect("`Set::time_triggers` doesn't contain required id. This is a bug"),
-            TriggeringEventType::ExecuteTrigger => self
-                .by_call_triggers()
-                .get(id)
-                .map(|entry| f(entry))
-                .expect("`Set::by_call_triggers` doesn't contain required id. This is a bug"),
+            TriggeringEventType::Data => self.data_triggers().get(id).map(|entry| f(entry)),
+            TriggeringEventType::Pipeline => self.pipeline_triggers().get(id).map(|entry| f(entry)),
+            TriggeringEventType::Time => self.time_triggers().get(id).map(|entry| f(entry)),
+            TriggeringEventType::ExecuteTrigger => {
+                self.by_call_triggers().get(id).map(|entry| f(entry))
+            }
         };
-        Some(result)
+        if result.is_none() {
+            warn!(
+                trigger_id = %id,
+                ?event_type,
+                "trigger id missing from typed map while inspecting trigger"
+            );
+        }
+        result
     }
 }
 
@@ -611,6 +621,17 @@ impl Set {
             ids: self.ids.view(),
             contracts: self.contracts.view(),
         }
+    }
+
+    /// Test-only helper to drop a trigger bytecode entry and commit the change.
+    #[cfg(test)]
+    pub(crate) fn remove_contract_for_test(&mut self, hash: HashOf<IvmBytecode>) -> bool {
+        let mut block = self.block();
+        let mut tx = block.transaction();
+        let removed = tx.contracts.remove(hash).is_some();
+        tx.apply();
+        block.commit();
+        removed
     }
 }
 
@@ -832,37 +853,29 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
         let event_type = self.ids.get(id).copied()?;
 
         let result = match event_type {
-            TriggeringEventType::Data => self
-                .data_triggers
-                .get_mut(id)
-                .map(|entry| f(entry))
-                .expect("`Set::data_triggers` doesn't contain required id. This is a bug"),
-            TriggeringEventType::Pipeline => self
-                .pipeline_triggers
-                .get_mut(id)
-                .map(|entry| f(entry))
-                .expect("`Set::pipeline_triggers` doesn't contain required id. This is a bug"),
-            TriggeringEventType::Time => self
-                .time_triggers
-                .get_mut(id)
-                .map(|entry| f(entry))
-                .expect("`Set::time_triggers` doesn't contain required id. This is a bug"),
-            TriggeringEventType::ExecuteTrigger => self
-                .by_call_triggers
-                .get_mut(id)
-                .map(|entry| f(entry))
-                .expect("`Set::by_call_triggers` doesn't contain required id. This is a bug"),
+            TriggeringEventType::Data => self.data_triggers.get_mut(id).map(|entry| f(entry)),
+            TriggeringEventType::Pipeline => {
+                self.pipeline_triggers.get_mut(id).map(|entry| f(entry))
+            }
+            TriggeringEventType::Time => self.time_triggers.get_mut(id).map(|entry| f(entry)),
+            TriggeringEventType::ExecuteTrigger => {
+                self.by_call_triggers.get_mut(id).map(|entry| f(entry))
+            }
         };
-        Some(result)
+        if result.is_none() {
+            warn!(
+                trigger_id = %id,
+                ?event_type,
+                "trigger id missing from typed map while mutating trigger"
+            );
+        }
+        result
     }
 
     /// Remove a trigger from the [`Set`].
     ///
     /// Return `false` if [`Set`] doesn't contain the trigger with the given `id`.
-    ///
-    /// # Panics
-    ///
-    /// Panics on inconsistent state of [`Set`]. This is a bug.
+    /// Logs and continues if the internal storage is inconsistent.
     pub fn remove(&mut self, id: TriggerId) -> bool {
         let Some(event_type) = self.ids.remove(id.clone()) else {
             return false;
@@ -870,23 +883,26 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
 
         let removed = match event_type {
             TriggeringEventType::Data => {
-                Self::remove_from(&mut self.contracts, &mut self.data_triggers, id)
+                Self::remove_from(&mut self.contracts, &mut self.data_triggers, id.clone())
             }
             TriggeringEventType::Pipeline => {
-                Self::remove_from(&mut self.contracts, &mut self.pipeline_triggers, id)
+                Self::remove_from(&mut self.contracts, &mut self.pipeline_triggers, id.clone())
             }
             TriggeringEventType::Time => {
-                Self::remove_from(&mut self.contracts, &mut self.time_triggers, id)
+                Self::remove_from(&mut self.contracts, &mut self.time_triggers, id.clone())
             }
             TriggeringEventType::ExecuteTrigger => {
-                Self::remove_from(&mut self.contracts, &mut self.by_call_triggers, id)
+                Self::remove_from(&mut self.contracts, &mut self.by_call_triggers, id.clone())
             }
         };
 
-        assert!(
-            removed,
-            "`Set`'s `ids` and typed trigger collections are inconsistent. This is a bug"
-        );
+        if !removed {
+            warn!(
+                trigger_id = %id,
+                ?event_type,
+                "`Set` ids referenced a missing trigger while removing"
+            );
+        }
 
         true
     }
@@ -938,10 +954,7 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
 
     /// Decrease the counter of the original [`IvmBytecode`] by `blob_hash`
     /// or remove it if the counter reaches zero.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `blob_hash` is not in the [`Set::contracts`].
+    /// Logs and skips removal if the bytecode entry is missing.
     fn remove_original_trigger(
         contracts: &mut TriggerContractStoreTransaction,
         blob_hash: HashOf<IvmBytecode>,
@@ -957,7 +970,10 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
                 }
             }
             None => {
-                panic!("`Set::contracts` doesn't contain required hash. This is a bug")
+                warn!(
+                    ?blob_hash,
+                    "`Set` contracts missing entry for trigger bytecode; skipping removal"
+                );
             }
         }
     }
@@ -1004,9 +1020,16 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
             .collect();
 
         for id in &to_remove {
-            ids.remove(id.clone())
-                .and_then(|_| Self::remove_from(contracts, triggers, id.clone()).then_some(()))
-                .expect("`Set`'s `ids`, `contracts` and typed trigger collections are inconsistent. This is a bug")
+            let removed_id = ids.remove(id.clone()).is_some();
+            let removed_trigger = Self::remove_from(contracts, triggers, id.clone());
+            if !removed_id || !removed_trigger {
+                warn!(
+                    trigger_id = %id,
+                    removed_id,
+                    removed_trigger,
+                    "`Set` trigger collections out of sync while removing depleted trigger"
+                );
+            }
         }
 
         removed.append(&mut to_remove);
@@ -1103,6 +1126,31 @@ mod tests {
     fn sample_hash() -> HashOf<IvmBytecode> {
         let bytecode = IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]);
         HashOf::new(&bytecode)
+    }
+
+    #[test]
+    fn inspect_by_id_skips_missing_entry() {
+        let mut set = Set::default();
+        let trigger_id: TriggerId = "missing_trigger".parse().expect("valid trigger id");
+        set.ids
+            .insert(trigger_id.clone(), TriggeringEventType::Time);
+
+        let view = set.view();
+        let found = SetReadOnly::inspect_by_id(&view, &trigger_id, |_| ());
+        assert!(found.is_none(), "missing trigger should return None");
+    }
+
+    #[test]
+    fn inspect_by_id_mut_skips_missing_entry() {
+        let set = Set::default();
+        let trigger_id: TriggerId = "missing_trigger_mut".parse().expect("valid trigger id");
+
+        let mut block = set.block();
+        let mut tx = block.transaction();
+        tx.ids.insert(trigger_id.clone(), TriggeringEventType::Time);
+
+        let found = tx.inspect_by_id_mut(&trigger_id, |_| ());
+        assert!(found.is_none(), "missing trigger should return None");
     }
 
     #[test]
@@ -1360,6 +1408,33 @@ impl From<&Set> for SetDto {
     }
 }
 
+fn load_trigger_entries<F>(
+    raw: Vec<(TriggerId, LoadedActionDto<F>)>,
+    event_type: TriggeringEventType,
+    contracts: &BTreeMap<HashOf<IvmBytecode>, IvmBytecodeEntry>,
+    ids: &mut BTreeMap<TriggerId, TriggeringEventType>,
+    duplicate_ids: &mut Vec<TriggerId>,
+    missing_contracts: &mut Vec<TriggerId>,
+) -> Result<Vec<(TriggerId, LoadedAction<F>)>, String> {
+    let mut entries = Vec::with_capacity(raw.len());
+    for (id, dto) in raw {
+        if ids.contains_key(&id) {
+            duplicate_ids.push(id);
+            continue;
+        }
+        let action = LoadedAction::try_from(dto)?;
+        if let Some(blob_hash) = action.extract_blob_hash() {
+            if !contracts.contains_key(&blob_hash) {
+                missing_contracts.push(id);
+                continue;
+            }
+        }
+        ids.insert(id.clone(), event_type);
+        entries.push((id, action));
+    }
+    Ok(entries)
+}
+
 impl TryFrom<SetDto> for Set {
     type Error = String;
     fn try_from(dto: SetDto) -> Result<Self, Self::Error> {
@@ -1368,9 +1443,152 @@ impl TryFrom<SetDto> for Set {
             pipeline,
             time,
             by_call,
-            ids,
+            ids: ids_raw,
             contracts,
         } = dto;
+
+        let mut contracts_map = BTreeMap::new();
+        let mut duplicate_contracts = 0usize;
+        for (hash, entry) in contracts {
+            let entry = IvmBytecodeEntry::try_from(entry)?;
+            if contracts_map.insert(hash, entry).is_some() {
+                duplicate_contracts = duplicate_contracts.saturating_add(1);
+            }
+        }
+
+        let mut ids = BTreeMap::new();
+        let mut duplicate_ids = Vec::new();
+        let mut missing_contracts = Vec::new();
+
+        let data = load_trigger_entries(
+            data,
+            TriggeringEventType::Data,
+            &contracts_map,
+            &mut ids,
+            &mut duplicate_ids,
+            &mut missing_contracts,
+        )?;
+        let pipeline = load_trigger_entries(
+            pipeline,
+            TriggeringEventType::Pipeline,
+            &contracts_map,
+            &mut ids,
+            &mut duplicate_ids,
+            &mut missing_contracts,
+        )?;
+        let time = load_trigger_entries(
+            time,
+            TriggeringEventType::Time,
+            &contracts_map,
+            &mut ids,
+            &mut duplicate_ids,
+            &mut missing_contracts,
+        )?;
+        let by_call = load_trigger_entries(
+            by_call,
+            TriggeringEventType::ExecuteTrigger,
+            &contracts_map,
+            &mut ids,
+            &mut duplicate_ids,
+            &mut missing_contracts,
+        )?;
+
+        let mut orphaned_ids = 0usize;
+        let mut mismatched_ids = 0usize;
+        for (id, event_type) in ids_raw {
+            match ids.get(&id) {
+                Some(actual) if actual == &event_type => {}
+                Some(_) => mismatched_ids = mismatched_ids.saturating_add(1),
+                None => orphaned_ids = orphaned_ids.saturating_add(1),
+            }
+        }
+
+        if !duplicate_ids.is_empty() {
+            warn!(
+                count = duplicate_ids.len(),
+                "dropping duplicate trigger ids while repairing trigger storage"
+            );
+        }
+        if !missing_contracts.is_empty() {
+            warn!(
+                count = missing_contracts.len(),
+                "dropping triggers referencing missing IVM bytecode"
+            );
+        }
+        if orphaned_ids > 0 || mismatched_ids > 0 {
+            warn!(
+                orphaned_ids,
+                mismatched_ids, "trigger id registry out of sync; rebuilding from typed triggers"
+            );
+        }
+        if duplicate_contracts > 0 {
+            warn!(
+                count = duplicate_contracts,
+                "duplicate trigger bytecode entries found; keeping latest"
+            );
+        }
+
+        let mut contract_counts: BTreeMap<HashOf<IvmBytecode>, u64> = BTreeMap::new();
+        for (_, action) in &data {
+            if let Some(blob_hash) = action.extract_blob_hash() {
+                let count = contract_counts.entry(blob_hash).or_insert(0);
+                *count = count.saturating_add(1);
+            }
+        }
+        for (_, action) in &pipeline {
+            if let Some(blob_hash) = action.extract_blob_hash() {
+                let count = contract_counts.entry(blob_hash).or_insert(0);
+                *count = count.saturating_add(1);
+            }
+        }
+        for (_, action) in &time {
+            if let Some(blob_hash) = action.extract_blob_hash() {
+                let count = contract_counts.entry(blob_hash).or_insert(0);
+                *count = count.saturating_add(1);
+            }
+        }
+        for (_, action) in &by_call {
+            if let Some(blob_hash) = action.extract_blob_hash() {
+                let count = contract_counts.entry(blob_hash).or_insert(0);
+                *count = count.saturating_add(1);
+            }
+        }
+
+        let mut repaired_contracts = BTreeMap::new();
+        let mut dropped_contracts = 0usize;
+        let mut fixed_counts = 0usize;
+        for (hash, mut entry) in contracts_map {
+            let Some(count) = contract_counts.get(&hash) else {
+                dropped_contracts = dropped_contracts.saturating_add(1);
+                continue;
+            };
+            let Some(new_count) = NonZeroU64::new(*count) else {
+                warn!(
+                    ?hash,
+                    count, "invalid trigger bytecode reference count; dropping entry"
+                );
+                dropped_contracts = dropped_contracts.saturating_add(1);
+                continue;
+            };
+            if entry.count.get() != new_count.get() {
+                fixed_counts = fixed_counts.saturating_add(1);
+                entry.count = new_count;
+            }
+            repaired_contracts.insert(hash, entry);
+        }
+
+        if dropped_contracts > 0 {
+            warn!(
+                count = dropped_contracts,
+                "dropping unused trigger bytecode entries"
+            );
+        }
+        if fixed_counts > 0 {
+            warn!(
+                count = fixed_counts,
+                "repairing trigger bytecode reference counts"
+            );
+        }
 
         let set = Set::default();
         // Use a block + transaction to mutate storages safely
@@ -1378,22 +1596,22 @@ impl TryFrom<SetDto> for Set {
             let mut block = set.block();
             let mut tx = block.transaction();
             for (k, v) in data {
-                tx.data_triggers.insert(k, LoadedAction::try_from(v)?);
+                tx.data_triggers.insert(k, v);
             }
             for (k, v) in pipeline {
-                tx.pipeline_triggers.insert(k, LoadedAction::try_from(v)?);
+                tx.pipeline_triggers.insert(k, v);
             }
             for (k, v) in time {
-                tx.time_triggers.insert(k, LoadedAction::try_from(v)?);
+                tx.time_triggers.insert(k, v);
             }
             for (k, v) in by_call {
-                tx.by_call_triggers.insert(k, LoadedAction::try_from(v)?);
+                tx.by_call_triggers.insert(k, v);
             }
             for (k, v) in ids {
                 tx.ids.insert(k, v);
             }
-            for (k, v) in contracts {
-                tx.contracts.insert(k, IvmBytecodeEntry::try_from(v)?);
+            for (k, v) in repaired_contracts {
+                tx.contracts.insert(k, v);
             }
             tx.apply();
             block.commit();
@@ -1406,13 +1624,14 @@ impl TryFrom<SetDto> for Set {
 mod dto_tests {
     use std::num::NonZeroU64;
 
-    use iroha_crypto::KeyPair;
+    use iroha_crypto::{HashOf, KeyPair};
     use iroha_data_model::{
         events::pipeline,
         prelude as dm,
         prelude::{BlockStatus, ExecutionTime, IvmBytecode, Log, SetKeyValue},
     };
     use iroha_primitives::const_vec::ConstVec;
+    use mv::storage::StorageReadOnly;
     use norito::json;
 
     use super::*;
@@ -1537,6 +1756,85 @@ mod dto_tests {
         assert_eq!(dto3.by_call.len(), 1);
         assert_eq!(dto3.ids.len(), 4);
         assert_eq!(dto3.contracts.len(), 1);
+    }
+
+    #[test]
+    fn set_dto_repairs_inconsistent_storage() {
+        let domain: dm::DomainId = "wonderland".parse().unwrap();
+        let authority: dm::AccountId =
+            dm::AccountId::new(domain, KeyPair::random().public_key().clone());
+
+        let missing_code = IvmBytecode::from_compiled(vec![0x01]);
+        let missing_hash = HashOf::new(&missing_code);
+        let valid_code = IvmBytecode::from_compiled(vec![0xAA]);
+        let valid_hash = HashOf::new(&valid_code);
+        let extra_code = IvmBytecode::from_compiled(vec![0xBB]);
+        let extra_hash = HashOf::new(&extra_code);
+
+        let data_id: dm::TriggerId = "data_missing".parse().unwrap();
+        let call_id: dm::TriggerId = "call_valid".parse().unwrap();
+        let orphan_id: dm::TriggerId = "orphan".parse().unwrap();
+
+        let data_action = LoadedActionDto {
+            executable: ExecutableRefDto::Ivm(missing_hash),
+            repeats: dm::Repeats::Exactly(1),
+            authority: authority.clone(),
+            filter: dm::DataEventFilter::Any,
+            metadata: dm::Metadata::default(),
+        };
+        let call_action = LoadedActionDto {
+            executable: ExecutableRefDto::Ivm(valid_hash),
+            repeats: dm::Repeats::Exactly(1),
+            authority,
+            filter: dm::ExecuteTriggerEventFilter::new(),
+            metadata: dm::Metadata::default(),
+        };
+
+        let dto = SetDto {
+            data: vec![(data_id.clone(), data_action)],
+            pipeline: Vec::new(),
+            time: Vec::new(),
+            by_call: vec![(call_id.clone(), call_action)],
+            ids: vec![
+                (data_id.clone(), TriggeringEventType::Pipeline),
+                (call_id.clone(), TriggeringEventType::ExecuteTrigger),
+                (orphan_id.clone(), TriggeringEventType::Data),
+            ],
+            contracts: vec![
+                (
+                    valid_hash,
+                    IvmBytecodeEntryDto {
+                        original_contract: valid_code,
+                        count: 9,
+                    },
+                ),
+                (
+                    extra_hash,
+                    IvmBytecodeEntryDto {
+                        original_contract: extra_code,
+                        count: 1,
+                    },
+                ),
+            ],
+        };
+
+        let set = Set::try_from(dto).expect("dto to set");
+        let view = set.view();
+
+        assert!(view.data_triggers().get(&data_id).is_none());
+        assert!(view.by_call_triggers().get(&call_id).is_some());
+        assert!(view.ids().get(&data_id).is_none());
+        assert_eq!(
+            view.ids().get(&call_id),
+            Some(&TriggeringEventType::ExecuteTrigger)
+        );
+        assert!(view.ids().get(&orphan_id).is_none());
+        let entry = view
+            .contracts()
+            .get(&valid_hash)
+            .expect("valid contract should remain");
+        assert_eq!(entry.count.get(), 1);
+        assert!(view.contracts().get(&extra_hash).is_none());
     }
 
     #[test]

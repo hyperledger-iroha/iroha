@@ -1189,6 +1189,7 @@ fn minimal_config_snapshot() {
                 quarantine_tx_max_cycles: 0,
                 quarantine_tx_max_millis: 0,
                 query_default_cursor_mode: Ephemeral,
+                query_max_fetch_size: 500,
                 query_stored_min_gas_units: 0,
                 amx_per_dataspace_budget_ms: 30,
                 amx_group_budget_ms: 140,

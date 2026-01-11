@@ -743,6 +743,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             quarantine_tx_max_cycles: defaults::pipeline::QUARANTINE_TX_MAX_CYCLES,
             quarantine_tx_max_millis: defaults::pipeline::QUARANTINE_TX_MAX_MILLIS,
             query_default_cursor_mode: A::QueryCursorMode::Ephemeral,
+            query_max_fetch_size: defaults::pipeline::QUERY_MAX_FETCH_SIZE,
             query_stored_min_gas_units: 0,
             amx_per_dataspace_budget_ms: defaults::pipeline::AMX_PER_DATASPACE_BUDGET_MS,
             amx_group_budget_ms: defaults::pipeline::AMX_GROUP_BUDGET_MS,

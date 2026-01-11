@@ -4766,7 +4766,10 @@ impl IVMHost for WsvHost {
     }
 
     /// Downcast support for hosts with extra methods/state.
-    fn as_any(&mut self) -> &mut dyn Any {
+    fn as_any(&mut self) -> &mut dyn Any
+    where
+        Self: 'static,
+    {
         self
     }
 

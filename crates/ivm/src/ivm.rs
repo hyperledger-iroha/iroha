@@ -2659,6 +2659,21 @@ impl IVM {
     /// logged on every cycle so that a prover can later reconstruct a trace.
     /// The loop terminates on `HALT` or when an error is encountered.
     pub fn run(&mut self) -> Result<(), VMError> {
+        let mut host = self
+            .host
+            .take()
+            .expect("IVM host must be present while the VM runs");
+        let result = self.run_with_host_ref(host.as_mut());
+        self.host = Some(host);
+        result
+    }
+
+    /// Execute the loaded program using a borrowed host without storing it in the VM.
+    pub fn run_with_host(&mut self, host: &mut dyn IVMHost) -> Result<(), VMError> {
+        self.run_with_host_ref(host)
+    }
+
+    fn run_with_host_ref(&mut self, host: &mut dyn IVMHost) -> Result<(), VMError> {
         self.halted = false;
         self.constraint_failed = false;
         self.cycles = 0;
@@ -2798,15 +2813,7 @@ impl IVM {
                 }
                 instruction::wide::system::SCALL => {
                     let imm8 = instruction::wide::imm8(instr) as u8 as u32;
-                    let extra_cost = {
-                        let mut host_box = self
-                            .host
-                            .take()
-                            .expect("IVM host must be present while the VM runs");
-                        let r = host_box.syscall(imm8, self);
-                        self.host = Some(host_box);
-                        r
-                    };
+                    let extra_cost = host.syscall(imm8, self);
                     match extra_cost {
                         Ok(extra) => {
                             if self.gas_remaining < extra {

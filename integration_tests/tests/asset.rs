@@ -1239,53 +1239,62 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
 
         // After integer ops: asset moved to destination, zero at source (purged)
         let deadline = Instant::now() + NON_EMPTY_BLOCK_TIMEOUT;
-        let mut last_err = None;
+        let mut last_pending = None;
         loop {
-            match (
-                asset_value(&mut clients, &dest_asset_id),
-                asset_exists(&mut clients, &asset_id),
-            ) {
-                (Ok(dest_val), Ok(source_exists))
-                    if dest_val == numeric!(1)
-                        && ((expected_after_transfer.is_zero() && !source_exists)
-                            || (!expected_after_transfer.is_zero() && source_exists)) =>
-                {
-                    break;
+            let mut pending = Vec::new();
+            for peer in network.peers() {
+                let client = peer.client();
+                let torii_url = &client.torii_url;
+                match client.query_single(FindAssetById::new(dest_asset_id.clone())) {
+                    Ok(asset) if asset.value() == &numeric!(1) => {}
+                    Ok(asset) => {
+                        pending.push(format!("{torii_url}: dest={}, expected=1", asset.value()))
+                    }
+                    Err(QueryError::Validation(ValidationFail::QueryFailed(
+                        QueryExecutionFail::Find(FindError::Asset(_))
+                        | QueryExecutionFail::NotFound,
+                    ))) => pending.push(format!("{torii_url}: dest missing")),
+                    Err(err) => pending.push(format!("{torii_url}: dest query error: {err}")),
                 }
-                (Ok(dest_val), Ok(source_exists)) => {
-                    let expected_source = if expected_after_transfer.is_zero() {
-                        "purged".to_string()
-                    } else {
-                        expected_after_transfer.to_string()
-                    };
-                    last_err = Some(eyre!(
-                        "unexpected balances while waiting for integer ops: dest={dest_val}, source_exists={source_exists}, expected_source={expected_source}"
-                    ));
+
+                match client.query_single(FindAssetById::new(asset_id.clone())) {
+                    Ok(asset) => {
+                        if expected_after_transfer.is_zero() {
+                            pending.push(format!("{torii_url}: source still present"));
+                        } else if asset.value() != &expected_after_transfer {
+                            pending.push(format!(
+                                "{torii_url}: source={}, expected={expected_after_transfer}",
+                                asset.value()
+                            ));
+                        }
+                    }
+                    Err(QueryError::Validation(ValidationFail::QueryFailed(
+                        QueryExecutionFail::Find(FindError::Asset(_))
+                        | QueryExecutionFail::NotFound,
+                    ))) => {
+                        if !expected_after_transfer.is_zero() {
+                            pending.push(format!("{torii_url}: source missing"));
+                        }
+                    }
+                    Err(err) => pending.push(format!("{torii_url}: source query error: {err}")),
                 }
-                (Err(err), _) | (_, Err(err)) => last_err = Some(err),
             }
 
+            if pending.is_empty() {
+                break;
+            }
+            last_pending = Some(pending.join("; "));
             if Instant::now() >= deadline {
-                return Err(last_err.unwrap_or_else(|| eyre!("timed out waiting for integer ops to settle after {NON_EMPTY_BLOCK_TIMEOUT:?}")).wrap_err(format!(
+                let details = last_pending.unwrap_or_else(|| "no details".to_string());
+                return Err(eyre!(
+                    "timed out waiting for integer ops to settle after {NON_EMPTY_BLOCK_TIMEOUT:?}: {details}"
+                )
+                .wrap_err(format!(
                     "final balance check; torii={torii}, env_dir={}",
                     env_dir.display()
                 )));
             }
             sleep(Duration::from_millis(500));
-        }
-
-        drop(last_err);
-        let dest_val = asset_value(&mut clients, &dest_asset_id)?;
-        assert_eq!(dest_val, numeric!(1));
-        if expected_after_transfer.is_zero() {
-            let source_exists = asset_exists(&mut clients, &asset_id)?;
-            assert!(
-                !source_exists,
-                "zero assets are purged from accounts; source should be gone"
-            );
-        } else {
-            let source_val = asset_value(&mut clients, &asset_id)?;
-            assert_eq!(source_val, expected_after_transfer);
         }
 
         Ok(())

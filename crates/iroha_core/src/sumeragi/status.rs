@@ -5446,6 +5446,8 @@ mod tests {
 
     #[test]
     fn locked_qc_updates_monotonically() {
+        let _guard = super::qc_status_test_guard();
+        super::set_locked_qc(0, 0, None);
         let hash_1 = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
             [1; UntypedHash::LENGTH],
         ));
@@ -5464,6 +5466,7 @@ mod tests {
 
     #[test]
     fn locked_qc_subject_updates_for_same_height_view() {
+        let _guard = super::qc_status_test_guard();
         let hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
             [3; UntypedHash::LENGTH],
         ));

@@ -302,14 +302,14 @@ gas = "G_verify"
 
 [[syscall]]
 number = "0xA0"
-args = "r10=&Json"
+args = "r10=&NoritoBytes(InstructionBox)"
 ret = "u64=0"
 gas = "G_sci"
 
 [[syscall]]
 number = "0xA1"
-args = "r10=&Json"
-ret = "ptr (r10)"
+args = "r10=&NoritoBytes(QueryRequest)"
+ret = "r10=ptr (&NoritoBytes(QueryResponse))"
 gas = "G_scq"
 
 [[syscall]]
@@ -329,6 +329,18 @@ number = "0xA4"
 args = "-"
 ret = "ptr (AccountId in INPUT)"
 gas = "G_get_auth"
+
+[[syscall]]
+number = "0xA5"
+args = "-"
+ret = "u64=0"
+gas = "G_sub_bill"
+
+[[syscall]]
+number = "0xA6"
+args = "-"
+ret = "u64=0"
+gas = "G_sub_usage"
 
 [[syscall]]
 number = "0xF0"

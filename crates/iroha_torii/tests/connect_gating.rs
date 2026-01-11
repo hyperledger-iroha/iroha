@@ -519,6 +519,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             quarantine_tx_max_millis:
                 iroha_config::parameters::defaults::pipeline::QUARANTINE_TX_MAX_MILLIS,
             query_default_cursor_mode: iroha_config::parameters::actual::QueryCursorMode::Ephemeral,
+            query_max_fetch_size: iroha_config::parameters::defaults::pipeline::QUERY_MAX_FETCH_SIZE,
             query_stored_min_gas_units: 0,
             amx_per_dataspace_budget_ms:
                 iroha_config::parameters::defaults::pipeline::AMX_PER_DATASPACE_BUDGET_MS,

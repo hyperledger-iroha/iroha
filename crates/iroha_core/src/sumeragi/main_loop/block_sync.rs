@@ -128,6 +128,7 @@ impl Actor {
         };
         let expected_epoch = self.epoch_for_height(block_height);
         let mut commit_votes = commit_votes;
+        let has_commit_votes = !commit_votes.is_empty();
         let mut process_commit_votes = |actor: &mut Actor| {
             let mut dropped_votes = 0usize;
             for vote in commit_votes.drain(..) {
@@ -159,12 +160,12 @@ impl Actor {
             block_height,
             block_hash,
             Some(block_view),
+            &self.roster_validation_cache,
         );
         let cert_hint = incoming_qc.as_ref();
         let checkpoint_hint = validator_checkpoint.as_ref();
-        let allow_uncertified = requested_missing_block
-            || (matches!(consensus_mode, ConsensusMode::Permissioned)
-                && block_height <= local_height.saturating_add(1));
+        let allow_uncertified = matches!(consensus_mode, ConsensusMode::Permissioned)
+            && (block_height == local_height.saturating_add(1) || requested_missing_block);
         let Some(selection) = select_block_sync_roster(
             &block,
             block_hash,
@@ -179,7 +180,27 @@ impl Actor {
             consensus_mode,
             mode_tag,
             allow_uncertified,
+            &self.roster_validation_cache,
         ) else {
+            if block_known
+                && cert_hint.is_none()
+                && checkpoint_hint.is_none()
+                && stake_snapshot.is_none()
+                && has_commit_votes
+            {
+                info!(
+                    height = block_height,
+                    view = block_view,
+                    block = %block_hash,
+                    "processing commit votes without roster hints for known block"
+                );
+                process_commit_votes(self);
+                self.clear_missing_block_request(
+                    &block_hash,
+                    MissingBlockClearReason::PayloadAvailable,
+                );
+                return Ok(());
+            }
             let roster_snapshot = self
                 .state
                 .commit_roster_snapshot_for_block(block_height, block_hash)
@@ -609,19 +630,21 @@ impl Actor {
         let incoming_qc_signers = incoming_qc.as_ref().map(qc_signer_count);
         let allow_nonextending_qc = selection.commit_qc.is_some()
             || incoming_qc.as_ref().is_some_and(|cert| {
-                let state_view = self.state.view();
-                let world = state_view.world();
+                let inputs = self.roster_validation_cache.inputs_for_roster(
+                    &cert.validator_set,
+                    consensus_mode,
+                    stake_snapshot.as_ref(),
+                );
                 super::validate_commit_qc_roster(
                     cert,
                     block_hash,
                     block_height,
                     Some(block_view),
                     consensus_mode,
-                    stake_snapshot.as_ref(),
                     expected_epoch,
-                    world,
                     &self.common_config.chain,
                     mode_tag,
+                    &inputs,
                 )
                 .is_ok()
             })
@@ -1071,6 +1094,7 @@ impl Actor {
                     self.config.consensus_mode,
                     self.common_config.trusted_peers.value(),
                     self.common_config.peer.id(),
+                    &self.roster_validation_cache,
                 );
                 let mut update = update;
                 let expected_epoch = self.epoch_for_height(block_height);
@@ -1119,6 +1143,7 @@ impl Actor {
                     self.config.consensus_mode,
                     self.common_config.trusted_peers.value(),
                     self.common_config.peer.id(),
+                    &self.roster_validation_cache,
                 );
                 let mut update = update;
                 let expected_epoch = self.epoch_for_height(block_height);
@@ -1162,6 +1187,7 @@ impl Actor {
                     self.config.consensus_mode,
                     self.common_config.trusted_peers.value(),
                     self.common_config.peer.id(),
+                    &self.roster_validation_cache,
                 );
                 let mut update = update;
                 let expected_epoch = self.epoch_for_height(block_height);

@@ -36,6 +36,7 @@ translator: manual
 - `NotFound`: Cursor חי שאינו קיים.
 - `CursorMismatch` / `CursorDone`: שגיאות פרוטוקול Cursor.
 - `FetchSizeTooBig`: חריגה ממגבלת שרת.
+- `GasBudgetExceeded`: חריגה מתקציב הגז/המטיריאליזציה של ביצוע השאילתה.
 - `InvalidSingularParameters`: פרמטרים בלתי נתמכים עבור שאילתות סינגולריות.
 - `CapacityLimit`: חנות השאילתות החיות מלאה.
 

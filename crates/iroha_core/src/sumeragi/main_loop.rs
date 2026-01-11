@@ -42,6 +42,7 @@ use iroha_data_model::{
 use iroha_logger::prelude::*;
 use iroha_p2p::network::data_frame_wire_len;
 use iroha_p2p::{Broadcast, Post, Priority, UpdateTopology, frame_plaintext_cap};
+use iroha_primitives::numeric::Numeric;
 use iroha_primitives::time::TimeSource;
 #[cfg(all(test, feature = "telemetry"))]
 use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
@@ -72,7 +73,10 @@ use super::{
     exec::{parent_state_from_witness, post_state_from_witness},
     penalties::PenaltyApplier,
     rbc_status,
-    stake_snapshot::{CommitStakeSnapshot, stake_quorum_reached_for_snapshot},
+    stake_snapshot::{
+        CommitStakeSnapshot, commit_stake_snapshot_from_map, fallback_stake_for_world,
+        stake_map_from_world, stake_quorum_reached_for_snapshot,
+    },
     *,
 };
 #[cfg_attr(not(feature = "telemetry"), allow(unused_imports))]
@@ -1060,6 +1064,153 @@ fn resolve_stake_snapshot_for_roster(
         );
     }
     CommitStakeSnapshot::from_roster(world, roster)
+}
+
+fn resolve_stake_snapshot_for_roster_from_cache(
+    stake_snapshot: Option<&CommitStakeSnapshot>,
+    roster: &[PeerId],
+    stake_map: &BTreeMap<PeerId, Numeric>,
+    fallback_stake: &Numeric,
+) -> Option<CommitStakeSnapshot> {
+    if let Some(snapshot) = stake_snapshot {
+        if snapshot.matches_roster(roster) {
+            return Some(snapshot.clone());
+        }
+        warn!(
+            roster_len = roster.len(),
+            "stake snapshot roster mismatch; recomputing"
+        );
+    }
+    commit_stake_snapshot_from_map(roster, stake_map, fallback_stake)
+}
+
+#[derive(Debug, Clone)]
+struct RosterValidationInputs {
+    pops: BTreeMap<PublicKey, Vec<u8>>,
+    stake_snapshot: Option<CommitStakeSnapshot>,
+}
+
+impl RosterValidationInputs {
+    fn from_cache(
+        cache: &RosterValidationCache,
+        roster: &[PeerId],
+        consensus_mode: ConsensusMode,
+        stake_snapshot: Option<&CommitStakeSnapshot>,
+    ) -> Self {
+        let stake_snapshot = match consensus_mode {
+            ConsensusMode::Permissioned => None,
+            ConsensusMode::Npos => resolve_stake_snapshot_for_roster_from_cache(
+                stake_snapshot,
+                roster,
+                &cache.stake_map,
+                &cache.fallback_stake,
+            ),
+        };
+        let mut pops = BTreeMap::new();
+        for peer in roster {
+            if let Some(pop) = cache.pops.get(peer.public_key()) {
+                pops.insert(peer.public_key().clone(), pop.clone());
+            }
+        }
+        Self {
+            pops,
+            stake_snapshot,
+        }
+    }
+
+    #[cfg(test)]
+    fn from_world(
+        world: &impl WorldReadOnly,
+        roster: &[PeerId],
+        consensus_mode: ConsensusMode,
+        stake_snapshot: Option<&CommitStakeSnapshot>,
+    ) -> Self {
+        let stake_map = stake_map_from_world(world);
+        let fallback_stake = fallback_stake_for_world(world);
+        let stake_snapshot = match consensus_mode {
+            ConsensusMode::Permissioned => None,
+            ConsensusMode::Npos => resolve_stake_snapshot_for_roster_from_cache(
+                stake_snapshot,
+                roster,
+                &stake_map,
+                &fallback_stake,
+            ),
+        };
+        let mut pops_by_key = BTreeMap::new();
+        for (_id, record) in world.consensus_keys().iter() {
+            if let Some(pop) = record.pop.as_ref() {
+                pops_by_key
+                    .entry(record.public_key.clone())
+                    .or_insert_with(|| pop.clone());
+            }
+        }
+        let mut pops = BTreeMap::new();
+        for peer in roster {
+            if let Some(pop) = pops_by_key.get(peer.public_key()) {
+                pops.insert(peer.public_key().clone(), pop.clone());
+            }
+        }
+        Self {
+            pops,
+            stake_snapshot,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RosterValidationCache {
+    epoch_schedule: super::EpochScheduleSnapshot,
+    pops: BTreeMap<PublicKey, Vec<u8>>,
+    stake_map: BTreeMap<PeerId, Numeric>,
+    fallback_stake: Numeric,
+}
+
+impl RosterValidationCache {
+    fn from_view(view: &StateView<'_>, fallback_epoch_length: u64) -> Self {
+        let epoch_schedule = super::EpochScheduleSnapshot::from_world_with_fallback(
+            view.world(),
+            fallback_epoch_length,
+        );
+        let mut pops = BTreeMap::new();
+        for (_id, record) in view.world().consensus_keys().iter() {
+            if let Some(pop) = record.pop.as_ref() {
+                pops.entry(record.public_key.clone())
+                    .or_insert_with(|| pop.clone());
+            }
+        }
+        let stake_map = stake_map_from_world(view.world());
+        let fallback_stake = fallback_stake_for_world(view.world());
+        Self {
+            epoch_schedule,
+            pops,
+            stake_map,
+            fallback_stake,
+        }
+    }
+
+    fn refresh_from_view(&mut self, view: &StateView<'_>, fallback_epoch_length: u64) {
+        *self = Self::from_view(view, fallback_epoch_length);
+    }
+
+    fn expected_epoch(&self, height: u64, consensus_mode: ConsensusMode) -> u64 {
+        if matches!(consensus_mode, ConsensusMode::Permissioned) {
+            return 0;
+        }
+        self.epoch_schedule.epoch_for_height(height)
+    }
+
+    fn inputs_for_roster(
+        &self,
+        roster: &[PeerId],
+        consensus_mode: ConsensusMode,
+        stake_snapshot: Option<&CommitStakeSnapshot>,
+    ) -> RosterValidationInputs {
+        RosterValidationInputs::from_cache(self, roster, consensus_mode, stake_snapshot)
+    }
+
+    fn stake_snapshot_for_roster(&self, roster: &[PeerId]) -> Option<CommitStakeSnapshot> {
+        commit_stake_snapshot_from_map(roster, &self.stake_map, &self.fallback_stake)
+    }
 }
 
 pub(crate) fn validate_block_sync_qc(
@@ -2160,14 +2311,16 @@ impl Actor {
             parent_height,
             parent_hash,
             None,
+            &self.roster_validation_cache,
         )
         .or_else(|| {
             block_sync_history_roster_for_block(
-                self.state.as_ref(),
                 consensus_mode,
                 parent_hash,
                 parent_height,
                 None,
+                &self.chain_id,
+                &self.roster_validation_cache,
             )
         }) {
             (selection.roster, selection.source.as_str())
@@ -2946,6 +3099,7 @@ pub(super) struct Actor {
     block_sync_gossip_limit: usize,
     last_advertised_topology: BTreeSet<PeerId>,
     last_commit_topology_hash: Option<HashOf<Vec<PeerId>>>,
+    last_commit_topology_membership_hash: Option<HashOf<Vec<PeerId>>>,
     last_committed_height: u64,
     #[cfg(feature = "telemetry")]
     telemetry: Telemetry,
@@ -2989,6 +3143,7 @@ pub(super) struct Actor {
     payload_rebroadcast_log: PayloadRebroadcastThrottle,
     block_sync_rebroadcast_log: PayloadRebroadcastThrottle,
     block_sync_fetch_log: PayloadRebroadcastThrottle,
+    roster_validation_cache: RosterValidationCache,
 }
 
 struct ActorSubsystems {
@@ -3003,6 +3158,13 @@ struct ActorSubsystems {
 enum CacheOutcome {
     Hit,
     Miss,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CommitTopologyChange {
+    None,
+    OrderOnly,
+    Membership,
 }
 
 impl CacheOutcome {
@@ -3765,24 +3927,27 @@ fn selection_from_roster_artifacts(
     block_view: Option<u64>,
     source: BlockSyncRosterSource,
     consensus_mode: ConsensusMode,
-    state: &State,
+    chain_id: &ChainId,
     mode_tag: &'static str,
+    roster_cache: &RosterValidationCache,
 ) -> Option<BlockSyncRosterSelection> {
-    let expected_epoch = epoch_for_height_from_state(state, block_height, consensus_mode);
-    let state_view = state.view();
-    let world = state_view.world();
+    let expected_epoch = roster_cache.expected_epoch(block_height, consensus_mode);
+    let mut cert_inputs: Option<RosterValidationInputs> = None;
+    let mut checkpoint_inputs: Option<RosterValidationInputs> = None;
     let validated_cert = commit_qc.and_then(|cert| {
+        let inputs = cert_inputs.get_or_insert_with(|| {
+            roster_cache.inputs_for_roster(&cert.validator_set, consensus_mode, stake_snapshot)
+        });
         match validate_commit_qc_roster(
             cert,
             block_hash,
             block_height,
             block_view,
             consensus_mode,
-            stake_snapshot,
             expected_epoch,
-            world,
-            &state.chain_id,
+            chain_id,
             mode_tag,
+            inputs,
         ) {
             Ok(roster) => Some((roster, cert)),
             Err(err) => {
@@ -3816,18 +3981,28 @@ fn selection_from_roster_artifacts(
             })
         });
     let validated_checkpoint = checkpoint.and_then(|chk| {
+        let reuse_cert_inputs =
+            commit_qc.is_some_and(|cert| cert.validator_set == chk.validator_set);
+        let inputs = if reuse_cert_inputs {
+            cert_inputs.get_or_insert_with(|| {
+                roster_cache.inputs_for_roster(&chk.validator_set, consensus_mode, stake_snapshot)
+            })
+        } else {
+            checkpoint_inputs.get_or_insert_with(|| {
+                roster_cache.inputs_for_roster(&chk.validator_set, consensus_mode, stake_snapshot)
+            })
+        };
         match validate_checkpoint_roster(
             chk,
             block_hash,
             block_height,
             block_view,
             consensus_mode,
-            stake_snapshot,
-            &state.chain_id,
+            chain_id,
             mode_tag,
             epoch,
             checkpoint_roots,
-            world,
+            inputs,
         ) {
             Ok(roster) => Some((roster, chk)),
             Err(err) => {
@@ -3926,25 +4101,19 @@ fn selection_from_roster_artifacts(
     }
 }
 
-fn epoch_for_height_from_state(state: &State, height: u64, consensus_mode: ConsensusMode) -> u64 {
-    if matches!(consensus_mode, ConsensusMode::Permissioned) {
-        return 0;
-    }
-    if height == 0 {
-        return 0;
-    }
-    let view = state.view();
-    super::EpochScheduleSnapshot::from_world(view.world()).epoch_for_height(height)
-}
-
 fn block_sync_history_roster_for_block(
-    state: &State,
     consensus_mode: ConsensusMode,
     block_hash: HashOf<BlockHeader>,
     block_height: u64,
     block_view: Option<u64>,
+    chain_id: &ChainId,
+    roster_cache: &RosterValidationCache,
 ) -> Option<BlockSyncRosterSelection> {
-    let cert = super::status::commit_qc_history()
+    let mode_tag = match consensus_mode {
+        ConsensusMode::Permissioned => PERMISSIONED_TAG,
+        ConsensusMode::Npos => NPOS_TAG,
+    };
+    let mut cert = super::status::commit_qc_history()
         .into_iter()
         .filter(|cert| cert.subject_block_hash == block_hash && cert.height <= block_height)
         .max_by(|a, b| a.height.cmp(&b.height).then_with(|| a.view.cmp(&b.view)));
@@ -3952,6 +4121,33 @@ fn block_sync_history_roster_for_block(
         .into_iter()
         .filter(|chk| chk.block_hash == block_hash && chk.height <= block_height)
         .max_by(|a, b| a.height.cmp(&b.height));
+
+    if cert.is_none() {
+        if let Some(record) = super::status::precommit_signers_for(block_hash) {
+            let expected_epoch = roster_cache.expected_epoch(record.height, consensus_mode);
+            let view_matches = block_view.map_or(true, |view| view == record.view);
+            if record.height <= block_height
+                && view_matches
+                && record.epoch == expected_epoch
+                && record.mode_tag.as_str() == mode_tag
+            {
+                cert = derive_block_sync_qc_from_signers(
+                    block_hash,
+                    record.height,
+                    record.view,
+                    record.epoch,
+                    record.parent_state_root,
+                    record.post_state_root,
+                    &record.validator_set,
+                    consensus_mode,
+                    record.stake_snapshot.as_ref(),
+                    record.mode_tag.as_str(),
+                    &record.signers,
+                    record.bls_aggregate_signature.clone(),
+                );
+            }
+        }
+    }
 
     if cert.is_none() && checkpoint.is_none() {
         return None;
@@ -3961,10 +4157,6 @@ fn block_sync_history_roster_for_block(
         BlockSyncRosterSource::QcHistory
     } else {
         BlockSyncRosterSource::ValidatorCheckpointHistory
-    };
-    let mode_tag = match consensus_mode {
-        ConsensusMode::Permissioned => PERMISSIONED_TAG,
-        ConsensusMode::Npos => NPOS_TAG,
     };
     let mut roster_height = block_height;
     let mut roster_view = block_view;
@@ -3989,8 +4181,9 @@ fn block_sync_history_roster_for_block(
         roster_view,
         source,
         consensus_mode,
-        state,
+        chain_id,
         mode_tag,
+        roster_cache,
     )
 }
 
@@ -4001,6 +4194,7 @@ fn persisted_roster_for_block(
     block_height: u64,
     block_hash: HashOf<BlockHeader>,
     block_view: Option<u64>,
+    roster_cache: &RosterValidationCache,
 ) -> Option<BlockSyncRosterSelection> {
     let mode_tag = match consensus_mode {
         ConsensusMode::Permissioned => PERMISSIONED_TAG,
@@ -4016,8 +4210,9 @@ fn persisted_roster_for_block(
             block_view,
             BlockSyncRosterSource::CommitRosterJournal,
             consensus_mode,
-            state,
+            &state.chain_id,
             mode_tag,
+            roster_cache,
         ) {
             if let Some(cert) = selection.commit_qc.as_ref() {
                 status::record_commit_qc(cert.clone());
@@ -4056,8 +4251,9 @@ fn persisted_roster_for_block(
             block_view,
             BlockSyncRosterSource::RosterSidecar,
             consensus_mode,
-            state,
+            &state.chain_id,
             mode_tag,
+            roster_cache,
         ) {
             if let Some(cert) = selection.commit_qc.as_ref() {
                 status::record_commit_qc(cert.clone());
@@ -4083,6 +4279,7 @@ fn block_sync_update_with_roster(
     fallback_consensus_mode: ConsensusMode,
     trusted: &iroha_config::parameters::actual::TrustedPeers,
     me: &PeerId,
+    roster_cache: &RosterValidationCache,
 ) -> super::message::BlockSyncUpdate {
     let block_hash = block.hash();
     let block_height = block.header().height().get();
@@ -4110,14 +4307,16 @@ fn block_sync_update_with_roster(
         block_height,
         block_hash,
         Some(block_view),
+        roster_cache,
     )
     .or_else(|| {
         block_sync_history_roster_for_block(
-            state,
             consensus_mode,
             block_hash,
             block_height,
             Some(block_view),
+            &state.chain_id,
+            roster_cache,
         )
     })
     .or_else(|| {
@@ -4147,7 +4346,7 @@ fn block_sync_update_with_roster(
     }
     if matches!(consensus_mode, ConsensusMode::Npos) && update.stake_snapshot.is_none() {
         if let Some(roster) = selection.as_ref().map(|sel| sel.roster.as_slice()) {
-            update.stake_snapshot = CommitStakeSnapshot::from_roster(state.view().world(), roster);
+            update.stake_snapshot = roster_cache.stake_snapshot_for_roster(roster);
         }
     }
     update
@@ -4159,11 +4358,10 @@ fn validate_commit_qc_roster(
     block_height: u64,
     block_view: Option<u64>,
     consensus_mode: ConsensusMode,
-    stake_snapshot: Option<&CommitStakeSnapshot>,
     expected_epoch: u64,
-    world: &impl WorldReadOnly,
     chain_id: &ChainId,
     mode_tag: &str,
+    inputs: &RosterValidationInputs,
 ) -> Result<Vec<PeerId>, RosterValidationError> {
     if cert.subject_block_hash != block_hash {
         return Err(RosterValidationError::BlockHashMismatch);
@@ -4258,10 +4456,10 @@ fn validate_commit_qc_roster(
             }
         }
         ConsensusMode::Npos => {
-            let resolved_snapshot =
-                resolve_stake_snapshot_for_roster(stake_snapshot, world, &cert.validator_set);
-            let snapshot = resolved_snapshot
+            let snapshot = inputs
+                .stake_snapshot
                 .as_ref()
+                .filter(|snapshot| snapshot.matches_roster(&cert.validator_set))
                 .ok_or(RosterValidationError::StakeSnapshotUnavailable)?;
             match stake_quorum_reached_for_snapshot(snapshot, &cert.validator_set, &signer_peers) {
                 Ok(true) => {}
@@ -4272,7 +4470,7 @@ fn validate_commit_qc_roster(
     }
     let preimage = qc_bls_preimage(cert, chain_id, mode_tag);
     let mut public_keys: Vec<&PublicKey> = Vec::with_capacity(signer_indices.len());
-    let mut pops: Vec<Vec<u8>> = Vec::with_capacity(signer_indices.len());
+    let mut pop_refs: Vec<&[u8]> = Vec::with_capacity(signer_indices.len());
     for idx in &signer_indices {
         let Some(peer) = cert.validator_set.get(*idx) else {
             return Err(RosterValidationError::SignerOutOfRange {
@@ -4281,13 +4479,12 @@ fn validate_commit_qc_roster(
             });
         };
         let pk = peer.public_key();
-        let Some(pop) = consensus_key_pop_for_public_key(world, pk) else {
+        let Some(pop) = inputs.pops.get(pk) else {
             return Err(RosterValidationError::AggregateSignatureInvalid);
         };
         public_keys.push(pk);
-        pops.push(pop);
+        pop_refs.push(pop.as_slice());
     }
-    let pop_refs: Vec<&[u8]> = pops.iter().map(Vec::as_slice).collect();
     if iroha_crypto::bls_normal_verify_preaggregated_same_message(
         &preimage,
         &cert.aggregate.bls_aggregate_signature,
@@ -4307,12 +4504,11 @@ fn validate_checkpoint_roster(
     block_height: u64,
     block_view: Option<u64>,
     consensus_mode: ConsensusMode,
-    stake_snapshot: Option<&CommitStakeSnapshot>,
     chain_id: &ChainId,
     mode_tag: &str,
     epoch: u64,
     roots: Option<(Hash, Hash)>,
-    world: &impl WorldReadOnly,
+    inputs: &RosterValidationInputs,
 ) -> Result<Vec<PeerId>, RosterValidationError> {
     if checkpoint.block_hash != block_hash {
         return Err(RosterValidationError::BlockHashMismatch);
@@ -4403,10 +4599,10 @@ fn validate_checkpoint_roster(
             }
         }
         ConsensusMode::Npos => {
-            let resolved_snapshot =
-                resolve_stake_snapshot_for_roster(stake_snapshot, world, &checkpoint.validator_set);
-            let snapshot = resolved_snapshot
+            let snapshot = inputs
+                .stake_snapshot
                 .as_ref()
+                .filter(|snapshot| snapshot.matches_roster(&checkpoint.validator_set))
                 .ok_or(RosterValidationError::StakeSnapshotUnavailable)?;
             match stake_quorum_reached_for_snapshot(
                 snapshot,
@@ -4443,7 +4639,7 @@ fn validate_checkpoint_roster(
     };
     let preimage = vote_preimage(chain_id, mode_tag, &vote);
     let mut public_keys: Vec<&PublicKey> = Vec::with_capacity(signer_indices.len());
-    let mut pops: Vec<Vec<u8>> = Vec::with_capacity(signer_indices.len());
+    let mut pop_refs: Vec<&[u8]> = Vec::with_capacity(signer_indices.len());
     for idx in &signer_indices {
         let Some(peer) = checkpoint.validator_set.get(*idx) else {
             return Err(RosterValidationError::SignerOutOfRange {
@@ -4452,13 +4648,12 @@ fn validate_checkpoint_roster(
             });
         };
         let pk = peer.public_key();
-        let Some(pop) = consensus_key_pop_for_public_key(world, pk) else {
+        let Some(pop) = inputs.pops.get(pk) else {
             return Err(RosterValidationError::AggregateSignatureInvalid);
         };
         public_keys.push(pk);
-        pops.push(pop);
+        pop_refs.push(pop.as_slice());
     }
-    let pop_refs: Vec<&[u8]> = pops.iter().map(Vec::as_slice).collect();
     if iroha_crypto::bls_normal_verify_preaggregated_same_message(
         &preimage,
         &checkpoint.bls_aggregate_signature,
@@ -4487,6 +4682,7 @@ fn select_block_sync_roster(
     consensus_mode: ConsensusMode,
     mode_tag: &'static str,
     allow_uncertified: bool,
+    roster_cache: &RosterValidationCache,
 ) -> Option<BlockSyncRosterSelection> {
     let block_view = block.header().view_change_index();
     if let Some(selection) = persisted {
@@ -4503,8 +4699,9 @@ fn select_block_sync_roster(
             Some(block_view),
             BlockSyncRosterSource::CommitRosterJournal,
             consensus_mode,
-            state,
+            &state.chain_id,
             mode_tag,
+            roster_cache,
         ) {
             return Some(selection);
         }
@@ -4525,8 +4722,9 @@ fn select_block_sync_roster(
             Some(block_view),
             BlockSyncRosterSource::CommitCheckpointPairHint,
             consensus_mode,
-            state,
+            &state.chain_id,
             mode_tag,
+            roster_cache,
         ) {
             return Some(selection);
         }
@@ -4542,8 +4740,9 @@ fn select_block_sync_roster(
             Some(block_view),
             BlockSyncRosterSource::QcHint,
             consensus_mode,
-            state,
+            &state.chain_id,
             mode_tag,
+            roster_cache,
         ) {
             return Some(selection);
         }
@@ -4557,19 +4756,21 @@ fn select_block_sync_roster(
             Some(block_view),
             BlockSyncRosterSource::ValidatorCheckpointHint,
             consensus_mode,
-            state,
+            &state.chain_id,
             mode_tag,
+            roster_cache,
         ) {
             return Some(selection);
         }
     }
 
     if let Some(history) = block_sync_history_roster_for_block(
-        state,
         consensus_mode,
         block_hash,
         block_height,
         Some(block_view),
+        &state.chain_id,
+        roster_cache,
     ) {
         return Some(history);
     }
@@ -6067,6 +6268,12 @@ impl Actor {
                 committee: MergeCommitteeState::new(),
             },
         };
+        let roster_validation_cache = {
+            let view = state.view();
+            let cache = RosterValidationCache::from_view(&view, config.epoch_length_blocks);
+            drop(view);
+            cache
+        };
 
         let mut actor = Self {
             config,
@@ -6087,6 +6294,7 @@ impl Actor {
             block_sync_gossip_limit,
             last_advertised_topology: BTreeSet::new(),
             last_commit_topology_hash: None,
+            last_commit_topology_membership_hash: None,
             last_committed_height: block_count.0 as u64,
             #[cfg(feature = "telemetry")]
             telemetry,
@@ -6124,6 +6332,7 @@ impl Actor {
             payload_rebroadcast_log: PayloadRebroadcastThrottle::default(),
             block_sync_rebroadcast_log: PayloadRebroadcastThrottle::default(),
             block_sync_fetch_log: PayloadRebroadcastThrottle::default(),
+            roster_validation_cache,
         };
         actor.refresh_p2p_topology();
         if let Some(roster) = roster_to_install_now {
@@ -6133,7 +6342,7 @@ impl Actor {
                 actor.pending_roster_activation = None;
             }
         }
-        actor.refresh_commit_topology_state(HashOf::new(&actor.effective_commit_topology()));
+        actor.refresh_commit_topology_state(&actor.effective_commit_topology());
         // Publish initial status so operator endpoints are populated even before the
         // first tick, and to make stalled actor detection easier in tests.
         super::status::set_tx_queue_backpressure(
@@ -8669,6 +8878,13 @@ impl Actor {
             }
         }
         self.subsystems.propose.forced_view_after_timeout = Some((height, next_view));
+        // Drop earlier views for the active height so proposals_seen can't grow unbounded.
+        self.subsystems
+            .propose
+            .proposals_seen
+            .retain(|(entry_height, entry_view)| {
+                *entry_height != height || *entry_view >= next_view
+            });
         record_view_change_cause_with_telemetry(cause, self.telemetry_handle());
         let committed_qc = self.latest_committed_qc();
         if let Some(mut highest_qc) = self.highest_qc.or(committed_qc) {

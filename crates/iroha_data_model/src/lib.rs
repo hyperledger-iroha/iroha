@@ -136,6 +136,8 @@ pub mod sorafs;
 pub mod soranet;
 /// World state snapshot representations.
 pub mod state;
+/// Subscription metadata schemas for trigger-based billing.
+pub mod subscription;
 /// Taikai broadcast metadata and segment envelope types.
 pub mod taikai;
 /// Transaction structures, payloads, and signatures.
@@ -348,6 +350,7 @@ pub mod prelude {
         role::prelude::*,
         sns::prelude::*,
         social::prelude::*,
+        subscription::prelude::*,
         transaction::prelude::*,
         trigger::prelude::*,
     };

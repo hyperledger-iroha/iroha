@@ -144,10 +144,7 @@ impl Actor {
             .propose
             .proposal_cache
             .pop_proposal(height, view);
-        self.subsystems
-            .propose
-            .proposals_seen
-            .remove(&(height, view));
+        // Keep proposals_seen so we don't re-propose in the same view after dropping a stale block.
 
         Some((tx_count, requeued, failures, duplicate_failures))
     }
