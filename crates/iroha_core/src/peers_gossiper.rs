@@ -971,6 +971,8 @@ mod tests {
             p2p_queue_cap_high: iroha_config::parameters::defaults::network::P2P_QUEUE_CAP_HIGH,
             p2p_queue_cap_low: iroha_config::parameters::defaults::network::P2P_QUEUE_CAP_LOW,
             p2p_post_queue_cap: iroha_config::parameters::defaults::network::P2P_POST_QUEUE_CAP,
+            p2p_subscriber_queue_cap:
+                iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
             happy_eyeballs_stagger:
                 iroha_config::parameters::defaults::network::HAPPY_EYEBALLS_STAGGER,
             addr_ipv6_first: false,

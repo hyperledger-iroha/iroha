@@ -178,7 +178,7 @@ use crate::{
     role::RoleIdWithOwner,
     settlement::SettlementEngine,
     smartcontracts::{
-        isi::world::isi::apply_policy_if_due,
+        isi::{triggers::trigger_is_enabled, world::isi::apply_policy_if_due},
         triggers::{
             set::{
                 ExecutableRef, Set as TriggerSet, SetBlock as TriggerSetBlock,
@@ -17730,6 +17730,11 @@ impl StateTransaction<'_, '_> {
                 .ok_or_else(|| FindError::Trigger(id.clone()))
                 .map_err(Error::from)
                 .map_err(ValidationFail::from)?;
+            if !trigger_is_enabled(action.metadata()) {
+                return Err(
+                    ValidationFail::from(Error::from(FindError::Trigger(id.clone()))).into(),
+                );
+            }
             if action.repeats.is_depleted() {
                 warn!(
                     trigger_id = %id,
@@ -17801,6 +17806,9 @@ impl StateTransaction<'_, '_> {
                     let _ = self.world.triggers.remove(trg_id.clone());
                     continue;
                 }
+                if !trigger_is_enabled(action.metadata()) {
+                    continue;
+                }
 
                 action.executable().clone()
             };
@@ -17837,6 +17845,9 @@ impl StateTransaction<'_, '_> {
 
         for event in &drained {
             for (trg_id, action) in self.world.triggers.data_triggers().iter() {
+                if !trigger_is_enabled(action.metadata()) {
+                    continue;
+                }
                 if action.filter.matches(event) {
                     // Preserve emission order so every matching event in a batch
                     // produces its own trigger execution.
@@ -28171,6 +28182,156 @@ mod tests {
             view.world.triggers().ids().get(&trigger_id).is_none(),
             "depleted trigger should be removed"
         );
+    }
+
+    #[test]
+    fn execute_called_trigger_rejects_disabled_trigger() {
+        use iroha_data_model::events::execute_trigger::{
+            ExecuteTriggerEvent, ExecuteTriggerEventFilter,
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let trigger_id: TriggerId = "disabled_by_call".parse().unwrap();
+
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        {
+            let mut stx = state_block.transaction();
+            Register::domain(Domain::new("wonderland".parse().unwrap()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(Account::new(ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                crate::smartcontracts::isi::triggers::TRIGGER_ENABLED_METADATA_KEY
+                    .parse::<Name>()
+                    .expect("valid metadata key"),
+                Json::from(false),
+            );
+            let action = Action::new(
+                Vec::<InstructionBox>::new(),
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                ExecuteTriggerEventFilter::new()
+                    .for_trigger(trigger_id.clone())
+                    .under_authority(ALICE_ID.clone()),
+            )
+            .with_metadata(metadata);
+            Register::trigger(Trigger::new(trigger_id.clone(), action))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            stx.apply();
+        }
+        state_block.commit().unwrap();
+
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let mut stx = state_block.transaction();
+        let event = ExecuteTriggerEvent {
+            trigger_id: trigger_id.clone(),
+            authority: ALICE_ID.clone(),
+            args: Json::default(),
+        };
+        let err = stx
+            .execute_called_trigger(&trigger_id, &event)
+            .expect_err("disabled trigger should be rejected");
+        match err {
+            TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+                InstructionExecutionError::Find(FindError::Trigger(id)),
+            )) => assert_eq!(id, trigger_id),
+            other => panic!("unexpected rejection: {other:?}"),
+        }
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let view = state.view();
+        assert!(
+            view.world.triggers().ids().get(&trigger_id).is_some(),
+            "disabled trigger should remain registered"
+        );
+    }
+
+    #[test]
+    fn execute_data_triggers_dfs_skips_disabled_trigger() {
+        use iroha_data_model::prelude::DataEvent;
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let trigger_id: TriggerId = "disabled_data_trigger".parse().unwrap();
+        let flag_key: Name = "flag".parse().expect("valid name");
+
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        {
+            let mut stx = state_block.transaction();
+            Register::domain(Domain::new("wonderland".parse().unwrap()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(Account::new(ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                crate::smartcontracts::isi::triggers::TRIGGER_ENABLED_METADATA_KEY
+                    .parse::<Name>()
+                    .expect("valid metadata key"),
+                Json::from(false),
+            );
+            let action = Action::new(
+                vec![InstructionBox::from(SetKeyValue::account(
+                    ALICE_ID.clone(),
+                    flag_key.clone(),
+                    Json::from(true),
+                ))],
+                Repeats::Indefinitely,
+                ALICE_ID.clone(),
+                data_pre::DataEventFilter::Any,
+            )
+            .with_metadata(metadata);
+            Register::trigger(Trigger::new(trigger_id.clone(), action))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            stx.apply();
+        }
+        state_block.commit().unwrap();
+
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let mut stx = state_block.transaction();
+        let event =
+            data_pre::DomainEvent::Created(Domain::new("alpha".parse().unwrap()).build(&ALICE_ID));
+        stx.world
+            .internal_event_buf
+            .push(Arc::new(DataEvent::Domain(event)));
+
+        let steps = stx
+            .execute_data_triggers_dfs(&ALICE_ID)
+            .expect("disabled trigger should be skipped");
+        assert!(steps.is_empty(), "disabled trigger should not execute");
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let view = state.view();
+        assert!(
+            view.world.triggers().ids().get(&trigger_id).is_some(),
+            "disabled trigger should remain registered"
+        );
+        let flag_val = view
+            .world
+            .map_account(&ALICE_ID, |account| {
+                account.value().metadata().get(&flag_key).cloned()
+            })
+            .unwrap();
+        assert!(flag_val.is_none(), "disabled trigger must not mutate state");
     }
 
     #[test]

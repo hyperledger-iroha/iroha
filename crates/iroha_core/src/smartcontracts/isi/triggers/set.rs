@@ -34,6 +34,7 @@ use norito::json;
 use norito::json::{FastJsonWrite, JsonSerialize as JsonSerializeTrait};
 use thiserror::Error;
 
+use super::trigger_is_enabled;
 use crate::smartcontracts::isi::triggers::specialized::{
     LoadedAction, LoadedActionTrait, SpecializedAction, SpecializedTrigger,
 };
@@ -667,27 +668,30 @@ impl<'set> SetBlock<'set> {
         _current_block_time_ms: u64,
     ) -> impl Iterator<Item = (TriggerId, LoadedAction<TimeEventFilter>)> + '_ {
         let key_height = "__registered_block_height".parse::<Name>().ok();
-        self.time_triggers.iter().flat_map(move |(id, action)| {
-            let height_key = key_height.clone();
-            let mut count = action.filter.count_matches(&event);
-            if let Repeats::Exactly(repeats) = action.repeats {
-                count = min(repeats, count);
-            }
-            // Skip firing triggers that were registered in the same block that is being applied now.
-            // Require `__registered_block_height` metadata set during registration.
-            (0..count)
-                .map(move |_| (id.clone(), action.clone()))
-                .filter(move |(_, act)| {
-                    let registered_height = height_key
-                        .as_ref()
-                        .and_then(|key| act.metadata().get(key))
-                        .and_then(|json| json.try_into_any_norito::<u64>().ok());
-                    match registered_height {
-                        Some(height) => height != current_block_height,
-                        None => false,
-                    }
-                })
-        })
+        self.time_triggers
+            .iter()
+            .filter(|(_, action)| trigger_is_enabled(action.metadata()))
+            .flat_map(move |(id, action)| {
+                let height_key = key_height.clone();
+                let mut count = action.filter.count_matches(&event);
+                if let Repeats::Exactly(repeats) = action.repeats {
+                    count = min(repeats, count);
+                }
+                // Skip firing triggers that were registered in the same block that is being applied now.
+                // Require `__registered_block_height` metadata set during registration.
+                (0..count)
+                    .map(move |_| (id.clone(), action.clone()))
+                    .filter(move |(_, act)| {
+                        let registered_height = height_key
+                            .as_ref()
+                            .and_then(|key| act.metadata().get(key))
+                            .and_then(|json| json.try_into_any_norito::<u64>().ok());
+                        match registered_height {
+                            Some(height) => height != current_block_height,
+                            None => false,
+                        }
+                    })
+            })
     }
 }
 
@@ -1121,6 +1125,8 @@ mod tests {
     };
     use iroha_primitives::{const_vec::ConstVec, json::Json};
 
+    use crate::smartcontracts::isi::triggers::TRIGGER_ENABLED_METADATA_KEY;
+
     use super::*;
 
     fn sample_hash() -> HashOf<IvmBytecode> {
@@ -1261,6 +1267,61 @@ mod tests {
         assert_eq!(
             matches_later, 1,
             "trigger should appear for subsequent blocks"
+        );
+    }
+
+    #[test]
+    fn match_time_event_skips_disabled_triggers() {
+        crate::test_alias::ensure();
+        let set = Set::default();
+        {
+            let mut block = set.block();
+            {
+                let mut tx = block.transaction();
+                let trigger_id: TriggerId = "time_trigger_disabled".parse().expect("valid id");
+                let authority: AccountId =
+                    "alice@wonderland".parse().expect("authority must parse");
+                let instruction = InstructionBox::from(Log::new(Level::INFO, "noop".to_owned()));
+                let executable = Executable::Instructions(ConstVec::from(vec![instruction]));
+                let mut action = SpecializedAction::new(
+                    executable,
+                    Repeats::Exactly(1),
+                    authority,
+                    TimeEventFilter(ExecutionTime::PreCommit),
+                );
+                let mut metadata = Metadata::default();
+                metadata.insert(
+                    "__registered_block_height".parse().expect("valid name"),
+                    Json::from(42_u64),
+                );
+                metadata.insert(
+                    "__registered_at_ms".parse().expect("valid name"),
+                    Json::from(1_234_u64),
+                );
+                metadata.insert(
+                    TRIGGER_ENABLED_METADATA_KEY.parse().expect("valid name"),
+                    Json::from(false),
+                );
+                action.metadata = metadata;
+                let trigger = SpecializedTrigger::new(trigger_id, action);
+                tx.add_time_trigger(trigger)
+                    .expect("time trigger should be added");
+                tx.apply();
+            }
+            block.commit();
+        }
+
+        let block_view = set.block();
+        let interval =
+            TimeInterval::new_since_to(Duration::from_millis(0), Duration::from_millis(1_234));
+        let time_event = TimeEvent { interval };
+
+        assert!(
+            block_view
+                .match_time_event(time_event, 99, 1_234)
+                .next()
+                .is_none(),
+            "disabled trigger must be skipped"
         );
     }
 

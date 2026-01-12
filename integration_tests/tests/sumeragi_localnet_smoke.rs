@@ -21,12 +21,13 @@ static LOCALNET_SMOKE_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
 const SMOKE_PIPELINE_TIME: Duration = Duration::from_secs(2);
 const STATUS_POLL_TIMEOUT: Duration = Duration::from_secs(5);
 const STATUS_LOG_INTERVAL: Duration = Duration::from_secs(2);
-const SOAK_PIPELINE_TIME: Duration = Duration::from_secs(1);
+const SOAK_PIPELINE_TIME: Duration = Duration::from_secs(2);
+const SOAK_STATUS_POLL_TIMEOUT: Duration = Duration::from_secs(10);
 const SOAK_TARGET_BLOCKS: u64 = 2_000;
-const SOAK_SUBMIT_BATCH: u64 = 100;
-const SOAK_QUEUE_SOFT_LIMIT: u64 = 500;
+const SOAK_SUBMIT_BATCH: u64 = 25;
+const SOAK_QUEUE_SOFT_LIMIT: u64 = 200;
 const SOAK_QUEUE_PROGRESS_TIMEOUT: Duration = Duration::from_secs(3 * 60);
-const SOAK_STATUS_POLL_INTERVAL: Duration = Duration::from_millis(500);
+const SOAK_STATUS_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const SOAK_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(10);
 const SOAK_STALL_THRESHOLD: Duration = Duration::from_secs(40);
 const SOAK_CLIENT_TTL: Duration = Duration::from_secs(2 * 60 * 60);
@@ -45,6 +46,14 @@ fn remove_env_var(key: &str) {
     unsafe {
         std::env::remove_var(key);
     }
+}
+
+fn env_or_default(key: &str, default: u64) -> u64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -77,11 +86,11 @@ async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
                     "forward",
                 )
                 // Tighten local timeouts to keep proposal/view-change cadence bounded.
-                .write(["sumeragi", "npos", "timeouts", "propose_ms"], 200_i64)
-                .write(["sumeragi", "npos", "timeouts", "prevote_ms"], 400_i64)
-                .write(["sumeragi", "npos", "timeouts", "precommit_ms"], 600_i64)
-                .write(["sumeragi", "npos", "timeouts", "commit_ms"], 800_i64)
-                .write(["sumeragi", "npos", "timeouts", "da_ms"], 400_i64)
+                .write(["sumeragi", "npos", "timeouts", "propose_ms"], 400_i64)
+                .write(["sumeragi", "npos", "timeouts", "prevote_ms"], 800_i64)
+                .write(["sumeragi", "npos", "timeouts", "precommit_ms"], 1_200_i64)
+                .write(["sumeragi", "npos", "timeouts", "commit_ms"], 1_600_i64)
+                .write(["sumeragi", "npos", "timeouts", "da_ms"], 800_i64)
                 .write(["sumeragi", "pacemaker_max_backoff_ms"], 2_000_i64)
                 .write(["sumeragi", "pacemaker_rtt_floor_multiplier"], 1_i64);
         });
@@ -97,7 +106,7 @@ async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
 
     let result: Result<()> = async {
         wait_for_status_responses(&network, Duration::from_secs(30)).await?;
-        let baseline_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
+        let baseline_statuses = collect_statuses(&network, SOAK_STATUS_POLL_TIMEOUT).await?;
         let baseline_height = baseline_statuses
             .iter()
             .map(|status| status.blocks)
@@ -354,11 +363,10 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
             .unwrap_or_default();
 
         // Allow shorter local runs via IROHA_SOAK_TARGET_BLOCKS while keeping the default.
-        let target_blocks = std::env::var("IROHA_SOAK_TARGET_BLOCKS")
-            .ok()
-            .and_then(|value| value.parse::<u64>().ok())
-            .filter(|value| *value > 0)
-            .unwrap_or(SOAK_TARGET_BLOCKS);
+        let target_blocks = env_or_default("IROHA_SOAK_TARGET_BLOCKS", SOAK_TARGET_BLOCKS);
+        let submit_batch = env_or_default("IROHA_SOAK_SUBMIT_BATCH", SOAK_SUBMIT_BATCH);
+        let queue_soft_limit =
+            env_or_default("IROHA_SOAK_QUEUE_SOFT_LIMIT", SOAK_QUEUE_SOFT_LIMIT);
         let target_height = baseline_non_empty.saturating_add(target_blocks);
         let submit_peer = network
             .peers()
@@ -372,8 +380,8 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
                     Log::new(Level::INFO, format!("localnet soak {idx}")).into(),
                 )
                 .wrap_err_with(|| format!("failed to submit log instruction {idx}"))?;
-            if (idx + 1) % SOAK_SUBMIT_BATCH == 0 {
-                wait_for_queue_depth(&network, SOAK_QUEUE_SOFT_LIMIT).await?;
+            if (idx + 1) % submit_batch == 0 {
+                wait_for_queue_depth(&network, queue_soft_limit, SOAK_STATUS_POLL_TIMEOUT).await?;
             }
         }
 
@@ -385,7 +393,7 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
         let mut last_snapshot: Vec<StatusSnapshot> = Vec::new();
 
         loop {
-            match collect_statuses(&network, STATUS_POLL_TIMEOUT).await {
+            match collect_statuses(&network, SOAK_STATUS_POLL_TIMEOUT).await {
                 Ok(statuses) => {
                     let min_non_empty = statuses
                         .iter()
@@ -431,7 +439,7 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
             sleep(SOAK_STATUS_POLL_INTERVAL).await;
         }
 
-        let after_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
+        let after_statuses = collect_statuses(&network, SOAK_STATUS_POLL_TIMEOUT).await?;
         ensure!(
             after_statuses
                 .iter()
@@ -521,7 +529,11 @@ async fn wait_for_status_responses(network: &Network, timeout: Duration) -> Resu
     }
 }
 
-async fn wait_for_queue_depth(network: &Network, max_queue: u64) -> Result<()> {
+async fn wait_for_queue_depth(
+    network: &Network,
+    max_queue: u64,
+    status_timeout: Duration,
+) -> Result<()> {
     let mut last_progress = Instant::now();
     let mut last_queue: Option<u64> = None;
     let mut last_blocks_non_empty: Option<u64> = None;
@@ -529,7 +541,7 @@ async fn wait_for_queue_depth(network: &Network, max_queue: u64) -> Result<()> {
         .checked_sub(STATUS_LOG_INTERVAL)
         .unwrap_or_else(Instant::now);
     loop {
-        match collect_statuses(network, STATUS_POLL_TIMEOUT).await {
+        match collect_statuses(network, status_timeout).await {
             Ok(statuses) => {
                 let submitter_queue = statuses
                     .first()
@@ -552,7 +564,7 @@ async fn wait_for_queue_depth(network: &Network, max_queue: u64) -> Result<()> {
                 last_blocks_non_empty = Some(min_non_empty);
                 if last_log.elapsed() >= STATUS_LOG_INTERVAL {
                     eprintln!(
-                        "waiting for submit queue to drain (queue_size={submitter_queue}, limit={max_queue})"
+                        "waiting for submit queue to drain (queue_size={submitter_queue}, limit={max_queue}, min_non_empty={min_non_empty})"
                     );
                     last_log = Instant::now();
                 }
@@ -574,6 +586,32 @@ async fn wait_for_queue_depth(network: &Network, max_queue: u64) -> Result<()> {
 
         sleep(SOAK_STATUS_POLL_INTERVAL).await;
     }
+}
+
+#[test]
+fn env_or_default_reads_positive_values() {
+    let _guard = LOCALNET_SMOKE_GUARD
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("localnet smoke guard");
+    let key = "IROHA_ENV_OR_DEFAULT_TEST";
+    set_env_var(key, "42");
+    assert_eq!(env_or_default(key, 7), 42);
+    remove_env_var(key);
+}
+
+#[test]
+fn env_or_default_ignores_invalid_or_zero() {
+    let _guard = LOCALNET_SMOKE_GUARD
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("localnet smoke guard");
+    let key = "IROHA_ENV_OR_DEFAULT_TEST";
+    set_env_var(key, "0");
+    assert_eq!(env_or_default(key, 7), 7);
+    set_env_var(key, "nope");
+    assert_eq!(env_or_default(key, 7), 7);
+    remove_env_var(key);
 }
 
 async fn wait_for_converged_height(

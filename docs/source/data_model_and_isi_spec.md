@@ -190,6 +190,7 @@ Common envelope: `InstructionExecutionError` with variants for evaluation errors
 - Mintability: `Once` allows a single mint and then flips to `Not`; `Limited(n)` allows exactly `n` mints before flipping to `Not`. Attempts to forbid minting on `Infinitely` cause `MintabilityError::ForbidMintOnMintable`, and configuring `Limited(0)` yields `MintabilityError::InvalidMintabilityTokens`.
 - Metadata operations are key‑exact; removing a non‑existent key is an error.
 - Trigger filters can be non‑mintable; then `Register<Trigger>` only permits `Exactly(1)` repeats.
+- Trigger metadata key `__enabled` (bool) gates execution; missing defaults to enabled, and disabled triggers are skipped across data/time/by-call paths.
 - Determinism: all arithmetic uses checked operations; under/overflow returns typed math errors; zero balances drop asset entries (no hidden state).
 
 ---
@@ -204,6 +205,7 @@ Common envelope: `InstructionExecutionError` with variants for evaluation errors
   - `Grant::account_role(role_id, account)`, `Grant::role_permission(perm, role)`, and their `Revoke` counterparts.
 - Trigger lifecycle:
   - `Register::trigger(Trigger::new(id, Action::new(exec, repeats, authority, filter)))` with mintability check implied by filter; `ExecuteTrigger::new(id).with_args(&args)` must match configured authority.
+  - Triggers can be disabled by setting metadata key `__enabled` to `false` (missing defaults to enabled); toggle via `SetKeyValue::trigger` or the IVM `set_trigger_enabled` syscall.
   - Trigger storage is repaired on load: duplicate ids, mismatched ids, and triggers referencing missing bytecode are dropped; bytecode reference counts are recomputed.
   - If a trigger's IVM bytecode is missing at execution time, the trigger is removed and the execution is treated as a no-op with a failure outcome.
   - Depleted triggers are removed immediately; if a depleted entry is encountered during execution it is pruned and treated as missing.

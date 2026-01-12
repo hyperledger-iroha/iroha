@@ -86,6 +86,12 @@ use crate::{
     http::{Method as HttpMethod, RequestBuilder, Response, StatusCode},
     http_default::{self, DefaultRequest, DefaultRequestBuilder, WebSocketError, WebSocketMessage},
     nexus::{CrossLaneTransferProof, verify_lane_relay_envelopes},
+    subscriptions::{
+        SubscriptionActionRequest, SubscriptionActionResponse, SubscriptionCreateRequest,
+        SubscriptionCreateResponse, SubscriptionGetResponse, SubscriptionListParams,
+        SubscriptionListResponse, SubscriptionPlanCreateRequest, SubscriptionPlanCreateResponse,
+        SubscriptionPlanListParams, SubscriptionPlanListResponse, SubscriptionUsageRequest,
+    },
 };
 // (No query imports needed here)
 
@@ -7389,6 +7395,218 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
+    /// POST `/v1/subscriptions/plans` with a JSON subscription plan payload.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
+    pub fn create_subscription_plan(
+        &self,
+        request: &SubscriptionPlanCreateRequest,
+    ) -> Result<SubscriptionPlanCreateResponse> {
+        let url = join_torii_url(&self.torii_url, "v1/subscriptions/plans");
+        let body = norito::json::to_vec(request)
+            .wrap_err("failed to encode subscription plan create request")?;
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::POST, url)
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON)
+                .body(body),
+        )?;
+        let payload = Self::parse_json_ok_response(&resp, "subscription plan create request")?;
+        norito::json::from_value(payload)
+            .wrap_err("failed to decode subscription plan create response")
+    }
+
+    /// GET `/v1/subscriptions/plans` with optional query parameters.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
+    pub fn list_subscription_plans(
+        &self,
+        params: &SubscriptionPlanListParams,
+    ) -> Result<SubscriptionPlanListResponse> {
+        let url = join_torii_url(&self.torii_url, "v1/subscriptions/plans");
+        let mut req = self
+            .default_request(HttpMethod::GET, url)
+            .header("Accept", APPLICATION_JSON);
+        if let Some(provider) = &params.provider {
+            req = req.param("provider", provider);
+        }
+        if let Some(limit) = params.limit {
+            req = req.param("limit", &limit);
+        }
+        if params.offset > 0 {
+            req = req.param("offset", &params.offset);
+        }
+        let resp = self.send_builder(req)?;
+        let payload = Self::parse_json_ok_response(&resp, "subscription plan list request")?;
+        norito::json::from_value(payload)
+            .wrap_err("failed to decode subscription plan list response")
+    }
+
+    /// POST `/v1/subscriptions` with a subscription creation payload.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
+    pub fn create_subscription(
+        &self,
+        request: &SubscriptionCreateRequest,
+    ) -> Result<SubscriptionCreateResponse> {
+        let url = join_torii_url(&self.torii_url, "v1/subscriptions");
+        let body = norito::json::to_vec(request)
+            .wrap_err("failed to encode subscription create request")?;
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::POST, url)
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON)
+                .body(body),
+        )?;
+        let payload = Self::parse_json_ok_response(&resp, "subscription create request")?;
+        norito::json::from_value(payload).wrap_err("failed to decode subscription create response")
+    }
+
+    /// GET `/v1/subscriptions` with optional query parameters.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
+    pub fn list_subscriptions(
+        &self,
+        params: &SubscriptionListParams,
+    ) -> Result<SubscriptionListResponse> {
+        let url = join_torii_url(&self.torii_url, "v1/subscriptions");
+        let mut req = self
+            .default_request(HttpMethod::GET, url)
+            .header("Accept", APPLICATION_JSON);
+        if let Some(owner) = &params.owned_by {
+            req = req.param("owned_by", owner);
+        }
+        if let Some(provider) = &params.provider {
+            req = req.param("provider", provider);
+        }
+        if let Some(status) = &params.status {
+            req = req.param("status", status);
+        }
+        if let Some(limit) = params.limit {
+            req = req.param("limit", &limit);
+        }
+        if params.offset > 0 {
+            req = req.param("offset", &params.offset);
+        }
+        let resp = self.send_builder(req)?;
+        let payload = Self::parse_json_ok_response(&resp, "subscription list request")?;
+        norito::json::from_value(payload).wrap_err("failed to decode subscription list response")
+    }
+
+    /// GET `/v1/subscriptions/{subscription_id}`.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
+    pub fn get_subscription(&self, subscription_id: &NftId) -> Result<SubscriptionGetResponse> {
+        let path = format!("v1/subscriptions/{subscription_id}");
+        let url = join_torii_url(&self.torii_url, &path);
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_JSON),
+        )?;
+        let payload = Self::parse_json_ok_response(&resp, "subscription get request")?;
+        norito::json::from_value(payload).wrap_err("failed to decode subscription get response")
+    }
+
+    /// POST `/v1/subscriptions/{subscription_id}/pause`.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
+    pub fn pause_subscription(
+        &self,
+        subscription_id: &NftId,
+        request: &SubscriptionActionRequest,
+    ) -> Result<SubscriptionActionResponse> {
+        self.post_subscription_action(subscription_id, "pause", request)
+            .wrap_err("pause subscription request failed")
+    }
+
+    /// POST `/v1/subscriptions/{subscription_id}/resume`.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
+    pub fn resume_subscription(
+        &self,
+        subscription_id: &NftId,
+        request: &SubscriptionActionRequest,
+    ) -> Result<SubscriptionActionResponse> {
+        self.post_subscription_action(subscription_id, "resume", request)
+            .wrap_err("resume subscription request failed")
+    }
+
+    /// POST `/v1/subscriptions/{subscription_id}/cancel`.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
+    pub fn cancel_subscription(
+        &self,
+        subscription_id: &NftId,
+        request: &SubscriptionActionRequest,
+    ) -> Result<SubscriptionActionResponse> {
+        self.post_subscription_action(subscription_id, "cancel", request)
+            .wrap_err("cancel subscription request failed")
+    }
+
+    /// POST `/v1/subscriptions/{subscription_id}/charge-now`.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
+    pub fn charge_subscription_now(
+        &self,
+        subscription_id: &NftId,
+        request: &SubscriptionActionRequest,
+    ) -> Result<SubscriptionActionResponse> {
+        self.post_subscription_action(subscription_id, "charge-now", request)
+            .wrap_err("charge subscription request failed")
+    }
+
+    /// POST `/v1/subscriptions/{subscription_id}/usage`.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
+    pub fn record_subscription_usage(
+        &self,
+        subscription_id: &NftId,
+        request: &SubscriptionUsageRequest,
+    ) -> Result<SubscriptionActionResponse> {
+        let path = format!("v1/subscriptions/{subscription_id}/usage");
+        let url = join_torii_url(&self.torii_url, &path);
+        let body = norito::json::to_vec(request)
+            .wrap_err("failed to encode subscription usage request")?;
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::POST, url)
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON)
+                .body(body),
+        )?;
+        let payload = Self::parse_json_ok_response(&resp, "subscription usage request")?;
+        norito::json::from_value(payload).wrap_err("failed to decode subscription usage response")
+    }
+
+    fn post_subscription_action(
+        &self,
+        subscription_id: &NftId,
+        action: &str,
+        request: &SubscriptionActionRequest,
+    ) -> Result<SubscriptionActionResponse> {
+        let path = format!("v1/subscriptions/{subscription_id}/{action}");
+        let url = join_torii_url(&self.torii_url, &path);
+        let body = norito::json::to_vec(request)
+            .wrap_err("failed to encode subscription action request")?;
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::POST, url)
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON)
+                .body(body),
+        )?;
+        let payload = Self::parse_json_ok_response(&resp, "subscription action request")?;
+        norito::json::from_value(payload).wrap_err("failed to decode subscription action response")
+    }
+
     /// GET `/v1/runtime/abi/active`
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -8257,6 +8475,329 @@ fn contains_tx_hash(
 
 fn hashes_match(target: &HashOf<SignedTransaction>, entry_hash: impl AsRef<[u8]>) -> bool {
     target.as_ref() == entry_hash.as_ref()
+}
+
+#[cfg(test)]
+mod subscription_http_tests {
+    use std::{
+        collections::BTreeMap,
+        sync::{Arc, Mutex},
+    };
+
+    use http::StatusCode;
+    use iroha_primitives::numeric::Numeric;
+    use iroha_test_samples::gen_account_in;
+    use norito::json::{JsonSerialize, Value as JsonValue};
+
+    use super::evidence_http_tests::{
+        SnapshotStore, base_url, client_with_base_url, json_response, with_mock_http,
+    };
+    use super::{
+        SubscriptionActionRequest, SubscriptionCreateRequest, SubscriptionPlanCreateRequest,
+    };
+    use super::{
+        SubscriptionActionResponse, SubscriptionCreateResponse, SubscriptionGetResponse,
+        SubscriptionListParams, SubscriptionListResponse, SubscriptionPlanListParams,
+        SubscriptionPlanListResponse, SubscriptionUsageRequest,
+    };
+    use crate::{
+        data_model::{
+            asset::AssetDefinitionId,
+            name::Name,
+            nft::NftId,
+            subscription::{
+                SubscriptionBilling, SubscriptionCadence, SubscriptionFixedPeriodCadence,
+                SubscriptionFixedPricing, SubscriptionPlan, SubscriptionState, SubscriptionStatus,
+            },
+            trigger::TriggerId,
+        },
+        http::{Method as HttpMethod, Response as HttpResponse},
+        http_default::RequestSnapshot,
+        subscriptions::{
+            SubscriptionListItem, SubscriptionPlanCreateResponse, SubscriptionPlanListItem,
+        },
+    };
+
+    fn encode_json<T: JsonSerialize>(value: &T) -> String {
+        norito::json::to_json(value).expect("encode json")
+    }
+
+    fn match_body<T: JsonSerialize>(snapshot: &RequestSnapshot, expected: &T) {
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode request body");
+        let expected = norito::json::to_value(expected).expect("encode expected body");
+        assert_eq!(
+            body, expected,
+            "unexpected request body for {}",
+            snapshot.url
+        );
+    }
+
+    #[test]
+    fn subscription_endpoints_build_requests() {
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let (provider, provider_key) = gen_account_in("commerce");
+        let (subscriber, subscriber_key) = gen_account_in("users");
+        let plan_id: AssetDefinitionId = "fixed_plan#commerce".parse().unwrap();
+        let subscription_id: NftId = "sub-1$subscriptions".parse().unwrap();
+        let billing_trigger_id: TriggerId = "sub-1-bill".parse().unwrap();
+        let charge_asset_id: AssetDefinitionId = "usd#pay".parse().unwrap();
+        let unit_key: Name = "compute_ms".parse().unwrap();
+        let provider_private = provider_key.private_key().clone();
+        let subscriber_private = subscriber_key.private_key().clone();
+
+        let plan = SubscriptionPlan {
+            provider: provider.clone(),
+            billing: SubscriptionBilling {
+                cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
+                    period_ms: 1_000,
+                }),
+                bill_for: crate::data_model::subscription::SubscriptionBillFor::PreviousPeriod,
+                retry_backoff_ms: 100,
+                max_failures: 3,
+                grace_ms: 500,
+            },
+            pricing: crate::data_model::subscription::SubscriptionPricing::Fixed(
+                SubscriptionFixedPricing {
+                    amount: Numeric::new(5_u32, 0),
+                    asset_definition: charge_asset_id.clone(),
+                },
+            ),
+        };
+
+        let subscription_state = SubscriptionState {
+            plan_id: plan_id.clone(),
+            provider: provider.clone(),
+            subscriber: subscriber.clone(),
+            status: SubscriptionStatus::Active,
+            current_period_start_ms: 0,
+            current_period_end_ms: 1,
+            next_charge_ms: 1,
+            failure_count: 0,
+            usage_accumulated: BTreeMap::new(),
+            billing_trigger_id: billing_trigger_id.clone(),
+        };
+
+        let plan_request = SubscriptionPlanCreateRequest {
+            authority: provider.clone(),
+            private_key: crate::data_model::prelude::ExposedPrivateKey(provider_private),
+            plan_id: plan_id.clone(),
+            plan: plan.clone(),
+        };
+        let plan_list_params = SubscriptionPlanListParams {
+            provider: Some(provider.to_string()),
+            limit: Some(10),
+            offset: 5,
+        };
+        let subscription_request = SubscriptionCreateRequest {
+            authority: subscriber.clone(),
+            private_key: crate::data_model::prelude::ExposedPrivateKey(subscriber_private.clone()),
+            subscription_id: subscription_id.clone(),
+            plan_id: plan_id.clone(),
+            billing_trigger_id: Some(billing_trigger_id.clone()),
+            usage_trigger_id: None,
+            first_charge_ms: Some(42),
+            grant_usage_to_provider: Some(true),
+        };
+        let subscription_list_params = SubscriptionListParams {
+            owned_by: Some(subscriber.to_string()),
+            provider: Some(provider.to_string()),
+            status: Some("active".to_string()),
+            limit: Some(25),
+            offset: 2,
+        };
+        let action_request = SubscriptionActionRequest {
+            authority: subscriber.clone(),
+            private_key: crate::data_model::prelude::ExposedPrivateKey(subscriber_private.clone()),
+            charge_at_ms: Some(170),
+        };
+        let usage_request = SubscriptionUsageRequest {
+            authority: subscriber.clone(),
+            private_key: crate::data_model::prelude::ExposedPrivateKey(subscriber_private),
+            unit_key: unit_key.clone(),
+            delta: Numeric::new(3_u32, 0),
+            usage_trigger_id: None,
+        };
+
+        let plan_create_response = SubscriptionPlanCreateResponse {
+            ok: true,
+            plan_id: plan_id.clone(),
+            tx_hash_hex: "aa".to_string(),
+        };
+        let plan_list_response = SubscriptionPlanListResponse {
+            items: vec![SubscriptionPlanListItem {
+                plan_id: plan_id.clone(),
+                plan: plan.clone(),
+            }],
+            total: 1,
+        };
+        let subscription_create_response = SubscriptionCreateResponse {
+            ok: true,
+            subscription_id: subscription_id.clone(),
+            billing_trigger_id: billing_trigger_id.clone(),
+            usage_trigger_id: None,
+            first_charge_ms: 42,
+            tx_hash_hex: "bb".to_string(),
+        };
+        let subscription_list_response = SubscriptionListResponse {
+            items: vec![SubscriptionListItem {
+                subscription_id: subscription_id.clone(),
+                subscription: subscription_state.clone(),
+                invoice: None,
+                plan: Some(plan.clone()),
+            }],
+            total: 1,
+        };
+        let subscription_get_response = SubscriptionGetResponse {
+            subscription_id: subscription_id.clone(),
+            subscription: subscription_state,
+            invoice: None,
+            plan: Some(plan),
+        };
+        let action_response = SubscriptionActionResponse {
+            ok: true,
+            subscription_id: subscription_id.clone(),
+            tx_hash_hex: "cc".to_string(),
+        };
+
+        let responder = {
+            let store = Arc::clone(&store);
+            let plan_create_json = encode_json(&plan_create_response);
+            let plan_list_json = encode_json(&plan_list_response);
+            let subscription_create_json = encode_json(&subscription_create_response);
+            let subscription_list_json = encode_json(&subscription_list_response);
+            let subscription_get_json = encode_json(&subscription_get_response);
+            let action_json = encode_json(&action_response);
+            move |snapshot: RequestSnapshot| {
+                store
+                    .lock()
+                    .expect("lock snapshot store")
+                    .push(snapshot.clone());
+                let path = snapshot.url.path();
+                let response = match (snapshot.method.clone(), path) {
+                    (HttpMethod::POST, "/v1/subscriptions/plans") => {
+                        json_response(StatusCode::OK, &plan_create_json)
+                    }
+                    (HttpMethod::GET, "/v1/subscriptions/plans") => {
+                        json_response(StatusCode::OK, &plan_list_json)
+                    }
+                    (HttpMethod::POST, "/v1/subscriptions") => {
+                        json_response(StatusCode::OK, &subscription_create_json)
+                    }
+                    (HttpMethod::GET, "/v1/subscriptions") => {
+                        json_response(StatusCode::OK, &subscription_list_json)
+                    }
+                    (HttpMethod::GET, "/v1/subscriptions/sub-1$subscriptions") => {
+                        json_response(StatusCode::OK, &subscription_get_json)
+                    }
+                    (HttpMethod::POST, "/v1/subscriptions/sub-1$subscriptions/pause")
+                    | (HttpMethod::POST, "/v1/subscriptions/sub-1$subscriptions/resume")
+                    | (HttpMethod::POST, "/v1/subscriptions/sub-1$subscriptions/cancel")
+                    | (HttpMethod::POST, "/v1/subscriptions/sub-1$subscriptions/charge-now")
+                    | (HttpMethod::POST, "/v1/subscriptions/sub-1$subscriptions/usage") => {
+                        json_response(StatusCode::OK, &action_json)
+                    }
+                    _ => HttpResponse::builder()
+                        .status(StatusCode::NOT_FOUND)
+                        .body(Vec::new())
+                        .expect("response build"),
+                };
+                Ok(response)
+            }
+        };
+
+        with_mock_http(responder, || {
+            let client = client_with_base_url(base_url());
+            client
+                .create_subscription_plan(&plan_request)
+                .expect("create subscription plan");
+            client
+                .list_subscription_plans(&plan_list_params)
+                .expect("list subscription plans");
+            client
+                .create_subscription(&subscription_request)
+                .expect("create subscription");
+            client
+                .list_subscriptions(&subscription_list_params)
+                .expect("list subscriptions");
+            client
+                .get_subscription(&subscription_id)
+                .expect("get subscription");
+            client
+                .pause_subscription(&subscription_id, &action_request)
+                .expect("pause subscription");
+            client
+                .resume_subscription(&subscription_id, &action_request)
+                .expect("resume subscription");
+            client
+                .cancel_subscription(&subscription_id, &action_request)
+                .expect("cancel subscription");
+            client
+                .charge_subscription_now(&subscription_id, &action_request)
+                .expect("charge subscription now");
+            client
+                .record_subscription_usage(&subscription_id, &usage_request)
+                .expect("record usage");
+        });
+
+        let snapshots = store.lock().expect("lock snapshots").clone();
+        assert_eq!(snapshots.len(), 10);
+        for snapshot in &snapshots {
+            match (snapshot.method.clone(), snapshot.url.path()) {
+                (HttpMethod::POST, "/v1/subscriptions/plans") => {
+                    match_body(snapshot, &plan_request);
+                }
+                (HttpMethod::GET, "/v1/subscriptions/plans") => {
+                    let params: Vec<(String, String)> = snapshot
+                        .url
+                        .query_pairs()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect();
+                    assert_eq!(
+                        params,
+                        vec![
+                            ("provider".to_string(), provider.to_string()),
+                            ("limit".to_string(), "10".to_string()),
+                            ("offset".to_string(), "5".to_string()),
+                        ]
+                    );
+                }
+                (HttpMethod::POST, "/v1/subscriptions") => {
+                    match_body(snapshot, &subscription_request);
+                }
+                (HttpMethod::GET, "/v1/subscriptions") => {
+                    let params: Vec<(String, String)> = snapshot
+                        .url
+                        .query_pairs()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect();
+                    assert_eq!(
+                        params,
+                        vec![
+                            ("owned_by".to_string(), subscriber.to_string()),
+                            ("provider".to_string(), provider.to_string()),
+                            ("status".to_string(), "active".to_string()),
+                            ("limit".to_string(), "25".to_string()),
+                            ("offset".to_string(), "2".to_string()),
+                        ]
+                    );
+                }
+                (HttpMethod::GET, "/v1/subscriptions/sub-1$subscriptions") => {
+                    assert!(snapshot.body.is_empty());
+                }
+                (HttpMethod::POST, "/v1/subscriptions/sub-1$subscriptions/pause")
+                | (HttpMethod::POST, "/v1/subscriptions/sub-1$subscriptions/resume")
+                | (HttpMethod::POST, "/v1/subscriptions/sub-1$subscriptions/cancel")
+                | (HttpMethod::POST, "/v1/subscriptions/sub-1$subscriptions/charge-now") => {
+                    match_body(snapshot, &action_request);
+                }
+                (HttpMethod::POST, "/v1/subscriptions/sub-1$subscriptions/usage") => {
+                    match_body(snapshot, &usage_request);
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -48,6 +48,13 @@ from iroha_torii_client.client import (
     OfflineTransferListPage,
     OfflineSummaryListItem,
     OfflineSummaryListPage,
+    SubscriptionPlanCreateResult,
+    SubscriptionPlanListItem,
+    SubscriptionPlanListPage,
+    SubscriptionCreateResult,
+    SubscriptionListItem,
+    SubscriptionListPage,
+    SubscriptionActionResult,
 )
 from .repo import RepoAgreementListPage
 
@@ -6468,6 +6475,13 @@ __all__ = [
     "AssetHolderListPage",
     "AccountPermissionRecord",
     "AccountPermissionListPage",
+    "SubscriptionPlanCreateResult",
+    "SubscriptionPlanListItem",
+    "SubscriptionPlanListPage",
+    "SubscriptionCreateResult",
+    "SubscriptionListItem",
+    "SubscriptionListPage",
+    "SubscriptionActionResult",
     "SumeragiEvidenceRecord",
     "SumeragiEvidenceListPage",
     "SumeragiQcSummary",

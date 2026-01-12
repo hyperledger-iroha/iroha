@@ -41,6 +41,10 @@ Settlement telemetry
 - `iroha_settlement_finality_events_total{kind="dvp|pvp",outcome="success|failure",final_state="none|delivery_only|payment_only|both|primary_only|counter_only"}` — finality counters grouped by settlement kind, execution outcome, and which legs remained committed. DvP reports `delivery_only|payment_only`, PvP reports `primary_only|counter_only`; `none` means both legs rolled back.
 - `iroha_settlement_fx_window_ms{kind="pvp",order,atomicity}` — histogram of observed PvP FX windows (milliseconds between committed legs) labelled by execution order (`delivery_then_payment`/`payment_then_delivery`) and atomicity policy (`all_or_nothing|commit_first_leg|commit_second_leg`).
 
+Subscription telemetry
+- `iroha_subscription_billing_attempts_total{pricing="fixed|usage"}` — billing trigger invocations grouped by pricing kind.
+- `iroha_subscription_billing_outcomes_total{pricing="fixed|usage",result="paid|failed|suspended|skipped"}` — billing outcomes grouped by pricing kind and result label.
+
 Network time telemetry
 - `nts_offset_ms` (gauge) — smoothed or raw offset vs local clock.
 - `nts_confidence_ms` (gauge) — MAD confidence bound.

@@ -750,6 +750,8 @@ pub mod network {
     pub const P2P_QUEUE_CAP_LOW: NonZeroUsize = nonzero!(32768_usize);
     /// Capacity for post-queue tasks (per topic).
     pub const P2P_POST_QUEUE_CAP: NonZeroUsize = nonzero!(2048_usize);
+    /// Capacity for the inbound P2P subscriber queue feeding the node relay.
+    pub const P2P_SUBSCRIBER_QUEUE_CAP: NonZeroUsize = nonzero!(8192_usize);
 
     // Optional DNS hostname refresh interval (None disables). Default 5 minutes.
     /// Interval between DNS resolution refreshes for peer hostnames.

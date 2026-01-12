@@ -96,6 +96,7 @@ pub(super) struct RbcPersistWorkerHandle {
 
 fn spawn_rbc_persist_worker(
     cfg: crate::sumeragi::RbcStoreConfig,
+    wake_tx: Option<mpsc::SyncSender<()>>,
 ) -> io::Result<RbcPersistWorkerHandle> {
     let (work_tx, work_rx) = mpsc::sync_channel::<RbcPersistWork>(RBC_PERSIST_WORK_QUEUE_CAP);
     let (result_tx, result_rx) =
@@ -116,6 +117,9 @@ fn spawn_rbc_persist_worker(
                 let outcome = store.persist_snapshot(&work.persisted);
                 if result_tx.send(RbcPersistResult { key, outcome }).is_err() {
                     break;
+                }
+                if let Some(wake) = wake_tx.as_ref() {
+                    let _ = wake.try_send(());
                 }
             }
         })?;
@@ -2746,7 +2750,7 @@ impl Actor {
         if cfg.max_sessions == 0 || cfg.max_bytes == 0 {
             return None;
         }
-        match spawn_rbc_persist_worker(cfg) {
+        match spawn_rbc_persist_worker(cfg, self.wake_tx.clone()) {
             Ok(handle) => {
                 self.subsystems.da_rbc.rbc.persist_tx = Some(handle.work_tx);
                 self.subsystems.da_rbc.rbc.persist_rx = Some(handle.result_rx);
@@ -2760,7 +2764,7 @@ impl Actor {
         }
     }
 
-    pub(super) fn poll_rbc_persist_results(&mut self) -> bool {
+    pub(in crate::sumeragi) fn poll_rbc_persist_results_inner(&mut self) -> bool {
         let Some(rx) = self.subsystems.da_rbc.rbc.persist_rx.as_ref() else {
             return false;
         };

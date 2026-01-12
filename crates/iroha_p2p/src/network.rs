@@ -1306,6 +1306,8 @@ pub struct NetworkBaseHandle<T: Pload, K: Kex, E: Enc> {
     network_message_high_sender: net_channel::Sender<NetworkMessage<T>>,
     /// Sender of low priority messages
     network_message_low_sender: net_channel::Sender<NetworkMessage<T>>,
+    /// Configured capacity for subscriber queues.
+    subscriber_queue_cap: core::num::NonZeroUsize,
     /// Key exchange used by network
     _key_exchange: core::marker::PhantomData<K>,
     /// Encryptor used by the network
@@ -1326,6 +1328,7 @@ impl<T: Pload, K: Kex, E: Enc> Clone for NetworkBaseHandle<T, K, E> {
             service_message_sender: self.service_message_sender.clone(),
             network_message_high_sender: self.network_message_high_sender.clone(),
             network_message_low_sender: self.network_message_low_sender.clone(),
+            subscriber_queue_cap: self.subscriber_queue_cap,
             _key_exchange: core::marker::PhantomData::<K>,
             _encryptor: core::marker::PhantomData::<E>,
         }
@@ -1402,6 +1405,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             service_message_sender: service_message_tx,
             network_message_high_sender,
             network_message_low_sender,
+            subscriber_queue_cap: core::num::NonZeroUsize::new(1).expect("nonzero"),
             _key_exchange: core::marker::PhantomData::<K>,
             _encryptor: core::marker::PhantomData::<E>,
         }
@@ -1441,6 +1445,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             p2p_queue_cap_high,
             p2p_queue_cap_low,
             p2p_post_queue_cap,
+            p2p_subscriber_queue_cap,
             dns_refresh_interval,
             dns_refresh_ttl,
             happy_eyeballs_stagger: config_happy_eyeballs_stagger,
@@ -1738,6 +1743,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                 service_message_sender: service_message_sender_handle,
                 network_message_high_sender,
                 network_message_low_sender,
+                subscriber_queue_cap: p2p_subscriber_queue_cap,
                 _key_exchange: core::marker::PhantomData,
                 _encryptor: core::marker::PhantomData,
             },
@@ -1833,6 +1839,12 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                 );
                 err.0
             })
+    }
+
+    /// Configured capacity for P2P subscriber queues.
+    #[must_use]
+    pub fn subscriber_queue_cap(&self) -> core::num::NonZeroUsize {
+        self.subscriber_queue_cap
     }
 
     /// Send [`Post<T>`] message on network actor.
@@ -2025,6 +2037,7 @@ mod handle_update_tests {
             service_message_sender: service_message_tx,
             network_message_high_sender,
             network_message_low_sender,
+            subscriber_queue_cap: core::num::NonZeroUsize::new(1).expect("nonzero"),
             _key_exchange: core::marker::PhantomData,
             _encryptor: core::marker::PhantomData,
         }
@@ -2056,6 +2069,12 @@ mod handle_update_tests {
             },
         };
         handle.update_consensus_caps(caps, false);
+    }
+
+    #[test]
+    fn closed_handle_reports_subscriber_queue_cap() {
+        let handle = closed_handle();
+        assert_eq!(handle.subscriber_queue_cap().get(), 1);
     }
 
     #[tokio::test]
@@ -2214,6 +2233,8 @@ mod accept_stream_tests {
             p2p_queue_cap_high: core::num::NonZeroUsize::new(128).unwrap(),
             p2p_queue_cap_low: core::num::NonZeroUsize::new(128).unwrap(),
             p2p_post_queue_cap: core::num::NonZeroUsize::new(64).unwrap(),
+            p2p_subscriber_queue_cap:
+                iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
             happy_eyeballs_stagger: std::time::Duration::from_millis(50),
             addr_ipv6_first: false,
             max_incoming: None,
@@ -4281,7 +4302,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         let is_high = matches!(frame.priority, Priority::High);
         let is_consensus = matches!(topic, message::Topic::Consensus);
         if matches!(topic, message::Topic::BlockSync) {
-            iroha_logger::info!(
+            iroha_logger::debug!(
                 peer=%peer_id,
                 high=is_high,
                 "enqueueing block sync frame to peer"
@@ -4851,7 +4872,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             payload,
         } = msg.payload;
         if matches!(topic, message::Topic::BlockSync) {
-            iroha_logger::info!(
+            iroha_logger::debug!(
                 from=%incoming_peer,
                 origin=%origin,
                 ?target,
@@ -4882,13 +4903,13 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                 topic,
                 message::Topic::TxGossip | message::Topic::TxGossipRestricted
             ) {
-                iroha_logger::info!(
+                iroha_logger::debug!(
                     peer=%deliver.peer,
                     size_bytes,
                     "delivering tx gossip frame to subscribers"
                 );
             } else if matches!(topic, message::Topic::Consensus) {
-                iroha_logger::info!(
+                iroha_logger::debug!(
                     peer=%deliver.peer,
                     size_bytes,
                     "delivering consensus frame to subscribers"
@@ -4952,7 +4973,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             return;
         }
         if matches!(topic, message::Topic::BlockSync) {
-            iroha_logger::info!(
+            iroha_logger::debug!(
                 peer = %msg.peer,
                 size_bytes = msg.payload_bytes,
                 "dispatching block sync message to subscribers"

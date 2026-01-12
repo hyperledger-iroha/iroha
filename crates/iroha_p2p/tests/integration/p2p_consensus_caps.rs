@@ -54,6 +54,7 @@ fn cfg(addr: iroha_primitives::addr::SocketAddr) -> Config {
         p2p_queue_cap_high: NonZeroUsize::new(128).unwrap(),
         p2p_queue_cap_low: NonZeroUsize::new(128).unwrap(),
         p2p_post_queue_cap: NonZeroUsize::new(64).unwrap(),
+        p2p_subscriber_queue_cap: iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
         max_incoming: None,
         max_total_connections: None,
         accept_rate_per_ip_per_sec: None,

@@ -3057,6 +3057,22 @@ pub(crate) mod valid {
             Self::enforce_consensus_key_lifecycle(block, topology, state)
         }
 
+        /// Validate block signatures against the topology without consulting state.
+        ///
+        /// Use this before calling [`Self::enforce_consensus_key_lifecycle`] to keep state access
+        /// scoped to consensus key checks only.
+        pub(crate) fn validate_signatures_subset_without_state(
+            block: &SignedBlock,
+            topology: &Topology,
+        ) -> Result<(), SignatureVerificationError> {
+            if block.header().is_genesis() {
+                return Ok(());
+            }
+            Self::verify_unique_signers(block)?;
+            Self::verify_signatures_against_topology(block, topology)?;
+            Ok(())
+        }
+
         pub(crate) fn enforce_consensus_key_lifecycle(
             block: &SignedBlock,
             topology: &Topology,

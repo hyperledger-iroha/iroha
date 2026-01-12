@@ -107,6 +107,60 @@ InstructionBox registerMultisig =
     InstructionBuilders.registerMultisig("controller@wonderland", spec);
 ```
 
+## Subscriptions
+
+```java
+import java.net.URI;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import org.hyperledger.iroha.android.client.SubscriptionToriiClient;
+import org.hyperledger.iroha.android.subscriptions.SubscriptionCreateRequest;
+import org.hyperledger.iroha.android.subscriptions.SubscriptionCreateResponse;
+import org.hyperledger.iroha.android.subscriptions.SubscriptionPlanCreateRequest;
+import org.hyperledger.iroha.android.subscriptions.SubscriptionPlanCreateResponse;
+import org.hyperledger.iroha.android.subscriptions.SubscriptionUsageRequest;
+
+SubscriptionToriiClient client =
+    SubscriptionToriiClient.builder()
+        .baseUri(URI.create("https://example.com"))
+        .build();
+
+Map<String, Object> plan = new LinkedHashMap<>();
+plan.put("kind", "fixed");
+plan.put("price", "120");
+plan.put("period", "month");
+
+SubscriptionPlanCreateResponse planResponse =
+    client.createSubscriptionPlan(
+            SubscriptionPlanCreateRequest.builder()
+                .authority("aws@commerce")
+                .privateKey("<hex>")
+                .planId("aws_compute#commerce")
+                .plan(plan)
+                .build())
+        .join();
+
+SubscriptionCreateResponse subscriptionResponse =
+    client.createSubscription(
+            SubscriptionCreateRequest.builder()
+                .authority("alice@wonderland")
+                .privateKey("<hex>")
+                .subscriptionId("sub-001$subscriptions")
+                .planId("aws_compute#commerce")
+                .build())
+        .join();
+
+client.recordSubscriptionUsage(
+        "sub-001$subscriptions",
+        SubscriptionUsageRequest.builder()
+            .authority("aws@commerce")
+            .privateKey("<hex>")
+            .unitKey("compute_ms")
+            .delta("3600000")
+            .build())
+    .join();
+```
+
 ## Layout
 
 ```
@@ -146,6 +200,11 @@ java/iroha_android
 │   │       │   ├── OfflineTransferList.java
 │   │       │   ├── OfflineAuditLogger.java
 │   │       │   └── OfflineWallet.java
+│   │       ├── subscriptions
+│   │       │   ├── SubscriptionPlanCreateRequest.java
+│   │       │   ├── SubscriptionCreateRequest.java
+│   │       │   ├── SubscriptionListResponse.java
+│   │       │   └── SubscriptionToriiException.java
 │   │       └── tx
 │   │           ├── SignedTransaction.java
 │   │           └── TransactionBuilder.java

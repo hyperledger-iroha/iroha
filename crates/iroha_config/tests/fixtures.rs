@@ -261,6 +261,7 @@ fn minimal_config_snapshot() {
                 p2p_queue_cap_high: 8192,
                 p2p_queue_cap_low: 32768,
                 p2p_post_queue_cap: 2048,
+                p2p_subscriber_queue_cap: 8192,
                 happy_eyeballs_stagger: 100ms,
                 addr_ipv6_first: false,
                 max_incoming: None,

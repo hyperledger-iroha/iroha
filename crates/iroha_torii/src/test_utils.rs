@@ -364,6 +364,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             p2p_queue_cap_high: nonzero!(128usize),
             p2p_queue_cap_low: nonzero!(512usize),
             p2p_post_queue_cap: nonzero!(128usize),
+            p2p_subscriber_queue_cap: nonzero!(128usize),
             happy_eyeballs_stagger: core::time::Duration::from_millis(100),
             addr_ipv6_first: false,
             max_incoming: None,

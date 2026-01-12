@@ -1212,6 +1212,8 @@ pub struct Network {
     pub p2p_queue_cap_low: NonZeroUsize,
     /// Capacity for the per-peer post queue (bounded mode only).
     pub p2p_post_queue_cap: NonZeroUsize,
+    /// Capacity for the inbound P2P subscriber queue feeding the node relay.
+    pub p2p_subscriber_queue_cap: NonZeroUsize,
     /// Stagger between parallel dial attempts for multi-address peers.
     pub happy_eyeballs_stagger: Duration,
     /// Prefer IPv6 addresses over hostnames/IPv4 when dialing.

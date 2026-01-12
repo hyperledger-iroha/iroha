@@ -16,8 +16,9 @@ use std::{
     ops::Deref,
     str::FromStr,
     sync::{
-        Arc, LazyLock,
+        Arc, LazyLock, OnceLock,
         atomic::{AtomicU64, AtomicUsize, Ordering},
+        mpsc,
     },
 };
 
@@ -235,6 +236,8 @@ pub struct Queue {
     tx_gossip: ArrayQueue<SignedTxHash>,
     /// Broadcast queue load so producers can observe backpressure.
     backpressure_tx: watch::Sender<BackpressureState>,
+    /// Optional wake handle for the Sumeragi worker when new transactions are enqueued.
+    sumeragi_wake: OnceLock<mpsc::SyncSender<()>>,
     /// Limits derived from Nexus configuration (TEU capacity, starvation bounds).
     nexus_limits: RwLock<QueueLimits>,
     /// Cached TEU metadata for queued transactions keyed by hash.
@@ -1228,6 +1231,7 @@ impl Queue {
                 tx_time_to_live: transaction_time_to_live,
                 tx_gossip: ArrayQueue::new(capacity.get()),
                 backpressure_tx,
+                sumeragi_wake: OnceLock::new(),
                 nexus_limits: RwLock::new(limits),
                 #[cfg(feature = "telemetry")]
                 tx_teu: DashMap::new(),
@@ -1265,6 +1269,16 @@ impl Queue {
         }
         queue.publish_backpressure_state(0, None);
         queue
+    }
+
+    pub(crate) fn set_sumeragi_wake(&self, wake: mpsc::SyncSender<()>) {
+        let _ = self.sumeragi_wake.set(wake);
+    }
+
+    fn wake_sumeragi(&self) {
+        if let Some(wake) = self.sumeragi_wake.get() {
+            let _ = wake.try_send(());
+        }
     }
 
     fn is_pending(&self, tx: &CheckedTransaction<'static>, state_view: &StateView) -> bool {
@@ -1744,6 +1758,7 @@ impl Queue {
             len = self.tx_hashes.len(),
             "Transaction queue length"
         );
+        self.wake_sumeragi();
         Ok(routing_decision)
     }
 
@@ -2636,6 +2651,7 @@ pub mod tests {
                     time_source: time_source.clone(),
                     tx_time_to_live: cfg.transaction_time_to_live,
                     backpressure_tx,
+                    sumeragi_wake: OnceLock::new(),
                     nexus_limits: parking_lot::RwLock::new(QueueLimits::default()),
                     #[cfg(feature = "telemetry")]
                     tx_teu: DashMap::new(),
@@ -3763,6 +3779,24 @@ pub mod tests {
     fn accepted_tx_by_someone(time_source: &TimeSource) -> AcceptedTransaction<'static> {
         let (account_id, key_pair) = gen_account_in("wonderland");
         accepted_tx_by(account_id, &key_pair, time_source)
+    }
+
+    #[test]
+    fn push_wakes_sumeragi_when_configured() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Queue::test(config_factory(), &time_source);
+        let (wake_tx, wake_rx) = std::sync::mpsc::sync_channel(1);
+        queue.set_sumeragi_wake(wake_tx);
+
+        queue
+            .push(accepted_tx_by_someone(&time_source), state.view())
+            .expect("push should succeed");
+
+        assert!(matches!(wake_rx.try_recv(), Ok(())));
     }
 
     #[tokio::test]

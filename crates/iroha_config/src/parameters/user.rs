@@ -7148,6 +7148,9 @@ pub struct Network {
     /// Capacity for the per-peer post queue (bounded mode only).
     #[config(default = "defaults::network::P2P_POST_QUEUE_CAP")]
     pub p2p_post_queue_cap: NonZeroUsize,
+    /// Capacity for the inbound P2P subscriber queue feeding the node relay.
+    #[config(default = "defaults::network::P2P_SUBSCRIBER_QUEUE_CAP")]
+    pub p2p_subscriber_queue_cap: NonZeroUsize,
     /// Stagger between parallel address dial attempts (Happy Eyeballs)
     #[config(default = "defaults::network::HAPPY_EYEBALLS_STAGGER.into()")]
     pub happy_eyeballs_stagger_ms: DurationMs,
@@ -7296,6 +7299,7 @@ impl Network {
             p2p_queue_cap_high,
             p2p_queue_cap_low,
             p2p_post_queue_cap,
+            p2p_subscriber_queue_cap,
             happy_eyeballs_stagger_ms,
             addr_ipv6_first,
             max_incoming,
@@ -7427,6 +7431,7 @@ impl Network {
                 p2p_queue_cap_high,
                 p2p_queue_cap_low,
                 p2p_post_queue_cap,
+                p2p_subscriber_queue_cap,
                 happy_eyeballs_stagger: happy_eyeballs_stagger_ms.get(),
                 addr_ipv6_first,
                 max_incoming,

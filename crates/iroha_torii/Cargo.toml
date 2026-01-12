@@ -82,6 +82,7 @@ iroha_config = { workspace = true }
 iroha_primitives = { workspace = true }
 iroha_logger = { workspace = true }
 iroha_data_model = { workspace = true, features = ["http", "json", "bridge"] }
+iroha_executor_data_model = { workspace = true }
 iroha_crypto = { workspace = true }
 sorafs_car = { workspace = true, features = ["manifest"] }
 sorafs_chunker = { workspace = true }

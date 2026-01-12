@@ -1,7 +1,9 @@
-"""Torii client helpers for attachments and prover reports.
+"""Torii client helpers for subscriptions, attachments, and prover reports.
 
 The API mirrors the app-facing endpoints exposed by Torii:
 
+* `/v1/subscriptions` and `/v1/subscriptions/plans` for subscription
+  management and billing triggers.
 * `/v1/zk/attachments` for uploading, listing, fetching, and deleting
   proof attachments stored on the node.
 * `/v1/zk/prover/reports` for querying background prover results.
@@ -272,6 +274,13 @@ __all__ = [
     "OfflineTransferListPage",
     "OfflineSummaryListItem",
     "OfflineSummaryListPage",
+    "SubscriptionPlanCreateResult",
+    "SubscriptionPlanListItem",
+    "SubscriptionPlanListPage",
+    "SubscriptionCreateResult",
+    "SubscriptionListItem",
+    "SubscriptionListPage",
+    "SubscriptionActionResult",
     "SumeragiQcSnapshot",
     "SumeragiPacemakerSnapshot",
     "SumeragiPhasesSnapshot",
@@ -1609,6 +1618,213 @@ class OfflineSummaryListPage:
 
 
 @dataclass(frozen=True)
+class SubscriptionPlanCreateResult:
+    """Response from ``POST /v1/subscriptions/plans``."""
+
+    ok: bool
+    plan_id: str
+    tx_hash_hex: str
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "SubscriptionPlanCreateResult":
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("subscription plan create response must be an object")
+
+        def require_str(key: str) -> str:
+            value = payload.get(key)
+            if not isinstance(value, str) or not value:
+                raise RuntimeError(f"subscription plan create response missing `{key}`")
+            return value
+
+        ok_value = payload.get("ok")
+        if not isinstance(ok_value, bool):
+            raise RuntimeError("subscription plan create response missing `ok`")
+        return cls(
+            ok=ok_value,
+            plan_id=require_str("plan_id"),
+            tx_hash_hex=require_str("tx_hash_hex"),
+        )
+
+
+@dataclass(frozen=True)
+class SubscriptionPlanListItem:
+    """Subscription plan record returned from ``GET /v1/subscriptions/plans``."""
+
+    plan_id: str
+    plan: Dict[str, Any]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "SubscriptionPlanListItem":
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("subscription plan list item must be an object")
+        plan_id = payload.get("plan_id")
+        if not isinstance(plan_id, str) or not plan_id:
+            raise RuntimeError("subscription plan list item missing `plan_id`")
+        plan_value = payload.get("plan")
+        if not isinstance(plan_value, Mapping):
+            raise RuntimeError("subscription plan list item missing `plan` object")
+        return cls(plan_id=plan_id, plan=dict(plan_value))
+
+
+@dataclass(frozen=True)
+class SubscriptionPlanListPage:
+    """Paginated list of subscription plans."""
+
+    items: List[SubscriptionPlanListItem]
+    total: int
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "SubscriptionPlanListPage":
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("subscription plan list response must be an object")
+        items_value = payload.get("items", [])
+        if items_value is None:
+            items_value = []
+        if not isinstance(items_value, list):
+            raise RuntimeError("subscription plan list `items` must be a list")
+        try:
+            total = int(payload.get("total", len(items_value)))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("subscription plan list `total` must be numeric") from exc
+        items = [SubscriptionPlanListItem.from_payload(entry) for entry in items_value]
+        return cls(items=items, total=total)
+
+
+@dataclass(frozen=True)
+class SubscriptionCreateResult:
+    """Response from ``POST /v1/subscriptions``."""
+
+    ok: bool
+    subscription_id: str
+    billing_trigger_id: str
+    usage_trigger_id: Optional[str]
+    first_charge_ms: int
+    tx_hash_hex: str
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "SubscriptionCreateResult":
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("subscription create response must be an object")
+
+        def require_str(key: str) -> str:
+            value = payload.get(key)
+            if not isinstance(value, str) or not value:
+                raise RuntimeError(f"subscription create response missing `{key}`")
+            return value
+
+        ok_value = payload.get("ok")
+        if not isinstance(ok_value, bool):
+            raise RuntimeError("subscription create response missing `ok`")
+        first_charge = payload.get("first_charge_ms")
+        if isinstance(first_charge, bool) or not isinstance(first_charge, (int, float)):
+            raise RuntimeError("subscription create response missing `first_charge_ms`")
+        usage_trigger = payload.get("usage_trigger_id")
+        if usage_trigger is None:
+            usage_value = None
+        elif isinstance(usage_trigger, str) and usage_trigger:
+            usage_value = usage_trigger
+        else:
+            raise RuntimeError("subscription create response `usage_trigger_id` must be a string when present")
+        return cls(
+            ok=ok_value,
+            subscription_id=require_str("subscription_id"),
+            billing_trigger_id=require_str("billing_trigger_id"),
+            usage_trigger_id=usage_value,
+            first_charge_ms=int(first_charge),
+            tx_hash_hex=require_str("tx_hash_hex"),
+        )
+
+
+@dataclass(frozen=True)
+class SubscriptionListItem:
+    """Subscription record returned by list/get endpoints."""
+
+    subscription_id: str
+    subscription: Dict[str, Any]
+    invoice: Optional[Dict[str, Any]]
+    plan: Optional[Dict[str, Any]]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "SubscriptionListItem":
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("subscription item must be an object")
+        subscription_id = payload.get("subscription_id")
+        if not isinstance(subscription_id, str) or not subscription_id:
+            raise RuntimeError("subscription item missing `subscription_id`")
+        subscription_value = payload.get("subscription")
+        if not isinstance(subscription_value, Mapping):
+            raise RuntimeError("subscription item missing `subscription` object")
+
+        def optional_object(key: str) -> Optional[Dict[str, Any]]:
+            value = payload.get(key)
+            if value is None:
+                return None
+            if isinstance(value, Mapping):
+                return dict(value)
+            raise RuntimeError(f"subscription item `{key}` must be an object when present")
+
+        return cls(
+            subscription_id=subscription_id,
+            subscription=dict(subscription_value),
+            invoice=optional_object("invoice"),
+            plan=optional_object("plan"),
+        )
+
+
+@dataclass(frozen=True)
+class SubscriptionListPage:
+    """Paginated list of subscriptions."""
+
+    items: List[SubscriptionListItem]
+    total: int
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "SubscriptionListPage":
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("subscription list response must be an object")
+        items_value = payload.get("items", [])
+        if items_value is None:
+            items_value = []
+        if not isinstance(items_value, list):
+            raise RuntimeError("subscription list `items` must be a list")
+        try:
+            total = int(payload.get("total", len(items_value)))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("subscription list `total` must be numeric") from exc
+        items = [SubscriptionListItem.from_payload(entry) for entry in items_value]
+        return cls(items=items, total=total)
+
+
+@dataclass(frozen=True)
+class SubscriptionActionResult:
+    """Response from subscription pause/resume/cancel/usage actions."""
+
+    ok: bool
+    subscription_id: str
+    tx_hash_hex: str
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "SubscriptionActionResult":
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("subscription action response must be an object")
+
+        def require_str(key: str) -> str:
+            value = payload.get(key)
+            if not isinstance(value, str) or not value:
+                raise RuntimeError(f"subscription action response missing `{key}`")
+            return value
+
+        ok_value = payload.get("ok")
+        if not isinstance(ok_value, bool):
+            raise RuntimeError("subscription action response missing `ok`")
+        return cls(
+            ok=ok_value,
+            subscription_id=require_str("subscription_id"),
+            tx_hash_hex=require_str("tx_hash_hex"),
+        )
+
+
+@dataclass(frozen=True)
 class TriggerRecord:
     """Trigger definition surfaced by listing/query endpoints."""
 
@@ -2667,6 +2883,392 @@ class ToriiClient:
         self._expect_status(response, {200})
         body = self._ensure_mapping(response.json(), "connect admission manifest")
         return self._parse_connect_manifest(body, context="connect admission manifest")
+
+    # ------------------------------------------------------------------
+    # Subscriptions
+    # ------------------------------------------------------------------
+    def list_subscription_plans(
+        self,
+        *,
+        provider: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+    ) -> SubscriptionPlanListPage:
+        """List subscription plans via ``GET /v1/subscriptions/plans``."""
+
+        params: Dict[str, Any] = {}
+        if provider is not None:
+            params["provider"] = self._normalize_optional_string(
+                provider,
+                "subscriptions.plans.provider",
+            )
+        limit_value = self._normalize_optional_int(limit, "subscriptions.plans.limit")
+        if limit_value is not None:
+            params["limit"] = limit_value
+        offset_value = self._normalize_optional_int(
+            offset,
+            "subscriptions.plans.offset",
+            allow_zero=True,
+        )
+        if offset_value is not None:
+            params["offset"] = offset_value
+        response = self._request(
+            "GET",
+            "/v1/subscriptions/plans",
+            params=self._clean_params(params),
+        )
+        self._expect_status(response, {200})
+        return SubscriptionPlanListPage.from_payload(response.json())
+
+    def create_subscription_plan(
+        self,
+        *,
+        authority: str,
+        private_key: str,
+        plan_id: str,
+        plan: Mapping[str, Any],
+    ) -> SubscriptionPlanCreateResult:
+        """Create a subscription plan via ``POST /v1/subscriptions/plans``."""
+
+        payload = {
+            "authority": self._require_non_empty_string(
+                authority,
+                "subscription plan authority",
+            ),
+            "private_key": self._require_non_empty_string(
+                private_key,
+                "subscription plan private_key",
+            ),
+            "plan_id": self._require_non_empty_string(
+                plan_id,
+                "subscription plan plan_id",
+            ),
+            "plan": self._clone_json_payload(plan, context="subscription plan"),
+        }
+        body = self._post_json(
+            "/v1/subscriptions/plans",
+            payload,
+            context="subscription plan create response",
+            expected_status=(200,),
+        )
+        return SubscriptionPlanCreateResult.from_payload(body)
+
+    def list_subscriptions(
+        self,
+        *,
+        owned_by: Optional[str] = None,
+        provider: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+    ) -> SubscriptionListPage:
+        """List subscriptions via ``GET /v1/subscriptions``."""
+
+        params: Dict[str, Any] = {}
+        if owned_by is not None:
+            params["owned_by"] = self._normalize_optional_string(
+                owned_by,
+                "subscriptions.owned_by",
+            )
+        if provider is not None:
+            params["provider"] = self._normalize_optional_string(
+                provider,
+                "subscriptions.provider",
+            )
+        if status is not None:
+            params["status"] = self._normalize_subscription_status(
+                status,
+                "subscriptions.status",
+            )
+        limit_value = self._normalize_optional_int(limit, "subscriptions.limit")
+        if limit_value is not None:
+            params["limit"] = limit_value
+        offset_value = self._normalize_optional_int(
+            offset,
+            "subscriptions.offset",
+            allow_zero=True,
+        )
+        if offset_value is not None:
+            params["offset"] = offset_value
+        response = self._request(
+            "GET",
+            "/v1/subscriptions",
+            params=self._clean_params(params),
+        )
+        self._expect_status(response, {200})
+        return SubscriptionListPage.from_payload(response.json())
+
+    def create_subscription(
+        self,
+        *,
+        authority: str,
+        private_key: str,
+        subscription_id: str,
+        plan_id: str,
+        billing_trigger_id: Optional[str] = None,
+        usage_trigger_id: Optional[str] = None,
+        first_charge_ms: Optional[int] = None,
+        grant_usage_to_provider: Optional[bool] = None,
+    ) -> SubscriptionCreateResult:
+        """Create a subscription via ``POST /v1/subscriptions``."""
+
+        payload: Dict[str, Any] = {
+            "authority": self._require_non_empty_string(
+                authority,
+                "subscription authority",
+            ),
+            "private_key": self._require_non_empty_string(
+                private_key,
+                "subscription private_key",
+            ),
+            "subscription_id": self._require_non_empty_string(
+                subscription_id,
+                "subscription subscription_id",
+            ),
+            "plan_id": self._require_non_empty_string(
+                plan_id,
+                "subscription plan_id",
+            ),
+        }
+        billing_value = self._normalize_optional_string(
+            billing_trigger_id,
+            "subscription billing_trigger_id",
+        )
+        if billing_value is not None:
+            payload["billing_trigger_id"] = billing_value
+        usage_value = self._normalize_optional_string(
+            usage_trigger_id,
+            "subscription usage_trigger_id",
+        )
+        if usage_value is not None:
+            payload["usage_trigger_id"] = usage_value
+        charge_value = self._normalize_optional_int(
+            first_charge_ms,
+            "subscription first_charge_ms",
+            allow_zero=True,
+        )
+        if charge_value is not None:
+            payload["first_charge_ms"] = charge_value
+        if grant_usage_to_provider is not None:
+            payload["grant_usage_to_provider"] = self._coerce_bool(
+                grant_usage_to_provider,
+                "subscription grant_usage_to_provider",
+            )
+        body = self._post_json(
+            "/v1/subscriptions",
+            payload,
+            context="subscription create response",
+            expected_status=(200,),
+        )
+        return SubscriptionCreateResult.from_payload(body)
+
+    def get_subscription(self, subscription_id: str) -> Optional[SubscriptionListItem]:
+        """Fetch a single subscription (`GET /v1/subscriptions/{subscription_id}`)."""
+
+        normalized_id = self._require_non_empty_string(
+            subscription_id,
+            "subscription_id",
+        )
+        encoded_id = quote(normalized_id, safe="")
+        response = self._request("GET", f"/v1/subscriptions/{encoded_id}")
+        if response.status_code == 404:
+            return None
+        self._expect_status(response, {200})
+        payload = self._ensure_mapping(response.json(), "subscription get response")
+        return SubscriptionListItem.from_payload(payload)
+
+    def pause_subscription(
+        self,
+        subscription_id: str,
+        *,
+        authority: str,
+        private_key: str,
+    ) -> SubscriptionActionResult:
+        """Pause a subscription (`POST /v1/subscriptions/{subscription_id}/pause`)."""
+
+        normalized_id = self._require_non_empty_string(
+            subscription_id,
+            "subscription_id",
+        )
+        encoded_id = quote(normalized_id, safe="")
+        payload = {
+            "authority": self._require_non_empty_string(
+                authority,
+                "subscription pause authority",
+            ),
+            "private_key": self._require_non_empty_string(
+                private_key,
+                "subscription pause private_key",
+            ),
+        }
+        body = self._post_json(
+            f"/v1/subscriptions/{encoded_id}/pause",
+            payload,
+            context="subscription pause response",
+            expected_status=(200,),
+        )
+        return SubscriptionActionResult.from_payload(body)
+
+    def resume_subscription(
+        self,
+        subscription_id: str,
+        *,
+        authority: str,
+        private_key: str,
+        charge_at_ms: Optional[int] = None,
+    ) -> SubscriptionActionResult:
+        """Resume a subscription (`POST /v1/subscriptions/{subscription_id}/resume`)."""
+
+        normalized_id = self._require_non_empty_string(
+            subscription_id,
+            "subscription_id",
+        )
+        encoded_id = quote(normalized_id, safe="")
+        payload: Dict[str, Any] = {
+            "authority": self._require_non_empty_string(
+                authority,
+                "subscription resume authority",
+            ),
+            "private_key": self._require_non_empty_string(
+                private_key,
+                "subscription resume private_key",
+            ),
+        }
+        charge_value = self._normalize_optional_int(
+            charge_at_ms,
+            "subscription resume charge_at_ms",
+            allow_zero=True,
+        )
+        if charge_value is not None:
+            payload["charge_at_ms"] = charge_value
+        body = self._post_json(
+            f"/v1/subscriptions/{encoded_id}/resume",
+            payload,
+            context="subscription resume response",
+            expected_status=(200,),
+        )
+        return SubscriptionActionResult.from_payload(body)
+
+    def cancel_subscription(
+        self,
+        subscription_id: str,
+        *,
+        authority: str,
+        private_key: str,
+    ) -> SubscriptionActionResult:
+        """Cancel a subscription (`POST /v1/subscriptions/{subscription_id}/cancel`)."""
+
+        normalized_id = self._require_non_empty_string(
+            subscription_id,
+            "subscription_id",
+        )
+        encoded_id = quote(normalized_id, safe="")
+        payload = {
+            "authority": self._require_non_empty_string(
+                authority,
+                "subscription cancel authority",
+            ),
+            "private_key": self._require_non_empty_string(
+                private_key,
+                "subscription cancel private_key",
+            ),
+        }
+        body = self._post_json(
+            f"/v1/subscriptions/{encoded_id}/cancel",
+            payload,
+            context="subscription cancel response",
+            expected_status=(200,),
+        )
+        return SubscriptionActionResult.from_payload(body)
+
+    def charge_subscription_now(
+        self,
+        subscription_id: str,
+        *,
+        authority: str,
+        private_key: str,
+        charge_at_ms: Optional[int] = None,
+    ) -> SubscriptionActionResult:
+        """Charge a subscription now (`POST /v1/subscriptions/{subscription_id}/charge-now`)."""
+
+        normalized_id = self._require_non_empty_string(
+            subscription_id,
+            "subscription_id",
+        )
+        encoded_id = quote(normalized_id, safe="")
+        payload: Dict[str, Any] = {
+            "authority": self._require_non_empty_string(
+                authority,
+                "subscription charge authority",
+            ),
+            "private_key": self._require_non_empty_string(
+                private_key,
+                "subscription charge private_key",
+            ),
+        }
+        charge_value = self._normalize_optional_int(
+            charge_at_ms,
+            "subscription charge_at_ms",
+            allow_zero=True,
+        )
+        if charge_value is not None:
+            payload["charge_at_ms"] = charge_value
+        body = self._post_json(
+            f"/v1/subscriptions/{encoded_id}/charge-now",
+            payload,
+            context="subscription charge-now response",
+            expected_status=(200,),
+        )
+        return SubscriptionActionResult.from_payload(body)
+
+    def record_subscription_usage(
+        self,
+        subscription_id: str,
+        *,
+        authority: str,
+        private_key: str,
+        unit_key: str,
+        delta: Any,
+        usage_trigger_id: Optional[str] = None,
+    ) -> SubscriptionActionResult:
+        """Record usage for a subscription (`POST /v1/subscriptions/{subscription_id}/usage`)."""
+
+        normalized_id = self._require_non_empty_string(
+            subscription_id,
+            "subscription_id",
+        )
+        encoded_id = quote(normalized_id, safe="")
+        payload: Dict[str, Any] = {
+            "authority": self._require_non_empty_string(
+                authority,
+                "subscription usage authority",
+            ),
+            "private_key": self._require_non_empty_string(
+                private_key,
+                "subscription usage private_key",
+            ),
+            "unit_key": self._require_non_empty_string(
+                unit_key,
+                "subscription usage unit_key",
+            ),
+            "delta": self._normalize_numeric_literal(
+                delta,
+                "subscription usage delta",
+            ),
+        }
+        usage_value = self._normalize_optional_string(
+            usage_trigger_id,
+            "subscription usage usage_trigger_id",
+        )
+        if usage_value is not None:
+            payload["usage_trigger_id"] = usage_value
+        body = self._post_json(
+            f"/v1/subscriptions/{encoded_id}/usage",
+            payload,
+            context="subscription usage response",
+            expected_status=(200,),
+        )
+        return SubscriptionActionResult.from_payload(body)
 
     # ------------------------------------------------------------------
     # UAID & Space Directory surfaces
@@ -3745,6 +4347,57 @@ class ToriiClient:
                 f"{context} must be {'non-negative' if allow_zero else 'positive'}"
             )
         return number
+
+    @staticmethod
+    def _normalize_numeric_literal(
+        value: Any, context: str, *, allow_negative: bool = False
+    ) -> str:
+        if isinstance(value, bool):
+            raise TypeError(f"{context} must be a numeric literal")
+        if isinstance(value, str):
+            raw = value.strip()
+        elif isinstance(value, (int, float)):
+            if isinstance(value, float) and not math.isfinite(value):
+                raise ValueError(f"{context} must be a finite number")
+            raw = str(value)
+        else:
+            raise TypeError(f"{context} must be a numeric literal")
+        if not raw:
+            raise ValueError(f"{context} must be a numeric literal")
+        sign = raw[0]
+        if sign in ("-", "+"):
+            if sign == "-" and not allow_negative:
+                raise ValueError(f"{context} must be non-negative")
+            digits = raw[1:]
+        else:
+            digits = raw
+        if not digits:
+            raise ValueError(f"{context} must be a numeric literal")
+        seen_dot = False
+        seen_digit = False
+        for ch in digits:
+            if ch == ".":
+                if seen_dot:
+                    raise ValueError(f"{context} must be a numeric literal")
+                seen_dot = True
+                continue
+            if not ch.isdigit():
+                raise ValueError(f"{context} must be a numeric literal")
+            seen_digit = True
+        if not seen_digit:
+            raise ValueError(f"{context} must be a numeric literal")
+        return raw
+
+    @staticmethod
+    def _normalize_subscription_status(value: Any, context: str) -> str:
+        if not isinstance(value, str):
+            raise TypeError(f"{context} must be a string")
+        normalized = value.strip().lower()
+        if not normalized:
+            raise ValueError(f"{context} must be a non-empty string")
+        if normalized not in _SUBSCRIPTION_STATUSES:
+            raise ValueError(f"{context} must be one of {sorted(_SUBSCRIPTION_STATUSES)}")
+        return normalized
 
     def _post_json(
         self,
@@ -6242,3 +6895,13 @@ _FILTER_MAPPING: Dict[str, str] = {
     "messages_only": "messages_only",
     "id": "id",
 }
+
+_SUBSCRIPTION_STATUSES = frozenset(
+    {
+        "active",
+        "paused",
+        "past_due",
+        "canceled",
+        "suspended",
+    }
+)

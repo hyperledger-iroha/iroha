@@ -1,6 +1,8 @@
 //! This module contains implementations of smart-contract traits and
 //! instructions for triggers in Iroha.
 
+use std::sync::OnceLock;
+
 use iroha_data_model::{
     ValidationFail,
     isi::error::MathError,
@@ -13,6 +15,32 @@ use iroha_telemetry::metrics;
 
 pub mod set;
 pub mod specialized;
+
+/// Trigger metadata key toggled by `set_trigger_enabled` syscalls/ISIs.
+pub(crate) const TRIGGER_ENABLED_METADATA_KEY: &str = "__enabled";
+
+fn trigger_enabled_metadata_key() -> &'static Name {
+    static KEY: OnceLock<Name> = OnceLock::new();
+    KEY.get_or_init(|| {
+        TRIGGER_ENABLED_METADATA_KEY
+            .parse()
+            .expect("trigger enabled metadata key must be valid")
+    })
+}
+
+/// Read the trigger enabled flag from metadata, defaulting to `true` when absent or malformed.
+pub(crate) fn trigger_is_enabled(metadata: &Metadata) -> bool {
+    let Some(value) = metadata.get(trigger_enabled_metadata_key()) else {
+        return true;
+    };
+    if let Ok(flag) = value.clone().try_into_any_norito::<bool>() {
+        return flag;
+    }
+    if let Ok(raw) = value.clone().try_into_any_norito::<u64>() {
+        return raw != 0;
+    }
+    true
+}
 
 /// All instructions related to triggers.
 /// - registering a trigger and validating the declared authority against
@@ -703,6 +731,27 @@ mod tests {
 
     // No unit test for the cache helpers here; those are exercised indirectly
     // via existing trigger authorization tests.
+
+    #[test]
+    fn trigger_is_enabled_reads_metadata_flag() {
+        let mut metadata = Metadata::default();
+        assert!(
+            trigger_is_enabled(&metadata),
+            "missing flag defaults to enabled"
+        );
+
+        let key = TRIGGER_ENABLED_METADATA_KEY
+            .parse::<Name>()
+            .expect("valid metadata key");
+        metadata.insert(key.clone(), Json::from(false));
+        assert!(!trigger_is_enabled(&metadata), "false disables trigger");
+
+        metadata.insert(key.clone(), Json::from(0_u64));
+        assert!(!trigger_is_enabled(&metadata), "zero disables trigger");
+
+        metadata.insert(key, Json::from(true));
+        assert!(trigger_is_enabled(&metadata), "true enables trigger");
+    }
 
     #[test]
     fn execute_trigger_requires_owner_or_permission() {

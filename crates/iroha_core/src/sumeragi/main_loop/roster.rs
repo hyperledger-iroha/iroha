@@ -170,16 +170,16 @@ fn guard_pop_quorum(filtered: Vec<PeerId>, baseline: &[PeerId], pops_len: usize)
 }
 
 #[allow(clippy::if_not_else)]
-pub(super) fn derive_active_topology(
-    view: &StateView<'_>,
+pub(super) fn derive_active_topology_from_views(
+    world: &impl WorldReadOnly,
+    commit_topology: &[PeerId],
     trusted: &iroha_config::parameters::actual::TrustedPeers,
     _me: &PeerId,
 ) -> Vec<PeerId> {
-    let world_peers = view.world.peers();
-    let commit_topology = view.commit_topology();
+    let world_peers = world.peers();
     let use_commit = !commit_topology.is_empty();
     let mut baseline = if use_commit {
-        commit_topology.iter().cloned().collect()
+        commit_topology.to_vec()
     } else if !world_peers.is_empty() {
         world_peers.iter().cloned().collect()
     } else {
@@ -216,8 +216,8 @@ pub(super) fn derive_active_topology(
     }
 
     iroha_logger::info!(
-        world_peers = view.world.peers().len(),
-        commit_topology_len = view.commit_topology().len(),
+        world_peers = world.peers().len(),
+        commit_topology_len = commit_topology.len(),
         "commit topology fallback to trusted peers"
     );
 
@@ -237,6 +237,15 @@ pub(super) fn derive_active_topology(
         guard_pop_quorum(filtered, &baseline, trusted.pops.len())
     };
     canonicalize_roster(fallback)
+}
+
+#[allow(clippy::if_not_else)]
+pub(super) fn derive_active_topology(
+    view: &StateView<'_>,
+    trusted: &iroha_config::parameters::actual::TrustedPeers,
+    me: &PeerId,
+) -> Vec<PeerId> {
+    derive_active_topology_from_views(view.world(), view.commit_topology().as_slice(), trusted, me)
 }
 
 pub(super) fn derive_local_validator_index(
@@ -413,5 +422,48 @@ mod tests {
         let roster = derive_active_topology(&view, &trusted, &peers[0]);
 
         assert_eq!(roster, peers);
+    }
+
+    #[test]
+    fn active_topology_from_views_matches_state_view() {
+        let peers: Vec<PeerId> = (0..3)
+            .map(|_| {
+                PeerId::new(
+                    KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                        .public_key()
+                        .clone(),
+                )
+            })
+            .collect();
+        let world = World::new();
+        {
+            let mut block = world.block();
+            let peers_cell = block.peers.get_mut();
+            for peer in &peers {
+                let _ = peers_cell.push(peer.clone());
+            }
+            block.commit();
+        }
+
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_for_testing(world, kura, LiveQueryStore::start_test());
+        let trusted = iroha_config::parameters::actual::TrustedPeers {
+            myself: Peer::new("127.0.0.1:10000".parse().expect("addr"), peers[0].clone()),
+            others: UniqueVec::new(),
+            pops: BTreeMap::new(),
+        };
+
+        let view = state.view();
+        let world_view = state.world.view();
+        let commit_topology = state.commit_topology.view();
+        let from_view = derive_active_topology(&view, &trusted, &peers[0]);
+        let from_views = derive_active_topology_from_views(
+            &world_view,
+            commit_topology.as_slice(),
+            &trusted,
+            &peers[0],
+        );
+
+        assert_eq!(from_views, from_view);
     }
 }

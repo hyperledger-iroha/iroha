@@ -1239,7 +1239,6 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
 
         // After integer ops: asset moved to destination, zero at source (purged)
         let deadline = Instant::now() + NON_EMPTY_BLOCK_TIMEOUT;
-        let mut last_pending = None;
         loop {
             let mut pending = Vec::new();
             for peer in network.peers() {
@@ -1283,9 +1282,8 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
             if pending.is_empty() {
                 break;
             }
-            last_pending = Some(pending.join("; "));
             if Instant::now() >= deadline {
-                let details = last_pending.unwrap_or_else(|| "no details".to_string());
+                let details = pending.join("; ");
                 return Err(eyre!(
                     "timed out waiting for integer ops to settle after {NON_EMPTY_BLOCK_TIMEOUT:?}: {details}"
                 )

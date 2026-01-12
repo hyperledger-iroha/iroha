@@ -632,6 +632,7 @@ mod tests {
                 p2p_queue_cap_high: NonZeroUsize::new(128).unwrap(),
                 p2p_queue_cap_low: NonZeroUsize::new(512).unwrap(),
                 p2p_post_queue_cap: NonZeroUsize::new(128).unwrap(),
+                p2p_subscriber_queue_cap: NonZeroUsize::new(128).unwrap(),
                 happy_eyeballs_stagger: Duration::from_millis(100),
                 addr_ipv6_first: false,
                 max_incoming: None,

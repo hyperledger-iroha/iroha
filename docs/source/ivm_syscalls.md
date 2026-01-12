@@ -8,7 +8,7 @@ Versioning
 - Syscall gas costs are part of the versioned gas schedule bound to the bytecode header version. See `ivm.md` (Gas policy).
 
 Numbering ranges
-- `0x00..=0x1F`: VM core/utility (development helpers; not available under `CoreHost`).
+- `0x00..=0x1F`: VM core/utility (debug/exit helpers are available under `CoreHost`; remaining dev helpers are mock-host only).
 - `0x20..=0x5F`: Iroha core ISI bridge (stable in ABI v1).
 - `0x60..=0x7F`: extension ISIs gated by protocol features (still part of ABI v1 when enabled).
 - `0x80..=0xFF`: host/crypto helpers and reserved slots; only numbers present in the ABI v1 allowlist are accepted.
@@ -36,6 +36,7 @@ Canonical syscall table (subset)
 | 0x26 | NFT_TRANSFER_ASSET         | `&AccountId(from)`, `&NftId`, `&AccountId(to)`                          | `u64=0`     | `G_nft_transfer_asset`       | Transfers ownership of NFT |
 | 0x27 | NFT_SET_METADATA           | `&NftId`, `&Json`                                                       | `u64=0`     | `G_nft_set_metadata`         | Updates NFT metadata |
 | 0x28 | NFT_BURN_ASSET             | `&NftId`                                                                | `u64=0`     | `G_nft_burn_asset`           | Burns (destroys) an NFT |
+| 0xA1 | SMARTCONTRACT_EXECUTE_QUERY| `r10=&NoritoBytes(QueryRequest)`                                        | `r10=ptr (&NoritoBytes(QueryResponse))` | `G_scq + per_item*items + per_byte*bytes(resp)` | Iterable queries run ephemerally; `QueryRequest::Continue` rejected |
 | 0xA2 | CREATE_NFTS_FOR_ALL_USERS  | –                                                                       | `u64=count` | `G_create_nfts_for_all`      | Helper; feature‑gated |
 | 0xA3 | SET_SMARTCONTRACT_EXECUTION_DEPTH | `depth:u64`                                                         | `u64=prev`  | `G_set_depth`                | Admin; feature‑gated |
 | 0xA4 | GET_AUTHORITY              | – (host writes result)                                                  | `&AccountId`| `G_get_auth`                 | Host writes pointer to current authority into `r10` |
@@ -46,6 +47,7 @@ Canonical syscall table (subset)
 Gas enforcement
 - CoreHost charges extra gas for ISI syscalls using the native ISI schedule; FASTPQ batch transfers are charged per entry.
 - ZK_VERIFY syscalls reuse the confidential verification gas schedule (base + proof size).
+- SMARTCONTRACT_EXECUTE_QUERY charges base + per-item + per-byte; sorting multiplies per-item cost and unsorted offsets add a per-item penalty.
 
 Notes
 - All pointer arguments reference Norito TLV envelopes in the INPUT region and are validated on first dereference (`E_NORITO_INVALID` on error).
@@ -73,6 +75,7 @@ This section documents the TLV shapes and minimal JSON payloads accepted by the 
 - REGISTER_PEER / UNREGISTER_PEER
   - Args: `r10=&Json`
   - Example JSON: `{ "peer": "peer-id-or-info" }`
+  - CoreHost note: `REGISTER_PEER` expects a `RegisterPeerWithPop` JSON object with `peer` + `pop` bytes (optional `activation_at`, `expiry_at`, `hsm`); `UNREGISTER_PEER` accepts a peer-id string or `{ "peer": "..." }`.
 
 - CREATE_TRIGGER / REMOVE_TRIGGER / SET_TRIGGER_ENABLED
   - CREATE_TRIGGER:
@@ -82,6 +85,10 @@ This section documents the TLV shapes and minimal JSON payloads accepted by the 
     - Args: `r10=&Name` (trigger name)
   - SET_TRIGGER_ENABLED:
     - Args: `r10=&Name`, `r11=enabled:u64` (0 = disabled, non‑zero = enabled)
+  - CoreHost note: `CREATE_TRIGGER` expects a full trigger spec (base64 Norito `Trigger` string or
+    `{ "id": "<trigger_id>", "action": ... }` with `action` as a base64 Norito `Action` string or
+    a JSON object), and `SET_TRIGGER_ENABLED` toggles the trigger metadata key `__enabled` (missing
+    defaults to enabled).
 
 - Roles: CREATE_ROLE / DELETE_ROLE / GRANT_ROLE / REVOKE_ROLE
   - CREATE_ROLE:
@@ -101,6 +108,7 @@ This section documents the TLV shapes and minimal JSON payloads accepted by the 
     - Fails if any account is still assigned this role.
   - GRANT_ROLE / REVOKE_ROLE:
     - Args: `r10=&AccountId` (subject), `r11=&Name` (role name)
+  - CoreHost note: permission JSON may be a full `Permission` object (`{ "name": "...", "payload": ... }`) or a string (payload defaults to `null`); `GRANT_PERMISSION`/`REVOKE_PERMISSION` accept `&Name` or `&Json(Permission)`.
 
 - Unregister ops (domain/account/asset): invariants (mock)
   - UNREGISTER_DOMAIN (`r10=&DomainId`) fails if accounts or asset definitions exist in the domain.

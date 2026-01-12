@@ -13,6 +13,7 @@ use iroha_data_model::{
     nexus::{AxtPolicyEntry, AxtPolicySnapshot, DataSpaceId},
     prelude::Name,
 };
+use iroha_primitives::json::Json;
 use norito::{
     codec::{Decode as NoritoDecode, Encode as NoritoEncode},
     decode_from_bytes, json as njson,
@@ -1467,19 +1468,59 @@ impl IVMHost for CoreHost {
                 vm.set_register(10, if eq { 1 } else { 0 });
                 Ok(0)
             }
+            syscalls::SYSCALL_DEBUG_PRINT => {
+                let value = vm.register(10);
+                if cfg!(any(test, debug_assertions)) {
+                    eprintln!("[IVM] debug_print r10={value}");
+                }
+                Ok(0)
+            }
+            syscalls::SYSCALL_EXIT => {
+                let status = vm.register(10);
+                vm.request_exit();
+                vm.set_register(10, status);
+                Ok(0)
+            }
+            syscalls::SYSCALL_ABORT => {
+                vm.set_register(10, 0);
+                vm.request_abort();
+                Ok(0)
+            }
             syscalls::SYSCALL_DEBUG_LOG => {
                 let ptr = vm.register(10);
                 if ptr == 0 {
                     return Ok(0);
                 }
                 let tlv = vm.memory.validate_tlv(ptr)?;
-                if cfg!(any(test, debug_assertions))
-                    && matches!(tlv.type_id, PointerType::Blob | PointerType::NoritoBytes)
-                {
-                    let msg = core::str::from_utf8(tlv.payload).unwrap_or("<non-utf8>");
-                    eprintln!("[IVM] {msg}");
+                let policy = vm.syscall_policy();
+                if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
+                    return Err(VMError::AbiTypeNotAllowed {
+                        abi: vm.abi_version(),
+                        type_id: tlv.type_id as u16,
+                    });
                 }
-                Ok(0)
+                match tlv.type_id {
+                    PointerType::Blob | PointerType::NoritoBytes | PointerType::Json => {
+                        if cfg!(any(test, debug_assertions)) {
+                            let msg = if tlv.type_id == PointerType::Json {
+                                decode_from_bytes::<Json>(tlv.payload)
+                                    .map(|json| json.to_string())
+                                    .unwrap_or_else(|_| {
+                                        core::str::from_utf8(tlv.payload)
+                                            .unwrap_or("<non-utf8>")
+                                            .to_string()
+                                    })
+                            } else {
+                                core::str::from_utf8(tlv.payload)
+                                    .unwrap_or("<non-utf8>")
+                                    .to_string()
+                            };
+                            eprintln!("[IVM] {msg}");
+                        }
+                        Ok(0)
+                    }
+                    _ => Err(VMError::NoritoInvalid),
+                }
             }
             syscalls::SYSCALL_SM3_HASH => {
                 if !self.sm_enabled {
