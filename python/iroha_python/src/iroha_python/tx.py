@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import time
 import json
 from decimal import Decimal, InvalidOperation
-from typing import TYPE_CHECKING, Any, Iterable, List, Mapping, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Mapping, Optional, Union
 
 from .crypto import (
     Ed25519KeyPair,
@@ -278,11 +278,11 @@ class TransactionDraft:
         """Append a `RepoIsi` instruction for repo initiation or rolling."""
 
         governance = governance or RepoGovernance(haircut_bps=0, margin_frequency_secs=0)
-        cash_payload = {
+        cash_payload: Dict[str, Any] = {
             "asset_definition_id": cash_leg.asset_definition_id,
             "quantity": _normalize_quantity(cash_leg.quantity),
         }
-        collateral_payload = {
+        collateral_payload: Dict[str, Any] = {
             "asset_definition_id": collateral_leg.asset_definition_id,
             "quantity": _normalize_quantity(collateral_leg.quantity),
         }
@@ -320,11 +320,11 @@ class TransactionDraft:
     ) -> TransactionDraft:
         """Append a `ReverseRepoIsi` instruction to unwind a repo agreement."""
 
-        cash_payload = {
+        cash_payload: Dict[str, Any] = {
             "asset_definition_id": cash_leg.asset_definition_id,
             "quantity": _normalize_quantity(cash_leg.quantity),
         }
-        collateral_payload = {
+        collateral_payload: Dict[str, Any] = {
             "asset_definition_id": collateral_leg.asset_definition_id,
             "quantity": _normalize_quantity(collateral_leg.quantity),
         }

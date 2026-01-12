@@ -98,7 +98,13 @@ def poseidon6_cuda_many(inputs: Sequence[Sequence[int]]) -> Optional[Tuple[int, 
 def _expect_field_elem(elem: Sequence[int], context: str) -> Tuple[int, int, int, int]:
     if len(elem) != 4:
         raise ValueError(f"{context} expects four 64-bit limbs")
-    return tuple(int(value) & ((1 << 64) - 1) for value in elem)  # type: ignore[return-value]
+    mask = (1 << 64) - 1
+    return (
+        int(elem[0]) & mask,
+        int(elem[1]) & mask,
+        int(elem[2]) & mask,
+        int(elem[3]) & mask,
+    )
 
 
 def bn254_add_cuda(a: Sequence[int], b: Sequence[int]) -> Optional[Tuple[int, int, int, int]]:
@@ -107,7 +113,7 @@ def bn254_add_cuda(a: Sequence[int], b: Sequence[int]) -> Optional[Tuple[int, in
     result = _crypto.bn254_add_cuda(_expect_field_elem(a, "bn254_add_cuda"), _expect_field_elem(b, "bn254_add_cuda"))
     if result is None:
         return None
-    return tuple(int(value) & ((1 << 64) - 1) for value in result)
+    return _expect_field_elem(result, "bn254_add_cuda result")
 
 
 def bn254_sub_cuda(a: Sequence[int], b: Sequence[int]) -> Optional[Tuple[int, int, int, int]]:
@@ -116,7 +122,7 @@ def bn254_sub_cuda(a: Sequence[int], b: Sequence[int]) -> Optional[Tuple[int, in
     result = _crypto.bn254_sub_cuda(_expect_field_elem(a, "bn254_sub_cuda"), _expect_field_elem(b, "bn254_sub_cuda"))
     if result is None:
         return None
-    return tuple(int(value) & ((1 << 64) - 1) for value in result)
+    return _expect_field_elem(result, "bn254_sub_cuda result")
 
 
 def bn254_mul_cuda(a: Sequence[int], b: Sequence[int]) -> Optional[Tuple[int, int, int, int]]:
@@ -125,4 +131,4 @@ def bn254_mul_cuda(a: Sequence[int], b: Sequence[int]) -> Optional[Tuple[int, in
     result = _crypto.bn254_mul_cuda(_expect_field_elem(a, "bn254_mul_cuda"), _expect_field_elem(b, "bn254_mul_cuda"))
     if result is None:
         return None
-    return tuple(int(value) & ((1 << 64) - 1) for value in result)
+    return _expect_field_elem(result, "bn254_mul_cuda result")

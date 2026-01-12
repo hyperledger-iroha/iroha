@@ -1,5 +1,9 @@
+use std::collections::BTreeMap;
+
 use iroha_crypto::{Hash, HashOf, MerkleProof};
+use iroha_data_model::name::Name;
 use ivm::{IVM, PointerType, VMError, encoding, instruction, syscalls};
+use norito::codec::Encode as NoritoEncode;
 mod common;
 use common::assemble;
 
@@ -93,6 +97,32 @@ fn debug_log_accepts_json_tlv() {
     let prog = assemble_syscall(syscalls::SYSCALL_DEBUG_LOG as u8);
     vm.load_program(&prog).unwrap();
     vm.run().expect("debug log should succeed");
+}
+
+#[test]
+fn get_public_input_returns_named_tlv() {
+    let mut vm = IVM::new(u64::MAX);
+    let name: Name = "public_key".parse().unwrap();
+    let payload = b"hello".to_vec();
+    let value_tlv = make_tlv(PointerType::Blob as u16, &payload);
+    let mut inputs = BTreeMap::new();
+    inputs.insert(name.clone(), value_tlv);
+    let mut host = ivm::host::DefaultHost::new().with_public_inputs(BTreeMap::new());
+    host.set_public_inputs(inputs);
+    vm.set_host(host);
+
+    let name_payload = name.encode();
+    let name_tlv = make_tlv(PointerType::Name as u16, &name_payload);
+    let ptr = vm.alloc_input_tlv(&name_tlv).expect("alloc tlv");
+    vm.set_register(10, ptr);
+    let prog = assemble_syscall(syscalls::SYSCALL_GET_PUBLIC_INPUT as u8);
+    vm.load_program(&prog).unwrap();
+    vm.run().expect("get public input should succeed");
+
+    let out_ptr = vm.register(10);
+    let out_tlv = vm.memory.validate_tlv(out_ptr).expect("validate output");
+    assert_eq!(out_tlv.type_id, PointerType::Blob);
+    assert_eq!(out_tlv.payload, payload.as_slice());
 }
 
 struct AddHost;

@@ -1,6 +1,33 @@
 # Status
 
 ## Latest Updates
+- Block sync: enqueue ShareBlocks updates via `spawn_blocking` to avoid holding StateView across Sumeragi backpressure, and derive roster/QC data outside long-lived views; add runtime coverage to ensure tokio timers are not blocked by a full block queue.
+- Sumeragi/tests: add a test-only helper to build a handle with a configurable block queue cap for block-sync runtime tests.
+- IVM/CoreHost tests: build numeric asset definitions with authority for `World::with_assets` in the account-balance syscall test.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Tests: `cargo test -p iroha_core --lib share_blocks_enqueue_does_not_block_tokio_timer -- --nocapture` (pass; warnings about unused imports in `crates/iroha_core/src/smartcontracts/ivm/host.rs`).
+- Tests: `cargo test --workspace` (timed out after 120s during compilation).
+- Tests: `cargo test --workspace` (aborted by user after ~3m during compilation).
+- Tests: `IROHA_TEST_NETWORK_PARALLELISM=5 IROHA_SOAK_TARGET_BLOCKS=100 cargo test -p integration_tests --test sumeragi_localnet_smoke permissioned_localnet_soak_thousands -- --ignored --nocapture` (failed: localnet soak stalled for 40s at min_non_empty=59/target 101; status request timed out for `aspirant_perch`).
+- IVM/CoreHost: implement `GET_ACCOUNT_BALANCE`, `GET_PUBLIC_INPUT`, and `ZK_VERIFY_BATCH` with registry/manifest/domain binding plus unit coverage.
+- IVM/Kotodama: decode `CreateTrigger` JSON literals (base64 Norito or object form) to emit trigger access hints; add manifest regression coverage.
+- IVM docs/tests: document `GET_PUBLIC_INPUT` and add public input forwarding tests for CoreHost/DefaultHost.
+- Tooling: install `types-requests` for Python type checking.
+- Lint: `./python/iroha_python/scripts/run_checks.sh` (failed: ruff reports 338 lint errors; script now runs ruff from project roots).
+- Typecheck: `python3 -m mypy --config-file python/iroha_python/pyproject.toml python/iroha_python/src/iroha_python python/iroha_python/tests` (failed: 153 errors after installing `types-requests`).
+- Typecheck: `python3 -m mypy --config-file python/iroha_torii_client/pyproject.toml python/iroha_torii_client` (failed: 109 errors after installing `types-requests`).
+- Typecheck: `python3 -m mypy --config-file python/iroha_python/pyproject.toml python/iroha_python/src/iroha_python python/iroha_python/tests` (failed: 145 errors; missing `types-requests` plus existing typing issues).
+- Typecheck: `python3 -m mypy --config-file python/iroha_torii_client/pyproject.toml python/iroha_torii_client` (failed: 28 errors; missing `types-requests` plus existing typing issues).
+- Python SDK: fix `run_checks.sh` repo-root resolution and ensure test `conftest.py` adds the `python/` root for imports.
+- Tests: `npm test` (pass; 892 passed, 255 skipped; native binding verification skipped because darwin-arm64 checksums missing).
+- Tests: `SKIP_LINT=1 ./python/iroha_python/scripts/run_checks.sh` (pass; pytest + fixtures, lint skipped).
+- Lint: `python3 -m ruff check --config python/iroha_python/pyproject.toml python/iroha_python/src/iroha_python python/iroha_python/tests` (failed: 340 errors, mostly import order/unused).
+- Python SDK: add governance zk-ballot wrappers, fix address digest call, and align canonical owner validation errors with tests.
+- Python Torii client: accept camelCase explorer QR fields and fix BLS key parsing error handling.
+- Tests: `IROHA_PYTHON_CONNECT_STUB=1 PYTHONPATH=python python3 -m pytest python/iroha_python/tests -q` (pass; 21 tests).
+- Tests: `PYTHONPATH=python python3 -m pytest python/iroha_torii_client/tests -q` (pass; 87 tests).
+- Tests: `IROHA_TEST_NETWORK_PARALLELISM=5 IROHA_SOAK_TARGET_BLOCKS=100 cargo test -p integration_tests --test sumeragi_localnet_smoke permissioned_localnet_soak_thousands -- --ignored --nocapture` (skipped network startup; loopback bind denied, so soak did not run).
+- Tests: `cargo test --workspace` (aborted by user after ~15m; no failures observed before abort).
 - Tests: `IROHA_PYTHON_CONNECT_STUB=1 PYTHONPATH=python python3 -m pytest python/iroha_python/tests -q` (failed: `ToriiClient` missing `governance_submit_zk_ballot*` methods; 12 failures).
 - Tests: `PYTHONPATH=python python3 -m pytest python/iroha_torii_client/tests -q` (failed: `get_explorer_account_qr` and `get_sumeragi_bls_keys` parsing; 2 failures).
 - Tests: `npm run test:js` (pass; 891 passed, 256 skipped due to native binding disabled).
@@ -2150,6 +2177,7 @@
 - Tests: `cargo test -p integration_tests trigger_completion_failure_reports_error -- --nocapture` (timed out after 600s; compile finished; test `events::notification::trigger_completion_failure_reports_error` still running).
 - Sumeragi NEW_VIEW quorum selection now filters senders against the active roster (only counts local if it is in-roster), with coverage for non-roster senders.
 - Sumeragi now rejects NEW_VIEW votes with mismatched highest QC hashes/heights before recording, with regressions for invalid highest fields.
+- Python SDK: fixed typing in Torii client + mocks (moved telemetry methods back onto `ToriiClient`, cleaned optionals), tightened governance/connect parsing, and removed stale ignores; Tests: `python3 -m mypy --config-file python/iroha_python/pyproject.toml python/iroha_python/src/iroha_python python/iroha_python/tests`, `python3 -m mypy --config-file python/iroha_torii_client/pyproject.toml python/iroha_torii_client`.
 - Added Android subscription Torii client/models, wired ClientConfig/HttpClientTransport helpers, documented subscription usage in the Android README, added SubscriptionToriiClient tests (wired into the Gradle harness), validated usage delta literals, and covered non-2xx error propagation. Tests: `./java/iroha_android/gradlew -p java/iroha_android :core:test -Dandroid.test.mains=org.hyperledger.iroha.android.client.SubscriptionToriiClientTests`, `./java/iroha_android/gradlew -p java/iroha_android :core:test`.
 - Sumeragi block-sync now records commit votes for known blocks without roster hints; proposals_seen pruning aligns with view changes; active-topology fallback test now matches sorted world-peer order; QC status tests are guarded to avoid cross-test interference; subscription trigger test setup now uses trigger blocks/transactions with explicit commit.
 - Tests: `cargo test -p iroha_core --lib sumeragi::main_loop::tests` (timed out after 600s; earlier failures fixed); targeted runs: `cargo test -p iroha_core --lib sumeragi::main_loop::tests::{block_sync_update_known_block_records_commit_votes_without_roster_hint,commit_inflight_timeout_triggers_view_change_and_retains_aborted_pending,active_topology_falls_back_to_world_peers,block_created_updates_locked_status_when_lock_missing}`.

@@ -12,6 +12,8 @@
 
 use std::collections::{BTreeSet, HashMap};
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use indexmap::IndexSet;
 use iroha_crypto as _; // for Hash types in new APIs
 use iroha_data_model::{
@@ -23,8 +25,9 @@ use iroha_data_model::{
     nft::NftId,
     role::RoleId,
     smart_contract::manifest::{AccessSetHints, EntryPointKind, EntrypointDescriptor},
-    trigger::TriggerId,
+    trigger::{Trigger, TriggerId},
 };
+use norito::json;
 
 use super::{
     ast::{
@@ -596,6 +599,30 @@ seiyaku Test {
             .expect("expected access_set_hints");
         assert_eq!(hints.read_keys, vec!["state:Foo[*]".to_string()]);
         assert_eq!(hints.write_keys, vec!["state:Foo[*]".to_string()]);
+    }
+
+    #[test]
+    fn manifest_access_set_hints_include_create_trigger() {
+        let src = r#"
+seiyaku Test {
+  kotoage fn make() {
+    create_trigger(json("{\"id\":\"t1\"}"));
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile manifest");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected access_set_hints");
+        let expected = vec![
+            "trigger.repetitions:t1".to_string(),
+            "trigger:t1".to_string(),
+        ];
+        assert_eq!(hints.read_keys, expected);
+        assert_eq!(hints.write_keys, expected);
     }
 
     #[test]
@@ -4771,8 +4798,12 @@ fn record_isi_access(
         }
         // TODO: resolve asset-definition construction for register/create-new asset helpers before emitting hints.
         ir::Instr::RegisterAsset { .. } | ir::Instr::CreateNewAsset { .. } => None,
-        // TODO: handle trigger spec decoding for create_trigger.
-        ir::Instr::CreateTrigger { .. } => None,
+        ir::Instr::CreateTrigger { json } => {
+            let raw = string_map.get(&(func_idx, *json))?;
+            let id = trigger_id_from_json(raw)?;
+            add_trigger_rw(access_set, &id);
+            Some(())
+        }
         // TODO: entrypoint hints do not yet model TransferDomain authority reads.
         ir::Instr::TransferDomain { .. } => None,
         // TODO: SetNftData lacks a metadata key in IR; skip hints until key is modeled.
@@ -4832,6 +4863,22 @@ fn permission_name_from_json(raw: &str) -> Option<String> {
     let map = value.as_object()?;
     let kind = map.get("type").and_then(norito::json::Value::as_str)?;
     Some(permission_name_from_literal(kind))
+}
+
+fn trigger_id_from_json(raw: &str) -> Option<TriggerId> {
+    let value: json::Value = json::from_slice(raw.as_bytes()).ok()?;
+    match value {
+        json::Value::String(encoded) => {
+            let bytes = STANDARD.decode(encoded.as_bytes()).ok()?;
+            let trigger: Trigger = norito::decode_from_bytes(&bytes).ok()?;
+            Some(trigger.id().clone())
+        }
+        json::Value::Object(map) => {
+            let id = map.get("id")?.as_str()?;
+            id.parse().ok()
+        }
+        _ => None,
+    }
 }
 
 fn key_account(id: &AccountId) -> String {

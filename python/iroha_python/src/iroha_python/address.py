@@ -445,7 +445,7 @@ class AccountAddress:
 
 
 def compute_local_digest(label: str) -> bytes:
-    mac = hashlib.blake2s(data=label.encode("utf-8"), key=LOCAL_DOMAIN_KEY, digest_size=32)
+    mac = hashlib.blake2s(label.encode("utf-8"), key=LOCAL_DOMAIN_KEY, digest_size=32)
     return mac.digest()[:12]
 
 

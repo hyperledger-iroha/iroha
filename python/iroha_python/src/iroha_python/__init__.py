@@ -11,7 +11,7 @@ from __future__ import annotations
 from importlib import metadata
 from typing import Any, List
 
-import norito as norito  # type: ignore[import-not-found]
+import norito as norito
 
 from .address import (
     AccountAddress,

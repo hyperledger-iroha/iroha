@@ -5441,6 +5441,41 @@ impl SumeragiHandle {
     }
 }
 
+/// Build a lightweight Sumeragi handle with a configurable block queue for unit tests.
+#[cfg(test)]
+pub(crate) fn test_sumeragi_handle(
+    block_channel_cap: usize,
+) -> (SumeragiHandle, mpsc::Receiver<BlockMessage>) {
+    let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(1);
+    let (block_tx, block_rx) = mpsc::sync_channel(block_channel_cap);
+    let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(1);
+    let (vote_tx, _vote_rx) = mpsc::sync_channel(1);
+    let (consensus_tx, _consensus_rx) = mpsc::sync_channel(1);
+    let (background_tx, _background_rx) = mpsc::sync_channel(1);
+    let (lane_tx, _lane_rx) = mpsc::sync_channel(1);
+    let vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>> = Arc::new(Mutex::new(DedupCache::new(
+        VOTE_DEDUP_CACHE_CAP,
+        VOTE_DEDUP_CACHE_TTL,
+    )));
+    let block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>> =
+        Arc::new(Mutex::new(BlockPayloadDedupCache::new(
+            BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
+            BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
+        )));
+    let handle = SumeragiHandle::new(
+        block_payload_tx,
+        block_tx,
+        rbc_chunk_tx,
+        vote_tx,
+        consensus_tx,
+        background_tx,
+        lane_tx,
+        vote_dedup,
+        block_payload_dedup,
+    );
+    (handle, block_rx)
+}
+
 /// Adapter exposing a static roster derived from WSV peers.
 #[derive(Clone)]
 pub struct WsvEpochRosterAdapter {

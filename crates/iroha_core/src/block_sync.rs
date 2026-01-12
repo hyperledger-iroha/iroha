@@ -2693,12 +2693,14 @@ pub mod message {
                             block_hash,
                             block_sync.fallback_consensus_mode,
                         );
-                        let view = block_sync.state.view();
-                        let consensus_mode = consensus_mode_for_block_sync(
-                            &view,
-                            block_height,
-                            block_sync.fallback_consensus_mode,
-                        );
+                        let consensus_mode = {
+                            let view = block_sync.state.view();
+                            consensus_mode_for_block_sync(
+                                &view,
+                                block_height,
+                                block_sync.fallback_consensus_mode,
+                            )
+                        };
                         if let Some(metadata) = effective_roster_metadata(
                             incoming_roster,
                             fallback,
@@ -2711,14 +2713,18 @@ pub mod message {
                                 .clone_from(&metadata.validator_checkpoint);
                             msg.stake_snapshot.clone_from(&metadata.stake_snapshot);
                         }
+                        let derived_qc = if msg.commit_qc.is_none() && incoming_qc.is_none() {
+                            let view = block_sync.state.view();
+                            BlockSynchronizer::block_sync_qc_for(
+                                &view,
+                                block_sync.fallback_consensus_mode,
+                                &block,
+                            )
+                        } else {
+                            None
+                        };
                         if msg.commit_qc.is_none() {
-                            if let Some(qc) = incoming_qc.or_else(|| {
-                                BlockSynchronizer::block_sync_qc_for(
-                                    &view,
-                                    block_sync.fallback_consensus_mode,
-                                    &block,
-                                )
-                            }) {
+                            if let Some(qc) = incoming_qc.or(derived_qc) {
                                 let attach_qc = match consensus_mode {
                                     ConsensusMode::Permissioned => true,
                                     ConsensusMode::Npos => {
@@ -2748,9 +2754,20 @@ pub mod message {
                                 }
                             }
                         }
-                        block_sync.sumeragi.incoming_block_message(
-                            crate::sumeragi::message::BlockMessage::BlockSyncUpdate(msg),
-                        );
+                        let update = crate::sumeragi::message::BlockMessage::BlockSyncUpdate(msg);
+                        let sumeragi = block_sync.sumeragi.clone();
+                        let enqueue = tokio::task::spawn_blocking(move || {
+                            sumeragi.incoming_block_message(update);
+                        });
+                        // Avoid blocking the async runtime while waiting on Sumeragi backpressure.
+                        if let Err(err) = enqueue.await {
+                            warn!(
+                                ?err,
+                                height = block_height,
+                                block = %block_hash,
+                                "failed to enqueue block sync update"
+                            );
+                        }
                     }
                 }
             }
@@ -2882,6 +2899,116 @@ pub mod message {
             assert_eq!(qcs.len(), 1);
             assert_eq!(rosters.len(), 1);
             assert_eq!(blocks[0].hash(), block1.hash());
+        }
+    }
+
+    #[cfg(test)]
+    mod share_blocks_runtime_tests {
+        use std::{
+            collections::{BTreeMap, BTreeSet},
+            num::{NonZeroU32, NonZeroU64},
+            sync::Arc,
+            time::{Duration, Instant},
+        };
+
+        use iroha_config::parameters::actual::ConsensusMode;
+        use iroha_crypto::KeyPair;
+        use iroha_data_model::peer::{Peer, PeerId};
+
+        use super::*;
+        use crate::{
+            block::ValidBlock,
+            kura::Kura,
+            query::store::LiveQueryStore,
+            state::{State, World},
+            sumeragi::test_sumeragi_handle,
+        };
+
+        #[test]
+        fn share_blocks_enqueue_does_not_block_tokio_timer() {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .expect("tokio runtime");
+
+            runtime.block_on(async {
+                let (sumeragi, block_rx) = test_sumeragi_handle(0);
+                let kura = Kura::blank_kura_for_testing();
+                let state = Arc::new(State::new_for_testing(
+                    World::new(),
+                    Arc::clone(&kura),
+                    LiveQueryStore::start_test(),
+                ));
+                let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let peer = Peer::new(
+                    "127.0.0.1:0".parse().expect("valid socket address"),
+                    peer_id.clone(),
+                );
+                let mut block_sync = BlockSynchronizer {
+                    sumeragi,
+                    kura,
+                    peer,
+                    gossip_period: Duration::from_secs(1),
+                    gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
+                    network: crate::IrohaNetwork::closed_for_tests(),
+                    relay_ttl: 1,
+                    block_sync_frame_cap: 1024,
+                    state,
+                    seen_blocks: BTreeSet::new(),
+                    unknown_prev_hashes: BTreeMap::new(),
+                    latest_height: 0,
+                    fallback_consensus_mode: ConsensusMode::Permissioned,
+                };
+
+                let keypair = KeyPair::random();
+                let block =
+                    ValidBlock::new_dummy_and_modify_header(keypair.private_key(), |header| {
+                        let height = NonZeroU64::new(1).expect("non-zero height");
+                        header.set_height(height);
+                        header.set_prev_block_hash(None);
+                    });
+                let blocks = vec![block.into()];
+                let qcs = vec![None];
+                let rosters = vec![RosterMetadata {
+                    commit_qc: None,
+                    validator_checkpoint: None,
+                    stake_snapshot: None,
+                }];
+                let msg = message::Message::ShareBlocks(message::ShareBlocks::new(
+                    blocks, peer_id, qcs, rosters,
+                ));
+
+                let unblock_delay = Duration::from_millis(200);
+                let unblock = std::thread::spawn(move || {
+                    std::thread::sleep(unblock_delay);
+                    block_rx
+                        .recv_timeout(Duration::from_secs(1))
+                        .expect("expected block sync update");
+                });
+
+                let start = Instant::now();
+                let handle_message = msg.handle_message(&mut block_sync);
+                tokio::pin!(handle_message);
+                let timer = tokio::time::sleep(Duration::from_millis(20));
+                tokio::pin!(timer);
+
+                tokio::select! {
+                    biased;
+                    _ = &mut handle_message => {
+                        panic!("block sync update should wait for queue capacity");
+                    }
+                    _ = &mut timer => {
+                        let elapsed = start.elapsed();
+                        assert!(
+                            elapsed < Duration::from_millis(150),
+                            "timer delayed by block sync enqueue: {elapsed:?}"
+                        );
+                    }
+                }
+
+                handle_message.await;
+                unblock.join().expect("unblock thread");
+            });
         }
     }
 
