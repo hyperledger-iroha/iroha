@@ -35,6 +35,7 @@ async fn p2p_ws_route_accepts_and_handshakes() {
             p2p_queue_cap_high: core::num::NonZeroUsize::new(128).unwrap(),
             p2p_queue_cap_low: core::num::NonZeroUsize::new(128).unwrap(),
             p2p_post_queue_cap: core::num::NonZeroUsize::new(64).unwrap(),
+            p2p_subscriber_queue_cap: core::num::NonZeroUsize::new(128).unwrap(),
             happy_eyeballs_stagger: std::time::Duration::from_millis(50),
             addr_ipv6_first: false,
             lane_profile: iroha_config::parameters::actual::LaneProfile::Core,

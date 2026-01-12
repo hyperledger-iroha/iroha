@@ -86,6 +86,69 @@ Poseidon permutations plus BN254 field arithmetic. These helpers return `None` w
 unavailable or disabled so callers can fall back to the scalar implementations provided by the core
 SDK.
 
+## Subscriptions
+
+Use the Torii subscription endpoints to publish plans, subscribe, and report usage. Set
+`bill_for.period` to `previous_period` to bill in arrears (for example, charge on the first for the
+previous month's usage). Fixed monthly plans use `pricing.kind = "fixed"` and
+`bill_for.period = "next_period"`.
+
+```python
+from iroha_python import ToriiClient
+
+client = ToriiClient("http://127.0.0.1:8080", auth_token="provider-token")
+
+usage_plan = {
+    "provider": "aws@commerce",
+    "billing": {
+        "cadence": {
+            "kind": "monthly_calendar",
+            "detail": {"anchor_day": 1, "anchor_time_ms": 0},
+        },
+        "bill_for": {"period": "previous_period", "value": None},
+        "retry_backoff_ms": 86_400_000,
+        "max_failures": 3,
+        "grace_ms": 604_800_000,
+    },
+    "pricing": {
+        "kind": "usage",
+        "detail": {
+            "unit_price": "0.024",
+            "unit_key": "compute_ms",
+            "asset_definition": "usd#pay",
+        },
+    },
+}
+
+client.create_subscription_plan(
+    authority="aws@commerce",
+    private_key="provider-private-key-hex",
+    plan_id="aws_compute#commerce",
+    plan=usage_plan,
+)
+
+subscription = client.create_subscription(
+    authority="alice@users",
+    private_key="subscriber-private-key-hex",
+    subscription_id="sub-001",
+    plan_id="aws_compute#commerce",
+)
+
+client.record_subscription_usage(
+    "sub-001",
+    authority="aws@commerce",
+    private_key="provider-private-key-hex",
+    unit_key="compute_ms",
+    delta="3600000",
+)
+
+client.charge_subscription_now(
+    "sub-001",
+    authority="aws@commerce",
+    private_key="provider-private-key-hex",
+)
+```
+
 ## Streaming events
 
 All streaming helpers decode JSON payloads by default. Pass `with_metadata=True` to receive full

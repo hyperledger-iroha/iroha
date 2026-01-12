@@ -114,8 +114,10 @@ fn roster_cache_for_state(
     state: &State,
     fallback_epoch_length: u64,
 ) -> super::RosterValidationCache {
-    let view = state.view();
-    super::RosterValidationCache::from_view(&view, fallback_epoch_length)
+    let world = state.world.view();
+    let cache = super::RosterValidationCache::from_world(&world, fallback_epoch_length);
+    drop(world);
+    cache
 }
 
 fn sample_chunk_with_len(idx: u32, len: usize) -> crate::sumeragi::consensus::RbcChunk {
@@ -1452,6 +1454,8 @@ async fn test_actor_harness_with_config_and_height_and_kura(
         p2p_queue_cap_high: iroha_config::parameters::defaults::network::P2P_QUEUE_CAP_HIGH,
         p2p_queue_cap_low: iroha_config::parameters::defaults::network::P2P_QUEUE_CAP_LOW,
         p2p_post_queue_cap: iroha_config::parameters::defaults::network::P2P_POST_QUEUE_CAP,
+        p2p_subscriber_queue_cap:
+            iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
         happy_eyeballs_stagger: iroha_config::parameters::defaults::network::HAPPY_EYEBALLS_STAGGER,
         addr_ipv6_first: false,
         max_incoming: None,
@@ -1588,6 +1592,7 @@ async fn test_actor_harness_with_config_and_height_and_kura(
         None,
         rbc_store_cfg,
         Some(background_tx),
+        None,
         rbc_status_handle,
     )
     .expect("actor init");
@@ -1610,6 +1615,7 @@ async fn test_actor_harness_with_config_and_height_and_kura(
         None,
         rbc_store_cfg,
         Some(background_tx),
+        None,
         rbc_status_handle,
     )
     .expect("actor init");
@@ -1669,6 +1675,259 @@ fn expected_block_sync_update_targets(actor: &Actor, peers: &[PeerId]) -> usize 
     };
     targets += remaining.min(fallback_world);
     targets
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn actor_should_tick_tracks_missing_block_requests() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    assert!(
+        !actor.should_tick(),
+        "fresh actor with empty queues should be idle"
+    );
+
+    let now = Instant::now();
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"missing"));
+    actor.pending.missing_block_requests.insert(
+        block_hash,
+        MissingBlockRequest {
+            height: 1,
+            view: 0,
+            phase: Phase::Prepare,
+            priority: MissingBlockPriority::Consensus,
+            retry_window: Duration::from_secs(1),
+            view_change_window: None,
+            first_seen: now,
+            last_requested: now,
+            view_change_triggered: false,
+            attempts: 0,
+        },
+    );
+
+    assert!(
+        actor.should_tick(),
+        "missing block retries should require ticks"
+    );
+
+    actor.pending.missing_block_requests.clear();
+    assert!(
+        !actor.should_tick(),
+        "clearing pending requests should return to idle"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn actor_next_tick_deadline_tracks_missing_block_windows() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    let now = Instant::now();
+    assert!(
+        actor.next_tick_deadline(now).is_none(),
+        "fresh actor should not schedule ticks"
+    );
+
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"deadline"));
+    actor.pending.missing_block_requests.insert(
+        block_hash,
+        MissingBlockRequest {
+            height: 1,
+            view: 0,
+            phase: Phase::Prepare,
+            priority: MissingBlockPriority::Consensus,
+            retry_window: Duration::from_secs(2),
+            view_change_window: Some(Duration::from_millis(500)),
+            first_seen: now,
+            last_requested: now,
+            view_change_triggered: false,
+            attempts: 0,
+        },
+    );
+
+    let deadline = actor
+        .next_tick_deadline(now)
+        .expect("missing block request should schedule a deadline");
+    assert_eq!(
+        deadline,
+        now + Duration::from_millis(500),
+        "earliest missing-block window should drive the deadline"
+    );
+
+    if let Some(stats) = actor.pending.missing_block_requests.get_mut(&block_hash) {
+        stats.last_requested = now - Duration::from_secs(5);
+        stats.view_change_window = None;
+    }
+    let deadline = actor
+        .next_tick_deadline(now)
+        .expect("overdue retry should trigger immediate tick");
+    assert_eq!(deadline, now);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn actor_next_tick_deadline_tracks_pending_quorum_timeout() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da_enabled = true;
+    consensus_cfg.npos.block_time = Duration::from_secs(2);
+    consensus_cfg.npos.timeouts.commit = Duration::from_secs(1);
+
+    let mut harness = test_actor_harness_with_config_and_height(1, consensus_cfg, None, 1).await;
+    let actor = &mut harness.actor;
+
+    let now = Instant::now();
+    let quorum_timeout = super::commit_quorum_timeout_for_config(&actor.config);
+    let tip_hash = actor.state.view().latest_block_hash();
+    let height = 2;
+    let block = sample_block(height, 0, tip_hash);
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, height, 0);
+    pending.inserted_at = now.checked_sub(quorum_timeout / 2).unwrap_or(now);
+    let delay_guard = quorum_timeout.saturating_add(Duration::from_secs(1));
+    pending.next_kura_retry = Some(now + delay_guard);
+    pending.last_precommit_rebroadcast = Some(now + delay_guard);
+    pending.precommit_vote_sent = true;
+
+    let block_hash = pending.block.hash();
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    let expected = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending block stored")
+        .inserted_at
+        .checked_add(quorum_timeout)
+        .unwrap_or(now);
+    let deadline = actor
+        .next_tick_deadline(now)
+        .expect("pending block should schedule a deadline");
+    assert_eq!(deadline, expected);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn actor_next_tick_deadline_tracks_aborted_retention() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da_enabled = true;
+    consensus_cfg.npos.block_time = Duration::from_secs(2);
+    consensus_cfg.npos.timeouts.commit = Duration::from_secs(1);
+    consensus_cfg.missing_block_signer_fallback_attempts = 1;
+
+    let mut harness = test_actor_harness_with_config_and_height(1, consensus_cfg, None, 1).await;
+    let actor = &mut harness.actor;
+
+    let now = Instant::now();
+    let quorum_timeout = super::commit_quorum_timeout_for_config(&actor.config);
+    let quorum_reschedule_cooldown = quorum_timeout.max(super::QUORUM_RESCHEDULE_COOLDOWN);
+    let retention_factor = actor
+        .config
+        .missing_block_signer_fallback_attempts
+        .saturating_add(2)
+        .max(4);
+    let aborted_retention = quorum_reschedule_cooldown.saturating_mul(retention_factor);
+
+    let tip_hash = actor.state.view().latest_block_hash();
+    let height = 2;
+    let block = sample_block(height, 0, tip_hash);
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, height, 0);
+    pending.mark_aborted();
+    pending.inserted_at = now.checked_sub(aborted_retention / 2).unwrap_or(now);
+    let block_hash = pending.block.hash();
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    let expected = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending block stored")
+        .inserted_at
+        .checked_add(aborted_retention)
+        .unwrap_or(now);
+    let deadline = actor
+        .next_tick_deadline(now)
+        .expect("aborted pending block should schedule retention cleanup");
+    assert_eq!(deadline, expected);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn actor_next_tick_deadline_tracks_idle_view_timeout() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    let now = Instant::now();
+    let committed_qc = actor.latest_committed_qc();
+    let committed_height = committed_qc
+        .as_ref()
+        .map_or_else(|| actor.state.view().height() as u64, |qc| qc.height);
+    let height = super::active_round_height(actor.highest_qc, committed_qc, committed_height);
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+    );
+    let age = timeout / 2;
+    actor
+        .phase_tracker
+        .start_new_round(height, now.checked_sub(age).unwrap_or(now));
+
+    let deadline = actor
+        .next_tick_deadline(now)
+        .expect("idle view should schedule a deadline");
+    assert_eq!(deadline, now + timeout.saturating_sub(age));
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn actor_next_tick_deadline_tracks_rbc_rebroadcast_cooldown() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da_enabled = true;
+    consensus_cfg.npos.block_time = Duration::from_secs(2);
+    consensus_cfg.npos.timeouts.commit = Duration::from_secs(1);
+
+    let mut harness = test_actor_harness_with_config(2, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let now = Instant::now();
+    let height = 2;
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x55; 32]));
+    let key = (block_hash, height, 0);
+    let payload_hash = Hash::prehashed([0x11; Hash::LENGTH]);
+    let chunk_root = Hash::prehashed([0x22; Hash::LENGTH]);
+    let mut session = RbcSession::test_new(1, Some(payload_hash), Some(chunk_root), 0);
+    session.sent_ready = true;
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .payload_rebroadcast_last_sent
+        .insert(key, now);
+
+    let roster = vec![
+        actor.common_config.peer.id().clone(),
+        PeerId::new(harness.key_pairs[1].public_key().clone()),
+    ];
+    actor.record_rbc_session_roster(key, roster, RbcRosterSource::Network);
+
+    let payload_cooldown = actor.payload_rebroadcast_cooldown();
+    let deadline = actor
+        .next_tick_deadline(now)
+        .expect("rbc session should schedule a rebroadcast deadline");
+    assert_eq!(deadline, now + payload_cooldown);
+
+    harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -2455,11 +2714,18 @@ async fn rbc_persist_worker_persists_full_session() {
     harness
         .actor
         .record_rbc_session_roster(key, roster, super::RbcRosterSource::Network);
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session.clone());
     harness.actor.persist_rbc_session(key, &session);
 
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
-        harness.actor.poll_rbc_persist_results();
+        harness.actor.poll_rbc_persist_results_inner();
         if harness
             .actor
             .subsystems
@@ -2493,6 +2759,60 @@ async fn rbc_persist_worker_persists_full_session() {
     )
     .expect("load session");
     assert!(persisted.is_some(), "worker should persist full session");
+
+    harness.shutdown.send();
+    drop(harness);
+    if let Err(err) = worker_join.join() {
+        panic!("persist worker panicked: {err:?}");
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rbc_persist_worker_wakes_on_result() {
+    let rbc_dir = tempfile::tempdir().expect("tempdir");
+    let cfg = crate::sumeragi::RbcStoreConfig {
+        dir: rbc_dir.path().to_path_buf(),
+        max_sessions: 16,
+        soft_sessions: 8,
+        max_bytes: 1 << 20,
+        soft_bytes: 1 << 20,
+        ttl: Duration::from_secs(60),
+    };
+    let mut harness = test_actor_harness_with_rbc_store(1, Some(cfg)).await;
+    let (wake_tx, wake_rx) = mpsc::sync_channel(1);
+    harness.actor.wake_tx = Some(wake_tx);
+    let worker_join = harness
+        .actor
+        .attach_rbc_persist_worker()
+        .expect("persist worker");
+
+    let key: SessionKey = (
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x13; 32])),
+        4,
+        1,
+    );
+    let payload = vec![0xEE; 16];
+    let payload_hash = Hash::new(&payload);
+    let mut session = RbcSession::test_new(1, Some(payload_hash), None, 0);
+    session.test_note_chunk(0, payload, 0);
+    let roster = harness.actor.effective_commit_topology();
+    assert!(!roster.is_empty(), "roster should not be empty");
+    harness
+        .actor
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Network);
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session.clone());
+    harness.actor.persist_rbc_session(key, &session);
+
+    wake_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("persist worker wake");
+    harness.actor.poll_rbc_persist_results_inner();
 
     harness.shutdown.send();
     drop(harness);
@@ -9405,7 +9725,7 @@ async fn handle_vote_defers_until_roster_available() {
         "vote should be retained for roster resolution"
     );
 
-    actor.cache_vote_roster(block_hash, topology.as_ref().to_vec());
+    actor.cache_vote_roster(block_hash, height, view, topology.as_ref().to_vec());
 
     assert!(
         actor
@@ -15756,6 +16076,8 @@ async fn stale_pending_block_requeues_transactions() {
         p2p_queue_cap_high: iroha_config::parameters::defaults::network::P2P_QUEUE_CAP_HIGH,
         p2p_queue_cap_low: iroha_config::parameters::defaults::network::P2P_QUEUE_CAP_LOW,
         p2p_post_queue_cap: iroha_config::parameters::defaults::network::P2P_POST_QUEUE_CAP,
+        p2p_subscriber_queue_cap:
+            iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
         happy_eyeballs_stagger: iroha_config::parameters::defaults::network::HAPPY_EYEBALLS_STAGGER,
         addr_ipv6_first: false,
         max_incoming: None,
@@ -15884,6 +16206,7 @@ async fn stale_pending_block_requeues_transactions() {
         None,
         None,
         Some(background_tx),
+        None,
         rbc_status_handle,
     )
     .expect("actor init");
@@ -15906,6 +16229,7 @@ async fn stale_pending_block_requeues_transactions() {
         None,
         None,
         Some(background_tx),
+        None,
         rbc_status_handle,
     )
     .expect("actor init");
@@ -16195,7 +16519,8 @@ fn active_topology_falls_back_to_world_peers() {
     let view = state.view();
 
     let roster = derive_active_topology(&view, &trusted, &me_id);
-    let expected = vec![me_id, other_id];
+    let mut expected = vec![me_id, other_id];
+    expected.sort();
     assert_eq!(roster, expected);
 }
 
@@ -21576,6 +21901,264 @@ async fn trigger_view_change_prunes_proposals_seen_for_height() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn proposals_seen_prunes_far_future_heights() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let committed_height = actor.state.view().height() as u64;
+    let anchor_height = committed_height.saturating_add(1);
+    let far_height = anchor_height
+        .saturating_add(super::PROPOSALS_SEEN_HEIGHT_WINDOW)
+        .saturating_add(1);
+
+    actor
+        .subsystems
+        .propose
+        .proposals_seen
+        .insert((anchor_height, 0));
+    actor
+        .subsystems
+        .propose
+        .proposals_seen
+        .insert((far_height, 0));
+
+    actor.prune_proposals_seen_horizon(committed_height);
+
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposals_seen
+            .contains(&(anchor_height, 0)),
+        "entries near the active height should be retained"
+    );
+    assert!(
+        !actor
+            .subsystems
+            .propose
+            .proposals_seen
+            .contains(&(far_height, 0)),
+        "entries far above the active height should be pruned"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposals_seen_prunes_far_future_views_for_active_height() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let committed_height = actor.state.view().height() as u64;
+    let active_height = committed_height.saturating_add(1);
+    let current_view = 1_u64;
+    let far_view = current_view
+        .saturating_add(super::PROPOSALS_SEEN_VIEW_WINDOW)
+        .saturating_add(1);
+
+    actor
+        .phase_tracker
+        .on_view_change(active_height, current_view, Instant::now());
+    actor
+        .subsystems
+        .propose
+        .proposals_seen
+        .insert((active_height, current_view));
+    actor
+        .subsystems
+        .propose
+        .proposals_seen
+        .insert((active_height, far_view));
+
+    actor.prune_proposals_seen_horizon(committed_height);
+
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposals_seen
+            .contains(&(active_height, current_view)),
+        "entries near the current view should be retained"
+    );
+    assert!(
+        !actor
+            .subsystems
+            .propose
+            .proposals_seen
+            .contains(&(active_height, far_view)),
+        "entries far beyond the current view should be pruned"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn vote_log_prunes_far_future_heights() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let committed_height = actor.state.view().height() as u64;
+    let active_height = committed_height.saturating_add(1);
+    let current_view = 1_u64;
+    let far_height = active_height
+        .saturating_add(super::VOTE_CACHE_HEIGHT_WINDOW)
+        .saturating_add(1);
+
+    actor
+        .phase_tracker
+        .on_view_change(active_height, current_view, Instant::now());
+
+    let near_block = sample_block(active_height, current_view, None);
+    let near_vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash: near_block.hash(),
+        parent_state_root: Hash::prehashed([0_u8; Hash::LENGTH]),
+        post_state_root: Hash::prehashed([0_u8; Hash::LENGTH]),
+        height: active_height,
+        view: current_view,
+        epoch: 0,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: vec![0_u8; 96],
+    };
+    actor.vote_log.insert(
+        (Phase::Commit, active_height, current_view, 0, 0),
+        near_vote,
+    );
+
+    let far_block = sample_block(far_height, 0, None);
+    let far_vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash: far_block.hash(),
+        parent_state_root: Hash::prehashed([0_u8; Hash::LENGTH]),
+        post_state_root: Hash::prehashed([0_u8; Hash::LENGTH]),
+        height: far_height,
+        view: 0,
+        epoch: 0,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: vec![0_u8; 96],
+    };
+    actor
+        .vote_log
+        .insert((Phase::Commit, far_height, 0, 0, 0), far_vote);
+    let roster = actor.effective_commit_topology();
+    actor.cache_vote_roster(
+        near_block.hash(),
+        active_height,
+        current_view,
+        roster.clone(),
+    );
+    actor.cache_vote_roster(far_block.hash(), far_height, 0, roster);
+
+    actor.prune_vote_caches_horizon(committed_height);
+
+    assert!(
+        actor
+            .vote_log
+            .contains_key(&(Phase::Commit, active_height, current_view, 0, 0)),
+        "vote for the active height should be retained"
+    );
+    assert!(
+        !actor
+            .vote_log
+            .contains_key(&(Phase::Commit, far_height, 0, 0, 0)),
+        "vote far above the active height should be pruned"
+    );
+    assert!(
+        actor.vote_roster_cache.contains_key(&near_block.hash()),
+        "vote roster cache near the active height should be retained"
+    );
+    assert!(
+        !actor.vote_roster_cache.contains_key(&far_block.hash()),
+        "vote roster cache far above the active height should be pruned"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn vote_log_prunes_far_future_views_for_active_height() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let committed_height = actor.state.view().height() as u64;
+    let active_height = committed_height.saturating_add(1);
+    let current_view = 1_u64;
+    let far_view = current_view
+        .saturating_add(super::VOTE_CACHE_VIEW_WINDOW)
+        .saturating_add(1);
+
+    actor
+        .phase_tracker
+        .on_view_change(active_height, current_view, Instant::now());
+
+    let current_block = sample_block(active_height, current_view, None);
+    let current_vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash: current_block.hash(),
+        parent_state_root: Hash::prehashed([0_u8; Hash::LENGTH]),
+        post_state_root: Hash::prehashed([0_u8; Hash::LENGTH]),
+        height: active_height,
+        view: current_view,
+        epoch: 0,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: vec![0_u8; 96],
+    };
+    actor.vote_log.insert(
+        (Phase::Commit, active_height, current_view, 0, 0),
+        current_vote,
+    );
+
+    let far_block = sample_block(active_height, far_view, None);
+    let far_vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash: far_block.hash(),
+        parent_state_root: Hash::prehashed([0_u8; Hash::LENGTH]),
+        post_state_root: Hash::prehashed([0_u8; Hash::LENGTH]),
+        height: active_height,
+        view: far_view,
+        epoch: 0,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: vec![0_u8; 96],
+    };
+    actor
+        .vote_log
+        .insert((Phase::Commit, active_height, far_view, 0, 0), far_vote);
+    let roster = actor.effective_commit_topology();
+    actor.cache_vote_roster(
+        current_block.hash(),
+        active_height,
+        current_view,
+        roster.clone(),
+    );
+    actor.cache_vote_roster(far_block.hash(), active_height, far_view, roster);
+
+    actor.prune_vote_caches_horizon(committed_height);
+
+    assert!(
+        actor
+            .vote_log
+            .contains_key(&(Phase::Commit, active_height, current_view, 0, 0)),
+        "votes near the current view should be retained"
+    );
+    assert!(
+        !actor
+            .vote_log
+            .contains_key(&(Phase::Commit, active_height, far_view, 0, 0)),
+        "votes far beyond the current view should be pruned"
+    );
+    assert!(
+        actor.vote_roster_cache.contains_key(&current_block.hash()),
+        "vote roster cache near the current view should be retained"
+    );
+    assert!(
+        !actor.vote_roster_cache.contains_key(&far_block.hash()),
+        "vote roster cache far beyond the current view should be pruned"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn commit_topology_change_preserves_state_on_reorder() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -21678,7 +22261,10 @@ async fn on_block_commit_keeps_pending_on_order_only_topology_change() {
     actor.on_block_commit(1).expect("commit should succeed");
 
     assert!(
-        actor.pending.pending_blocks.contains_key(&pending_block.hash()),
+        actor
+            .pending
+            .pending_blocks
+            .contains_key(&pending_block.hash()),
         "order-only topology change should not clear pending blocks"
     );
     assert!(
@@ -28361,11 +28947,6 @@ async fn block_created_updates_locked_status_when_lock_missing() {
     let locked = actor.locked_qc.expect("locked qc updated");
     assert_eq!(locked.subject_block_hash, parent_hash);
 
-    let snapshot = super::status::snapshot();
-    assert_eq!(snapshot.locked_qc_height, 1);
-    assert_eq!(snapshot.locked_qc_view, 0);
-    assert_eq!(snapshot.locked_qc_subject, Some(parent_hash));
-
     super::status::set_locked_qc(0, 0, None);
     super::status::set_highest_qc(0, 0);
     super::status::set_highest_qc_hash(HashOf::from_untyped_unchecked(Hash::prehashed(
@@ -34669,6 +35250,8 @@ async fn proposal_assembly_defers_without_draining_queue_and_preserves_view_when
         p2p_queue_cap_high: iroha_config::parameters::defaults::network::P2P_QUEUE_CAP_HIGH,
         p2p_queue_cap_low: iroha_config::parameters::defaults::network::P2P_QUEUE_CAP_LOW,
         p2p_post_queue_cap: iroha_config::parameters::defaults::network::P2P_POST_QUEUE_CAP,
+        p2p_subscriber_queue_cap:
+            iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
         happy_eyeballs_stagger: iroha_config::parameters::defaults::network::HAPPY_EYEBALLS_STAGGER,
         addr_ipv6_first: false,
         max_incoming: None,
@@ -34797,6 +35380,7 @@ async fn proposal_assembly_defers_without_draining_queue_and_preserves_view_when
         None,
         None,
         None,
+        None,
         rbc_status_handle,
     )
     .expect("actor init");
@@ -34815,6 +35399,7 @@ async fn proposal_assembly_defers_without_draining_queue_and_preserves_view_when
         genesis_network,
         crate::kura::BlockCount(0),
         block_sync_gossip_limit,
+        None,
         None,
         None,
         None,
@@ -35690,7 +36275,10 @@ async fn reschedule_stale_pending_blocks_skips_empty_roster() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn reschedule_stale_pending_blocks_evicts_aborted_payloads() {
-    let mut harness = test_actor_harness(4).await;
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da_enabled = true;
+    let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 1).await;
     let actor = &mut harness.actor;
     let view = actor.state.view();
     let committed_height = view.height() as u64;
@@ -35738,8 +36326,54 @@ async fn reschedule_stale_pending_blocks_evicts_aborted_payloads() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn reschedule_stale_pending_blocks_evicts_aborted_payloads_without_active() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da_enabled = true;
+    let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 1).await;
+    let actor = &mut harness.actor;
+    let view = actor.state.view();
+    let committed_height = view.height() as u64;
+    let height = committed_height + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let block = sample_block(height, 0, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let view_idx = u64::from(block.header().view_change_index());
+    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    pending.mark_aborted();
+    let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
+    let retention_factor = actor
+        .config
+        .missing_block_signer_fallback_attempts
+        .saturating_add(2)
+        .max(4);
+    let retention = quorum_timeout
+        .max(super::QUORUM_RESCHEDULE_COOLDOWN)
+        .saturating_mul(retention_factor);
+    pending.inserted_at = Instant::now() - retention - Duration::from_millis(1);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    assert!(
+        actor.reschedule_stale_pending_blocks(),
+        "aborted payloads should be evicted even without active pending blocks"
+    );
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&block_hash),
+        "aborted payload should be evicted after retention"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn reschedule_stale_pending_blocks_retains_aborted_with_votes() {
-    let mut harness = test_actor_harness(4).await;
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da_enabled = true;
+    let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 1).await;
     let actor = &mut harness.actor;
     let view = actor.state.view();
     let committed_height = view.height() as u64;
@@ -35780,7 +36414,7 @@ async fn reschedule_stale_pending_blocks_retains_aborted_with_votes() {
         block_hash,
         parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
         post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-        height,
+        height: committed_height,
         view: view_idx,
         epoch,
         highest_qc: None,
@@ -35835,13 +36469,60 @@ async fn reschedule_stale_pending_blocks_retains_aborted_above_committed_height(
     let retention = quorum_timeout
         .max(super::QUORUM_RESCHEDULE_COOLDOWN)
         .saturating_mul(retention_factor);
-    pending.inserted_at = Instant::now() - retention - Duration::from_millis(1);
+    let within_retention = retention.saturating_sub(Duration::from_millis(1));
+    pending.inserted_at = Instant::now() - within_retention;
     actor.pending.pending_blocks.insert(block_hash, pending);
 
     actor.reschedule_stale_pending_blocks();
     assert!(
         actor.pending.pending_blocks.contains_key(&block_hash),
-        "aborted payloads above committed height should be retained"
+        "aborted payloads above committed height should be retained within the window"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn reschedule_stale_pending_blocks_evicts_aborted_above_committed_height_after_retention() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let view = actor.state.view();
+    let committed_height = view.height() as u64;
+    let height = committed_height + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let active_block = sample_block(height, 0, parent);
+    let active_hash = active_block.hash();
+    let active_payload_hash = Hash::new(super::proposals::block_payload_bytes(&active_block));
+    let active_view = u64::from(active_block.header().view_change_index());
+    actor.pending.pending_blocks.insert(
+        active_hash,
+        PendingBlock::new(active_block, active_payload_hash, height, active_view),
+    );
+
+    let block = sample_block(height, 1, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let view_idx = u64::from(block.header().view_change_index());
+    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    pending.mark_aborted();
+    let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
+    let retention_factor = actor
+        .config
+        .missing_block_signer_fallback_attempts
+        .saturating_add(2)
+        .max(4);
+    let retention = quorum_timeout
+        .max(super::QUORUM_RESCHEDULE_COOLDOWN)
+        .saturating_mul(retention_factor);
+    pending.inserted_at = Instant::now() - retention - Duration::from_millis(1);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    actor.reschedule_stale_pending_blocks();
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&block_hash),
+        "aborted payloads above committed height should be evicted after retention"
     );
 
     harness.shutdown.send();

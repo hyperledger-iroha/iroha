@@ -903,6 +903,11 @@ impl ValidQueryRequest {
         limits: QueryLimits,
     ) -> Result<Self, ValidationFail> {
         ensure_query_registry_initialized();
+        if matches!(&query, QueryRequest::Continue(_)) {
+            return Err(ValidationFail::NotPermitted(
+                "QueryRequest::Continue is not supported in IVM".to_string(),
+            ));
+        }
         validate_query_request_limits(&query, limits)?;
         let authority = state.authority().clone();
         state.validate_query(&authority, &query)?;
@@ -3037,6 +3042,49 @@ mod tests {
         assert!(validator.validated);
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn validate_for_ivm_rejects_continue() {
+        use iroha_data_model::query::parameters::ForwardCursor;
+
+        struct DummyValidator {
+            authority: AccountId,
+        }
+
+        impl IvmQueryValidator for DummyValidator {
+            fn authority(&self) -> &AccountId {
+                &self.authority
+            }
+
+            fn validate_query(
+                &mut self,
+                _authority: &AccountId,
+                _query: &QueryRequest,
+            ) -> Result<(), ValidationFail> {
+                Ok(())
+            }
+        }
+
+        let mut validator = DummyValidator {
+            authority: ALICE_ID.clone(),
+        };
+        let cursor = ForwardCursor {
+            query: "ivm-cursor".to_string(),
+            cursor: nonzero!(1_u64),
+            gas_budget: None,
+        };
+        let request = QueryRequest::Continue(cursor);
+
+        let err = match ValidQueryRequest::validate_for_ivm(
+            request,
+            &mut validator,
+            QueryLimits::default(),
+        ) {
+            Ok(_) => panic!("IVM must reject query continuations"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, ValidationFail::NotPermitted(msg) if msg.contains("Continue")));
     }
 
     fn world_with_test_domains() -> World {

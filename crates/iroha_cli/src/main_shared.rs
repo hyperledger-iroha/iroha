@@ -20,6 +20,7 @@ mod nexus;
 mod offline;
 mod runtime;
 mod staking;
+mod subscriptions;
 mod space_directory;
 mod sumeragi;
 mod zk; // ZK helpers (app API convenience) // IVM/ABI helpers
@@ -196,6 +197,9 @@ enum Command {
     /// Public-lane staking helpers (register/activate/exit)
     #[command(subcommand)]
     Staking(staking::Command),
+    /// Subscription plan and billing helpers
+    #[command(subcommand)]
+    Subscriptions(subscriptions::Command),
     /// Domain endorsement helpers (committees, policies, submissions)
     #[command(subcommand)]
     Endorsement(endorsement::Command),
@@ -486,6 +490,7 @@ impl Run for Command {
             Streaming(variant) => Run::run(variant, context),
             Nexus(variant) => Run::run(variant, context),
             Staking(variant) => Run::run(variant, context),
+            Subscriptions(variant) => Run::run(variant, context),
             Endorsement(variant) => Run::run(variant, context),
             Jurisdiction(variant) => Run::run(variant, context),
             #[cfg(feature = "bridge")]

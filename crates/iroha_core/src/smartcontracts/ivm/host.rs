@@ -26,7 +26,8 @@ use iroha_data_model::{
     isi::{
         Burn, BurnBox, InstructionBox, Mint, MintBox, Register, RegisterBox, SetKeyValue,
         SetKeyValueBox, SetParameter, Transfer, TransferAssetBatch, TransferAssetBatchEntry,
-        TransferBox, Unregister, UnregisterBox, smart_contract_code as scode, zk as DMZk,
+        TransferBox, Unregister, UnregisterBox, register::RegisterPeerWithPop,
+        smart_contract_code as scode, zk as DMZk,
     },
     nexus::{
         AxtBinding, AxtDescriptor as ModelAxtDescriptor, AxtEnvelopeRecord, AxtHandleFragment,
@@ -35,15 +36,17 @@ use iroha_data_model::{
         AxtTouchSpec as ModelAxtTouchSpec, ProofBlob as ModelProofBlob,
         TouchManifest as ModelTouchManifest, proof_matches_manifest,
     },
+    permission::Permissions,
     prelude::{AccountId, *},
     proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
     query::{QueryRequest, QueryResponse, error::QueryExecutionFail, parameters::ForwardCursor},
     subscription::{
-        SUBSCRIPTION_INVOICE_METADATA_KEY, SUBSCRIPTION_METADATA_KEY, SUBSCRIPTION_PLAN_METADATA_KEY,
-        SUBSCRIPTION_TRIGGER_REF_METADATA_KEY,
+        SUBSCRIPTION_INVOICE_METADATA_KEY, SUBSCRIPTION_METADATA_KEY,
+        SUBSCRIPTION_PLAN_METADATA_KEY, SUBSCRIPTION_TRIGGER_REF_METADATA_KEY,
     },
     zk::BackendTag,
 };
+use iroha_primitives::calendar;
 #[cfg(test)]
 use ivm::VMError;
 use ivm::{
@@ -54,11 +57,10 @@ use ivm::{
     is_type_allowed_for_policy,
 };
 use mv::storage::StorageReadOnly;
-use iroha_primitives::calendar;
 use norito::{
     codec::Decode as NoritoDecode,
     core::{Archived, Header, NoritoSerialize},
-    decode_from_bytes,
+    decode_from_bytes, json,
     streaming::CapabilityFlags,
 };
 use sha2::{Digest, Sha256};
@@ -68,7 +70,9 @@ use crate::telemetry::StateTelemetry;
 use crate::{
     smartcontracts::isi::{
         query::{IvmQueryValidator, QueryLimits, ValidQueryRequest},
-        triggers::set::SetReadOnly,
+        triggers::{
+            TRIGGER_ENABLED_METADATA_KEY, set::SetReadOnly, specialized::SpecializedAction,
+        },
     },
     state::{
         StateBlock, StateReadOnly, StateTransaction, StateView, WorldReadOnly,
@@ -596,10 +600,8 @@ pub trait QueryStateRefOps {
         trigger_id: &TriggerId,
     ) -> Result<SubscriptionContext, ivm::VMError>;
     /// Load subscription state from a subscription NFT.
-    fn subscription_state_for_nft(
-        &self,
-        nft_id: &NftId,
-    ) -> Result<SubscriptionState, ivm::VMError>;
+    fn subscription_state_for_nft(&self, nft_id: &NftId)
+    -> Result<SubscriptionState, ivm::VMError>;
     /// Load a subscription plan from its asset definition metadata.
     fn subscription_plan(
         &self,
@@ -2139,6 +2141,132 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         s.parse::<Json>().map_err(|_| ivm::VMError::DecodeError)
     }
 
+    fn permission_from_name(name: Name) -> Permission {
+        Permission::new(name.as_ref().to_string().into(), Json::new(()))
+    }
+
+    fn permission_from_value(value: &json::Value) -> Result<Permission, ivm::VMError> {
+        if let Some(name) = value.as_str() {
+            return Ok(Permission::new(name.to_string().into(), Json::new(())));
+        }
+        if let Some(map) = value.as_object() {
+            if let Ok(permission) = json::from_value::<Permission>(value.clone()) {
+                return Ok(permission);
+            }
+            let name = map
+                .get("name")
+                .and_then(json::Value::as_str)
+                .ok_or(ivm::VMError::DecodeError)?;
+            let payload = map.get("payload").cloned().unwrap_or(json::Value::Null);
+            return Ok(Permission::new(
+                name.to_string().into(),
+                Json::from(payload),
+            ));
+        }
+        Err(ivm::VMError::DecodeError)
+    }
+
+    fn permission_from_json(value: &Json) -> Result<Permission, ivm::VMError> {
+        let value: json::Value = value
+            .try_into_any_norito::<json::Value>()
+            .map_err(|_| ivm::VMError::DecodeError)?;
+        Self::permission_from_value(&value)
+    }
+
+    fn permissions_from_value(value: &json::Value) -> Result<Permissions, ivm::VMError> {
+        if let Ok(perms) = json::from_value::<Permissions>(value.clone()) {
+            return Ok(perms);
+        }
+        let array = if let Some(array) = value.as_array() {
+            Some(array)
+        } else if let Some(map) = value.as_object() {
+            map.get("permissions")
+                .or_else(|| map.get("perms"))
+                .or_else(|| map.get("permission"))
+                .and_then(json::Value::as_array)
+        } else {
+            None
+        };
+        if let Some(items) = array {
+            let mut perms = Permissions::new();
+            for item in items {
+                let perm = Self::permission_from_value(item)?;
+                perms.insert(perm);
+            }
+            return Ok(perms);
+        }
+        let perm = Self::permission_from_value(value)?;
+        let mut perms = Permissions::new();
+        perms.insert(perm);
+        Ok(perms)
+    }
+
+    fn permissions_from_json(value: &Json) -> Result<Permissions, ivm::VMError> {
+        let value: json::Value = value
+            .try_into_any_norito::<json::Value>()
+            .map_err(|_| ivm::VMError::DecodeError)?;
+        Self::permissions_from_value(&value)
+    }
+
+    fn peer_id_from_value(value: &json::Value) -> Result<PeerId, ivm::VMError> {
+        if let Some(peer_str) = value.as_str() {
+            if let Ok(peer_id) = PeerId::from_str(peer_str) {
+                return Ok(peer_id);
+            }
+            if let Ok(peer) = Peer::from_str(peer_str) {
+                return Ok(peer.id().clone());
+            }
+            return Err(ivm::VMError::DecodeError);
+        }
+        if let Some(map) = value.as_object()
+            && let Some(peer_value) = map.get("peer")
+        {
+            return Self::peer_id_from_value(peer_value);
+        }
+        Err(ivm::VMError::DecodeError)
+    }
+
+    fn register_peer_from_value(value: &json::Value) -> Result<RegisterPeerWithPop, ivm::VMError> {
+        if let Ok(request) = json::from_value::<RegisterPeerWithPop>(value.clone()) {
+            return Ok(request);
+        }
+        let map = value.as_object().ok_or(ivm::VMError::DecodeError)?;
+        let peer_value = map.get("peer").ok_or(ivm::VMError::DecodeError)?;
+        let peer_id = Self::peer_id_from_value(peer_value)?;
+        let pop_value = map.get("pop").ok_or(ivm::VMError::DecodeError)?;
+        let pop: Vec<u8> =
+            json::from_value(pop_value.clone()).map_err(|_| ivm::VMError::DecodeError)?;
+        let mut request = RegisterPeerWithPop::new(peer_id, pop);
+        if let Some(value) = map.get("activation_at") {
+            request.activation_at =
+                Some(json::from_value(value.clone()).map_err(|_| ivm::VMError::DecodeError)?);
+        }
+        if let Some(value) = map.get("expiry_at") {
+            request.expiry_at =
+                Some(json::from_value(value.clone()).map_err(|_| ivm::VMError::DecodeError)?);
+        }
+        if let Some(value) = map.get("hsm") {
+            request.hsm =
+                Some(json::from_value(value.clone()).map_err(|_| ivm::VMError::DecodeError)?);
+        }
+        Ok(request)
+    }
+
+    fn decode_permission(vm: &IVM, ptr: u64) -> Result<Permission, ivm::VMError> {
+        let tlv = vm.memory.validate_tlv(ptr)?;
+        match tlv.type_id {
+            PointerType::Name => {
+                let name: Name = Self::decode_tlv_typed(vm, ptr, PointerType::Name)?;
+                Ok(Self::permission_from_name(name))
+            }
+            PointerType::Json => {
+                let payload = Self::decode_tlv_json(vm, ptr)?;
+                Self::permission_from_json(&payload)
+            }
+            _ => Err(ivm::VMError::NoritoInvalid),
+        }
+    }
+
     fn decode_header_or_bare<T: NoritoDecode>(payload: &[u8]) -> Result<T, ivm::VMError> {
         decode_from_bytes(payload)
             .or_else(|_| {
@@ -2564,9 +2692,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             end_ms: u64,
         }
 
-        let trigger_id = self.current_trigger_id.clone().ok_or(ivm::VMError::NotImplemented {
-            syscall: ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL,
-        })?;
+        let trigger_id = self
+            .current_trigger_id
+            .clone()
+            .ok_or(ivm::VMError::NotImplemented {
+                syscall: ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL,
+            })?;
         let context = {
             let Some(state_ref) = self.query_state.get() else {
                 return Err(ivm::VMError::NotImplemented {
@@ -2585,15 +2716,28 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         subscription_state.billing_trigger_id = trigger_id.clone();
 
+        #[cfg(feature = "telemetry")]
+        let pricing_label = match context.plan.pricing {
+            SubscriptionPricing::Fixed(_) => "fixed",
+            SubscriptionPricing::Usage(_) => "usage",
+        };
+        #[cfg(feature = "telemetry")]
+        if let Some(telemetry) = self.telemetry.as_ref() {
+            telemetry.record_subscription_billing_attempt(pricing_label);
+        }
+
         if matches!(
             subscription_state.status,
             SubscriptionStatus::Paused
                 | SubscriptionStatus::Canceled
                 | SubscriptionStatus::Suspended
         ) {
-            let instr = InstructionBox::from(UnregisterBox::from(Unregister::trigger(
-                trigger_id.clone(),
-            )));
+            #[cfg(feature = "telemetry")]
+            if let Some(telemetry) = self.telemetry.as_ref() {
+                telemetry.record_subscription_billing_outcome(pricing_label, "skipped");
+            }
+            let instr =
+                InstructionBox::from(UnregisterBox::from(Unregister::trigger(trigger_id.clone())));
             return Ok(self.queue_instruction(instr));
         }
 
@@ -2727,9 +2871,15 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
         if can_pay {
             if !amount.is_zero() {
-                let asset_id =
-                    AssetId::of(context.charge_asset_def.id.clone(), subscription_state.subscriber.clone());
-                let isi = Transfer::asset_numeric(asset_id, amount.clone(), context.plan.provider.clone());
+                let asset_id = AssetId::of(
+                    context.charge_asset_def.id.clone(),
+                    subscription_state.subscriber.clone(),
+                );
+                let isi = Transfer::asset_numeric(
+                    asset_id,
+                    amount.clone(),
+                    context.plan.provider.clone(),
+                );
                 let instr = InstructionBox::from(TransferBox::from(isi));
                 gas = gas.saturating_add(self.queue_instruction(instr));
             }
@@ -2746,8 +2896,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 subscription_state.usage_accumulated.remove(&key);
             }
         } else {
-            subscription_state.failure_count =
-                subscription_state.failure_count.saturating_add(1);
+            subscription_state.failure_count = subscription_state.failure_count.saturating_add(1);
             let grace_deadline = scheduled_at_ms.saturating_add(billing.grace_ms);
             let mut status = subscription_state.status;
             if subscription_state.failure_count >= billing.max_failures {
@@ -2761,12 +2910,28 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     attempted_at_ms.saturating_add(billing.retry_backoff_ms);
             }
         }
+        #[cfg(feature = "telemetry")]
+        let outcome = if can_pay {
+            "paid"
+        } else if subscription_state.status == SubscriptionStatus::Suspended {
+            "suspended"
+        } else {
+            "failed"
+        };
+        #[cfg(feature = "telemetry")]
+        if let Some(telemetry) = self.telemetry.as_ref() {
+            telemetry.record_subscription_billing_outcome(pricing_label, outcome);
+        }
 
         let subscription_key: Name = SUBSCRIPTION_METADATA_KEY
             .parse()
             .map_err(|_| ivm::VMError::NoritoInvalid)?;
         let subscription_json = iroha_primitives::json::Json::new(subscription_state.clone());
-        let isi = SetKeyValue::nft(context.subscription_nft_id.clone(), subscription_key, subscription_json);
+        let isi = SetKeyValue::nft(
+            context.subscription_nft_id.clone(),
+            subscription_key,
+            subscription_json,
+        );
         let instr = InstructionBox::from(SetKeyValueBox::from(isi));
         gas = gas.saturating_add(self.queue_instruction(instr));
 
@@ -2774,15 +2939,17 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .parse()
             .map_err(|_| ivm::VMError::NoritoInvalid)?;
         let invoice_json = iroha_primitives::json::Json::new(invoice);
-        let invoice_isi =
-            SetKeyValue::nft(context.subscription_nft_id.clone(), invoice_key, invoice_json);
+        let invoice_isi = SetKeyValue::nft(
+            context.subscription_nft_id.clone(),
+            invoice_key,
+            invoice_json,
+        );
         let invoice_instr = InstructionBox::from(SetKeyValueBox::from(invoice_isi));
         gas = gas.saturating_add(self.queue_instruction(invoice_instr));
 
         if subscription_state.status == SubscriptionStatus::Suspended {
-            let instr = InstructionBox::from(UnregisterBox::from(Unregister::trigger(
-                trigger_id.clone(),
-            )));
+            let instr =
+                InstructionBox::from(UnregisterBox::from(Unregister::trigger(trigger_id.clone())));
             gas = gas.saturating_add(self.queue_instruction(instr));
             return Ok(gas);
         }
@@ -2799,9 +2966,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         )
         .with_metadata(context.trigger_metadata.clone());
         let trigger = Trigger::new(trigger_id.clone(), action);
-        let unregister = InstructionBox::from(UnregisterBox::from(Unregister::trigger(
-            trigger_id.clone(),
-        )));
+        let unregister =
+            InstructionBox::from(UnregisterBox::from(Unregister::trigger(trigger_id.clone())));
         gas = gas.saturating_add(self.queue_instruction(unregister));
         let register = InstructionBox::from(RegisterBox::from(Register::trigger(trigger)));
         gas = gas.saturating_add(self.queue_instruction(register));
@@ -2862,7 +3028,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .parse()
             .map_err(|_| ivm::VMError::NoritoInvalid)?;
         let subscription_json = iroha_primitives::json::Json::new(subscription_state);
-        let isi = SetKeyValue::nft(delta.subscription_nft_id, subscription_key, subscription_json);
+        let isi = SetKeyValue::nft(
+            delta.subscription_nft_id,
+            subscription_key,
+            subscription_json,
+        );
         let instr = InstructionBox::from(SetKeyValueBox::from(isi));
         Ok(self.queue_instruction(instr))
     }
@@ -2908,7 +3078,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         };
 
         let balance = {
-            let asset_id = AssetId::of(charge_asset_def.id.clone(), subscription_state.subscriber.clone());
+            let asset_id = AssetId::of(
+                charge_asset_def.id.clone(),
+                subscription_state.subscriber.clone(),
+            );
             state
                 .world()
                 .asset(&asset_id)
@@ -3960,7 +4133,66 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let instr = InstructionBox::from(TransferBox::from(isi));
                 Ok(self.queue_instruction(instr))
             }
+            // ----------------- Peer ISIs via pointer-ABI -----------------
+            ivm::syscalls::SYSCALL_REGISTER_PEER => {
+                let ptr = vm.register(10);
+                let payload: Json = Self::decode_tlv_json(vm, ptr)?;
+                let value: json::Value = payload
+                    .try_into_any_norito::<json::Value>()
+                    .map_err(|_| ivm::VMError::DecodeError)?;
+                let request = Self::register_peer_from_value(&value)?;
+                let instr = InstructionBox::from(request);
+                Ok(self.queue_instruction(instr))
+            }
+            ivm::syscalls::SYSCALL_UNREGISTER_PEER => {
+                let ptr = vm.register(10);
+                let payload: Json = Self::decode_tlv_json(vm, ptr)?;
+                let value: json::Value = payload
+                    .try_into_any_norito::<json::Value>()
+                    .map_err(|_| ivm::VMError::DecodeError)?;
+                let peer_id = Self::peer_id_from_value(&value)?;
+                let isi = Unregister::peer(peer_id);
+                let instr = InstructionBox::from(UnregisterBox::from(isi));
+                Ok(self.queue_instruction(instr))
+            }
+            // ----------------- Account ISIs via pointer-ABI -----------------
+            ivm::syscalls::SYSCALL_REGISTER_ACCOUNT => {
+                let ptr = vm.register(10);
+                let id: AccountId = Self::decode_tlv_typed(vm, ptr, PointerType::AccountId)?;
+                let isi = Register::account(Account::new(id));
+                let instr = InstructionBox::from(RegisterBox::from(isi));
+                Ok(self.queue_instruction(instr))
+            }
+            ivm::syscalls::SYSCALL_UNREGISTER_ACCOUNT => {
+                let ptr = vm.register(10);
+                let id: AccountId = Self::decode_tlv_typed(vm, ptr, PointerType::AccountId)?;
+                let isi = Unregister::account(id);
+                let instr = InstructionBox::from(UnregisterBox::from(isi));
+                Ok(self.queue_instruction(instr))
+            }
+            ivm::syscalls::SYSCALL_ADD_SIGNATORY
+            | ivm::syscalls::SYSCALL_REMOVE_SIGNATORY
+            | ivm::syscalls::SYSCALL_SET_ACCOUNT_QUORUM => {
+                // TODO: Iroha v3 data model does not expose signatory/quorum ISIs for IVM yet.
+                Err(ivm::VMError::NotImplemented { syscall: number })
+            }
             // ----------------- Asset (Numeric) ISIs via pointer-ABI -----------------
+            ivm::syscalls::SYSCALL_REGISTER_ASSET => {
+                let ptr = vm.register(10);
+                let id: AssetDefinitionId =
+                    Self::decode_tlv_typed(vm, ptr, PointerType::AssetDefinitionId)?;
+                let isi = Register::asset_definition(AssetDefinition::numeric(id));
+                let instr = InstructionBox::from(RegisterBox::from(isi));
+                Ok(self.queue_instruction(instr))
+            }
+            ivm::syscalls::SYSCALL_UNREGISTER_ASSET => {
+                let ptr = vm.register(10);
+                let id: AssetDefinitionId =
+                    Self::decode_tlv_typed(vm, ptr, PointerType::AssetDefinitionId)?;
+                let isi = Unregister::asset_definition(id);
+                let instr = InstructionBox::from(UnregisterBox::from(isi));
+                Ok(self.queue_instruction(instr))
+            }
             ivm::syscalls::SYSCALL_MINT_ASSET => {
                 let account_ptr = vm.register(10);
                 let asset_def_ptr = vm.register(11);
@@ -4073,6 +4305,131 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 };
 
                 let isi = SetKeyValue::account(account, key, value);
+                let instr = InstructionBox::from(SetKeyValueBox::from(isi));
+                Ok(self.queue_instruction(instr))
+            }
+            // ----------------- Role and permission ISIs via pointer-ABI -----------------
+            ivm::syscalls::SYSCALL_CREATE_ROLE => {
+                let name_ptr = vm.register(10);
+                let perms_ptr = vm.register(11);
+                let name: Name = Self::decode_tlv_typed(vm, name_ptr, PointerType::Name)?;
+                let perms_json: Json = Self::decode_tlv_json(vm, perms_ptr)?;
+                let permissions = Self::permissions_from_json(&perms_json)?;
+                let role_id = RoleId::new(name);
+                let mut role = Role::new(role_id, self.authority.clone());
+                for perm in permissions {
+                    role = role.add_permission(perm);
+                }
+                let isi = Register::role(role);
+                let instr = InstructionBox::from(RegisterBox::from(isi));
+                Ok(self.queue_instruction(instr))
+            }
+            ivm::syscalls::SYSCALL_DELETE_ROLE => {
+                let name_ptr = vm.register(10);
+                let name: Name = Self::decode_tlv_typed(vm, name_ptr, PointerType::Name)?;
+                let isi = Unregister::role(RoleId::new(name));
+                let instr = InstructionBox::from(UnregisterBox::from(isi));
+                Ok(self.queue_instruction(instr))
+            }
+            ivm::syscalls::SYSCALL_GRANT_ROLE => {
+                let account_ptr = vm.register(10);
+                let name_ptr = vm.register(11);
+                let account: AccountId =
+                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
+                let name: Name = Self::decode_tlv_typed(vm, name_ptr, PointerType::Name)?;
+                let isi = Grant::account_role(RoleId::new(name), account);
+                let instr = InstructionBox::from(isi);
+                Ok(self.queue_instruction(instr))
+            }
+            ivm::syscalls::SYSCALL_REVOKE_ROLE => {
+                let account_ptr = vm.register(10);
+                let name_ptr = vm.register(11);
+                let account: AccountId =
+                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
+                let name: Name = Self::decode_tlv_typed(vm, name_ptr, PointerType::Name)?;
+                let isi = Revoke::account_role(RoleId::new(name), account);
+                let instr = InstructionBox::from(isi);
+                Ok(self.queue_instruction(instr))
+            }
+            ivm::syscalls::SYSCALL_GRANT_PERMISSION => {
+                let account_ptr = vm.register(10);
+                let perm_ptr = vm.register(11);
+                let account: AccountId =
+                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
+                let permission = Self::decode_permission(vm, perm_ptr)?;
+                let isi = Grant::account_permission(permission, account);
+                let instr = InstructionBox::from(isi);
+                Ok(self.queue_instruction(instr))
+            }
+            ivm::syscalls::SYSCALL_REVOKE_PERMISSION => {
+                let account_ptr = vm.register(10);
+                let perm_ptr = vm.register(11);
+                let account: AccountId =
+                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
+                let permission = Self::decode_permission(vm, perm_ptr)?;
+                let isi = Revoke::account_permission(permission, account);
+                let instr = InstructionBox::from(isi);
+                Ok(self.queue_instruction(instr))
+            }
+            ivm::syscalls::SYSCALL_CREATE_TRIGGER => {
+                let ptr = vm.register(10);
+                let spec: Json = Self::decode_tlv_json(vm, ptr)?;
+                let trigger = if let Ok(trigger) = spec.try_into_any_norito::<Trigger>() {
+                    trigger
+                } else {
+                    let value: json::Value = spec
+                        .try_into_any_norito::<json::Value>()
+                        .map_err(|_| ivm::VMError::DecodeError)?;
+                    let mut map = match value {
+                        json::Value::Object(map) => map,
+                        _ => return Err(ivm::VMError::DecodeError),
+                    };
+                    let id_value = map.remove("id").ok_or(ivm::VMError::DecodeError)?;
+                    let id_str = id_value.as_str().ok_or(ivm::VMError::DecodeError)?;
+                    let id: TriggerId = id_str.parse().map_err(|_| ivm::VMError::DecodeError)?;
+                    let action_value = map.remove("action").ok_or(ivm::VMError::DecodeError)?;
+                    let action = match json::from_value::<Action>(action_value.clone()) {
+                        Ok(action) => action,
+                        Err(_) => {
+                            let spec_action: SpecializedAction<EventFilterBox> =
+                                json::from_value(action_value)
+                                    .map_err(|_| ivm::VMError::DecodeError)?;
+                            let SpecializedAction {
+                                executable,
+                                repeats,
+                                authority,
+                                filter,
+                                metadata,
+                            } = spec_action;
+                            if matches!(filter, EventFilterBox::TriggerCompleted(_)) {
+                                return Err(ivm::VMError::DecodeError);
+                            }
+                            Action::new(executable, repeats, authority, filter)
+                                .with_metadata(metadata)
+                        }
+                    };
+                    Trigger::new(id, action)
+                };
+                let instr = InstructionBox::from(Register::trigger(trigger));
+                Ok(self.queue_instruction(instr))
+            }
+            ivm::syscalls::SYSCALL_REMOVE_TRIGGER => {
+                let ptr = vm.register(10);
+                let name: Name = Self::decode_tlv_typed(vm, ptr, PointerType::Name)?;
+                let id = TriggerId::new(name);
+                let isi = Unregister::trigger(id);
+                let instr = InstructionBox::from(UnregisterBox::from(isi));
+                Ok(self.queue_instruction(instr))
+            }
+            ivm::syscalls::SYSCALL_SET_TRIGGER_ENABLED => {
+                let ptr = vm.register(10);
+                let enabled = vm.register(11) != 0;
+                let name: Name = Self::decode_tlv_typed(vm, ptr, PointerType::Name)?;
+                let id = TriggerId::new(name);
+                let key: Name = TRIGGER_ENABLED_METADATA_KEY
+                    .parse()
+                    .map_err(|_| ivm::VMError::DecodeError)?;
+                let isi = SetKeyValue::trigger(id, key, Json::from(enabled));
                 let instr = InstructionBox::from(SetKeyValueBox::from(isi));
                 Ok(self.queue_instruction(instr))
             }
@@ -4606,8 +4963,12 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             | ivm::syscalls::SYSCALL_TLV_EQ
             | ivm::syscalls::SYSCALL_SCHEMA_INFO
             | ivm::syscalls::SYSCALL_NAME_DECODE => self.codec_host.syscall(number, vm),
-            // Remaining Norito helpers are safe to forward to DefaultHost.
-            ivm::syscalls::SYSCALL_ALLOC
+            // Stateless helpers are safe to forward to DefaultHost.
+            ivm::syscalls::SYSCALL_DEBUG_PRINT
+            | ivm::syscalls::SYSCALL_EXIT
+            | ivm::syscalls::SYSCALL_ABORT
+            | ivm::syscalls::SYSCALL_DEBUG_LOG
+            | ivm::syscalls::SYSCALL_ALLOC
             | ivm::syscalls::SYSCALL_GROW_HEAP
             | ivm::syscalls::SYSCALL_GET_PRIVATE_INPUT
             | ivm::syscalls::SYSCALL_INPUT_PUBLISH_TLV
@@ -6297,6 +6658,384 @@ mod pointer_abi_tests {
     }
 
     #[test]
+    fn register_account_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let account: AccountId = "bob@wonderland".parse().unwrap();
+        let ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
+        vm.set_register(10, ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_REGISTER_ACCOUNT, &mut vm);
+        let expected = InstructionBox::from(Register::account(Account::new(account)));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn unregister_account_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let account: AccountId = "bob@wonderland".parse().unwrap();
+        let ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
+        vm.set_register(10, ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_UNREGISTER_ACCOUNT, &mut vm);
+        let expected = InstructionBox::from(Unregister::account(account));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn register_asset_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let ptr = store_tlv(
+            &mut vm,
+            PointerType::AssetDefinitionId,
+            &norito_blob(&asset_def),
+        );
+        vm.set_register(10, ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_REGISTER_ASSET, &mut vm);
+        let expected = InstructionBox::from(Register::asset_definition(AssetDefinition::numeric(
+            asset_def,
+        )));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn unregister_asset_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let ptr = store_tlv(
+            &mut vm,
+            PointerType::AssetDefinitionId,
+            &norito_blob(&asset_def),
+        );
+        vm.set_register(10, ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_UNREGISTER_ASSET, &mut vm);
+        let expected = InstructionBox::from(Unregister::asset_definition(asset_def));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn register_peer_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+        let request = RegisterPeerWithPop::new(peer_id, vec![0xAB, 0xCD]);
+        let json = Json::new(request.clone());
+        let ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&json));
+        vm.set_register(10, ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_REGISTER_PEER, &mut vm);
+        let expected = InstructionBox::from(request);
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn unregister_peer_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+        let json = Json::new(peer_id.clone());
+        let ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&json));
+        vm.set_register(10, ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_UNREGISTER_PEER, &mut vm);
+        let expected = InstructionBox::from(Unregister::peer(peer_id));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn create_role_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority.clone());
+
+        let role_name: Name = "auditor".parse().unwrap();
+        let mut perms_map = BTreeMap::new();
+        perms_map.insert(
+            "permissions".to_string(),
+            norito::json::Value::Array(vec![norito::json::Value::String(
+                "read_assets".to_string(),
+            )]),
+        );
+        let perms_json = Json::from(&norito::json::Value::Object(perms_map));
+
+        let name_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&role_name));
+        let perms_ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&perms_json));
+        vm.set_register(10, name_ptr);
+        vm.set_register(11, perms_ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_CREATE_ROLE, &mut vm);
+        let mut role = Role::new(RoleId::new(role_name), authority);
+        role = role.add_permission(Permission::new(
+            "read_assets".to_string().into(),
+            Json::new(()),
+        ));
+        let expected = InstructionBox::from(Register::role(role));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn delete_role_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let role_name: Name = "auditor".parse().unwrap();
+        let name_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&role_name));
+        vm.set_register(10, name_ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_DELETE_ROLE, &mut vm);
+        let expected = InstructionBox::from(Unregister::role(RoleId::new(role_name)));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn grant_role_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let account: AccountId = "bob@wonderland".parse().unwrap();
+        let role_name: Name = "auditor".parse().unwrap();
+        let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
+        let role_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&role_name));
+        vm.set_register(10, account_ptr);
+        vm.set_register(11, role_ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_GRANT_ROLE, &mut vm);
+        let expected = InstructionBox::from(Grant::account_role(RoleId::new(role_name), account));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn revoke_role_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let account: AccountId = "bob@wonderland".parse().unwrap();
+        let role_name: Name = "auditor".parse().unwrap();
+        let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
+        let role_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&role_name));
+        vm.set_register(10, account_ptr);
+        vm.set_register(11, role_ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_REVOKE_ROLE, &mut vm);
+        let expected = InstructionBox::from(Revoke::account_role(RoleId::new(role_name), account));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn grant_permission_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let account: AccountId = "bob@wonderland".parse().unwrap();
+        let perm_name: Name = "read_assets".parse().unwrap();
+        let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
+        let perm_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&perm_name));
+        vm.set_register(10, account_ptr);
+        vm.set_register(11, perm_ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_GRANT_PERMISSION, &mut vm);
+        let expected = InstructionBox::from(Grant::account_permission(
+            Permission::new(perm_name.as_ref().to_string().into(), Json::new(())),
+            account,
+        ));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn revoke_permission_syscall_queues_instruction_from_json() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let account: AccountId = "bob@wonderland".parse().unwrap();
+        let permission = Permission::new("transfer_asset".to_string().into(), Json::new(()));
+        let perm_json = Json::new(permission.clone());
+        let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
+        let perm_ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&perm_json));
+        vm.set_register(10, account_ptr);
+        vm.set_register(11, perm_ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_REVOKE_PERMISSION, &mut vm);
+        let expected = InstructionBox::from(Revoke::account_permission(permission, account));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn signatory_and_quorum_syscalls_are_not_implemented() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_ADD_SIGNATORY, &mut vm);
+        assert!(matches!(res, Err(ivm::VMError::NotImplemented { .. })));
+        let res = host.syscall(ivm::syscalls::SYSCALL_REMOVE_SIGNATORY, &mut vm);
+        assert!(matches!(res, Err(ivm::VMError::NotImplemented { .. })));
+        let res = host.syscall(ivm::syscalls::SYSCALL_SET_ACCOUNT_QUORUM, &mut vm);
+        assert!(matches!(res, Err(ivm::VMError::NotImplemented { .. })));
+    }
+
+    #[test]
+    fn create_trigger_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority.clone());
+
+        let trigger_id: TriggerId = "trigger_base64".parse().unwrap();
+        let trigger = Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                vec![InstructionBox::from(Log::new(
+                    Level::INFO,
+                    "noop".to_owned(),
+                ))],
+                Repeats::Exactly(1),
+                authority.clone(),
+                DataEventFilter::Any,
+            ),
+        );
+        let json = Json::new(trigger.clone());
+        let ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&json));
+        vm.set_register(10, ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_CREATE_TRIGGER, &mut vm);
+        let expected = InstructionBox::from(Register::trigger(trigger));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn create_trigger_syscall_object_spec_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority.clone());
+
+        let trigger_id: TriggerId = "trigger_object".parse().unwrap();
+        let action = SpecializedAction::new(
+            vec![InstructionBox::from(Log::new(
+                Level::INFO,
+                "object".to_owned(),
+            ))],
+            Repeats::Exactly(1),
+            authority.clone(),
+            EventFilterBox::Data(DataEventFilter::Any),
+        );
+        let action_value = norito::json::to_value(&action).expect("serialize specialized action");
+        let mut map = BTreeMap::new();
+        map.insert(
+            "id".to_string(),
+            norito::json::Value::String(trigger_id.to_string()),
+        );
+        map.insert("action".to_string(), action_value);
+        let spec = Json::from(&norito::json::Value::Object(map));
+
+        let ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&spec));
+        vm.set_register(10, ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_CREATE_TRIGGER, &mut vm);
+        let expected_action = Action::new(
+            action.executable.clone(),
+            action.repeats,
+            action.authority.clone(),
+            action.filter.clone(),
+        )
+        .with_metadata(action.metadata.clone());
+        let expected =
+            InstructionBox::from(Register::trigger(Trigger::new(trigger_id, expected_action)));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn remove_trigger_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let name: Name = "drop_me".parse().unwrap();
+        let ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&name));
+        vm.set_register(10, ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_REMOVE_TRIGGER, &mut vm);
+        let expected = InstructionBox::from(Unregister::trigger(TriggerId::new(name)));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn set_trigger_enabled_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let name: Name = "toggle_me".parse().unwrap();
+        let ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&name));
+        vm.set_register(10, ptr);
+        vm.set_register(11, 1);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_SET_TRIGGER_ENABLED, &mut vm);
+        let key: Name = TRIGGER_ENABLED_METADATA_KEY
+            .parse()
+            .expect("valid metadata key");
+        let expected = InstructionBox::from(SetKeyValue::trigger(
+            TriggerId::new(name),
+            key,
+            Json::from(true),
+        ));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
     fn mint_asset_syscall_returns_metered_gas() {
         let mut vm = ivm::IVM::new(1_000);
         let authority: AccountId = "alice@wonderland".parse().unwrap();
@@ -6466,6 +7205,7 @@ mod tests {
     use std::{collections::BTreeMap, sync::Arc};
 
     use iroha_data_model::{
+        isi::register::RegisterPeerWithPop,
         proof::{VerifyingKeyBox, VerifyingKeyId},
         query::{QueryRequest, QueryResponse, SingularQueryBox, prelude::FindParameters},
         zk::BackendTag,
@@ -6480,7 +7220,7 @@ mod tests {
         query::{
             QueryBox, QueryWithFilter, QueryWithParams,
             dsl::prelude::{CompoundPredicate, SelectorTuple},
-            parameters::{FetchSize, Pagination, QueryParams, Sorting},
+            parameters::{FetchSize, ForwardCursor, Pagination, QueryParams, Sorting},
         },
     };
     use nonzero_ext::nonzero;
@@ -6774,6 +7514,35 @@ mod tests {
     }
 
     #[test]
+    fn execute_query_syscall_rejects_continue_request() {
+        crate::test_alias::ensure();
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority);
+        host.set_query_state(&view);
+        let mut vm = IVM::new(1_000_000);
+
+        let cursor = ForwardCursor {
+            query: "ivm-cursor".to_string(),
+            cursor: nonzero!(1_u64),
+            gas_budget: None,
+        };
+        let request = QueryRequest::Continue(cursor);
+        let request_bytes = norito::to_bytes(&request).expect("encode query request");
+        let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &request_bytes);
+        vm.set_register(10, ptr);
+
+        let err = host
+            .syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY, &mut vm)
+            .expect_err("continue should be rejected");
+        assert!(matches!(err, ivm::VMError::PermissionDenied));
+    }
+
+    #[test]
     fn subscription_bill_fixed_plan_transfers_and_reschedules() {
         crate::test_alias::ensure();
         let provider: AccountId = "acme@commerce".parse().unwrap();
@@ -6802,14 +7571,12 @@ mod tests {
             }),
         };
 
-        let mut plan_def = AssetDefinition::new(plan_id.clone(), NumericSpec::integer())
-            .build(&provider);
+        let mut plan_def =
+            AssetDefinition::new(plan_id.clone(), NumericSpec::integer()).build(&provider);
         let plan_key: Name = SUBSCRIPTION_PLAN_METADATA_KEY.parse().unwrap();
-        plan_def
-            .metadata
-            .insert(plan_key, Json::new(plan.clone()));
-        let charge_def = AssetDefinition::new(charge_asset_id.clone(), NumericSpec::integer())
-            .build(&provider);
+        plan_def.metadata.insert(plan_key, Json::new(plan.clone()));
+        let charge_def =
+            AssetDefinition::new(charge_asset_id.clone(), NumericSpec::integer()).build(&provider);
         let asset_id = AssetId::of(charge_asset_id.clone(), subscriber.clone());
         let asset = Asset::new(asset_id.clone(), Numeric::new(500_u32, 0));
 
@@ -6844,8 +7611,7 @@ mod tests {
             Account::new(provider.clone()).build(&provider),
             Account::new(subscriber.clone()).build(&provider),
         ];
-        let world =
-            World::with_assets(domains, accounts, [plan_def, charge_def], [asset], [nft]);
+        let world = World::with_assets(domains, accounts, [plan_def, charge_def], [asset], [nft]);
 
         let bytecode = IvmBytecode::from_compiled(ivm::ProgramMetadata::default().encode());
         let mut trigger_metadata = Metadata::default();
@@ -6881,6 +7647,10 @@ mod tests {
         let state = State::new_for_testing(world, kura, query);
         let view = state.view();
         let mut host = CoreHostImpl::new(subscriber.clone());
+        #[cfg(feature = "telemetry")]
+        let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
+        #[cfg(feature = "telemetry")]
+        host.set_telemetry(StateTelemetry::new(Arc::clone(&metrics), true));
         host.set_query_state(&view);
         host.set_trigger_id(trigger_id.clone());
         host.set_block_time_ms(scheduled_at_ms);
@@ -6923,8 +7693,7 @@ mod tests {
             invoice_key,
             Json::new(expected_invoice),
         ));
-        let expected_unregister =
-            InstructionBox::from(Unregister::trigger(trigger_id.clone()));
+        let expected_unregister = InstructionBox::from(Unregister::trigger(trigger_id.clone()));
         let expected_schedule = Schedule {
             start_ms: scheduled_at_ms + period_ms,
             period_ms: None,
@@ -6937,8 +7706,7 @@ mod tests {
         )
         .with_metadata(trigger_metadata);
         let expected_trigger = Trigger::new(trigger_id.clone(), expected_action);
-        let expected_register =
-            InstructionBox::from(Register::trigger(expected_trigger));
+        let expected_register = InstructionBox::from(Register::trigger(expected_trigger));
 
         assert_eq!(
             host.queued,
@@ -6956,6 +7724,24 @@ mod tests {
             .saturating_add(crate::gas::meter_instruction(&expected_unregister))
             .saturating_add(crate::gas::meter_instruction(&expected_register));
         assert_eq!(gas, expected_gas);
+
+        #[cfg(feature = "telemetry")]
+        {
+            assert_eq!(
+                metrics
+                    .subscription_billing_attempts_total
+                    .with_label_values(&["fixed"])
+                    .get(),
+                1
+            );
+            assert_eq!(
+                metrics
+                    .subscription_billing_outcomes_total
+                    .with_label_values(&["fixed", "paid"])
+                    .get(),
+                1
+            );
+        }
     }
 
     #[test]
@@ -6986,11 +7772,12 @@ mod tests {
             }),
         };
 
-        let mut plan_def = AssetDefinition::new(plan_id.clone(), NumericSpec::integer())
-            .build(&provider);
+        let mut plan_def =
+            AssetDefinition::new(plan_id.clone(), NumericSpec::integer()).build(&provider);
         let plan_key: Name = SUBSCRIPTION_PLAN_METADATA_KEY.parse().unwrap();
         plan_def.metadata.insert(plan_key, Json::new(plan));
-        let charge_def = AssetDefinition::new(charge_asset_id, NumericSpec::integer()).build(&provider);
+        let charge_def =
+            AssetDefinition::new(charge_asset_id, NumericSpec::integer()).build(&provider);
 
         let mut usage_accumulated = BTreeMap::new();
         usage_accumulated.insert(unit_key.clone(), Numeric::new(10_u32, 0));
@@ -7025,8 +7812,13 @@ mod tests {
             Account::new(provider.clone()).build(&provider),
             Account::new(subscriber.clone()).build(&provider),
         ];
-        let world =
-            World::with_assets(domains, accounts, [plan_def, charge_def], Vec::<Asset>::new(), [nft]);
+        let world = World::with_assets(
+            domains,
+            accounts,
+            [plan_def, charge_def],
+            Vec::<Asset>::new(),
+            [nft],
+        );
 
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -7094,12 +7886,12 @@ mod tests {
             }),
         };
 
-        let mut plan_def = AssetDefinition::new(plan_id.clone(), NumericSpec::integer())
-            .build(&provider);
+        let mut plan_def =
+            AssetDefinition::new(plan_id.clone(), NumericSpec::integer()).build(&provider);
         let plan_key: Name = SUBSCRIPTION_PLAN_METADATA_KEY.parse().unwrap();
         plan_def.metadata.insert(plan_key, Json::new(plan));
-        let charge_def = AssetDefinition::new(charge_asset_id.clone(), NumericSpec::integer())
-            .build(&provider);
+        let charge_def =
+            AssetDefinition::new(charge_asset_id.clone(), NumericSpec::integer()).build(&provider);
         let asset_id = AssetId::of(charge_asset_id.clone(), subscriber.clone());
         let asset = Asset::new(asset_id.clone(), Numeric::new(50_u32, 0));
 
@@ -7117,7 +7909,10 @@ mod tests {
         };
         let mut nft_meta = Metadata::default();
         let subscription_key: Name = SUBSCRIPTION_METADATA_KEY.parse().unwrap();
-        nft_meta.insert(subscription_key.clone(), Json::new(subscription_state.clone()));
+        nft_meta.insert(
+            subscription_key.clone(),
+            Json::new(subscription_state.clone()),
+        );
         let nft_id: NftId = "sub-fail$subscriptions".parse().unwrap();
         let nft = Nft::new(nft_id.clone(), nft_meta).build(&subscriber);
 
@@ -7131,8 +7926,7 @@ mod tests {
             Account::new(provider.clone()).build(&provider),
             Account::new(subscriber.clone()).build(&provider),
         ];
-        let world =
-            World::with_assets(domains, accounts, [plan_def, charge_def], [asset], [nft]);
+        let world = World::with_assets(domains, accounts, [plan_def, charge_def], [asset], [nft]);
 
         let bytecode = IvmBytecode::from_compiled(ivm::ProgramMetadata::default().encode());
         let mut trigger_metadata = Metadata::default();
@@ -7203,8 +7997,7 @@ mod tests {
             invoice_key,
             Json::new(expected_invoice),
         ));
-        let expected_unregister =
-            InstructionBox::from(Unregister::trigger(trigger_id.clone()));
+        let expected_unregister = InstructionBox::from(Unregister::trigger(trigger_id.clone()));
         let expected_schedule = Schedule {
             start_ms: scheduled_at_ms + retry_backoff_ms,
             period_ms: None,
@@ -7217,8 +8010,7 @@ mod tests {
         )
         .with_metadata(trigger_metadata);
         let expected_trigger = Trigger::new(trigger_id.clone(), expected_action);
-        let expected_register =
-            InstructionBox::from(Register::trigger(expected_trigger));
+        let expected_register = InstructionBox::from(Register::trigger(expected_trigger));
 
         assert_eq!(
             host.queued,
@@ -7265,12 +8057,12 @@ mod tests {
             }),
         };
 
-        let mut plan_def = AssetDefinition::new(plan_id.clone(), NumericSpec::integer())
-            .build(&provider);
+        let mut plan_def =
+            AssetDefinition::new(plan_id.clone(), NumericSpec::integer()).build(&provider);
         let plan_key: Name = SUBSCRIPTION_PLAN_METADATA_KEY.parse().unwrap();
         plan_def.metadata.insert(plan_key, Json::new(plan));
-        let charge_def = AssetDefinition::new(charge_asset_id.clone(), NumericSpec::integer())
-            .build(&provider);
+        let charge_def =
+            AssetDefinition::new(charge_asset_id.clone(), NumericSpec::integer()).build(&provider);
 
         let subscription_state = SubscriptionState {
             plan_id: plan_id.clone(),
@@ -7286,7 +8078,10 @@ mod tests {
         };
         let mut nft_meta = Metadata::default();
         let subscription_key: Name = SUBSCRIPTION_METADATA_KEY.parse().unwrap();
-        nft_meta.insert(subscription_key.clone(), Json::new(subscription_state.clone()));
+        nft_meta.insert(
+            subscription_key.clone(),
+            Json::new(subscription_state.clone()),
+        );
         let nft_id: NftId = "sub-suspend$subscriptions".parse().unwrap();
         let nft = Nft::new(nft_id.clone(), nft_meta).build(&subscriber);
 
@@ -7376,8 +8171,7 @@ mod tests {
             invoice_key,
             Json::new(expected_invoice),
         ));
-        let expected_unregister =
-            InstructionBox::from(Unregister::trigger(trigger_id));
+        let expected_unregister = InstructionBox::from(Unregister::trigger(trigger_id));
 
         assert_eq!(
             host.queued,

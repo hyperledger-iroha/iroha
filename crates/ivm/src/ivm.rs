@@ -2533,6 +2533,17 @@ impl IVM {
         self.registers.set(idx, value);
     }
 
+    /// Request a graceful halt after the current instruction.
+    pub fn request_exit(&mut self) {
+        self.halted = true;
+    }
+
+    /// Request an abort and mark the run as failed.
+    pub fn request_abort(&mut self) {
+        self.halted = true;
+        self.constraint_failed = true;
+    }
+
     /// Get a copy of a vector register (128-bit value as four 32-bit lanes).
     pub fn vector_register(&self, idx: usize) -> [u32; 4] {
         let stride = self.vector_length.max(1);

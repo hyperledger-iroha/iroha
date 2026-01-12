@@ -640,11 +640,9 @@ struct NetworkRelay {
     suppress_pow_broadcast: Arc<AtomicBool>,
 }
 
-const NETWORK_RELAY_QUEUE_CAP: usize = 1024;
-
 impl NetworkRelay {
     async fn run(mut self) {
-        let (sender, mut receiver) = mpsc::channel(NETWORK_RELAY_QUEUE_CAP);
+        let (sender, mut receiver) = mpsc::channel(self.network.subscriber_queue_cap().get());
         let mut sender = sender;
         loop {
             match self.network.subscribe_to_peers_messages(sender) {
@@ -664,7 +662,7 @@ impl NetworkRelay {
                 && let iroha_core::block_sync::message::Message::ShareBlocks(share) =
                     block_sync.as_ref()
             {
-                iroha_logger::info!(
+                iroha_logger::debug!(
                     %msg.peer,
                     from = %share.peer_id,
                     count = share.blocks.len(),
@@ -691,7 +689,7 @@ impl NetworkRelay {
         match msg {
             SumeragiBlock(data) => {
                 let (kind, height, view) = Self::block_message_meta(data.as_ref());
-                iroha_logger::info!(
+                iroha_logger::debug!(
                     %peer,
                     ?height,
                     ?view,
@@ -699,11 +697,11 @@ impl NetworkRelay {
                     kind,
                     "relay received sumeragi block message"
                 );
-                self.sumeragi.incoming_block_message(*data);
+                let _ = self.sumeragi.try_incoming_block_message(*data);
             }
             SumeragiControlFlow(data) => {
                 let (kind, height, view) = Self::control_flow_meta(data.as_ref());
-                iroha_logger::info!(
+                iroha_logger::debug!(
                     %peer,
                     ?height,
                     ?view,
@@ -711,13 +709,15 @@ impl NetworkRelay {
                     kind,
                     "relay received sumeragi control-flow message"
                 );
-                self.sumeragi.incoming_consensus_control_flow_message(*data);
+                let _ = self
+                    .sumeragi
+                    .try_incoming_consensus_control_flow_message(*data);
             }
             LaneRelay(envelope) => {
-                self.sumeragi.incoming_lane_relay(*envelope);
+                let _ = self.sumeragi.try_incoming_lane_relay(*envelope);
             }
             MergeCommitteeSignature(signature) => {
-                self.sumeragi.incoming_merge_signature(*signature);
+                let _ = self.sumeragi.try_incoming_merge_signature(*signature);
             }
             StreamingControl(frame) => {
                 if let Err(err) = self.streaming.process_control_frame(&peer, frame.as_ref()) {
@@ -727,7 +727,7 @@ impl NetworkRelay {
             BlockSync(data) => {
                 match data.as_ref() {
                     iroha_core::block_sync::message::Message::GetBlocksAfter(get) => {
-                        iroha_logger::info!(
+                        iroha_logger::debug!(
                             %peer,
                             from = %get.peer_id,
                             prev = ?get.prev_hash,
@@ -737,7 +737,7 @@ impl NetworkRelay {
                         );
                     }
                     iroha_core::block_sync::message::Message::ShareBlocks(share) => {
-                        iroha_logger::info!(
+                        iroha_logger::debug!(
                             %peer,
                             from = %share.peer_id,
                             count = share.blocks.len(),
@@ -750,7 +750,7 @@ impl NetworkRelay {
                 self.block_sync.message(*data);
             }
             TransactionGossiper(data) => {
-                iroha_logger::info!(
+                iroha_logger::debug!(
                     %peer,
                     txs = data.txs.len(),
                     "relay received transaction gossip"

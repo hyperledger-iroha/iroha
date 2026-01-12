@@ -80,9 +80,10 @@ Gas enforcement (CoreHost)
 - SMARTCONTRACT_EXECUTE_QUERY charges base + per-item + per-byte; sorting multiplies per-item cost. Pagination offsets add an extra per-item penalty for unsorted queries; for sorted queries, the per-item charge is based on all items scanned before pagination (so offsets are already included). Query materialization aborts with OutOfGas when the per-item budget is exhausted, and responses that exceed the per-byte budget are rejected before encoding when exact Norito sizing is available (otherwise after encoding).
 
 Lifecycle / Utility
+- 0x00 DEBUG_PRINT — Args: `r10=value:u64` → Return: 0 — Gas: G_debug
 - 0x01 EXIT — Args: `r10=status:u64` → Return: `u64=status` — Gas: G_exit
-- 0x02 ABORT — Args: none → Return: `u64=0` — Gas: G_abort
-- 0x03 DEBUG_LOG — Args: `r10=&Json` → Return: 0 — Gas: G_debug
+- 0x02 ABORT — Args: none → Return: `u64=0` — Gas: G_abort (halts and marks the run failed)
+- 0x03 DEBUG_LOG — Args: `r10=&Json|&Blob|&NoritoBytes` → Return: 0 — Gas: G_debug
 - 0xE0 INPUT_PUBLISH_TLV — Args: `r10=&Blob(TLV)` → Return: `ptr (r10)` — Gas: G_input_publish (rejects invalid TLV envelopes and disallowed pointer types)
 - 0x90 SM3_HASH — Args: `r10=&Blob(message)` → Return: `ptr (&Blob(digest))` — Gas: G_sm3
 - 0x91 SM2_VERIFY — Args: `r10=&Blob(msg)`, `r11=&Blob(sig)` (64-byte r∥s), `r12=&Blob(pubkey)` (SEC1), `r13=&Blob(distid)` *(optional, 0 for default)* → Return: `u64=0/1` — Gas: G_sm2_verify
@@ -103,8 +104,9 @@ Domains / Peers
 - 0x10 REGISTER_DOMAIN — Args: `r10=&DomainId` → 0 — Gas: G_reg_domain
 - 0x11 UNREGISTER_DOMAIN — Args: `r10=&DomainId` → 0 — Gas: G_unreg_domain
 - 0x12 TRANSFER_DOMAIN — Args: `r10=&DomainId, r11=&AccountId` → 0 — Gas: G_xfer_domain
-- 0x15 REGISTER_PEER — Args: `r10=&Json` (peer info) → 0 — Gas: G_reg_peer
-- 0x16 UNREGISTER_PEER — Args: `r10=&Json` → 0 — Gas: G_unreg_peer
+- 0x15 REGISTER_PEER — Args: `r10=&Json` (RegisterPeerWithPop) → 0 — Gas: G_reg_peer
+  - JSON object: `{ "peer": "<public_key or public_key@addr>", "pop": [..], "activation_at": <u64?>, "expiry_at": <u64?>, "hsm": <HsmBinding?> }`
+- 0x16 UNREGISTER_PEER — Args: `r10=&Json` (peer id string or `{ "peer": "..." }`) → 0 — Gas: G_unreg_peer
 
 Accounts
 - 0x13 REGISTER_ACCOUNT — Args: `r10=&AccountId` → 0 — Gas: G_reg_acct
@@ -148,16 +150,24 @@ ZK gating & determinism
 
 Roles / Permissions
 - 0x30 CREATE_ROLE — Args: `r10=&Name, r11=&Json` (perm set) → 0 — Gas: G_create_role
+  - Permissions JSON: array of permission strings/objects or `{ "permissions": [...] }` / `{ "perms": [...] }`.
 - 0x31 DELETE_ROLE — Args: `r10=&Name` → 0 — Gas: G_delete_role
 - 0x32 GRANT_ROLE — Args: `r10=&AccountId, r11=&Name` → 0 — Gas: G_grant_role
 - 0x33 REVOKE_ROLE — Args: `r10=&AccountId, r11=&Name` → 0 — Gas: G_revoke_role
-- 0x34 GRANT_PERMISSION — Args: `r10=&AccountId, r11=&Name` → 0 — Gas: G_grant_perm
-- 0x35 REVOKE_PERMISSION — Args: `r10=&AccountId, r11=&Name` → 0 — Gas: G_revoke_perm
+- 0x34 GRANT_PERMISSION — Args: `r10=&AccountId, r11=&Name|&Json(Permission)` → 0 — Gas: G_grant_perm
+- 0x35 REVOKE_PERMISSION — Args: `r10=&AccountId, r11=&Name|&Json(Permission)` → 0 — Gas: G_revoke_perm
 
 Triggers
 - 0x40 CREATE_TRIGGER — Args: `r10=&Json` (trigger spec) → 0 — Gas: G_create_trig
+  - Spec payloads:
+    - JSON string: base64 Norito-encoded `Trigger` (canonical).
+    - JSON object: `{ "id": "<trigger_id>", "action": <ActionSpec> }` where `action` is either a
+      base64 Norito `Action` string or a JSON object with `executable`, `repeats`, `authority`,
+      `filter`, and `metadata` fields (matching `SpecializedAction<EventFilterBox>`).
+    - `EventFilterBox::TriggerCompleted` filters are rejected for triggering actions.
 - 0x41 REMOVE_TRIGGER — Args: `r10=&Name` → 0 — Gas: G_remove_trig
 - 0x42 SET_TRIGGER_ENABLED — Args: `r10=&Name, r11=enabled:u64` → 0 — Gas: G_set_trig
+  - Writes trigger metadata key `__enabled` to `true`/`false`; missing key defaults to enabled.
 - 0x43 DEACTIVATE_CONTRACT_INSTANCE — Args: `r10=&NoritoBytes(DeactivateContractInstance)` → 0 — Gas: G_deactivate_contract_instance
 - 0x44 REMOVE_SMART_CONTRACT_BYTES — Args: `r10=&NoritoBytes(RemoveSmartContractBytes)` → 0 — Gas: G_remove_contract_bytes
 - 0x45 REGISTER_SMART_CONTRACT_CODE — Args: `r10=&NoritoBytes(RegisterSmartContractCode)` → 0 — Gas: G_register_contract_code
@@ -268,10 +278,10 @@ but they must not change the host ABI.
 <!-- BEGIN GENERATED SYSCALLS -->
 | Number | Name | Args | Return | Gas |
 |---|---|---|---|---|
-| 0x00 | DEBUG_PRINT | - | - | asset:gas/G_debug@ivm.core/v1 |
+| 0x00 | DEBUG_PRINT | r10=value:u64 | u64=0 | asset:gas/G_debug@ivm.core/v1 |
 | 0x01 | EXIT | r10=status:u64 | u64=status | asset:gas/G_exit@ivm.core/v1 |
 | 0x02 | ABORT | - | u64=0 | asset:gas/G_abort@ivm.core/v1 |
-| 0x03 | DEBUG_LOG | r10=&Json | u64=0 | asset:gas/G_debug@ivm.core/v1 |
+| 0x03 | DEBUG_LOG | r10=&Json|&Blob|&NoritoBytes | u64=0 | asset:gas/G_debug@ivm.core/v1 |
 | 0x10 | REGISTER_DOMAIN | r10=&DomainId | u64=0 | asset:gas/G_reg_domain@ivm.core/v1 |
 | 0x11 | UNREGISTER_DOMAIN | r10=&DomainId | u64=0 | asset:gas/G_unreg_domain@ivm.core/v1 |
 | 0x12 | TRANSFER_DOMAIN | r10=&DomainId, r11=&AccountId | u64=0 | asset:gas/G_xfer_domain@ivm.core/v1 |
@@ -299,8 +309,8 @@ but they must not change the host ABI.
 | 0x31 | DELETE_ROLE | r10=&Name | u64=0 | asset:gas/G_delete_role@ivm.core/v1 |
 | 0x32 | GRANT_ROLE | r10=&AccountId, r11=&Name | u64=0 | asset:gas/G_grant_role@ivm.core/v1 |
 | 0x33 | REVOKE_ROLE | r10=&AccountId, r11=&Name | u64=0 | asset:gas/G_revoke_role@ivm.core/v1 |
-| 0x34 | GRANT_PERMISSION | r10=&AccountId, r11=&Name | u64=0 | asset:gas/G_grant_perm@ivm.core/v1 |
-| 0x35 | REVOKE_PERMISSION | r10=&AccountId, r11=&Name | u64=0 | asset:gas/G_revoke_perm@ivm.core/v1 |
+| 0x34 | GRANT_PERMISSION | r10=&AccountId, r11=&Name|&Json(Permission) | u64=0 | asset:gas/G_grant_perm@ivm.core/v1 |
+| 0x35 | REVOKE_PERMISSION | r10=&AccountId, r11=&Name|&Json(Permission) | u64=0 | asset:gas/G_revoke_perm@ivm.core/v1 |
 | 0x40 | CREATE_TRIGGER | r10=&Json(spec) | u64=0 | asset:gas/G_create_trig@ivm.core/v1 |
 | 0x41 | REMOVE_TRIGGER | r10=&Name | u64=0 | asset:gas/G_remove_trig@ivm.core/v1 |
 | 0x42 | SET_TRIGGER_ENABLED | r10=&Name, r11=enabled:u64 | u64=0 | asset:gas/G_set_trig@ivm.core/v1 |

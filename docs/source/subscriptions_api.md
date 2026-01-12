@@ -215,17 +215,181 @@ Alternative:
 - Billing agent account owns the billing trigger and receives explicit
   `CanTransferAsset` grants from the subscriber. Use only if needed.
 
-## Torii API Surface (Proposed)
+## Torii API Surface
 - `POST /v1/subscriptions/plans` - register plan (AssetDefinition metadata).
 - `GET /v1/subscriptions/plans` - list plans by provider.
 - `POST /v1/subscriptions` - create subscription + billing trigger.
-- `GET /v1/subscriptions` - list subscriptions owned by requester.
-- `GET /v1/subscriptions/{id}` - fetch one subscription.
-- `POST /v1/subscriptions/{id}/pause` - set `status=paused`, cancel triggers.
-- `POST /v1/subscriptions/{id}/resume` - set `status=active`, re-schedule.
-- `POST /v1/subscriptions/{id}/cancel` - set `status=canceled`, unregister trigger.
-- `POST /v1/subscriptions/{id}/usage` - record usage (by-call trigger).
-- `POST /v1/subscriptions/{id}/charge-now` - execute billing immediately.
+- `GET /v1/subscriptions` - list subscriptions with optional filters.
+- `GET /v1/subscriptions/{subscription_id}` - fetch one subscription.
+- `POST /v1/subscriptions/{subscription_id}/pause` - set `status=paused`, cancel triggers.
+- `POST /v1/subscriptions/{subscription_id}/resume` - set `status=active`, re-schedule.
+- `POST /v1/subscriptions/{subscription_id}/cancel` - set `status=canceled`, unregister trigger.
+- `POST /v1/subscriptions/{subscription_id}/usage` - record usage (by-call trigger).
+- `POST /v1/subscriptions/{subscription_id}/charge-now` - execute billing immediately.
+
+### POST /v1/subscriptions/plans
+Registers a plan on an asset definition. `authority` must match `plan.provider`.
+```json
+{
+  "authority": "alice@wonderland",
+  "private_key": "<hex>",
+  "plan_id": "aws_compute#subscriptions",
+  "plan": { "provider": "alice@wonderland", "billing": { "...": "..." }, "pricing": { "...": "..." } }
+}
+```
+Response:
+```json
+{ "ok": true, "plan_id": "aws_compute#subscriptions", "tx_hash_hex": "<hex>" }
+```
+
+### GET /v1/subscriptions/plans
+Query params:
+- `provider` (optional) - filter by provider account id.
+- `limit`, `offset` (optional) - pagination.
+Response:
+```json
+{ "items": [ { "plan_id": "...", "plan": { "...": "..." } } ], "total": 1 }
+```
+
+### POST /v1/subscriptions
+Creates a subscription NFT and billing trigger. `authority` must be the subscriber (NFT owner).
+```json
+{
+  "authority": "bob@wonderland",
+  "private_key": "<hex>",
+  "subscription_id": "sub-6f3a9c$subscriptions",
+  "plan_id": "aws_compute#subscriptions",
+  "billing_trigger_id": "optional",
+  "usage_trigger_id": "optional",
+  "first_charge_ms": 1704067200000,
+  "grant_usage_to_provider": true
+}
+```
+Defaults:
+- `billing_trigger_id` and `usage_trigger_id` are derived when omitted using
+  `sub_bill_<hash>` and `sub_usage_<hash>` (BLAKE2b of the subscription id).
+- `first_charge_ms` defaults to the next cadence boundary:
+  - Monthly cadence: next anchor at or after the current network time.
+  - Fixed period: `now` for `bill_for=next_period`, `now + period_ms` for `previous_period`.
+- `grant_usage_to_provider` defaults to `true` (usage plans only).
+Response:
+```json
+{
+  "ok": true,
+  "subscription_id": "sub-6f3a9c$subscriptions",
+  "billing_trigger_id": "sub_bill_<hash>",
+  "usage_trigger_id": "sub_usage_<hash>",
+  "first_charge_ms": 1704067200000,
+  "tx_hash_hex": "<hex>"
+}
+```
+
+### GET /v1/subscriptions
+Query params:
+- `owned_by` (optional) - filter by subscriber account id.
+- `provider` (optional) - filter by provider account id.
+- `status` (optional) - one of `active`, `paused`, `past_due`, `canceled`, `suspended`.
+- `limit`, `offset` (optional) - pagination.
+Response:
+```json
+{
+  "items": [
+    {
+      "subscription_id": "sub-6f3a9c$subscriptions",
+      "subscription": { "...": "..." },
+      "invoice": { "...": "..." },
+      "plan": { "...": "..." }
+    }
+  ],
+  "total": 1
+}
+```
+
+### GET /v1/subscriptions/{subscription_id}
+Returns the subscription state, latest invoice (if any), and plan metadata (if present).
+
+### POST /v1/subscriptions/{subscription_id}/pause
+```json
+{ "authority": "bob@wonderland", "private_key": "<hex>" }
+```
+Sets `status=paused` and unregisters the billing trigger.
+
+### POST /v1/subscriptions/{subscription_id}/resume
+```json
+{ "authority": "bob@wonderland", "private_key": "<hex>", "charge_at_ms": 1704067200000 }
+```
+Sets `status=active`, resets `failure_count`, recomputes the current period, and re-schedules billing.
+`charge_at_ms` follows the same defaults as `first_charge_ms` when omitted.
+
+### POST /v1/subscriptions/{subscription_id}/cancel
+```json
+{ "authority": "bob@wonderland", "private_key": "<hex>" }
+```
+Sets `status=canceled` and unregisters the billing trigger.
+
+### POST /v1/subscriptions/{subscription_id}/usage
+```json
+{
+  "authority": "alice@wonderland",
+  "private_key": "<hex>",
+  "unit_key": "compute_ms",
+  "delta": "3600000",
+  "usage_trigger_id": "optional"
+}
+```
+Executes the usage trigger with `SubscriptionUsageDelta`. `delta` must be non-negative.
+
+### POST /v1/subscriptions/{subscription_id}/charge-now
+```json
+{ "authority": "bob@wonderland", "private_key": "<hex>", "charge_at_ms": 1704067200000 }
+```
+Updates `next_charge_ms` and re-registers the billing trigger to execute at `charge_at_ms`
+(defaults to current network time when omitted).
+
+## CLI Helpers
+The CLI mirrors the Torii endpoints for plan and subscription management.
+
+Register a plan from a JSON file (or stdin when `--plan-json` is omitted):
+```bash
+iroha_cli subscriptions plan create \
+  --authority aws@commerce \
+  --private-key <hex> \
+  --plan-id aws_compute#commerce \
+  --plan-json plan.json
+```
+
+List plans for a provider:
+```bash
+iroha_cli subscriptions plan list --provider aws@commerce --limit 10
+```
+
+Create a subscription:
+```bash
+iroha_cli subscriptions subscription create \
+  --authority alice@users \
+  --private-key <hex> \
+  --subscription-id sub-001$subscriptions \
+  --plan-id aws_compute#commerce
+```
+
+Pause, resume, cancel, or charge now:
+```bash
+iroha_cli subscriptions subscription pause --subscription-id sub-001$subscriptions \
+  --authority alice@users --private-key <hex>
+iroha_cli subscriptions subscription resume --subscription-id sub-001$subscriptions \
+  --authority alice@users --private-key <hex>
+iroha_cli subscriptions subscription cancel --subscription-id sub-001$subscriptions \
+  --authority alice@users --private-key <hex>
+iroha_cli subscriptions subscription charge-now --subscription-id sub-001$subscriptions \
+  --authority alice@users --private-key <hex>
+```
+
+Record usage:
+```bash
+iroha_cli subscriptions subscription usage --subscription-id sub-001$subscriptions \
+  --authority aws@commerce --private-key <hex> \
+  --unit-key compute_ms --delta 3600000
+```
 
 ## Query Patterns
 - List subscriptions for an account:
@@ -234,9 +398,12 @@ Alternative:
   - `FindAssetsDefinitions` with predicate `metadata.subscription_plan.provider == <account>`.
 
 ## Events and Telemetry
-- Use `TriggerCompletedEvent` to observe billing successes/failures.
-- Use `ExecuteTriggerEvent` for usage recorder invocations.
-- Emit subscription-specific counters in telemetry as follow-up work.
+- Billing trigger completion events: subscribe to `TriggerCompletedEvent` and filter by the billing trigger id for a subscription.
+  - Rust helper: `TriggerCompletedEventFilter::new().for_trigger(trigger_id)`
+- Usage recorder events: `ExecuteTriggerEvent` for usage trigger invocations.
+- Prometheus metrics:
+  - `iroha_subscription_billing_attempts_total{pricing="fixed|usage"}`
+  - `iroha_subscription_billing_outcomes_total{pricing="fixed|usage",result="paid|failed|suspended|skipped"}`
 
 ## Examples
 

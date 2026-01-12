@@ -302,6 +302,7 @@ impl Actor {
                 "observed proposal hint for view"
             );
         }
+        self.prune_proposals_seen_horizon(state_height);
         Ok(())
     }
 
@@ -489,6 +490,46 @@ impl Actor {
                 "observed proposal for view"
             );
         }
+        self.prune_proposals_seen_horizon(self.last_committed_height);
+    }
+
+    pub(super) fn prune_proposals_seen_horizon(&mut self, committed_height: u64) {
+        let highest_commit = self
+            .highest_qc
+            .filter(|qc| qc.phase == crate::sumeragi::consensus::Phase::Commit);
+        let anchor_height = highest_commit
+            .map(|qc| qc.height.max(committed_height))
+            .unwrap_or(committed_height);
+        let active_height = anchor_height.saturating_add(1);
+        let min_height = active_height.saturating_sub(super::PROPOSALS_SEEN_HEIGHT_WINDOW);
+        let max_height = active_height.saturating_add(super::PROPOSALS_SEEN_HEIGHT_WINDOW);
+        let current_view = self.phase_tracker.current_view(active_height);
+        let max_view =
+            current_view.map(|view| view.saturating_add(super::PROPOSALS_SEEN_VIEW_WINDOW));
+        self.subsystems
+            .propose
+            .proposals_seen
+            .retain(|(entry_height, entry_view)| {
+                if *entry_height <= committed_height
+                    || *entry_height < min_height
+                    || *entry_height > max_height
+                {
+                    return false;
+                }
+                if *entry_height == active_height {
+                    if let Some(current_view) = current_view {
+                        if *entry_view < current_view {
+                            return false;
+                        }
+                    }
+                    if let Some(max_view) = max_view {
+                        if *entry_view > max_view {
+                            return false;
+                        }
+                    }
+                }
+                true
+            });
     }
 
     pub(super) fn missing_proposal_context(

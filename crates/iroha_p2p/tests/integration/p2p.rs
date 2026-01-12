@@ -129,6 +129,8 @@ fn trust_config(
         p2p_queue_cap_high: NonZeroUsize::new(8192).expect("non-zero"),
         p2p_queue_cap_low: NonZeroUsize::new(32_768).expect("non-zero"),
         p2p_post_queue_cap: NonZeroUsize::new(2048).expect("non-zero"),
+        p2p_subscriber_queue_cap:
+            iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
         max_incoming: None,
         max_total_connections: None,
         accept_rate_per_ip_per_sec: None,
@@ -211,6 +213,8 @@ async fn network_create() {
         p2p_queue_cap_high: NonZeroUsize::new(8192).expect("non-zero"),
         p2p_queue_cap_low: NonZeroUsize::new(32_768).expect("non-zero"),
         p2p_post_queue_cap: NonZeroUsize::new(2048).expect("non-zero"),
+        p2p_subscriber_queue_cap:
+            iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
         max_incoming: None,
         max_total_connections: None,
         accept_rate_per_ip_per_sec: None,
@@ -549,6 +553,8 @@ async fn ws_fallback_connects_and_handshakes() {
             p2p_queue_cap_high: NonZeroUsize::new(128).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(128).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(64).unwrap(),
+            p2p_subscriber_queue_cap:
+                iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
             max_incoming: None,
             max_total_connections: None,
             accept_rate_per_ip_per_sec: None,
@@ -736,6 +742,8 @@ async fn ws_fallback_connects_and_handshakes() {
             p2p_queue_cap_high: NonZeroUsize::new(128).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(128).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(64).unwrap(),
+            p2p_subscriber_queue_cap:
+                iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
             max_incoming: None,
             max_total_connections: None,
             accept_rate_per_ip_per_sec: None,
@@ -925,6 +933,8 @@ async fn two_networks() {
         p2p_queue_cap_high: NonZeroUsize::new(8192).expect("non-zero"),
         p2p_queue_cap_low: NonZeroUsize::new(32_768).expect("non-zero"),
         p2p_post_queue_cap: NonZeroUsize::new(2048).expect("non-zero"),
+        p2p_subscriber_queue_cap:
+            iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
         max_incoming: None,
         max_total_connections: None,
         accept_rate_per_ip_per_sec: None,
@@ -1009,6 +1019,8 @@ async fn two_networks() {
         p2p_queue_cap_high: NonZeroUsize::new(8192).expect("non-zero"),
         p2p_queue_cap_low: NonZeroUsize::new(32_768).expect("non-zero"),
         p2p_post_queue_cap: NonZeroUsize::new(2048).expect("non-zero"),
+        p2p_subscriber_queue_cap:
+            iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
         max_incoming: None,
         max_total_connections: None,
         accept_rate_per_ip_per_sec: None,
@@ -1160,6 +1172,8 @@ async fn update_peers_triggers_immediate_connect() {
             p2p_queue_cap_high: NonZeroUsize::new(8192).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(32_768).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(2048).unwrap(),
+            p2p_subscriber_queue_cap:
+                iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
             max_incoming: None,
             max_total_connections: None,
             accept_rate_per_ip_per_sec: None,
@@ -1246,6 +1260,8 @@ async fn update_peers_triggers_immediate_connect() {
             p2p_queue_cap_high: NonZeroUsize::new(8192).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(32_768).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(2048).unwrap(),
+            p2p_subscriber_queue_cap:
+                iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
             max_incoming: None,
             max_total_connections: None,
             accept_rate_per_ip_per_sec: None,
@@ -1374,6 +1390,8 @@ async fn happy_eyeballs_parallel_dials() {
             p2p_queue_cap_high: NonZeroUsize::new(8192).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(32_768).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(2048).unwrap(),
+            p2p_subscriber_queue_cap:
+                iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
             max_incoming: None,
             max_total_connections: None,
             accept_rate_per_ip_per_sec: None,
@@ -1461,6 +1479,8 @@ async fn happy_eyeballs_parallel_dials() {
             p2p_queue_cap_high: NonZeroUsize::new(8192).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(32_768).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(2048).unwrap(),
+            p2p_subscriber_queue_cap:
+                iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
             max_incoming: None,
             max_total_connections: None,
             accept_rate_per_ip_per_sec: None,
@@ -1586,6 +1606,8 @@ async fn low_topics_do_not_starve_each_other() {
             p2p_queue_cap_high: NonZeroUsize::new(1024).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(1024).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(1024).unwrap(),
+            p2p_subscriber_queue_cap:
+                iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
             max_incoming: None,
             max_total_connections: None,
             accept_rate_per_ip_per_sec: None,
@@ -1673,6 +1695,8 @@ async fn low_topics_do_not_starve_each_other() {
             p2p_queue_cap_high: NonZeroUsize::new(1024).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(1024).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(1024).unwrap(),
+            p2p_subscriber_queue_cap:
+                iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
             max_incoming: None,
             max_total_connections: None,
             accept_rate_per_ip_per_sec: None,
@@ -1854,6 +1878,8 @@ async fn relay_hub_routes_consensus_between_spokes() {
             p2p_queue_cap_high: NonZeroUsize::new(4096).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(4096).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(2048).unwrap(),
+            p2p_subscriber_queue_cap:
+                iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
             max_incoming: None,
             max_total_connections: None,
             accept_rate_per_ip_per_sec: None,
@@ -2123,6 +2149,8 @@ async fn start_network(
         p2p_queue_cap_high: NonZeroUsize::new(8192).expect("non-zero"),
         p2p_queue_cap_low: NonZeroUsize::new(32_768).expect("non-zero"),
         p2p_post_queue_cap: NonZeroUsize::new(2048).expect("non-zero"),
+        p2p_subscriber_queue_cap:
+            iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
         max_incoming: None,
         max_total_connections: None,
         accept_rate_per_ip_per_sec: None,
@@ -2279,6 +2307,8 @@ async fn tls_inbound_listener_smoke() {
         p2p_queue_cap_high: NonZeroUsize::new(1024).unwrap(),
         p2p_queue_cap_low: NonZeroUsize::new(4096).unwrap(),
         p2p_post_queue_cap: NonZeroUsize::new(256).unwrap(),
+        p2p_subscriber_queue_cap:
+            iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
         max_incoming: None,
         max_total_connections: None,
         accept_rate_per_ip_per_sec: None,
@@ -2370,6 +2400,8 @@ async fn tls_inbound_listener_smoke() {
             p2p_queue_cap_high: NonZeroUsize::new(1024).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(4096).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(256).unwrap(),
+            p2p_subscriber_queue_cap:
+                iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
             max_incoming: None,
             max_total_connections: None,
             accept_rate_per_ip_per_sec: None,

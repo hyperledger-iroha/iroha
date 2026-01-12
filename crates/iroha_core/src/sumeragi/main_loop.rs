@@ -140,8 +140,8 @@ use proposals::{
 };
 use roster::{
     apply_roster_indices_to_manager, canonicalize_roster, compute_membership_view_hash,
-    compute_roster_indices_from_topology, derive_active_topology, derive_local_validator_index,
-    roster_member_allowed_bls,
+    compute_roster_indices_from_topology, derive_active_topology,
+    derive_active_topology_from_views, derive_local_validator_index, roster_member_allowed_bls,
 };
 use vrf::VrfActor;
 #[cfg(test)]
@@ -229,6 +229,10 @@ fn bump_view_after_quorum_timeout(
 }
 
 const PROPOSAL_CACHE_LIMIT: usize = 128;
+const PROPOSALS_SEEN_HEIGHT_WINDOW: u64 = PROPOSAL_CACHE_LIMIT as u64;
+const PROPOSALS_SEEN_VIEW_WINDOW: u64 = PROPOSAL_CACHE_LIMIT as u64;
+const VOTE_CACHE_HEIGHT_WINDOW: u64 = PROPOSAL_CACHE_LIMIT as u64;
+const VOTE_CACHE_VIEW_WINDOW: u64 = PROPOSAL_CACHE_LIMIT as u64;
 fn missing_quorum_stale(
     pending_age: Duration,
     commit_timeout: Duration,
@@ -1166,20 +1170,18 @@ struct RosterValidationCache {
 }
 
 impl RosterValidationCache {
-    fn from_view(view: &StateView<'_>, fallback_epoch_length: u64) -> Self {
-        let epoch_schedule = super::EpochScheduleSnapshot::from_world_with_fallback(
-            view.world(),
-            fallback_epoch_length,
-        );
+    fn from_world(world: &impl WorldReadOnly, fallback_epoch_length: u64) -> Self {
+        let epoch_schedule =
+            super::EpochScheduleSnapshot::from_world_with_fallback(world, fallback_epoch_length);
         let mut pops = BTreeMap::new();
-        for (_id, record) in view.world().consensus_keys().iter() {
+        for (_id, record) in world.consensus_keys().iter() {
             if let Some(pop) = record.pop.as_ref() {
                 pops.entry(record.public_key.clone())
                     .or_insert_with(|| pop.clone());
             }
         }
-        let stake_map = stake_map_from_world(view.world());
-        let fallback_stake = fallback_stake_for_world(view.world());
+        let stake_map = stake_map_from_world(world);
+        let fallback_stake = fallback_stake_for_world(world);
         Self {
             epoch_schedule,
             pops,
@@ -1188,8 +1190,8 @@ impl RosterValidationCache {
         }
     }
 
-    fn refresh_from_view(&mut self, view: &StateView<'_>, fallback_epoch_length: u64) {
-        *self = Self::from_view(view, fallback_epoch_length);
+    fn refresh_from_world(&mut self, world: &impl WorldReadOnly, fallback_epoch_length: u64) {
+        *self = Self::from_world(world, fallback_epoch_length);
     }
 
     fn expected_epoch(&self, height: u64, consensus_mode: ConsensusMode) -> u64 {
@@ -3105,6 +3107,7 @@ pub(super) struct Actor {
     telemetry: Telemetry,
     epoch_roster_provider: Option<Arc<WsvEpochRosterAdapter>>,
     background_post_tx: Option<mpsc::SyncSender<BackgroundPost>>,
+    wake_tx: Option<mpsc::SyncSender<()>>,
     phase_tracker: PhaseTracker,
     phase_ema: PhaseEma,
     evidence_store: EvidenceStore,
@@ -3125,7 +3128,7 @@ pub(super) struct Actor {
         BTreeMap<votes::VoteLogKey, crate::sumeragi::consensus::Vote>,
     >,
     deferred_qcs: BTreeMap<QcVoteKey, crate::sumeragi::consensus::Qc>,
-    vote_roster_cache: BTreeMap<HashOf<BlockHeader>, Vec<PeerId>>,
+    vote_roster_cache: BTreeMap<HashOf<BlockHeader>, VoteRosterCacheEntry>,
     qc_cache: BTreeMap<QcVoteKey, crate::sumeragi::consensus::Qc>,
     qc_signer_tally: BTreeMap<QcVoteKey, QcSignerTally>,
     epoch_manager: Option<EpochManager>,
@@ -3144,6 +3147,13 @@ pub(super) struct Actor {
     block_sync_rebroadcast_log: PayloadRebroadcastThrottle,
     block_sync_fetch_log: PayloadRebroadcastThrottle,
     roster_validation_cache: RosterValidationCache,
+}
+
+#[derive(Debug, Clone)]
+struct VoteRosterCacheEntry {
+    roster: Vec<PeerId>,
+    height: u64,
+    view: u64,
 }
 
 struct ActorSubsystems {
@@ -3585,6 +3595,7 @@ impl Actor {
             Arc::clone(&self.kura),
             self.common_config.chain.clone(),
             self.genesis_account.clone(),
+            self.wake_tx.clone(),
         );
         self.subsystems.commit.work_tx = Some(commit_handle.work_tx);
         self.subsystems.commit.result_rx = Some(commit_handle.result_rx);
@@ -4285,20 +4296,15 @@ fn block_sync_update_with_roster(
     let block_height = block.header().height().get();
     let block_view = block.header().view_change_index();
     let mut update = super::message::BlockSyncUpdate::from(block);
-    let (consensus_mode, _mode_tag, _prf_seed) = {
-        let state_view = state.view();
-        let consensus_mode = super::effective_consensus_mode_for_height(
-            &state_view,
+    let consensus_mode = {
+        let world = state.world.view();
+        let consensus_mode = super::effective_consensus_mode_for_height_from_world(
+            &world,
             block_height,
             fallback_consensus_mode,
         );
-        let mode_tag = match consensus_mode {
-            ConsensusMode::Permissioned => PERMISSIONED_TAG,
-            ConsensusMode::Npos => NPOS_TAG,
-        };
-        let prf_seed = matches!(consensus_mode, ConsensusMode::Npos)
-            .then(|| super::npos_seed_for_height(&state_view, block_height));
-        (consensus_mode, mode_tag, prf_seed)
+        drop(world);
+        consensus_mode
     };
     let selection = persisted_roster_for_block(
         state,
@@ -4320,15 +4326,18 @@ fn block_sync_update_with_roster(
         )
     })
     .or_else(|| {
-        let view = state.view();
         // Use the active roster so checkpoint signature indices match consensus ordering.
-        let roster = derive_active_topology(&view, trusted, me);
-        let source = if view.commit_topology().is_empty() {
+        let world = state.world.view();
+        let commit_topology = state.commit_topology.view();
+        let roster =
+            derive_active_topology_from_views(&world, commit_topology.as_slice(), trusted, me);
+        let source = if commit_topology.is_empty() {
             BlockSyncRosterSource::TrustedPeersFallback
         } else {
             BlockSyncRosterSource::CommitTopologySnapshot
         };
-        drop(view);
+        drop(commit_topology);
+        drop(world);
         if roster.is_empty() {
             None
         } else {
@@ -5870,6 +5879,7 @@ impl Actor {
         epoch_roster_provider: Option<Arc<WsvEpochRosterAdapter>>,
         rbc_store: Option<RbcStoreConfig>,
         background_post_tx: Option<mpsc::SyncSender<BackgroundPost>>,
+        wake_tx: Option<mpsc::SyncSender<()>>,
         rbc_status_handle: rbc_status::Handle,
     ) -> Result<Self> {
         let consensus_frame_cap = frame_plaintext_cap(consensus_frame_cap);
@@ -6269,9 +6279,9 @@ impl Actor {
             },
         };
         let roster_validation_cache = {
-            let view = state.view();
-            let cache = RosterValidationCache::from_view(&view, config.epoch_length_blocks);
-            drop(view);
+            let world = state.world.view();
+            let cache = RosterValidationCache::from_world(&world, config.epoch_length_blocks);
+            drop(world);
             cache
         };
 
@@ -6300,6 +6310,7 @@ impl Actor {
             telemetry,
             epoch_roster_provider,
             background_post_tx,
+            wake_tx,
             phase_tracker: PhaseTracker::new(now),
             phase_ema: PhaseEma::new(&pacemaker_timeouts),
             evidence_store: EvidenceStore::new(),
@@ -6744,6 +6755,291 @@ impl Actor {
         false
     }
 
+    fn missing_block_next_due(&self, now: Instant) -> Option<Instant> {
+        let mut next_due: Option<Instant> = None;
+        for stats in self.pending.missing_block_requests.values() {
+            let mut candidate = if stats.retry_window.is_zero() {
+                Some(now)
+            } else {
+                stats.last_requested.checked_add(stats.retry_window)
+            };
+            if !stats.view_change_triggered {
+                if let Some(window) = stats.view_change_window {
+                    if !window.is_zero() {
+                        if let Some(deadline) = stats.first_seen.checked_add(window) {
+                            candidate = Some(match candidate {
+                                Some(prev) => prev.min(deadline),
+                                None => deadline,
+                            });
+                        }
+                    }
+                }
+            }
+            let Some(candidate) = candidate else {
+                continue;
+            };
+            let candidate = if candidate < now { now } else { candidate };
+            if candidate == now {
+                return Some(now);
+            }
+            next_due = Some(match next_due {
+                Some(prev) => prev.min(candidate),
+                None => candidate,
+            });
+        }
+        next_due
+    }
+
+    fn merge_deadline(current: Option<Instant>, candidate: Option<Instant>) -> Option<Instant> {
+        match (current, candidate) {
+            (Some(existing), Some(next)) => Some(existing.min(next)),
+            (None, Some(next)) => Some(next),
+            (Some(existing), None) => Some(existing),
+            (None, None) => None,
+        }
+    }
+
+    fn pending_block_next_due(&self, now: Instant) -> Option<Instant> {
+        if self.pending.pending_blocks.is_empty() {
+            return None;
+        }
+
+        let da_enabled = self.runtime_da_enabled();
+        let quorum_timeout = self.quorum_timeout(da_enabled);
+        let quorum_reschedule_cooldown = quorum_timeout.max(QUORUM_RESCHEDULE_COOLDOWN);
+        let retention_factor = self
+            .config
+            .missing_block_signer_fallback_attempts
+            .saturating_add(2)
+            .max(4);
+        let aborted_retention = quorum_reschedule_cooldown.saturating_mul(retention_factor);
+        let rebroadcast_cooldown = self.rebroadcast_cooldown();
+        let (tip_height, tip_hash) = {
+            let view = self.state.view();
+            (view.height(), view.latest_block_hash())
+        };
+
+        let mut next_due: Option<Instant> = None;
+        for (hash, pending) in &self.pending.pending_blocks {
+            if pending.aborted {
+                if aborted_retention == Duration::ZERO {
+                    return Some(now);
+                }
+                let expiry = pending
+                    .inserted_at
+                    .checked_add(aborted_retention)
+                    .map(|deadline| deadline.max(now))
+                    .unwrap_or(now);
+                next_due = Self::merge_deadline(next_due, Some(expiry));
+                continue;
+            }
+
+            if !pending_extends_tip(
+                pending.height,
+                pending.block.header().prev_block_hash(),
+                tip_height,
+                tip_hash,
+            ) {
+                continue;
+            }
+
+            if pending.kura_aborted {
+                next_due = Self::merge_deadline(next_due, Some(now));
+            } else if let Some(deadline) = pending.next_kura_retry {
+                next_due = Self::merge_deadline(next_due, Some(deadline.max(now)));
+            }
+
+            let has_precommit_votes = pending.precommit_vote_sent
+                || self.vote_log.values().any(|vote| {
+                    vote.phase == crate::sumeragi::consensus::Phase::Commit
+                        && vote.block_hash == *hash
+                        && vote.height == pending.height
+                        && vote.view == pending.view
+                });
+            if has_precommit_votes && !pending.commit_qc_seen {
+                let expected_epoch = self.epoch_for_height(pending.height);
+                let has_precommit_qc = cached_qc_for(
+                    &self.qc_cache,
+                    crate::sumeragi::consensus::Phase::Commit,
+                    *hash,
+                    pending.height,
+                    pending.view,
+                    expected_epoch,
+                )
+                .is_some();
+                if !has_precommit_qc {
+                    let deadline = pending
+                        .last_precommit_rebroadcast
+                        .and_then(|last| last.checked_add(rebroadcast_cooldown))
+                        .unwrap_or(now)
+                        .max(now);
+                    next_due = Self::merge_deadline(next_due, Some(deadline));
+                }
+            }
+
+            if quorum_timeout != Duration::ZERO {
+                let age = now.saturating_duration_since(pending.inserted_at);
+                let deadline = if age < quorum_timeout {
+                    pending
+                        .inserted_at
+                        .checked_add(quorum_timeout)
+                        .unwrap_or(now)
+                } else {
+                    pending
+                        .last_quorum_reschedule
+                        .and_then(|last| last.checked_add(quorum_reschedule_cooldown))
+                        .unwrap_or(now)
+                };
+                let deadline = deadline.max(now);
+                next_due = Self::merge_deadline(next_due, Some(deadline));
+            }
+        }
+
+        next_due
+    }
+
+    fn idle_view_next_due(&self, now: Instant) -> Option<Instant> {
+        if self.has_active_pending_blocks() {
+            return None;
+        }
+
+        let committed_qc = self.latest_committed_qc();
+        let committed_height = committed_qc.as_ref().map_or_else(
+            || {
+                let view_snapshot = self.state.view();
+                view_snapshot.height() as u64
+            },
+            |qc| qc.height,
+        );
+        let height = active_round_height(self.highest_qc, committed_qc, committed_height);
+        let current_view = self.phase_tracker.current_view(height).unwrap_or(0);
+        let Some(age) = self.phase_tracker.view_age(height, now) else {
+            return Some(now);
+        };
+        let proposal_seen = self
+            .subsystems
+            .propose
+            .proposals_seen
+            .contains(&(height, current_view));
+        let timeout = idle_view_timeout(
+            proposal_seen,
+            self.commit_quorum_timeout(),
+            self.subsystems.propose.pacemaker.propose_interval,
+        );
+        if timeout == Duration::ZERO {
+            return None;
+        }
+        if age >= timeout {
+            return Some(now);
+        }
+        Some(now + timeout.saturating_sub(age))
+    }
+
+    fn rbc_next_due(&self, now: Instant) -> Option<Instant> {
+        let rbc = &self.subsystems.da_rbc.rbc;
+        if rbc.sessions.is_empty() && rbc.pending.is_empty() && rbc.persist_inflight.is_empty() {
+            return None;
+        }
+
+        let mut next_due: Option<Instant> = None;
+        let payload_cooldown = self.payload_rebroadcast_cooldown();
+        let ready_cooldown = self.rebroadcast_cooldown();
+
+        for (key, session) in &rbc.sessions {
+            if session.delivered || session.is_invalid() {
+                continue;
+            }
+
+            if !session.sent_ready {
+                let roster = self.rbc_session_roster(*key);
+                let roster_source = self
+                    .rbc_session_roster_source(*key)
+                    .unwrap_or(RbcRosterSource::Derived);
+                if !roster.is_empty() && roster_source.is_authoritative() {
+                    return Some(now);
+                }
+            }
+
+            let roster = self.rbc_session_roster(*key);
+            let roster_source = self
+                .rbc_session_roster_source(*key)
+                .unwrap_or(RbcRosterSource::Derived);
+            if roster.is_empty() || !roster_source.is_authoritative() {
+                continue;
+            }
+            let topology = super::network_topology::Topology::new(roster);
+            let required = self.rbc_deliver_quorum(&topology);
+            let ready_quorum = session.ready_signatures.len() >= required;
+            let total_chunks = session.total_chunks();
+            let missing_chunks = total_chunks != 0 && session.received_chunks() < total_chunks;
+            if ready_quorum && !missing_chunks {
+                continue;
+            }
+
+            if missing_chunks || !ready_quorum {
+                let deadline = rbc
+                    .payload_rebroadcast_last_sent
+                    .get(key)
+                    .and_then(|last| last.checked_add(payload_cooldown))
+                    .unwrap_or(now)
+                    .max(now);
+                next_due = Self::merge_deadline(next_due, Some(deadline));
+            }
+            if !ready_quorum && !session.ready_signatures.is_empty() {
+                let deadline = rbc
+                    .ready_rebroadcast_last_sent
+                    .get(key)
+                    .and_then(|last| last.checked_add(ready_cooldown))
+                    .unwrap_or(now)
+                    .max(now);
+                next_due = Self::merge_deadline(next_due, Some(deadline));
+            }
+        }
+
+        let ttl = self.config.rbc_session_ttl;
+        if ttl != Duration::ZERO {
+            let now_system = SystemTime::now();
+            if let Some(due_in) = rbc.status_handle.next_stale_due(ttl, now_system) {
+                let deadline = now.checked_add(due_in).unwrap_or(now);
+                next_due = Self::merge_deadline(next_due, Some(deadline));
+            }
+        }
+
+        next_due
+    }
+
+    pub(super) fn next_tick_deadline(&self, now: Instant) -> Option<Instant> {
+        let queue_len = self.queue.tx_len();
+        let has_active_pending = self.has_active_pending_blocks();
+        if queue_len > 0 && !has_active_pending {
+            return Some(now);
+        }
+        let mut next_due = Self::merge_deadline(None, self.pending_block_next_due(now));
+
+        if !self.deferred_votes.is_empty() || !self.deferred_qcs.is_empty() {
+            return Some(now);
+        }
+
+        next_due = Self::merge_deadline(next_due, self.rbc_next_due(now));
+
+        if let Some(inflight) = self.subsystems.commit.inflight.as_ref() {
+            let timeout = self.config.commit_inflight_timeout;
+            if !timeout.is_zero() {
+                let deadline = inflight.enqueue_time.checked_add(timeout).unwrap_or(now);
+                next_due = Self::merge_deadline(next_due, Some(deadline.max(now)));
+            }
+        }
+
+        next_due = Self::merge_deadline(next_due, self.missing_block_next_due(now));
+        next_due = Self::merge_deadline(next_due, self.idle_view_next_due(now));
+
+        next_due
+    }
+
+    pub(super) fn should_tick(&self) -> bool {
+        self.next_tick_deadline(Instant::now()).is_some()
+    }
+
     #[allow(clippy::too_many_lines)]
     pub(super) fn tick(&mut self) -> bool {
         let tick_start = Instant::now();
@@ -6761,7 +7057,7 @@ impl Actor {
             );
         }
         let mut progress = self.tick_mode_management();
-        let rbc_persist_progress = self.poll_rbc_persist_results();
+        let rbc_persist_progress = self.poll_rbc_persist_results_inner();
         let now = tick_start;
         let queue_len = self.queue.tx_len();
         let queue_ready = queue_len > 0 && self.active_pending_blocks_len() == 0;
@@ -8885,6 +9181,7 @@ impl Actor {
             .retain(|(entry_height, entry_view)| {
                 *entry_height != height || *entry_view >= next_view
             });
+        self.prune_vote_caches_horizon(self.last_committed_height);
         record_view_change_cause_with_telemetry(cause, self.telemetry_handle());
         let committed_qc = self.latest_committed_qc();
         if let Some(mut highest_qc) = self.highest_qc.or(committed_qc) {

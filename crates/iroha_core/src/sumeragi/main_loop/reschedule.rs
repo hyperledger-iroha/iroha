@@ -7,7 +7,16 @@ use super::*;
 impl Actor {
     #[allow(clippy::too_many_lines)]
     pub(super) fn reschedule_stale_pending_blocks(&mut self) -> bool {
-        if self.active_pending_blocks_len() == 0 {
+        if self.pending.pending_blocks.is_empty() {
+            return false;
+        }
+        // Allow pruning aborted payloads even when no active pending blocks remain.
+        let has_aborted = self
+            .pending
+            .pending_blocks
+            .values()
+            .any(|pending| pending.aborted);
+        if !has_aborted && self.active_pending_blocks_len() == 0 {
             return false;
         }
 
@@ -29,7 +38,6 @@ impl Actor {
             let view = self.state.view();
             (view.height(), view.latest_block_hash())
         };
-        let tip_height_u64 = u64::try_from(tip_height).unwrap_or(u64::MAX);
 
         let mut stale_pending = Vec::new();
         let mut aborted_expired = Vec::new();
@@ -42,11 +50,6 @@ impl Actor {
             if pending.aborted {
                 if self.kura.get_block_height_by_hash(*hash).is_some() {
                     aborted_expired.push((*hash, pending.height, pending.view));
-                    continue;
-                }
-                if pending.height > tip_height_u64 {
-                    // Keep aborted payloads above the committed tip so missing-block fetches can
-                    // recover across view changes at the current height.
                     continue;
                 }
                 let has_votes = self.vote_log.values().any(|vote| {

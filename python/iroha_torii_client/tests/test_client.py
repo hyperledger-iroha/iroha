@@ -2393,3 +2393,226 @@ def test_submit_zk_ballot_v1_rejects_invalid_hex_hints() -> None:
             envelope_b64="AAAA",
             root_hint="not-hex",
         )
+
+
+def test_list_subscription_plans_encodes_params() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "items": [
+                    {
+                        "plan_id": "plan#subs",
+                        "plan": {"provider": "alice@wonderland", "pricing": {"kind": "fixed"}},
+                    }
+                ],
+                "total": 1,
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    page = client.list_subscription_plans(provider="alice@wonderland", limit=10, offset=5)
+
+    assert page.total == 1
+    assert page.items[0].plan_id == "plan#subs"
+    assert page.items[0].plan["provider"] == "alice@wonderland"
+    assert session.calls[0]["params"] == {
+        "provider": "alice@wonderland",
+        "limit": 10,
+        "offset": 5,
+    }
+
+
+def test_create_subscription_plan_posts_payload() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "ok": True,
+                "plan_id": "plan#subs",
+                "tx_hash_hex": "deadbeef",
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    result = client.create_subscription_plan(
+        authority="alice@wonderland",
+        private_key="ed25519:priv",
+        plan_id="plan#subs",
+        plan={"provider": "alice@wonderland"},
+    )
+
+    assert result.ok is True
+    assert result.plan_id == "plan#subs"
+    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
+    assert payload["authority"] == "alice@wonderland"
+    assert payload["private_key"] == "ed25519:priv"
+    assert payload["plan_id"] == "plan#subs"
+    assert payload["plan"]["provider"] == "alice@wonderland"
+
+
+def test_list_subscriptions_encodes_params() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "items": [
+                    {
+                        "subscription_id": "sub-1$subscriptions",
+                        "subscription": {"status": "active"},
+                        "invoice": {"amount": "120"},
+                        "plan": {"provider": "alice@wonderland"},
+                    }
+                ],
+                "total": 1,
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    page = client.list_subscriptions(
+        owned_by="bob@wonderland",
+        provider="alice@wonderland",
+        status="ACTIVE",
+        limit=25,
+        offset=0,
+    )
+
+    assert page.total == 1
+    assert page.items[0].subscription_id == "sub-1$subscriptions"
+    assert page.items[0].subscription["status"] == "active"
+    assert session.calls[0]["params"] == {
+        "owned_by": "bob@wonderland",
+        "provider": "alice@wonderland",
+        "status": "active",
+        "limit": 25,
+        "offset": 0,
+    }
+
+
+def test_list_subscriptions_rejects_invalid_status() -> None:
+    client = ToriiClient("http://node.test", session=RecordingSession())
+
+    with pytest.raises(ValueError, match="subscriptions.status"):
+        client.list_subscriptions(status="unknown")
+
+
+def test_create_subscription_posts_payload() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "ok": True,
+                "subscription_id": "sub-1$subscriptions",
+                "billing_trigger_id": "sub-bill",
+                "usage_trigger_id": "sub-usage",
+                "first_charge_ms": 1_704_067_200_000,
+                "tx_hash_hex": "deadbeef",
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    result = client.create_subscription(
+        authority="bob@wonderland",
+        private_key="ed25519:priv",
+        subscription_id="sub-1$subscriptions",
+        plan_id="plan#subs",
+        billing_trigger_id="sub-bill",
+        usage_trigger_id="sub-usage",
+        first_charge_ms=1_704_067_200_000,
+        grant_usage_to_provider=True,
+    )
+
+    assert result.subscription_id == "sub-1$subscriptions"
+    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
+    assert payload["authority"] == "bob@wonderland"
+    assert payload["private_key"] == "ed25519:priv"
+    assert payload["billing_trigger_id"] == "sub-bill"
+    assert payload["usage_trigger_id"] == "sub-usage"
+    assert payload["first_charge_ms"] == 1_704_067_200_000
+    assert payload["grant_usage_to_provider"] is True
+
+
+def test_get_subscription_encodes_path_and_parses_response() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "subscription_id": "sub-1$subscriptions",
+                "subscription": {"status": "active"},
+                "plan": {"provider": "alice@wonderland"},
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    record = client.get_subscription("sub-1$subscriptions")
+
+    assert record is not None
+    assert record.subscription_id == "sub-1$subscriptions"
+    assert session.calls[0]["url"].endswith("/v1/subscriptions/sub-1%24subscriptions")
+
+
+def test_get_subscription_returns_none_on_404() -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(status_code=404, payload=None))
+    client = ToriiClient("http://node.test", session=session)
+
+    assert client.get_subscription("sub-404$subscriptions") is None
+
+
+def test_subscription_actions_post_payloads() -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(payload={"ok": True, "subscription_id": "sub-1", "tx_hash_hex": "a"}))
+    session.queue(StubResponse(payload={"ok": True, "subscription_id": "sub-1", "tx_hash_hex": "b"}))
+    session.queue(StubResponse(payload={"ok": True, "subscription_id": "sub-1", "tx_hash_hex": "c"}))
+    session.queue(StubResponse(payload={"ok": True, "subscription_id": "sub-1", "tx_hash_hex": "d"}))
+    client = ToriiClient("http://node.test", session=session)
+
+    client.pause_subscription("sub-1", authority="bob@wonderland", private_key="ed25519:priv")
+    client.resume_subscription(
+        "sub-1",
+        authority="bob@wonderland",
+        private_key="ed25519:priv",
+        charge_at_ms=1_704_067_200_000,
+    )
+    client.cancel_subscription("sub-1", authority="bob@wonderland", private_key="ed25519:priv")
+    client.charge_subscription_now(
+        "sub-1",
+        authority="bob@wonderland",
+        private_key="ed25519:priv",
+        charge_at_ms=1_704_067_200_000,
+    )
+
+    pause_body = json.loads(session.calls[0]["data"].decode("utf-8"))
+    assert pause_body["authority"] == "bob@wonderland"
+    resume_body = json.loads(session.calls[1]["data"].decode("utf-8"))
+    assert resume_body["charge_at_ms"] == 1_704_067_200_000
+    cancel_body = json.loads(session.calls[2]["data"].decode("utf-8"))
+    assert cancel_body["private_key"] == "ed25519:priv"
+    charge_body = json.loads(session.calls[3]["data"].decode("utf-8"))
+    assert charge_body["charge_at_ms"] == 1_704_067_200_000
+
+
+def test_record_subscription_usage_posts_payload() -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(payload={"ok": True, "subscription_id": "sub-1", "tx_hash_hex": "e"}))
+    client = ToriiClient("http://node.test", session=session)
+
+    result = client.record_subscription_usage(
+        "sub-1",
+        authority="alice@wonderland",
+        private_key="ed25519:priv",
+        unit_key="compute_ms",
+        delta=3600,
+        usage_trigger_id="sub-usage",
+    )
+
+    assert result.ok is True
+    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
+    assert payload["unit_key"] == "compute_ms"
+    assert payload["delta"] == "3600"
+    assert payload["usage_trigger_id"] == "sub-usage"

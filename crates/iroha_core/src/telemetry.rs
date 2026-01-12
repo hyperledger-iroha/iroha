@@ -2692,6 +2692,30 @@ impl StateTelemetry {
         }
     }
 
+    /// Record a subscription billing attempt grouped by pricing kind.
+    pub fn record_subscription_billing_attempt(&self, pricing: &'static str) {
+        if self.is_enabled() {
+            self.metrics
+                .subscription_billing_attempts_total
+                .with_label_values(&[pricing])
+                .inc();
+        }
+    }
+
+    /// Record a subscription billing outcome grouped by pricing kind and result.
+    pub fn record_subscription_billing_outcome(
+        &self,
+        pricing: &'static str,
+        outcome: &'static str,
+    ) {
+        if self.is_enabled() {
+            self.metrics
+                .subscription_billing_outcomes_total
+                .with_label_values(&[pricing, outcome])
+                .inc();
+        }
+    }
+
     /// Record an AXT policy rejection grouped by lane id and reason.
     pub fn note_axt_policy_reject(
         &self,
@@ -12568,6 +12592,49 @@ mod tests {
                 .get(),
             1,
             "disabled telemetry must not record additional successes"
+        );
+    }
+
+    #[test]
+    fn subscription_billing_counters_respect_enablement() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = StateTelemetry::new(Arc::clone(&metrics), true);
+
+        telemetry.record_subscription_billing_attempt("usage");
+        telemetry.record_subscription_billing_outcome("usage", "paid");
+        assert_eq!(
+            metrics
+                .subscription_billing_attempts_total
+                .with_label_values(&["usage"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .subscription_billing_outcomes_total
+                .with_label_values(&["usage", "paid"])
+                .get(),
+            1
+        );
+
+        telemetry.disable();
+        telemetry.record_subscription_billing_attempt("fixed");
+        telemetry.record_subscription_billing_outcome("fixed", "failed");
+        assert_eq!(
+            metrics
+                .subscription_billing_attempts_total
+                .with_label_values(&["fixed"])
+                .get(),
+            0,
+            "disabled telemetry must not record attempts"
+        );
+        assert_eq!(
+            metrics
+                .subscription_billing_outcomes_total
+                .with_label_values(&["fixed", "failed"])
+                .get(),
+            0,
+            "disabled telemetry must not record outcomes"
         );
     }
 

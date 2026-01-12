@@ -5871,6 +5871,10 @@ pub struct Metrics {
     pub settlement_conversion_total: IntCounterVec,
     /// Cumulative settlement haircut totals grouped by lane/dataspace (XOR units).
     pub settlement_haircut_total: CounterVec,
+    /// Subscription billing attempts grouped by pricing kind.
+    pub subscription_billing_attempts_total: IntCounterVec,
+    /// Subscription billing outcomes grouped by pricing kind and result.
+    pub subscription_billing_outcomes_total: IntCounterVec,
     /// Offline-to-online transfer lifecycle events grouped by event kind.
     pub offline_transfer_events_total: IntCounterVec,
     /// Aggregate offline receipt counters grouped by event kind.
@@ -7647,6 +7651,28 @@ impl Default for Metrics {
             &["lane_id", "dataspace_id"],
         )
         .expect("Infallible");
+        let subscription_billing_attempts_total = IntCounterVec::new(
+            Opts::new(
+                "iroha_subscription_billing_attempts_total",
+                "Subscription billing attempts grouped by pricing kind.",
+            ),
+            &["pricing"],
+        )
+        .expect("Infallible");
+        let subscription_billing_outcomes_total = IntCounterVec::new(
+            Opts::new(
+                "iroha_subscription_billing_outcomes_total",
+                "Subscription billing outcomes grouped by pricing kind and result.",
+            ),
+            &["pricing", "result"],
+        )
+        .expect("Infallible");
+        for pricing in ["fixed", "usage"] {
+            let _ = subscription_billing_attempts_total.with_label_values(&[pricing]);
+            for result in ["paid", "failed", "suspended", "skipped"] {
+                let _ = subscription_billing_outcomes_total.with_label_values(&[pricing, result]);
+            }
+        }
         let offline_transfer_events_total = IntCounterVec::new(
             Opts::new(
                 "iroha_offline_transfer_events_total",
@@ -11873,6 +11899,8 @@ impl Default for Metrics {
         register_guarded(&registry, &da_shard_cursor_lag_blocks);
         register!(
             registry,
+            subscription_billing_attempts_total,
+            subscription_billing_outcomes_total,
             offline_transfer_events_total,
             offline_transfer_receipts_total,
             offline_transfer_settled_amount,
@@ -12412,6 +12440,8 @@ impl Default for Metrics {
             settlement_swapline_utilisation,
             settlement_conversion_total,
             settlement_haircut_total,
+            subscription_billing_attempts_total,
+            subscription_billing_outcomes_total,
             sumeragi_tx_queue_depth,
             sumeragi_tx_queue_capacity,
             sumeragi_tx_queue_saturated,
@@ -12873,6 +12903,8 @@ impl Default for Metrics {
             settlement_swapline_utilisation,
             settlement_conversion_total,
             settlement_haircut_total,
+            subscription_billing_attempts_total,
+            subscription_billing_outcomes_total,
             offline_transfer_events_total,
             offline_transfer_receipts_total,
             offline_transfer_settled_amount,

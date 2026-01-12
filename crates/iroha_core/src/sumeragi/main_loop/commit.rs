@@ -73,6 +73,7 @@ pub(super) fn spawn_commit_worker(
     kura: Arc<Kura>,
     chain_id: ChainId,
     genesis_account: AccountId,
+    wake_tx: Option<mpsc::SyncSender<()>>,
 ) -> CommitWorkerHandle {
     let (work_tx, work_rx) = mpsc::sync_channel::<CommitWork>(COMMIT_WORK_QUEUE_CAP);
     let (result_tx, result_rx) = mpsc::sync_channel::<CommitResult>(COMMIT_RESULT_QUEUE_CAP);
@@ -90,6 +91,9 @@ pub(super) fn spawn_commit_worker(
                 );
                 if result_tx.send(CommitResult { id, outcome }).is_err() {
                     break;
+                }
+                if let Some(wake) = wake_tx.as_ref() {
+                    let _ = wake.try_send(());
                 }
             }
         })
@@ -3889,18 +3893,14 @@ impl Actor {
     pub(super) fn on_block_commit(&mut self, height: u64) -> Result<()> {
         self.refresh_roster_validation_cache();
         self.subsystems.propose.new_view_tracker.prune(height);
-        self.subsystems
-            .propose
-            .proposals_seen
-            .retain(|(entry_height, _)| *entry_height > height);
+        self.prune_proposals_seen_horizon(height);
+        self.prune_vote_caches_horizon(height);
         self.subsystems.propose.forced_view_after_timeout = self
             .subsystems
             .propose
             .forced_view_after_timeout
             .filter(|(forced_height, _)| *forced_height > height);
         let _retention_floor = height.saturating_sub(1);
-        self.vote_log
-            .retain(|(_, vote_height, _, _, _), _| *vote_height > height);
         self.pending
             .missing_block_requests
             .retain(|_, request| request.height > height);
@@ -4294,9 +4294,10 @@ impl Actor {
     }
 
     fn refresh_roster_validation_cache(&mut self) {
-        let view = self.state.view();
+        let world = self.state.world.view();
         self.roster_validation_cache
-            .refresh_from_view(&view, self.config.epoch_length_blocks);
+            .refresh_from_world(&world, self.config.epoch_length_blocks);
+        drop(world);
     }
 
     pub(super) fn refresh_commit_topology_state(
@@ -4516,7 +4517,8 @@ mod tests {
     use std::{
         collections::{BTreeMap, BTreeSet},
         net::SocketAddr,
-        sync::Arc,
+        sync::{Arc, mpsc},
+        time::Duration,
     };
 
     use super::*;
@@ -4622,6 +4624,69 @@ mod tests {
             }
         }
         assert!(got_pipeline_event, "expected pipeline event emission");
+    }
+
+    #[test]
+    fn commit_worker_wakes_on_result() {
+        let genesis_key = KeyPair::random();
+        let genesis_account_id =
+            AccountId::new(GENESIS_DOMAIN_ID.clone(), genesis_key.public_key().clone());
+        let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
+        let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
+        let world = World::with([genesis_domain], [genesis_account], []);
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(
+            world,
+            Arc::clone(&kura),
+            query_handle,
+        ));
+        let chain_id = state.view().chain_id().clone();
+        let (wake_tx, wake_rx) = mpsc::sync_channel(1);
+
+        let handle = spawn_commit_worker(
+            Arc::clone(&state),
+            Arc::clone(&kura),
+            chain_id.clone(),
+            genesis_account_id.clone(),
+            Some(wake_tx),
+        );
+
+        let tx = TransactionBuilder::new(chain_id.clone(), genesis_account_id.clone())
+            .with_instructions([Log::new(
+                Level::DEBUG,
+                "commit worker wake test".to_string(),
+            )])
+            .sign(genesis_key.private_key());
+        let block = SignedBlock::genesis(vec![tx], genesis_key.private_key(), None, None);
+        let peer_key = KeyPair::random();
+        let peer_id = PeerId::new(peer_key.public_key().clone());
+        let topology = vec![peer_id];
+        let (events_sender, _events_rx) = tokio::sync::broadcast::channel(16);
+        let work = CommitWork {
+            id: 42,
+            block,
+            commit_topology: topology.clone(),
+            signature_topology: topology,
+            qc_signers: None,
+            allow_quorum_bypass: false,
+            persist_required: false,
+            events_sender,
+        };
+
+        handle.work_tx.send(work).expect("send commit work");
+        handle
+            .result_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("commit result");
+        wake_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("wake signal");
+
+        drop(handle.work_tx);
+        if let Err(err) = handle.join_handle.join() {
+            panic!("commit worker panicked: {err:?}");
+        }
     }
 
     #[test]
@@ -5317,7 +5382,7 @@ mod tests {
         let (trusted, me_id) = trusted_self();
         let roster_cache = {
             let view = state.view();
-            super::RosterValidationCache::from_view(&view, super::EPOCH_LENGTH_BLOCKS)
+            super::RosterValidationCache::from_world(view.world(), super::EPOCH_LENGTH_BLOCKS)
         };
         let mut update = block_sync_update_with_roster(
             &block,

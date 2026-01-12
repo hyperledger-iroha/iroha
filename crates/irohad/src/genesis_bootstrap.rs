@@ -3,6 +3,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fmt,
+    num::NonZeroUsize,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -43,6 +44,8 @@ pub trait GenesisNetwork: Clone + Send + Sync + 'static {
         &self,
         sender: mpsc::Sender<PeerMessage<NetworkMessage>>,
     ) -> Result<(), mpsc::Sender<PeerMessage<NetworkMessage>>>;
+    /// Configured queue capacity for P2P subscribers.
+    fn subscriber_queue_cap(&self) -> NonZeroUsize;
     /// Update the gossip topology (used to seed trusted peers for bootstrap).
     fn update_topology(&self, update: UpdateTopology);
     /// Update peer addresses (used to seed trusted peers for bootstrap).
@@ -59,6 +62,10 @@ impl GenesisNetwork for IrohaNetwork {
         sender: mpsc::Sender<PeerMessage<NetworkMessage>>,
     ) -> Result<(), mpsc::Sender<PeerMessage<NetworkMessage>>> {
         self.subscribe_to_peers_messages(sender)
+    }
+
+    fn subscriber_queue_cap(&self) -> NonZeroUsize {
+        self.subscriber_queue_cap()
     }
 
     fn update_topology(&self, update: UpdateTopology) {
@@ -284,7 +291,7 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
 
     /// Spawn a listener that handles inbound genesis requests/responses.
     pub async fn spawn_listener(&self) {
-        let (mut sender, mut rx) = mpsc::channel(8);
+        let (mut sender, mut rx) = mpsc::channel(self.network.subscriber_queue_cap().get());
         let mut backoff_ms = 50;
         while let Err(returned) = self.network.subscribe(sender) {
             sender = returned;
@@ -975,6 +982,10 @@ mod tests {
         ) -> Result<(), mpsc::Sender<PeerMessage<NetworkMessage>>> {
             *self.sender.lock().expect("sender mutex") = Some(sender);
             Ok(())
+        }
+
+        fn subscriber_queue_cap(&self) -> NonZeroUsize {
+            NonZeroUsize::new(8).expect("nonzero")
         }
 
         fn update_topology(&self, _update: UpdateTopology) {}

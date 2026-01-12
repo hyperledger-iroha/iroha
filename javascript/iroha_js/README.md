@@ -103,6 +103,69 @@ console.log(formats.domainSummary.selector.registryId); // registry id when Glob
 > IH58 remains the default copy/share target, compressed strings need an inline
 > warning, and QR codes should always encode the IH58 value.
 
+## Subscriptions
+
+Subscription plans are stored on asset definitions and billed by triggers. Use
+`bill_for.period = "previous_period"` to charge in arrears (for example, bill
+on the first for last month's usage); fixed-price plans typically bill the next
+period in advance.
+
+```js
+import { ToriiClient } from "@iroha/iroha-js";
+
+const torii = new ToriiClient("http://127.0.0.1:8080", {
+  authToken: "provider-token",
+});
+
+const usagePlan = {
+  provider: "aws@commerce",
+  billing: {
+    cadence: {
+      kind: "monthly_calendar",
+      detail: { anchor_day: 1, anchor_time_ms: 0 },
+    },
+    bill_for: { period: "previous_period", value: null },
+    retry_backoff_ms: 86_400_000,
+    max_failures: 3,
+    grace_ms: 604_800_000,
+  },
+  pricing: {
+    kind: "usage",
+    detail: {
+      unit_price: "0.024",
+      unit_key: "compute_ms",
+      asset_definition: "usd#pay",
+    },
+  },
+};
+
+await torii.createSubscriptionPlan({
+  authority: "aws@commerce",
+  private_key: "provider-private-key-hex",
+  plan_id: "aws_compute#commerce",
+  plan: usagePlan,
+});
+
+await torii.createSubscription({
+  authority: "alice@users",
+  private_key: "subscriber-private-key-hex",
+  subscription_id: "sub-001",
+  plan_id: "aws_compute#commerce",
+});
+
+await torii.recordSubscriptionUsage("sub-001", {
+  authority: "aws@commerce",
+  private_key: "provider-private-key-hex",
+  unit_key: "compute_ms",
+  delta: "3600000",
+});
+
+await torii.chargeSubscriptionNow("sub-001", {
+  authority: "aws@commerce",
+  private_key: "provider-private-key-hex",
+});
+```
+
 ## Multisig TTL preview and enforcement
 
 ```js

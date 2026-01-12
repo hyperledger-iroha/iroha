@@ -37,6 +37,7 @@ use crate::{
 
 /// Stack size reserved for the consensus worker thread to handle deep recursion safely.
 const SUMERAGI_STACK_SIZE_BYTES: usize = 64 * 1024 * 1024;
+const WORKER_WAKE_CHANNEL_CAP: usize = 1;
 
 /// Build initial validator topology from trusted peers by enforcing BLS-normal keys and `PoP`.
 /// Observers are not included; this helper filters the validator set only.
@@ -104,7 +105,16 @@ pub fn effective_consensus_mode_for_height(
     height: u64,
     fallback: ConsensusMode,
 ) -> ConsensusMode {
-    let params = view.world.parameters();
+    effective_consensus_mode_for_height_from_world(view.world(), height, fallback)
+}
+
+/// Derive the effective consensus mode for a specific height from a world snapshot.
+pub fn effective_consensus_mode_for_height_from_world(
+    world: &impl WorldReadOnly,
+    height: u64,
+    fallback: ConsensusMode,
+) -> ConsensusMode {
+    let params = world.parameters();
     let sumeragi = params.sumeragi();
     match (sumeragi.next_mode, sumeragi.mode_activation_height) {
         (Some(next), Some(activation_height)) => {
@@ -568,7 +578,7 @@ mod tests {
     #[test]
     fn should_run_tick_when_queues_not_exhausted() {
         let now = Instant::now();
-        let last_tick = backdate(now, Duration::from_millis(10));
+        let last_tick = backdate(now, Duration::from_millis(250));
         assert!(should_run_tick(
             now,
             last_tick,
@@ -577,6 +587,24 @@ mod tests {
             false,
             false,
             status::WorkerQueueDepthSnapshot::default(),
+            Duration::from_millis(200),
+            Duration::from_secs(1)
+        ));
+    }
+
+    #[test]
+    fn should_skip_tick_when_idle_and_gap_small() {
+        let now = Instant::now();
+        let last_tick = backdate(now, Duration::from_millis(50));
+        assert!(!should_run_tick(
+            now,
+            last_tick,
+            false,
+            false,
+            false,
+            false,
+            status::WorkerQueueDepthSnapshot::default(),
+            Duration::from_millis(200),
             Duration::from_secs(1)
         ));
     }
@@ -596,6 +624,7 @@ mod tests {
                 vote_rx: 1,
                 ..status::WorkerQueueDepthSnapshot::default()
             },
+            Duration::from_millis(100),
             Duration::from_millis(200)
         ));
     }
@@ -612,6 +641,7 @@ mod tests {
             true,
             true,
             status::WorkerQueueDepthSnapshot::default(),
+            Duration::from_millis(100),
             Duration::from_millis(200)
         ));
     }
@@ -631,8 +661,21 @@ mod tests {
                 block_payload_rx: 1,
                 ..status::WorkerQueueDepthSnapshot::default()
             },
+            Duration::from_millis(100),
             Duration::from_millis(200)
         ));
+    }
+
+    #[test]
+    fn idle_wait_duration_tracks_min_gap() {
+        let base = Instant::now();
+        let min_gap = Duration::from_millis(200);
+        assert_eq!(idle_wait_duration(base, base, min_gap), Some(min_gap));
+        assert_eq!(
+            idle_wait_duration(base + Duration::from_millis(50), base, min_gap),
+            Some(Duration::from_millis(150))
+        );
+        assert_eq!(idle_wait_duration(base + min_gap, base, min_gap), None);
     }
 
     #[test]
@@ -698,10 +741,10 @@ mod tests {
             consensus_rx_drain_max_messages: 16,
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
+            tick_min_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
-            sleep: Duration::from_millis(1),
         };
         let now = Instant::now();
         let mut loop_state = WorkerLoopState {
@@ -789,10 +832,10 @@ mod tests {
             consensus_rx_drain_max_messages: 16,
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
+            tick_min_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(2),
             non_vote_starve_max: Duration::from_millis(1),
-            sleep: Duration::from_millis(1),
         };
         let now = Instant::now();
         let mut loop_state = WorkerLoopState {
@@ -934,6 +977,30 @@ mod tests {
     }
 
     #[test]
+    fn idle_tick_gap_clamps_to_floor_and_max() {
+        let gap = idle_tick_gap(
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            Duration::from_secs(2),
+        );
+        assert_eq!(gap, Duration::from_millis(250));
+
+        let clamped = idle_tick_gap(
+            Duration::from_secs(10),
+            Duration::from_secs(10),
+            Duration::from_secs(2),
+        );
+        assert_eq!(clamped, Duration::from_secs(2));
+
+        let floored = idle_tick_gap(
+            Duration::from_millis(10),
+            Duration::from_millis(10),
+            Duration::from_millis(200),
+        );
+        assert_eq!(floored, Duration::from_millis(IDLE_TICK_GAP_FLOOR_MS));
+    }
+
+    #[test]
     fn cap_drain_budget_clamps_to_floor_and_cap() {
         let floor = Duration::from_millis(200);
         assert_eq!(
@@ -1023,6 +1090,35 @@ mod tests {
             effective_consensus_mode_for_height(&view, 5, ConsensusMode::Permissioned),
             ConsensusMode::Npos
         );
+    }
+
+    #[test]
+    fn effective_consensus_mode_for_height_from_world_matches_view() {
+        let world = World::new();
+        {
+            let mut block = world.block();
+            let params = block.parameters.get_mut();
+            params.sumeragi.next_mode = Some(SumeragiConsensusMode::Npos);
+            params.sumeragi.mode_activation_height = Some(7);
+            block.commit();
+        }
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let view = state.view();
+        let world_view = state.world.view();
+
+        for height in [0_u64, 6, 7, 9] {
+            assert_eq!(
+                effective_consensus_mode_for_height(&view, height, ConsensusMode::Permissioned),
+                effective_consensus_mode_for_height_from_world(
+                    &world_view,
+                    height,
+                    ConsensusMode::Permissioned
+                ),
+                "world view should mirror StateView for consensus mode"
+            );
+        }
     }
 
     #[test]
@@ -1671,6 +1767,43 @@ mod tests {
     }
 
     #[test]
+    fn try_incoming_block_message_wakes_worker_on_accept() {
+        let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, _block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (vote_tx, _vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (wake_tx, wake_rx) = mpsc::sync_channel(1);
+        let vote_dedup = Arc::new(Mutex::new(DedupCache::new(4, VOTE_DEDUP_CACHE_TTL)));
+        let block_payload_dedup = Arc::new(Mutex::new(BlockPayloadDedupCache::new(
+            4,
+            BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
+        )));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        )
+        .with_wake(wake_tx);
+
+        let advert = message::ConsensusParamsAdvert {
+            collectors_k: 1,
+            redundant_send_r: 1,
+            membership: None,
+        };
+        assert!(handle.try_incoming_block_message(BlockMessage::ConsensusParams(advert)));
+        assert!(matches!(wake_rx.try_recv(), Ok(())));
+    }
+
+    #[test]
     fn incoming_block_message_drops_duplicate_rbc_ready() {
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -2226,6 +2359,104 @@ mod tests {
     }
 
     #[test]
+    fn try_incoming_block_message_waits_when_rbc_ready_queue_full() {
+        const CAP: usize = 1;
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(CAP);
+        let (block_tx, _block_rx) = mpsc::sync_channel(CAP);
+        let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(CAP);
+        let (vote_tx, _vote_rx) = mpsc::sync_channel(CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(CAP);
+        let vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>> = Arc::new(Mutex::new(
+            DedupCache::new(VOTE_DEDUP_CACHE_CAP, VOTE_DEDUP_CACHE_TTL),
+        ));
+        let block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>> =
+            Arc::new(Mutex::new(BlockPayloadDedupCache::new(
+                BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
+                BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
+            )));
+        let block_payload_tx_fill = block_payload_tx.clone();
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        let header = BlockHeader {
+            height: NonZeroU64::new(1).expect("non-zero"),
+            prev_block_hash: None,
+            merkle_root: None,
+            result_merkle_root: None,
+            da_proof_policies_hash: None,
+            da_commitments_hash: None,
+            da_pin_intents_hash: None,
+            creation_time_ms: 0,
+            view_change_index: 0,
+            confidential_features: None,
+        };
+        let key_pair = KeyPair::random();
+        let (_, private_key) = key_pair.into_parts();
+        let signature = SignatureOf::from_hash(&private_key, header.hash());
+        let block = SignedBlock::presigned_with_da(
+            BlockSignature::new(0, signature),
+            header,
+            Vec::new(),
+            None,
+        );
+
+        block_payload_tx_fill
+            .send(BlockMessage::BlockCreated(message::BlockCreated { block }))
+            .expect("fill block payload channel");
+
+        let ready = BlockMessage::RbcReady(crate::sumeragi::consensus::RbcReady {
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([7u8; 32])),
+            height: 2,
+            view: 0,
+            epoch: 0,
+            roster_hash: Hash::prehashed([0x21; 32]),
+            chunk_root: Hash::prehashed([0x31; 32]),
+            sender: 1,
+            signature: vec![0x11],
+        });
+
+        let (done_tx, done_rx) = mpsc::channel();
+        let handle_clone = handle.clone();
+        let join = std::thread::spawn(move || {
+            let accepted = handle_clone.try_incoming_block_message(ready);
+            let _ = done_tx.send(accepted);
+        });
+
+        assert!(
+            done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+            "RbcReady should wait for block payload queue capacity"
+        );
+        let _ = block_payload_rx
+            .recv()
+            .expect("drain block payload queue to unblock sender");
+        let accepted = done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("RbcReady should be enqueued after space is available");
+        assert!(accepted);
+        join.join().expect("join RbcReady sender");
+
+        let received = block_payload_rx
+            .try_recv()
+            .expect("RbcReady should be enqueued after space is freed");
+        assert!(matches!(received, BlockMessage::RbcReady(_)));
+        assert!(matches!(
+            block_payload_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
     fn incoming_block_message_waits_when_rbc_chunk_queue_full() {
         const CAP: usize = 1;
         let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(CAP);
@@ -2611,6 +2842,103 @@ mod tests {
     }
 
     #[derive(Default)]
+    struct RbcPollingActor {
+        poll_calls: usize,
+    }
+
+    impl WorkerActor for RbcPollingActor {
+        fn on_block_message(&mut self, _msg: BlockMessage) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_consensus_control(&mut self, _msg: ControlFlow) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_lane_relay(&mut self, _message: LaneRelayMessage) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_background_request(&mut self, _request: BackgroundRequest) -> Result<()> {
+            Ok(())
+        }
+
+        fn poll_rbc_persist_results(&mut self) -> bool {
+            self.poll_calls = self.poll_calls.saturating_add(1);
+            true
+        }
+
+        fn tick(&mut self) -> bool {
+            false
+        }
+    }
+
+    #[derive(Default)]
+    struct NoTickActor {
+        tick_calls: usize,
+    }
+
+    impl WorkerActor for NoTickActor {
+        fn on_block_message(&mut self, _msg: BlockMessage) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_consensus_control(&mut self, _msg: ControlFlow) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_lane_relay(&mut self, _message: LaneRelayMessage) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_background_request(&mut self, _request: BackgroundRequest) -> Result<()> {
+            Ok(())
+        }
+
+        fn should_tick(&self) -> bool {
+            false
+        }
+
+        fn tick(&mut self) -> bool {
+            self.tick_calls = self.tick_calls.saturating_add(1);
+            true
+        }
+    }
+
+    #[derive(Default)]
+    struct FutureTickActor {
+        delay: Duration,
+        tick_calls: usize,
+    }
+
+    impl WorkerActor for FutureTickActor {
+        fn on_block_message(&mut self, _msg: BlockMessage) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_consensus_control(&mut self, _msg: ControlFlow) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_lane_relay(&mut self, _message: LaneRelayMessage) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_background_request(&mut self, _request: BackgroundRequest) -> Result<()> {
+            Ok(())
+        }
+
+        fn next_tick_deadline(&self, now: Instant) -> Option<Instant> {
+            Some(now + self.delay)
+        }
+
+        fn tick(&mut self) -> bool {
+            self.tick_calls = self.tick_calls.saturating_add(1);
+            true
+        }
+    }
+
+    #[derive(Default)]
     struct RecordingActorWithTick {
         events: Vec<&'static str>,
         tick_calls: usize,
@@ -2833,10 +3161,10 @@ mod tests {
             consensus_rx_drain_max_messages: 16,
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
+            tick_min_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
-            sleep: Duration::from_millis(1),
         };
         let past = Instant::now()
             .checked_sub(Duration::from_secs(1))
@@ -2963,10 +3291,10 @@ mod tests {
             consensus_rx_drain_max_messages: 16,
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
+            tick_min_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
-            sleep: Duration::from_millis(1),
         };
         let past = Instant::now()
             .checked_sub(Duration::from_secs(1))
@@ -2999,6 +3327,140 @@ mod tests {
     }
 
     #[test]
+    fn run_worker_iteration_skips_tick_when_actor_disables_tick() {
+        status::reset_worker_loop_snapshot_for_tests();
+
+        let (_vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_lane_tx, lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+
+        let config = WorkerLoopConfig {
+            time_budget: Duration::from_secs(1),
+            vote_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_max_messages: 16,
+            vote_rx_drain_max_messages: 16,
+            block_rx_drain_budget: Duration::from_secs(1),
+            block_rx_drain_max_messages: 16,
+            rbc_chunk_rx_drain_budget: Duration::from_secs(1),
+            rbc_chunk_rx_drain_max_messages: 16,
+            consensus_rx_drain_max_messages: 16,
+            lane_relay_rx_drain_max_messages: 16,
+            background_rx_drain_max_messages: 16,
+            tick_min_gap: Duration::from_millis(1),
+            tick_max_gap: Duration::from_secs(1),
+            block_rx_starve_max: Duration::from_secs(1),
+            non_vote_starve_max: Duration::from_secs(1),
+        };
+        let past = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        let mut loop_state = WorkerLoopState {
+            last_tick: past,
+            last_served: [past; PRIORITY_TIER_COUNT],
+            mailbox: WorkerMailboxState::new(),
+        };
+        let mut actor = NoTickActor::default();
+
+        let stats = run_worker_iteration(
+            &mut actor,
+            &config,
+            &mut loop_state,
+            &vote_rx,
+            &block_payload_rx,
+            &rbc_chunk_rx,
+            &block_rx,
+            &consensus_rx,
+            &lane_rx,
+            &background_rx,
+        );
+
+        assert_eq!(actor.tick_calls, 0);
+        assert!(!stats.progress);
+    }
+
+    #[test]
+    fn run_worker_iteration_respects_tick_deadline() {
+        status::reset_worker_loop_snapshot_for_tests();
+
+        let (_vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_lane_tx, lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+
+        let config = WorkerLoopConfig {
+            time_budget: Duration::from_secs(1),
+            vote_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_max_messages: 16,
+            vote_rx_drain_max_messages: 16,
+            block_rx_drain_budget: Duration::from_secs(1),
+            block_rx_drain_max_messages: 16,
+            rbc_chunk_rx_drain_budget: Duration::from_secs(1),
+            rbc_chunk_rx_drain_max_messages: 16,
+            consensus_rx_drain_max_messages: 16,
+            lane_relay_rx_drain_max_messages: 16,
+            background_rx_drain_max_messages: 16,
+            tick_min_gap: Duration::from_millis(1),
+            tick_max_gap: Duration::from_secs(1),
+            block_rx_starve_max: Duration::from_secs(1),
+            non_vote_starve_max: Duration::from_secs(1),
+        };
+        let past = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        let mut loop_state = WorkerLoopState {
+            last_tick: past,
+            last_served: [past; PRIORITY_TIER_COUNT],
+            mailbox: WorkerMailboxState::new(),
+        };
+        let mut actor = FutureTickActor {
+            delay: Duration::from_secs(1),
+            ..FutureTickActor::default()
+        };
+
+        let stats = run_worker_iteration(
+            &mut actor,
+            &config,
+            &mut loop_state,
+            &vote_rx,
+            &block_payload_rx,
+            &rbc_chunk_rx,
+            &block_rx,
+            &consensus_rx,
+            &lane_rx,
+            &background_rx,
+        );
+
+        assert_eq!(actor.tick_calls, 0);
+        assert!(!stats.progress);
+
+        actor.delay = Duration::ZERO;
+        let stats = run_worker_iteration(
+            &mut actor,
+            &config,
+            &mut loop_state,
+            &vote_rx,
+            &block_payload_rx,
+            &rbc_chunk_rx,
+            &block_rx,
+            &consensus_rx,
+            &lane_rx,
+            &background_rx,
+        );
+
+        assert_eq!(actor.tick_calls, 1);
+        assert!(stats.progress);
+    }
+
+    #[test]
     fn run_worker_iteration_polls_commit_results() {
         status::reset_worker_loop_snapshot_for_tests();
 
@@ -3023,10 +3485,10 @@ mod tests {
             consensus_rx_drain_max_messages: 16,
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
+            tick_min_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
-            sleep: Duration::from_millis(1),
         };
         let now = Instant::now();
         let mut loop_state = WorkerLoopState {
@@ -3035,6 +3497,61 @@ mod tests {
             mailbox: WorkerMailboxState::new(),
         };
         let mut actor = CommitPollingActor::default();
+
+        let stats = run_worker_iteration(
+            &mut actor,
+            &config,
+            &mut loop_state,
+            &vote_rx,
+            &block_payload_rx,
+            &rbc_chunk_rx,
+            &block_rx,
+            &consensus_rx,
+            &lane_rx,
+            &background_rx,
+        );
+
+        assert_eq!(actor.poll_calls, 1);
+        assert!(stats.progress);
+    }
+
+    #[test]
+    fn run_worker_iteration_polls_rbc_persist_results() {
+        status::reset_worker_loop_snapshot_for_tests();
+
+        let (_vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_lane_tx, lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+
+        let config = WorkerLoopConfig {
+            time_budget: Duration::from_secs(1),
+            vote_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_max_messages: 16,
+            vote_rx_drain_max_messages: 16,
+            block_rx_drain_budget: Duration::from_secs(1),
+            block_rx_drain_max_messages: 16,
+            rbc_chunk_rx_drain_budget: Duration::from_secs(1),
+            rbc_chunk_rx_drain_max_messages: 16,
+            consensus_rx_drain_max_messages: 16,
+            lane_relay_rx_drain_max_messages: 16,
+            background_rx_drain_max_messages: 16,
+            tick_min_gap: Duration::from_millis(1),
+            tick_max_gap: Duration::from_secs(1),
+            block_rx_starve_max: Duration::from_secs(1),
+            non_vote_starve_max: Duration::from_secs(1),
+        };
+        let now = Instant::now();
+        let mut loop_state = WorkerLoopState {
+            last_tick: now,
+            last_served: [now; PRIORITY_TIER_COUNT],
+            mailbox: WorkerMailboxState::new(),
+        };
+        let mut actor = RbcPollingActor::default();
 
         let stats = run_worker_iteration(
             &mut actor,
@@ -3121,10 +3638,10 @@ mod tests {
             consensus_rx_drain_max_messages: 16,
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
+            tick_min_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_millis(50),
             block_rx_starve_max: Duration::from_millis(50),
             non_vote_starve_max: Duration::from_millis(50),
-            sleep: Duration::from_millis(1),
         };
         let past = Instant::now()
             .checked_sub(Duration::from_secs(1))
@@ -3220,10 +3737,10 @@ mod tests {
             consensus_rx_drain_max_messages: 16,
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
+            tick_min_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
-            sleep: Duration::from_millis(1),
         };
         let now = Instant::now();
         let mut loop_state = WorkerLoopState {
@@ -3311,10 +3828,10 @@ mod tests {
             consensus_rx_drain_max_messages: 16,
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
+            tick_min_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
-            sleep: Duration::from_millis(1),
         };
         let past = Instant::now()
             .checked_sub(Duration::from_secs(1))
@@ -3368,10 +3885,10 @@ mod tests {
             consensus_rx_drain_max_messages: 16,
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
+            tick_min_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
-            sleep: Duration::from_millis(1),
         };
         let past = Instant::now()
             .checked_sub(Duration::from_secs(1))
@@ -3553,10 +4070,10 @@ mod tests {
                 consensus_rx_drain_max_messages: 16,
                 lane_relay_rx_drain_max_messages: 16,
                 background_rx_drain_max_messages: 16,
+                tick_min_gap: Duration::from_millis(1),
                 tick_max_gap: Duration::from_secs(1),
                 block_rx_starve_max: Duration::from_secs(1),
                 non_vote_starve_max: Duration::from_secs(1),
-                sleep: Duration::from_millis(1),
             };
             let now = Instant::now();
             let mut loop_state = WorkerLoopState {
@@ -3750,10 +4267,10 @@ mod tests {
             consensus_rx_drain_max_messages: 16,
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
+            tick_min_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
-            sleep: Duration::from_millis(1),
         };
         let past = Instant::now()
             .checked_sub(Duration::from_secs(1))
@@ -3796,6 +4313,7 @@ mod tests {
         let (_consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (_lane_tx, lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_wake_tx, wake_rx) = mpsc::sync_channel::<()>(WORKER_WAKE_CHANNEL_CAP);
         let mut actor = RecordingActor::default();
         let config = WorkerLoopConfig {
             time_budget: Duration::from_secs(1),
@@ -3810,10 +4328,10 @@ mod tests {
             consensus_rx_drain_max_messages: 16,
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
+            tick_min_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
-            sleep: Duration::from_millis(1),
         };
         let now = Instant::now();
         let state = WorkerLoopState {
@@ -3835,6 +4353,7 @@ mod tests {
             consensus_rx,
             lane_rx,
             background_rx,
+            wake_rx,
             shutdown_signal,
         );
 
@@ -4267,6 +4786,7 @@ pub struct SumeragiHandle {
     consensus_control: mpsc::SyncSender<ControlFlow>,
     background: mpsc::SyncSender<BackgroundRequest>,
     lane_relay: mpsc::SyncSender<LaneRelayMessage>,
+    wake: Option<mpsc::SyncSender<()>>,
     vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>>,
     block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>>,
 }
@@ -4300,8 +4820,20 @@ impl SumeragiHandle {
             consensus_control: consensus_control_tx,
             background: background_tx,
             lane_relay: lane_relay_tx,
+            wake: None,
             vote_dedup,
             block_payload_dedup,
+        }
+    }
+
+    fn with_wake(mut self, wake: mpsc::SyncSender<()>) -> Self {
+        self.wake = Some(wake);
+        self
+    }
+
+    fn wake(&self) {
+        if let Some(wake) = self.wake.as_ref() {
+            let _ = wake.try_send(());
         }
     }
 
@@ -4345,12 +4877,21 @@ impl SumeragiHandle {
     /// Enqueue an incoming block message without blocking the caller.
     /// Returns `true` if the message was accepted by the queue.
     ///
-    /// Note: `BlockSyncUpdate` payloads may block under backpressure to avoid dropping
-    /// commit/QC evidence needed for recovery.
+    /// Note: `BlockSyncUpdate`, `RbcReady`, and `RbcDeliver` payloads may block under
+    /// backpressure to avoid dropping commit/QC evidence or RBC quorum signals needed
+    /// for recovery.
     pub fn try_incoming_block_message(&self, msg: BlockMessage) -> bool {
         match msg {
             BlockMessage::BlockSyncUpdate(update) => self.incoming_block_message_with_mode(
                 BlockMessage::BlockSyncUpdate(update),
+                IngressMode::Blocking,
+            ),
+            BlockMessage::RbcReady(ready) => self.incoming_block_message_with_mode(
+                BlockMessage::RbcReady(ready),
+                IngressMode::Blocking,
+            ),
+            BlockMessage::RbcDeliver(deliver) => self.incoming_block_message_with_mode(
+                BlockMessage::RbcDeliver(deliver),
                 IngressMode::Blocking,
             ),
             other => self.incoming_block_message_with_mode(other, IngressMode::NonBlocking),
@@ -4428,12 +4969,14 @@ impl SumeragiHandle {
                 }
             }
         };
+        let wake = || self.wake();
         let enqueue_blocking =
             |tx: &mpsc::SyncSender<BlockMessage>,
              msg: BlockMessage,
              kind: &'static str,
              queue: status::WorkerQueueKind| match mode {
                 IngressMode::Blocking => {
+                    wake();
                     let start = Instant::now();
                     match tx.send(msg) {
                         Ok(()) => {
@@ -4451,6 +4994,7 @@ impl SumeragiHandle {
                 IngressMode::NonBlocking => match tx.try_send(msg) {
                     Ok(()) => {
                         status::record_worker_queue_enqueue(queue);
+                        wake();
                         true
                     }
                     Err(mpsc::TrySendError::Full(msg)) => {
@@ -4674,6 +5218,7 @@ impl SumeragiHandle {
     ) -> bool {
         match mode {
             IngressMode::Blocking => {
+                self.wake();
                 let start = Instant::now();
                 match self.consensus_control.send(msg) {
                     Ok(()) => {
@@ -4697,6 +5242,7 @@ impl SumeragiHandle {
             IngressMode::NonBlocking => match self.consensus_control.try_send(msg) {
                 Ok(()) => {
                     status::record_worker_queue_enqueue(status::WorkerQueueKind::Consensus);
+                    self.wake();
                     true
                 }
                 Err(mpsc::TrySendError::Full(_msg)) => {
@@ -4731,6 +5277,7 @@ impl SumeragiHandle {
     ) -> bool {
         match mode {
             IngressMode::Blocking => {
+                self.wake();
                 let start = Instant::now();
                 match self.lane_relay.send(LaneRelayMessage::Envelope(envelope)) {
                     Ok(()) => {
@@ -4754,6 +5301,7 @@ impl SumeragiHandle {
             {
                 Ok(()) => {
                     status::record_worker_queue_enqueue(status::WorkerQueueKind::LaneRelay);
+                    self.wake();
                     true
                 }
                 Err(mpsc::TrySendError::Full(_msg)) => {
@@ -4788,6 +5336,7 @@ impl SumeragiHandle {
     ) -> bool {
         match mode {
             IngressMode::Blocking => {
+                self.wake();
                 let start = Instant::now();
                 match self
                     .lane_relay
@@ -4814,6 +5363,7 @@ impl SumeragiHandle {
             {
                 Ok(()) => {
                     status::record_worker_queue_enqueue(status::WorkerQueueKind::LaneRelay);
+                    self.wake();
                     true
                 }
                 Err(mpsc::TrySendError::Full(_msg)) => {
@@ -4832,6 +5382,7 @@ impl SumeragiHandle {
 
     /// Schedule a high-priority consensus message to be posted to a specific peer.
     pub fn post_to_peer(&self, peer: PeerId, msg: BlockMessage) {
+        self.wake();
         let start = Instant::now();
         match self.background.send(BackgroundRequest::Post { peer, msg }) {
             Ok(()) => {
@@ -4850,6 +5401,7 @@ impl SumeragiHandle {
 
     /// Schedule a consensus broadcast to all peers.
     pub fn broadcast(&self, msg: BlockMessage) {
+        self.wake();
         let start = Instant::now();
         match self.background.send(BackgroundRequest::Broadcast { msg }) {
             Ok(()) => {
@@ -4868,6 +5420,7 @@ impl SumeragiHandle {
 
     /// Schedule a control-flow broadcast to all peers.
     pub fn broadcast_control_flow(&self, frame: ControlFlow) {
+        self.wake();
         let start = Instant::now();
         match self
             .background
@@ -4994,6 +5547,8 @@ impl SumeragiStartArgs {
         let (consensus_tx, consensus_rx) = mpsc::sync_channel(control_msg_channel_cap);
         let (background_tx, background_rx) = mpsc::sync_channel(control_msg_channel_cap);
         let (lane_relay_tx, lane_relay_rx) = mpsc::sync_channel(control_msg_channel_cap);
+        let (wake_tx, wake_rx) = mpsc::sync_channel(WORKER_WAKE_CHANNEL_CAP);
+        queue.set_sumeragi_wake(wake_tx.clone());
         let vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>> = Arc::new(Mutex::new(
             DedupCache::new(VOTE_DEDUP_CACHE_CAP, VOTE_DEDUP_CACHE_TTL),
         ));
@@ -5013,7 +5568,8 @@ impl SumeragiStartArgs {
             lane_relay_tx,
             Arc::clone(&vote_dedup),
             Arc::clone(&block_payload_dedup),
-        );
+        )
+        .with_wake(wake_tx.clone());
 
         let rbc_status_handle = rbc_status::register_handle();
         rbc_status::set_active(&rbc_status_handle);
@@ -5045,6 +5601,8 @@ impl SumeragiStartArgs {
             rbc_chunk_rx,
             consensus_rx,
             background_rx,
+            wake_tx,
+            wake_rx,
             shutdown_signal,
             rbc_status_handle,
         };
@@ -5090,6 +5648,8 @@ struct SumeragiWorker {
     rbc_chunk_rx: mpsc::Receiver<BlockMessage>,
     consensus_rx: mpsc::Receiver<ControlFlow>,
     background_rx: mpsc::Receiver<BackgroundRequest>,
+    wake_tx: mpsc::SyncSender<()>,
+    wake_rx: mpsc::Receiver<()>,
     shutdown_signal: ShutdownSignal,
     rbc_status_handle: rbc_status::Handle,
 }
@@ -5104,6 +5664,7 @@ fn should_run_tick(
     rbc_chunk_rx_budget_exhausted: bool,
     block_rx_budget_exhausted: bool,
     queue_depths: status::WorkerQueueDepthSnapshot,
+    min_tick_gap: Duration,
     max_tick_gap: Duration,
 ) -> bool {
     let queues_saturated = vote_rx_budget_exhausted
@@ -5118,9 +5679,22 @@ fn should_run_tick(
         || queue_depths.lane_relay_rx > 0
         || queue_depths.background_rx > 0;
     if !queues_saturated && !queues_pending {
-        return true;
+        return now.saturating_duration_since(last_tick) >= min_tick_gap;
     }
     now.saturating_duration_since(last_tick) >= max_tick_gap
+}
+
+fn idle_wait_duration(
+    now: Instant,
+    last_tick: Instant,
+    min_tick_gap: Duration,
+) -> Option<Duration> {
+    let elapsed = now.saturating_duration_since(last_tick);
+    if elapsed >= min_tick_gap {
+        None
+    } else {
+        Some(min_tick_gap.saturating_sub(elapsed))
+    }
 }
 
 fn resolve_sumeragi_timeouts(
@@ -5182,9 +5756,22 @@ fn vote_rx_drain_budget(
 
 const TIME_BUDGET_FLOOR_MS: u64 = 200;
 const TIME_BUDGET_CAP_MS: u64 = 2_000;
+const IDLE_TICK_GAP_FLOOR_MS: u64 = 50;
+const IDLE_SHUTDOWN_POLL_MS: u64 = 1_000;
 const DRAIN_BUDGET_CAP_MS: u64 = 500;
 const VOTE_DRAIN_BUDGET_CAP_MS: u64 = 2_000;
 const RBC_DRAIN_BUDGET_CAP_MS: u64 = 2_000;
+
+fn idle_tick_gap(block_time: Duration, commit_time: Duration, max_tick_gap: Duration) -> Duration {
+    let base = block_time.min(commit_time);
+    let raw = if base == Duration::ZERO {
+        max_tick_gap
+    } else {
+        base / 4
+    };
+    raw.max(Duration::from_millis(IDLE_TICK_GAP_FLOOR_MS))
+        .min(max_tick_gap)
+}
 
 fn cap_drain_budget(raw: Duration, floor: Duration) -> Duration {
     raw.min(Duration::from_millis(DRAIN_BUDGET_CAP_MS))
@@ -5209,6 +5796,15 @@ trait WorkerActor {
     fn poll_commit_results(&mut self) -> bool {
         false
     }
+    fn poll_rbc_persist_results(&mut self) -> bool {
+        false
+    }
+    fn should_tick(&self) -> bool {
+        true
+    }
+    fn next_tick_deadline(&self, now: Instant) -> Option<Instant> {
+        self.should_tick().then_some(now)
+    }
     fn tick(&mut self) -> bool;
 }
 
@@ -5231,6 +5827,18 @@ impl WorkerActor for crate::sumeragi::main_loop::Actor {
 
     fn poll_commit_results(&mut self) -> bool {
         crate::sumeragi::main_loop::Actor::poll_commit_results(self)
+    }
+
+    fn poll_rbc_persist_results(&mut self) -> bool {
+        crate::sumeragi::main_loop::Actor::poll_rbc_persist_results_inner(self)
+    }
+
+    fn should_tick(&self) -> bool {
+        crate::sumeragi::main_loop::Actor::should_tick(self)
+    }
+
+    fn next_tick_deadline(&self, now: Instant) -> Option<Instant> {
+        crate::sumeragi::main_loop::Actor::next_tick_deadline(self, now)
     }
 
     fn tick(&mut self) -> bool {
@@ -5469,10 +6077,10 @@ struct WorkerLoopConfig {
     consensus_rx_drain_max_messages: usize,
     lane_relay_rx_drain_max_messages: usize,
     background_rx_drain_max_messages: usize,
+    tick_min_gap: Duration,
     tick_max_gap: Duration,
     block_rx_starve_max: Duration,
     non_vote_starve_max: Duration,
-    sleep: Duration,
 }
 
 #[derive(Debug)]
@@ -5677,6 +6285,9 @@ fn run_worker_iteration<A: WorkerActor>(
     if actor.poll_commit_results() {
         stats.progress = true;
     }
+    if actor.poll_rbc_persist_results() {
+        stats.progress = true;
+    }
 
     let pre_tick_depths = status::worker_queue_depth_snapshot();
     stats.vote_rx_budget_exhausted =
@@ -5689,16 +6300,21 @@ fn run_worker_iteration<A: WorkerActor>(
         budgets.remaining(PriorityTier::Blocks) == 0 && pre_tick_depths.block_rx > 0;
 
     let tick_now = Instant::now();
-    if should_run_tick(
-        tick_now,
-        *last_tick,
-        stats.vote_rx_budget_exhausted,
-        stats.block_payload_rx_budget_exhausted,
-        stats.rbc_chunk_rx_budget_exhausted,
-        stats.block_rx_budget_exhausted,
-        pre_tick_depths,
-        cfg.tick_max_gap,
-    ) {
+    let tick_deadline = actor.next_tick_deadline(tick_now);
+    let tick_due = tick_deadline.is_some_and(|deadline| deadline <= tick_now);
+    if tick_due
+        && should_run_tick(
+            tick_now,
+            *last_tick,
+            stats.vote_rx_budget_exhausted,
+            stats.block_payload_rx_budget_exhausted,
+            stats.rbc_chunk_rx_budget_exhausted,
+            stats.block_rx_budget_exhausted,
+            pre_tick_depths,
+            cfg.tick_min_gap,
+            cfg.tick_max_gap,
+        )
+    {
         status::set_worker_stage(status::WorkerLoopStage::Tick);
         let tick_start = Instant::now();
         stats.progress |= actor.tick();
@@ -5800,6 +6416,7 @@ fn run_worker_loop<A: WorkerActor>(
     consensus_rx: mpsc::Receiver<ControlFlow>,
     lane_relay_rx: mpsc::Receiver<LaneRelayMessage>,
     background_rx: mpsc::Receiver<BackgroundRequest>,
+    wake_rx: mpsc::Receiver<()>,
     shutdown_signal: ShutdownSignal,
 ) {
     iroha_logger::debug!(
@@ -5808,6 +6425,7 @@ fn run_worker_loop<A: WorkerActor>(
         block_payload_rx_drain_budget = ?cfg.block_payload_rx_drain_budget,
         rbc_chunk_rx_drain_budget = ?cfg.rbc_chunk_rx_drain_budget,
         block_rx_drain_budget = ?cfg.block_rx_drain_budget,
+        tick_min_gap = ?cfg.tick_min_gap,
         "sumeragi worker drain budgets"
     );
     loop {
@@ -5836,7 +6454,35 @@ fn run_worker_loop<A: WorkerActor>(
             && !stats.vote_rx_budget_exhausted
         {
             status::set_worker_stage(status::WorkerLoopStage::Idle);
-            std::thread::sleep(cfg.sleep);
+            let now = Instant::now();
+            let tick_deadline = actor.next_tick_deadline(now);
+            let wait = match tick_deadline {
+                None => Some(Duration::from_millis(IDLE_SHUTDOWN_POLL_MS)),
+                Some(deadline) => {
+                    let due_wait = deadline.saturating_duration_since(now);
+                    let min_gap_wait =
+                        idle_wait_duration(now, loop_state.last_tick, cfg.tick_min_gap);
+                    let mut wait = match min_gap_wait {
+                        Some(min_gap) => min_gap.max(due_wait),
+                        None => due_wait,
+                    };
+                    if wait.is_zero() {
+                        None
+                    } else {
+                        let shutdown_poll = Duration::from_millis(IDLE_SHUTDOWN_POLL_MS);
+                        if wait > shutdown_poll {
+                            wait = shutdown_poll;
+                        }
+                        Some(wait)
+                    }
+                }
+            };
+            if let Some(wait) = wait {
+                match wake_rx.recv_timeout(wait) {
+                    Ok(()) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => std::thread::sleep(wait),
+                }
+            }
         }
 
         let iter_elapsed = iter_start.elapsed();
@@ -5885,6 +6531,8 @@ impl SumeragiWorker {
             consensus_rx,
             lane_relay_rx,
             background_rx,
+            wake_tx,
+            wake_rx,
             shutdown_signal,
             rbc_status_handle,
             consensus_frame_cap,
@@ -5959,6 +6607,7 @@ impl SumeragiWorker {
             epoch_roster_provider,
             rbc_store,
             background_post_tx,
+            Some(wake_tx.clone()),
             rbc_status_handle,
         ) {
             Ok(actor) => Box::new(actor),
@@ -5982,6 +6631,7 @@ impl SumeragiWorker {
         let rbc_chunk_drain_budget = cap_rbc_drain_budget(block_time / 2, time_budget);
         let block_rx_drain_budget = cap_drain_budget(block_time / 4, time_budget);
         let starve_max = block_time.max(commit_time).max(time_budget);
+        let tick_min_gap = idle_tick_gap(block_time, commit_time, time_budget);
         let loop_config = WorkerLoopConfig {
             time_budget,
             vote_rx_drain_budget,
@@ -5995,10 +6645,10 @@ impl SumeragiWorker {
             consensus_rx_drain_max_messages: control_msg_channel_cap.max(1),
             lane_relay_rx_drain_max_messages: control_msg_channel_cap.max(1),
             background_rx_drain_max_messages: control_msg_channel_cap.max(1),
+            tick_min_gap,
             tick_max_gap: time_budget,
             block_rx_starve_max: starve_max,
             non_vote_starve_max: starve_max,
-            sleep: Duration::from_millis(25),
         };
         let now = Instant::now();
         let loop_state = WorkerLoopState {
@@ -6019,6 +6669,7 @@ impl SumeragiWorker {
             consensus_rx,
             lane_relay_rx,
             background_rx,
+            wake_rx,
             shutdown_signal,
         );
         drop(actor);

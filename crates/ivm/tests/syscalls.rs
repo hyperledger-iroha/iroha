@@ -1,5 +1,5 @@
 use iroha_crypto::{Hash, HashOf, MerkleProof};
-use ivm::{IVM, VMError, encoding, instruction, syscalls};
+use ivm::{IVM, PointerType, VMError, encoding, instruction, syscalls};
 mod common;
 use common::assemble;
 
@@ -13,25 +13,25 @@ fn assemble_syscall(syscall: u8) -> Vec<u8> {
     assemble(&code)
 }
 
+fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(7 + payload.len() + 32);
+    out.extend_from_slice(&type_id.to_be_bytes());
+    out.push(1);
+    out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    out.extend_from_slice(payload);
+    let h: [u8; 32] = Hash::new(payload).into();
+    out.extend_from_slice(&h);
+    out
+}
+
 #[test]
-fn test_syscall_propagation() {
+fn debug_print_is_handled_by_default_host() {
     let mut vm = IVM::new(u64::MAX);
     // Program: SCALL 0x00; HALT
     let prog = assemble_syscall(syscalls::SYSCALL_DEBUG_PRINT as u8);
     vm.load_program(&prog).unwrap();
-    // By default, DefaultHost returns UnknownSyscall for any call.
     let result = vm.run();
-    assert!(
-        matches!(result, Err(VMError::UnknownSyscall(_))),
-        "Expected UnknownSyscall error"
-    );
-    if let Err(VMError::UnknownSyscall(num)) = result {
-        assert_eq!(
-            num,
-            syscalls::SYSCALL_DEBUG_PRINT,
-            "Syscall number should propagate"
-        );
-    }
+    assert!(result.is_ok(), "debug_print should be handled");
 }
 
 #[test]
@@ -53,6 +53,46 @@ fn syscall_policy_gating_allows_known_and_rejects_unknown_v1() {
     vm2.load_program(&bad).unwrap();
     let res = vm2.run();
     assert!(matches!(res, Err(VMError::UnknownSyscall(0xAB))));
+}
+
+#[test]
+fn syscall_exit_halts_execution() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_register(10, 5);
+    let mut code = Vec::new();
+    let exit_sys = encoding::wide::encode_sys(
+        instruction::wide::system::SCALL,
+        syscalls::SYSCALL_EXIT as u8,
+    );
+    code.extend_from_slice(&exit_sys.to_le_bytes());
+    let addi = encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 10, 0, 9);
+    code.extend_from_slice(&addi.to_le_bytes());
+    code.extend_from_slice(&HALT);
+    let prog = assemble(&code);
+    vm.load_program(&prog).unwrap();
+    vm.run().expect("exit syscall should halt");
+    assert_eq!(vm.register(10), 5);
+}
+
+#[test]
+fn syscall_abort_marks_failure() {
+    let mut vm = IVM::new(u64::MAX);
+    let prog = assemble_syscall(syscalls::SYSCALL_ABORT as u8);
+    vm.load_program(&prog).unwrap();
+    let result = vm.run();
+    assert!(matches!(result, Err(VMError::AssertionFailed)));
+}
+
+#[test]
+fn debug_log_accepts_json_tlv() {
+    let mut vm = IVM::new(u64::MAX);
+    let payload = br#"{"msg":"hello"}"#;
+    let tlv = make_tlv(PointerType::Json as u16, payload);
+    let ptr = vm.alloc_input_tlv(&tlv).expect("alloc tlv");
+    vm.set_register(10, ptr);
+    let prog = assemble_syscall(syscalls::SYSCALL_DEBUG_LOG as u8);
+    vm.load_program(&prog).unwrap();
+    vm.run().expect("debug log should succeed");
 }
 
 struct AddHost;

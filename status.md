@@ -1,11 +1,124 @@
 # Status
 
 ## Latest Updates
+- Tests: `IROHA_PYTHON_CONNECT_STUB=1 PYTHONPATH=python python3 -m pytest python/iroha_python/tests -q` (failed: `ToriiClient` missing `governance_submit_zk_ballot*` methods; 12 failures).
+- Tests: `PYTHONPATH=python python3 -m pytest python/iroha_torii_client/tests -q` (failed: `get_explorer_account_qr` and `get_sumeragi_bls_keys` parsing; 2 failures).
+- Tests: `npm run test:js` (pass; 891 passed, 256 skipped due to native binding disabled).
+- Tests: `cargo test -p iroha_core --lib commit_worker_wakes_on_result -- --nocapture` (pass).
+- Tests: `cargo test -p iroha_core --lib rbc_persist_worker_wakes_on_result -- --nocapture` (pass).
+- Sumeragi/localnet: add unit coverage confirming commit/RBC persist workers wake the main loop on result delivery.
+- Triggers/tests: import `TRIGGER_ENABLED_METADATA_KEY` for trigger-set unit coverage to fix the `iroha_core` test build.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_core --lib rbc_persist_worker_persists_full_session -- --nocapture` (pass).
+- Sumeragi/localnet: align tick deadlines to pending-block timeouts/retention, RBC rebroadcast/TTL, and idle view-change windows; wake the worker on commit/RBC persist results; add RBC stale-due helper + unit coverage; update `docs/source/sumeragi.md`.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Tests: `cargo test --workspace` (timed out after 1200s while running tests; warning about unused trigger metadata constants in `crates/iroha_core/src/smartcontracts/isi/triggers/mod.rs`).
+- Sumeragi/localnet: ensure RBC persist polling uses the Actor inner helper (avoiding the recursive WorkerActor call) and register test sessions in actor state before awaiting persist completion to match runtime behavior.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_core rbc_persist_worker_persists_full_session -- --nocapture` (failed: missing `TRIGGER_ENABLED_METADATA_KEY` import in `crates/iroha_core/src/smartcontracts/isi/triggers/set.rs`).
+- Mochi UI: reset test-only CLI overrides from env, and start the mock Torii server after supervisor build to avoid port-allocator skips during lane reset readiness.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Tests: `CARGO_TARGET_DIR=target/codex-mochi cargo test -p mochi-ui-egui` (pass).
+- Tests: `CARGO_TARGET_DIR=target/codex-full cargo test --workspace` (timed out after 1200s during compilation).
+- Roadmap: add IVM syscall completion backlog covering the remaining ABI v1 syscalls in the production CoreHost.
+- IVM/triggers: implement create/remove/set-enabled syscalls in CoreHost, gate trigger execution on `__enabled` metadata, and update docs/unit coverage.
+- P2P/localnet: demote per-frame block-sync/consensus/tx-gossip delivery logs to debug to cut IO overhead during high-throughput runs.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Tests: `IROHA_TEST_NETWORK_PARALLELISM=5 cargo test -p integration_tests --test sumeragi_localnet_smoke permissioned_localnet_soak_thousands -- --nocapture --ignored` (failed: submit queue did not drain below 200 within 180s; min_non_empty=87; status polls timed out for `foremost_dobsonfly`).
+- CLI: add subscription request/params helper builders with unit coverage; document subscription CLI usage in `docs/source/subscriptions_api.md`; clarify OpenAPI subscription list description.
+- Tests: not run (not requested).
+- Localnet/P2P: propagate configured subscriber queue caps to the network relay, genesis bootstrap, and Torii Connect subscriptions; expose the cap on the P2P handle and switch relay ingress to non-blocking Sumeragi enqueue calls to reduce backpressure under load.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Tests: `cargo test -p iroha_p2p closed_handle_reports_subscriber_queue_cap -- --nocapture` (pass).
+- Tests: `cargo test -p irohad genesis_bootstrap -- --nocapture` (pass).
+- Sumeragi/localnet: align tick scheduling with per-task deadlines (missing-block retry/view-change windows and commit inflight timeouts) so idle workers sleep until the next due action; add unit coverage for deadline gating.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Tests: `cargo test -p iroha_core --lib run_worker_iteration_respects_tick_deadline -- --nocapture` (pass).
+- Tests: `cargo test -p iroha_core --lib actor_next_tick_deadline_tracks_missing_block_windows -- --nocapture` (pass).
+- Tests: `CARGO_TARGET_DIR=target/codex-vote-roster cargo test --workspace` (timed out after 600s; warnings about unused `base64::Engine` imports in `crates/iroha_cli/src/contracts.rs`, unused assignment in `integration_tests/tests/asset.rs`, and unused `MissingQc` variant in `mochi/mochi-ui-egui/src/main.rs`).
+- P2P/tests: populate `p2p_subscriber_queue_cap` in network config fixtures to fix missing-field build errors.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Tests: `CARGO_TARGET_DIR=target/codex-vote-roster cargo test --workspace` (timed out after 300s; warnings about unused `base64::Engine` imports in `crates/iroha_cli/src/contracts.rs` and unused assignment in `integration_tests/tests/asset.rs`).
+- Sumeragi/localnet: suppress ticks when consensus is fully idle; queue enqueues now wake the worker so proposals start immediately on new transactions.
+- Docs: note idle tick suppression + queue wake behavior in `docs/source/sumeragi.md`.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Tests: `cargo test -p iroha_core --lib run_worker_iteration_skips_tick_when_actor_disables_tick -- --nocapture` (pass).
+- Tests: `cargo test -p iroha_core --lib actor_should_tick_tracks_missing_block_requests -- --nocapture` (pass).
+- Tests: `cargo test -p iroha_core --lib push_wakes_sumeragi_when_configured -- --nocapture` (pass).
+- Sumeragi/localnet: track height/view in cached vote rosters and prune the roster cache alongside vote/QC/deferred windows to prevent unbounded growth.
+- Docs: note bounded vote/QC/roster cache pruning in `docs/source/sumeragi.md`.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Sumeragi/localnet: bound vote/QC/deferred caches with height/view windows to prevent unbounded growth across view-change storms; prune on vote receipt, view change, and commit, with coverage for view/height pruning.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Tests: `CARGO_TARGET_DIR=target/codex-vote cargo test -p iroha_core --lib vote_log_prunes_far_future -- --nocapture` (timed out after 120s during compilation).
+- Sumeragi/localnet: avoid StateView guard contention in block-sync roster selection and consensus context by using world/commit-topology views; add world-based consensus-mode and active-topology helpers plus cache refresh path coverage.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Tests: `CARGO_TARGET_DIR=target/codex-roster cargo test -p iroha_core --lib from_world_matches_view -- --nocapture` (timed out after 120s during compilation).
+- Tests: `CARGO_TARGET_DIR=target/codex-proposals cargo test -p iroha_core --lib proposals_seen_prunes_far_future_views_for_active_height -- --nocapture` (timed out after 120s during compilation).
+- Sumeragi/localnet: add a worker wake channel so idle loops block until new work or the next tick deadline (removing fixed polling) while keeping tick cadence intact; add wake + idle-wait unit coverage.
+- Docs: note the worker wake channel in the Sumeragi commit rules.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Tests: `cargo test -p iroha_core --lib idle_wait_duration_tracks_min_gap -- --nocapture` (pass; warning: method `refresh_from_view` is never used in `crates/iroha_core/src/sumeragi/main_loop.rs`).
+- Tests: `cargo test -p iroha_core --lib try_incoming_block_message_wakes_worker_on_accept -- --nocapture` (pass; same warning).
+- Sumeragi/localnet: cap `proposals_seen` to a bounded height window around the active round, prune far-future entries on insert/commit, and add coverage for the horizon pruning behavior.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Tests: `CARGO_TARGET_DIR=target/codex-proposals cargo test -p iroha_core --lib proposals_seen_prunes_far_future_heights -- --nocapture` (timed out after 120s during compilation).
+- Sumeragi/localnet: throttle idle worker-loop ticks using a block/commit-derived minimum gap to cut idle CPU churn while preserving max-gap liveness; add unit coverage.
+- Docs: note idle tick throttling in the Sumeragi commit rules.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Tests: `cargo test --workspace` (timed out after 1200s during tests; warnings: unused `MissingQc` variant in `mochi/mochi-ui-egui/src/main.rs`, unused `base64::Engine` import in `crates/iroha_cli/src/contracts.rs`, unused assignment in `integration_tests/tests/asset.rs`).
+- Sumeragi/localnet: allow reschedule pruning to evict aborted pending payloads even when no active pending blocks remain; add reschedule coverage for the aborted-only retention window.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Tests: `cargo test -p iroha_core --lib reschedule_stale_pending_blocks_ -- --nocapture` (timed out waiting for build lock on the target dir).
+- Tests: `CARGO_TARGET_DIR=target/codex-reschedule cargo test -p iroha_core --lib reschedule_stale_pending_blocks_ -- --nocapture` (timed out after 120s during compilation).
+- Swift SDK: add subscription usage example to `IrohaSwift/README.md`.
+- Tests: not run (not requested).
+- JS SDK: document subscription plan/subscription usage in `javascript/iroha_js/README.md`.
+- Tests: not run (not requested).
+- Python SDK: re-export subscription plan/subscription models and document subscription usage in `python/iroha_python/README.md`.
+- Tests: not run (not requested).
+- Sumeragi/localnet: apply the aborted pending-payload retention window even above the committed tip to avoid unbounded growth, narrow StateView scope in block-sync roster selection by removing unused NPoS PRF seed derivation, and refresh reschedule coverage for bounded retention above tip.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Tests: `cargo test -p iroha_core --lib reschedule_stale_pending_blocks_ -- --nocapture` (pass).
+- Python Torii client: add subscription plan/subscription helpers, typed list/result models, and request validation for actions + usage.
+- Tests: `python3 -m pytest python/iroha_torii_client/tests/test_client.py` (failed: `pytest` module not available).
+- Swift SDK: add subscription plan/subscription Torii client methods, request/response models, list params, and action helpers.
+- Tests: `swift test` (pass).
+- JS SDK: add subscription plan/subscription Torii client methods, request/response normalization, list filters, and action helpers.
+- Tests: `node --test javascript/iroha_js/test/toriiSubscriptions.test.js` (pass; native binding missing warning).
+- IVM/queries: add CoreHost syscall coverage to ensure `QueryRequest::Continue` is rejected at execution time.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Tests: `cargo test -p iroha_core --lib execute_query_syscall_rejects_continue_request -- --nocapture` (pass).
+- IVM/queries: reject `QueryRequest::Continue` during IVM validation to enforce ephemeral cursor mode; add unit coverage.
+- Docs: add SMARTCONTRACT_EXECUTE_QUERY gas notes to the syscall table.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Tests: `cargo test -p iroha_core --lib validate_for_ivm_rejects_continue -- --nocapture` (pass).
+- Subscriptions: scope Torii subscription create/pause/resume/cancel/charge-now state reads to avoid holding `StateView` across async calls, keeping axum handlers `Send`.
+- Tests: `CARGO_TARGET_DIR=target/subscription-tests cargo test -p iroha_torii subscription_api_tests -- --nocapture` (timed out after 420s while running filtered integration test bins; `subscription_api_tests` passed with 18 tests).
+- Block sync: size the block-sync inbox using gossip fanout, throttle repeated unknown-prev-hash responses, clear unknown-prev cache on height regression, and add unit coverage for queue caps + unknown-prev gating.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Tests: `cargo test -p iroha_core block_sync_channel_cap_scales_with_gossip_size -- --nocapture` (pass).
+- Tests: `cargo test -p iroha_core should_share_unknown_prev_hash_tracks_peer_and_height -- --nocapture` (pass).
+- Tests: `IROHA_TEST_NETWORK_PARALLELISM=5 IROHA_SOAK_TARGET_BLOCKS=200 cargo test -p integration_tests --test sumeragi_localnet_smoke permissioned_localnet_soak_thousands -- --nocapture` (failed to compile `iroha_torii`: Handler trait errors in `crates/iroha_torii/src/lib.rs`).
+- Subscriptions: add unit coverage for Torii subscription POST handlers (plan create, create, pause/resume/cancel/charge-now/usage).
+- Docs: align subscription endpoint path parameters with Torii routes.
+- OpenAPI: document subscription list query parameters (provider/owned_by/status/limit/offset).
+- Block sync: validate ShareBlocks batches with per-entry StateView snapshots to shorten lock holds under load.
+- Localnet soak: tighten submit batching/queue limits, add `IROHA_SOAK_SUBMIT_BATCH` and `IROHA_SOAK_QUEUE_SOFT_LIMIT` overrides, and cover env parsing in unit tests.
+- Tests: `cargo test -p integration_tests --test sumeragi_localnet_smoke env_or_default -- --nocapture` (pass).
+- Tests: `cargo test -p iroha_core filter_blocks_drops_blocks_without_quorum_or_qc -- --nocapture` (timed out after 300s while iterating other bins; target test passed).
+- Tests: `IROHA_TEST_NETWORK_PARALLELISM=5 IROHA_SOAK_TARGET_BLOCKS=200 cargo test -p integration_tests --test sumeragi_localnet_smoke permissioned_localnet_soak_thousands -- --ignored --nocapture` (timed out after 900s while still progressing; min_non_empty=42/201).
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Sumeragi/localnet: keep consensus caches on order-only commit-topology rotations, and add coverage for NEW_VIEW/forced-view preservation plus pending-block retention across order-only commits.
+- Localnet soak: queue drain waits now track progress instead of fixed deadlines, and the soak target blocks can be overridden via `IROHA_SOAK_TARGET_BLOCKS` for shorter local runs.
+- Tests: `cargo test -p iroha_core commit_topology_change_preserves_state_on_reorder -- --nocapture` (pass); `cargo test -p iroha_core on_block_commit_keeps_pending_on_order_only_topology_change -- --nocapture` (pass; warning about unused `query_total_items`).
+- Tests: `IROHA_TEST_NETWORK_PARALLELISM=5 IROHA_SOAK_TARGET_BLOCKS=100 cargo test -p integration_tests --test sumeragi_localnet_smoke permissioned_localnet_soak_thousands -- --ignored --nocapture` (timed out after 900s while still progressing; min_non_empty=42/101; warning about unused `query_total_items`).
 - Subscriptions: biller now suspends at `failure_count >= max_failures`, records failed invoices, adds retry/suspension unit coverage, and ships Kotodama wrapper samples for billing/usage triggers.
 - IVM: add subscription syscalls to the ABI golden list and regenerate syscall docs/gas assets from `syscalls.toml`.
 - Docs: align the subscription API design with invoice metadata stored on the subscription NFT.
+- Subscriptions: add 4-peer integration coverage for arrears usage billing, fixed advance billing, and retry/grace failure flows (`integration_tests/tests/subscriptions.rs`).
+- Subscriptions: implement Torii app API endpoints for plan/subscription creation, listing, pause/resume/cancel, usage, and charge-now; document payload defaults and trigger derivation.
 - Tooling: `CARGO_TARGET_DIR=target/codex-syscall-doc cargo run -p ivm --bin gen_syscalls_doc --locked -- --write` (pass; warnings about prose gas tokens missing in generated assets).
-- Tests: not run (not requested).
+- Tests: `cargo test -p integration_tests --test subscriptions -- --nocapture` (timed out after 120s; compilation finished and tests were still running).
 - Sumeragi/localnet: keep aborted inflight payloads in pending storage with bounded retention for late commit-QC block sync, prune `proposals_seen` on view changes and commit height advances, and preserve `proposals_seen` when commit topology order changes without membership changes; add roster-validation caching to avoid holding StateView locks during block-sync roster selection.
 - Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
 - Tests: `cargo test --workspace` (timed out after 120s during compilation; warnings in `crates/ivm/src/schema_registry.rs` about unused imports and dead code).
@@ -2037,6 +2150,9 @@
 - Tests: `cargo test -p integration_tests trigger_completion_failure_reports_error -- --nocapture` (timed out after 600s; compile finished; test `events::notification::trigger_completion_failure_reports_error` still running).
 - Sumeragi NEW_VIEW quorum selection now filters senders against the active roster (only counts local if it is in-roster), with coverage for non-roster senders.
 - Sumeragi now rejects NEW_VIEW votes with mismatched highest QC hashes/heights before recording, with regressions for invalid highest fields.
+- Added Android subscription Torii client/models, wired ClientConfig/HttpClientTransport helpers, documented subscription usage in the Android README, added SubscriptionToriiClient tests (wired into the Gradle harness), validated usage delta literals, and covered non-2xx error propagation. Tests: `./java/iroha_android/gradlew -p java/iroha_android :core:test -Dandroid.test.mains=org.hyperledger.iroha.android.client.SubscriptionToriiClientTests`, `./java/iroha_android/gradlew -p java/iroha_android :core:test`.
+- Sumeragi block-sync now records commit votes for known blocks without roster hints; proposals_seen pruning aligns with view changes; active-topology fallback test now matches sorted world-peer order; QC status tests are guarded to avoid cross-test interference; subscription trigger test setup now uses trigger blocks/transactions with explicit commit.
+- Tests: `cargo test -p iroha_core --lib sumeragi::main_loop::tests` (timed out after 600s; earlier failures fixed); targeted runs: `cargo test -p iroha_core --lib sumeragi::main_loop::tests::{block_sync_update_known_block_records_commit_votes_without_roster_hint,commit_inflight_timeout_triggers_view_change_and_retains_aborted_pending,active_topology_falls_back_to_world_peers,block_created_updates_locked_status_when_lock_missing}`.
 - Permissioned block sync now accepts missing-block roster requests beyond next height when commit-quorum signatures are present; roster validation inputs can be built from world views in tests, and roster-change resets are exposed to main-loop tests.
 - Core host constructors now initialize `current_trigger_id` so integration-test `irohad` builds succeed.
 - Tests: `cargo fmt --all` (stable warns about unstable rustfmt options); `ENABLE_RANS_BUNDLES=1 NORITO_SKIP_BINDINGS_SYNC=1 cargo build -p irohad --bin iroha3d` (warn: `current_trigger_id` unused); `IROHA_TEST_NETWORK_PARALLELISM=5 cargo test -p integration_tests --test genesis_json genesis_asset_minted_across_peers -- --nocapture` (pass); `IROHA_TEST_NETWORK_PARALLELISM=5 cargo test -p integration_tests --test address_canonicalisation -- --nocapture` (timed out after 12m; tests still running, waiting on network permits).

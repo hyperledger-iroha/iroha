@@ -1862,7 +1862,7 @@ impl Bus {
                 let mut w = me.p2p.write().await;
                 *w = Some(network.clone());
             }
-            let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+            let (tx, mut rx) = tokio::sync::mpsc::channel(network.subscriber_queue_cap().get());
             let mut tx = tx;
             loop {
                 match network.subscribe_to_peers_messages(tx) {

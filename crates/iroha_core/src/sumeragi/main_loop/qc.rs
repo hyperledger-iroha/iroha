@@ -141,7 +141,7 @@ impl Actor {
             return false;
         }
         for (key, block_hash, roster) in to_replay {
-            self.cache_vote_roster(block_hash, roster);
+            self.cache_vote_roster(block_hash, key.2, key.3, roster);
             if let Some(qc) = self.deferred_qcs.remove(&key) {
                 if let Err(err) = self.handle_qc(qc) {
                     warn!(?err, "failed to replay deferred QC");

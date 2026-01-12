@@ -334,7 +334,6 @@ fn program_summary_from_bytes(bytes: &[u8]) -> Result<ProgramSummary> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::Engine as _;
     use iroha_crypto::Algorithm;
     use iroha_i18n::{Bundle, Language, Localizer};
     use url::Url;

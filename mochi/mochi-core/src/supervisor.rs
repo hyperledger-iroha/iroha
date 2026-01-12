@@ -3976,7 +3976,7 @@ case "$1" in
     ;;
 esac
 cat <<'JSON'
-{"chain":"00000000-0000-0000-0000-000000000000","ivm_dir":".","transactions":[{"instructions":[]}]}
+{"chain":"00000000-0000-0000-0000-000000000000","ivm_dir":".","consensus_mode":"Permissioned","transactions":[{"instructions":[]}]}
 JSON
 "#;
             fs::write(&script_path, script).expect("write kagami stub");
@@ -4040,7 +4040,7 @@ case "$1" in
     ;;
 esac
 cat <<'JSON'
-{"chain":"00000000-0000-0000-0000-000000000000","ivm_dir":".","transactions":[{"instructions":[]}]}
+{"chain":"00000000-0000-0000-0000-000000000000","ivm_dir":".","consensus_mode":"Permissioned","transactions":[{"instructions":[]}]}
 JSON
 "#;
             fs::write(&script_path, script).expect("write standalone kagami stub");

@@ -247,6 +247,26 @@ public final class ClientConfig {
         .build();
   }
 
+  /**
+   * Creates a {@link SubscriptionToriiClient} that reuses this config's base URI, timeout, headers,
+   * and observers. Callers must provide the executor so transports can share the same HTTP stack.
+   */
+  public SubscriptionToriiClient toSubscriptionToriiClient(final HttpTransportExecutor executor) {
+    Objects.requireNonNull(executor, "executor");
+    return SubscriptionToriiClient.builder()
+        .executor(executor)
+        .baseUri(baseUri)
+        .timeout(requestTimeout)
+        .defaultHeaders(defaultHeaders)
+        .observers(observers)
+        .build();
+  }
+
+  /** Convenience overload that creates a subscription Torii client with the default executor. */
+  public SubscriptionToriiClient toSubscriptionToriiClient() {
+    return toSubscriptionToriiClient(PlatformHttpTransportExecutor.createDefault());
+  }
+
   private CrashTelemetryHandler maybeInstallCrashTelemetryHandler(
       final Builder builder, final TelemetrySink sink) {
     if (!builder.crashTelemetryEnabled) {

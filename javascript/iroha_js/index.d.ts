@@ -622,6 +622,39 @@ export interface TriggerQueryIteratorOptions extends IterableQueryOptions {
   maxItems?: NumericLike;
 }
 
+export type SubscriptionStatus =
+  | "active"
+  | "paused"
+  | "past_due"
+  | "canceled"
+  | "suspended";
+
+export interface SubscriptionPlanListOptions {
+  provider?: string;
+  limit?: NumericLike;
+  offset?: NumericLike;
+  signal?: AbortSignal;
+}
+
+export interface SubscriptionPlanIteratorOptions extends SubscriptionPlanListOptions {
+  pageSize?: NumericLike;
+  maxItems?: NumericLike;
+}
+
+export interface SubscriptionListOptions {
+  ownedBy?: string;
+  provider?: string;
+  status?: SubscriptionStatus | string;
+  limit?: NumericLike;
+  offset?: NumericLike;
+  signal?: AbortSignal;
+}
+
+export interface SubscriptionIteratorOptions extends SubscriptionListOptions {
+  pageSize?: NumericLike;
+  maxItems?: NumericLike;
+}
+
 export interface ToriiIterableListResponse<T = unknown> {
   items: ReadonlyArray<T>;
   total: number;
@@ -3047,6 +3080,124 @@ export interface ToriiTriggerRecord {
 export interface ToriiTriggerListPage {
   items: ReadonlyArray<ToriiTriggerRecord>;
   total: number;
+}
+
+export type SubscriptionPlan = Record<string, unknown>;
+export type SubscriptionState = Record<string, unknown>;
+export type SubscriptionInvoice = Record<string, unknown>;
+
+export interface SubscriptionPlanCreateRequest {
+  authority: string;
+  planId: string;
+  plan: SubscriptionPlan;
+  privateKey?:
+    | ArrayBufferView
+    | ArrayBuffer
+    | Buffer
+    | ReadonlyArray<number>
+    | string;
+  privateKeyHex?: string;
+  privateKeyMultihash?: string;
+  privateKeyAlgorithm?: string;
+}
+
+export interface SubscriptionPlanCreateResponse {
+  ok: boolean;
+  plan_id: string;
+  tx_hash_hex: string;
+}
+
+export interface SubscriptionPlanListItem {
+  plan_id: string;
+  plan: SubscriptionPlan;
+}
+
+export interface SubscriptionPlanListResponse {
+  items: ReadonlyArray<SubscriptionPlanListItem>;
+  total: number;
+}
+
+export interface SubscriptionCreateRequest {
+  authority: string;
+  subscriptionId: string;
+  planId: string;
+  billingTriggerId?: string;
+  usageTriggerId?: string | null;
+  firstChargeMs?: NumericLike;
+  grantUsageToProvider?: boolean;
+  privateKey?:
+    | ArrayBufferView
+    | ArrayBuffer
+    | Buffer
+    | ReadonlyArray<number>
+    | string;
+  privateKeyHex?: string;
+  privateKeyMultihash?: string;
+  privateKeyAlgorithm?: string;
+}
+
+export interface SubscriptionCreateResponse {
+  ok: boolean;
+  subscription_id: string;
+  billing_trigger_id: string;
+  usage_trigger_id?: string;
+  first_charge_ms: number;
+  tx_hash_hex: string;
+}
+
+export interface SubscriptionListItem {
+  subscription_id: string;
+  subscription: SubscriptionState;
+  invoice?: SubscriptionInvoice | null;
+  plan?: SubscriptionPlan | null;
+}
+
+export interface SubscriptionListResponse {
+  items: ReadonlyArray<SubscriptionListItem>;
+  total: number;
+}
+
+export interface SubscriptionGetResponse {
+  subscription_id: string;
+  subscription: SubscriptionState;
+  invoice?: SubscriptionInvoice | null;
+  plan?: SubscriptionPlan | null;
+}
+
+export interface SubscriptionActionRequest {
+  authority: string;
+  chargeAtMs?: NumericLike;
+  privateKey?:
+    | ArrayBufferView
+    | ArrayBuffer
+    | Buffer
+    | ReadonlyArray<number>
+    | string;
+  privateKeyHex?: string;
+  privateKeyMultihash?: string;
+  privateKeyAlgorithm?: string;
+}
+
+export interface SubscriptionUsageRequest {
+  authority: string;
+  unitKey: string;
+  delta: NumericLike;
+  usageTriggerId?: string | null;
+  privateKey?:
+    | ArrayBufferView
+    | ArrayBuffer
+    | Buffer
+    | ReadonlyArray<number>
+    | string;
+  privateKeyHex?: string;
+  privateKeyMultihash?: string;
+  privateKeyAlgorithm?: string;
+}
+
+export interface SubscriptionActionResponse {
+  ok: boolean;
+  subscription_id: string;
+  tx_hash_hex: string;
 }
 
 export interface ToriiOfflineAllowanceItem {
@@ -6456,6 +6607,53 @@ export declare class ToriiClient {
   iterateTriggersQuery(
     options?: TriggerQueryIteratorOptions,
   ): AsyncGenerator<ToriiTriggerRecord, void, unknown>;
+  listSubscriptionPlans(
+    options?: SubscriptionPlanListOptions,
+  ): Promise<SubscriptionPlanListResponse>;
+  iterateSubscriptionPlans(
+    options?: SubscriptionPlanIteratorOptions,
+  ): AsyncGenerator<SubscriptionPlanListItem, void, unknown>;
+  createSubscriptionPlan(
+    request: SubscriptionPlanCreateRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<SubscriptionPlanCreateResponse>;
+  listSubscriptions(options?: SubscriptionListOptions): Promise<SubscriptionListResponse>;
+  iterateSubscriptions(
+    options?: SubscriptionIteratorOptions,
+  ): AsyncGenerator<SubscriptionListItem, void, unknown>;
+  createSubscription(
+    request: SubscriptionCreateRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<SubscriptionCreateResponse>;
+  getSubscription(
+    subscriptionId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<SubscriptionGetResponse | null>;
+  pauseSubscription(
+    subscriptionId: string,
+    request: SubscriptionActionRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<SubscriptionActionResponse>;
+  resumeSubscription(
+    subscriptionId: string,
+    request: SubscriptionActionRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<SubscriptionActionResponse>;
+  cancelSubscription(
+    subscriptionId: string,
+    request: SubscriptionActionRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<SubscriptionActionResponse>;
+  chargeSubscriptionNow(
+    subscriptionId: string,
+    request: SubscriptionActionRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<SubscriptionActionResponse>;
+  recordSubscriptionUsage(
+    subscriptionId: string,
+    request: SubscriptionUsageRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<SubscriptionActionResponse>;
   listOfflineAllowances(
     options?: OfflineAllowanceListOptions,
   ): Promise<ToriiOfflineAllowanceListResponse>;

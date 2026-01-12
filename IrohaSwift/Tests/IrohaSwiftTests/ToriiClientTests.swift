@@ -1313,6 +1313,268 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testListSubscriptionPlansEncodesParams() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/subscriptions/plans")
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            let query = Dictionary(uniqueKeysWithValues: (components?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+            XCTAssertEqual(query["provider"], "alice@wonderland")
+            XCTAssertEqual(query["limit"], "10")
+            XCTAssertEqual(query["offset"], "5")
+            let payload: [String: Any] = [
+                "items": [
+                    [
+                        "plan_id": "plan#subs",
+                        "plan": [
+                            "provider": "alice@wonderland",
+                            "pricing": ["kind": "fixed"]
+                        ]
+                    ]
+                ],
+                "total": 1
+            ]
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let data = try JSONSerialization.data(withJSONObject: payload)
+            return (response, data)
+        }
+
+        let params = ToriiSubscriptionPlanListParams(provider: "alice@wonderland", limit: 10, offset: 5)
+        let response = try await makeClient().listSubscriptionPlans(params: params)
+        XCTAssertEqual(response.total, 1)
+        let item = try XCTUnwrap(response.items.first)
+        XCTAssertEqual(item.planId, "plan#subs")
+        if case let .string(provider)? = item.plan["provider"] {
+            XCTAssertEqual(provider, "alice@wonderland")
+        } else {
+            XCTFail("missing plan provider")
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testCreateSubscriptionPlanPostsPayload() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/subscriptions/plans")
+            XCTAssertEqual(request.httpMethod, "POST")
+            let body = self.bodyJSON(from: request)
+            XCTAssertEqual(body["authority"] as? String, "alice@wonderland")
+            XCTAssertEqual(body["private_key"] as? String, "ed25519:priv")
+            XCTAssertEqual(body["plan_id"] as? String, "plan#subs")
+            let plan = body["plan"] as? [String: Any]
+            XCTAssertEqual(plan?["provider"] as? String, "alice@wonderland")
+            let payload: [String: Any] = [
+                "ok": true,
+                "plan_id": "plan#subs",
+                "tx_hash_hex": "deadbeef"
+            ]
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let data = try JSONSerialization.data(withJSONObject: payload)
+            return (response, data)
+        }
+
+        let plan: ToriiSubscriptionPlan = [
+            "provider": .string("alice@wonderland"),
+            "billing": .object(["kind": .string("monthly")]),
+            "pricing": .object(["kind": .string("fixed"), "amount": .string("120")])
+        ]
+        let requestBody = ToriiSubscriptionPlanCreateRequest(authority: "alice@wonderland",
+                                                             privateKey: "ed25519:priv",
+                                                             planId: "plan#subs",
+                                                             plan: plan)
+        let response = try await makeClient().createSubscriptionPlan(requestBody)
+        XCTAssertTrue(response.ok)
+        XCTAssertEqual(response.planId, "plan#subs")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testListSubscriptionsEncodesParams() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/subscriptions")
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            let query = Dictionary(uniqueKeysWithValues: (components?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+            XCTAssertEqual(query["owned_by"], "bob@wonderland")
+            XCTAssertEqual(query["provider"], "alice@wonderland")
+            XCTAssertEqual(query["status"], "active")
+            XCTAssertEqual(query["limit"], "25")
+            XCTAssertEqual(query["offset"], "0")
+            let payload: [String: Any] = [
+                "items": [
+                    [
+                        "subscription_id": "sub-1$subscriptions",
+                        "subscription": [
+                            "status": "active",
+                            "plan_id": "plan#subs"
+                        ],
+                        "invoice": ["amount": "120"],
+                        "plan": ["provider": "alice@wonderland"]
+                    ]
+                ],
+                "total": 1
+            ]
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let data = try JSONSerialization.data(withJSONObject: payload)
+            return (response, data)
+        }
+
+        let params = ToriiSubscriptionListParams(ownedBy: "bob@wonderland",
+                                                 provider: "alice@wonderland",
+                                                 status: .active,
+                                                 limit: 25,
+                                                 offset: 0)
+        let response = try await makeClient().listSubscriptions(params: params)
+        XCTAssertEqual(response.total, 1)
+        let record = try XCTUnwrap(response.items.first)
+        XCTAssertEqual(record.subscriptionId, "sub-1$subscriptions")
+        if case let .string(status)? = record.subscription["status"] {
+            XCTAssertEqual(status, "active")
+        } else {
+            XCTFail("missing subscription status")
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testCreateSubscriptionPostsPayload() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/subscriptions")
+            XCTAssertEqual(request.httpMethod, "POST")
+            let body = self.bodyJSON(from: request)
+            XCTAssertEqual(body["authority"] as? String, "bob@wonderland")
+            XCTAssertEqual(body["private_key"] as? String, "ed25519:priv")
+            XCTAssertEqual(body["subscription_id"] as? String, "sub-1$subscriptions")
+            XCTAssertEqual(body["plan_id"] as? String, "plan#subs")
+            XCTAssertEqual(body["billing_trigger_id"] as? String, "sub-bill")
+            XCTAssertEqual(body["usage_trigger_id"] as? String, "sub-usage")
+            XCTAssertEqual(body["first_charge_ms"] as? Int, 1_704_067_200_000)
+            XCTAssertEqual(body["grant_usage_to_provider"] as? Bool, true)
+            let payload: [String: Any] = [
+                "ok": true,
+                "subscription_id": "sub-1$subscriptions",
+                "billing_trigger_id": "sub-bill",
+                "usage_trigger_id": "sub-usage",
+                "first_charge_ms": 1_704_067_200_000,
+                "tx_hash_hex": "deadbeef"
+            ]
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let data = try JSONSerialization.data(withJSONObject: payload)
+            return (response, data)
+        }
+
+        let requestBody = ToriiSubscriptionCreateRequest(authority: "bob@wonderland",
+                                                         privateKey: "ed25519:priv",
+                                                         subscriptionId: "sub-1$subscriptions",
+                                                         planId: "plan#subs",
+                                                         billingTriggerId: "sub-bill",
+                                                         usageTriggerId: "sub-usage",
+                                                         firstChargeMs: 1_704_067_200_000,
+                                                         grantUsageToProvider: true)
+        let response = try await makeClient().createSubscription(requestBody)
+        XCTAssertTrue(response.ok)
+        XCTAssertEqual(response.subscriptionId, "sub-1$subscriptions")
+        XCTAssertEqual(response.billingTriggerId, "sub-bill")
+        XCTAssertEqual(response.usageTriggerId, "sub-usage")
+        XCTAssertEqual(response.firstChargeMs, 1_704_067_200_000)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetSubscriptionDecodesRecord() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/subscriptions/sub-1$subscriptions")
+            let payload: [String: Any] = [
+                "subscription_id": "sub-1$subscriptions",
+                "subscription": ["status": "active"],
+                "invoice": NSNull(),
+                "plan": ["provider": "alice@wonderland"]
+            ]
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let data = try JSONSerialization.data(withJSONObject: payload)
+            return (response, data)
+        }
+
+        let record = try await makeClient().getSubscription(subscriptionId: "sub-1$subscriptions")
+        XCTAssertEqual(record?.subscriptionId, "sub-1$subscriptions")
+        if case let .string(provider)? = record?.plan?["provider"] {
+            XCTAssertEqual(provider, "alice@wonderland")
+        } else {
+            XCTFail("missing plan provider")
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetSubscriptionReturnsNilFor404() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/subscriptions/sub-404$subscriptions")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: [:])!
+            return (response, Data())
+        }
+        let record = try await makeClient().getSubscription(subscriptionId: "sub-404$subscriptions")
+        XCTAssertNil(record)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testSubscriptionActionsPostPayloads() async throws {
+        let subscriptionId = "sub-1$subscriptions"
+        var captured: [String: [String: Any]] = [:]
+        StubURLProtocol.handler = { request in
+            let path = request.url?.path ?? ""
+            captured[path] = self.bodyJSON(from: request)
+            let payload: [String: Any] = [
+                "ok": true,
+                "subscription_id": subscriptionId,
+                "tx_hash_hex": "deadbeef"
+            ]
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let data = try JSONSerialization.data(withJSONObject: payload)
+            return (response, data)
+        }
+
+        let client = makeClient()
+        let action = ToriiSubscriptionActionRequest(authority: "bob@wonderland", privateKey: "ed25519:priv")
+        let chargeAction = ToriiSubscriptionActionRequest(authority: "bob@wonderland",
+                                                          privateKey: "ed25519:priv",
+                                                          chargeAtMs: 1_704_067_200_000)
+        let usage = ToriiSubscriptionUsageRequest(authority: "alice@wonderland",
+                                                  privateKey: "ed25519:priv",
+                                                  unitKey: "compute_ms",
+                                                  delta: "3600000",
+                                                  usageTriggerId: "sub-usage")
+        _ = try await client.pauseSubscription(subscriptionId: subscriptionId, requestBody: action)
+        _ = try await client.resumeSubscription(subscriptionId: subscriptionId, requestBody: chargeAction)
+        _ = try await client.cancelSubscription(subscriptionId: subscriptionId, requestBody: action)
+        _ = try await client.chargeSubscriptionNow(subscriptionId: subscriptionId, requestBody: chargeAction)
+        _ = try await client.recordSubscriptionUsage(subscriptionId: subscriptionId, requestBody: usage)
+
+        let pauseBody = captured["/v1/subscriptions/\(subscriptionId)/pause"] ?? [:]
+        XCTAssertEqual(pauseBody["authority"] as? String, "bob@wonderland")
+        let resumeBody = captured["/v1/subscriptions/\(subscriptionId)/resume"] ?? [:]
+        XCTAssertEqual(resumeBody["charge_at_ms"] as? Int, 1_704_067_200_000)
+        let cancelBody = captured["/v1/subscriptions/\(subscriptionId)/cancel"] ?? [:]
+        XCTAssertEqual(cancelBody["private_key"] as? String, "ed25519:priv")
+        let chargeBody = captured["/v1/subscriptions/\(subscriptionId)/charge-now"] ?? [:]
+        XCTAssertEqual(chargeBody["charge_at_ms"] as? Int, 1_704_067_200_000)
+        let usageBody = captured["/v1/subscriptions/\(subscriptionId)/usage"] ?? [:]
+        XCTAssertEqual(usageBody["unit_key"] as? String, "compute_ms")
+        XCTAssertEqual(usageBody["delta"] as? String, "3600000")
+        XCTAssertEqual(usageBody["usage_trigger_id"] as? String, "sub-usage")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testGetUaidPortfolioNormalizesLiteral() async throws {
         let uaidHex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         let payload = """

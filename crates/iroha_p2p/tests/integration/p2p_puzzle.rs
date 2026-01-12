@@ -97,6 +97,8 @@ fn config(addr: iroha_primitives::addr::SocketAddr, handshake: ActualSoranetHand
         p2p_queue_cap_high: core::num::NonZeroUsize::new(1024).unwrap(),
         p2p_queue_cap_low: core::num::NonZeroUsize::new(1024).unwrap(),
         p2p_post_queue_cap: core::num::NonZeroUsize::new(256).unwrap(),
+        p2p_subscriber_queue_cap:
+            iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
         happy_eyeballs_stagger: Duration::from_millis(50),
         addr_ipv6_first: false,
         max_incoming: None,

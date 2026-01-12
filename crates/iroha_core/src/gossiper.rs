@@ -1336,6 +1336,7 @@ mod tests {
             p2p_queue_cap_high: defaults::network::P2P_QUEUE_CAP_HIGH,
             p2p_queue_cap_low: defaults::network::P2P_QUEUE_CAP_LOW,
             p2p_post_queue_cap: defaults::network::P2P_POST_QUEUE_CAP,
+            p2p_subscriber_queue_cap: defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
             happy_eyeballs_stagger: defaults::network::HAPPY_EYEBALLS_STAGGER,
             addr_ipv6_first: false,
             max_incoming: None,
