@@ -37,8 +37,8 @@ fn metadata_with_gas_limit(limit: u64) -> iroha_data_model::metadata::Metadata {
 
 #[test]
 fn deny_unlisted_syscall_in_v1() {
-    // Choose a syscall that CoreHost does not forward/bridge (e.g., GET_PUBLIC_INPUT 0xF1).
-    let prog = program_with_scall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT as u8);
+    // Choose a syscall that is not in the ABI v1 allowlist (e.g., VERIFY_SIGNATURE 0xFC).
+    let prog = program_with_scall(ivm_sys::SYSCALL_VERIFY_SIGNATURE as u8);
     let mut vm = IVM::new(u64::MAX);
     // Any authority is fine; it won't be used
     let authority: AccountId =

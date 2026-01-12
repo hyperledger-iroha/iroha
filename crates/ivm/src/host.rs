@@ -6,11 +6,15 @@
 //!
 //! The host also exposes basic hardware feature discovery and proof generation
 //! helpers used by some tests.
-use std::{any::Any, collections::HashSet};
+use std::{
+    any::Any,
+    collections::{BTreeMap, HashSet},
+};
 
 use iroha_crypto::{Sm2PublicKey, Sm2Signature, Sm3Digest, Sm4Key};
 use iroha_data_model::{
     isi::transfer::TransferAssetBatch,
+    name::Name,
     nexus::{AxtPolicySnapshot, DataSpaceId},
 };
 use iroha_primitives::json::Json;
@@ -184,6 +188,7 @@ const _: FinishTxSignatureGuard = finish_tx_signature_guard;
 #[derive(Clone)]
 pub struct DefaultHost {
     private_inputs: Vec<u64>,
+    public_inputs: BTreeMap<Name, Vec<u8>>,
     pub_output: Vec<u8>,
     nullifiers: HashSet<u64>,
     zk_cfg: ZkHalo2Config,
@@ -201,6 +206,7 @@ impl DefaultHost {
     pub fn new() -> Self {
         DefaultHost {
             private_inputs: Vec::new(),
+            public_inputs: BTreeMap::new(),
             pub_output: Vec::new(),
             nullifiers: HashSet::new(),
             zk_cfg: ZkHalo2Config::default(),
@@ -219,6 +225,7 @@ impl DefaultHost {
     pub fn with_private_inputs(inputs: Vec<u64>) -> Self {
         DefaultHost {
             private_inputs: inputs,
+            public_inputs: BTreeMap::new(),
             pub_output: Vec::new(),
             nullifiers: HashSet::new(),
             zk_cfg: ZkHalo2Config::default(),
@@ -237,6 +244,17 @@ impl DefaultHost {
     pub fn with_zk_halo2_config(mut self, cfg: ZkHalo2Config) -> Self {
         self.zk_cfg = cfg;
         self
+    }
+
+    /// Provide public inputs retrievable via `SYSCALL_GET_PUBLIC_INPUT`.
+    pub fn with_public_inputs(mut self, inputs: BTreeMap<Name, Vec<u8>>) -> Self {
+        self.public_inputs = inputs;
+        self
+    }
+
+    /// Replace the public input map used by `SYSCALL_GET_PUBLIC_INPUT`.
+    pub fn set_public_inputs(&mut self, inputs: BTreeMap<Name, Vec<u8>>) {
+        self.public_inputs = inputs;
     }
 
     /// Expose the current Halo2 verifier config (for tests/introspection).
@@ -1087,6 +1105,41 @@ impl IVMHost for DefaultHost {
                 } else {
                     Err(VMError::UnknownSyscall(number))
                 }
+            }
+            crate::syscalls::SYSCALL_GET_PUBLIC_INPUT => {
+                // Load a named public input provided by the host.
+                let ptr = vm.register(10);
+                if ptr == 0 {
+                    vm.set_register(10, 0);
+                    return Ok(0);
+                }
+                let tlv = vm.memory.validate_tlv(ptr)?;
+                if tlv.type_id != PointerType::Name {
+                    return Err(VMError::NoritoInvalid);
+                }
+                let policy = vm.syscall_policy();
+                if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
+                    return Err(VMError::AbiTypeNotAllowed {
+                        abi: vm.abi_version(),
+                        type_id: tlv.type_id as u16,
+                    });
+                }
+                let name: Name =
+                    norito::decode_from_bytes(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+                let Some(bytes) = self.public_inputs.get(&name) else {
+                    vm.set_register(10, 0);
+                    return Ok(0);
+                };
+                let tlv = pointer_abi::validate_tlv_bytes(bytes)?;
+                if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
+                    return Err(VMError::AbiTypeNotAllowed {
+                        abi: vm.abi_version(),
+                        type_id: tlv.type_id as u16,
+                    });
+                }
+                let dst = vm.alloc_input_tlv(bytes)?;
+                vm.set_register(10, dst);
+                Ok(0)
             }
             crate::syscalls::SYSCALL_COMMIT_OUTPUT => {
                 // Make the VM's output buffer available to the host.

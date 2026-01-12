@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional
 
 from .tx import NumericLike
 
@@ -37,7 +37,7 @@ class RepoCashLeg:
     metadata: Optional[Mapping[str, Any]] = None
 
     def to_payload(self) -> Mapping[str, Any]:
-        payload = {
+        payload: Dict[str, Any] = {
             "asset_definition_id": self.asset_definition_id,
             "quantity": _normalize_quantity(self.quantity),
         }
@@ -55,7 +55,7 @@ class RepoCollateralLeg:
     metadata: Optional[Mapping[str, Any]] = None
 
     def to_payload(self) -> Mapping[str, Any]:
-        payload = {
+        payload: Dict[str, Any] = {
             "asset_definition_id": self.asset_definition_id,
             "quantity": _normalize_quantity(self.quantity),
         }

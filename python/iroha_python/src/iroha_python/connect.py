@@ -9,7 +9,7 @@ import warnings
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Any, Dict, Mapping, Optional, Sequence, Type, Union
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Type, Union
 from urllib.parse import ParseResult, urlencode, urlparse, parse_qs
 
 from ._native import load_crypto_extension
@@ -318,7 +318,7 @@ class ConnectSessionInfo:
         except KeyError as exc:  # pragma: no cover - defensive
             raise ValueError("connect session response is missing required fields") from exc
 
-    def as_dict(self) -> Dict[str, str]:
+    def as_dict(self) -> Dict[str, Optional[str]]:
         """Return the raw response as a JSON-friendly dict."""
 
         return {
@@ -1140,11 +1140,11 @@ class ConnectSession:
     ) -> None:
         self._sid = _ensure_bytes(sid, size=32, field="sid")
         self._keys = keys
-        self._next_sequence = {
+        self._next_sequence: Dict[ConnectDirection, int] = {
             ConnectDirection.APP_TO_WALLET: int(app_initial_sequence),
             ConnectDirection.WALLET_TO_APP: int(wallet_initial_sequence),
         }
-        self._last_received = {
+        self._last_received: Dict[ConnectDirection, Optional[int]] = {
             ConnectDirection.APP_TO_WALLET: None,
             ConnectDirection.WALLET_TO_APP: None,
         }

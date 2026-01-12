@@ -194,7 +194,7 @@ def _preview_summary_payload(result: ConnectPreviewBootstrapResult) -> Dict[str,
             "app": result.tokens.app,
         }
     if result.session is not None:
-        payload["session"] = dict(result.session)
+        payload["session"] = result.session.as_dict()
     return payload
 
 
@@ -224,9 +224,7 @@ def _print_preview_result(result: ConnectPreviewBootstrapResult) -> None:
         print(f"    wallet: {result.tokens.wallet}")
         print(f"    app:    {result.tokens.app}")
     if result.session is not None:
-        sid_value = result.session.get("sid")
-        if isinstance(sid_value, str):
-            print(f"  Registered Torii session SID: {sid_value}")
+        print(f"  Registered Torii session SID: {result.session.sid}")
 
 
 def build_connect_open_frame(
@@ -532,7 +530,6 @@ def main() -> None:
     )
     _print_session_info(session_info)
 
-    metadata: Optional[ConnectAppMetadata]
     _print_connect_status(status_snapshot)
     if args.status_json_output:
         destination = Path(args.status_json_output)
@@ -549,7 +546,6 @@ def main() -> None:
     else:
         app_public_key = b"\x00" * 32
 
-    metadata: Optional[ConnectAppMetadata]
     if args.app_metadata_file:
         try:
             metadata = _load_app_metadata_from_file(args.app_metadata_file)
@@ -597,6 +593,8 @@ def main() -> None:
 
     if args.send_open:
         print("Posting ConnectControlOpen via REST ...")
+        if frame.control is None:
+            raise RuntimeError("connect open frame missing control payload")
         response = client.send_connect_control_frame(session_info.sid, frame.control)
         print("Torii response:", response)
 

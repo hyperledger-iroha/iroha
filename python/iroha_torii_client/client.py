@@ -2535,7 +2535,7 @@ class ToriiClient:
             "POST",
             "/v1/configuration",
             headers={"Content-Type": "application/json"},
-            data=json.dumps(dict(payload)),
+            data=json.dumps(dict(payload)).encode("utf-8"),
         )
         self._expect_status(response, {200, 202})
         if not response.content:
@@ -3724,8 +3724,8 @@ class ToriiClient:
                 except ValueError as exc:
                     raise RuntimeError(f"sumeragi bls_keys[{key}] must be a hex string or null") from exc
                 result[key] = stripped
-        else:
-            raise RuntimeError(f"sumeragi bls_keys[{key}] must be a string or null")
+            else:
+                raise RuntimeError(f"sumeragi bls_keys[{key}] must be a string or null")
         return result
 
     def list_sumeragi_evidence(
@@ -4534,14 +4534,14 @@ class ToriiClient:
     ) -> ExplorerAccountQr:
         record = ToriiClient._ensure_mapping(value, context)
         canonical = ToriiClient._require_non_empty_string(
-            record.get("canonical_id"),
+            record.get("canonical_id", record.get("canonicalId")),
             f"{context}.canonical_id",
         )
         literal = ToriiClient._require_non_empty_string(
             record.get("literal"),
             f"{context}.literal",
         )
-        fmt_raw = record.get("address_format")
+        fmt_raw = record.get("address_format", record.get("addressFormat"))
         fmt = ToriiClient._normalize_address_format_option(
             fmt_raw,
             context=f"{context}.address_format",
@@ -4549,16 +4549,16 @@ class ToriiClient:
         if fmt is None:
             fmt = "ih58"
         network_prefix = ToriiClient._coerce_int(
-            record.get("network_prefix"),
+            record.get("network_prefix", record.get("networkPrefix")),
             f"{context}.network_prefix",
         )
         error_correction = ToriiClient._require_non_empty_string(
-            record.get("error_correction"),
+            record.get("error_correction", record.get("errorCorrection")),
             f"{context}.error_correction",
         )
         modules = ToriiClient._coerce_int(record.get("modules"), f"{context}.modules")
         qr_version = ToriiClient._coerce_int(
-            record.get("qr_version"),
+            record.get("qr_version", record.get("qrVersion")),
             f"{context}.qr_version",
         )
         svg = ToriiClient._require_non_empty_string(
@@ -4955,18 +4955,22 @@ class ToriiClient:
             raise RuntimeError(f"{context}.status must be one of {allowed}")
         lifecycle = ToriiClient._parse_uaid_manifest_lifecycle(record.get("lifecycle"), context=f"{context}.lifecycle")
         manifest = ToriiClient._parse_uaid_manifest(record.get("manifest"), context=f"{context}.manifest")
+        manifest_hash_value = ToriiClient._require_string(
+            record.get("manifest_hash"),
+            f"{context}.manifest_hash",
+        )
+        manifest_hash = ToriiClient._normalize_hex_string(
+            manifest_hash_value,
+            context=f"{context}.manifest_hash",
+            expected_length=64,
+        )
         return UaidManifestRecord(
             dataspace_id=ToriiClient._coerce_unsigned(record.get("dataspace_id"), f"{context}.dataspace_id"),
             dataspace_alias=ToriiClient._coerce_optional_string(
                 record.get("dataspace_alias"),
                 context=f"{context}.dataspace_alias",
             ),
-            manifest_hash="0x"
-            + ToriiClient._normalize_hex_string(
-                record.get("manifest_hash"),
-                context=f"{context}.manifest_hash",
-                expected_length=64,
-            ),
+            manifest_hash="0x" + manifest_hash,
             status=status,
             lifecycle=lifecycle,
             accounts=ToriiClient._parse_string_list(record.get("accounts"), context=f"{context}.accounts"),
@@ -6267,15 +6271,6 @@ class ToriiClient:
         raise RuntimeError(f"{context} must be 'ih58'/'canonical' or 'compressed'")
 
     @staticmethod
-    def _require_non_empty_string(value: Any, context: str) -> str:
-        if not isinstance(value, str):
-            raise TypeError(f"{context} must be a string")
-        stripped = value.strip()
-        if not stripped:
-            raise ValueError(f"{context} must be a non-empty string")
-        return stripped
-
-    @staticmethod
     def _require_string(value: Any, context: str) -> str:
         if not isinstance(value, str):
             raise RuntimeError(f"{context} must be a string")
@@ -6634,8 +6629,9 @@ class ToriiClient:
     def _parse_runtime_abi_hash(payload: Mapping[str, Any], *, context: str) -> RuntimeAbiHash:
         record = ToriiClient._ensure_mapping(payload, context)
         policy = ToriiClient._require_string(record.get("policy"), f"{context}.policy")
+        abi_hash_value = ToriiClient._require_string(record.get("abi_hash_hex"), f"{context}.abi_hash_hex")
         abi_hash = ToriiClient._normalize_hex_string(
-            record.get("abi_hash_hex"),
+            abi_hash_value,
             context=f"{context}.abi_hash_hex",
             expected_length=64,
         )
@@ -6676,8 +6672,12 @@ class ToriiClient:
     @staticmethod
     def _parse_runtime_upgrade_item(value: Any, index: int, *, context: str) -> RuntimeUpgradeListItem:
         record = ToriiClient._ensure_mapping(value, f"{context}[{index}]")
-        identifier = ToriiClient._normalize_hex_string(
+        identifier_value = ToriiClient._require_string(
             record.get("id_hex"),
+            f"{context}[{index}].id_hex",
+        )
+        identifier = ToriiClient._normalize_hex_string(
+            identifier_value,
             context=f"{context}[{index}].id_hex",
             expected_length=64,
         )
@@ -6719,8 +6719,9 @@ class ToriiClient:
         )
         if abi_version == 0:
             raise RuntimeError(f"{context}.abi_version must be greater than zero")
+        abi_hash_value = ToriiClient._require_string(record.get("abi_hash"), f"{context}.abi_hash")
         abi_hash = ToriiClient._normalize_hex_string(
-            record.get("abi_hash"),
+            abi_hash_value,
             context=f"{context}.abi_hash",
             expected_length=64,
         )

@@ -10,6 +10,7 @@ from typing import Any, Optional
 
 from iroha_python import (
     Ed25519KeyPair,
+    SignedTransactionEnvelope,
     TransactionConfig,
     TransactionDraft,
     create_torii_client,
@@ -27,8 +28,8 @@ def build_sample_transaction(
     quantity: Decimal,
     burn_quantity: Optional[Decimal] = None,
     transfer_destination: Optional[str] = None,
-) -> tuple[TransactionDraft, bytes]:
-    """Return the draft and signed payload for a sample asset mint flow."""
+) -> tuple[TransactionDraft, SignedTransactionEnvelope]:
+    """Return the draft and signed envelope for a sample asset mint flow."""
 
     draft = TransactionDraft(config)
     draft.register_domain(domain_id) \

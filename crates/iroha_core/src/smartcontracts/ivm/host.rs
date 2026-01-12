@@ -39,7 +39,10 @@ use iroha_data_model::{
     permission::Permissions,
     prelude::{AccountId, *},
     proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
-    query::{QueryRequest, QueryResponse, error::QueryExecutionFail, parameters::ForwardCursor},
+    query::{
+        QueryRequest, QueryResponse, SingularQueryBox, SingularQueryOutputBox,
+        asset::prelude::FindAssetById, error::QueryExecutionFail, parameters::ForwardCursor,
+    },
     subscription::{
         SUBSCRIPTION_INVOICE_METADATA_KEY, SUBSCRIPTION_METADATA_KEY,
         SUBSCRIPTION_PLAN_METADATA_KEY, SUBSCRIPTION_TRIGGER_REF_METADATA_KEY,
@@ -1542,6 +1545,17 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.chain_id_bytes = chain.to_string().into_bytes();
     }
 
+    /// Provide public inputs retrievable via `SYSCALL_GET_PUBLIC_INPUT`.
+    pub fn with_public_inputs(mut self, inputs: BTreeMap<Name, Vec<u8>>) -> Self {
+        self.default.set_public_inputs(inputs);
+        self
+    }
+
+    /// Replace the public input map used by `SYSCALL_GET_PUBLIC_INPUT`.
+    pub fn set_public_inputs(&mut self, inputs: BTreeMap<Name, Vec<u8>>) {
+        self.default.set_public_inputs(inputs);
+    }
+
     /// Install a read-only snapshot of ZK roots per asset for state-read syscalls.
     pub fn set_zk_roots_snapshot(&mut self, map: BTreeMap<AssetDefinitionId, Vec<[u8; 32]>>) {
         self.zk_roots = map;
@@ -1696,12 +1710,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Ok(())
     }
 
-    fn load_vk_record(
+    fn load_vk_record_any_namespace(
         &self,
         env: &iroha_zkp_halo2::OpenVerifyEnvelope,
         vk_commitment: [u8; 32],
         schema_hash: [u8; 32],
-        namespace: &str,
     ) -> Result<(VerifyingKeyRecord, String), u64> {
         let vk_rec = self
             .verifying_keys
@@ -1728,10 +1741,22 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         if vk_rec.public_inputs_schema_hash != schema_hash || vk_rec.commitment != vk_commitment {
             return Err(ivm::host::ERR_VK_MISMATCH);
         }
+        let backend_label = Self::backend_label_for_record(&vk_rec);
+        Ok((vk_rec, backend_label))
+    }
+
+    fn load_vk_record(
+        &self,
+        env: &iroha_zkp_halo2::OpenVerifyEnvelope,
+        vk_commitment: [u8; 32],
+        schema_hash: [u8; 32],
+        namespace: &str,
+    ) -> Result<(VerifyingKeyRecord, String), u64> {
+        let (vk_rec, backend_label) =
+            self.load_vk_record_any_namespace(env, vk_commitment, schema_hash)?;
         if vk_rec.namespace != namespace {
             return Err(ivm::host::ERR_NAMESPACE);
         }
-        let backend_label = Self::backend_label_for_record(&vk_rec);
         Ok((vk_rec, backend_label))
     }
 
@@ -4721,6 +4746,31 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             }
             ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL => self.subscription_bill(),
             ivm::syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE => self.subscription_record_usage(),
+            ivm::syscalls::SYSCALL_GET_ACCOUNT_BALANCE => {
+                let account_ptr = vm.register(10);
+                let asset_def_ptr = vm.register(11);
+                let account: AccountId =
+                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
+                let asset_def: AssetDefinitionId =
+                    Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
+                let asset_id = AssetId::of(asset_def, account);
+                let Some(state_ref) = self.query_state.get() else {
+                    return Err(ivm::VMError::NotImplemented { syscall: number });
+                };
+                let request =
+                    QueryRequest::Singular(SingularQueryBox::FindAssetById(FindAssetById {
+                        id: asset_id,
+                    }));
+                let result = state_ref.execute_query(&self.authority, request)?;
+                let asset = match result.response {
+                    QueryResponse::Singular(SingularQueryOutputBox::Asset(asset)) => asset,
+                    _ => return Err(ivm::VMError::DecodeError),
+                };
+                let amount =
+                    u64::try_from(asset.value().clone()).map_err(|_| ivm::VMError::DecodeError)?;
+                vm.set_register(10, amount);
+                Ok(0)
+            }
             // Helper syscalls forwarded to the default host implementation.
             // Intercept ZK_VERIFY syscalls to record success and gate ZK ISIs.
             ivm::syscalls::SYSCALL_ZK_VERIFY_TRANSFER => {
@@ -4810,6 +4860,165 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 if vm.register(10) != 0 {
                     self.zk_verified_tally.push_back(env_hash);
                     self.zk_last_env_hash_tally.push_back(env_hash);
+                }
+                Ok(gas)
+            }
+            ivm::syscalls::SYSCALL_ZK_VERIFY_BATCH => {
+                let ptr = vm.register(10);
+                let tlv = vm.memory.validate_tlv(ptr)?;
+                if tlv.type_id != PointerType::NoritoBytes {
+                    return Err(ivm::VMError::NoritoInvalid);
+                }
+                let gas = Self::gas_for_zk_verify_payload(tlv.payload);
+                let envs: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+                    match norito::decode_from_bytes(tlv.payload) {
+                        Ok(v) => v,
+                        Err(_) => {
+                            vm.set_register(10, 0);
+                            vm.set_register(11, ivm::host::ERR_DECODE);
+                            return Ok(gas);
+                        }
+                    };
+                if envs.len() as u32 > self.halo2_config.verifier_max_batch {
+                    vm.set_register(10, 0);
+                    vm.set_register(11, ivm::host::ERR_BATCH);
+                    return Ok(gas);
+                }
+                if !self.halo2_config.enabled {
+                    vm.set_register(10, 0);
+                    vm.set_register(11, ivm::host::ERR_DISABLED);
+                    return Ok(gas);
+                }
+                if self.halo2_config.backend != ivm::host::ZkHalo2Backend::Ipa {
+                    vm.set_register(10, 0);
+                    vm.set_register(11, ivm::host::ERR_BACKEND);
+                    return Ok(gas);
+                }
+
+                let mut statuses: Vec<u8> = Vec::with_capacity(envs.len());
+                let mut first_error: Option<u64> = None;
+                for env in &envs {
+                    let mut status = 0u8;
+                    let payload = match norito::to_bytes(env) {
+                        Ok(bytes) => bytes,
+                        Err(_) => {
+                            first_error.get_or_insert(ivm::host::ERR_DECODE);
+                            statuses.push(status);
+                            continue;
+                        }
+                    };
+                    if let Err(code) =
+                        self.validate_envelope_header(env, payload.len(), ivm::host::LABEL_BATCH)
+                    {
+                        first_error.get_or_insert(code);
+                        statuses.push(status);
+                        continue;
+                    }
+                    let Some(vk_commitment) = env.vk_commitment else {
+                        first_error.get_or_insert(ivm::host::ERR_VK_MISSING);
+                        statuses.push(status);
+                        continue;
+                    };
+                    let Some(schema_hash) = env.public_inputs_schema_hash else {
+                        first_error.get_or_insert(ivm::host::ERR_VK_MISSING);
+                        statuses.push(status);
+                        continue;
+                    };
+                    let (vk_rec, backend_label) =
+                        match self.load_vk_record_any_namespace(env, vk_commitment, schema_hash) {
+                            Ok(v) => v,
+                            Err(code) => {
+                                first_error.get_or_insert(code);
+                                statuses.push(status);
+                                continue;
+                            }
+                        };
+                    let Some(vk_box) = vk_rec.key.as_ref() else {
+                        first_error.get_or_insert(ivm::host::ERR_VK_MISSING);
+                        statuses.push(status);
+                        continue;
+                    };
+                    let inline_commit = Self::hash_vk_bytes(&backend_label, &vk_box.bytes);
+                    if inline_commit != vk_rec.commitment {
+                        first_error.get_or_insert(ivm::host::ERR_VK_MISMATCH);
+                        statuses.push(status);
+                        continue;
+                    }
+                    let current_manifest = self.current_manifest_id.as_deref().unwrap_or("core");
+                    if vk_rec.owner_manifest_id.as_deref().unwrap_or("core") != current_manifest {
+                        first_error.get_or_insert(ivm::host::ERR_NAMESPACE);
+                        statuses.push(status);
+                        continue;
+                    }
+                    let proof_len = match norito::to_bytes(&env.proof) {
+                        Ok(bytes) => bytes.len(),
+                        Err(_) => {
+                            first_error.get_or_insert(ivm::host::ERR_DECODE);
+                            statuses.push(status);
+                            continue;
+                        }
+                    };
+                    if let Err(code) = self.validate_proof_len(&vk_rec, proof_len) {
+                        first_error.get_or_insert(code);
+                        statuses.push(status);
+                        continue;
+                    }
+                    let domain_inputs = DomainHashInputs {
+                        backend: &backend_label,
+                        curve: &vk_rec.curve,
+                        vk_commitment,
+                        schema_hash,
+                        syscall_label: ivm::host::LABEL_BATCH,
+                        manifest: current_manifest,
+                        namespace: &vk_rec.namespace,
+                    };
+                    let domain = self.compute_domain_hash(&domain_inputs);
+                    if env.domain_tag != Some(domain) {
+                        first_error.get_or_insert(ivm::host::ERR_DOMAIN_TAG);
+                        statuses.push(status);
+                        continue;
+                    }
+                    self.default
+                        .set_external_vk_bytes(vk_box.backend.clone(), vk_box.bytes.clone());
+                    match ivm::zk_verify::verify_open_envelope(&payload) {
+                        Ok(ok) => {
+                            status = if ok { 1 } else { 0 };
+                            if !ok {
+                                first_error.get_or_insert(ivm::host::ERR_VERIFY);
+                            }
+                        }
+                        Err(_) => {
+                            first_error.get_or_insert(ivm::host::ERR_DECODE);
+                        }
+                    }
+                    statuses.push(status);
+                }
+
+                if statuses.is_empty() {
+                    vm.set_register(10, 0);
+                    vm.set_register(11, ivm::host::ERR_DECODE);
+                    return Ok(gas);
+                }
+
+                let body = norito::to_bytes(&statuses).map_err(|_| ivm::VMError::NoritoInvalid)?;
+                let mut out = Vec::with_capacity(7 + body.len() + 32);
+                out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
+                out.push(1);
+                out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+                out.extend_from_slice(&body);
+                let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
+                out.extend_from_slice(&h);
+                let p = vm.alloc_input_tlv(&out)?;
+                vm.set_register(10, p);
+                if let Some((idx, _)) = statuses.iter().enumerate().find(|(_, s)| **s == 0) {
+                    vm.set_register(12, idx as u64);
+                } else {
+                    vm.set_register(12, u64::MAX);
+                }
+                if let Some(code) = first_error {
+                    vm.set_register(11, code);
+                } else {
+                    vm.set_register(11, 0);
                 }
                 Ok(gas)
             }
@@ -4970,12 +5179,18 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             | ivm::syscalls::SYSCALL_DEBUG_LOG
             | ivm::syscalls::SYSCALL_ALLOC
             | ivm::syscalls::SYSCALL_GROW_HEAP
+            | ivm::syscalls::SYSCALL_GET_PUBLIC_INPUT
             | ivm::syscalls::SYSCALL_GET_PRIVATE_INPUT
             | ivm::syscalls::SYSCALL_INPUT_PUBLISH_TLV
             | ivm::syscalls::SYSCALL_COMMIT_OUTPUT
             | ivm::syscalls::SYSCALL_PROVE_EXECUTION
             | ivm::syscalls::SYSCALL_VERIFY_PROOF
-            | ivm::syscalls::SYSCALL_GET_MERKLE_PATH => self.default.syscall(number, vm),
+            | ivm::syscalls::SYSCALL_GET_MERKLE_PATH
+            | ivm::syscalls::SYSCALL_GET_MERKLE_COMPACT
+            | ivm::syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT
+            | ivm::syscalls::SYSCALL_USE_NULLIFIER
+            | ivm::syscalls::SYSCALL_VRF_VERIFY
+            | ivm::syscalls::SYSCALL_VRF_VERIFY_BATCH => self.default.syscall(number, vm),
 
             // Provide current authority AccountId pointer via INPUT region.
             // New format: TLV (type_id:u16, version:u8, len:be u32, payload, hash:32).
@@ -5045,7 +5260,7 @@ mod pointer_abi_tests {
 
     use iroha_crypto::{Hash as IrohaHash, KeyPair};
     use iroha_data_model::smart_contract::manifest::ContractManifest;
-    use iroha_primitives::json::Json;
+    use iroha_primitives::{json::Json, numeric::Numeric};
     use ivm::{
         axt::{GroupBinding, HandleBudget, HandleSubject, SpendOp},
         syscalls as ivm_sys,
@@ -7314,6 +7529,42 @@ mod tests {
     }
 
     #[test]
+    fn get_account_balance_syscall_reads_numeric_asset() {
+        crate::test_alias::ensure();
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
+        let asset = Asset::new(asset_id, Numeric::new(42_u32, 0));
+        let world = World::with_assets([domain], [account], [asset_def], [asset], []);
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority.clone());
+        host.set_query_state(&view);
+        let mut vm = IVM::new(10_000);
+
+        let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&authority));
+        let asset_def_ptr = store_tlv(
+            &mut vm,
+            PointerType::AssetDefinitionId,
+            &norito_blob(&asset_def_id),
+        );
+        vm.set_register(10, account_ptr);
+        vm.set_register(11, asset_def_ptr);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_GET_ACCOUNT_BALANCE, &mut vm)
+            .expect("get balance");
+        assert_eq!(gas, 0);
+        assert_eq!(vm.register(10), 42);
+    }
+
+    #[test]
     fn execute_query_syscall_charges_sorted_queries_by_scanned_items() {
         crate::test_alias::ensure();
         let authority: AccountId = "alice@wonderland".parse().unwrap();
@@ -8769,6 +9020,53 @@ mod tests {
     }
 
     #[test]
+    fn zk_verify_batch_returns_statuses_with_registry_binding() {
+        crate::test_alias::ensure();
+        let mut host = CoreHost::new("alice@wonderland".parse().unwrap());
+        host.set_chain_id_bytes(b"chain".to_vec());
+        host.set_current_manifest_id(Some("core".to_string()));
+
+        let backend = "halo2/ipa";
+        let vk_bytes = vec![9, 9, 9];
+        let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+        let schema_hash = [4u8; 32];
+        let mut rec = active_vk_record(commitment, schema_hash, backend);
+        rec.key = Some(VerifyingKeyBox::new(backend.into(), vk_bytes.clone()));
+        let mut map = BTreeMap::new();
+        map.insert(VerifyingKeyId::new(backend, "vk"), rec);
+        host.set_verifying_keys(map).expect("set registry");
+
+        let domain_inputs = DomainHashInputs {
+            backend,
+            curve: "pallas",
+            vk_commitment: commitment,
+            schema_hash,
+            syscall_label: ivm::host::LABEL_BATCH,
+            manifest: "core",
+            namespace: "transfer",
+        };
+        let domain = host.compute_domain_hash(&domain_inputs);
+        let env_bytes = dummy_env(ivm::host::LABEL_BATCH, commitment, schema_hash, domain);
+        let env: iroha_zkp_halo2::OpenVerifyEnvelope =
+            norito::decode_from_bytes(&env_bytes).expect("decode envelope");
+        let payload = norito::to_bytes(&vec![env]).expect("encode batch");
+
+        let mut vm = IVM::new(1_000_000);
+        let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
+        vm.set_register(10, ptr);
+
+        host.syscall(ivm_sys::SYSCALL_ZK_VERIFY_BATCH, &mut vm)
+            .expect("batch verify");
+        let out_ptr = vm.register(10);
+        let tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
+        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+        let statuses: Vec<u8> = norito::decode_from_bytes(tlv.payload).expect("decode statuses");
+        assert_eq!(statuses, vec![0]);
+        assert_eq!(vm.register(11), ivm::host::ERR_DECODE);
+        assert_eq!(vm.register(12), 0);
+    }
+
+    #[test]
     fn input_publish_tlv_is_forwarded_to_default_host() {
         crate::test_alias::ensure();
         // Build a minimal program that calls INPUT_PUBLISH_TLV and then HALT
@@ -8818,6 +9116,30 @@ mod tests {
             .expect("validate copied tlv");
         assert_eq!(v.type_id, ivm::PointerType::Blob);
         assert_eq!(v.payload, payload.as_slice());
+    }
+
+    #[test]
+    fn get_public_input_is_forwarded_to_default_host() {
+        crate::test_alias::ensure();
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let name: Name = "pub_key".parse().unwrap();
+        let payload = b"hello".to_vec();
+        let tlv = make_tlv(PointerType::Blob as u16, &payload);
+        let mut inputs = BTreeMap::new();
+        inputs.insert(name.clone(), tlv);
+
+        let mut host = CoreHost::new(authority).with_public_inputs(BTreeMap::new());
+        host.set_public_inputs(inputs);
+        let mut vm = IVM::new(10_000);
+        let name_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&name));
+        vm.set_register(10, name_ptr);
+
+        host.syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, &mut vm)
+            .expect("public input syscall");
+        let out_ptr = vm.register(10);
+        let out_tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
+        assert_eq!(out_tlv.type_id, PointerType::Blob);
+        assert_eq!(out_tlv.payload, payload.as_slice());
     }
 
     #[test]

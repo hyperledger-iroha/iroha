@@ -4,9 +4,11 @@ import base64
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import pytest
+import requests
+from requests.structures import CaseInsensitiveDict
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 if str(PACKAGE_ROOT) not in sys.path:
@@ -25,7 +27,7 @@ CANONICAL_OWNER = (
 )
 
 
-class StubResponse:
+class StubResponse(requests.Response):
     def __init__(
         self,
         status_code: int = 200,
@@ -34,29 +36,28 @@ class StubResponse:
         headers: Optional[Dict[str, str]] = None,
         text: Optional[str] = None,
     ) -> None:
+        super().__init__()
         self.status_code = status_code
         self._payload = payload
-        self.headers: Dict[str, str] = headers or {}
+        self.headers = CaseInsensitiveDict(headers or {})
         if payload is None:
-            if text is not None:
-                self.content = text.encode("utf-8")
-                self.text = text
-            else:
-                self.content = b""
-                self.text = ""
+            content = text.encode("utf-8") if text is not None else b""
         else:
-            encoded = json.dumps(payload)
-            self.content = encoded.encode("utf-8")
-            self.text = encoded
+            content = json.dumps(payload).encode("utf-8")
+            if "Content-Type" not in self.headers:
+                self.headers["Content-Type"] = "application/json"
+        self._content = content
+        self.encoding = "utf-8"
 
-    def json(self) -> Any:
+    def json(self, **kwargs: Any) -> Any:
         if self._payload is None:
             raise ValueError("no payload available")
         return json.loads(self.text)
 
 
-class RecordingSession:
+class RecordingSession(requests.Session):
     def __init__(self) -> None:
+        super().__init__()
         self.calls: List[Dict[str, Any]] = []
         self._responses: List[StubResponse] = []
 
@@ -65,18 +66,20 @@ class RecordingSession:
 
     def request(
         self,
-        method: str,
-        url: str,
-        params: Optional[Dict[str, Any]] = None,
-        headers: Optional[Dict[str, str]] = None,
-        data: Optional[bytes] = None,
-    ) -> StubResponse:
+        method: Union[str, bytes],
+        url: Union[str, bytes],
+        *args: Any,
+        **kwargs: Any,
+    ) -> requests.Response:
+        params = kwargs.get("params") or {}
+        headers = kwargs.get("headers") or {}
+        data = kwargs.get("data")
         self.calls.append(
             {
                 "method": method,
                 "url": url,
-                "params": params or {},
-                "headers": headers or {},
+                "params": params,
+                "headers": headers,
                 "data": data,
             }
         )
@@ -732,7 +735,7 @@ def test_publish_space_directory_manifest_posts_payload() -> None:
     session.queue(StubResponse(status_code=202, payload={"queued": True}))
     client = ToriiClient("http://node.test", session=session)
 
-    manifest = {
+    manifest: Dict[str, Any] = {
         "version": "V1",
         "uaid": "uaid:" + "11" * 32,
         "dataspace": 7,
@@ -1275,7 +1278,7 @@ def test_set_confidential_gas_schedule_reuses_logger() -> None:
     assert body["confidential_gas"]["per_nullifier"] == 6
 
 
-def test_get_time_now_parses_snapshot() -> None:
+def test_get_time_now_parses_snapshot_alt_values() -> None:
     session = RecordingSession()
     session.queue(
         StubResponse(
@@ -1864,7 +1867,7 @@ def test_connect_admission_manifest_helpers() -> None:
 
 def test_trigger_listing_and_lookup_roundtrip() -> None:
     session = RecordingSession()
-    list_payload = {
+    list_payload: Dict[str, Any] = {
         "items": [
             {
                 "id": "daily-airdrop",

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
+
+import requests
+from requests.structures import CaseInsensitiveDict
 
 import pytest
 
@@ -12,14 +15,16 @@ from iroha_python import (
 )
 
 
-class StubResponse:
+class StubResponse(requests.Response):
     def __init__(self, payload: Optional[Dict[str, Any]] = None) -> None:
+        super().__init__()
         self.status_code = 200
         self._payload = payload or {"items": [], "total": 0}
-        self.headers: Dict[str, str] = {"Content-Type": "application/json"}
-        self.content = json.dumps(self._payload).encode("utf-8")
+        self.headers = CaseInsensitiveDict({"Content-Type": "application/json"})
+        self._content = json.dumps(self._payload).encode("utf-8")
+        self.encoding = "utf-8"
 
-    def json(self) -> Dict[str, Any]:
+    def json(self, **kwargs: Any) -> Any:
         return json.loads(self.content.decode("utf-8"))
 
     def close(self) -> None:
@@ -28,32 +33,33 @@ class StubResponse:
     def __enter__(self) -> "StubResponse":
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> bool:
+    def __exit__(self, *args: object) -> None:
         self.close()
-        return False
+        return None
 
 
-class RecordingSession:
+class RecordingSession(requests.Session):
     def __init__(self) -> None:
+        super().__init__()
         self.calls: list[Dict[str, Any]] = []
         self._response = StubResponse()
 
     def request(
         self,
-        method: str,
-        url: str,
-        params: Optional[Dict[str, Any]] = None,
-        headers: Optional[Dict[str, str]] = None,
-        data: Optional[bytes] = None,
-        stream: bool = False,
-        timeout: Optional[float] = None,
-    ) -> StubResponse:
+        method: Union[str, bytes],
+        url: Union[str, bytes],
+        *args: Any,
+        **kwargs: Any,
+    ) -> requests.Response:
+        params = kwargs.get("params") or {}
+        headers = kwargs.get("headers") or {}
+        data = kwargs.get("data")
         self.calls.append(
             {
                 "method": method,
                 "url": url,
-                "params": params or {},
-                "headers": headers or {},
+                "params": params,
+                "headers": headers,
                 "data": data,
             }
         )
@@ -62,7 +68,7 @@ class RecordingSession:
 
 def _client_with_session() -> tuple[ToriiClient, RecordingSession]:
     session = RecordingSession()
-    client = ToriiClient("http://localhost:8080", session=session)  # type: ignore[arg-type]
+    client = ToriiClient("http://localhost:8080", session=session)
     return client, session
 
 
