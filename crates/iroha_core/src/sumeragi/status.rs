@@ -10,7 +10,7 @@ use std::{
         Mutex, OnceLock,
         atomic::{AtomicUsize, Ordering as StdOrdering},
     },
-    time::{Duration, SystemTime},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use iroha_config::parameters::actual::ConsensusMode;
@@ -334,6 +334,7 @@ static BLOCK_SYNC_ROSTER_CHECKPOINT_HISTORY_TOTAL: AtomicU64 = AtomicU64::new(0)
 static BLOCK_SYNC_ROSTER_ROSTER_SIDECAR_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCK_SYNC_ROSTER_COMMIT_ROSTER_JOURNAL_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCK_SYNC_ROSTER_DROP_MISSING_TOTAL: AtomicU64 = AtomicU64::new(0);
+static BLOCK_SYNC_ROSTER_DROP_UNSOLICITED_SHARE_BLOCKS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_COMMIT_FAILURE_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_QUORUM_TIMEOUT_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_DA_GATE_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -442,6 +443,9 @@ static PENDING_RBC_EVICTED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static RBC_STORE_SESSIONS: AtomicU64 = AtomicU64::new(0);
 static RBC_STORE_BYTES: AtomicU64 = AtomicU64::new(0);
 static RBC_STORE_PRESSURE_LEVEL: AtomicU8 = AtomicU8::new(0);
+static RBC_STORE_PRESSURE_LOG_LEVEL: AtomicU8 = AtomicU8::new(0);
+static RBC_STORE_PRESSURE_LOG_LAST_SECS: AtomicU64 = AtomicU64::new(0);
+const RBC_STORE_PRESSURE_LOG_INTERVAL_SECS: u64 = 60;
 static RBC_STORE_BACKPRESSURE_DEFERRALS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static RBC_STORE_EVICTIONS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static RBC_DELIVER_DEFER_READY_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -2033,6 +2037,8 @@ pub struct BlockSyncRosterSnapshot {
     pub commit_roster_journal_total: u64,
     /// Total block-sync drops due to missing/invalid roster proofs.
     pub drop_missing_total: u64,
+    /// Total block-sync ShareBlocks drops without a matching request.
+    pub drop_unsolicited_share_blocks_total: u64,
 }
 
 /// Snapshot of view-change causes and timing.
@@ -2973,6 +2979,8 @@ fn block_sync_roster_snapshot() -> BlockSyncRosterSnapshot {
         commit_roster_journal_total: BLOCK_SYNC_ROSTER_COMMIT_ROSTER_JOURNAL_TOTAL
             .load(Ordering::Relaxed),
         drop_missing_total: BLOCK_SYNC_ROSTER_DROP_MISSING_TOTAL.load(Ordering::Relaxed),
+        drop_unsolicited_share_blocks_total: BLOCK_SYNC_ROSTER_DROP_UNSOLICITED_SHARE_BLOCKS_TOTAL
+            .load(Ordering::Relaxed),
     }
 }
 
@@ -3634,6 +3642,11 @@ pub fn inc_block_sync_roster_drop_missing() {
     BLOCK_SYNC_ROSTER_DROP_MISSING_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
+/// Increment counter when block sync drops ShareBlocks without a matching request.
+pub fn inc_block_sync_roster_drop_unsolicited_share_blocks() {
+    BLOCK_SYNC_ROSTER_DROP_UNSOLICITED_SHARE_BLOCKS_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
 /// Record the cause of a view change and timestamp it.
 pub fn record_view_change_cause(cause: &str) {
     #[cfg(test)]
@@ -3799,6 +3812,7 @@ pub(crate) fn reset_block_sync_counters_for_tests() {
     BLOCK_SYNC_ROSTER_ROSTER_SIDECAR_TOTAL.store(0, Ordering::Relaxed);
     BLOCK_SYNC_ROSTER_COMMIT_ROSTER_JOURNAL_TOTAL.store(0, Ordering::Relaxed);
     BLOCK_SYNC_ROSTER_DROP_MISSING_TOTAL.store(0, Ordering::Relaxed);
+    BLOCK_SYNC_ROSTER_DROP_UNSOLICITED_SHARE_BLOCKS_TOTAL.store(0, Ordering::Relaxed);
 }
 
 /// Reset the cached precommit signer history for unit tests.
@@ -4474,11 +4488,70 @@ pub fn update_lane_governance_from_statuses(statuses: &[LaneManifestStatus]) {
     set_lane_governance_snapshot(snapshots);
 }
 
+fn rbc_store_pressure_label(level: u8) -> &'static str {
+    match level {
+        0 => "normal",
+        1 => "soft",
+        2 => "hard",
+        _ => "unknown",
+    }
+}
+
+fn should_log_rbc_store_pressure(
+    level: u8,
+    prev_level: u8,
+    last_log_secs: u64,
+    now_secs: u64,
+) -> bool {
+    if level != prev_level {
+        return true;
+    }
+    if level == 0 {
+        return false;
+    }
+    now_secs.saturating_sub(last_log_secs) >= RBC_STORE_PRESSURE_LOG_INTERVAL_SECS
+}
+
+fn maybe_log_rbc_store_pressure(sessions: u64, bytes: u64, level: u8) {
+    // TODO: Temporary logging for soak diagnostics; remove or formalize once stable.
+    let prev_level = RBC_STORE_PRESSURE_LOG_LEVEL.load(Ordering::Relaxed);
+    let last_log_secs = RBC_STORE_PRESSURE_LOG_LAST_SECS.load(Ordering::Relaxed);
+    let now_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0);
+    if !should_log_rbc_store_pressure(level, prev_level, last_log_secs, now_secs) {
+        return;
+    }
+    RBC_STORE_PRESSURE_LOG_LEVEL.store(level, Ordering::Relaxed);
+    RBC_STORE_PRESSURE_LOG_LAST_SECS.store(now_secs, Ordering::Relaxed);
+
+    let level_label = rbc_store_pressure_label(level);
+    let prev_label = rbc_store_pressure_label(prev_level);
+    if level == 0 {
+        iroha_logger::info!(
+            sessions,
+            bytes,
+            previous = prev_label,
+            "RBC store pressure back to normal"
+        );
+    } else {
+        iroha_logger::warn!(
+            sessions,
+            bytes,
+            level = level_label,
+            previous = prev_label,
+            "RBC store pressure elevated"
+        );
+    }
+}
+
 /// Update the persisted RBC store pressure snapshot (sessions, bytes, pressure level).
 pub fn set_rbc_store_pressure(sessions: u64, bytes: u64, level: u8) {
     RBC_STORE_SESSIONS.store(sessions, Ordering::Relaxed);
     RBC_STORE_BYTES.store(bytes, Ordering::Relaxed);
     RBC_STORE_PRESSURE_LEVEL.store(level, Ordering::Relaxed);
+    maybe_log_rbc_store_pressure(sessions, bytes, level);
 }
 
 /// Record detailed information about RBC sessions evicted due to TTL or capacity enforcement.
@@ -5322,6 +5395,22 @@ pub(crate) fn reset_rbc_store_evictions_for_tests() {
 }
 
 #[cfg(test)]
+/// Reset the logged RBC pressure state for unit tests.
+pub(crate) fn reset_rbc_store_pressure_log_state_for_tests() {
+    RBC_STORE_PRESSURE_LOG_LEVEL.store(0, Ordering::Relaxed);
+    RBC_STORE_PRESSURE_LOG_LAST_SECS.store(0, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+/// Snapshot the logged RBC pressure state for unit tests.
+pub(crate) fn rbc_store_pressure_log_state_for_tests() -> (u8, u64) {
+    (
+        RBC_STORE_PRESSURE_LOG_LEVEL.load(Ordering::Relaxed),
+        RBC_STORE_PRESSURE_LOG_LAST_SECS.load(Ordering::Relaxed),
+    )
+}
+
+#[cfg(test)]
 pub(crate) fn reset_gossip_fallback_for_tests() {
     GOSSIP_FALLBACK_TOTAL.store(0, Ordering::Relaxed);
     BG_POST_DROP_POST_TOTAL.store(0, Ordering::Relaxed);
@@ -5940,6 +6029,7 @@ mod tests {
         super::inc_block_sync_roster_source("commit_checkpoint_pair_hint");
         super::inc_block_sync_roster_source("commit_roster_journal");
         super::inc_block_sync_roster_drop_missing();
+        super::inc_block_sync_roster_drop_unsolicited_share_blocks();
 
         let snapshot = super::snapshot();
         assert_eq!(snapshot.block_sync_drop_invalid_signatures_total, 1);
@@ -5949,6 +6039,10 @@ mod tests {
         assert_eq!(snapshot.block_sync_roster.checkpoint_hint_total, 1);
         assert_eq!(snapshot.block_sync_roster.commit_roster_journal_total, 1);
         assert_eq!(snapshot.block_sync_roster.drop_missing_total, 1);
+        assert_eq!(
+            snapshot.block_sync_roster.drop_unsolicited_share_blocks_total,
+            1
+        );
         super::reset_block_sync_counters_for_tests();
     }
 
@@ -6273,6 +6367,34 @@ mod tests {
         assert_eq!(oldest.block_hash, expected_oldest);
         assert_eq!(oldest.height, key_a.1);
         assert_eq!(oldest.view, key_a.2);
+    }
+
+    #[test]
+    fn rbc_store_pressure_log_state_updates_on_transition() {
+        let _guard = super::rbc_status_test_guard();
+        super::reset_rbc_store_pressure_log_state_for_tests();
+        super::set_rbc_store_pressure(2, 8_192, 2);
+        let (level, _stamp) = super::rbc_store_pressure_log_state_for_tests();
+        assert_eq!(level, 2);
+
+        super::set_rbc_store_pressure(0, 0, 0);
+        let (level, _stamp) = super::rbc_store_pressure_log_state_for_tests();
+        assert_eq!(level, 0);
+    }
+
+    #[test]
+    fn rbc_store_pressure_log_interval_respects_state() {
+        let interval = super::RBC_STORE_PRESSURE_LOG_INTERVAL_SECS;
+        assert!(super::should_log_rbc_store_pressure(1, 0, 0, 0));
+        assert!(super::should_log_rbc_store_pressure(0, 1, 10, 10));
+        assert!(!super::should_log_rbc_store_pressure(0, 0, 0, interval));
+        assert!(!super::should_log_rbc_store_pressure(
+            1,
+            1,
+            0,
+            interval.saturating_sub(1)
+        ));
+        assert!(super::should_log_rbc_store_pressure(1, 1, 0, interval));
     }
 
     #[test]

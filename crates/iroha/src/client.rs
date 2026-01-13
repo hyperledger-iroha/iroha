@@ -1606,6 +1606,42 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
         Value::from(wire.validation_rejects.last_timestamp_ms),
     );
 
+    let mut block_sync_roster = Map::new();
+    block_sync_roster.insert(
+        "commit_qc_hint_total".into(),
+        Value::from(wire.block_sync_roster.commit_qc_hint_total),
+    );
+    block_sync_roster.insert(
+        "checkpoint_hint_total".into(),
+        Value::from(wire.block_sync_roster.checkpoint_hint_total),
+    );
+    block_sync_roster.insert(
+        "commit_qc_history_total".into(),
+        Value::from(wire.block_sync_roster.commit_qc_history_total),
+    );
+    block_sync_roster.insert(
+        "checkpoint_history_total".into(),
+        Value::from(wire.block_sync_roster.checkpoint_history_total),
+    );
+    block_sync_roster.insert(
+        "roster_sidecar_total".into(),
+        Value::from(wire.block_sync_roster.roster_sidecar_total),
+    );
+    block_sync_roster.insert(
+        "commit_roster_journal_total".into(),
+        Value::from(wire.block_sync_roster.commit_roster_journal_total),
+    );
+    block_sync_roster.insert(
+        "drop_missing_total".into(),
+        Value::from(wire.block_sync_roster.drop_missing_total),
+    );
+    block_sync_roster.insert(
+        "drop_unsolicited_share_blocks_total".into(),
+        Value::from(wire.block_sync_roster.drop_unsolicited_share_blocks_total),
+    );
+    let mut block_sync = Map::new();
+    block_sync.insert("roster".into(), Value::Object(block_sync_roster));
+
     let mut tx_queue = Map::new();
     tx_queue.insert("depth".into(), Value::from(wire.tx_queue_depth));
     tx_queue.insert("capacity".into(), Value::from(wire.tx_queue_capacity));
@@ -2091,6 +2127,7 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
         "missing_block_fetch".into(),
         Value::Object(missing_block_fetch),
     );
+    root.insert("block_sync".into(), Value::Object(block_sync));
     root.insert("kura_store".into(), Value::Object(kura_store));
     root.insert("epoch".into(), {
         let mut map = Map::new();
@@ -10117,7 +10154,16 @@ mod tests {
             validation_reject_reason: None,
             validation_rejects: SumeragiValidationRejectStatus::default(),
             peer_key_policy: SumeragiPeerKeyPolicyStatus::default(),
-            block_sync_roster: SumeragiBlockSyncRosterStatus::default(),
+            block_sync_roster: SumeragiBlockSyncRosterStatus {
+                commit_qc_hint_total: 0,
+                checkpoint_hint_total: 0,
+                commit_qc_history_total: 0,
+                checkpoint_history_total: 0,
+                roster_sidecar_total: 0,
+                commit_roster_journal_total: 0,
+                drop_missing_total: 0,
+                drop_unsolicited_share_blocks_total: 4,
+            },
             pacemaker_backpressure_deferrals_total: 6,
             commit_pipeline_tick_total: 0,
             da_reschedule_total: 0,
@@ -12392,6 +12438,22 @@ mod tests {
                 .map(Vec::len),
             Some(0),
             "lane_governance_sealed_aliases mismatch"
+        );
+
+        let block_sync = root
+            .get("block_sync")
+            .and_then(Value::as_object)
+            .expect("block_sync object");
+        let roster = block_sync
+            .get("roster")
+            .and_then(Value::as_object)
+            .expect("block_sync roster object");
+        assert_eq!(
+            roster
+                .get("drop_unsolicited_share_blocks_total")
+                .and_then(Value::as_u64),
+            Some(4),
+            "block_sync roster drop_unsolicited_share_blocks_total mismatch"
         );
 
         let lane_governance = root

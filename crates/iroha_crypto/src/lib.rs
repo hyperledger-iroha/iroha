@@ -766,7 +766,7 @@ fn bls_collect_pks_with_pop<'a>(
 }
 
 /// Attempt aggregate verification for BLS (normal) when all messages are identical.
-/// Requires a valid Proof-of-Possession (PoP) per public key to prevent rogue-key attacks.
+/// Requires a valid Proof-of-Possession (`PoP`) per public key to prevent rogue-key attacks.
 /// Fallback: per-signature verify inside this function. Deterministic and hardware-stable.
 ///
 /// # Errors
@@ -978,7 +978,7 @@ pub fn bls_small_verify_aggregate_multi_message(
     }
 }
 /// Attempt aggregate verification for BLS (small) when all messages are identical.
-/// Requires a valid Proof-of-Possession (PoP) per public key to prevent rogue-key attacks.
+/// Requires a valid Proof-of-Possession (`PoP`) per public key to prevent rogue-key attacks.
 /// Fallback: per-signature verify inside this function.
 ///
 /// # Errors
@@ -1019,7 +1019,7 @@ pub fn bls_normal_aggregate_signatures(signatures: &[&[u8]]) -> Result<Vec<u8>, 
 }
 
 /// Verify a pre-aggregated BLS (normal) signature for the same-message case against a set of public keys.
-/// Requires a valid Proof-of-Possession (PoP) per public key to prevent rogue-key attacks.
+/// Requires a valid Proof-of-Possession (`PoP`) per public key to prevent rogue-key attacks.
 ///
 /// # Errors
 /// Returns `Err(Error::BadSignature)` on parse/verify failure.

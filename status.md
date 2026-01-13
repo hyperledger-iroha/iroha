@@ -1,6 +1,20 @@
 # Status
 
 ## Latest Updates
+- Torii/status: align the JSON status test with the `block_sync.roster` nesting.
+- Tests: not run (per request).
+- Sumeragi/status JSON: include block-sync roster fields when converting Norito payloads and refresh status docs to show `block_sync.roster`.
+- Tests: not run (per request).
+- Sumeragi/status: expose unsolicited ShareBlocks drop counter in block-sync roster snapshots and `/v1/sumeragi/status` payloads; update tests and docs.
+- Tests: not run (per request).
+- Sumeragi/view-change: prune stale pending blocks/RBC sessions/missing-block requests for older views at the active height to avoid rebroadcast floods; add unit coverage and update docs.
+- Tests: not run (per request).
+- Telemetry/P2P: add `p2p_queue_depth` gauges, wire queue-depth sampling, and log RBC store pressure transitions; update P2P/telemetry docs.
+- Format: `cargo fmt --all` (stable rustfmt warns about unstable options); tests not run (per request).
+- Telemetry/block sync: add `sumeragi_block_sync_share_blocks_unsolicited_total` for dropped unsolicited ShareBlocks, wire it into block-sync handling, and add unit coverage.
+- Tests: not run (per request).
+- Block sync: track outgoing `GetBlocksAfter` requests and drop unsolicited `ShareBlocks` batches before enqueueing into Sumeragi; add request-tracker unit coverage and update Sumeragi docs.
+- Tests: not run (per request).
 - Sumeragi/block sync: future-window gating now exempts BlockSyncUpdate when the parent payload is already known locally; added unit coverage for the parent-known exception.
 - Tests: not run (per request).
 - Sumeragi/block sync: add unit coverage ensuring future-window gating allows BlockSyncUpdate for already-tracked (pending) blocks.

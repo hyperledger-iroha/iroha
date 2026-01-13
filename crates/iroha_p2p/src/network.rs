@@ -368,6 +368,10 @@ static DROPPED_POSTS_LO: AtomicU64 = AtomicU64::new(0);
 /// High/Low split for bounded queue drops (broadcasts)
 static DROPPED_BROADCASTS_HI: AtomicU64 = AtomicU64::new(0);
 static DROPPED_BROADCASTS_LO: AtomicU64 = AtomicU64::new(0);
+/// Latest observed depth for the high-priority network message queue.
+static NETWORK_QUEUE_DEPTH_HIGH: AtomicU64 = AtomicU64::new(0);
+/// Latest observed depth for the low-priority network message queue.
+static NETWORK_QUEUE_DEPTH_LOW: AtomicU64 = AtomicU64::new(0);
 /// Count of DNS interval-based hostname refreshes performed.
 static DNS_REFRESHES: AtomicU64 = AtomicU64::new(0);
 /// Count of DNS TTL-based hostname refreshes performed.
@@ -609,6 +613,25 @@ pub fn dropped_broadcast_low_count() -> u64 {
     DROPPED_BROADCASTS_LO.load(Ordering::Relaxed)
 }
 
+/// Returns the last observed depth of the high-priority network queue.
+pub fn network_queue_depth_high() -> u64 {
+    NETWORK_QUEUE_DEPTH_HIGH.load(Ordering::Relaxed)
+}
+
+/// Returns the last observed depth of the low-priority network queue.
+pub fn network_queue_depth_low() -> u64 {
+    NETWORK_QUEUE_DEPTH_LOW.load(Ordering::Relaxed)
+}
+
+// TODO: Temporary queue-depth instrumentation for soak diagnostics; remove or formalize later.
+fn update_network_queue_depth_high(len: usize) {
+    NETWORK_QUEUE_DEPTH_HIGH.store(len as u64, Ordering::Relaxed);
+}
+
+fn update_network_queue_depth_low(len: usize) {
+    NETWORK_QUEUE_DEPTH_LOW.store(len as u64, Ordering::Relaxed);
+}
+
 /// Returns the number of inbound messages dropped because subscriber queues are full.
 pub fn subscriber_queue_full_count() -> u64 {
     SUBSCRIBER_QUEUE_FULL.load(Ordering::Relaxed)
@@ -696,6 +719,15 @@ pub fn inc_queue_drop_for_test(priority_high: bool, broadcast: bool, n: u64) {
         } else {
             DROPPED_POSTS_LO.fetch_add(n, Relaxed);
         }
+    }
+}
+
+/// Testing helper: set the observed network queue depth for High/Low queues.
+pub fn set_network_queue_depth_for_test(priority_high: bool, len: usize) {
+    if priority_high {
+        update_network_queue_depth_high(len);
+    } else {
+        update_network_queue_depth_low(len);
     }
 }
 
@@ -4158,6 +4190,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                         break;
                     };
                     let len = self.network_message_high_receiver.len();
+                    update_network_queue_depth_high(len);
                     if len > 100 {
                         if let Some(supp) = self.sampler_high_queue_warn.should_log(tokio::time::Duration::from_secs(1)) {
                             iroha_logger::warn!(size=len, suppressed=supp, "High-priority messages are piling up in the queue");
@@ -4175,6 +4208,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                         break;
                     };
                     let len = self.network_message_low_receiver.len();
+                    update_network_queue_depth_low(len);
                     if len > 100 {
                         if let Some(supp) = self.sampler_low_queue_warn.should_log(tokio::time::Duration::from_secs(1)) {
                             iroha_logger::warn!(size=len, suppressed=supp, "Low-priority messages are piling up in the queue");
@@ -5619,6 +5653,13 @@ mod tests {
             .expect("trust gossip test lock poisoned")
     }
 
+    fn queue_depth_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("queue depth test lock poisoned")
+    }
+
     #[allow(clippy::too_many_lines)]
     fn bare_network() -> Option<NetworkBase<DummyMsg, X25519Sha256, ChaCha20Poly1305>> {
         bare_network_with::<DummyMsg>()
@@ -6259,6 +6300,18 @@ mod tests {
             after_peer >= before_peer + 3,
             "trust-gossip should be grouped under peer gossip counters"
         );
+    }
+
+    #[test]
+    fn network_queue_depth_tracks_updates() {
+        let _guard = queue_depth_test_guard();
+        set_network_queue_depth_for_test(true, 0);
+        set_network_queue_depth_for_test(false, 0);
+        set_network_queue_depth_for_test(true, 12);
+        set_network_queue_depth_for_test(false, 7);
+
+        assert_eq!(network_queue_depth_high(), 12);
+        assert_eq!(network_queue_depth_low(), 7);
     }
 
     #[test]

@@ -5437,6 +5437,16 @@ impl Telemetry {
             .inc();
     }
 
+    /// Record that a block-sync ShareBlocks batch was dropped as unsolicited.
+    pub fn note_block_sync_unsolicited_share_blocks_drop(&self) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        self.metrics
+            .sumeragi_block_sync_share_blocks_unsolicited_total
+            .inc();
+    }
+
     /// Record a view-change trigger grouped by cause.
     pub fn note_view_change_cause(&self, cause: &'static str) {
         if !self.enabled.load(Ordering::Relaxed) {
@@ -8261,6 +8271,14 @@ impl Actor {
         self.metrics
             .p2p_ws_outbound_total
             .set(iroha_p2p::network::ws_outbound_total());
+        // High/Low bounded-queue depth (network actor queues)
+        let queue_depth = &self.metrics.p2p_queue_depth;
+        queue_depth
+            .with_label_values(&["High"])
+            .set(iroha_p2p::network::network_queue_depth_high());
+        queue_depth
+            .with_label_values(&["Low"])
+            .set(iroha_p2p::network::network_queue_depth_low());
         // High/Low bounded-queue drops (network actor queues)
         let drops = &self.metrics.p2p_queue_dropped_total;
         drops
@@ -8842,6 +8860,22 @@ mod tests {
                 .with_label_values(&["missing"])
                 .get(),
             1
+        );
+    }
+
+    #[test]
+    fn block_sync_unsolicited_share_blocks_metric_increments() {
+        let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
+        let telemetry = Telemetry::new(metrics.clone(), true);
+
+        telemetry.note_block_sync_unsolicited_share_blocks_drop();
+        telemetry.note_block_sync_unsolicited_share_blocks_drop();
+
+        assert_eq!(
+            metrics
+                .sumeragi_block_sync_share_blocks_unsolicited_total
+                .get(),
+            2
         );
     }
 
@@ -12320,6 +12354,19 @@ mod tests {
             drops.with_label_values(&["High", "Broadcast"]).get() >= baseline_high_broadcast + 5
         );
         assert!(drops.with_label_values(&["Low", "Broadcast"]).get() >= baseline_low_broadcast + 7);
+    }
+
+    #[tokio::test]
+    async fn p2p_queue_depth_metric_tracks_updates() {
+        let sut = SystemUnderTest::new();
+        iroha_p2p::network::set_network_queue_depth_for_test(true, 12);
+        iroha_p2p::network::set_network_queue_depth_for_test(false, 7);
+
+        sut.force_sync().await;
+        let metrics = sut.telemetry.metrics().await;
+        let depth = &metrics.p2p_queue_depth;
+        assert_eq!(depth.with_label_values(&["High"]).get(), 12);
+        assert_eq!(depth.with_label_values(&["Low"]).get(), 7);
     }
 
     #[tokio::test]

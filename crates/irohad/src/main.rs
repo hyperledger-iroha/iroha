@@ -2693,6 +2693,10 @@ impl Iroha {
                 .max_frame_bytes_block_sync
                 .min(global_plaintext)
         };
+        #[cfg(feature = "telemetry")]
+        let block_sync_telemetry = Some(telemetry.clone());
+        #[cfg(not(feature = "telemetry"))]
+        let block_sync_telemetry = None;
         let (block_sync, child) = BlockSynchronizer::from_config(
             &config.block_sync,
             sumeragi.clone(),
@@ -2700,6 +2704,7 @@ impl Iroha {
             config.common.peer.clone(),
             network.clone(),
             Arc::clone(&state),
+            block_sync_telemetry,
             config.sumeragi.consensus_mode,
             config.network.relay_ttl,
             block_sync_frame_cap,
