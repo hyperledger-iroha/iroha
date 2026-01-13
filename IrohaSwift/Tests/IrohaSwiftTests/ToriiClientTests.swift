@@ -1549,6 +1549,9 @@ final class ToriiClientTests: XCTestCase {
         let chargeAction = ToriiSubscriptionActionRequest(authority: "bob@wonderland",
                                                           privateKey: "ed25519:priv",
                                                           chargeAtMs: 1_704_067_200_000)
+        let cancelAction = ToriiSubscriptionActionRequest(authority: "bob@wonderland",
+                                                          privateKey: "ed25519:priv",
+                                                          cancelMode: .periodEnd)
         let usage = ToriiSubscriptionUsageRequest(authority: "alice@wonderland",
                                                   privateKey: "ed25519:priv",
                                                   unitKey: "compute_ms",
@@ -1556,7 +1559,8 @@ final class ToriiClientTests: XCTestCase {
                                                   usageTriggerId: "sub-usage")
         _ = try await client.pauseSubscription(subscriptionId: subscriptionId, requestBody: action)
         _ = try await client.resumeSubscription(subscriptionId: subscriptionId, requestBody: chargeAction)
-        _ = try await client.cancelSubscription(subscriptionId: subscriptionId, requestBody: action)
+        _ = try await client.cancelSubscription(subscriptionId: subscriptionId, requestBody: cancelAction)
+        _ = try await client.keepSubscription(subscriptionId: subscriptionId, requestBody: action)
         _ = try await client.chargeSubscriptionNow(subscriptionId: subscriptionId, requestBody: chargeAction)
         _ = try await client.recordSubscriptionUsage(subscriptionId: subscriptionId, requestBody: usage)
 
@@ -1566,6 +1570,9 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(resumeBody["charge_at_ms"] as? Int, 1_704_067_200_000)
         let cancelBody = captured["/v1/subscriptions/\(subscriptionId)/cancel"] ?? [:]
         XCTAssertEqual(cancelBody["private_key"] as? String, "ed25519:priv")
+        XCTAssertEqual(cancelBody["cancel_mode"] as? String, "period_end")
+        let keepBody = captured["/v1/subscriptions/\(subscriptionId)/keep"] ?? [:]
+        XCTAssertEqual(keepBody["authority"] as? String, "bob@wonderland")
         let chargeBody = captured["/v1/subscriptions/\(subscriptionId)/charge-now"] ?? [:]
         XCTAssertEqual(chargeBody["charge_at_ms"] as? Int, 1_704_067_200_000)
         let usageBody = captured["/v1/subscriptions/\(subscriptionId)/usage"] ?? [:]

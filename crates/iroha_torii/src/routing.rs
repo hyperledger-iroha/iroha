@@ -7376,6 +7376,28 @@ pub struct SubscriptionActionDto {
     /// Optional charge time override in UTC milliseconds.
     #[norito(default)]
     pub charge_at_ms: Option<u64>,
+    /// Optional cancel mode (`immediate` or `period_end`).
+    #[norito(default)]
+    pub cancel_mode: Option<SubscriptionCancelMode>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+    PartialEq,
+    Eq,
+)]
+#[norito(tag = "mode", content = "value", rename_all = "snake_case")]
+/// Cancelation mode for subscription cancel requests.
+pub enum SubscriptionCancelMode {
+    Immediate,
+    PeriodEnd,
 }
 
 #[cfg(feature = "app_api")]
@@ -35121,6 +35143,8 @@ pub async fn handle_post_v1_subscription_create(
         current_period_start_ms: period_start,
         current_period_end_ms: period_end,
         next_charge_ms: charge_at_ms,
+        cancel_at_period_end: false,
+        cancel_at_ms: None,
         failure_count: 0,
         usage_accumulated: std::collections::BTreeMap::new(),
         billing_trigger_id: billing_trigger_id.clone(),
@@ -35434,6 +35458,7 @@ pub async fn handle_post_v1_subscription_resume(
         authority,
         private_key,
         charge_at_ms,
+        ..
     } = req;
 
     let (mut subscription_state, owner, plan, billing_trigger_exists) = {
@@ -35538,6 +35563,7 @@ pub async fn handle_post_v1_subscription_cancel(
     let SubscriptionActionDto {
         authority,
         private_key,
+        cancel_mode,
         ..
     } = req;
 
@@ -35564,19 +35590,125 @@ pub async fn handle_post_v1_subscription_cancel(
             "subscription owner must match authority".to_string(),
         ));
     }
-    subscription_state.status = SubscriptionStatus::Canceled;
-
+    let cancel_mode = cancel_mode.unwrap_or(SubscriptionCancelMode::Immediate);
     let mut instructions = Vec::new();
-    instructions.push(InstructionBox::from(SetKeyValue::nft(
+    match cancel_mode {
+        SubscriptionCancelMode::Immediate => {
+            subscription_state.status = SubscriptionStatus::Canceled;
+            subscription_state.cancel_at_period_end = false;
+            subscription_state.cancel_at_ms = None;
+            instructions.push(InstructionBox::from(SetKeyValue::nft(
+                subscription_id.clone(),
+                (*SUBSCRIPTION_KEY).clone(),
+                IrohaJson::new(subscription_state.clone()),
+            )));
+            if billing_trigger_exists {
+                instructions.push(InstructionBox::from(Unregister::trigger(
+                    subscription_state.billing_trigger_id,
+                )));
+            }
+        }
+        SubscriptionCancelMode::PeriodEnd => {
+            if !matches!(
+                subscription_state.status,
+                SubscriptionStatus::Active | SubscriptionStatus::PastDue
+            ) {
+                return Err(conversion_error(
+                    "subscription must be active to cancel at period end".to_string(),
+                ));
+            }
+            subscription_state.cancel_at_period_end = true;
+            subscription_state.cancel_at_ms = Some(subscription_state.current_period_end_ms);
+            instructions.push(InstructionBox::from(SetKeyValue::nft(
+                subscription_id.clone(),
+                (*SUBSCRIPTION_KEY).clone(),
+                IrohaJson::new(subscription_state.clone()),
+            )));
+        }
+    }
+
+    let tx = TransactionBuilder::new((*chain_id).clone(), authority.clone())
+        .with_instructions(instructions)
+        .sign(&private_key.0);
+    let tx_hash_hex = hex::encode(tx.hash().as_ref());
+    handle_transaction_with_metrics(
+        chain_id,
+        queue,
+        state,
+        tx,
+        telemetry,
+        ENDPOINT_SUBSCRIPTIONS_LIST,
+    )
+    .await?;
+
+    let payload = SubscriptionActionResponseDto {
+        ok: true,
+        subscription_id,
+        tx_hash_hex,
+    };
+    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_v1_subscription_keep(
+    chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
+    subscription_id: NftId,
+    NoritoJson(req): NoritoJson<SubscriptionActionDto>,
+) -> Result<impl IntoResponse> {
+    let SubscriptionActionDto {
+        authority,
+        private_key,
+        ..
+    } = req;
+
+    let (mut subscription_state, owner) = {
+        let view = state.view();
+        let nft = view
+            .world()
+            .nfts()
+            .get(&subscription_id)
+            .ok_or_else(|| conversion_error("subscription nft not found".to_string()))?;
+        let subscription_state = subscription_state_from_metadata(&nft.content)?
+            .ok_or_else(|| conversion_error("subscription metadata missing".to_string()))?;
+        let owner = nft.owned_by.clone();
+        (subscription_state, owner)
+    };
+    if owner != authority {
+        return Err(conversion_error(
+            "subscription owner must match authority".to_string(),
+        ));
+    }
+    if !subscription_state.cancel_at_period_end {
+        return Err(conversion_error(
+            "subscription is not scheduled to cancel at period end".to_string(),
+        ));
+    }
+    if matches!(
+        subscription_state.status,
+        SubscriptionStatus::Canceled | SubscriptionStatus::Suspended
+    ) {
+        return Err(conversion_error(
+            "subscription cannot be kept from current status".to_string(),
+        ));
+    }
+    subscription_state.cancel_at_period_end = false;
+    subscription_state.cancel_at_ms = None;
+
+    let instructions = vec![InstructionBox::from(SetKeyValue::nft(
         subscription_id.clone(),
         (*SUBSCRIPTION_KEY).clone(),
         IrohaJson::new(subscription_state.clone()),
-    )));
-    if billing_trigger_exists {
-        instructions.push(InstructionBox::from(Unregister::trigger(
-            subscription_state.billing_trigger_id,
-        )));
-    }
+    ))];
 
     let tx = TransactionBuilder::new((*chain_id).clone(), authority.clone())
         .with_instructions(instructions)
@@ -35620,6 +35752,7 @@ pub async fn handle_post_v1_subscription_charge_now(
         authority,
         private_key,
         charge_at_ms,
+        ..
     } = req;
 
     let (mut subscription_state, owner, billing_trigger_exists) = {
@@ -35882,6 +36015,8 @@ mod subscription_api_tests {
             current_period_start_ms: 1_000,
             current_period_end_ms: 2_000,
             next_charge_ms: 2_000,
+            cancel_at_period_end: false,
+            cancel_at_ms: None,
             failure_count: 0,
             usage_accumulated: std::collections::BTreeMap::new(),
             billing_trigger_id,
@@ -36044,6 +36179,8 @@ mod subscription_api_tests {
             current_period_start_ms: 0,
             current_period_end_ms: 1_000,
             next_charge_ms: 1_000,
+            cancel_at_period_end: false,
+            cancel_at_ms: None,
             failure_count: 0,
             usage_accumulated: std::collections::BTreeMap::new(),
             billing_trigger_id,
@@ -36185,6 +36322,8 @@ mod subscription_api_tests {
             current_period_start_ms: 0,
             current_period_end_ms: 1_000,
             next_charge_ms: 1_000,
+            cancel_at_period_end: false,
+            cancel_at_ms: None,
             failure_count: 0,
             usage_accumulated: std::collections::BTreeMap::new(),
             billing_trigger_id: "bill_active".parse().unwrap(),
@@ -36258,6 +36397,8 @@ mod subscription_api_tests {
             current_period_start_ms: 0,
             current_period_end_ms: 1_000,
             next_charge_ms: 1_000,
+            cancel_at_period_end: false,
+            cancel_at_ms: None,
             failure_count: 0,
             usage_accumulated: std::collections::BTreeMap::new(),
             billing_trigger_id: "bill_invoice".parse().unwrap(),
@@ -36401,6 +36542,16 @@ mod subscription_api_tests {
             SubscriptionStatus::Paused,
             "bill_paused_actions".parse().unwrap(),
         );
+        let keep_id: NftId = "sub-keep-actions$wonderland".parse().unwrap();
+        let mut keep_state = sample_subscription_state(
+            plan_id.clone(),
+            provider.clone(),
+            subscriber.clone(),
+            SubscriptionStatus::Active,
+            "bill_keep_actions".parse().unwrap(),
+        );
+        keep_state.cancel_at_period_end = true;
+        keep_state.cancel_at_ms = Some(keep_state.current_period_end_ms);
         let state = state_with_plans_and_subscriptions(
             provider,
             subscriber.clone(),
@@ -36408,6 +36559,7 @@ mod subscription_api_tests {
             vec![
                 (active_id.clone(), active_state, None),
                 (paused_id.clone(), paused_state, None),
+                (keep_id.clone(), keep_state, None),
             ],
         );
         let (queue, chain_id, telemetry) = test_queue_components();
@@ -36416,6 +36568,7 @@ mod subscription_api_tests {
             authority: subscriber.clone(),
             private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
             charge_at_ms: None,
+            cancel_mode: None,
         };
         let resp = handle_post_v1_subscription_pause(
             chain_id.clone(),
@@ -36435,6 +36588,7 @@ mod subscription_api_tests {
             authority: subscriber.clone(),
             private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
             charge_at_ms: Some(5_000),
+            cancel_mode: None,
         };
         let resp = handle_post_v1_subscription_resume(
             chain_id.clone(),
@@ -36454,6 +36608,7 @@ mod subscription_api_tests {
             authority: subscriber.clone(),
             private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
             charge_at_ms: None,
+            cancel_mode: None,
         };
         let resp = handle_post_v1_subscription_cancel(
             chain_id.clone(),
@@ -36469,10 +36624,31 @@ mod subscription_api_tests {
         assert_eq!(queue.tx_len(), 3);
         assert_action_ok(resp, &active_id).await;
 
+        let keep_req = SubscriptionActionDto {
+            authority: subscriber.clone(),
+            private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
+            charge_at_ms: None,
+            cancel_mode: None,
+        };
+        let resp = handle_post_v1_subscription_keep(
+            chain_id.clone(),
+            queue.clone(),
+            state.clone(),
+            telemetry.clone(),
+            keep_id.clone(),
+            NoritoJson(keep_req),
+        )
+        .await
+        .expect("keep ok")
+        .into_response();
+        assert_eq!(queue.tx_len(), 4);
+        assert_action_ok(resp, &keep_id).await;
+
         let charge_req = SubscriptionActionDto {
             authority: subscriber.clone(),
             private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
             charge_at_ms: Some(9_000),
+            cancel_mode: None,
         };
         let resp = handle_post_v1_subscription_charge_now(
             chain_id.clone(),
@@ -36485,7 +36661,7 @@ mod subscription_api_tests {
         .await
         .expect("charge-now ok")
         .into_response();
-        assert_eq!(queue.tx_len(), 4);
+        assert_eq!(queue.tx_len(), 5);
         assert_action_ok(resp, &active_id).await;
 
         let usage_req = SubscriptionUsageRequestDto {

@@ -16,7 +16,7 @@ mod i18n;
 
 use std::{
     borrow::Cow,
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     convert::TryFrom,
     env,
     ffi::OsString,
@@ -27,7 +27,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crate::genesis_bootstrap::GenesisBootstrapper;
@@ -638,42 +638,440 @@ struct NetworkRelay {
     streaming: iroha_core::streaming::StreamingHandle,
     kiso: KisoHandle,
     suppress_pow_broadcast: Arc<AtomicBool>,
+    consensus_ingress: ConsensusIngressLimiter,
+}
+
+/// Maximum number of consecutive high-priority messages before yielding to low-priority work.
+const RELAY_HIGH_BURST: usize = 32;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConsensusIngressDropReason {
+    Rate,
+    Bytes,
+    RbcSessionLimit,
+    Penalty,
+}
+
+impl ConsensusIngressDropReason {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Rate => "rate",
+            Self::Bytes => "bytes",
+            Self::RbcSessionLimit => "rbc_session_limit",
+            Self::Penalty => "penalty",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct BucketConfig {
+    rate_per_sec: std::num::NonZeroU32,
+    burst: std::num::NonZeroU32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PenaltyConfig {
+    threshold: u32,
+    window: Duration,
+    cooldown: Duration,
+}
+
+struct ConsensusIngressLimiter {
+    msg_rate: Option<BucketConfig>,
+    bytes_rate: Option<BucketConfig>,
+    rbc_session_limit: usize,
+    rbc_session_ttl: Duration,
+    penalty: PenaltyConfig,
+    peers: HashMap<PeerId, PeerIngressState>,
+}
+
+struct PeerIngressState {
+    msg_bucket: Option<TokenBucket>,
+    bytes_bucket: Option<TokenBucket>,
+    rbc_sessions: HashMap<iroha_core::sumeragi::rbc_store::SessionKey, Instant>,
+    penalty: PenaltyTracker,
+}
+
+#[derive(Debug)]
+struct PenaltyTracker {
+    threshold: u32,
+    window: Duration,
+    cooldown: Duration,
+    window_start: Option<Instant>,
+    count: u32,
+    cooldown_until: Option<Instant>,
+}
+
+#[derive(Debug)]
+struct TokenBucket {
+    rate_per_sec: f64,
+    capacity: f64,
+    tokens: f64,
+    last_refill: Instant,
+}
+
+impl ConsensusIngressLimiter {
+    fn from_config(
+        network: &iroha_config::parameters::actual::Network,
+        sumeragi: &iroha_config::parameters::actual::Sumeragi,
+    ) -> Self {
+        let msg_rate = network.consensus_ingress_rate_per_sec.map(|rate| BucketConfig {
+            rate_per_sec: rate,
+            burst: network.consensus_ingress_burst.unwrap_or(rate),
+        });
+        let bytes_rate = network.consensus_ingress_bytes_per_sec.map(|rate| BucketConfig {
+            rate_per_sec: rate,
+            burst: network.consensus_ingress_bytes_burst.unwrap_or(rate),
+        });
+        let penalty = PenaltyConfig {
+            threshold: network.consensus_ingress_penalty_threshold,
+            window: network.consensus_ingress_penalty_window,
+            cooldown: network.consensus_ingress_penalty_cooldown,
+        };
+        Self::new(
+            msg_rate,
+            bytes_rate,
+            network.consensus_ingress_rbc_session_limit,
+            sumeragi.rbc_session_ttl,
+            penalty,
+        )
+    }
+
+    fn new(
+        msg_rate: Option<BucketConfig>,
+        bytes_rate: Option<BucketConfig>,
+        rbc_session_limit: usize,
+        rbc_session_ttl: Duration,
+        penalty: PenaltyConfig,
+    ) -> Self {
+        Self {
+            msg_rate,
+            bytes_rate,
+            rbc_session_limit,
+            rbc_session_ttl,
+            penalty,
+            peers: HashMap::new(),
+        }
+    }
+
+    fn should_drop(
+        &mut self,
+        peer: &Peer,
+        msg: &iroha_core::NetworkMessage,
+        size_bytes: usize,
+    ) -> Option<ConsensusIngressDropReason> {
+        let now = Instant::now();
+        let entry = self
+            .peers
+            .entry(peer.id().clone())
+            .or_insert_with(|| {
+                PeerIngressState::new(now, self.msg_rate, self.bytes_rate, self.penalty)
+            });
+        if entry.penalty.is_suppressed(now) {
+            return Some(ConsensusIngressDropReason::Penalty);
+        }
+        if let Some(bucket) = entry.msg_bucket.as_mut() {
+            if !bucket.allow(1.0, now) {
+                entry.penalty.note_violation(now);
+                return Some(ConsensusIngressDropReason::Rate);
+            }
+        }
+        if let Some(bucket) = entry.bytes_bucket.as_mut() {
+            if !bucket.allow(size_bytes as f64, now) {
+                entry.penalty.note_violation(now);
+                return Some(ConsensusIngressDropReason::Bytes);
+            }
+        }
+        if let Some(key) = Self::rbc_session_key(msg) {
+            if self.rbc_session_limit > 0 {
+                entry.prune_rbc_sessions(now, self.rbc_session_ttl);
+                if !entry.rbc_sessions.contains_key(&key)
+                    && entry.rbc_sessions.len() >= self.rbc_session_limit
+                {
+                    entry.penalty.note_violation(now);
+                    return Some(ConsensusIngressDropReason::RbcSessionLimit);
+                }
+                entry.rbc_sessions.insert(key, now);
+            }
+        }
+        None
+    }
+
+    fn rbc_session_key(
+        msg: &iroha_core::NetworkMessage,
+    ) -> Option<iroha_core::sumeragi::rbc_store::SessionKey> {
+        let iroha_core::NetworkMessage::SumeragiBlock(block) = msg else {
+            return None;
+        };
+        use iroha_core::sumeragi::message::BlockMessage::*;
+        match block.as_ref() {
+            RbcInit(init) => Some((init.block_hash, init.height, init.view)),
+            RbcChunk(chunk) => Some((chunk.block_hash, chunk.height, chunk.view)),
+            RbcReady(ready) => Some((ready.block_hash, ready.height, ready.view)),
+            RbcDeliver(deliver) => Some((deliver.block_hash, deliver.height, deliver.view)),
+            _ => None,
+        }
+    }
+}
+
+impl PeerIngressState {
+    fn new(
+        now: Instant,
+        msg_rate: Option<BucketConfig>,
+        bytes_rate: Option<BucketConfig>,
+        penalty: PenaltyConfig,
+    ) -> Self {
+        Self {
+            msg_bucket: msg_rate.map(|cfg| TokenBucket::new(cfg, now)),
+            bytes_bucket: bytes_rate.map(|cfg| TokenBucket::new(cfg, now)),
+            rbc_sessions: HashMap::new(),
+            penalty: PenaltyTracker::new(penalty),
+        }
+    }
+
+    fn prune_rbc_sessions(&mut self, now: Instant, ttl: Duration) {
+        if ttl.is_zero() {
+            self.rbc_sessions.clear();
+            return;
+        }
+        self.rbc_sessions
+            .retain(|_, seen| now.saturating_duration_since(*seen) <= ttl);
+    }
+}
+
+impl PenaltyTracker {
+    fn new(config: PenaltyConfig) -> Self {
+        Self {
+            threshold: config.threshold,
+            window: config.window,
+            cooldown: config.cooldown,
+            window_start: None,
+            count: 0,
+            cooldown_until: None,
+        }
+    }
+
+    fn is_suppressed(&mut self, now: Instant) -> bool {
+        if self.threshold == 0 {
+            return false;
+        }
+        if let Some(until) = self.cooldown_until {
+            if now < until {
+                return true;
+            }
+            self.cooldown_until = None;
+        }
+        false
+    }
+
+    fn note_violation(&mut self, now: Instant) {
+        if self.threshold == 0 {
+            return;
+        }
+        let window_expired = self
+            .window_start
+            .map(|start| now.saturating_duration_since(start) > self.window)
+            .unwrap_or(true);
+        if window_expired {
+            self.window_start = Some(now);
+            self.count = 0;
+        }
+        self.count = self.count.saturating_add(1);
+        if self.count >= self.threshold {
+            self.count = 0;
+            self.window_start = Some(now);
+            if !self.cooldown.is_zero() {
+                self.cooldown_until = Some(now.checked_add(self.cooldown).unwrap_or(now));
+            }
+        }
+    }
+}
+
+impl TokenBucket {
+    fn new(config: BucketConfig, now: Instant) -> Self {
+        let capacity = config.burst.get() as f64;
+        Self {
+            rate_per_sec: config.rate_per_sec.get() as f64,
+            capacity,
+            tokens: capacity,
+            last_refill: now,
+        }
+    }
+
+    fn allow(&mut self, cost: f64, now: Instant) -> bool {
+        if cost <= 0.0 {
+            return true;
+        }
+        self.refill(now);
+        if cost > self.capacity {
+            return false;
+        }
+        if self.tokens >= cost {
+            self.tokens -= cost;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn refill(&mut self, now: Instant) {
+        let elapsed = now.saturating_duration_since(self.last_refill);
+        if elapsed.is_zero() {
+            return;
+        }
+        let added = elapsed.as_secs_f64() * self.rate_per_sec;
+        self.tokens = (self.tokens + added).min(self.capacity);
+        self.last_refill = now;
+    }
+}
+
+fn try_recv_low_after_burst<T>(
+    receiver: &mut mpsc::Receiver<T>,
+    high_budget: &mut usize,
+    high_burst: usize,
+) -> Option<T> {
+    use tokio::sync::mpsc::error::TryRecvError;
+
+    if *high_budget != 0 {
+        return None;
+    }
+    let msg = match receiver.try_recv() {
+        Ok(msg) => Some(msg),
+        Err(TryRecvError::Empty | TryRecvError::Disconnected) => None,
+    };
+    *high_budget = high_burst;
+    msg
 }
 
 impl NetworkRelay {
     async fn run(mut self) {
-        let (sender, mut receiver) = mpsc::channel(self.network.subscriber_queue_cap().get());
-        let mut sender = sender;
+        use iroha_p2p::network::{SubscriberFilter, message::Topic};
+
+        let cap = self.network.subscriber_queue_cap().get();
+        let (high_sender, mut high_receiver) = mpsc::channel(cap);
+        let (low_sender, mut low_receiver) = mpsc::channel(cap);
+
+        let high_filter = SubscriberFilter::topics([
+            Topic::Consensus,
+            Topic::Control,
+            Topic::BlockSync,
+        ]);
+        let low_filter = SubscriberFilter::topics([
+            Topic::TxGossip,
+            Topic::TxGossipRestricted,
+            Topic::PeerGossip,
+            Topic::TrustGossip,
+            Topic::Health,
+            Topic::Other,
+        ]);
+
+        let mut high_sender = Some(high_sender);
+        let mut low_sender = Some(low_sender);
         loop {
-            match self.network.subscribe_to_peers_messages(sender) {
-                Ok(()) => {
-                    iroha_logger::info!("registered consensus relay subscriber");
+            if let Some(sender) = high_sender.take() {
+                match self
+                    .network
+                    .subscribe_to_peers_messages_with_filter(sender, high_filter.clone())
+                {
+                    Ok(()) => {
+                        iroha_logger::info!("registered high-priority relay subscriber");
+                    }
+                    Err(returned) => {
+                        iroha_logger::warn!("retrying high-priority P2P subscriber registration");
+                        high_sender = Some(returned);
+                    }
+                }
+            }
+
+            if let Some(sender) = low_sender.take() {
+                match self
+                    .network
+                    .subscribe_to_peers_messages_with_filter(sender, low_filter.clone())
+                {
+                    Ok(()) => {
+                        iroha_logger::info!("registered low-priority relay subscriber");
+                    }
+                    Err(returned) => {
+                        iroha_logger::warn!("retrying low-priority P2P subscriber registration");
+                        low_sender = Some(returned);
+                    }
+                }
+            }
+
+            if high_sender.is_none() && low_sender.is_none() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        // Ensure low-priority queues make progress without stalling consensus traffic.
+        let mut high_budget = RELAY_HIGH_BURST;
+        loop {
+            if let Some(msg) =
+                try_recv_low_after_burst(&mut low_receiver, &mut high_budget, RELAY_HIGH_BURST)
+            {
+                if let iroha_core::NetworkMessage::BlockSync(block_sync) = &msg.payload
+                    && let iroha_core::block_sync::message::Message::ShareBlocks(share) =
+                        block_sync.as_ref()
+                {
+                    iroha_logger::debug!(
+                        %msg.peer,
+                        from = %share.peer_id,
+                        count = share.blocks.len(),
+                        first_height = share.blocks.first().map(|b| b.header().height().get()),
+                        last_height = share.blocks.last().map(|b| b.header().height().get()),
+                        size_bytes = msg.payload_bytes,
+                        "relay delivering block sync response to handler"
+                    );
+                }
+                self.handle_message(msg.peer, msg.payload, msg.payload_bytes)
+                    .await;
+                continue;
+            }
+            tokio::select! {
+                biased;
+                Some(msg) = high_receiver.recv() => {
+                    high_budget = high_budget.saturating_sub(1);
+                    if let iroha_core::NetworkMessage::BlockSync(block_sync) = &msg.payload
+                        && let iroha_core::block_sync::message::Message::ShareBlocks(share) =
+                            block_sync.as_ref()
+                    {
+                        iroha_logger::debug!(
+                            %msg.peer,
+                            from = %share.peer_id,
+                            count = share.blocks.len(),
+                            first_height = share.blocks.first().map(|b| b.header().height().get()),
+                            last_height = share.blocks.last().map(|b| b.header().height().get()),
+                            size_bytes = msg.payload_bytes,
+                            "relay delivering block sync response to handler"
+                        );
+                    }
+                    self.handle_message(msg.peer, msg.payload, msg.payload_bytes)
+                        .await;
+                }
+                Some(msg) = low_receiver.recv() => {
+                    high_budget = RELAY_HIGH_BURST;
+                    if let iroha_core::NetworkMessage::BlockSync(block_sync) = &msg.payload
+                        && let iroha_core::block_sync::message::Message::ShareBlocks(share) =
+                            block_sync.as_ref()
+                    {
+                        iroha_logger::debug!(
+                            %msg.peer,
+                            from = %share.peer_id,
+                            count = share.blocks.len(),
+                            first_height = share.blocks.first().map(|b| b.header().height().get()),
+                            last_height = share.blocks.last().map(|b| b.header().height().get()),
+                            size_bytes = msg.payload_bytes,
+                            "relay delivering block sync response to handler"
+                        );
+                    }
+                    self.handle_message(msg.peer, msg.payload, msg.payload_bytes)
+                        .await;
+                }
+                else => {
                     break;
                 }
-                Err(returned) => {
-                    iroha_logger::warn!("retrying P2P subscriber registration");
-                    sender = returned;
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                }
             }
-        }
-        while let Some(msg) = receiver.recv().await {
-            if let iroha_core::NetworkMessage::BlockSync(block_sync) = &msg.payload
-                && let iroha_core::block_sync::message::Message::ShareBlocks(share) =
-                    block_sync.as_ref()
-            {
-                iroha_logger::debug!(
-                    %msg.peer,
-                    from = %share.peer_id,
-                    count = share.blocks.len(),
-                    first_height = share.blocks.first().map(|b| b.header().height().get()),
-                    last_height = share.blocks.last().map(|b| b.header().height().get()),
-                    size_bytes = msg.payload_bytes,
-                    "relay delivering block sync response to handler"
-                );
-            }
-            self.handle_message(msg.peer, msg.payload, msg.payload_bytes)
-                .await;
         }
         iroha_logger::debug!("Exiting the network relay");
     }
@@ -686,6 +1084,37 @@ impl NetworkRelay {
     ) {
         use iroha_core::NetworkMessage::*;
 
+        if matches!(&msg, SumeragiBlock(_) | SumeragiControlFlow(_) | BlockSync(_)) {
+            if let Some(reason) = self.consensus_ingress.should_drop(&peer, &msg, size_bytes) {
+                let (kind, height, view) = match &msg {
+                    SumeragiBlock(data) => Self::block_message_meta(data.as_ref()),
+                    SumeragiControlFlow(data) => Self::control_flow_meta(data.as_ref()),
+                    BlockSync(data) => {
+                        let label = match data.as_ref() {
+                            iroha_core::block_sync::message::Message::GetBlocksAfter(_) => {
+                                "BlockSyncRequest"
+                            }
+                            iroha_core::block_sync::message::Message::ShareBlocks(_) => {
+                                "BlockSyncResponse"
+                            }
+                        };
+                        (label, None, None)
+                    }
+                    _ => ("Other", None, None),
+                };
+                iroha_logger::debug!(
+                    %peer,
+                    ?height,
+                    ?view,
+                    size_bytes,
+                    kind,
+                    reason = reason.label(),
+                    "dropping inbound consensus message due to ingress limits"
+                );
+                return;
+            }
+        }
+
         match msg {
             SumeragiBlock(data) => {
                 let (kind, height, view) = Self::block_message_meta(data.as_ref());
@@ -697,7 +1126,11 @@ impl NetworkRelay {
                     kind,
                     "relay received sumeragi block message"
                 );
-                let _ = self.sumeragi.try_incoming_block_message(*data);
+                let sumeragi = self.sumeragi.clone();
+                enqueue_sumeragi_block_message(*data, move |msg| {
+                    let _ = sumeragi.try_incoming_block_message(msg);
+                })
+                .await;
             }
             SumeragiControlFlow(data) => {
                 let (kind, height, view) = Self::control_flow_meta(data.as_ref());
@@ -912,6 +1345,271 @@ impl NetworkRelay {
         {
             iroha_logger::warn!(?err, "Failed to apply remote PoW configuration update");
         }
+    }
+}
+
+async fn enqueue_sumeragi_block_message<F>(msg: iroha_core::sumeragi::message::BlockMessage, enqueue: F)
+where
+    F: FnOnce(iroha_core::sumeragi::message::BlockMessage) + Send + 'static,
+{
+    if matches!(
+        msg,
+        iroha_core::sumeragi::message::BlockMessage::BlockSyncUpdate(_)
+            | iroha_core::sumeragi::message::BlockMessage::RbcReady(_)
+            | iroha_core::sumeragi::message::BlockMessage::RbcDeliver(_)
+    ) {
+        let kind = match &msg {
+            iroha_core::sumeragi::message::BlockMessage::BlockSyncUpdate(_) => "BlockSyncUpdate",
+            iroha_core::sumeragi::message::BlockMessage::RbcReady(_) => "RbcReady",
+            iroha_core::sumeragi::message::BlockMessage::RbcDeliver(_) => "RbcDeliver",
+            _ => "Other",
+        };
+        let enqueue = tokio::task::spawn_blocking(move || {
+            enqueue(msg);
+        });
+        if let Err(err) = enqueue.await {
+            iroha_logger::warn!(
+                ?err,
+                kind,
+                "relay failed to enqueue blocking sumeragi message"
+            );
+        }
+    } else {
+        enqueue(msg);
+    }
+}
+
+#[cfg(test)]
+mod network_relay_tests {
+    use std::time::{Duration, Instant};
+
+    use iroha_core::{
+        block::BlockBuilder,
+        sumeragi::message::{BlockMessage, BlockSyncUpdate, ConsensusParamsAdvert},
+    };
+    use iroha_crypto::{Hash, HashOf, KeyPair};
+    use iroha_data_model::{block::BlockHeader, peer::Peer};
+
+    use super::{
+        BucketConfig, ConsensusIngressDropReason, ConsensusIngressLimiter, PenaltyConfig,
+        enqueue_sumeragi_block_message,
+    };
+
+    #[test]
+    fn relay_enqueue_does_not_block_tokio_timer_on_blocking_message() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("tokio runtime");
+
+        runtime.block_on(async {
+            let (tx, rx) = std::sync::mpsc::sync_channel(0);
+            let keypair = KeyPair::random();
+            let new_block = BlockBuilder::new(Vec::new())
+                .chain(0, None)
+                .sign(keypair.private_key())
+                .unpack(|_| {});
+            let signed = iroha_data_model::block::SignedBlock::from(new_block);
+            let update = BlockSyncUpdate::from(&signed);
+            let msg = BlockMessage::BlockSyncUpdate(update);
+
+            let unblock_delay = Duration::from_millis(200);
+            let unblock = std::thread::spawn(move || {
+                std::thread::sleep(unblock_delay);
+                rx
+                    .recv_timeout(Duration::from_secs(1))
+                    .expect("expected block sync update");
+            });
+
+            let start = Instant::now();
+            let enqueue = enqueue_sumeragi_block_message(msg, move |msg| {
+                tx.send(msg).expect("enqueue message");
+            });
+            tokio::pin!(enqueue);
+            let timer = tokio::time::sleep(Duration::from_millis(20));
+            tokio::pin!(timer);
+
+            tokio::select! {
+                biased;
+                _ = &mut enqueue => {
+                    panic!("blocking block sync update should wait for queue capacity");
+                }
+                _ = &mut timer => {
+                    let elapsed = start.elapsed();
+                    assert!(
+                        elapsed < Duration::from_millis(150),
+                        "timer delayed by relay enqueue: {elapsed:?}"
+                    );
+                }
+            }
+
+            enqueue.await;
+            unblock.join().expect("unblock thread");
+        });
+    }
+
+    fn sample_peer() -> Peer {
+        let keypair = KeyPair::random();
+        Peer::new(
+            "127.0.0.1:0".parse().expect("socket address"),
+            keypair.public_key().clone(),
+        )
+    }
+
+    fn nz_u32(value: u32) -> std::num::NonZeroU32 {
+        std::num::NonZeroU32::new(value).expect("non-zero")
+    }
+
+    fn consensus_params_msg() -> iroha_core::NetworkMessage {
+        let advert = ConsensusParamsAdvert {
+            collectors_k: 1,
+            redundant_send_r: 1,
+            membership: None,
+        };
+        iroha_core::NetworkMessage::SumeragiBlock(Box::new(BlockMessage::ConsensusParams(advert)))
+    }
+
+    fn rbc_init_msg(tag: u8, height: u64, view: u64) -> iroha_core::NetworkMessage {
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([tag; 32]));
+        let init = iroha_core::sumeragi::consensus::RbcInit {
+            block_hash,
+            height,
+            view,
+            epoch: 0,
+            roster: Vec::new(),
+            roster_hash: Hash::prehashed([0x11; 32]),
+            total_chunks: 1,
+            chunk_digests: vec![[0x22; 32]],
+            payload_hash: Hash::prehashed([0x33; 32]),
+            chunk_root: Hash::prehashed([0x44; 32]),
+        };
+        iroha_core::NetworkMessage::SumeragiBlock(Box::new(BlockMessage::RbcInit(init)))
+    }
+
+    fn rbc_chunk_msg(tag: u8, height: u64, view: u64) -> iroha_core::NetworkMessage {
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([tag; 32]));
+        let chunk = iroha_core::sumeragi::consensus::RbcChunk {
+            block_hash,
+            height,
+            view,
+            epoch: 0,
+            idx: 0,
+            bytes: vec![0xCD; 4],
+        };
+        iroha_core::NetworkMessage::SumeragiBlock(Box::new(BlockMessage::RbcChunk(chunk)))
+    }
+
+    #[test]
+    fn consensus_ingress_rate_limit_drops_burst() {
+        let peer = sample_peer();
+        let msg = consensus_params_msg();
+        let mut limiter = ConsensusIngressLimiter::new(
+            Some(BucketConfig {
+                rate_per_sec: nz_u32(1),
+                burst: nz_u32(1),
+            }),
+            None,
+            0,
+            Duration::from_secs(1),
+            PenaltyConfig {
+                threshold: 0,
+                window: Duration::from_secs(1),
+                cooldown: Duration::from_secs(1),
+            },
+        );
+
+        assert_eq!(limiter.should_drop(&peer, &msg, 32), None);
+        assert_eq!(
+            limiter.should_drop(&peer, &msg, 32),
+            Some(ConsensusIngressDropReason::Rate)
+        );
+    }
+
+    #[test]
+    fn consensus_ingress_bytes_limit_drops_oversize() {
+        let peer = sample_peer();
+        let msg = consensus_params_msg();
+        let mut limiter = ConsensusIngressLimiter::new(
+            None,
+            Some(BucketConfig {
+                rate_per_sec: nz_u32(10),
+                burst: nz_u32(10),
+            }),
+            0,
+            Duration::from_secs(1),
+            PenaltyConfig {
+                threshold: 0,
+                window: Duration::from_secs(1),
+                cooldown: Duration::from_secs(1),
+            },
+        );
+
+        assert_eq!(
+            limiter.should_drop(&peer, &msg, 20),
+            Some(ConsensusIngressDropReason::Bytes)
+        );
+        assert_eq!(limiter.should_drop(&peer, &msg, 5), None);
+    }
+
+    #[test]
+    fn consensus_ingress_rbc_session_limit_counts_unique_sessions() {
+        let peer = sample_peer();
+        let mut limiter = ConsensusIngressLimiter::new(
+            None,
+            None,
+            1,
+            Duration::from_secs(60),
+            PenaltyConfig {
+                threshold: 0,
+                window: Duration::from_secs(1),
+                cooldown: Duration::from_secs(1),
+            },
+        );
+
+        let first = rbc_init_msg(0x01, 2, 0);
+        let same_session = rbc_chunk_msg(0x01, 2, 0);
+        let second = rbc_init_msg(0x02, 3, 0);
+
+        assert_eq!(limiter.should_drop(&peer, &first, 128), None);
+        assert_eq!(limiter.should_drop(&peer, &same_session, 64), None);
+        assert_eq!(
+            limiter.should_drop(&peer, &second, 128),
+            Some(ConsensusIngressDropReason::RbcSessionLimit)
+        );
+    }
+
+    #[test]
+    fn consensus_ingress_penalty_suppresses_after_threshold() {
+        let peer = sample_peer();
+        let msg = consensus_params_msg();
+        let mut limiter = ConsensusIngressLimiter::new(
+            Some(BucketConfig {
+                rate_per_sec: nz_u32(1),
+                burst: nz_u32(1),
+            }),
+            None,
+            0,
+            Duration::from_secs(1),
+            PenaltyConfig {
+                threshold: 2,
+                window: Duration::from_secs(5),
+                cooldown: Duration::from_secs(30),
+            },
+        );
+
+        assert_eq!(limiter.should_drop(&peer, &msg, 8), None);
+        assert_eq!(
+            limiter.should_drop(&peer, &msg, 8),
+            Some(ConsensusIngressDropReason::Rate)
+        );
+        assert_eq!(
+            limiter.should_drop(&peer, &msg, 8),
+            Some(ConsensusIngressDropReason::Rate)
+        );
+        assert_eq!(
+            limiter.should_drop(&peer, &msg, 8),
+            Some(ConsensusIngressDropReason::Penalty)
+        );
     }
 }
 
@@ -1802,6 +2500,7 @@ impl Iroha {
             config.common.trusted_peers.value().clone(),
             config.common.key_pair.clone(),
             config.network.peer_gossip_period,
+            config.network.peer_gossip_max_period,
             config.sumeragi.consensus_mode,
             config.network.trust_decay_half_life,
             config.network.trust_penalty_bad_gossip,
@@ -2070,6 +2769,10 @@ impl Iroha {
                 streaming: streaming.clone(),
                 kiso: kiso.clone(),
                 suppress_pow_broadcast: Arc::clone(&suppress_pow_broadcast),
+                consensus_ingress: ConsensusIngressLimiter::from_config(
+                    &config.network,
+                    &config.sumeragi,
+                ),
             }
             .run(),
         ));
@@ -4759,6 +5462,49 @@ mod tests {
             assert!(overrides.dispatch_trace);
             assert!(overrides.debug_enum);
             assert!(!overrides.debug_fused);
+        }
+    }
+
+    mod relay_fairness {
+        use super::*;
+        use tokio::sync::mpsc;
+        use tokio::sync::mpsc::error::TryRecvError;
+
+        #[test]
+        fn try_recv_low_after_burst_skips_when_budget_remaining() {
+            let (tx, mut rx) = mpsc::channel(1);
+            tx.try_send(7).expect("send low message");
+            let mut budget = 1;
+
+            let msg = try_recv_low_after_burst(&mut rx, &mut budget, 4);
+
+            assert!(msg.is_none());
+            assert_eq!(budget, 1);
+            assert!(matches!(rx.try_recv(), Ok(7)));
+        }
+
+        #[test]
+        fn try_recv_low_after_burst_consumes_when_due() {
+            let (tx, mut rx) = mpsc::channel(1);
+            tx.try_send(9).expect("send low message");
+            let mut budget = 0;
+
+            let msg = try_recv_low_after_burst(&mut rx, &mut budget, 4);
+
+            assert!(matches!(msg, Some(9)));
+            assert_eq!(budget, 4);
+            assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+        }
+
+        #[test]
+        fn try_recv_low_after_burst_resets_budget_when_empty() {
+            let (_tx, mut rx) = mpsc::channel::<u8>(1);
+            let mut budget = 0;
+
+            let msg = try_recv_low_after_burst(&mut rx, &mut budget, 4);
+
+            assert!(msg.is_none());
+            assert_eq!(budget, 4);
         }
     }
 

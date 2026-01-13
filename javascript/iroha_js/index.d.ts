@@ -3167,6 +3167,7 @@ export interface SubscriptionGetResponse {
 export interface SubscriptionActionRequest {
   authority: string;
   chargeAtMs?: NumericLike;
+  cancelMode?: "immediate" | "period_end";
   privateKey?:
     | ArrayBufferView
     | ArrayBuffer
@@ -6640,6 +6641,11 @@ export declare class ToriiClient {
     options?: { signal?: AbortSignal },
   ): Promise<SubscriptionActionResponse>;
   cancelSubscription(
+    subscriptionId: string,
+    request: SubscriptionActionRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<SubscriptionActionResponse>;
+  keepSubscription(
     subscriptionId: string,
     request: SubscriptionActionRequest,
     options?: { signal?: AbortSignal },

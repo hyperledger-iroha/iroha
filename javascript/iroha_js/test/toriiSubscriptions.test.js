@@ -200,6 +200,7 @@ test("subscription action endpoints send normalized payloads", async () => {
     chargeAtMs: 1728000000,
   });
   await client.cancelSubscription(subscriptionId, actionRequest);
+  await client.keepSubscription(subscriptionId, actionRequest);
   await client.chargeSubscriptionNow(subscriptionId, {
     ...actionRequest,
     chargeAtMs: 1730000000,
@@ -222,6 +223,9 @@ test("subscription action endpoints send normalized payloads", async () => {
 
   const cancelBody = captured.get(`/v1/subscriptions/${encodedId}/cancel`);
   assert.ok(!("charge_at_ms" in cancelBody));
+
+  const keepBody = captured.get(`/v1/subscriptions/${encodedId}/keep`);
+  assert.ok(!("charge_at_ms" in keepBody));
 
   const chargeBody = captured.get(`/v1/subscriptions/${encodedId}/charge-now`);
   assert.equal(chargeBody.charge_at_ms, 1730000000);

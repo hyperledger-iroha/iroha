@@ -708,9 +708,13 @@ pub mod network {
     pub const TX_GOSSIP_RESTRICTED_PUBLIC_PAYLOAD: &str = "refuse";
     /// Interval between peer gossip batches.
     pub const PEER_GOSSIP_PERIOD: Duration = Duration::from_secs(1);
+    /// Maximum interval between peer gossip batches (change-driven gossip backs off toward this).
+    pub const PEER_GOSSIP_MAX_PERIOD: Duration = Duration::from_secs(30);
 
     /// Interval between block gossip batches.
     pub const BLOCK_GOSSIP_PERIOD: Duration = Duration::from_secs(10);
+    /// Maximum interval between block gossip batches (idle backoff ceiling).
+    pub const BLOCK_GOSSIP_MAX_PERIOD: Duration = Duration::from_secs(30);
     /// Number of blocks gossiped per batch.
     pub const BLOCK_GOSSIP_SIZE: NonZeroU32 = nonzero!(4u32);
 
@@ -752,6 +756,23 @@ pub mod network {
     pub const P2P_POST_QUEUE_CAP: NonZeroUsize = nonzero!(2048_usize);
     /// Capacity for the inbound P2P subscriber queue feeding the node relay.
     pub const P2P_SUBSCRIBER_QUEUE_CAP: NonZeroUsize = nonzero!(8192_usize);
+
+    /// Optional per-peer consensus ingress rate (msgs/sec). When None, consensus ingress limiting is disabled.
+    pub const CONSENSUS_INGRESS_RATE_PER_SEC: Option<NonZeroU32> = Some(nonzero!(1000_u32));
+    /// Optional burst for consensus ingress rate limiting (msgs). Defaults to `rate` when None.
+    pub const CONSENSUS_INGRESS_BURST: Option<NonZeroU32> = Some(nonzero!(2000_u32));
+    /// Optional per-peer consensus ingress bytes/sec budget. When None, bytes limiting is disabled.
+    pub const CONSENSUS_INGRESS_BYTES_PER_SEC: Option<NonZeroU32> = Some(nonzero!(67_108_864_u32)); // 64 MiB/s
+    /// Optional burst size in bytes for consensus ingress limiting. Defaults to `bytes_per_sec` when None.
+    pub const CONSENSUS_INGRESS_BYTES_BURST: Option<NonZeroU32> = Some(nonzero!(134_217_728_u32)); // 128 MiB
+    /// Maximum concurrent RBC sessions accepted per peer before throttling (0 disables).
+    pub const CONSENSUS_INGRESS_RBC_SESSION_LIMIT: usize = 64;
+    /// Drop threshold (per window) before temporarily suppressing consensus ingress.
+    pub const CONSENSUS_INGRESS_PENALTY_THRESHOLD: u32 = 32;
+    /// Window size (ms) for consensus ingress penalty tracking.
+    pub const CONSENSUS_INGRESS_PENALTY_WINDOW_MS: u64 = 5_000;
+    /// Cooldown (ms) applied after consensus ingress penalties trigger.
+    pub const CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS: u64 = 10_000;
 
     // Optional DNS hostname refresh interval (None disables). Default 5 minutes.
     /// Interval between DNS resolution refreshes for peer hostnames.
@@ -2258,6 +2279,8 @@ pub mod sumeragi {
     pub const ENABLE_BLS: bool = true;
     /// Default RBC chunk maximum bytes per chunk.
     pub const RBC_CHUNK_MAX_BYTES: usize = 64 * 1024; // 64 KiB
+    /// Optional fanout cap for RBC chunk broadcasts (None = auto based on topology).
+    pub const RBC_CHUNK_FANOUT: Option<NonZeroUsize> = None;
     /// Default RBC session TTL (seconds) before pruning inactive sessions.
     pub const RBC_SESSION_TTL_SECS: u64 = 120; // 2 minutes
     /// Default maximum number of persisted RBC session summaries kept on disk.
@@ -2280,6 +2303,16 @@ pub mod sumeragi {
     pub const RBC_PENDING_TTL_MS: u64 = 30_000;
     /// Default: do not force RBC deliver quorum to 1.
     pub const DEBUG_RBC_FORCE_DELIVER_QUORUM_ONE: bool = false;
+    /// Maximum height delta accepted for inbound consensus messages (0 disables future gating).
+    pub const CONSENSUS_FUTURE_HEIGHT_WINDOW: u64 = 8;
+    /// Maximum view delta accepted for inbound consensus messages (0 disables future gating).
+    pub const CONSENSUS_FUTURE_VIEW_WINDOW: u64 = 8;
+    /// Invalid signature count before temporarily suppressing a signer (0 disables).
+    pub const INVALID_SIG_PENALTY_THRESHOLD: u32 = 3;
+    /// Window (ms) for invalid signature penalty counting.
+    pub const INVALID_SIG_PENALTY_WINDOW_MS: u64 = 5_000;
+    /// Cooldown (ms) applied after invalid signature penalties trigger.
+    pub const INVALID_SIG_PENALTY_COOLDOWN_MS: u64 = 15_000;
     /// Default cap for in-memory commit certificate history.
     pub const COMMIT_CERT_HISTORY_CAP: usize = 512;
     /// Default epoch length in blocks (NPoS).

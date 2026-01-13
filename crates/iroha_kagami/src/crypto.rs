@@ -46,7 +46,6 @@ impl ValueEnum for AlgorithmArg {
         const VARIANTS: &[AlgorithmArg] = &[
             AlgorithmArg(Algorithm::Ed25519),
             AlgorithmArg(Algorithm::Secp256k1),
-            #[cfg(feature = "ml-dsa")]
             AlgorithmArg(Algorithm::MlDsa),
             #[cfg(feature = "gost")]
             AlgorithmArg(Algorithm::Gost3410_2012_256ParamSetA),

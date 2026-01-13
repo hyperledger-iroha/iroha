@@ -8090,6 +8090,49 @@ impl Actor {
             .p2p_dropped_broadcasts
             .set(iroha_p2p::network::dropped_broadcast_count());
         self.metrics
+            .p2p_subscriber_queue_full_total
+            .set(iroha_p2p::network::subscriber_queue_full_count());
+        let full = &self.metrics.p2p_subscriber_queue_full_by_topic_total;
+        full.with_label_values(&["Consensus"])
+            .set(iroha_p2p::network::subscriber_queue_full_consensus_count());
+        full.with_label_values(&["Control"])
+            .set(iroha_p2p::network::subscriber_queue_full_control_count());
+        full.with_label_values(&["BlockSync"])
+            .set(iroha_p2p::network::subscriber_queue_full_block_sync_count());
+        full.with_label_values(&["TxGossip"])
+            .set(iroha_p2p::network::subscriber_queue_full_tx_gossip_count());
+        full.with_label_values(&["PeerGossip"])
+            .set(iroha_p2p::network::subscriber_queue_full_peer_gossip_count());
+        full.with_label_values(&["Health"])
+            .set(iroha_p2p::network::subscriber_queue_full_health_count());
+        full.with_label_values(&["Other"])
+            .set(iroha_p2p::network::subscriber_queue_full_other_count());
+        self.metrics
+            .p2p_subscriber_unrouted_total
+            .set(iroha_p2p::network::subscriber_unrouted_count());
+        let unrouted = &self.metrics.p2p_subscriber_unrouted_by_topic_total;
+        unrouted
+            .with_label_values(&["Consensus"])
+            .set(iroha_p2p::network::subscriber_unrouted_consensus_count());
+        unrouted
+            .with_label_values(&["Control"])
+            .set(iroha_p2p::network::subscriber_unrouted_control_count());
+        unrouted
+            .with_label_values(&["BlockSync"])
+            .set(iroha_p2p::network::subscriber_unrouted_block_sync_count());
+        unrouted
+            .with_label_values(&["TxGossip"])
+            .set(iroha_p2p::network::subscriber_unrouted_tx_gossip_count());
+        unrouted
+            .with_label_values(&["PeerGossip"])
+            .set(iroha_p2p::network::subscriber_unrouted_peer_gossip_count());
+        unrouted
+            .with_label_values(&["Health"])
+            .set(iroha_p2p::network::subscriber_unrouted_health_count());
+        unrouted
+            .with_label_values(&["Other"])
+            .set(iroha_p2p::network::subscriber_unrouted_other_count());
+        self.metrics
             .p2p_handshake_failures
             .set(iroha_p2p::peer::handshake_failure_count());
         self.metrics
@@ -12277,6 +12320,148 @@ mod tests {
             drops.with_label_values(&["High", "Broadcast"]).get() >= baseline_high_broadcast + 5
         );
         assert!(drops.with_label_values(&["Low", "Broadcast"]).get() >= baseline_low_broadcast + 7);
+    }
+
+    #[tokio::test]
+    async fn p2p_subscriber_unrouted_metric_tracks_counter() {
+        use iroha_p2p::network::message::Topic;
+
+        let sut = SystemUnderTest::new();
+        let metrics = sut.telemetry.metrics().await;
+        let baseline = metrics.p2p_subscriber_unrouted_total.get();
+
+        iroha_p2p::network::inc_subscriber_unrouted_for_test(Topic::Consensus, 4);
+
+        sut.force_sync().await;
+        let metrics = sut.telemetry.metrics().await;
+        assert!(
+            metrics.p2p_subscriber_unrouted_total.get() >= baseline + 4,
+            "subscriber unrouted metric should track the network counter"
+        );
+    }
+
+    #[tokio::test]
+    async fn p2p_subscriber_queue_full_metric_tracks_counter() {
+        use iroha_p2p::network::message::Topic;
+
+        let sut = SystemUnderTest::new();
+        let metrics = sut.telemetry.metrics().await;
+        let baseline = metrics.p2p_subscriber_queue_full_total.get();
+
+        iroha_p2p::network::inc_subscriber_queue_full_for_test(Topic::Control, 2);
+
+        sut.force_sync().await;
+        let metrics = sut.telemetry.metrics().await;
+        assert!(
+            metrics.p2p_subscriber_queue_full_total.get() >= baseline + 2,
+            "subscriber queue-full metric should track the network counter"
+        );
+    }
+
+    #[tokio::test]
+    async fn p2p_subscriber_queue_full_by_topic_tracks_counters() {
+        use iroha_p2p::network::{inc_subscriber_queue_full_for_test as bump, message::Topic};
+
+        let sut = SystemUnderTest::new();
+        let metrics = sut.telemetry.metrics().await;
+        let by = &metrics.p2p_subscriber_queue_full_by_topic_total;
+        let mut baseline = BTreeMap::new();
+        for topic in [
+            "Consensus",
+            "Control",
+            "BlockSync",
+            "TxGossip",
+            "PeerGossip",
+            "Health",
+            "Other",
+        ] {
+            baseline.insert(topic.to_string(), by.with_label_values(&[topic]).get());
+        }
+
+        for &topic in &[
+            Topic::Consensus,
+            Topic::Control,
+            Topic::BlockSync,
+            Topic::TxGossip,
+            Topic::PeerGossip,
+            Topic::Health,
+            Topic::Other,
+        ] {
+            bump(topic, 1);
+        }
+
+        sut.force_sync().await;
+        let metrics = sut.telemetry.metrics().await;
+        let by = &metrics.p2p_subscriber_queue_full_by_topic_total;
+        for topic in [
+            "Consensus",
+            "Control",
+            "BlockSync",
+            "TxGossip",
+            "PeerGossip",
+            "Health",
+            "Other",
+        ] {
+            let after = by.with_label_values(&[topic]).get();
+            let before = baseline.get(topic).copied().unwrap_or(0);
+            assert!(
+                after > before,
+                "expected {topic} queue-full metric to increase"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn p2p_subscriber_unrouted_by_topic_tracks_counters() {
+        use iroha_p2p::network::{inc_subscriber_unrouted_for_test as bump, message::Topic};
+
+        let sut = SystemUnderTest::new();
+        let metrics = sut.telemetry.metrics().await;
+        let by = &metrics.p2p_subscriber_unrouted_by_topic_total;
+        let mut baseline = BTreeMap::new();
+        for topic in [
+            "Consensus",
+            "Control",
+            "BlockSync",
+            "TxGossip",
+            "PeerGossip",
+            "Health",
+            "Other",
+        ] {
+            baseline.insert(topic.to_string(), by.with_label_values(&[topic]).get());
+        }
+
+        for &topic in &[
+            Topic::Consensus,
+            Topic::Control,
+            Topic::BlockSync,
+            Topic::TxGossip,
+            Topic::PeerGossip,
+            Topic::Health,
+            Topic::Other,
+        ] {
+            bump(topic, 1);
+        }
+
+        sut.force_sync().await;
+        let metrics = sut.telemetry.metrics().await;
+        let by = &metrics.p2p_subscriber_unrouted_by_topic_total;
+        for topic in [
+            "Consensus",
+            "Control",
+            "BlockSync",
+            "TxGossip",
+            "PeerGossip",
+            "Health",
+            "Other",
+        ] {
+            let after = by.with_label_values(&[topic]).get();
+            let before = baseline.get(topic).copied().unwrap_or(0);
+            assert!(
+                after > before,
+                "expected {topic} unrouted metric to increase"
+            );
+        }
     }
 
     #[tokio::test]

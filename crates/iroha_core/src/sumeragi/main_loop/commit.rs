@@ -1670,7 +1670,6 @@ impl Actor {
             .proposal_cache
             .pop_proposal(height, view);
         // Keep proposals_seen so we don't re-propose in the same view after timeout.
-        self.pending.pending_replay_last_sent.remove(&block_hash);
         let session_key = Self::session_key(&block_hash, height, view);
         self.subsystems
             .da_rbc
@@ -2058,7 +2057,10 @@ impl Actor {
                         vote_epoch,
                         &topology,
                     ) {
-                        self.maybe_broadcast_block_sync_update_for_precommit_vote(&pending, &vote);
+                        self.maybe_broadcast_block_sync_update_for_precommit_vote(
+                            &mut pending,
+                            &vote,
+                        );
                     }
                 }
             }
@@ -2133,7 +2135,7 @@ impl Actor {
 
     pub(super) fn maybe_broadcast_block_sync_update_for_precommit_vote(
         &mut self,
-        pending: &PendingBlock,
+        pending: &mut PendingBlock,
         vote: &crate::sumeragi::consensus::Vote,
     ) {
         if pending.aborted {
@@ -2163,6 +2165,19 @@ impl Actor {
                 &self.vote_log,
                 vote,
             );
+            let commit_votes = update.commit_votes.len();
+            let has_commit_qc = update.commit_qc.is_some();
+            if !pending.should_broadcast_block_sync_update(vote.view, commit_votes, has_commit_qc) {
+                iroha_logger::trace!(
+                    height = vote.height,
+                    view = vote.view,
+                    block = %vote.block_hash,
+                    commit_votes,
+                    has_commit_qc,
+                    "skipping block sync update broadcast: no new commit votes"
+                );
+                return;
+            }
             let (consensus_mode, _, _) = self.consensus_context_for_height(vote.height);
             let mut topology_peers = self.roster_for_vote_with_mode(
                 vote.block_hash,
@@ -3751,7 +3766,6 @@ impl Actor {
             .rbc
             .persist_inflight
             .retain(|(hash, _, _)| *hash != block_hash);
-        self.pending.pending_replay_last_sent.remove(&block_hash);
 
         let telemetry_ref = self.telemetry_handle();
         if !lane_totals.is_empty() || !dataspace_totals.is_empty() {
@@ -4336,7 +4350,6 @@ impl Actor {
         preserve_proposals_seen: bool,
     ) {
         self.pending.pending_blocks.clear();
-        self.pending.pending_replay_last_sent.clear();
         self.pending.missing_block_requests.clear();
         self.pending.pending_processing.set(None);
         self.pending.pending_processing_parent.set(None);
@@ -4682,6 +4695,70 @@ mod tests {
         wake_rx
             .recv_timeout(Duration::from_secs(2))
             .expect("wake signal");
+
+        drop(handle.work_tx);
+        if let Err(err) = handle.join_handle.join() {
+            panic!("commit worker panicked: {err:?}");
+        }
+    }
+
+    #[test]
+    fn commit_worker_does_not_block_on_full_wake_channel() {
+        let genesis_key = KeyPair::random();
+        let genesis_account_id =
+            AccountId::new(GENESIS_DOMAIN_ID.clone(), genesis_key.public_key().clone());
+        let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
+        let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
+        let world = World::with([genesis_domain], [genesis_account], []);
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(
+            world,
+            Arc::clone(&kura),
+            query_handle,
+        ));
+        let chain_id = state.view().chain_id().clone();
+        let (wake_tx, wake_rx) = mpsc::sync_channel(1);
+        wake_tx.try_send(()).expect("prefill wake");
+
+        let handle = spawn_commit_worker(
+            Arc::clone(&state),
+            Arc::clone(&kura),
+            chain_id.clone(),
+            genesis_account_id.clone(),
+            Some(wake_tx),
+        );
+
+        let tx = TransactionBuilder::new(chain_id.clone(), genesis_account_id.clone())
+            .with_instructions([Log::new(
+                Level::DEBUG,
+                "commit worker full wake test".to_string(),
+            )])
+            .sign(genesis_key.private_key());
+        let block = SignedBlock::genesis(vec![tx], genesis_key.private_key(), None, None);
+        let peer_key = KeyPair::random();
+        let peer_id = PeerId::new(peer_key.public_key().clone());
+        let topology = vec![peer_id];
+        let (events_sender, _events_rx) = tokio::sync::broadcast::channel(16);
+        let work = CommitWork {
+            id: 43,
+            block,
+            commit_topology: topology.clone(),
+            signature_topology: topology,
+            qc_signers: None,
+            allow_quorum_bypass: false,
+            persist_required: false,
+            events_sender,
+        };
+
+        handle.work_tx.send(work).expect("send commit work");
+        handle
+            .result_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("commit result");
+
+        assert!(wake_rx.try_recv().is_ok(), "prefilled wake should remain");
+        assert!(matches!(wake_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
 
         drop(handle.work_tx);
         if let Err(err) = handle.join_handle.join() {

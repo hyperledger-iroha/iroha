@@ -69,5 +69,6 @@ ascii_table = "=5.0.0" # pinned for edition/format stability
 ivm = { workspace = true }
 norito = {workspace = true}
 iroha_data_model = { workspace = true, features = ["governance", "json"] }
+iroha_crypto = { workspace = true }
 iroha_primitives = { workspace = true }
 iroha_test_samples = { workspace = true }

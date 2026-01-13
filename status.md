@@ -1,6 +1,61 @@
 # Status
 
 ## Latest Updates
+- Sumeragi/block sync: future-window gating now exempts BlockSyncUpdate when the parent payload is already known locally; added unit coverage for the parent-known exception.
+- Tests: not run (per request).
+- Sumeragi/block sync: add unit coverage ensuring future-window gating allows BlockSyncUpdate for already-tracked (pending) blocks.
+- Tests: not run (per request).
+- Sumeragi/block sync: gate `BlockSyncUpdate` on future height/view windows unless the payload is already tracked (pending/missing request), add unit coverage for the future-window exception, and update Sumeragi/config docs.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test -p iroha_core --lib block_sync_update_future_window_ -- --nocapture` (pass; warnings about unused imports/assignments in `ivm` + `iroha_core`); `cargo test --workspace` (timed out after 1200s while running tests; warnings about unused imports/assignments in `ivm`/`iroha_core` and test-network timeouts logged).
+- IVM/docs: fill missing syscall spec entries (transfer batch apply, contract lifecycle, state/path helpers, SM2/SM4, AXT, ZK batch), remove hwinfo stubs, and clarify GET_PUBLIC_INPUT return; regenerate syscall docs/gas spec.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test --workspace` failed in `integration_tests::genesis_json` (`genesis_norito_bytes_roundtrip_network`, `genesis_asset_minted_across_peers`) due to duplicate metrics registration and Kura init errors.
+- Local swarm: isolate snapshot store per peer, avoid client.toml backtick expansion, and switch asset flow to transfer a genesis-minted asset; `scripts/run_local_swarm.sh` now comes up cleanly with custom base ports.
+- Tests: `BASE_API_PORT=40080 BASE_P2P_PORT=43370 SKIP_BUILD=1 RESET_STORAGE=1 bash scripts/run_local_swarm.sh`.
+- Sumeragi/consensus: stop rebroadcasting proposal hints, update proposal handling to apply highest-QC/lock context, and synthesize hints from cached proposals for `BlockCreated`.
+- Tests: not run (per request).
+- Sumeragi/localnet: retry missing-block fetches on the rebroadcast cadence while keeping view-change windows tied to quorum timeout; update QC retry coverage and Sumeragi docs.
+- Tests: not run (per request).
+- IVM/DefaultHost: add pointer-ABI validation for signatory/quorum syscalls with unit coverage; docs: drop VERIFY_SIGNATURE "reserved" label in syscall docs.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test --workspace` timed out after ~20m while running tests (no failures observed before timeout).
+- Tests: `CARGO_TARGET_DIR=target/codex-tests cargo test --workspace` (timed out after 600s during compilation/run; warnings about unused imports/assignments in `ivm` and `iroha_core`).
+- CLI/relay/tests: build block-sync test blocks via `BlockBuilder`, build quorum-reschedule votes inline to avoid private `build_vote`, and include `cancel_at_period_end` in subscription action args unit tests.
+- Sumeragi: rebroadcast highest pending block using the shared payload cooldown + fanout-limited block-sync gossip, removing the redundant pending replay tracker.
+- Tests: not run (per request).
+- IVM/ABI: allowlist signatory/quorum syscalls, wire WsvHost add/remove signatory + set quorum handlers, and add WsvHost account-admin syscall tests.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test --workspace` failed with E0624 (private `build_vote` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`).
+- P2P/consensus: back off peer gossip and block-sync sampling on idle or relay drops, coalesce block-sync updates on progress, and deterministically cap RBC chunk fanout to a quorum-sized target set to cut consensus traffic.
+- Docs: document gossip backoff ceilings and RBC chunk fanout in P2P/Sumeragi/config references.
+- Tests: not run (per request).
+- IVM/CoreHost: implement signatory/quorum syscalls by updating multisig spec metadata + roles; add CoreHost queueing tests and multisig spec/role regression coverage.
+- Tests: not run (not requested).
+- IVM/ABI: remove signatory/quorum ISIs from the default registry/prelude, reserve signatory/quorum syscalls in docs, un-gate crypto opcodes/syscalls, update prebuild fallback bytecode to pointer-ABI, and refresh syscall docs/gas assets; add registry exclusion coverage.
+- Config: drop the `default` attribute for optional `sumeragi.rbc_chunk_fanout` to satisfy `ReadConfig` rules.
+- Tooling: `cargo run -p ivm --bin gen_syscalls_doc -- --write` (warns about unused `HttpEndpoint` fields in `crates/ivm/src/iso20022.rs`).
+- Tooling: `cargo run -p ivm --bin gen_syscalls_doc -- --write --no-code` (same warning).
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Sumeragi/relay: add per-peer consensus ingress limiting (rate/bytes/RBC session caps + penalty cooldown), future height gating, active-round view gating that relaxes after the commit-quorum timeout, and invalid-signature suppression; update config docs/fixtures and add unit coverage.
+- Tests: not run (per request).
+- IVM/CoreHost: wire `GET_PUBLIC_INPUT` to the on-chain `ivm_public_inputs` registry with schema/type enforcement, explicit missing-name errors, and per-byte gas; DefaultHost now charges per-byte gas and rejects missing names; add CoreHost/IVM registry and error-path tests and refresh syscall docs.
+- Tests: not run (not requested).
+- P2P: demote per-frame consensus send logs to debug to reduce relay overhead during high-volume traffic.
+- Tests: not run (per request).
+- Telemetry/P2P: add subscriber queue full + per-topic unrouted metrics, wire them into telemetry sync/tests, and update P2P/telemetry docs.
+- Tests: not run (per request).
+- Sumeragi/localnet: align consensus signature domain tags to v1, refresh Sumeragi translation stub metadata, and set default genesis `wire_proto_versions` to `[1]`.
+- Telemetry/P2P: expose subscriber-unrouted drops via `p2p_subscriber_unrouted_total` and add unit coverage.
+- Tests: not run (per request).
+- P2P/relay: add burst-based fairness between high/low relay queues, log and count unrouted subscriber topics, fix subscriber tests, and clarify per-subscriber queue caps in P2P docs.
+- Tests: not run (per request).
+- P2P/relay: add topic-filtered subscriber support, split relay ingress into high/low queues to isolate consensus traffic from gossip, and filter genesis/Torii Connect subscribers; add unit coverage for subscriber filtering.
+- Tests: not run (per request).
+- Sumeragi/localnet: include READY signature bundles in RBC DELIVER, validate/record them on receipt to recover READY quorum, set consensus wire `PROTO_VERSION` to 1; update docs and add unit coverage for deliver bundles plus commit/RBC persist wake-channel saturation.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Tests: not run (per request; `cargo test --workspace` was aborted immediately).
+- Sumeragi/idle: skip heartbeat proposals and idle view-change churn when no queued work or empty-child recovery is needed; add unit coverage and update `docs/source/sumeragi.md`.
+- P2P/localnet: raise localnet `p2p_subscriber_queue_cap` to 16384 and document the relay subscriber queue cap in the P2P docs/template.
+- Network relay: enqueue blocking Sumeragi block messages (BlockSyncUpdate/RbcReady/RbcDeliver) via `spawn_blocking` to avoid stalling async relay loops; add unit coverage that uses a blocking sync-channel sender to verify tokio timers still fire under backpressure.
+- Tests: not run (per request).
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
 - Block sync: enqueue ShareBlocks updates via `spawn_blocking` to avoid holding StateView across Sumeragi backpressure, and derive roster/QC data outside long-lived views; add runtime coverage to ensure tokio timers are not blocked by a full block queue.
 - Sumeragi/tests: add a test-only helper to build a handle with a configurable block queue cap for block-sync runtime tests.
 - IVM/CoreHost tests: build numeric asset definitions with authority for `World::with_assets` in the account-balance syscall test.
@@ -2177,7 +2232,19 @@
 - Tests: `cargo test -p integration_tests trigger_completion_failure_reports_error -- --nocapture` (timed out after 600s; compile finished; test `events::notification::trigger_completion_failure_reports_error` still running).
 - Sumeragi NEW_VIEW quorum selection now filters senders against the active roster (only counts local if it is in-roster), with coverage for non-roster senders.
 - Sumeragi now rejects NEW_VIEW votes with mismatched highest QC hashes/heights before recording, with regressions for invalid highest fields.
+- Fixed Kotodama `encode_schema`/`decode_schema` lowering to publish schema/data TLVs into INPUT before invoking CoreHost schema syscalls, added a roundtrip schema-encode test, and confirmed SMARTCONTRACT_EXECUTE_QUERY smoke (stored query response metadata on the local swarm).
+- Tests: `cargo test -p ivm --test kotodama_schema_encode` (passes; warnings about unused fields in `crates/ivm/src/iso20022.rs` and unused import in `crates/ivm/tests/crypto.rs`).
+- Cleaned up Norito Python ruff issues (benchmark import order, __all__ exports, adapter fixed-size check) and excluded build artifacts from linting.
+- Tests: `python3 -m ruff check python/norito_py`.
+- Cleaned up pytests/iroha_cli_tests and pytests/iroha_torii_tests ruff issues (unused fixture imports, __all__ exports, import ordering).
+- Tests: `python3 -m ruff check pytests/iroha_cli_tests`, `python3 -m ruff check pytests/iroha_torii_tests`.
+- Added Norito Python CRC64 tests and test-time path setup for the src layout.
+- Tests: `python3 -m pytest python/norito_py/tests`, `python3 -m ruff check python/norito_py`.
+- Tests: `python3 -m pytest pytests/iroha_cli_tests` (fails without CLI test env; missing `TMP_DIR`/CLI config/binary).
+- Tests: `python3 -m pytest pytests/iroha_torii_tests` (0 tests collected; urllib3 LibreSSL warning).
+- Test env attempt: `bash scripts/run_local_swarm.sh` failed during `cargo build --release` due to subscription Norito tags missing (`SubscriptionCancelMode`) and torii handler/config struct errors.
 - Python SDK: fixed typing in Torii client + mocks (moved telemetry methods back onto `ToriiClient`, cleaned optionals), tightened governance/connect parsing, and removed stale ignores; Tests: `python3 -m mypy --config-file python/iroha_python/pyproject.toml python/iroha_python/src/iroha_python python/iroha_python/tests`, `python3 -m mypy --config-file python/iroha_torii_client/pyproject.toml python/iroha_torii_client`.
+- Python SDK linting: `python3 -m ruff check python/iroha_python/src/iroha_python python/iroha_python/tests`, `python3 -m ruff check python/iroha_torii_client`.
 - Added Android subscription Torii client/models, wired ClientConfig/HttpClientTransport helpers, documented subscription usage in the Android README, added SubscriptionToriiClient tests (wired into the Gradle harness), validated usage delta literals, and covered non-2xx error propagation. Tests: `./java/iroha_android/gradlew -p java/iroha_android :core:test -Dandroid.test.mains=org.hyperledger.iroha.android.client.SubscriptionToriiClientTests`, `./java/iroha_android/gradlew -p java/iroha_android :core:test`.
 - Sumeragi block-sync now records commit votes for known blocks without roster hints; proposals_seen pruning aligns with view changes; active-topology fallback test now matches sorted world-peer order; QC status tests are guarded to avoid cross-test interference; subscription trigger test setup now uses trigger blocks/transactions with explicit commit.
 - Tests: `cargo test -p iroha_core --lib sumeragi::main_loop::tests` (timed out after 600s; earlier failures fixed); targeted runs: `cargo test -p iroha_core --lib sumeragi::main_loop::tests::{block_sync_update_known_block_records_commit_votes_without_roster_hint,commit_inflight_timeout_triggers_view_change_and_retains_aborted_pending,active_topology_falls_back_to_world_peers,block_created_updates_locked_status_when_lock_missing}`.

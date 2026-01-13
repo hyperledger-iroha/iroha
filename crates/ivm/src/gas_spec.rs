@@ -56,6 +56,7 @@ pub static GAS_ASSETS: &[GasAsset] = &[
     GasAsset { key: "G_use_null", asset_id: "asset:gas/G_use_null@ivm.core/v1", unit: "gas", version: "v1", group: "syscall" },
     GasAsset { key: "G_verify", asset_id: "asset:gas/G_verify@ivm.core/v1", unit: "gas", version: "v1", group: "syscall" },
     GasAsset { key: "G_verify_proof", asset_id: "asset:gas/G_verify_proof@ivm.core/v1", unit: "gas", version: "v1", group: "syscall" },
+    GasAsset { key: "G_verify_sig", asset_id: "asset:gas/G_verify_sig@ivm.core/v1", unit: "gas", version: "v1", group: "syscall" },
     GasAsset { key: "G_vote_get", asset_id: "asset:gas/G_vote_get@ivm.core/v1", unit: "gas", version: "v1", group: "syscall" },
     GasAsset { key: "G_xfer_domain", asset_id: "asset:gas/G_xfer_domain@ivm.core/v1", unit: "gas", version: "v1", group: "syscall" },
 ]

@@ -305,6 +305,7 @@ public final class SubscriptionToriiClientTests {
     executor.enqueue(200, actionResponse);
     executor.enqueue(200, actionResponse);
     executor.enqueue(200, actionResponse);
+    executor.enqueue(200, actionResponse);
     final SubscriptionToriiClient client =
         SubscriptionToriiClient.builder()
             .executor(executor)
@@ -327,6 +328,7 @@ public final class SubscriptionToriiClientTests {
     assert pauseResponse.ok() : "pause should be ok";
     client.resumeSubscription(subscriptionId, chargeRequest).join();
     client.cancelSubscription(subscriptionId, baseRequest).join();
+    client.keepSubscription(subscriptionId, baseRequest).join();
     client.chargeSubscriptionNow(subscriptionId, chargeRequest).join();
     client
         .recordSubscriptionUsage(
@@ -351,6 +353,9 @@ public final class SubscriptionToriiClientTests {
     final Map<String, Object> cancelBody =
         parseBody(executor.bodyFor("/v1/subscriptions/" + encodedId + "/cancel"));
     assert cancelBody.get("authority").equals("alice@wonderland") : "cancel authority missing";
+    final Map<String, Object> keepBody =
+        parseBody(executor.bodyFor("/v1/subscriptions/" + encodedId + "/keep"));
+    assert keepBody.get("authority").equals("alice@wonderland") : "keep authority missing";
     final Map<String, Object> chargeBody =
         parseBody(executor.bodyFor("/v1/subscriptions/" + encodedId + "/charge-now"));
     assert chargeBody.containsKey("charge_at_ms") : "charge-now charge_at_ms missing";

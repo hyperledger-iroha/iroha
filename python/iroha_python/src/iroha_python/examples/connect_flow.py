@@ -32,27 +32,24 @@ import os
 from dataclasses import asdict
 from importlib import resources
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Mapping
+from typing import Any, Dict, List, Mapping, Optional
 
 from iroha_python import (
     ConnectAppMetadata,
-    ConnectKeyPair,
-    ConnectPreviewBootstrapResult,
-    ConnectPreviewTokens,
-    ConnectSessionPreview,
     ConnectControlOpen,
     ConnectDirection,
     ConnectFrame,
+    ConnectKeyPair,
     ConnectPermissions,
-    bootstrap_connect_preview_session,
-    connect_public_key_from_private,
+    ConnectPreviewBootstrapResult,
     ConnectSessionInfo,
     ConnectStatusSnapshot,
-    create_torii_client,
+    bootstrap_connect_preview_session,
+    connect_public_key_from_private,
     create_connect_session_preview,
+    create_torii_client,
     encode_connect_frame,
 )
-
 
 _TEMPLATE_RESOURCE = "connect_app_metadata.json"
 _DEFAULT_METHODS = ("SIGN_REQUEST_TX",)

@@ -1,4 +1,4 @@
-#![cfg(feature = "ed25519")]
+//! Ed25519 batch verification helper tests.
 
 use ed25519_dalek::{Signer, SigningKey};
 use ivm::signature::{Ed25519BatchItem, verify_ed25519_batch_items};

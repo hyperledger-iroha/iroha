@@ -1079,9 +1079,7 @@ impl IVM {
     const GAS_SHA256_BASE: u64 = 10;
     const GAS_SHA256_PER_BYTE: u64 = 1;
     const GAS_ED25519_VERIFY: u64 = 1000;
-    #[cfg(feature = "ed25519")]
     const GAS_ED25519_BATCH_PER_ENTRY: u64 = 500;
-    #[cfg(feature = "ed25519")]
     const MAX_ED25519_BATCH_ENTRIES: usize = 512;
     #[allow(dead_code)]
     const GAS_DILITHIUM_VERIFY: u64 = 5000;
@@ -1456,7 +1454,6 @@ impl IVM {
                 Self::GAS_SHA256_BASE + Self::GAS_SHA256_PER_BYTE * len
             }
             SimpleInstruction::Ed25519Verify { .. } => Self::GAS_ED25519_VERIFY,
-            #[cfg(feature = "ml-dsa")]
             SimpleInstruction::DilithiumVerify { .. } => Self::GAS_DILITHIUM_VERIFY,
             SimpleInstruction::Halt => 0,
         };
@@ -1755,7 +1752,6 @@ impl IVM {
                     }
                 }
             }
-            #[cfg(feature = "ml-dsa")]
             SimpleInstruction::DilithiumVerify {
                 level,
                 pubkey_addr,
@@ -2234,7 +2230,6 @@ impl IVM {
     /// - `None` if CUDA is disabled or unavailable (caller should fall back to CPU).
     /// - `Some(Ok(()))` if every entry verified successfully on the GPU.
     /// - `Some(Err(index))` if a malformed entry or invalid signature was detected.
-    #[cfg(feature = "ed25519")]
     fn verify_ed25519_batch_cuda(
         &self,
         request: &crate::signature::Ed25519BatchRequest,
@@ -2261,7 +2256,7 @@ impl IVM {
         Some(Ok(()))
     }
 
-    #[cfg(all(feature = "ed25519", feature = "metal", target_os = "macos"))]
+    #[cfg(all(feature = "metal", target_os = "macos"))]
     fn verify_ed25519_batch_metal(
         &self,
         request: &crate::signature::Ed25519BatchRequest,
@@ -4402,104 +4397,86 @@ impl IVM {
                     if self.zk_mode && self.registers.tag(rs1) {
                         return Err(VMError::PrivacyViolation);
                     }
-                    #[cfg_attr(not(feature = "ed25519"), allow(unused_mut))]
                     let mut fail_index = 0u64;
                     let ok = if let Ok(tlv_req) = self.memory.validate_tlv(self.registers.get(rs1))
                     {
                         let is_norito = tlv_req.type_id_raw()
                             == crate::pointer_abi::PointerType::NoritoBytes as u16;
                         is_norito
-                            && {
-                                #[cfg(feature = "ed25519")]
-                                {
-                                    match norito::decode_from_bytes::<
-                                        crate::signature::Ed25519BatchRequest,
-                                    >(tlv_req.payload)
-                                    {
-                                        Ok(req) => {
-                                            if req.entries.is_empty() {
-                                                false
-                                            } else if req.entries.len()
-                                                > Self::MAX_ED25519_BATCH_ENTRIES
-                                            {
-                                                fail_index = req.entries.len() as u64;
-                                                false
-                                            } else {
-                                                let extra_cost = Self::GAS_ED25519_BATCH_PER_ENTRY
-                                                    .saturating_mul(req.entries.len() as u64);
-                                                if self.gas_remaining < extra_cost {
-                                                    return Err(VMError::OutOfGas);
-                                                }
-                                                self.gas_remaining -= extra_cost;
+                            && match norito::decode_from_bytes::<
+                                crate::signature::Ed25519BatchRequest,
+                            >(tlv_req.payload)
+                            {
+                                Ok(req) => {
+                                    if req.entries.is_empty() {
+                                        false
+                                    } else if req.entries.len() > Self::MAX_ED25519_BATCH_ENTRIES {
+                                        fail_index = req.entries.len() as u64;
+                                        false
+                                    } else {
+                                        let extra_cost = Self::GAS_ED25519_BATCH_PER_ENTRY
+                                            .saturating_mul(req.entries.len() as u64);
+                                        if self.gas_remaining < extra_cost {
+                                            return Err(VMError::OutOfGas);
+                                        }
+                                        self.gas_remaining -= extra_cost;
 
-                                                let batch_result = match self
-                                                    .verify_ed25519_batch_cuda(&req)
+                                        let batch_result = match self
+                                            .verify_ed25519_batch_cuda(&req)
+                                        {
+                                            Some(res) => Some(res),
+                                            None => {
+                                                #[cfg(all(feature = "metal", target_os = "macos"))]
                                                 {
-                                                    Some(res) => Some(res),
-                                                    None => {
-                                                        #[cfg(all(
-                                                            feature = "metal",
-                                                            target_os = "macos"
-                                                        ))]
-                                                        {
-                                                            if let Some(res) = self
-                                                                .verify_ed25519_batch_metal(&req)
-                                                            {
-                                                                Some(res)
-                                                            } else {
-                                                                None
-                                                            }
-                                                        }
-                                                        #[cfg(not(all(
-                                                            feature = "metal",
-                                                            target_os = "macos"
-                                                        )))]
-                                                        {
-                                                            None
-                                                        }
+                                                    if let Some(res) =
+                                                        self.verify_ed25519_batch_metal(&req)
+                                                    {
+                                                        Some(res)
+                                                    } else {
+                                                        None
                                                     }
-                                                };
-
-                                                match batch_result {
-                                                    Some(Ok(())) => true,
-                                                    Some(Err(index)) => {
-                                                        fail_index = index as u64;
-                                                        false
-                                                    }
-                                                    None => {
-                                                        match crate::signature::verify_ed25519_batch(
-                                                            &req,
-                                                            Self::MAX_ED25519_BATCH_ENTRIES,
-                                                        ) {
-                                                            Ok(()) => true,
-                                                            Err(err) => {
-                                                                fail_index = match err {
-                                                                    crate::signature::Ed25519BatchError::Empty => 0,
-                                                                    crate::signature::Ed25519BatchError::TooMany { actual, .. } => {
-                                                                        actual as u64
-                                                                    }
-                                                                    crate::signature::Ed25519BatchError::InvalidEntry {
-                                                                        index,
-                                                                    } => index as u64,
-                                                                    crate::signature::Ed25519BatchError::SignatureFailed {
-                                                                        index,
-                                                                    } => index as u64,
-                                                                };
-                                                                false
-                                                            }
-                                                        }
-                                                    }
+                                                }
+                                                #[cfg(not(all(
+                                                    feature = "metal",
+                                                    target_os = "macos"
+                                                )))]
+                                                {
+                                                    None
                                                 }
                                             }
+                                        };
+
+                                        match batch_result {
+                                            Some(Ok(())) => true,
+                                            Some(Err(index)) => {
+                                                fail_index = index as u64;
+                                                false
+                                            }
+                                            None => match crate::signature::verify_ed25519_batch(
+                                                &req,
+                                                Self::MAX_ED25519_BATCH_ENTRIES,
+                                            ) {
+                                                Ok(()) => true,
+                                                Err(err) => {
+                                                    fail_index = match err {
+                                                        crate::signature::Ed25519BatchError::Empty => 0,
+                                                        crate::signature::Ed25519BatchError::TooMany { actual, .. } => {
+                                                            actual as u64
+                                                        }
+                                                        crate::signature::Ed25519BatchError::InvalidEntry {
+                                                            index,
+                                                        } => index as u64,
+                                                        crate::signature::Ed25519BatchError::SignatureFailed {
+                                                            index,
+                                                        } => index as u64,
+                                                    };
+                                                    false
+                                                }
+                                            },
                                         }
-                                        Err(_) => false,
                                     }
                                 }
-                                #[cfg(not(feature = "ed25519"))]
-                                {
-                                    let _ = tlv_req;
-                                    false
-                                }
+                                Err(_) => false,
                             }
                     } else {
                         false
@@ -4538,21 +4515,13 @@ impl IVM {
                             && tlv_sig.type_id_raw()
                                 == crate::pointer_abi::PointerType::Blob as u16
                             && tlv_pk.type_id_raw() == crate::pointer_abi::PointerType::Blob as u16;
-                        types_ok && {
-                            #[cfg(feature = "ed25519")]
-                            {
-                                crate::signature::verify_signature(
-                                    crate::signature::SignatureScheme::Ed25519,
-                                    tlv_msg.payload,
-                                    tlv_sig.payload,
-                                    tlv_pk.payload,
-                                )
-                            }
-                            #[cfg(not(feature = "ed25519"))]
-                            {
-                                false
-                            }
-                        }
+                        types_ok
+                            && crate::signature::verify_signature(
+                                crate::signature::SignatureScheme::Ed25519,
+                                tlv_msg.payload,
+                                tlv_sig.payload,
+                                tlv_pk.payload,
+                            )
                     } else {
                         false
                     };
@@ -4588,21 +4557,13 @@ impl IVM {
                             && tlv_sig.type_id_raw()
                                 == crate::pointer_abi::PointerType::Blob as u16
                             && tlv_pk.type_id_raw() == crate::pointer_abi::PointerType::Blob as u16;
-                        types_ok && {
-                            #[cfg(feature = "secp256k1")]
-                            {
-                                crate::signature::verify_signature(
-                                    crate::signature::SignatureScheme::Secp256k1,
-                                    tlv_msg.payload,
-                                    tlv_sig.payload,
-                                    tlv_pk.payload,
-                                )
-                            }
-                            #[cfg(not(feature = "secp256k1"))]
-                            {
-                                false
-                            }
-                        }
+                        types_ok
+                            && crate::signature::verify_signature(
+                                crate::signature::SignatureScheme::Secp256k1,
+                                tlv_msg.payload,
+                                tlv_sig.payload,
+                                tlv_pk.payload,
+                            )
                     } else {
                         false
                     };
@@ -4638,21 +4599,13 @@ impl IVM {
                             && tlv_sig.type_id_raw()
                                 == crate::pointer_abi::PointerType::Blob as u16
                             && tlv_pk.type_id_raw() == crate::pointer_abi::PointerType::Blob as u16;
-                        types_ok && {
-                            #[cfg(feature = "ml-dsa")]
-                            {
-                                crate::signature::verify_signature(
-                                    crate::signature::SignatureScheme::MlDsa,
-                                    tlv_msg.payload,
-                                    tlv_sig.payload,
-                                    tlv_pk.payload,
-                                )
-                            }
-                            #[cfg(not(feature = "ml-dsa"))]
-                            {
-                                false
-                            }
-                        }
+                        types_ok
+                            && crate::signature::verify_signature(
+                                crate::signature::SignatureScheme::MlDsa,
+                                tlv_msg.payload,
+                                tlv_sig.payload,
+                                tlv_pk.payload,
+                            )
                     } else {
                         false
                     };
@@ -5235,7 +5188,6 @@ fn analyse_instruction(
             meta.writes.insert(result_reg);
             meta.mem_read = true;
         }
-        #[cfg(feature = "ml-dsa")]
         DilithiumVerify { result_reg, .. } => {
             meta.writes.insert(result_reg);
             meta.mem_read = true;
@@ -5283,7 +5235,6 @@ fn cost_of(instr: &SimpleInstruction, vl: usize) -> u64 {
             IVM::GAS_ALU * lanes as u64
         }
         SimpleInstruction::Ed25519Verify { .. } => IVM::GAS_ED25519_VERIFY,
-        #[cfg(feature = "ml-dsa")]
         SimpleInstruction::DilithiumVerify { .. } => IVM::GAS_DILITHIUM_VERIFY,
         SimpleInstruction::Halt => 0,
     }
@@ -5530,7 +5481,6 @@ fn compute_instruction(
                 tag: false,
             });
         }
-        #[cfg(feature = "ml-dsa")]
         DilithiumVerify {
             level,
             pubkey_addr,

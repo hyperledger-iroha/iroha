@@ -3,7 +3,7 @@ use std::{
     any::Any,
     collections::{BTreeMap, HashMap, HashSet, VecDeque},
     io::Cursor,
-    num::NonZeroU64,
+    num::{NonZeroU16, NonZeroU64},
     path::PathBuf,
     sync::Arc,
 };
@@ -2636,6 +2636,9 @@ fn parse_permission_json(s: &str) -> Result<PermissionToken, VMError> {
 
 impl IVMHost for WsvHost {
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+        if !crate::syscalls::is_syscall_allowed(vm.syscall_policy(), number) {
+            return Err(VMError::UnknownSyscall(number));
+        }
         match number {
             // Durable smart-contract state syscalls
             crate::syscalls::SYSCALL_STATE_GET => {
@@ -4410,25 +4413,33 @@ impl IVMHost for WsvHost {
                 }
             }
             syscalls::SYSCALL_ADD_SIGNATORY => {
+                // r10 = &AccountId; r11 = &Json PublicKey
                 let account = self.decode_account_reg(vm, 10)?;
                 let tlv = vm.memory.validate_tlv(vm.register(11))?;
                 if tlv.type_id != PointerType::Json {
                     return Err(VMError::NoritoInvalid);
                 }
-                let key = parse_json_string_any(tlv.payload, &["public_key", "pubkey"])?;
-                if self.wsv.add_signatory(&self.caller, &account, key) {
+                let signatory: PublicKey =
+                    njson::from_slice(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+                if self
+                    .wsv
+                    .add_signatory(&self.caller, &account, signatory.to_string())
+                {
                     Ok(0)
                 } else {
                     Err(VMError::PermissionDenied)
                 }
             }
             syscalls::SYSCALL_REMOVE_SIGNATORY => {
+                // r10 = &AccountId; r11 = &Json PublicKey
                 let account = self.decode_account_reg(vm, 10)?;
                 let tlv = vm.memory.validate_tlv(vm.register(11))?;
                 if tlv.type_id != PointerType::Json {
                     return Err(VMError::NoritoInvalid);
                 }
-                let key = parse_json_string_any(tlv.payload, &["public_key", "pubkey"])?;
+                let signatory: PublicKey =
+                    njson::from_slice(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+                let key = signatory.to_string();
                 if self.wsv.remove_signatory(&self.caller, &account, &key) {
                     Ok(0)
                 } else {
@@ -4436,10 +4447,15 @@ impl IVMHost for WsvHost {
                 }
             }
             syscalls::SYSCALL_SET_ACCOUNT_QUORUM => {
+                // r10 = &AccountId; r11 = quorum
                 let account = self.decode_account_reg(vm, 10)?;
-                let raw = vm.register(11);
-                let quorum = u32::try_from(raw).map_err(|_| VMError::NoritoInvalid)?;
-                if self.wsv.set_account_quorum(&self.caller, &account, quorum) {
+                let quorum_raw = vm.register(11);
+                let quorum_u16 = u16::try_from(quorum_raw).map_err(|_| VMError::DecodeError)?;
+                let quorum = NonZeroU16::new(quorum_u16).ok_or(VMError::DecodeError)?;
+                if self
+                    .wsv
+                    .set_account_quorum(&self.caller, &account, u32::from(quorum.get()))
+                {
                     Ok(0)
                 } else {
                     Err(VMError::PermissionDenied)

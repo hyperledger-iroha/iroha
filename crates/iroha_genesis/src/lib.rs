@@ -2794,7 +2794,7 @@ mod tests2 {
             transactions: vec![RawGenesisTx::default()],
             consensus_mode: Some(SumeragiConsensusMode::Permissioned),
             bls_domain: Some("bls:test-domain".to_string()),
-            wire_proto_versions: vec![1, 2],
+            wire_proto_versions: vec![1],
             consensus_fingerprint: Some("0xabc123".to_string()),
             crypto: ManifestCrypto::default(),
         };

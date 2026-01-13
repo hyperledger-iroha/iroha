@@ -3479,7 +3479,18 @@ fn subscription_paths() -> Map {
         Value::Object(json_post_operation(
             "Subscriptions",
             "Cancel a subscription.",
-            "Cancel a subscription and unregister billing triggers.",
+            "Cancel a subscription immediately or schedule cancellation at period end.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            vec![sub_param.clone()],
+        )),
+    );
+    paths.insert(
+        "/v1/subscriptions/{subscription_id}/keep".to_owned(),
+        Value::Object(json_post_operation(
+            "Subscriptions",
+            "Keep a subscription.",
+            "Undo a scheduled period-end cancellation and keep billing active.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             vec![sub_param.clone()],

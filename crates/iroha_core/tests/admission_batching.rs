@@ -503,7 +503,6 @@ fn bls_batch_bisection_finds_bad_sig() {
     );
 }
 
-#[cfg(feature = "ml-dsa")]
 #[test]
 fn mldsa_batch_bisection_finds_bad_sig() {
     // ML‑DSA (Dilithium3)

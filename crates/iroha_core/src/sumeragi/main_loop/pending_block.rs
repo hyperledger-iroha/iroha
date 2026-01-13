@@ -41,6 +41,13 @@ pub(super) struct GateComputation {
     pub(super) changed: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct BlockSyncUpdateState {
+    view: u64,
+    commit_votes: usize,
+    has_commit_qc: bool,
+}
+
 #[derive(Debug)]
 #[allow(clippy::struct_excessive_bools)]
 pub(super) struct PendingBlock {
@@ -67,6 +74,7 @@ pub(super) struct PendingBlock {
     pub(super) aborted: bool,
     pub(super) last_quorum_reschedule: Option<Instant>,
     pub(super) last_precommit_rebroadcast: Option<Instant>,
+    last_block_sync_update: Option<BlockSyncUpdateState>,
 }
 
 impl PendingBlock {
@@ -93,6 +101,7 @@ impl PendingBlock {
             aborted: false,
             last_quorum_reschedule: None,
             last_precommit_rebroadcast: None,
+            last_block_sync_update: None,
         }
     }
 
@@ -142,6 +151,7 @@ impl PendingBlock {
             self.aborted = false;
             self.parent_state_root = None;
             self.post_state_root = None;
+            self.last_block_sync_update = None;
         }
     }
 
@@ -201,6 +211,31 @@ impl PendingBlock {
         self.last_precommit_rebroadcast = None;
         self.parent_state_root = None;
         self.post_state_root = None;
+        self.last_block_sync_update = None;
+    }
+
+    pub(super) fn should_broadcast_block_sync_update(
+        &mut self,
+        view: u64,
+        commit_votes: usize,
+        has_commit_qc: bool,
+    ) -> bool {
+        let candidate = BlockSyncUpdateState {
+            view,
+            commit_votes,
+            has_commit_qc,
+        };
+        let Some(previous) = self.last_block_sync_update else {
+            self.last_block_sync_update = Some(candidate);
+            return true;
+        };
+        let progressed = commit_votes > previous.commit_votes
+            || (has_commit_qc && !previous.has_commit_qc)
+            || view != previous.view;
+        if progressed {
+            self.last_block_sync_update = Some(candidate);
+        }
+        progressed
     }
 
     pub(super) fn note_kura_failure(
@@ -378,5 +413,16 @@ mod tests {
         pending.mark_aborted();
         assert!(pending.parent_state_root.is_none());
         assert!(pending.post_state_root.is_none());
+    }
+
+    #[test]
+    fn block_sync_update_broadcasts_on_progress() {
+        let mut pending =
+            PendingBlock::new(sample_block(1), Hash::prehashed([0x11; Hash::LENGTH]), 1, 0);
+        assert!(pending.should_broadcast_block_sync_update(0, 1, false));
+        assert!(!pending.should_broadcast_block_sync_update(0, 1, false));
+        assert!(pending.should_broadcast_block_sync_update(0, 2, false));
+        assert!(pending.should_broadcast_block_sync_update(0, 2, true));
+        assert!(pending.should_broadcast_block_sync_update(1, 2, true));
     }
 }

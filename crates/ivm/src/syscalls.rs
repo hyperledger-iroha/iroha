@@ -12,7 +12,7 @@
 //! discovery. Additional concurrency primitives may be added in future
 //! versions of the specification.
 
-/// Debug helper used only in unit tests. Not part of the formal spec.
+/// Debug helper for development; part of the ABI v1 surface.
 pub const SYSCALL_DEBUG_PRINT: u32 = 0;
 
 /// Lifecycle and utility syscalls.
@@ -23,7 +23,7 @@ pub const SYSCALL_ABORT: u32 = 0x02;
 /// Output a debug message (development only).
 pub const SYSCALL_DEBUG_LOG: u32 = 0x03;
 
-/// Extra helper syscalls used in tests but not part of the official spec.
+/// Helper syscalls for inputs/outputs; part of the ABI v1 surface.
 /// Retrieve a piece of public input provided by the host.
 pub const SYSCALL_GET_PUBLIC_INPUT: u32 = 0xF1;
 /// Allocate heap memory.
@@ -39,8 +39,11 @@ pub const SYSCALL_UNREGISTER_PEER: u32 = 0x16;
 /// Account management.
 pub const SYSCALL_REGISTER_ACCOUNT: u32 = 0x13;
 pub const SYSCALL_UNREGISTER_ACCOUNT: u32 = 0x14;
+/// Add a signatory for an account.
 pub const SYSCALL_ADD_SIGNATORY: u32 = 0x17;
+/// Remove a signatory from an account.
 pub const SYSCALL_REMOVE_SIGNATORY: u32 = 0x18;
+/// Update account quorum.
 pub const SYSCALL_SET_ACCOUNT_QUORUM: u32 = 0x19;
 pub const SYSCALL_SET_ACCOUNT_DETAIL: u32 = 0x1A;
 
@@ -299,6 +302,7 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_GET_PUBLIC_INPUT,
             SYSCALL_GET_PRIVATE_INPUT,
             SYSCALL_COMMIT_OUTPUT,
+            SYSCALL_VERIFY_SIGNATURE,
             // Hardware / helpers
             SYSCALL_PROVE_EXECUTION,
             SYSCALL_VERIFY_PROOF,
@@ -447,6 +451,7 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_GET_PUBLIC_INPUT => "GET_PUBLIC_INPUT",
         SYSCALL_GET_PRIVATE_INPUT => "GET_PRIVATE_INPUT",
         SYSCALL_COMMIT_OUTPUT => "COMMIT_OUTPUT",
+        SYSCALL_VERIFY_SIGNATURE => "VERIFY_SIGNATURE",
         SYSCALL_INPUT_PUBLISH_TLV => "INPUT_PUBLISH_TLV",
         SYSCALL_SM3_HASH => "SM3_HASH",
         SYSCALL_SM2_VERIFY => "SM2_VERIFY",

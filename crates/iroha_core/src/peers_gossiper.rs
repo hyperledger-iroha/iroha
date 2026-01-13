@@ -290,6 +290,12 @@ pub struct PeersGossiper {
     current_topology: BTreeSet<PeerId>,
     key_pair: KeyPair,
     gossip_period: Duration,
+    gossip_max_period: Duration,
+    gossip_backoff: Duration,
+    gossip_next_deadline: std::time::Instant,
+    gossip_pending: bool,
+    last_drop_count: u64,
+    last_drop_at: Option<std::time::Instant>,
     trust: TrustBook,
     network: IrohaNetwork,
 }
@@ -314,6 +320,63 @@ impl PeersGossiper {
     fn gossip_interval(configured: Duration) -> Duration {
         configured
     }
+
+    fn next_gossip_backoff(
+        current: Duration,
+        min: Duration,
+        max: Duration,
+        had_pending: bool,
+    ) -> Duration {
+        if had_pending {
+            return min;
+        }
+        current.saturating_mul(2).min(max)
+    }
+
+    fn note_gossip_change(&mut self, now: std::time::Instant) {
+        self.gossip_pending = true;
+        self.gossip_backoff = self.gossip_period;
+        let next = now.checked_add(self.gossip_period).unwrap_or(now);
+        if next < self.gossip_next_deadline {
+            self.gossip_next_deadline = next;
+        }
+    }
+
+    fn drop_backpressure_active(&mut self, now: std::time::Instant) -> bool {
+        let current = iroha_p2p::network::subscriber_queue_full_count();
+        if current > self.last_drop_count {
+            self.last_drop_count = current;
+            self.last_drop_at = Some(now);
+        }
+        self.last_drop_at
+            .is_some_and(|last| now.saturating_duration_since(last) < self.gossip_backoff)
+    }
+
+    fn maybe_gossip(&mut self, now: std::time::Instant) {
+        if now < self.gossip_next_deadline {
+            return;
+        }
+        if self.drop_backpressure_active(now) {
+            self.gossip_next_deadline = now.checked_add(self.gossip_backoff).unwrap_or(now);
+            iroha_logger::trace!(
+                drops = self.last_drop_count,
+                cooldown_ms = self.gossip_backoff.as_millis(),
+                "peers gossiper skipping gossip due to relay backpressure"
+            );
+            return;
+        }
+        self.gossip_peers();
+        self.network_update_peers_addresses();
+        let had_pending = self.gossip_pending;
+        self.gossip_pending = false;
+        self.gossip_backoff = Self::next_gossip_backoff(
+            self.gossip_backoff,
+            self.gossip_period,
+            self.gossip_max_period,
+            had_pending,
+        );
+        self.gossip_next_deadline = now.checked_add(self.gossip_backoff).unwrap_or(now);
+    }
     /// Start actor.
     #[allow(clippy::too_many_arguments)]
     pub fn start(
@@ -321,6 +384,7 @@ impl PeersGossiper {
         trusted_peers: TrustedPeers,
         key_pair: KeyPair,
         gossip_period: Duration,
+        gossip_max_period: Duration,
         consensus_mode: iroha_config::parameters::actual::ConsensusMode,
         trust_decay_half_life: Duration,
         trust_penalty_bad_gossip: i32,
@@ -340,6 +404,8 @@ impl PeersGossiper {
         let static_trusted_peers = trusted_set.clone();
         let initial_topology: BTreeSet<_> = trusted_set.clone();
         let trust_candidates = trusted_set.clone();
+        let gossip_max_period = gossip_max_period.max(gossip_period);
+        let now = std::time::Instant::now();
         let mut gossiper = Self {
             peer_id,
             initial_peers,
@@ -351,6 +417,12 @@ impl PeersGossiper {
             current_topology: initial_topology.clone(),
             key_pair,
             gossip_period,
+            gossip_max_period,
+            gossip_backoff: gossip_period,
+            gossip_next_deadline: now,
+            gossip_pending: true,
+            last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
+            last_drop_at: None,
             trust: TrustBook::new(
                 trust_decay_half_life,
                 TrustPenalties {
@@ -401,20 +473,24 @@ impl PeersGossiper {
     ) {
         let mut gossip_period = tokio::time::interval(Self::gossip_interval(self.gossip_period));
         loop {
+            let mut should_check_gossip = false;
             tokio::select! {
                 Some(update_topology) = update_topology_receiver.recv() => {
-                    self.set_current_topology(update_topology);
+                    let changed = self.set_current_topology(update_topology);
+                    if changed {
+                        self.note_gossip_change(std::time::Instant::now());
+                    }
+                    should_check_gossip = true;
                 }
                 _ = gossip_period.tick() => {
-                    // Periodically broadcast known peers and reattempt address updates.
-                    self.gossip_peers();
-                    self.network_update_peers_addresses();
+                    should_check_gossip = true;
                 }
                 result = self.network.wait_online_peers_update(|_| ()) => {
                     match result {
                         Ok(()) => {
-                            self.gossip_peers();
                             self.network_update_peers_addresses();
+                            self.note_gossip_change(std::time::Instant::now());
+                            should_check_gossip = true;
                         }
                         Err(err) => {
                             iroha_logger::debug!(?err, "Network online peers channel closed");
@@ -425,23 +501,31 @@ impl PeersGossiper {
                 Some(event) = message_receiver.recv() => {
                     match event {
                         GossipEvent::Peers { gossip, from } => {
-                            self.handle_peers_gossip(gossip, &from);
+                            if self.handle_peers_gossip(gossip, &from) {
+                                self.note_gossip_change(std::time::Instant::now());
+                            }
                         }
                         GossipEvent::Trust { gossip, from } => {
-                            self.handle_trust_gossip(gossip, &from);
+                            if self.handle_trust_gossip(gossip, &from) {
+                                self.note_gossip_change(std::time::Instant::now());
+                            }
                         }
                     }
+                    should_check_gossip = true;
                 }
                 () = shutdown_signal.receive() => {
                     iroha_logger::debug!("Shutting down peers gossiper");
                     break;
                 },
             }
+            if should_check_gossip {
+                self.maybe_gossip(std::time::Instant::now());
+            }
             tokio::task::yield_now().await;
         }
     }
 
-    fn set_current_topology(&mut self, UpdateTopology(topology): UpdateTopology) {
+    fn set_current_topology(&mut self, UpdateTopology(topology): UpdateTopology) -> bool {
         let mut new_topology: BTreeSet<_> = topology.into_iter().collect();
         new_topology.extend(self.static_trusted_peers.iter().cloned());
 
@@ -488,6 +572,7 @@ impl PeersGossiper {
                 "received unchanged topology; re-advertising to enforce dial set"
             );
         }
+        !unchanged
     }
 
     fn gossip_peers(&mut self) {
@@ -567,20 +652,25 @@ impl PeersGossiper {
         }
     }
 
-    fn handle_peers_gossip(&mut self, PeersGossip { peers }: PeersGossip, from_peer: &Peer) {
+    fn handle_peers_gossip(
+        &mut self,
+        PeersGossip { peers }: PeersGossip,
+        from_peer: &Peer,
+    ) -> bool {
         let is_trusted = self.trusted_peers.contains(from_peer.id());
         let allow_public = matches!(
             self.consensus_mode,
             iroha_config::parameters::actual::ConsensusMode::Npos
         );
         if !allow_public && !self.current_topology.contains(from_peer.id()) && !is_trusted {
-            return;
+            return false;
         }
         let now = std::time::Instant::now();
         if self.evict_if_low_trust(from_peer.id(), now) {
-            return;
+            return false;
         }
         self.restore_if_recovered(from_peer.id(), now);
+        let mut changed = false;
         for peer in peers {
             let peer_allowed = self.current_topology.contains(peer.id())
                 || allow_public
@@ -590,16 +680,23 @@ impl PeersGossiper {
                 continue;
             }
             let map = self.gossip_peers.entry(peer.id().clone()).or_default();
-            map.insert(from_peer.id().clone(), peer.address().clone());
+            let address = peer.address().clone();
+            let previous = map.insert(from_peer.id().clone(), address.clone());
+            if previous.as_ref() != Some(&address) {
+                changed = true;
+            }
         }
-        self.network_update_peers_addresses();
+        if changed {
+            self.network_update_peers_addresses();
+        }
+        changed
     }
 
     fn handle_trust_gossip(
         &mut self,
         PeerTrustGossip { trust }: PeerTrustGossip,
         from_peer: &Peer,
-    ) {
+    ) -> bool {
         let allow_public = matches!(
             self.consensus_mode,
             iroha_config::parameters::actual::ConsensusMode::Npos
@@ -608,11 +705,11 @@ impl PeersGossiper {
             && !allow_public
             && !self.current_topology.contains(from_peer.id())
         {
-            return;
+            return false;
         }
         let now = std::time::Instant::now();
         if self.evict_if_low_trust(from_peer.id(), now) {
-            return;
+            return false;
         }
         self.restore_if_recovered(from_peer.id(), now);
 
@@ -626,13 +723,18 @@ impl PeersGossiper {
             now,
         );
         if outcome.drop_sender && self.evict_if_low_trust(from_peer.id(), now) {
-            return;
+            return false;
         }
+        let mut trust_changed = false;
         if !outcome.newly_trusted.is_empty() {
             self.trusted_peers.extend(outcome.newly_trusted.clone());
             self.trust_candidates.extend(outcome.newly_trusted);
+            trust_changed = true;
+        }
+        if trust_changed {
             self.update_trusted_peers_on_network();
         }
+        trust_changed
     }
 
     fn network_update_peers_addresses(&self) {
@@ -904,6 +1006,20 @@ mod tests {
     }
 
     #[test]
+    fn gossip_backoff_doubles_and_resets() {
+        let min = Duration::from_millis(100);
+        let max = Duration::from_millis(800);
+        let backoff = PeersGossiper::next_gossip_backoff(min, min, max, false);
+        assert_eq!(backoff, Duration::from_millis(200));
+        let backoff = PeersGossiper::next_gossip_backoff(backoff, min, max, false);
+        assert_eq!(backoff, Duration::from_millis(400));
+        let backoff = PeersGossiper::next_gossip_backoff(backoff, min, max, false);
+        assert_eq!(backoff, Duration::from_millis(800));
+        let reset = PeersGossiper::next_gossip_backoff(backoff, min, max, true);
+        assert_eq!(reset, min);
+    }
+
+    #[test]
     fn gossiper_handle_drops_messages_when_receiver_closed() {
         let (message_sender, message_receiver) = mpsc::channel(1);
         drop(message_receiver);
@@ -954,6 +1070,7 @@ mod tests {
                 iroha_config::parameters::defaults::network::REQUIRE_SM_OPENSSL_PREVIEW_MATCH,
             idle_timeout: iroha_config::parameters::defaults::network::IDLE_TIMEOUT,
             peer_gossip_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
+            peer_gossip_max_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
             trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             trust_decay_half_life:
                 iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -973,6 +1090,24 @@ mod tests {
             p2p_post_queue_cap: iroha_config::parameters::defaults::network::P2P_POST_QUEUE_CAP,
             p2p_subscriber_queue_cap:
                 iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
+            consensus_ingress_rate_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
+            consensus_ingress_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
+            consensus_ingress_bytes_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
+            consensus_ingress_bytes_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+            consensus_ingress_rbc_session_limit:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
+            consensus_ingress_penalty_threshold:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
+            consensus_ingress_penalty_window: Duration::from_millis(
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
+            ),
+            consensus_ingress_penalty_cooldown: Duration::from_millis(
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
+            ),
             happy_eyeballs_stagger:
                 iroha_config::parameters::defaults::network::HAPPY_EYEBALLS_STAGGER,
             addr_ipv6_first: false,
@@ -1062,6 +1197,12 @@ mod tests {
             current_topology,
             key_pair: key_pair.clone(),
             gossip_period: network_cfg.peer_gossip_period,
+            gossip_max_period: network_cfg.peer_gossip_max_period,
+            gossip_backoff: network_cfg.peer_gossip_period,
+            gossip_next_deadline: std::time::Instant::now(),
+            gossip_pending: true,
+            last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
+            last_drop_at: None,
             trust: TrustBook::new(
                 network_cfg.trust_decay_half_life,
                 TrustPenalties {

@@ -504,8 +504,9 @@ class TupleAdapter(TypeAdapter[Tuple[Any, ...]]):
         return tuple(adapter.decode(decoder) for adapter in self.elements)
 
     def fixed_size(self) -> Optional[int]:
-        if all((size := adapter.fixed_size()) is not None for adapter in self.elements):
-            return sum(adapter.fixed_size() or 0 for adapter in self.elements)
+        sizes = [adapter.fixed_size() for adapter in self.elements]
+        if all(size is not None for size in sizes):
+            return sum(size or 0 for size in sizes)
         return None
 
     def is_self_delimiting(self) -> bool:

@@ -13,7 +13,7 @@ use std::{
     collections::{BTreeMap, VecDeque},
     io::Cursor,
     mem,
-    num::{NonZeroU64, NonZeroUsize},
+    num::{NonZeroU16, NonZeroU64, NonZeroUsize},
     str::FromStr,
     sync::Arc,
 };
@@ -24,10 +24,10 @@ use iroha_data_model::{
     errors::{AmxStage, AmxTimeout, CanonicalErrorKind},
     events::time::Schedule,
     isi::{
-        Burn, BurnBox, InstructionBox, Mint, MintBox, Register, RegisterBox, SetKeyValue,
-        SetKeyValueBox, SetParameter, Transfer, TransferAssetBatch, TransferAssetBatchEntry,
-        TransferBox, Unregister, UnregisterBox, register::RegisterPeerWithPop,
-        smart_contract_code as scode, zk as DMZk,
+        AddSignatory, Burn, BurnBox, InstructionBox, Mint, MintBox, Register, RegisterBox,
+        RemoveSignatory, SetAccountQuorum, SetKeyValue, SetKeyValueBox, SetParameter, Transfer,
+        TransferAssetBatch, TransferAssetBatchEntry, TransferBox, Unregister, UnregisterBox,
+        register::RegisterPeerWithPop, smart_contract_code as scode, zk as DMZk,
     },
     nexus::{
         AxtBinding, AxtDescriptor as ModelAxtDescriptor, AxtEnvelopeRecord, AxtHandleFragment,
@@ -36,12 +36,13 @@ use iroha_data_model::{
         AxtTouchSpec as ModelAxtTouchSpec, ProofBlob as ModelProofBlob,
         TouchManifest as ModelTouchManifest, proof_matches_manifest,
     },
+    parameter::{Parameters, system::ivm_metadata},
     permission::Permissions,
     prelude::{AccountId, *},
     proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
     query::{
         QueryRequest, QueryResponse, SingularQueryBox, SingularQueryOutputBox,
-        asset::prelude::FindAssetById, error::QueryExecutionFail, parameters::ForwardCursor,
+        asset::prelude::FindAssetById, error::QueryExecutionFail,
     },
     subscription::{
         SUBSCRIPTION_INVOICE_METADATA_KEY, SUBSCRIPTION_METADATA_KEY,
@@ -57,7 +58,7 @@ use ivm::{
     analysis::{self, AmxLimits, ProgramAnalysis},
     axt::{self, AssetHandle, ProofBlob, RemoteSpendIntent, TouchManifest},
     host::IVMHost,
-    is_type_allowed_for_policy,
+    is_type_allowed_for_policy, pointer_abi,
 };
 use mv::storage::StorageReadOnly;
 use norito::{
@@ -118,6 +119,73 @@ struct CachedProofEntry {
     manifest_root: Option<[u8; 32]>,
     valid: bool,
     status: &'static str,
+}
+
+const PUBLIC_INPUT_GAS_BASE_DEFAULT: u64 = 16;
+const PUBLIC_INPUT_GAS_PER_BYTE_DEFAULT: u64 = 1;
+
+#[derive(Debug, Clone, crate::json_macros::JsonDeserialize)]
+struct PublicInputDescriptor {
+    name: Name,
+    type_id: u16,
+    tlv_hex: String,
+    #[norito(default)]
+    gas_base: Option<u64>,
+    #[norito(default)]
+    gas_per_byte: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+struct PublicInputRecord {
+    type_id: PointerType,
+    tlv: Vec<u8>,
+    gas_base: u64,
+    gas_per_byte: u64,
+}
+
+impl PublicInputRecord {
+    fn from_tlv_bytes(bytes: Vec<u8>) -> Result<Self, ivm::VMError> {
+        let tlv = pointer_abi::validate_tlv_bytes(&bytes)?;
+        Ok(Self {
+            type_id: tlv.type_id,
+            tlv: bytes,
+            gas_base: PUBLIC_INPUT_GAS_BASE_DEFAULT,
+            gas_per_byte: PUBLIC_INPUT_GAS_PER_BYTE_DEFAULT,
+        })
+    }
+
+    fn from_descriptor(desc: PublicInputDescriptor) -> Result<(Name, Self), ivm::VMError> {
+        let expected_type =
+            PointerType::from_u16(desc.type_id).ok_or(ivm::VMError::NoritoInvalid)?;
+        let hex_str = desc
+            .tlv_hex
+            .trim_start_matches("0x")
+            .trim_start_matches("0X");
+        let bytes = hex::decode(hex_str).map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let tlv = pointer_abi::validate_tlv_bytes(&bytes)?;
+        if tlv.type_id != expected_type {
+            return Err(ivm::VMError::NoritoInvalid);
+        }
+        let gas_base = desc.gas_base.unwrap_or(PUBLIC_INPUT_GAS_BASE_DEFAULT);
+        let gas_per_byte = desc
+            .gas_per_byte
+            .unwrap_or(PUBLIC_INPUT_GAS_PER_BYTE_DEFAULT);
+        Ok((
+            desc.name,
+            Self {
+                type_id: expected_type,
+                tlv: bytes,
+                gas_base,
+                gas_per_byte,
+            },
+        ))
+    }
+
+    fn gas_cost(&self) -> u64 {
+        let len = u64::try_from(self.tlv.len()).unwrap_or(u64::MAX);
+        self.gas_base
+            .saturating_add(self.gas_per_byte.saturating_mul(len))
+    }
 }
 
 /// Lightweight view of a cached AXT proof entry for diagnostics/tests.
@@ -210,7 +278,7 @@ pub struct CoreHostImpl<QS> {
     accounts_snapshot: Arc<Vec<AccountId>>,
     // Live read-only state view used to execute queries during IVM runs.
     query_state: QS,
-    // Simple counter for sentinel-generated NFT ids to guarantee uniqueness across calls.
+    // Simple counter for sample-generated NFT ids to guarantee uniqueness across calls.
     nft_seq: u64,
     // Optional trigger arguments for by-call entrypoints.
     args: Option<iroha_primitives::json::Json>,
@@ -241,6 +309,8 @@ pub struct CoreHostImpl<QS> {
     zk_elections: BTreeMap<String, (bool, Vec<u64>)>,
     // Registry snapshot of verifying keys.
     verifying_keys: BTreeMap<VerifyingKeyId, VerifyingKeyRecord>,
+    // Registry snapshot of public inputs exposed via SYSCALL_GET_PUBLIC_INPUT.
+    public_inputs: BTreeMap<Name, PublicInputRecord>,
     // Chain id bytes for domain-tag binding.
     chain_id_bytes: Vec<u8>,
     // Policy hook for AXT validation (deny-wins).
@@ -791,6 +861,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             zk_roots: BTreeMap::new(),
             zk_elections: BTreeMap::new(),
             verifying_keys: BTreeMap::new(),
+            public_inputs: BTreeMap::new(),
             chain_id_bytes: Vec::new(),
             axt_policy: Arc::new(ivm::axt::AllowAllAxtPolicy),
             axt_timing: iroha_config::parameters::actual::NexusAxt::default(),
@@ -823,6 +894,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         host.set_axt_timing(view.nexus.axt);
         host.hydrate_axt_replay_ledger(&view);
         host.set_durable_state_snapshot_from_world(view.world());
+        host.set_public_inputs_from_parameters(view.world().parameters());
         host = host.with_axt_policy_snapshot(&snapshot);
         host.set_amx_limits(Self::amx_limits_from_config(&view.pipeline));
         host
@@ -864,6 +936,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             zk_roots: BTreeMap::new(),
             zk_elections: BTreeMap::new(),
             verifying_keys: BTreeMap::new(),
+            public_inputs: BTreeMap::new(),
             chain_id_bytes: Vec::new(),
             axt_policy: Arc::new(ivm::axt::AllowAllAxtPolicy),
             axt_timing: iroha_config::parameters::actual::NexusAxt::default(),
@@ -928,6 +1001,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             zk_roots: BTreeMap::new(),
             zk_elections: BTreeMap::new(),
             verifying_keys: BTreeMap::new(),
+            public_inputs: BTreeMap::new(),
             chain_id_bytes: Vec::new(),
             axt_policy: Arc::new(ivm::axt::AllowAllAxtPolicy),
             axt_timing: iroha_config::parameters::actual::NexusAxt::default(),
@@ -1547,13 +1621,83 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
     /// Provide public inputs retrievable via `SYSCALL_GET_PUBLIC_INPUT`.
     pub fn with_public_inputs(mut self, inputs: BTreeMap<Name, Vec<u8>>) -> Self {
-        self.default.set_public_inputs(inputs);
+        self.set_public_inputs(inputs);
         self
     }
 
     /// Replace the public input map used by `SYSCALL_GET_PUBLIC_INPUT`.
     pub fn set_public_inputs(&mut self, inputs: BTreeMap<Name, Vec<u8>>) {
-        self.default.set_public_inputs(inputs);
+        self.public_inputs = Self::public_inputs_from_tlvs(inputs);
+    }
+
+    /// Refresh the public input registry from on-chain parameters when present.
+    pub fn set_public_inputs_from_parameters(&mut self, params: &Parameters) {
+        if let Some(map) = Self::public_inputs_from_parameters(params) {
+            self.public_inputs = map;
+        }
+    }
+
+    fn public_inputs_from_tlvs(
+        inputs: BTreeMap<Name, Vec<u8>>,
+    ) -> BTreeMap<Name, PublicInputRecord> {
+        let mut map = BTreeMap::new();
+        for (name, bytes) in inputs {
+            match PublicInputRecord::from_tlv_bytes(bytes) {
+                Ok(record) => {
+                    map.insert(name, record);
+                }
+                Err(err) => {
+                    iroha_logger::warn!(
+                        %name,
+                        ?err,
+                        "Skipping invalid public input TLV"
+                    );
+                }
+            }
+        }
+        map
+    }
+
+    fn public_inputs_from_parameters(
+        params: &Parameters,
+    ) -> Option<BTreeMap<Name, PublicInputRecord>> {
+        let id = ivm_metadata::public_inputs_id();
+        let custom = params.custom().get(&id)?;
+        let entries = match custom
+            .payload()
+            .try_into_any_norito::<Vec<PublicInputDescriptor>>()
+        {
+            Ok(entries) => entries,
+            Err(error) => {
+                iroha_logger::warn!(
+                    ?error,
+                    "Failed to decode ivm_public_inputs custom parameter payload"
+                );
+                return Some(BTreeMap::new());
+            }
+        };
+        let mut map = BTreeMap::new();
+        for entry in entries {
+            let name = entry.name.clone();
+            match PublicInputRecord::from_descriptor(entry) {
+                Ok((name, record)) => {
+                    if map.insert(name.clone(), record).is_some() {
+                        iroha_logger::warn!(
+                            %name,
+                            "Duplicate public input name in ivm_public_inputs registry"
+                        );
+                    }
+                }
+                Err(err) => {
+                    iroha_logger::warn!(
+                        %name,
+                        ?err,
+                        "Skipping invalid public input registry entry"
+                    );
+                }
+            }
+        }
+        Some(map)
     }
 
     /// Install a read-only snapshot of ZK roots per asset for state-read syscalls.
@@ -2844,6 +2988,39 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             }
         };
 
+        let mut gas = 0_u64;
+        if subscription_state.cancel_at_period_end {
+            let cancel_at_ms = subscription_state
+                .cancel_at_ms
+                .unwrap_or(subscription_state.current_period_end_ms);
+            if charge_period.start_ms >= cancel_at_ms {
+                subscription_state.status = SubscriptionStatus::Canceled;
+                subscription_state.cancel_at_period_end = false;
+                subscription_state.cancel_at_ms = None;
+                #[cfg(feature = "telemetry")]
+                if let Some(telemetry) = self.telemetry.as_ref() {
+                    telemetry.record_subscription_billing_outcome(pricing_label, "skipped");
+                }
+                let subscription_key: Name = SUBSCRIPTION_METADATA_KEY
+                    .parse()
+                    .map_err(|_| ivm::VMError::NoritoInvalid)?;
+                let subscription_json =
+                    iroha_primitives::json::Json::new(subscription_state.clone());
+                let isi = SetKeyValue::nft(
+                    context.subscription_nft_id.clone(),
+                    subscription_key,
+                    subscription_json,
+                );
+                let instr = InstructionBox::from(SetKeyValueBox::from(isi));
+                gas = gas.saturating_add(self.queue_instruction(instr));
+                let unregister = InstructionBox::from(UnregisterBox::from(Unregister::trigger(
+                    trigger_id.clone(),
+                )));
+                gas = gas.saturating_add(self.queue_instruction(unregister));
+                return Ok(gas);
+            }
+        }
+
         let charge_spec = context.charge_asset_def.spec();
         let (amount, usage_key) = match &context.plan.pricing {
             SubscriptionPricing::Fixed(pricing) => {
@@ -2892,8 +3069,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             status: invoice_status,
             tx_hash: None,
         };
-        let mut gas = 0_u64;
-
         if can_pay {
             if !amount.is_zero() {
                 let asset_id = AssetId::of(
@@ -2935,6 +3110,17 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     attempted_at_ms.saturating_add(billing.retry_backoff_ms);
             }
         }
+
+        if subscription_state.cancel_at_period_end {
+            let cancel_at_ms = subscription_state
+                .cancel_at_ms
+                .unwrap_or(subscription_state.current_period_end_ms);
+            if charge_period.end_ms >= cancel_at_ms {
+                subscription_state.status = SubscriptionStatus::Canceled;
+                subscription_state.cancel_at_period_end = false;
+                subscription_state.cancel_at_ms = None;
+            }
+        }
         #[cfg(feature = "telemetry")]
         let outcome = if can_pay {
             "paid"
@@ -2972,7 +3158,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let invoice_instr = InstructionBox::from(SetKeyValueBox::from(invoice_isi));
         gas = gas.saturating_add(self.queue_instruction(invoice_instr));
 
-        if subscription_state.status == SubscriptionStatus::Suspended {
+        if matches!(
+            subscription_state.status,
+            SubscriptionStatus::Suspended | SubscriptionStatus::Canceled
+        ) {
             let instr =
                 InstructionBox::from(UnregisterBox::from(Unregister::trigger(trigger_id.clone())));
             gas = gas.saturating_add(self.queue_instruction(instr));
@@ -4195,11 +4384,43 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let instr = InstructionBox::from(UnregisterBox::from(isi));
                 Ok(self.queue_instruction(instr))
             }
-            ivm::syscalls::SYSCALL_ADD_SIGNATORY
-            | ivm::syscalls::SYSCALL_REMOVE_SIGNATORY
-            | ivm::syscalls::SYSCALL_SET_ACCOUNT_QUORUM => {
-                // TODO: Iroha v3 data model does not expose signatory/quorum ISIs for IVM yet.
-                Err(ivm::VMError::NotImplemented { syscall: number })
+            ivm::syscalls::SYSCALL_ADD_SIGNATORY => {
+                let account_ptr = vm.register(10);
+                let signatory_ptr = vm.register(11);
+                let account: AccountId =
+                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
+                let payload: Json = Self::decode_tlv_json(vm, signatory_ptr)?;
+                let signatory: PublicKey = payload
+                    .try_into_any_norito::<PublicKey>()
+                    .map_err(|_| ivm::VMError::DecodeError)?;
+                let isi = AddSignatory::new(account, signatory);
+                let instr = InstructionBox::from(isi);
+                Ok(self.queue_instruction(instr))
+            }
+            ivm::syscalls::SYSCALL_REMOVE_SIGNATORY => {
+                let account_ptr = vm.register(10);
+                let signatory_ptr = vm.register(11);
+                let account: AccountId =
+                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
+                let payload: Json = Self::decode_tlv_json(vm, signatory_ptr)?;
+                let signatory: PublicKey = payload
+                    .try_into_any_norito::<PublicKey>()
+                    .map_err(|_| ivm::VMError::DecodeError)?;
+                let isi = RemoveSignatory::new(account, signatory);
+                let instr = InstructionBox::from(isi);
+                Ok(self.queue_instruction(instr))
+            }
+            ivm::syscalls::SYSCALL_SET_ACCOUNT_QUORUM => {
+                let account_ptr = vm.register(10);
+                let quorum_raw = vm.register(11);
+                let account: AccountId =
+                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
+                let quorum_u16 =
+                    u16::try_from(quorum_raw).map_err(|_| ivm::VMError::DecodeError)?;
+                let quorum = NonZeroU16::new(quorum_u16).ok_or(ivm::VMError::DecodeError)?;
+                let isi = SetAccountQuorum::new(account, quorum);
+                let instr = InstructionBox::from(isi);
+                Ok(self.queue_instruction(instr))
             }
             // ----------------- Asset (Numeric) ISIs via pointer-ABI -----------------
             ivm::syscalls::SYSCALL_REGISTER_ASSET => {
@@ -4221,41 +4442,13 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             ivm::syscalls::SYSCALL_MINT_ASSET => {
                 let account_ptr = vm.register(10);
                 let asset_def_ptr = vm.register(11);
-                let mut amount = vm.register(12);
+                let amount = vm.register(12);
 
-                // Pointer-ABI: if the pointer lies in the INPUT region use it,
-                // otherwise interpret sentinel values for minimal test samples.
-                let account: AccountId = if account_ptr >= ivm::Memory::INPUT_START {
-                    // Strict typed TLV (AccountId)
-                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?
-                } else {
-                    // Sentinel 0 => current authority
-                    if account_ptr == 0 {
-                        self.authority.clone()
-                    } else {
-                        return Err(ivm::VMError::DecodeError);
-                    }
-                };
-                let asset_def: AssetDefinitionId = if asset_def_ptr >= ivm::Memory::INPUT_START {
-                    Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?
-                } else {
-                    // Sentinel 0 => predefined sample: "rose#wonderland"
-                    if asset_def_ptr == 0 {
-                        "rose#wonderland"
-                            .parse()
-                            .map_err(|_| ivm::VMError::DecodeError)?
-                    } else {
-                        return Err(ivm::VMError::DecodeError);
-                    }
-                };
+                let account: AccountId =
+                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
+                let asset_def: AssetDefinitionId =
+                    Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
                 let asset_id = AssetId::of(asset_def, account);
-                // If amount is a sentinel (0), try to take it from trigger args.
-                if let Some(args) = &self.args
-                    && let Ok(value) = args.try_into_any_norito::<norito::json::Value>()
-                    && let Some(v) = value.get("val").and_then(norito::json::Value::as_u64)
-                {
-                    amount = v;
-                }
                 let isi = Mint::asset_numeric(amount, asset_id);
                 let instr = InstructionBox::from(MintBox::from(isi));
                 Ok(self.queue_instruction(instr))
@@ -4299,35 +4492,10 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let key_ptr = vm.register(11);
                 let value_ptr = vm.register(12);
 
-                let account: AccountId = if account_ptr >= ivm::Memory::INPUT_START {
-                    self.decode_at(vm, account_ptr)?
-                } else if account_ptr == 0 {
-                    self.authority.clone()
-                } else {
-                    return Err(ivm::VMError::DecodeError);
-                };
-
-                let key: Name = if key_ptr >= ivm::Memory::INPUT_START {
-                    Self::decode_tlv_typed(vm, key_ptr, PointerType::Name)?
-                } else if key_ptr == 0 {
-                    "cursor".parse().map_err(|_| ivm::VMError::DecodeError)?
-                } else {
-                    return Err(ivm::VMError::DecodeError);
-                };
-
-                let value: Json = if value_ptr >= ivm::Memory::INPUT_START {
-                    Self::decode_tlv_json(vm, value_ptr)?
-                } else if value_ptr == 0 {
-                    // Minimal ForwardCursor value so client-side deserialization succeeds.
-                    let fc = ForwardCursor {
-                        query: "sc_dummy".to_string(),
-                        cursor: nonzero_ext::nonzero!(1_u64),
-                        gas_budget: None,
-                    };
-                    Json::new(fc)
-                } else {
-                    return Err(ivm::VMError::DecodeError);
-                };
+                let account: AccountId =
+                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
+                let key: Name = Self::decode_tlv_typed(vm, key_ptr, PointerType::Name)?;
+                let value: Json = Self::decode_tlv_json(vm, value_ptr)?;
 
                 let isi = SetKeyValue::account(account, key, value);
                 let instr = InstructionBox::from(SetKeyValueBox::from(isi));
@@ -4503,50 +4671,29 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             ivm::syscalls::SYSCALL_NFT_MINT_ASSET => {
                 let nft_id_ptr = vm.register(10);
                 let owner_ptr = vm.register(11);
-                let owner: AccountId = if owner_ptr >= ivm::Memory::INPUT_START {
-                    Self::decode_tlv_typed(vm, owner_ptr, PointerType::AccountId)?
-                } else if owner_ptr == 0 {
-                    self.authority.clone()
-                } else {
-                    return Err(ivm::VMError::DecodeError);
-                };
-                let nft_id: NftId = if nft_id_ptr >= ivm::Memory::INPUT_START {
-                    Self::decode_tlv_typed(vm, nft_id_ptr, PointerType::NftId)?
-                } else if nft_id_ptr == 0 {
-                    // Auto-generate a unique NFT id for the current authority with a monotonic suffix
-                    let name = format!("nft_number_{}_for_{}", self.nft_seq, owner.signatory())
-                        .parse()
-                        .map_err(|_| ivm::VMError::DecodeError)?;
-                    self.nft_seq = self.nft_seq.saturating_add(1);
-                    NftId::of(owner.domain().clone(), name)
-                } else {
-                    return Err(ivm::VMError::DecodeError);
-                };
-                let nft = Nft::new(nft_id, Metadata::default());
-                let instr = InstructionBox::from(RegisterBox::from(Register::nft(nft)));
-                Ok(self.queue_instruction(instr))
+                let owner: AccountId =
+                    Self::decode_tlv_typed(vm, owner_ptr, PointerType::AccountId)?;
+                let nft_id: NftId = Self::decode_tlv_typed(vm, nft_id_ptr, PointerType::NftId)?;
+                let nft = Nft::new(nft_id.clone(), Metadata::default());
+                let mut gas = self
+                    .queue_instruction(InstructionBox::from(RegisterBox::from(Register::nft(nft))));
+                if owner != self.authority {
+                    let transfer = InstructionBox::from(TransferBox::from(Transfer::nft(
+                        self.authority.clone(),
+                        nft_id,
+                        owner,
+                    )));
+                    gas = gas.saturating_add(self.queue_instruction(transfer));
+                }
+                Ok(gas)
             }
             ivm::syscalls::SYSCALL_NFT_TRANSFER_ASSET => {
                 let from_ptr = vm.register(10);
                 let nft_id_ptr = vm.register(11);
                 let to_ptr = vm.register(12);
-                let from: AccountId = if from_ptr >= ivm::Memory::INPUT_START {
-                    Self::decode_tlv_typed(vm, from_ptr, PointerType::AccountId)?
-                } else if from_ptr == 0 {
-                    self.authority.clone()
-                } else {
-                    return Err(ivm::VMError::DecodeError);
-                };
-                let nft_id: NftId = if nft_id_ptr >= ivm::Memory::INPUT_START {
-                    Self::decode_tlv_typed(vm, nft_id_ptr, PointerType::NftId)?
-                } else {
-                    return Err(ivm::VMError::DecodeError);
-                };
-                let to: AccountId = if to_ptr >= ivm::Memory::INPUT_START {
-                    Self::decode_tlv_typed(vm, to_ptr, PointerType::AccountId)?
-                } else {
-                    return Err(ivm::VMError::DecodeError);
-                };
+                let from: AccountId = Self::decode_tlv_typed(vm, from_ptr, PointerType::AccountId)?;
+                let nft_id: NftId = Self::decode_tlv_typed(vm, nft_id_ptr, PointerType::NftId)?;
+                let to: AccountId = Self::decode_tlv_typed(vm, to_ptr, PointerType::AccountId)?;
                 let isi = Transfer::nft(from, nft_id, to);
                 let instr = InstructionBox::from(TransferBox::from(isi));
                 Ok(self.queue_instruction(instr))
@@ -4770,6 +4917,23 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     u64::try_from(asset.value().clone()).map_err(|_| ivm::VMError::DecodeError)?;
                 vm.set_register(10, amount);
                 Ok(0)
+            }
+            ivm::syscalls::SYSCALL_GET_PUBLIC_INPUT => {
+                let name_ptr = vm.register(10);
+                let tlv = Self::expect_tlv(vm, name_ptr, PointerType::Name)?;
+                let name = Self::decode_name_payload(tlv.payload)?;
+                let Some(record) = self.public_inputs.get(&name) else {
+                    return Err(ivm::VMError::PermissionDenied);
+                };
+                if !is_type_allowed_for_policy(vm.syscall_policy(), record.type_id) {
+                    return Err(ivm::VMError::AbiTypeNotAllowed {
+                        abi: vm.abi_version(),
+                        type_id: record.type_id as u16,
+                    });
+                }
+                let ptr = vm.alloc_input_tlv(&record.tlv)?;
+                vm.set_register(10, ptr);
+                Ok(record.gas_cost())
             }
             // Helper syscalls forwarded to the default host implementation.
             // Intercept ZK_VERIFY syscalls to record success and gate ZK ISIs.
@@ -5179,12 +5343,12 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             | ivm::syscalls::SYSCALL_DEBUG_LOG
             | ivm::syscalls::SYSCALL_ALLOC
             | ivm::syscalls::SYSCALL_GROW_HEAP
-            | ivm::syscalls::SYSCALL_GET_PUBLIC_INPUT
             | ivm::syscalls::SYSCALL_GET_PRIVATE_INPUT
             | ivm::syscalls::SYSCALL_INPUT_PUBLISH_TLV
             | ivm::syscalls::SYSCALL_COMMIT_OUTPUT
             | ivm::syscalls::SYSCALL_PROVE_EXECUTION
             | ivm::syscalls::SYSCALL_VERIFY_PROOF
+            | ivm::syscalls::SYSCALL_VERIFY_SIGNATURE
             | ivm::syscalls::SYSCALL_GET_MERKLE_PATH
             | ivm::syscalls::SYSCALL_GET_MERKLE_COMPACT
             | ivm::syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT
@@ -5256,7 +5420,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
 
 #[cfg(test)]
 mod pointer_abi_tests {
-    use core::str::FromStr;
+    use core::{num::NonZeroU16, str::FromStr};
 
     use iroha_crypto::{Hash as IrohaHash, KeyPair};
     use iroha_data_model::smart_contract::manifest::ContractManifest;
@@ -7122,17 +7286,64 @@ mod pointer_abi_tests {
     }
 
     #[test]
-    fn signatory_and_quorum_syscalls_are_not_implemented() {
+    fn add_signatory_syscall_queues_instruction() {
         let mut vm = ivm::IVM::new(1_000);
         let authority: AccountId = "alice@wonderland".parse().unwrap();
         let mut host = CoreHost::new(authority);
 
+        let account: AccountId = "bob@wonderland".parse().unwrap();
+        let public_key = KeyPair::random().public_key().clone();
+        let pk_json = Json::new(public_key.clone());
+        let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
+        let pk_ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&pk_json));
+        vm.set_register(10, account_ptr);
+        vm.set_register(11, pk_ptr);
+
         let res = host.syscall(ivm::syscalls::SYSCALL_ADD_SIGNATORY, &mut vm);
-        assert!(matches!(res, Err(ivm::VMError::NotImplemented { .. })));
+        let expected = InstructionBox::from(AddSignatory::new(account, public_key));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn remove_signatory_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let account: AccountId = "bob@wonderland".parse().unwrap();
+        let public_key = KeyPair::random().public_key().clone();
+        let pk_json = Json::new(public_key.clone());
+        let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
+        let pk_ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&pk_json));
+        vm.set_register(10, account_ptr);
+        vm.set_register(11, pk_ptr);
+
         let res = host.syscall(ivm::syscalls::SYSCALL_REMOVE_SIGNATORY, &mut vm);
-        assert!(matches!(res, Err(ivm::VMError::NotImplemented { .. })));
+        let expected = InstructionBox::from(RemoveSignatory::new(account, public_key));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn set_account_quorum_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let account: AccountId = "bob@wonderland".parse().unwrap();
+        let quorum = NonZeroU16::new(2).expect("non-zero quorum");
+        let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
+        vm.set_register(10, account_ptr);
+        vm.set_register(11, quorum.get().into());
+
         let res = host.syscall(ivm::syscalls::SYSCALL_SET_ACCOUNT_QUORUM, &mut vm);
-        assert!(matches!(res, Err(ivm::VMError::NotImplemented { .. })));
+        let expected = InstructionBox::from(SetAccountQuorum::new(account, quorum));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
     }
 
     #[test]
@@ -7421,6 +7632,7 @@ mod tests {
 
     use iroha_data_model::{
         isi::register::RegisterPeerWithPop,
+        parameter::{CustomParameter, Parameter},
         proof::{VerifyingKeyBox, VerifyingKeyId},
         query::{QueryRequest, QueryResponse, SingularQueryBox, prelude::FindParameters},
         zk::BackendTag,
@@ -7839,6 +8051,8 @@ mod tests {
             current_period_start_ms: scheduled_at_ms - period_ms,
             current_period_end_ms: scheduled_at_ms,
             next_charge_ms: scheduled_at_ms,
+            cancel_at_period_end: false,
+            cancel_at_ms: None,
             failure_count: 0,
             usage_accumulated: BTreeMap::new(),
             billing_trigger_id: trigger_id.clone(),
@@ -8040,6 +8254,8 @@ mod tests {
             current_period_start_ms: 0,
             current_period_end_ms: 1,
             next_charge_ms: 1,
+            cancel_at_period_end: false,
+            cancel_at_ms: None,
             failure_count: 0,
             usage_accumulated,
             billing_trigger_id: trigger_id,
@@ -8154,6 +8370,8 @@ mod tests {
             current_period_start_ms: scheduled_at_ms - period_ms,
             current_period_end_ms: scheduled_at_ms,
             next_charge_ms: scheduled_at_ms,
+            cancel_at_period_end: false,
+            cancel_at_ms: None,
             failure_count: 0,
             usage_accumulated: BTreeMap::new(),
             billing_trigger_id: trigger_id.clone(),
@@ -8323,6 +8541,8 @@ mod tests {
             current_period_start_ms: scheduled_at_ms - period_ms,
             current_period_end_ms: scheduled_at_ms,
             next_charge_ms: scheduled_at_ms,
+            cancel_at_period_end: false,
+            cancel_at_ms: None,
             failure_count: 2,
             usage_accumulated: BTreeMap::new(),
             billing_trigger_id: trigger_id.clone(),
@@ -9119,27 +9339,123 @@ mod tests {
     }
 
     #[test]
-    fn get_public_input_is_forwarded_to_default_host() {
+    fn get_public_input_uses_wsv_registry_and_charges_gas() {
+        crate::test_alias::ensure();
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let name: Name = "pub_key".parse().unwrap();
+        let payload = b"hello".to_vec();
+        let tlv = make_tlv(PointerType::Blob as u16, &payload);
+        let entry = norito::json::object([
+            ("name", norito::json::Value::from(name.as_ref())),
+            (
+                "type_id",
+                norito::json::Value::from(u64::from(PointerType::Blob as u16)),
+            ),
+            ("tlv_hex", norito::json::Value::from(hex::encode(&tlv))),
+        ])
+        .expect("registry entry");
+        let registry = norito::json::Value::Array(vec![entry]);
+        let custom = CustomParameter::new(ivm_metadata::public_inputs_id(), Json::from(registry));
+        let mut params = Parameters::default();
+        params.set_parameter(Parameter::Custom(custom));
+
+        let mut host = CoreHost::new(authority);
+        host.set_public_inputs_from_parameters(&params);
+        let mut vm = IVM::new(10_000);
+        let name_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&name));
+        vm.set_register(10, name_ptr);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, &mut vm)
+            .expect("public input syscall");
+        let out_ptr = vm.register(10);
+        let out_tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
+        assert_eq!(out_tlv.type_id, PointerType::Blob);
+        assert_eq!(out_tlv.payload, payload.as_slice());
+        let expected_gas = PUBLIC_INPUT_GAS_BASE_DEFAULT.saturating_add(
+            PUBLIC_INPUT_GAS_PER_BYTE_DEFAULT
+                .saturating_mul(u64::try_from(tlv.len()).unwrap_or(u64::MAX)),
+        );
+        assert_eq!(gas, expected_gas);
+    }
+
+    #[test]
+    fn get_public_input_uses_programmatic_setters() {
         crate::test_alias::ensure();
         let authority: AccountId = "alice@wonderland".parse().unwrap();
         let name: Name = "pub_key".parse().unwrap();
         let payload = b"hello".to_vec();
         let tlv = make_tlv(PointerType::Blob as u16, &payload);
         let mut inputs = BTreeMap::new();
-        inputs.insert(name.clone(), tlv);
+        inputs.insert(name.clone(), tlv.clone());
 
-        let mut host = CoreHost::new(authority).with_public_inputs(BTreeMap::new());
-        host.set_public_inputs(inputs);
+        let mut host = CoreHost::new(authority).with_public_inputs(inputs);
         let mut vm = IVM::new(10_000);
         let name_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&name));
         vm.set_register(10, name_ptr);
 
-        host.syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, &mut vm)
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, &mut vm)
             .expect("public input syscall");
         let out_ptr = vm.register(10);
         let out_tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
         assert_eq!(out_tlv.type_id, PointerType::Blob);
         assert_eq!(out_tlv.payload, payload.as_slice());
+        let expected_gas = PUBLIC_INPUT_GAS_BASE_DEFAULT.saturating_add(
+            PUBLIC_INPUT_GAS_PER_BYTE_DEFAULT
+                .saturating_mul(u64::try_from(tlv.len()).unwrap_or(u64::MAX)),
+        );
+        assert_eq!(gas, expected_gas);
+    }
+
+    #[test]
+    fn get_public_input_missing_name_is_error() {
+        crate::test_alias::ensure();
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let name: Name = "missing".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+        let mut vm = IVM::new(10_000);
+        let name_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&name));
+        vm.set_register(10, name_ptr);
+
+        let err = host
+            .syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, &mut vm)
+            .expect_err("missing name should error");
+        assert!(matches!(err, VMError::PermissionDenied));
+    }
+
+    #[test]
+    fn get_public_input_rejects_registry_type_mismatch() {
+        crate::test_alias::ensure();
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let name: Name = "pub_key".parse().unwrap();
+        let payload = b"hello".to_vec();
+        let tlv = make_tlv(PointerType::Blob as u16, &payload);
+        let entry = norito::json::object([
+            ("name", norito::json::Value::from(name.as_ref())),
+            (
+                "type_id",
+                norito::json::Value::from(u64::from(PointerType::Name as u16)),
+            ),
+            ("tlv_hex", norito::json::Value::from(hex::encode(&tlv))),
+        ])
+        .expect("registry entry");
+        let registry = norito::json::Value::Array(vec![entry]);
+        let custom = CustomParameter::new(ivm_metadata::public_inputs_id(), Json::from(registry));
+        let mut params = Parameters::default();
+        params.set_parameter(Parameter::Custom(custom));
+
+        let mut host = CoreHost::new(authority);
+        host.set_public_inputs_from_parameters(&params);
+        assert!(host.public_inputs.is_empty());
+
+        let mut vm = IVM::new(10_000);
+        let name_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&name));
+        vm.set_register(10, name_ptr);
+        let err = host
+            .syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, &mut vm)
+            .expect_err("mismatched registry entry should error");
+        assert!(matches!(err, VMError::PermissionDenied));
     }
 
     #[test]
@@ -9317,11 +9633,19 @@ mod tests {
     // NOTE: Additional CoreHost tests for NFT syscalls can be added once the VM instruction
     // builder helpers stabilize across metadata header formats.
     #[test]
-    fn sentinel_nft_mint_enqueues_register() {
+    fn nft_mint_enqueues_register_and_transfer() {
         let authority: AccountId =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
                 .parse()
                 .unwrap();
+        let authority_clone = authority.clone();
+        let owner: AccountId =
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
+                .parse()
+                .unwrap();
+        let nft_id: NftId = "gold$wonderland".parse().unwrap();
+        let nft_tlv = make_tlv(PointerType::NftId as u16, &norito_blob(&nft_id));
+        let owner_tlv = make_tlv(PointerType::AccountId as u16, &norito_blob(&owner));
 
         let mut code = Vec::new();
         code.extend_from_slice(
@@ -9336,21 +9660,42 @@ mod tests {
         let program = build_program(&code, 4);
 
         let mut vm = IVM::new(10_000);
-        vm.set_host(CoreHost::new(authority));
+        vm.set_host(CoreHost::new(authority_clone));
         vm.load_program(&program).unwrap();
-        // a0=a1=0 => sentinels
-        vm.set_register(10, 0);
-        vm.set_register(11, 0);
+        vm.memory
+            .preload_input(0, &nft_tlv)
+            .expect("preload nft tlv");
+        vm.memory
+            .preload_input(256, &owner_tlv)
+            .expect("preload owner tlv");
+        vm.set_register(10, ivm::Memory::INPUT_START);
+        vm.set_register(11, ivm::Memory::INPUT_START + 256);
         vm.run().unwrap();
 
         let host_any = vm.host_mut_any().unwrap();
         let host = host_any.downcast_mut::<CoreHost>().unwrap();
         let queued = host.drain_instructions();
-        assert_eq!(queued.len(), 1);
-        assert!(matches!(
-            queued[0].as_any().downcast_ref::<RegisterBox>(),
-            Some(RegisterBox::Nft(_))
-        ));
+        assert_eq!(queued.len(), 2);
+        let reg = queued[0]
+            .as_any()
+            .downcast_ref::<RegisterBox>()
+            .expect("register instruction");
+        match reg {
+            RegisterBox::Nft(inner) => assert_eq!(&inner.object.id, &nft_id),
+            _ => panic!("expected NFT register"),
+        }
+        let xfer = queued[1]
+            .as_any()
+            .downcast_ref::<TransferBox>()
+            .expect("transfer instruction");
+        match xfer {
+            TransferBox::Nft(inner) => {
+                assert_eq!(&inner.source, &authority);
+                assert_eq!(&inner.destination, &owner);
+                assert_eq!(&inner.object, &nft_id);
+            }
+            _ => panic!("expected NFT transfer"),
+        }
     }
 
     #[cfg(feature = "telemetry")]

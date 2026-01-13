@@ -244,6 +244,8 @@ const LOCALNET_MSG_CHANNEL_CAP_BLOCK_PAYLOAD: usize = 256;
 const LOCALNET_MSG_CHANNEL_CAP_RBC_CHUNKS: usize = 4_096;
 const LOCALNET_MSG_CHANNEL_CAP_BLOCKS: usize = 512;
 const LOCALNET_CONTROL_MSG_CHANNEL_CAP: usize = 1024;
+/// Capacity for the inbound P2P subscriber queue in localnet configs.
+const LOCALNET_P2P_SUBSCRIBER_QUEUE_CAP: usize = 16_384;
 /// Default listener host for generated P2P and Torii services.
 pub const DEFAULT_BIND_HOST: &str = "0.0.0.0";
 /// Default advertised host for generated peers and client config.
@@ -921,6 +923,13 @@ fn render_peer_config(
     network.insert(
         "public_address".into(),
         Value::String(public_host.addr_literal(peer.p2p_port)),
+    );
+    network.insert(
+        "p2p_subscriber_queue_cap".into(),
+        Value::Integer(
+            i64::try_from(LOCALNET_P2P_SUBSCRIBER_QUEUE_CAP)
+                .expect("LOCALNET_P2P_SUBSCRIBER_QUEUE_CAP fits i64"),
+        ),
     );
     root.insert("network".into(), Value::Table(network));
 
@@ -1662,6 +1671,11 @@ mod tests {
             parsed.sumeragi.da_availability_timeout_floor,
             Duration::from_millis(LOCALNET_DA_AVAILABILITY_TIMEOUT_FLOOR_MS),
             "localnet should set DA availability timeout floor"
+        );
+        assert_eq!(
+            parsed.network.p2p_subscriber_queue_cap.get(),
+            LOCALNET_P2P_SUBSCRIBER_QUEUE_CAP,
+            "localnet should raise P2P subscriber queue cap for fast pipelines"
         );
         let (block_ms, commit_ms) = resolve_localnet_pipeline_times(None, None);
         let block_ms = block_ms.expect("localnet defaults provide block_time_ms");

@@ -25,7 +25,8 @@ pub use iroha_data_model::block::consensus::{
     CertPhase, ConsensusBlockHeader, ConsensusGenesisParams, Evidence, EvidenceKind,
     EvidencePayload, ExecKv, ExecWitness, ExecWitnessMsg, Height, NPOS_TAG, NposGenesisParams,
     PERMISSIONED_TAG, PROTO_VERSION, Proposal, Qc, QcAggregate, QcRef, QcVote, RbcChunk,
-    RbcDeliver, RbcInit, RbcReady, Reconfig, ValidatorIndex, View, VrfCommit, VrfReveal,
+    RbcDeliver, RbcInit, RbcReady, RbcReadySignature, Reconfig, ValidatorIndex, View, VrfCommit,
+    VrfReveal,
 };
 
 // Transitional aliases to reduce churn while the QC terminology is removed.
@@ -54,7 +55,7 @@ pub use iroha_data_model::block::consensus::{BlockMultiproof, ReadNode, TxReadSp
 /// Build the canonical preimage for a QC vote signature under the given chain and mode tag.
 pub fn vote_preimage(chain_id: &ChainId, mode_tag: &str, v: &Vote) -> Vec<u8> {
     let mut out = Vec::with_capacity(32 + 32 * 3 + 8 * 3 + 1);
-    let domain = consensus_domain(chain_id, "Vote", b"v2", mode_tag);
+    let domain = consensus_domain(chain_id, "Vote", b"v1", mode_tag);
     out.extend_from_slice(&domain);
     out.extend_from_slice(v.block_hash.as_ref().as_ref());
     out.extend_from_slice(v.parent_state_root.as_ref());
@@ -293,7 +294,7 @@ pub struct HandshakeGate {
 /// Build canonical preimage for signing an RBC READY message.
 pub fn rbc_ready_preimage(chain_id: &ChainId, mode_tag: &str, ready: &RbcReady) -> Vec<u8> {
     let mut out = Vec::with_capacity(32 + 32 + 8 * 3 + 4 + 32 + 32);
-    let domain = consensus_domain(chain_id, "RbcReady", b"v2", mode_tag);
+    let domain = consensus_domain(chain_id, "RbcReady", b"v1", mode_tag);
     out.extend_from_slice(&domain);
     out.extend_from_slice(ready.block_hash.as_ref().as_ref());
     out.extend_from_slice(&ready.height.to_be_bytes());
@@ -307,8 +308,17 @@ pub fn rbc_ready_preimage(chain_id: &ChainId, mode_tag: &str, ready: &RbcReady) 
 
 /// Build canonical preimage for signing an RBC DELIVER message.
 pub fn rbc_deliver_preimage(chain_id: &ChainId, mode_tag: &str, deliver: &RbcDeliver) -> Vec<u8> {
-    let mut out = Vec::with_capacity(32 + 32 + 8 * 3 + 4 + 32 + 32);
-    let domain = consensus_domain(chain_id, "RbcDeliver", b"v2", mode_tag);
+    let ready_bytes = deliver
+        .ready_signatures
+        .iter()
+        .map(|entry| {
+            std::mem::size_of::<u32>()
+                .saturating_add(std::mem::size_of::<u32>())
+                .saturating_add(entry.signature.len())
+        })
+        .sum::<usize>();
+    let mut out = Vec::with_capacity(32 + 32 + 8 * 3 + 4 + 32 + 32 + 4 + ready_bytes);
+    let domain = consensus_domain(chain_id, "RbcDeliver", b"v1", mode_tag);
     out.extend_from_slice(&domain);
     out.extend_from_slice(deliver.block_hash.as_ref().as_ref());
     out.extend_from_slice(&deliver.height.to_be_bytes());
@@ -317,6 +327,14 @@ pub fn rbc_deliver_preimage(chain_id: &ChainId, mode_tag: &str, deliver: &RbcDel
     out.extend_from_slice(deliver.roster_hash.as_ref());
     out.extend_from_slice(deliver.chunk_root.as_ref());
     out.extend_from_slice(&deliver.sender.to_be_bytes());
+    let ready_len = u32::try_from(deliver.ready_signatures.len()).unwrap_or(u32::MAX);
+    out.extend_from_slice(&ready_len.to_be_bytes());
+    for entry in &deliver.ready_signatures {
+        out.extend_from_slice(&entry.sender.to_be_bytes());
+        let sig_len = u32::try_from(entry.signature.len()).unwrap_or(u32::MAX);
+        out.extend_from_slice(&sig_len.to_be_bytes());
+        out.extend_from_slice(&entry.signature);
+    }
     out
 }
 
@@ -478,6 +496,77 @@ mod tests {
         let d1 = consensus_domain(&cid_a, "Vote", b"x", PERMISSIONED_TAG);
         let d2 = consensus_domain(&cid_b, "Vote", b"x", PERMISSIONED_TAG);
         assert_ne!(d1, d2);
+    }
+
+    #[test]
+    fn preimages_use_v1_domain_tags() {
+        let chain = ChainId::from("iroha:test:preimage-tags");
+        let block_hash = HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([7u8; 32]));
+        let roster_hash = iroha_crypto::Hash::prehashed([3u8; 32]);
+        let chunk_root = iroha_crypto::Hash::prehashed([4u8; 32]);
+
+        let vote = Vote {
+            block_hash: block_hash.clone(),
+            parent_state_root: iroha_crypto::Hash::prehashed([1u8; 32]),
+            post_state_root: iroha_crypto::Hash::prehashed([2u8; 32]),
+            height: 11,
+            view: 2,
+            epoch: 0,
+            phase: Phase::Prepare,
+            highest_qc: None,
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        let vote_preimage = vote_preimage(&chain, PERMISSIONED_TAG, &vote);
+        assert_eq!(
+            &vote_preimage[..32],
+            &consensus_domain(&chain, "Vote", b"v1", PERMISSIONED_TAG)
+        );
+        assert_ne!(
+            &vote_preimage[..32],
+            &consensus_domain(&chain, "Vote", b"v2", PERMISSIONED_TAG)
+        );
+
+        let ready = RbcReady {
+            block_hash: block_hash.clone(),
+            height: 11,
+            view: 2,
+            epoch: 0,
+            roster_hash,
+            chunk_root,
+            sender: 1,
+            signature: vec![0xAA],
+        };
+        let ready_preimage = rbc_ready_preimage(&chain, PERMISSIONED_TAG, &ready);
+        assert_eq!(
+            &ready_preimage[..32],
+            &consensus_domain(&chain, "RbcReady", b"v1", PERMISSIONED_TAG)
+        );
+        assert_ne!(
+            &ready_preimage[..32],
+            &consensus_domain(&chain, "RbcReady", b"v2", PERMISSIONED_TAG)
+        );
+
+        let deliver = RbcDeliver {
+            block_hash,
+            height: 11,
+            view: 2,
+            epoch: 0,
+            roster_hash,
+            chunk_root,
+            sender: 1,
+            signature: vec![0xBB],
+            ready_signatures: Vec::new(),
+        };
+        let deliver_preimage = rbc_deliver_preimage(&chain, PERMISSIONED_TAG, &deliver);
+        assert_eq!(
+            &deliver_preimage[..32],
+            &consensus_domain(&chain, "RbcDeliver", b"v1", PERMISSIONED_TAG)
+        );
+        assert_ne!(
+            &deliver_preimage[..32],
+            &consensus_domain(&chain, "RbcDeliver", b"v2", PERMISSIONED_TAG)
+        );
     }
 
     #[test]

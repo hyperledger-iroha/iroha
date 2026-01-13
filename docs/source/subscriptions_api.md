@@ -323,9 +323,22 @@ Sets `status=active`, resets `failure_count`, recomputes the current period, and
 
 ### POST /v1/subscriptions/{subscription_id}/cancel
 ```json
+{ "authority": "bob@wonderland", "private_key": "<hex>", "cancel_mode": "immediate" }
+```
+or
+```json
+{ "authority": "bob@wonderland", "private_key": "<hex>", "cancel_mode": "period_end" }
+```
+`cancel_mode=immediate` sets `status=canceled` and unregisters the billing trigger.
+`cancel_mode=period_end` keeps the subscription active until the current period ends, then stops
+future billing without charging the next period.
+
+### POST /v1/subscriptions/{subscription_id}/keep
+```json
 { "authority": "bob@wonderland", "private_key": "<hex>" }
 ```
-Sets `status=canceled` and unregisters the billing trigger.
+Clears `cancel_at_period_end` and keeps the subscription active for future billing cycles. Returns
+an error if the subscription is not scheduled to cancel at period end.
 
 ### POST /v1/subscriptions/{subscription_id}/usage
 ```json
@@ -379,6 +392,8 @@ iroha_cli subscriptions subscription pause --subscription-id sub-001$subscriptio
 iroha_cli subscriptions subscription resume --subscription-id sub-001$subscriptions \
   --authority alice@users --private-key <hex>
 iroha_cli subscriptions subscription cancel --subscription-id sub-001$subscriptions \
+  --authority alice@users --private-key <hex> --cancel-at-period-end
+iroha_cli subscriptions subscription keep --subscription-id sub-001$subscriptions \
   --authority alice@users --private-key <hex>
 iroha_cli subscriptions subscription charge-now --subscription-id sub-001$subscriptions \
   --authority alice@users --private-key <hex>

@@ -3,6 +3,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     io,
+    num::NonZeroUsize,
     sync::mpsc,
     time::{Duration, Instant, SystemTime},
 };
@@ -289,6 +290,47 @@ pub(super) fn compute_chunk_broadcast_order(
     (order, dropped)
 }
 
+fn rbc_chunk_target_count(roster_len: usize, fanout_cap: Option<NonZeroUsize>) -> usize {
+    let peers = roster_len.saturating_sub(1);
+    if peers == 0 {
+        return 0;
+    }
+    let commit_quorum = if roster_len > 3 {
+        ((roster_len.saturating_sub(1)) / 3).saturating_mul(2) + 1
+    } else {
+        roster_len
+    };
+    let min_targets = commit_quorum.saturating_sub(1).min(peers);
+    let desired = fanout_cap.map_or(min_targets, |cap| cap.get().min(peers));
+    desired.max(min_targets)
+}
+
+fn select_rbc_chunk_targets(
+    roster: &[PeerId],
+    local_peer_id: &PeerId,
+    seed: u64,
+    target_count: usize,
+) -> Vec<(usize, PeerId)> {
+    if target_count == 0 {
+        return Vec::new();
+    }
+    let mut candidates: Vec<(usize, PeerId)> = roster
+        .iter()
+        .enumerate()
+        .filter(|(_, peer)| *peer != local_peer_id)
+        .map(|(idx, peer)| (idx, peer.clone()))
+        .collect();
+    if candidates.is_empty() {
+        return candidates;
+    }
+    if target_count < candidates.len() {
+        let mut rng = StdRng::seed_from_u64(seed);
+        candidates.shuffle(&mut rng);
+        candidates.truncate(target_count);
+    }
+    candidates
+}
+
 pub(super) fn distribute_chunks(total_chunks: u32, weights: &[u128]) -> Vec<u32> {
     if weights.is_empty() {
         return Vec::new();
@@ -342,6 +384,51 @@ pub(super) fn distribute_chunks(total_chunks: u32, weights: &[u128]) -> Vec<u32>
     }
 
     allocations
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::peer::PeerId;
+
+    fn sample_roster(len: usize) -> Vec<PeerId> {
+        (0..len)
+            .map(|idx| {
+                let seed = format!("rbc-roster-{idx}");
+                let keypair = KeyPair::from_seed(seed.into_bytes(), Algorithm::Ed25519);
+                PeerId::new(keypair.public_key().clone())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn rbc_chunk_target_count_respects_minimums() {
+        let roster_len: usize = 7;
+        let peers = roster_len.saturating_sub(1);
+        let commit_quorum = ((roster_len.saturating_sub(1)) / 3).saturating_mul(2) + 1;
+        let expected_min = commit_quorum.saturating_sub(1).min(peers);
+        assert_eq!(rbc_chunk_target_count(roster_len, None), expected_min);
+        assert_eq!(
+            rbc_chunk_target_count(roster_len, NonZeroUsize::new(1)),
+            expected_min
+        );
+        assert_eq!(
+            rbc_chunk_target_count(roster_len, NonZeroUsize::new(32)),
+            peers
+        );
+    }
+
+    #[test]
+    fn select_rbc_chunk_targets_is_deterministic() {
+        let roster = sample_roster(5);
+        let local = roster[0].clone();
+        let targets = select_rbc_chunk_targets(&roster, &local, 42, 2);
+        let targets_repeat = select_rbc_chunk_targets(&roster, &local, 42, 2);
+        assert_eq!(targets, targets_repeat);
+        assert_eq!(targets.len(), 2);
+        assert!(targets.iter().all(|(_, peer)| peer != &local));
+    }
 }
 
 pub(super) fn rbc_ready_signature_valid(
@@ -865,11 +952,15 @@ impl Actor {
             return;
         }
         let local_peer_id = self.common_config.peer.id().clone();
+        let target_count = rbc_chunk_target_count(roster.len(), self.config.rbc_chunk_fanout);
+        let seed = shuffle_seed(&chunk.block_hash, chunk.height, chunk.view);
+        // Keep a stable target set per session so a quorum can reconstruct the full payload.
+        let targets = select_rbc_chunk_targets(&roster, &local_peer_id, seed, target_count);
+        if targets.is_empty() {
+            return;
+        }
 
-        for (idx, peer_id) in roster.iter().enumerate() {
-            if peer_id == &local_peer_id {
-                continue;
-            }
+        for (idx, peer_id) in targets {
             let Ok(validator_idx) = u32::try_from(idx) else {
                 continue;
             };
@@ -1751,6 +1842,20 @@ impl Actor {
         ) {
             return Ok(());
         }
+        if self.invalid_sig_penalty.is_suppressed(
+            InvalidSigKind::RbcReady,
+            u64::from(ready.sender),
+            Instant::now(),
+        ) {
+            debug!(
+                height = ready.height,
+                view = ready.view,
+                sender = ready.sender,
+                block = %ready.block_hash,
+                "dropping RBC READY from penalized signer"
+            );
+            return Ok(());
+        }
         let expected_epoch = self.epoch_for_height(ready.height);
         if ready.epoch != expected_epoch {
             warn!(
@@ -2267,6 +2372,21 @@ impl Actor {
         ) {
             return Ok(());
         }
+        let now = Instant::now();
+        if self.invalid_sig_penalty.is_suppressed(
+            InvalidSigKind::RbcDeliver,
+            u64::from(deliver.sender),
+            now,
+        ) {
+            debug!(
+                height = deliver.height,
+                view = deliver.view,
+                sender = deliver.sender,
+                block = %deliver.block_hash,
+                "dropping RBC DELIVER from penalized signer"
+            );
+            return Ok(());
+        }
         let expected_epoch = self.epoch_for_height(deliver.height);
         if deliver.epoch != expected_epoch {
             warn!(
@@ -2525,6 +2645,52 @@ impl Actor {
                 }
             }
         }
+        let mut ready_to_record: Vec<(u32, Vec<u8>)> = Vec::new();
+        let mut invalid_ready_senders: Vec<u32> = Vec::new();
+        let mut suppressed_ready_senders: Vec<u32> = Vec::new();
+        if !deliver.ready_signatures.is_empty() {
+            let max_ready = signature_topology.as_ref().len();
+            if deliver.ready_signatures.len() > max_ready {
+                debug!(
+                    height = deliver.height,
+                    view = deliver.view,
+                    sender = deliver.sender,
+                    ready_entries = deliver.ready_signatures.len(),
+                    max_ready,
+                    "truncating oversized RBC DELIVER READY bundle"
+                );
+            }
+            for entry in deliver.ready_signatures.iter().take(max_ready) {
+                let ready = RbcReady {
+                    block_hash: deliver.block_hash,
+                    height: deliver.height,
+                    view: deliver.view,
+                    epoch: deliver.epoch,
+                    roster_hash: deliver.roster_hash,
+                    chunk_root: deliver.chunk_root,
+                    sender: entry.sender,
+                    signature: entry.signature.clone(),
+                };
+                if self.invalid_sig_penalty.is_suppressed(
+                    InvalidSigKind::RbcReady,
+                    u64::from(entry.sender),
+                    now,
+                ) {
+                    suppressed_ready_senders.push(entry.sender);
+                    continue;
+                }
+                if !rbc_ready_signature_valid(
+                    &ready,
+                    &signature_topology,
+                    &self.common_config.chain,
+                    mode_tag,
+                ) {
+                    invalid_ready_senders.push(entry.sender);
+                    continue;
+                }
+                ready_to_record.push((entry.sender, entry.signature.clone()));
+            }
+        }
         let deliver_quorum = self.rbc_deliver_quorum(&topology);
         let (ignored, first_deliver, delivered_bytes, invalidate, defer_reason) = {
             let session = self
@@ -2539,8 +2705,46 @@ impl Actor {
                     session.expected_chunk_root = Some(root);
                 }
             }
+            for (sender, signature) in ready_to_record {
+                session.record_ready(sender, signature);
+            }
             Self::evaluate_rbc_deliver_outcome(deliver_quorum, session, key, &deliver)
         };
+        if !invalid_ready_senders.is_empty() {
+            for sender in invalid_ready_senders {
+                let outcome = self.record_invalid_signature(
+                    InvalidSigKind::RbcReady,
+                    deliver.height,
+                    deliver.view,
+                    u64::from(sender),
+                );
+                if matches!(outcome, InvalidSigOutcome::Logged) {
+                    warn!(
+                        height = deliver.height,
+                        view = deliver.view,
+                        sender,
+                        topology_len = signature_topology.as_ref().len(),
+                        "dropping RBC READY from DELIVER bundle with invalid signature"
+                    );
+                } else {
+                    debug!(
+                        height = deliver.height,
+                        view = deliver.view,
+                        sender,
+                        topology_len = signature_topology.as_ref().len(),
+                        "suppressing repeated invalid RBC READY signature log"
+                    );
+                }
+            }
+        }
+        if !suppressed_ready_senders.is_empty() {
+            debug!(
+                height = deliver.height,
+                view = deliver.view,
+                suppressed = suppressed_ready_senders.len(),
+                "dropping RBC READY entries from penalized senders"
+            );
+        }
         if let Some(reason) = defer_reason {
             let sender = deliver.sender;
             let max_bytes = self.pending_rbc_caps().1;

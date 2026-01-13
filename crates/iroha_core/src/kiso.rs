@@ -618,6 +618,7 @@ mod tests {
                 require_sm_openssl_preview_match: true,
                 idle_timeout: std::time::Duration::from_secs(5),
                 peer_gossip_period: defaults::network::PEER_GOSSIP_PERIOD,
+                peer_gossip_max_period: defaults::network::PEER_GOSSIP_PERIOD,
                 trust_decay_half_life: defaults::network::TRUST_DECAY_HALF_LIFE,
                 trust_penalty_bad_gossip: defaults::network::TRUST_PENALTY_BAD_GOSSIP,
                 trust_penalty_unknown_peer: defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
@@ -633,6 +634,22 @@ mod tests {
                 p2p_queue_cap_low: NonZeroUsize::new(512).unwrap(),
                 p2p_post_queue_cap: NonZeroUsize::new(128).unwrap(),
                 p2p_subscriber_queue_cap: NonZeroUsize::new(128).unwrap(),
+                consensus_ingress_rate_per_sec: defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
+                consensus_ingress_burst: defaults::network::CONSENSUS_INGRESS_BURST,
+                consensus_ingress_bytes_per_sec:
+                    defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
+                consensus_ingress_bytes_burst:
+                    defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+                consensus_ingress_rbc_session_limit:
+                    defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
+                consensus_ingress_penalty_threshold:
+                    defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
+                consensus_ingress_penalty_window: Duration::from_millis(
+                    defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
+                ),
+                consensus_ingress_penalty_cooldown: Duration::from_millis(
+                    defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
+                ),
                 happy_eyeballs_stagger: Duration::from_millis(100),
                 addr_ipv6_first: false,
                 max_incoming: None,
@@ -961,6 +978,18 @@ mod tests {
                     iroha_config::parameters::defaults::sumeragi::MEMBERSHIP_MISMATCH_ALERT_THRESHOLD,
                 membership_mismatch_fail_closed:
                     iroha_config::parameters::defaults::sumeragi::MEMBERSHIP_MISMATCH_FAIL_CLOSED,
+                consensus_future_height_window:
+                    iroha_config::parameters::defaults::sumeragi::CONSENSUS_FUTURE_HEIGHT_WINDOW,
+                consensus_future_view_window:
+                    iroha_config::parameters::defaults::sumeragi::CONSENSUS_FUTURE_VIEW_WINDOW,
+                invalid_sig_penalty_threshold:
+                    iroha_config::parameters::defaults::sumeragi::INVALID_SIG_PENALTY_THRESHOLD,
+                invalid_sig_penalty_window: std::time::Duration::from_millis(
+                    iroha_config::parameters::defaults::sumeragi::INVALID_SIG_PENALTY_WINDOW_MS,
+                ),
+                invalid_sig_penalty_cooldown: std::time::Duration::from_millis(
+                    iroha_config::parameters::defaults::sumeragi::INVALID_SIG_PENALTY_COOLDOWN_MS,
+                ),
                 da_max_commitments_per_block:
                     iroha_config::parameters::defaults::sumeragi::DA_MAX_COMMITMENTS_PER_BLOCK,
                 da_max_proof_openings_per_block:
@@ -972,6 +1001,7 @@ mod tests {
                 require_precommit_qc:
                     iroha_config::parameters::defaults::sumeragi::REQUIRE_PRECOMMIT_QC,
                 rbc_chunk_max_bytes: 64 * 1024,
+                rbc_chunk_fanout: iroha_config::parameters::defaults::sumeragi::RBC_CHUNK_FANOUT,
                 rbc_pending_max_chunks:
                     iroha_config::parameters::defaults::sumeragi::RBC_PENDING_MAX_CHUNKS,
                 rbc_pending_max_bytes:
@@ -1096,6 +1126,7 @@ mod tests {
             },
             block_sync: BlockSync {
                 gossip_period: std::time::Duration::from_millis(200),
+                gossip_max_period: std::time::Duration::from_millis(200),
                 gossip_size: NonZeroU32::new(32).unwrap(),
             },
             transaction_gossiper: TransactionGossiper {

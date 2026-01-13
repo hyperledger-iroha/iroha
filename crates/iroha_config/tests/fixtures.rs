@@ -247,6 +247,7 @@ fn minimal_config_snapshot() {
                 require_sm_openssl_preview_match: true,
                 idle_timeout: 300s,
                 peer_gossip_period: 1s,
+                peer_gossip_max_period: 1s,
                 trust_gossip: true,
                 trust_decay_half_life: 300s,
                 trust_penalty_bad_gossip: 5,
@@ -262,6 +263,22 @@ fn minimal_config_snapshot() {
                 p2p_queue_cap_low: 32768,
                 p2p_post_queue_cap: 2048,
                 p2p_subscriber_queue_cap: 8192,
+                consensus_ingress_rate_per_sec: Some(
+                    1000,
+                ),
+                consensus_ingress_burst: Some(
+                    2000,
+                ),
+                consensus_ingress_bytes_per_sec: Some(
+                    67108864,
+                ),
+                consensus_ingress_bytes_burst: Some(
+                    134217728,
+                ),
+                consensus_ingress_rbc_session_limit: 64,
+                consensus_ingress_penalty_threshold: 32,
+                consensus_ingress_penalty_window: 5s,
+                consensus_ingress_penalty_cooldown: 10s,
                 happy_eyeballs_stagger: 100ms,
                 addr_ipv6_first: false,
                 max_incoming: None,
@@ -841,6 +858,11 @@ fn minimal_config_snapshot() {
                 missing_block_signer_fallback_attempts: 1,
                 membership_mismatch_alert_threshold: 1,
                 membership_mismatch_fail_closed: false,
+                consensus_future_height_window: 8,
+                consensus_future_view_window: 8,
+                invalid_sig_penalty_threshold: 3,
+                invalid_sig_penalty_window: 5s,
+                invalid_sig_penalty_cooldown: 15s,
                 da_max_commitments_per_block: 16,
                 da_max_proof_openings_per_block: 128,
                 proof_policy: Off,
@@ -848,6 +870,7 @@ fn minimal_config_snapshot() {
                 zk_finality_k: 0,
                 require_precommit_qc: true,
                 rbc_chunk_max_bytes: 65536,
+                rbc_chunk_fanout: None,
                 rbc_pending_max_chunks: 128,
                 rbc_pending_max_bytes: 8388608,
                 rbc_pending_ttl: 30s,
@@ -926,6 +949,7 @@ fn minimal_config_snapshot() {
             },
             block_sync: BlockSync {
                 gossip_period: 10s,
+                gossip_max_period: 10s,
                 gossip_size: 4,
             },
             transaction_gossiper: TransactionGossiper {

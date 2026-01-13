@@ -48,7 +48,6 @@ impl CurveId {
             Algorithm::BlsNormal => Ok(Self::BLS_NORMAL),
             #[cfg(feature = "bls")]
             Algorithm::BlsSmall => Ok(Self::BLS_SMALL),
-            #[cfg(feature = "ml-dsa")]
             Algorithm::MlDsa => Ok(Self::MLDSA),
             #[cfg(feature = "gost")]
             Algorithm::Gost3410_2012_256ParamSetA => Ok(Self::GOST_256_A),
@@ -80,7 +79,6 @@ impl CurveId {
             3 => Algorithm::BlsNormal,
             #[cfg(feature = "bls")]
             5 => Algorithm::BlsSmall,
-            #[cfg(feature = "ml-dsa")]
             2 => Algorithm::MlDsa,
             #[cfg(feature = "gost")]
             10 => Algorithm::Gost3410_2012_256ParamSetA,
@@ -110,7 +108,6 @@ impl TryFrom<u8> for CurveId {
             3 => Ok(Self::BLS_NORMAL),
             #[cfg(feature = "bls")]
             5 => Ok(Self::BLS_SMALL),
-            #[cfg(feature = "ml-dsa")]
             2 => Ok(Self::MLDSA),
             #[cfg(feature = "gost")]
             10 => Ok(Self::GOST_256_A),

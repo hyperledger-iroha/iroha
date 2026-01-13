@@ -50,7 +50,6 @@ fn keypair_from_private_key_bls_small() {
     assert_roundtrip(Algorithm::BlsSmall);
 }
 
-#[cfg(feature = "ml-dsa")]
 #[test]
 fn keypair_from_private_key_mldsa() {
     assert_roundtrip(Algorithm::MlDsa);

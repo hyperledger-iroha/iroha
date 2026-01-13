@@ -162,6 +162,18 @@ pub struct SubscriptionActionRequest {
     pub private_key: ExposedPrivateKey,
     /// Optional charge time override in UTC milliseconds.
     pub charge_at_ms: Option<u64>,
+    /// Optional cancel mode (`immediate` or `period_end`) for cancel requests.
+    pub cancel_mode: Option<SubscriptionCancelMode>,
+}
+
+/// Cancelation mode for subscription cancel requests.
+#[derive(Clone, Copy, Debug, JsonDeserialize, JsonSerialize, PartialEq, Eq)]
+#[norito(tag = "mode", content = "value", rename_all = "snake_case")]
+pub enum SubscriptionCancelMode {
+    /// Cancel the subscription immediately.
+    Immediate,
+    /// Cancel the subscription at the end of the current billing period.
+    PeriodEnd,
 }
 
 /// Request payload for recording subscription usage.

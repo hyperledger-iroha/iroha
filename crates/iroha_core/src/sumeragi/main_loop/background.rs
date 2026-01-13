@@ -213,16 +213,28 @@ impl Actor {
             return;
         };
         let cooldown = self.payload_rebroadcast_cooldown();
-        if !pending_replay_due(
-            self.pending.pending_replay_last_sent.get(&hash).copied(),
-            now,
-            cooldown,
-        ) {
+        if !self.payload_rebroadcast_log.allow(hash, now, cooldown) {
+            trace!(
+                height,
+                view,
+                block = %hash,
+                cooldown_ms = cooldown.as_millis(),
+                "skipping pending block rebroadcast due to cooldown"
+            );
             return;
         }
-        let msg = BlockMessage::BlockCreated(super::message::BlockCreated { block });
-        self.schedule_background(BackgroundRequest::Broadcast { msg });
-        self.pending.pending_replay_last_sent.insert(hash, now);
+        let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+        let mut topology_peers = self.roster_for_vote_with_mode(hash, height, view, consensus_mode);
+        if topology_peers.is_empty() {
+            topology_peers = self.effective_commit_topology();
+        }
+        if topology_peers.is_empty() {
+            return;
+        }
+        self.broadcast_block_created_for_block_sync(
+            super::message::BlockCreated { block },
+            &topology_peers,
+        );
         debug!(
             height,
             view,

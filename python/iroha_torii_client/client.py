@@ -43,9 +43,9 @@ from typing import (
     Tuple,
     Union,
 )
+from urllib.parse import quote
 
 import requests
-from urllib.parse import quote
 
 IH58_CHECKSUM_PREFIX = b"IH58PRE"
 IH58_CHECKSUM_BYTES = 2
@@ -3177,6 +3177,38 @@ class ToriiClient:
             f"/v1/subscriptions/{encoded_id}/cancel",
             payload,
             context="subscription cancel response",
+            expected_status=(200,),
+        )
+        return SubscriptionActionResult.from_payload(body)
+
+    def keep_subscription(
+        self,
+        subscription_id: str,
+        *,
+        authority: str,
+        private_key: str,
+    ) -> SubscriptionActionResult:
+        """Keep a subscription (`POST /v1/subscriptions/{subscription_id}/keep`)."""
+
+        normalized_id = self._require_non_empty_string(
+            subscription_id,
+            "subscription_id",
+        )
+        encoded_id = quote(normalized_id, safe="")
+        payload = {
+            "authority": self._require_non_empty_string(
+                authority,
+                "subscription keep authority",
+            ),
+            "private_key": self._require_non_empty_string(
+                private_key,
+                "subscription keep private_key",
+            ),
+        }
+        body = self._post_json(
+            f"/v1/subscriptions/{encoded_id}/keep",
+            payload,
+            context="subscription keep response",
             expected_status=(200,),
         )
         return SubscriptionActionResult.from_payload(body)

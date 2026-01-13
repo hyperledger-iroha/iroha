@@ -22,7 +22,10 @@ use iroha_crypto::{Hash, HashOf, MerkleTree, PrivateKey, PublicKey, Signature};
 use iroha_data_model::{
     ChainId, Encode as _,
     account::AccountId,
-    block::{BlockHeader, SignedBlock, consensus::SumeragiMembershipStatus},
+    block::{
+        BlockHeader, SignedBlock,
+        consensus::{RbcReadySignature, SumeragiMembershipStatus},
+    },
     consensus::{
         VALIDATOR_SET_HASH_VERSION_V1, ValidatorElectionOutcome, ValidatorSetCheckpoint,
         VrfEpochRecord, VrfLateRevealRecord, VrfParticipantRecord,
@@ -551,13 +554,17 @@ enum InvalidSigKind {
 }
 
 impl InvalidSigKind {
-    #[cfg(feature = "telemetry")]
-    fn label(self) -> &'static str {
+    fn as_str(self) -> &'static str {
         match self {
             Self::Vote => "vote",
             Self::RbcReady => "rbc_ready",
             Self::RbcDeliver => "rbc_deliver",
         }
+    }
+
+    #[cfg(feature = "telemetry")]
+    fn label(self) -> &'static str {
+        self.as_str()
     }
 }
 
@@ -636,6 +643,96 @@ impl InvalidSigThrottle {
                 }
             }
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct InvalidSigPenaltyEntry {
+    window_start: Instant,
+    count: u32,
+    last_seen: Instant,
+    suppressed_until: Option<Instant>,
+}
+
+struct InvalidSigPenalty {
+    threshold: u32,
+    window: Duration,
+    cooldown: Duration,
+    entries: BTreeMap<InvalidSigKey, InvalidSigPenaltyEntry>,
+}
+
+impl InvalidSigPenalty {
+    fn new(config: &SumeragiConfig) -> Self {
+        Self {
+            threshold: config.invalid_sig_penalty_threshold,
+            window: config.invalid_sig_penalty_window,
+            cooldown: config.invalid_sig_penalty_cooldown,
+            entries: BTreeMap::new(),
+        }
+    }
+
+    fn is_suppressed(&mut self, kind: InvalidSigKind, signer: u64, now: Instant) -> bool {
+        if self.threshold == 0 {
+            return false;
+        }
+        self.prune(now);
+        let key = InvalidSigKey { kind, signer };
+        let Some(entry) = self.entries.get_mut(&key) else {
+            return false;
+        };
+        entry.last_seen = now;
+        if let Some(until) = entry.suppressed_until {
+            if now < until {
+                return true;
+            }
+            entry.suppressed_until = None;
+            entry.count = 0;
+            entry.window_start = now;
+        }
+        false
+    }
+
+    fn record(&mut self, kind: InvalidSigKind, signer: u64, now: Instant) -> bool {
+        if self.threshold == 0 {
+            return false;
+        }
+        self.prune(now);
+        let key = InvalidSigKey { kind, signer };
+        let entry = self.entries.entry(key).or_insert(InvalidSigPenaltyEntry {
+            window_start: now,
+            count: 0,
+            last_seen: now,
+            suppressed_until: None,
+        });
+        entry.last_seen = now;
+        if let Some(until) = entry.suppressed_until {
+            if now < until {
+                return false;
+            }
+            entry.suppressed_until = None;
+            entry.count = 0;
+            entry.window_start = now;
+        }
+        if now.saturating_duration_since(entry.window_start) > self.window {
+            entry.window_start = now;
+            entry.count = 0;
+        }
+        entry.count = entry.count.saturating_add(1);
+        if entry.count >= self.threshold {
+            entry.count = 0;
+            entry.window_start = now;
+            if !self.cooldown.is_zero() {
+                entry.suppressed_until = Some(now.checked_add(self.cooldown).unwrap_or(now));
+            }
+            return true;
+        }
+        false
+    }
+
+    fn prune(&mut self, now: Instant) {
+        let retention = self.window.saturating_add(self.cooldown);
+        self.entries
+            .retain(|_, entry| now.saturating_duration_since(entry.last_seen) <= retention);
     }
 }
 
@@ -3112,6 +3209,7 @@ pub(super) struct Actor {
     phase_ema: PhaseEma,
     evidence_store: EvidenceStore,
     invalid_sig_log: InvalidSigThrottle,
+    invalid_sig_penalty: InvalidSigPenalty,
     genesis_account: AccountId,
     vote_log: BTreeMap<
         (
@@ -3508,7 +3606,6 @@ impl MergeCommitteeState {
 #[derive(Debug)]
 struct PendingBlockState {
     pending_blocks: BTreeMap<HashOf<BlockHeader>, PendingBlock>,
-    pending_replay_last_sent: BTreeMap<HashOf<BlockHeader>, Instant>,
     missing_block_requests: BTreeMap<HashOf<BlockHeader>, MissingBlockRequest>,
     pending_processing: Cell<Option<HashOf<BlockHeader>>>,
     pending_processing_parent: Cell<Option<HashOf<BlockHeader>>>,
@@ -3846,10 +3943,6 @@ fn record_view_change_cause_with_telemetry(
     if let Some(telemetry) = telemetry {
         telemetry.note_view_change_cause(cause.as_str());
     }
-}
-
-fn pending_replay_due(last_sent: Option<Instant>, now: Instant, cooldown: Duration) -> bool {
-    last_sent.is_none_or(|sent| now.saturating_duration_since(sent) >= cooldown)
 }
 
 #[cfg(test)]
@@ -5199,9 +5292,23 @@ impl Actor {
         view: u64,
         signer: u64,
     ) -> InvalidSigOutcome {
-        let outcome = self
-            .invalid_sig_log
-            .record(kind, height, view, signer, Instant::now());
+        let now = Instant::now();
+        let outcome = self.invalid_sig_log.record(kind, height, view, signer, now);
+        if self.invalid_sig_penalty.record(kind, signer, now) {
+            let cooldown_ms = u64::try_from(self.config.invalid_sig_penalty_cooldown.as_millis())
+                .unwrap_or(u64::MAX);
+            warn!(
+                height,
+                view,
+                signer,
+                kind = kind.as_str(),
+                threshold = self.config.invalid_sig_penalty_threshold,
+                window_ms = u64::try_from(self.config.invalid_sig_penalty_window.as_millis())
+                    .unwrap_or(u64::MAX),
+                cooldown_ms,
+                "suppressing signer after repeated invalid signatures"
+            );
+        }
         self.record_invalid_signature_metric(kind, outcome);
         outcome
     }
@@ -6284,6 +6391,7 @@ impl Actor {
             drop(world);
             cache
         };
+        let invalid_sig_penalty = InvalidSigPenalty::new(&config);
 
         let mut actor = Self {
             config,
@@ -6315,6 +6423,7 @@ impl Actor {
             phase_ema: PhaseEma::new(&pacemaker_timeouts),
             evidence_store: EvidenceStore::new(),
             invalid_sig_log: InvalidSigThrottle::default(),
+            invalid_sig_penalty,
             genesis_account,
             vote_log: BTreeMap::new(),
             deferred_votes: BTreeMap::new(),
@@ -6326,7 +6435,6 @@ impl Actor {
             npos_collectors,
             pending: PendingBlockState {
                 pending_blocks: BTreeMap::new(),
-                pending_replay_last_sent: BTreeMap::new(),
                 missing_block_requests: BTreeMap::new(),
                 pending_processing: Cell::new(None),
                 pending_processing_parent: Cell::new(None),
@@ -7325,6 +7433,15 @@ impl Actor {
     pub(super) fn on_block_message(&mut self, msg: BlockMessage) -> Result<()> {
         debug!(message=%Self::block_message_kind(&msg), "received consensus block message");
         self.note_message_received(&msg);
+        if let Some((height, view)) = Self::block_message_height_view(&msg) {
+            if self.should_drop_future_consensus_message(
+                height,
+                view,
+                Self::block_message_kind(&msg),
+            ) {
+                return Ok(());
+            }
+        }
         match msg {
             BlockMessage::ConsensusParams(advert) => self.handle_consensus_params(advert),
             BlockMessage::BlockCreated(block) => self.handle_block_created(block),
@@ -7827,6 +7944,30 @@ impl Actor {
         let _ = dispatched;
     }
 
+    fn block_message_height_view(msg: &BlockMessage) -> Option<(u64, u64)> {
+        match msg {
+            BlockMessage::BlockCreated(block) => {
+                let header = block.block.header();
+                Some((header.height().get(), header.view_change_index()))
+            }
+            BlockMessage::BlockSyncUpdate(_) => None,
+            BlockMessage::ConsensusParams(_) => None,
+            BlockMessage::VrfCommit(_) | BlockMessage::VrfReveal(_) => None,
+            BlockMessage::ExecWitness(witness) => Some((witness.height, witness.view)),
+            BlockMessage::RbcInit(init) => Some((init.height, init.view)),
+            BlockMessage::RbcChunk(chunk) => Some((chunk.height, chunk.view)),
+            BlockMessage::RbcReady(ready) => Some((ready.height, ready.view)),
+            BlockMessage::RbcDeliver(deliver) => Some((deliver.height, deliver.view)),
+            BlockMessage::FetchPendingBlock(_) => None,
+            BlockMessage::ProposalHint(hint) => Some((hint.height, hint.view)),
+            BlockMessage::Proposal(proposal) => {
+                Some((proposal.header.height, proposal.header.view))
+            }
+            BlockMessage::QcVote(vote) => Some((vote.height, vote.view)),
+            BlockMessage::Qc(cert) => Some((cert.height, cert.view)),
+        }
+    }
+
     fn block_message_kind(msg: &BlockMessage) -> &'static str {
         match msg {
             BlockMessage::BlockCreated(_) => "BlockCreated",
@@ -7970,6 +8111,14 @@ impl Actor {
         let chunk_root = session
             .expected_chunk_root
             .or_else(|| session.chunk_root())?;
+        let ready_signatures = session
+            .ready_signatures
+            .iter()
+            .map(|entry| RbcReadySignature {
+                sender: entry.sender,
+                signature: entry.signature.clone(),
+            })
+            .collect();
         let mut deliver = RbcDeliver {
             block_hash,
             height,
@@ -7979,6 +8128,7 @@ impl Actor {
             chunk_root,
             sender,
             signature: Vec::new(),
+            ready_signatures,
         };
 
         let preimage = rbc_deliver_preimage(&self.chain_id, mode_tag, &deliver);
@@ -8003,6 +8153,60 @@ impl Actor {
             topology,
             self.config.debug_rbc_force_deliver_quorum_one,
         )
+    }
+
+    fn should_drop_future_consensus_message(
+        &self,
+        height: u64,
+        view: u64,
+        kind: &'static str,
+    ) -> bool {
+        let height_window = self.config.consensus_future_height_window;
+        let view_window = self.config.consensus_future_view_window;
+        if height_window == 0 && view_window == 0 {
+            return false;
+        }
+        let committed_qc = self.latest_committed_qc();
+        let base_height =
+            active_round_height(self.highest_qc, committed_qc, self.last_committed_height);
+        if height_window != 0 && height > base_height.saturating_add(height_window) {
+            debug!(
+                height,
+                view,
+                base_height,
+                height_window,
+                kind,
+                "dropping consensus message beyond future height window"
+            );
+            return true;
+        }
+        if view_window == 0 {
+            return false;
+        }
+        if height != base_height {
+            return false;
+        }
+        let Some(base_view) = self.phase_tracker.current_view(height) else {
+            return false;
+        };
+        if let Some(view_age) = self.phase_tracker.view_age(height, Instant::now()) {
+            if view_age >= self.commit_quorum_timeout() {
+                return false;
+            }
+        }
+        if view > base_view.saturating_add(view_window) {
+            debug!(
+                height,
+                view,
+                base_height,
+                base_view,
+                view_window,
+                kind,
+                "dropping consensus message beyond future view window"
+            );
+            return true;
+        }
+        false
     }
 
     fn stale_view(&self, height: u64, view: u64) -> Option<u64> {
@@ -8863,6 +9067,10 @@ impl Actor {
 
     fn force_view_change_if_idle(&mut self, now: Instant) -> bool {
         if self.has_active_pending_blocks() {
+            return false;
+        }
+        if self.queue.tx_len() == 0 && self.empty_child_fallback(now).is_none() {
+            // Skip idle view-change churn when no work is queued and no empty-child recovery is needed.
             return false;
         }
 

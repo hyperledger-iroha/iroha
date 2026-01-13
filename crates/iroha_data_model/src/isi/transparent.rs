@@ -1,5 +1,7 @@
+use core::num::NonZeroU16;
 use std::fmt::Display;
 
+use iroha_crypto::PublicKey;
 use iroha_primitives::json::Json;
 #[cfg(feature = "json")]
 use norito::json::{FastJsonWrite, JsonSerialize};
@@ -233,6 +235,69 @@ impl_into_box! {
     RemoveKeyValue<Nft> |
     RemoveKeyValue<Trigger>
 => RemoveKeyValueBox
+}
+
+isi! {
+    /// Add a signatory to an account's multisig specification.
+    pub struct AddSignatory {
+        /// Account whose multisig spec is updated.
+        pub account: AccountId,
+        /// Public key to add as a signatory (weight defaults to 1).
+        pub signatory: PublicKey,
+    }
+}
+
+impl AddSignatory {
+    /// Construct a signatory-add instruction.
+    pub fn new(account: AccountId, signatory: PublicKey) -> Self {
+        Self { account, signatory }
+    }
+}
+
+isi! {
+    /// Remove a signatory from an account's multisig specification.
+    pub struct RemoveSignatory {
+        /// Account whose multisig spec is updated.
+        pub account: AccountId,
+        /// Public key to remove.
+        pub signatory: PublicKey,
+    }
+}
+
+impl RemoveSignatory {
+    /// Construct a signatory-remove instruction.
+    pub fn new(account: AccountId, signatory: PublicKey) -> Self {
+        Self { account, signatory }
+    }
+}
+
+isi! {
+    /// Set the quorum threshold for an account's multisig specification.
+    pub struct SetAccountQuorum {
+        /// Account whose multisig spec is updated.
+        pub account: AccountId,
+        /// Required approval weight (must be non-zero).
+        pub quorum: NonZeroU16,
+    }
+}
+
+impl SetAccountQuorum {
+    /// Construct an account quorum update.
+    pub fn new(account: AccountId, quorum: NonZeroU16) -> Self {
+        Self { account, quorum }
+    }
+}
+
+impl_display! {
+    AddSignatory => "ADD SIGNATORY `{}` TO `{}`", signatory, account
+}
+
+impl_display! {
+    RemoveSignatory => "REMOVE SIGNATORY `{}` FROM `{}`", signatory, account
+}
+
+impl_display! {
+    SetAccountQuorum => "SET QUORUM `{}` FOR `{}`", quorum, account
 }
 
 isi! {
@@ -528,6 +593,9 @@ impl crate::seal::Instruction for RemoveKeyValue<Account> {}
 impl crate::seal::Instruction for RemoveKeyValue<Nft> {}
 impl crate::seal::Instruction for RemoveKeyValue<Trigger> {}
 impl crate::seal::Instruction for RemoveAssetKeyValue {}
+impl crate::seal::Instruction for AddSignatory {}
+impl crate::seal::Instruction for RemoveSignatory {}
+impl crate::seal::Instruction for SetAccountQuorum {}
 impl crate::seal::Instruction for Grant<Permission, Account> {}
 impl crate::seal::Instruction for Grant<RoleId, Account> {}
 impl crate::seal::Instruction for Grant<Permission, Role> {}

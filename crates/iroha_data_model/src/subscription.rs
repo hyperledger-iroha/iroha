@@ -161,6 +161,12 @@ pub struct SubscriptionState {
     pub current_period_end_ms: u64,
     /// Next charge time (UTC ms).
     pub next_charge_ms: u64,
+    /// Whether the subscription is scheduled to cancel at period end.
+    #[norito(default)]
+    pub cancel_at_period_end: bool,
+    /// Timestamp in UTC ms when the subscription should cancel.
+    #[norito(default)]
+    pub cancel_at_ms: Option<u64>,
     /// Consecutive failure count.
     pub failure_count: u32,
     /// Usage counters accumulated during the period.
