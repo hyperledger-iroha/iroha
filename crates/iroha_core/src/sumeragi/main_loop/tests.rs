@@ -937,6 +937,18 @@ fn test_sumeragi_config() -> SumeragiConfig {
             iroha_config::parameters::defaults::sumeragi::MEMBERSHIP_MISMATCH_ALERT_THRESHOLD,
         membership_mismatch_fail_closed:
             iroha_config::parameters::defaults::sumeragi::MEMBERSHIP_MISMATCH_FAIL_CLOSED,
+        consensus_future_height_window:
+            iroha_config::parameters::defaults::sumeragi::CONSENSUS_FUTURE_HEIGHT_WINDOW,
+        consensus_future_view_window:
+            iroha_config::parameters::defaults::sumeragi::CONSENSUS_FUTURE_VIEW_WINDOW,
+        invalid_sig_penalty_threshold:
+            iroha_config::parameters::defaults::sumeragi::INVALID_SIG_PENALTY_THRESHOLD,
+        invalid_sig_penalty_window: Duration::from_millis(
+            iroha_config::parameters::defaults::sumeragi::INVALID_SIG_PENALTY_WINDOW_MS,
+        ),
+        invalid_sig_penalty_cooldown: Duration::from_millis(
+            iroha_config::parameters::defaults::sumeragi::INVALID_SIG_PENALTY_COOLDOWN_MS,
+        ),
         da_max_commitments_per_block: 0,
         da_max_proof_openings_per_block: 0,
         proof_policy: ProofPolicy::Off,
@@ -944,6 +956,7 @@ fn test_sumeragi_config() -> SumeragiConfig {
         zk_finality_k: 0,
         require_precommit_qc: false,
         rbc_chunk_max_bytes: iroha_config::parameters::defaults::sumeragi::RBC_CHUNK_MAX_BYTES,
+        rbc_chunk_fanout: iroha_config::parameters::defaults::sumeragi::RBC_CHUNK_FANOUT,
         rbc_pending_max_chunks:
             iroha_config::parameters::defaults::sumeragi::RBC_PENDING_MAX_CHUNKS,
         rbc_pending_max_bytes: iroha_config::parameters::defaults::sumeragi::RBC_PENDING_MAX_BYTES,
@@ -1438,6 +1451,7 @@ async fn test_actor_harness_with_config_and_height_and_kura(
             iroha_config::parameters::defaults::network::REQUIRE_SM_OPENSSL_PREVIEW_MATCH,
         idle_timeout: iroha_config::parameters::defaults::network::IDLE_TIMEOUT,
         peer_gossip_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
+        peer_gossip_max_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
         trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
         trust_penalty_bad_gossip:
@@ -1456,6 +1470,24 @@ async fn test_actor_harness_with_config_and_height_and_kura(
         p2p_post_queue_cap: iroha_config::parameters::defaults::network::P2P_POST_QUEUE_CAP,
         p2p_subscriber_queue_cap:
             iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
+        consensus_ingress_rate_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
+        consensus_ingress_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
+        consensus_ingress_bytes_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
+        consensus_ingress_bytes_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+        consensus_ingress_rbc_session_limit:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
+        consensus_ingress_penalty_threshold:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
+        consensus_ingress_penalty_window: Duration::from_millis(
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
+        ),
+        consensus_ingress_penalty_cooldown: Duration::from_millis(
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
+        ),
         happy_eyeballs_stagger: iroha_config::parameters::defaults::network::HAPPY_EYEBALLS_STAGGER,
         addr_ipv6_first: false,
         max_incoming: None,
@@ -1512,6 +1544,7 @@ async fn test_actor_harness_with_config_and_height_and_kura(
         trusted_peers,
         key_pair.clone(),
         network_cfg.peer_gossip_period,
+        network_cfg.peer_gossip_max_period,
         consensus_cfg.consensus_mode,
         network_cfg.trust_decay_half_life,
         network_cfg.trust_penalty_bad_gossip,
@@ -2813,6 +2846,78 @@ async fn rbc_persist_worker_wakes_on_result() {
         .recv_timeout(Duration::from_secs(2))
         .expect("persist worker wake");
     harness.actor.poll_rbc_persist_results_inner();
+
+    harness.shutdown.send();
+    drop(harness);
+    if let Err(err) = worker_join.join() {
+        panic!("persist worker panicked: {err:?}");
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rbc_persist_worker_does_not_block_on_full_wake_channel() {
+    let rbc_dir = tempfile::tempdir().expect("tempdir");
+    let cfg = crate::sumeragi::RbcStoreConfig {
+        dir: rbc_dir.path().to_path_buf(),
+        max_sessions: 16,
+        soft_sessions: 8,
+        max_bytes: 1 << 20,
+        soft_bytes: 1 << 20,
+        ttl: Duration::from_secs(60),
+    };
+    let mut harness = test_actor_harness_with_rbc_store(1, Some(cfg)).await;
+    let (wake_tx, wake_rx) = mpsc::sync_channel(1);
+    wake_tx.try_send(()).expect("prefill wake");
+    harness.actor.wake_tx = Some(wake_tx);
+    let worker_join = harness
+        .actor
+        .attach_rbc_persist_worker()
+        .expect("persist worker");
+
+    let key: SessionKey = (
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x14; 32])),
+        5,
+        1,
+    );
+    let payload = vec![0xAB; 16];
+    let payload_hash = Hash::new(&payload);
+    let mut session = RbcSession::test_new(1, Some(payload_hash), None, 0);
+    session.test_note_chunk(0, payload, 0);
+    let roster = harness.actor.effective_commit_topology();
+    assert!(!roster.is_empty(), "roster should not be empty");
+    harness
+        .actor
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Network);
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session.clone());
+    harness.actor.persist_rbc_session(key, &session);
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        harness.actor.poll_rbc_persist_results_inner();
+        if harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .persisted_full_sessions
+            .contains(&key)
+        {
+            break;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for RBC persistence worker");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    assert!(wake_rx.try_recv().is_ok(), "prefilled wake should remain");
+    assert!(matches!(wake_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
 
     harness.shutdown.send();
     drop(harness);
@@ -5752,6 +5857,136 @@ async fn quorum_reschedule_rebroadcasts_block_sync_update() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn quorum_reschedule_skips_duplicate_block_sync_updates() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let block = sample_block(1, 0, None);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let height = block.header().height().get();
+    let view = block.header().view_change_index();
+    let epoch = actor.epoch_for_height(height);
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let local_idx = actor
+        .local_validator_index_for_topology(&topology)
+        .expect("local validator index");
+    let vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view,
+        epoch,
+        highest_qc: None,
+        signer: local_idx,
+        bls_sig: Vec::new(),
+    };
+    actor
+        .vote_log
+        .insert((Phase::Commit, height, view, epoch, local_idx), vote);
+
+    let pending = PendingBlock::new(block, payload_hash, height, view);
+    let now = Instant::now();
+
+    actor.reschedule_pending_quorum_block(
+        pending,
+        Duration::from_secs(5),
+        /*min_votes_for_commit*/ 3,
+        /*vote_count*/ 3,
+        /*quorum_timeout*/ Duration::from_secs(1),
+        /*reschedule_backoff*/ Duration::from_secs(1),
+        now,
+    );
+
+    let posts_first: Vec<_> = harness.background_rx.try_iter().collect();
+    let sync_updates_first = posts_first
+        .iter()
+        .filter(|post| {
+            matches!(
+                post,
+                BackgroundPost::Post {
+                    msg: BlockMessage::BlockSyncUpdate(update),
+                    ..
+                } if update.block.hash() == block_hash
+            )
+        })
+        .count();
+    let block_created_first = posts_first
+        .iter()
+        .filter(|post| {
+            matches!(
+                post,
+                BackgroundPost::Post {
+                    msg: BlockMessage::BlockCreated(created),
+                    ..
+                } if created.block.hash() == block_hash
+            )
+        })
+        .count();
+    assert!(
+        sync_updates_first > 0,
+        "first reschedule should broadcast a block sync update"
+    );
+    assert!(
+        block_created_first > 0,
+        "first reschedule should broadcast the pending block"
+    );
+
+    let pending = actor
+        .pending
+        .pending_blocks
+        .remove(&block_hash)
+        .expect("pending block retained");
+    actor.reschedule_pending_quorum_block(
+        pending,
+        Duration::from_secs(5),
+        /*min_votes_for_commit*/ 3,
+        /*vote_count*/ 3,
+        /*quorum_timeout*/ Duration::from_secs(1),
+        /*reschedule_backoff*/ Duration::from_secs(1),
+        now,
+    );
+
+    let posts_second: Vec<_> = harness.background_rx.try_iter().collect();
+    let sync_updates_second = posts_second
+        .iter()
+        .filter(|post| {
+            matches!(
+                post,
+                BackgroundPost::Post {
+                    msg: BlockMessage::BlockSyncUpdate(update),
+                    ..
+                } if update.block.hash() == block_hash
+            )
+        })
+        .count();
+    let block_created_second = posts_second
+        .iter()
+        .filter(|post| {
+            matches!(
+                post,
+                BackgroundPost::Post {
+                    msg: BlockMessage::BlockCreated(created),
+                    ..
+                } if created.block.hash() == block_hash
+            )
+        })
+        .count();
+    assert_eq!(
+        sync_updates_second, 0,
+        "duplicate reschedule should skip redundant block sync updates"
+    );
+    assert_eq!(
+        block_created_second, 0,
+        "duplicate reschedule should respect the payload rebroadcast cooldown"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn quorum_reschedule_skips_requeue_when_precommit_votes_present() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -7889,7 +8124,7 @@ async fn rebroadcast_highest_pending_block_picks_latest() {
     let broadcasted = posts.iter().any(|post| {
         matches!(
             post,
-            BackgroundPost::Broadcast {
+            BackgroundPost::Post {
                 msg: BlockMessage::BlockCreated(created),
                 ..
             } if created.block.hash() == high.hash()
@@ -7932,7 +8167,7 @@ async fn rebroadcast_highest_pending_block_skips_aborted() {
     let broadcast_low = posts.iter().any(|post| {
         matches!(
             post,
-            BackgroundPost::Broadcast {
+            BackgroundPost::Post {
                 msg: BlockMessage::BlockCreated(created),
                 ..
             } if created.block.hash() == low.hash()
@@ -7941,7 +8176,7 @@ async fn rebroadcast_highest_pending_block_skips_aborted() {
     let broadcast_high = posts.iter().any(|post| {
         matches!(
             post,
-            BackgroundPost::Broadcast {
+            BackgroundPost::Post {
                 msg: BlockMessage::BlockCreated(created),
                 ..
             } if created.block.hash() == high.hash()
@@ -8333,7 +8568,7 @@ async fn precommit_vote_broadcasts_payload_when_pending_untracked() {
     let block = sample_block(2, 0, Some(parent.hash()));
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
-    let pending = PendingBlock::new(block.clone(), payload_hash, 2, 0);
+    let mut pending = PendingBlock::new(block.clone(), payload_hash, 2, 0);
 
     let _ = harness.background_rx.try_iter().count();
 
@@ -8358,7 +8593,7 @@ async fn precommit_vote_broadcasts_payload_when_pending_untracked() {
         .expect("local precommit vote recorded");
     harness
         .actor
-        .maybe_broadcast_block_sync_update_for_precommit_vote(&pending, &vote);
+        .maybe_broadcast_block_sync_update_for_precommit_vote(&mut pending, &vote);
 
     let topology_peers = harness.actor.effective_commit_topology();
     let expected_targets = expected_block_sync_update_targets(&harness.actor, &topology_peers);
@@ -8418,7 +8653,7 @@ async fn precommit_vote_payload_broadcast_skips_aborted_pending_untracked() {
         .expect("local precommit vote recorded");
     harness
         .actor
-        .maybe_broadcast_block_sync_update_for_precommit_vote(&pending, &vote);
+        .maybe_broadcast_block_sync_update_for_precommit_vote(&mut pending, &vote);
 
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
     let payload_posts = posts
@@ -8451,7 +8686,7 @@ async fn precommit_vote_block_sync_update_targets_snapshot_roster() {
     let block = sample_block(2, 0, Some(parent.hash()));
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
-    let pending = PendingBlock::new(block.clone(), payload_hash, 2, 0);
+    let mut pending = PendingBlock::new(block.clone(), payload_hash, 2, 0);
 
     let mut snapshot_roster = actor.effective_commit_topology();
     let local_peer = actor.common_config.peer.id().clone();
@@ -8523,7 +8758,7 @@ async fn precommit_vote_block_sync_update_targets_snapshot_roster() {
         .expect("local precommit vote recorded");
 
     let _ = harness.background_rx.try_iter().count();
-    actor.maybe_broadcast_block_sync_update_for_precommit_vote(&pending, &vote);
+    actor.maybe_broadcast_block_sync_update_for_precommit_vote(&mut pending, &vote);
 
     let online_peers = actor
         .network
@@ -11287,7 +11522,7 @@ async fn handle_qc_missing_block_fetch_falls_back_after_signer_attempts() {
         );
     }
 
-    let retry_window = actor.quorum_timeout(actor.runtime_da_enabled());
+    let retry_window = actor.rebroadcast_cooldown();
     let retry_cutoff = Instant::now()
         .checked_sub(retry_window + Duration::from_millis(1))
         .unwrap_or_else(Instant::now);
@@ -11323,6 +11558,49 @@ async fn handle_qc_missing_block_fetch_falls_back_after_signer_attempts() {
             "missing-block fetch should fall back to full topology after signer attempts"
         );
     }
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn defer_qc_if_block_missing_uses_rebroadcast_cooldown() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da_enabled = true;
+    let mut harness = test_actor_harness_with_config(2, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let mut block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x93; Hash::LENGTH]));
+    if actor.block_known_locally(block_hash) {
+        block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x94; Hash::LENGTH]));
+    }
+    let height = 2u64;
+    let view = 0u64;
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let signers = BTreeSet::new();
+
+    let deferred = actor.defer_qc_if_block_missing(
+        Phase::Commit,
+        block_hash,
+        height,
+        view,
+        &signers,
+        &topology,
+    );
+    assert!(deferred, "missing payload should defer QC aggregation");
+
+    let stats = actor
+        .pending
+        .missing_block_requests
+        .get(&block_hash)
+        .expect("missing-block request recorded");
+    assert_eq!(stats.retry_window, actor.rebroadcast_cooldown());
+    assert_eq!(
+        stats.view_change_window,
+        Some(actor.quorum_timeout(actor.runtime_da_enabled()))
+    );
 
     harness.shutdown.send();
 }
@@ -11930,6 +12208,7 @@ async fn handle_rbc_deliver_stashes_on_roster_hash_mismatch() {
         chunk_root,
         sender: u32::try_from(signer_idx).expect("signer index fits u32"),
         signature: Vec::new(),
+        ready_signatures: Vec::new(),
     };
     let (_, mode_tag, _prf_seed) = harness.actor.consensus_context_for_height(key.1);
     let preimage =
@@ -12053,6 +12332,7 @@ async fn handle_rbc_deliver_stashes_when_derived_roster_mismatches() {
         chunk_root,
         sender: u32::try_from(signer_idx).expect("signer index fits u32"),
         signature: Vec::new(),
+        ready_signatures: Vec::new(),
     };
     let (_, mode_tag, _prf_seed) = harness.actor.consensus_context_for_height(key.1);
     let preimage =
@@ -13899,6 +14179,7 @@ async fn handle_rbc_deliver_rejects_chunk_root_mismatch() {
         chunk_root: wrong_root,
         sender: u32::try_from(signer_idx).expect("signer index fits u32"),
         signature: Vec::new(),
+        ready_signatures: Vec::new(),
     };
     let preimage =
         super::rbc_deliver_preimage(&actor.common_config.chain, actor.mode_tag(), &deliver);
@@ -13977,6 +14258,112 @@ async fn handle_rbc_deliver_sets_expected_chunk_root_when_missing() {
         .expect("session");
     assert_eq!(stored.expected_chunk_root, Some(deliver.chunk_root));
     assert!(stored.deliver_signature.is_some());
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn handle_rbc_deliver_records_ready_bundle() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let key = session_key();
+    let payload = b"payload".to_vec();
+    let payload_hash = Hash::new(&payload);
+    let epoch = actor.epoch_for_height(key.1);
+    let session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
+        .expect("session");
+
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    let roster = actor.effective_commit_topology();
+    assert!(!roster.is_empty(), "roster should not be empty");
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Network);
+
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let required = actor.rbc_deliver_quorum(&topology);
+    assert!(required > 0, "ready quorum must be non-zero");
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(key.1);
+    let signature_topology = super::topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
+    let chunk_root = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .and_then(|session| session.expected_chunk_root)
+        .expect("chunk root");
+
+    let roster_hash = roster_hash(&roster);
+    let mut ready_signatures = Vec::new();
+    for (idx, peer) in signature_topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .take(required)
+    {
+        let signer_kp = harness
+            .key_pairs
+            .iter()
+            .find(|kp| kp.public_key() == peer.public_key())
+            .expect("signer keypair");
+        let mut ready = crate::sumeragi::consensus::RbcReady {
+            block_hash: key.0,
+            height: key.1,
+            view: key.2,
+            epoch,
+            roster_hash,
+            chunk_root,
+            sender: u32::try_from(idx).expect("sender fits u32"),
+            signature: Vec::new(),
+        };
+        let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
+        let signature = Signature::new(signer_kp.private_key(), &preimage);
+        ready.signature = signature.payload().to_vec();
+        ready_signatures.push(crate::sumeragi::consensus::RbcReadySignature {
+            sender: ready.sender,
+            signature: ready.signature.clone(),
+        });
+    }
+
+    let deliver_sender = 0u32;
+    let deliver_peer = signature_topology
+        .as_ref()
+        .get(deliver_sender as usize)
+        .expect("deliver peer");
+    let deliver_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == deliver_peer.public_key())
+        .expect("deliver keypair");
+
+    let mut deliver = crate::sumeragi::consensus::RbcDeliver {
+        block_hash: key.0,
+        height: key.1,
+        view: key.2,
+        epoch,
+        roster_hash,
+        chunk_root,
+        sender: deliver_sender,
+        signature: Vec::new(),
+        ready_signatures,
+    };
+    let preimage = super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
+    let signature = Signature::new(deliver_kp.private_key(), &preimage);
+    deliver.signature = signature.payload().to_vec();
+
+    actor.handle_rbc_deliver(deliver).expect("deliver handled");
+    let stored = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session");
+    assert!(stored.delivered, "deliver should be accepted");
+    assert!(
+        stored.ready_signatures.len() >= required,
+        "ready bundle should seed quorum"
+    );
 
     harness.shutdown.send();
 }
@@ -16060,6 +16447,7 @@ async fn stale_pending_block_requeues_transactions() {
             iroha_config::parameters::defaults::network::REQUIRE_SM_OPENSSL_PREVIEW_MATCH,
         idle_timeout: iroha_config::parameters::defaults::network::IDLE_TIMEOUT,
         peer_gossip_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
+        peer_gossip_max_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
         trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
         trust_penalty_bad_gossip:
@@ -16078,6 +16466,24 @@ async fn stale_pending_block_requeues_transactions() {
         p2p_post_queue_cap: iroha_config::parameters::defaults::network::P2P_POST_QUEUE_CAP,
         p2p_subscriber_queue_cap:
             iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
+        consensus_ingress_rate_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
+        consensus_ingress_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
+        consensus_ingress_bytes_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
+        consensus_ingress_bytes_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+        consensus_ingress_rbc_session_limit:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
+        consensus_ingress_penalty_threshold:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
+        consensus_ingress_penalty_window: Duration::from_millis(
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
+        ),
+        consensus_ingress_penalty_cooldown: Duration::from_millis(
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
+        ),
         happy_eyeballs_stagger: iroha_config::parameters::defaults::network::HAPPY_EYEBALLS_STAGGER,
         addr_ipv6_first: false,
         max_incoming: None,
@@ -16134,6 +16540,7 @@ async fn stale_pending_block_requeues_transactions() {
         trusted_peers,
         key_pair.clone(),
         network_cfg.peer_gossip_period,
+        network_cfg.peer_gossip_max_period,
         consensus_cfg.consensus_mode,
         network_cfg.trust_decay_half_life,
         network_cfg.trust_penalty_bad_gossip,
@@ -21778,17 +22185,6 @@ fn bump_view_after_quorum_timeout_resets_round_state() {
 }
 
 #[test]
-fn pending_replay_due_obeys_cooldown() {
-    let now = Instant::now();
-    let cooldown = Duration::from_millis(50);
-    assert!(super::pending_replay_due(None, now, cooldown));
-    let recent = now - Duration::from_millis(10);
-    assert!(!super::pending_replay_due(Some(recent), now, cooldown));
-    let older = now - Duration::from_millis(75);
-    assert!(super::pending_replay_due(Some(older), now, cooldown));
-}
-
-#[test]
 fn record_view_change_cause_helper_updates_status() {
     super::status::reset_view_change_cause_counters_for_tests();
     let before = super::status::snapshot();
@@ -22588,10 +22984,21 @@ async fn active_pending_blocks_len_ignores_aborted_and_nonextending() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn force_view_change_if_idle_records_missing_qc_and_advances_view() {
+    use std::borrow::Cow;
+
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
     super::status::reset_view_change_cause_counters_for_tests();
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
 
     let committed_height = actor.state.view().height() as u64;
     let highest_qc = sample_qc_ref(committed_height, 0);
@@ -22637,10 +23044,21 @@ async fn force_view_change_if_idle_records_missing_qc_and_advances_view() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn force_view_change_if_idle_ignores_aborted_pending() {
+    use std::borrow::Cow;
+
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
     super::status::reset_view_change_cause_counters_for_tests();
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
 
     let committed_height = actor.state.view().height() as u64;
     let highest_qc = sample_qc_ref(committed_height, 0);
@@ -22677,6 +23095,48 @@ async fn force_view_change_if_idle_ignores_aborted_pending() {
         actor.force_view_change_if_idle(now),
         "idle timeout should ignore aborted pending blocks"
     );
+
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn force_view_change_if_idle_skips_when_no_work() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let committed_height = actor.state.view().height() as u64;
+    let highest_qc = sample_qc_ref(committed_height, 0);
+    actor.highest_qc = Some(highest_qc);
+    let height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    let current_view = 0u64;
+    let now = Instant::now();
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+    );
+    let start = now
+        .checked_sub(timeout + Duration::from_millis(1))
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, start);
+
+    assert!(
+        !actor.force_view_change_if_idle(now),
+        "idle view change should not trigger without queued work or empty-child recovery"
+    );
+
+    let snapshot = super::status::snapshot().view_change_causes;
+    assert_eq!(snapshot.missing_qc_total, 0);
+    assert!(snapshot.last_cause.is_none());
 
     super::status::reset_view_change_cause_counters_for_tests();
     harness.shutdown.send();
@@ -26862,9 +27322,7 @@ async fn assemble_proposal_schedules_rbc_after_proposal_messages() {
             _ => continue,
         };
         match msg {
-            BlockMessage::ProposalHint(_)
-            | BlockMessage::Proposal(_)
-            | BlockMessage::BlockCreated(_) => proposal_indexes.push(idx),
+            BlockMessage::Proposal(_) | BlockMessage::BlockCreated(_) => proposal_indexes.push(idx),
             BlockMessage::RbcInit(_) | BlockMessage::RbcChunk(_) | BlockMessage::RbcReady(_) => {
                 rbc_indexes.push(idx)
             }
@@ -27050,7 +27508,7 @@ async fn refresh_npos_seed_realigns_epoch_after_epoch_length_change() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn update_prf_context_for_hint_uses_activation_height_seed() {
+async fn update_prf_context_uses_activation_height_seed() {
     use iroha_data_model::parameter::system::SumeragiConsensusMode;
 
     let mut consensus_cfg = test_sumeragi_config();
@@ -27081,7 +27539,7 @@ async fn update_prf_context_for_hint_uses_activation_height_seed() {
         view: 1,
         highest_qc: sample_qc_ref(1, 0),
     };
-    actor.update_prf_context_for_hint(&hint);
+    actor.update_prf_context(hint.height, hint.view);
 
     let expected_seed = {
         let view = actor.state.view();
@@ -27248,6 +27706,23 @@ async fn pacemaker_single_validator_seeds_new_view_from_precommit_qc() {
             .entries
             .contains_key(&(prevote.height.saturating_add(1), view)),
         "prevote QC must not seed single-validator NEW_VIEW"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pacemaker_skips_proposal_when_queue_empty() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    actor.locked_qc = None;
+
+    let proposed = actor.on_pacemaker_propose_ready(Instant::now());
+    assert!(!proposed, "pacemaker should not propose with empty queue");
+    assert!(
+        actor.subsystems.propose.proposal_cache.proposals.is_empty(),
+        "proposal cache should remain empty when queue is idle"
     );
 
     harness.shutdown.send();
@@ -28957,6 +29432,77 @@ async fn block_created_updates_locked_status_when_lock_missing() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn block_created_uses_cached_proposal_when_lock_missing() {
+    let _guard = super::status::qc_status_test_guard();
+    super::status::set_locked_qc(0, 0, None);
+    super::status::set_highest_qc(0, 0);
+    super::status::set_highest_qc_hash(HashOf::from_untyped_unchecked(Hash::prehashed(
+        [0; Hash::LENGTH],
+    )));
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da_enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH]));
+    let height = 2u64;
+    let view = 0u64;
+    let block = sample_block(height, view, Some(parent_hash));
+    let block_hash = block.hash();
+
+    let epoch = actor.epoch_for_height(height.saturating_sub(1));
+    let locked_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x22; Hash::LENGTH]));
+    actor.locked_qc = Some(QcHeaderRef {
+        height: 1,
+        view: 0,
+        epoch,
+        subject_block_hash: locked_hash,
+        phase: Phase::Commit,
+    });
+    super::status::set_locked_qc(1, 0, Some(locked_hash));
+
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let highest_qc = QcHeaderRef {
+        height: 1,
+        view: 0,
+        epoch,
+        subject_block_hash: parent_hash,
+        phase: Phase::Commit,
+    };
+    let proposal =
+        Actor::build_consensus_proposal(&block, payload_hash, highest_qc, 0, view, epoch);
+    actor
+        .subsystems
+        .propose
+        .proposal_cache
+        .insert_proposal(proposal);
+
+    actor
+        .handle_block_created(super::message::BlockCreated { block })
+        .expect("handle BlockCreated");
+
+    let locked = actor.locked_qc.expect("locked qc updated");
+    assert_eq!(locked.subject_block_hash, parent_hash);
+    assert!(
+        actor.pending.pending_blocks.contains_key(&block_hash),
+        "BlockCreated should be accepted when proposal supplies the highest QC"
+    );
+
+    super::status::set_locked_qc(0, 0, None);
+    super::status::set_highest_qc(0, 0);
+    super::status::set_highest_qc_hash(HashOf::from_untyped_unchecked(Hash::prehashed(
+        [0; Hash::LENGTH],
+    )));
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn block_created_without_hint_rejects_conflicting_lock() {
     let _guard = super::status::qc_status_test_guard();
     let mut harness = test_actor_harness(4).await;
@@ -29462,6 +30008,64 @@ async fn proposal_hint_marks_view_seen() {
         actor.subsystems.propose.proposals_seen.contains(&(2, 0)),
         "proposal hint should mark the view as observed"
     );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_updates_highest_qc_and_marks_view_seen() {
+    let _guard = super::status::qc_status_test_guard();
+    super::status::set_locked_qc(0, 0, None);
+    super::status::set_highest_qc(0, 0);
+    super::status::set_highest_qc_hash(HashOf::from_untyped_unchecked(Hash::prehashed(
+        [0; Hash::LENGTH],
+    )));
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent_block = sample_block(1, 0, None);
+    actor
+        .kura
+        .store_block(parent_block.clone())
+        .expect("store parent block");
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(parent_block.hash());
+
+    actor.locked_qc = None;
+    let height = 2;
+    let view = 0;
+    let proposal = sample_proposal(parent_block.hash(), height, view);
+
+    actor.handle_proposal(proposal).expect("handle proposal");
+
+    let highest = actor.highest_qc.expect("highest QC set");
+    assert_eq!(highest.height, 1);
+    assert_eq!(highest.view, view);
+    assert_eq!(highest.subject_block_hash, parent_block.hash());
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposals_seen
+            .contains(&(height, view)),
+        "accepted proposal should mark the view as observed"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(height, view)
+            .is_some(),
+        "accepted proposal should be cached"
+    );
+
+    super::status::set_locked_qc(0, 0, None);
+    super::status::set_highest_qc(0, 0);
+    super::status::set_highest_qc_hash(HashOf::from_untyped_unchecked(Hash::prehashed(
+        [0; Hash::LENGTH],
+    )));
 
     harness.shutdown.send();
 }
@@ -34526,6 +35130,7 @@ fn rbc_deliver_signature_valid_rejects_out_of_range_sender() {
         chunk_root: Hash::prehashed([0xBB; Hash::LENGTH]),
         sender: 0,
         signature: Vec::new(),
+        ready_signatures: Vec::new(),
     };
     let preimage = super::rbc_deliver_preimage(&chain, super::PERMISSIONED_TAG, &deliver);
     let signature = Signature::new(keypair.private_key(), &preimage);
@@ -34558,6 +35163,7 @@ fn rbc_deliver_signature_valid_rejects_invalid_bls_signature() {
         chunk_root: Hash::prehashed([0xBC; Hash::LENGTH]),
         sender: 0,
         signature: Vec::new(),
+        ready_signatures: Vec::new(),
     };
     let preimage = super::rbc_deliver_preimage(&chain, super::PERMISSIONED_TAG, &deliver);
     let mut signature = Signature::new(keypair.private_key(), &preimage)
@@ -34566,6 +35172,48 @@ fn rbc_deliver_signature_valid_rejects_invalid_bls_signature() {
     signature[0] ^= 0xFF;
     deliver.signature = signature;
 
+    assert!(!super::rbc::rbc_deliver_signature_valid(
+        &deliver,
+        &topology,
+        &chain,
+        super::PERMISSIONED_TAG
+    ));
+}
+
+#[test]
+fn rbc_deliver_signature_valid_rejects_ready_bundle_tamper() {
+    let chain: ChainId = "rbc-deliver-ready-bundle".parse().expect("chain id parses");
+    let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let peer_id = PeerId::new(keypair.public_key().clone());
+    let topology = super::network_topology::Topology::new(vec![peer_id]);
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x44; Hash::LENGTH]));
+    let mut deliver = crate::sumeragi::consensus::RbcDeliver {
+        block_hash,
+        height: 4,
+        view: 1,
+        epoch: 0,
+        roster_hash: roster_hash(topology.as_ref()),
+        chunk_root: Hash::prehashed([0xBD; Hash::LENGTH]),
+        sender: 0,
+        signature: Vec::new(),
+        ready_signatures: vec![crate::sumeragi::consensus::RbcReadySignature {
+            sender: 0,
+            signature: vec![0xAA; 8],
+        }],
+    };
+    let preimage = super::rbc_deliver_preimage(&chain, super::PERMISSIONED_TAG, &deliver);
+    let signature = Signature::new(keypair.private_key(), &preimage);
+    deliver.signature = signature.payload().to_vec();
+
+    assert!(super::rbc::rbc_deliver_signature_valid(
+        &deliver,
+        &topology,
+        &chain,
+        super::PERMISSIONED_TAG
+    ));
+
+    deliver.ready_signatures[0].signature[0] ^= 0xFF;
     assert!(!super::rbc::rbc_deliver_signature_valid(
         &deliver,
         &topology,
@@ -34613,6 +35261,245 @@ fn invalid_signature_throttle_logs_on_height_advance() {
         now + Duration::from_millis(1),
     );
     assert_eq!(advanced_height, InvalidSigOutcome::Logged);
+}
+
+#[test]
+fn invalid_signature_penalty_suppresses_after_threshold() {
+    let mut config = test_sumeragi_config();
+    config.invalid_sig_penalty_threshold = 2;
+    config.invalid_sig_penalty_window = Duration::from_secs(10);
+    config.invalid_sig_penalty_cooldown = Duration::from_secs(5);
+    let mut penalty = InvalidSigPenalty::new(&config);
+    let now = Instant::now();
+
+    assert!(!penalty.is_suppressed(InvalidSigKind::Vote, 7, now));
+    assert!(!penalty.record(InvalidSigKind::Vote, 7, now));
+    assert!(!penalty.is_suppressed(InvalidSigKind::Vote, 7, now));
+    assert!(penalty.record(InvalidSigKind::Vote, 7, now + Duration::from_millis(10)));
+    assert!(penalty.is_suppressed(InvalidSigKind::Vote, 7, now + Duration::from_millis(20)));
+    assert!(!penalty.is_suppressed(InvalidSigKind::Vote, 7, now + Duration::from_secs(6)));
+}
+
+#[tokio::test]
+async fn future_consensus_height_window_drops_far_height() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_future_height_window = 1;
+    consensus_cfg.consensus_future_view_window = 0;
+    let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 5).await;
+    let actor = &mut harness.actor;
+    let base_height = actor.last_committed_height.saturating_add(1);
+
+    assert!(actor.should_drop_future_consensus_message(base_height.saturating_add(2), 0, "QcVote"));
+    assert!(!actor.should_drop_future_consensus_message(
+        base_height.saturating_add(1),
+        0,
+        "QcVote"
+    ));
+    harness.shutdown.send();
+}
+
+#[tokio::test]
+async fn future_consensus_view_window_drops_far_view() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_future_height_window = 0;
+    consensus_cfg.consensus_future_view_window = 1;
+    let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 5).await;
+    let actor = &mut harness.actor;
+    let base_height = actor.last_committed_height.saturating_add(1);
+    actor
+        .phase_tracker
+        .start_new_round(base_height, Instant::now());
+
+    assert!(!actor.should_drop_future_consensus_message(base_height, 1, "QcVote"));
+    assert!(actor.should_drop_future_consensus_message(base_height, 2, "QcVote"));
+    harness.shutdown.send();
+}
+
+#[tokio::test]
+async fn future_consensus_view_window_skips_stale_round() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_future_height_window = 0;
+    consensus_cfg.consensus_future_view_window = 1;
+    let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 5).await;
+    let actor = &mut harness.actor;
+    let base_height = actor.last_committed_height.saturating_add(1);
+    let timeout = actor.commit_quorum_timeout();
+    let now = Instant::now();
+    let stale_start = now
+        .checked_sub(timeout + Duration::from_millis(1))
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .start_new_round(base_height, stale_start);
+
+    assert!(!actor.should_drop_future_consensus_message(base_height, 10, "QcVote"));
+    harness.shutdown.send();
+}
+
+#[tokio::test]
+async fn block_sync_update_future_window_drops_unrequested() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_future_height_window = 1;
+    consensus_cfg.consensus_future_view_window = 0;
+    let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 5).await;
+    let actor = &mut harness.actor;
+    let base_height = actor.last_committed_height.saturating_add(1);
+    let height = base_height.saturating_add(2);
+    let view = 0;
+    let block = sample_block(height, view, None);
+    let block_hash = block.hash();
+    let parent_hash = block.header().prev_block_hash();
+    let requested_missing_block = actor
+        .pending
+        .missing_block_requests
+        .contains_key(&block_hash);
+
+    assert!(
+        !requested_missing_block,
+        "missing request should not be seeded"
+    );
+    assert!(actor.should_drop_future_block_sync_update(
+        &block_hash,
+        parent_hash,
+        height,
+        view,
+        requested_missing_block
+    ));
+    harness.shutdown.send();
+}
+
+#[tokio::test]
+async fn block_sync_update_future_window_allows_requested() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_future_height_window = 1;
+    consensus_cfg.consensus_future_view_window = 0;
+    let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 5).await;
+    let actor = &mut harness.actor;
+    let base_height = actor.last_committed_height.saturating_add(1);
+    let height = base_height.saturating_add(2);
+    let view = 0;
+    let block = sample_block(height, view, None);
+    let block_hash = block.hash();
+    let parent_hash = block.header().prev_block_hash();
+    let now = Instant::now();
+    let inserted = super::touch_missing_block_request(
+        &mut actor.pending.missing_block_requests,
+        block_hash,
+        height,
+        view,
+        crate::sumeragi::consensus::Phase::Commit,
+        super::MissingBlockPriority::Background,
+        now,
+        Duration::from_secs(1),
+        None,
+    );
+    let requested_missing_block = actor
+        .pending
+        .missing_block_requests
+        .contains_key(&block_hash);
+
+    assert!(inserted, "missing request should be recorded");
+    assert!(requested_missing_block, "missing request should be tracked");
+    assert!(!actor.should_drop_future_block_sync_update(
+        &block_hash,
+        parent_hash,
+        height,
+        view,
+        requested_missing_block
+    ));
+    harness.shutdown.send();
+}
+
+#[tokio::test]
+async fn block_sync_update_future_window_allows_known_block() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_future_height_window = 1;
+    consensus_cfg.consensus_future_view_window = 0;
+    let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 5).await;
+    let actor = &mut harness.actor;
+    let base_height = actor.last_committed_height.saturating_add(1);
+    let height = base_height.saturating_add(2);
+    let view = 0;
+    let block = sample_block(height, view, None);
+    let block_hash = block.hash();
+    let parent_hash = block.header().prev_block_hash();
+    let payload_hash = Hash::prehashed([0xBA; Hash::LENGTH]);
+    let pending = PendingBlock::new(block, payload_hash, height, view);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    let requested_missing_block = actor
+        .pending
+        .missing_block_requests
+        .contains_key(&block_hash);
+
+    assert!(
+        actor.block_known_locally(block_hash),
+        "pending block should be known locally"
+    );
+    assert!(!requested_missing_block, "missing request should not be seeded");
+    assert!(!actor.should_drop_future_block_sync_update(
+        &block_hash,
+        parent_hash,
+        height,
+        view,
+        requested_missing_block
+    ));
+    harness.shutdown.send();
+}
+
+#[tokio::test]
+async fn block_sync_update_future_window_allows_known_parent() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_future_height_window = 1;
+    consensus_cfg.consensus_future_view_window = 0;
+    let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 5).await;
+    let actor = &mut harness.actor;
+    let base_height = actor.last_committed_height.saturating_add(1);
+    let parent_height = base_height.saturating_add(1);
+    let view = 0;
+    let parent_block = sample_block(parent_height, view, None);
+    let parent_hash = parent_block.hash();
+    let parent_payload_hash = Hash::prehashed([0xBB; Hash::LENGTH]);
+    let pending_parent = PendingBlock::new(
+        parent_block,
+        parent_payload_hash,
+        parent_height,
+        view,
+    );
+    actor
+        .pending
+        .pending_blocks
+        .insert(parent_hash, pending_parent);
+
+    let height = parent_height.saturating_add(1);
+    let block = sample_block(height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    let requested_missing_block = actor
+        .pending
+        .missing_block_requests
+        .contains_key(&block_hash);
+
+    assert!(
+        actor.block_payload_available_locally(parent_hash),
+        "parent block should be available locally"
+    );
+    assert!(!requested_missing_block, "missing request should not be seeded");
+    assert!(!actor.should_drop_future_block_sync_update(
+        &block_hash,
+        Some(parent_hash),
+        height,
+        view,
+        requested_missing_block
+    ));
+    harness.shutdown.send();
+}
+
+#[test]
+fn block_message_height_view_skips_block_sync_update() {
+    let block = sample_block(3, 0, None);
+    let update = super::message::BlockSyncUpdate::from(&block);
+    let msg = BlockMessage::BlockSyncUpdate(update);
+    assert!(Actor::block_message_height_view(&msg).is_none());
 }
 
 #[cfg(feature = "telemetry")]
@@ -35234,6 +36121,7 @@ async fn proposal_assembly_defers_without_draining_queue_and_preserves_view_when
             iroha_config::parameters::defaults::network::REQUIRE_SM_OPENSSL_PREVIEW_MATCH,
         idle_timeout: iroha_config::parameters::defaults::network::IDLE_TIMEOUT,
         peer_gossip_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
+        peer_gossip_max_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
         trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
         trust_penalty_bad_gossip:
@@ -35252,6 +36140,24 @@ async fn proposal_assembly_defers_without_draining_queue_and_preserves_view_when
         p2p_post_queue_cap: iroha_config::parameters::defaults::network::P2P_POST_QUEUE_CAP,
         p2p_subscriber_queue_cap:
             iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
+        consensus_ingress_rate_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
+        consensus_ingress_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
+        consensus_ingress_bytes_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
+        consensus_ingress_bytes_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+        consensus_ingress_rbc_session_limit:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
+        consensus_ingress_penalty_threshold:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
+        consensus_ingress_penalty_window: Duration::from_millis(
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
+        ),
+        consensus_ingress_penalty_cooldown: Duration::from_millis(
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
+        ),
         happy_eyeballs_stagger: iroha_config::parameters::defaults::network::HAPPY_EYEBALLS_STAGGER,
         addr_ipv6_first: false,
         max_incoming: None,
@@ -35308,6 +36214,7 @@ async fn proposal_assembly_defers_without_draining_queue_and_preserves_view_when
         trusted_peers.clone(),
         key_pair.clone(),
         network_cfg.peer_gossip_period,
+        network_cfg.peer_gossip_max_period,
         consensus_mode,
         network_cfg.trust_decay_half_life,
         network_cfg.trust_penalty_bad_gossip,
@@ -39419,6 +40326,7 @@ fn pending_rbc_messages_track_ready_and_deliver_drops() {
         chunk_root: Hash::prehashed([0x22; Hash::LENGTH]),
         sender: 1,
         signature: vec![0xBB; 8],
+        ready_signatures: Vec::new(),
     };
     let (accepted_deliver, dropped_deliver_bytes) = pending.push_deliver_capped(deliver, 1, now);
     assert!(!accepted_deliver);
@@ -39431,6 +40339,37 @@ fn pending_rbc_messages_track_ready_and_deliver_drops() {
     let expected_bytes = u64::try_from(dropped_ready_bytes.saturating_add(dropped_deliver_bytes))
         .unwrap_or(u64::MAX);
     assert_eq!(dropped_bytes, expected_bytes);
+}
+
+#[test]
+fn rbc_deliver_stash_bytes_includes_ready_bundle() {
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAC; 32]));
+    let deliver = crate::sumeragi::consensus::RbcDeliver {
+        block_hash,
+        height: 1,
+        view: 0,
+        epoch: 0,
+        roster_hash: Hash::prehashed([0x20; Hash::LENGTH]),
+        chunk_root: Hash::prehashed([0x22; Hash::LENGTH]),
+        sender: 1,
+        signature: vec![0xBB; 8],
+        ready_signatures: Vec::new(),
+    };
+    let base = super::pending_rbc::rbc_deliver_stash_bytes(&deliver);
+    let mut with_bundle = deliver;
+    with_bundle
+        .ready_signatures
+        .push(crate::sumeragi::consensus::RbcReadySignature {
+            sender: 2,
+            signature: vec![0xCC; 12],
+        });
+    let bundled = super::pending_rbc::rbc_deliver_stash_bytes(&with_bundle);
+    assert!(
+        bundled
+            >= base
+                .saturating_add(std::mem::size_of::<u32>())
+                .saturating_add(12)
+    );
 }
 
 #[test]

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, Mapping, Optional, TYPE_CHECKING
-from typing import Final
+from typing import TYPE_CHECKING, Any, Dict, Final, Iterable, Mapping, Optional
+
 from typing_extensions import TypeAlias
 
 from ._native import load_crypto_extension

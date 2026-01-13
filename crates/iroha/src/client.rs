@@ -7551,6 +7551,19 @@ impl Client {
             .wrap_err("cancel subscription request failed")
     }
 
+    /// POST `/v1/subscriptions/{subscription_id}/keep`.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
+    pub fn keep_subscription(
+        &self,
+        subscription_id: &NftId,
+        request: &SubscriptionActionRequest,
+    ) -> Result<SubscriptionActionResponse> {
+        self.post_subscription_action(subscription_id, "keep", request)
+            .wrap_err("keep subscription request failed")
+    }
+
     /// POST `/v1/subscriptions/{subscription_id}/charge-now`.
     ///
     /// # Errors
@@ -8573,6 +8586,8 @@ mod subscription_http_tests {
             current_period_start_ms: 0,
             current_period_end_ms: 1,
             next_charge_ms: 1,
+            cancel_at_period_end: false,
+            cancel_at_ms: None,
             failure_count: 0,
             usage_accumulated: BTreeMap::new(),
             billing_trigger_id: billing_trigger_id.clone(),
@@ -8610,6 +8625,7 @@ mod subscription_http_tests {
             authority: subscriber.clone(),
             private_key: crate::data_model::prelude::ExposedPrivateKey(subscriber_private.clone()),
             charge_at_ms: Some(170),
+            cancel_mode: None,
         };
         let usage_request = SubscriptionUsageRequest {
             authority: subscriber.clone(),

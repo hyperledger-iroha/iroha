@@ -259,8 +259,8 @@ impl Actor {
             }
         }
 
-        self.update_prf_context_for_hint(&hint);
-        if !self.ensure_highest_qc_extends_locked(&hint, highest_qc) {
+        self.update_prf_context(height, view);
+        if !self.ensure_highest_qc_extends_locked(height, view, highest_qc, "proposal hint") {
             return Ok(());
         }
         let should_update_highest = self.highest_qc.is_none_or(|current| {
@@ -306,22 +306,23 @@ impl Actor {
         Ok(())
     }
 
-    pub(super) fn update_prf_context_for_hint(&self, hint: &super::message::ProposalHint) {
-        let (consensus_mode, _, prf_seed) = self.consensus_context_for_height(hint.height);
+    pub(super) fn update_prf_context(&self, height: u64, view: u64) {
+        let (consensus_mode, _, prf_seed) = self.consensus_context_for_height(height);
         if let ConsensusMode::Npos = consensus_mode {
             if let Some(seed) = prf_seed {
-                super::status::set_prf_context(seed, hint.height, hint.view);
+                super::status::set_prf_context(seed, height, view);
                 #[cfg(feature = "telemetry")]
-                self.telemetry
-                    .set_prf_context(Some(seed), hint.height, hint.view);
+                self.telemetry.set_prf_context(Some(seed), height, view);
             }
         }
     }
 
     pub(super) fn ensure_highest_qc_extends_locked(
         &mut self,
-        hint: &super::message::ProposalHint,
+        height: u64,
+        view: u64,
         highest_qc: super::consensus::QcHeaderRef,
+        source: &'static str,
     ) -> bool {
         if !self.highest_qc_extends_locked(highest_qc) {
             if let Some(new_lock) = realign_locked_to_committed_if_extends(
@@ -332,13 +333,14 @@ impl Actor {
             ) {
                 if self.locked_qc != Some(new_lock) {
                     info!(
-                        height = hint.height,
-                        view = hint.view,
+                        height,
+                        view,
                         highest_height = highest_qc.height,
                         highest_hash = %highest_qc.subject_block_hash,
                         locked_height = new_lock.height,
                         locked_hash = %new_lock.subject_block_hash,
-                        "resetting locked QC to committed chain before caching proposal hint"
+                        context = source,
+                        "resetting locked QC to committed chain before caching"
                     );
                     self.locked_qc = Some(new_lock);
                     super::status::set_locked_qc(
@@ -353,13 +355,14 @@ impl Actor {
             return true;
         }
         debug!(
-            height = hint.height,
-            view = hint.view,
+            height,
+            view,
             highest_height = highest_qc.height,
             highest_hash = ?highest_qc.subject_block_hash,
             locked_height = ?self.locked_qc.map(|qc| qc.height),
             locked_hash = ?self.locked_qc.map(|qc| qc.subject_block_hash),
-            "dropping proposal hint: highest QC does not extend locked chain"
+            context = source,
+            "dropping highest QC that does not extend locked chain"
         );
         false
     }
@@ -439,6 +442,64 @@ impl Actor {
             );
             return Ok(());
         }
+        let committed_qc_height = self.latest_committed_qc().map_or(0, |qc| qc.height);
+        if let Some(stored_height) = self
+            .kura
+            .get_block_height_by_hash(highest_qc.subject_block_hash)
+            .and_then(|nz| u64::try_from(nz.get()).ok())
+        {
+            if stored_height != highest_qc.height {
+                warn!(
+                    height,
+                    view,
+                    stored_height,
+                    highest_height = highest_qc.height,
+                    block = %highest_qc.subject_block_hash,
+                    payload = %proposal.payload_hash,
+                    "dropping proposal: highest QC hash stored at different height"
+                );
+                return Ok(());
+            }
+            let stored_hash = usize::try_from(stored_height)
+                .ok()
+                .and_then(NonZeroUsize::new)
+                .and_then(|nz| self.kura.get_block(nz))
+                .map(|block| block.hash());
+            if highest_qc.height <= committed_qc_height
+                && stored_hash.is_some_and(|hash| hash != highest_qc.subject_block_hash)
+            {
+                info!(
+                    height,
+                    view,
+                    committed_height = committed_qc_height,
+                    committed_hash = %stored_hash.unwrap_or(highest_qc.subject_block_hash),
+                    highest_hash = %highest_qc.subject_block_hash,
+                    payload = %proposal.payload_hash,
+                    "dropping proposal: highest QC conflicts with committed block at height"
+                );
+                return Ok(());
+            }
+        } else if highest_qc.height <= committed_qc_height {
+            info!(
+                height,
+                view,
+                committed_height = committed_qc_height,
+                highest_height = highest_qc.height,
+                block = %highest_qc.subject_block_hash,
+                payload = %proposal.payload_hash,
+                "dropping proposal: highest QC block missing locally for committed height"
+            );
+            return Ok(());
+        } else {
+            info!(
+                height,
+                view,
+                highest_height = highest_qc.height,
+                block = %highest_qc.subject_block_hash,
+                payload = %proposal.payload_hash,
+                "caching proposal without local highest QC block; awaiting sync"
+            );
+        }
         if let Some((local_height, local_view)) =
             self.local_block_height_view(highest_qc.subject_block_hash)
         {
@@ -468,6 +529,34 @@ impl Actor {
                 return Ok(());
             }
         }
+        self.update_prf_context(height, view);
+        if !self.ensure_highest_qc_extends_locked(height, view, highest_qc, "proposal") {
+            return Ok(());
+        }
+        let should_update_highest = self.highest_qc.is_none_or(|current| {
+            let incoming = (highest_qc.height, highest_qc.view);
+            let existing = (current.height, current.view);
+            let promotes_phase = incoming == existing
+                && highest_qc.phase == crate::sumeragi::consensus::Phase::Commit
+                && current.phase != crate::sumeragi::consensus::Phase::Commit;
+            incoming > existing || promotes_phase
+        });
+        if should_update_highest {
+            self.highest_qc = Some(highest_qc);
+            super::status::set_highest_qc(highest_qc.height, highest_qc.view);
+            super::status::set_highest_qc_hash(highest_qc.subject_block_hash);
+        } else {
+            debug!(
+                height,
+                view,
+                highest_height = highest_qc.height,
+                highest_view = highest_qc.view,
+                current_height = self.highest_qc.map(|qc| qc.height),
+                current_view = self.highest_qc.map(|qc| qc.view),
+                "skipping highest QC update for stale proposal"
+            );
+        }
+        self.record_phase_sample(PipelinePhase::Propose, height, view);
         self.note_proposal_seen(height, view, proposal.payload_hash);
         self.subsystems
             .propose
@@ -755,6 +844,15 @@ impl Actor {
             .proposal_cache
             .get_hint(height, view)
             .copied();
+        let cached_proposal = self
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(height, view)
+            .cloned();
+        let mut payload_bytes = None;
+        let mut payload_hash = None;
+        let mut proposal_mismatch = None;
         let parent_view = header
             .prev_block_hash()
             .and_then(|parent_hash| self.local_block_height_view(parent_hash))
@@ -804,6 +902,25 @@ impl Actor {
                         "BlockCreated hint mismatch"
                     );
                     return Ok(());
+                }
+            }
+        }
+        if cached_hint.is_none() {
+            if let Some(proposal) = cached_proposal.as_ref() {
+                let computed_bytes = block_payload_bytes(&block);
+                let computed_hash = Hash::new(&computed_bytes);
+                payload_bytes = Some(computed_bytes);
+                payload_hash = Some(computed_hash);
+                let mismatch = detect_proposal_mismatch(proposal, &header, &computed_hash);
+                if mismatch.is_none() {
+                    cached_hint = Some(super::message::ProposalHint {
+                        block_hash,
+                        height,
+                        view,
+                        highest_qc: proposal.header.highest_qc,
+                    });
+                } else {
+                    proposal_mismatch = mismatch;
                 }
             }
         }
@@ -955,8 +1072,8 @@ impl Actor {
                 }
             }
         }
-        let payload_bytes = block_payload_bytes(&block);
-        let payload_hash = Hash::new(&payload_bytes);
+        let payload_bytes = payload_bytes.unwrap_or_else(|| block_payload_bytes(&block));
+        let payload_hash = payload_hash.unwrap_or_else(|| Hash::new(&payload_bytes));
         let tx_count = block.transactions_vec().len();
         let queue_len = self.queue.tx_len();
         if empty_block_disfavored(
@@ -972,12 +1089,12 @@ impl Actor {
                 "accepting empty BlockCreated despite queued transactions or competing non-empty candidate to stay in sync"
             );
         }
-        if let Some(reason) = self
-            .subsystems
-            .propose
-            .proposal_cache
-            .get_proposal(height, view)
-            .and_then(|proposal| detect_proposal_mismatch(proposal, &header, &payload_hash))
+        if let Some(reason) = proposal_mismatch
+            .or_else(|| {
+                cached_proposal
+                    .as_ref()
+                    .and_then(|proposal| detect_proposal_mismatch(proposal, &header, &payload_hash))
+            })
             .map(|mismatch| mismatch.reason())
         {
             self.invalidate_proposal(height, view, reason)?;
@@ -1238,7 +1355,6 @@ impl Actor {
         view: u64,
     ) {
         self.pending.pending_blocks.remove(&block_hash);
-        self.pending.pending_replay_last_sent.remove(&block_hash);
         self.purge_rbc_state(session_key, block_hash, height, view);
     }
 }

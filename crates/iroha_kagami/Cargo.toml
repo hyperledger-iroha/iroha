@@ -47,7 +47,6 @@ base64.workspace = true
 [features]
 default = ["bls"]
 bls = ["iroha_crypto/bls"]
-ml-dsa = ["iroha_crypto/ml-dsa"]
 gost = ["iroha_crypto/gost"]
 sm = ["iroha_crypto/sm"]
 # Enable codec subcommands that depend on exhaustive Norito conversions.

@@ -3,10 +3,9 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, Optional, Union
 
+import pytest
 import requests
 from requests.structures import CaseInsensitiveDict
-
-import pytest
 
 from iroha_python import (
     ToriiClient,

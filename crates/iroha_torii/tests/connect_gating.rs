@@ -75,6 +75,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             relay_hub_address: None,
             relay_ttl: iroha_config::parameters::defaults::network::RELAY_TTL,
             peer_gossip_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
+            peer_gossip_max_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
             trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
             trust_penalty_bad_gossip: iroha_config::parameters::defaults::network::TRUST_PENALTY_BAD_GOSSIP,
             trust_penalty_unknown_peer: iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
@@ -106,6 +107,24 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             p2p_queue_cap_low: nonzero!(512usize),
             p2p_post_queue_cap: nonzero!(128usize),
             p2p_subscriber_queue_cap: nonzero!(128usize),
+            consensus_ingress_rate_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
+            consensus_ingress_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
+            consensus_ingress_bytes_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
+            consensus_ingress_bytes_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+            consensus_ingress_rbc_session_limit:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
+            consensus_ingress_penalty_threshold:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
+            consensus_ingress_penalty_window: core::time::Duration::from_millis(
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
+            ),
+            consensus_ingress_penalty_cooldown: core::time::Duration::from_millis(
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
+            ),
             happy_eyeballs_stagger: core::time::Duration::from_millis(100),
             addr_ipv6_first: false,
             max_incoming: None,
@@ -336,6 +355,18 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 iroha_config::parameters::defaults::sumeragi::MEMBERSHIP_MISMATCH_ALERT_THRESHOLD,
             membership_mismatch_fail_closed:
                 iroha_config::parameters::defaults::sumeragi::MEMBERSHIP_MISMATCH_FAIL_CLOSED,
+            consensus_future_height_window:
+                iroha_config::parameters::defaults::sumeragi::CONSENSUS_FUTURE_HEIGHT_WINDOW,
+            consensus_future_view_window:
+                iroha_config::parameters::defaults::sumeragi::CONSENSUS_FUTURE_VIEW_WINDOW,
+            invalid_sig_penalty_threshold:
+                iroha_config::parameters::defaults::sumeragi::INVALID_SIG_PENALTY_THRESHOLD,
+            invalid_sig_penalty_window: std::time::Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::INVALID_SIG_PENALTY_WINDOW_MS,
+            ),
+            invalid_sig_penalty_cooldown: std::time::Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::INVALID_SIG_PENALTY_COOLDOWN_MS,
+            ),
             role: A::NodeRole::Validator,
             allow_view0_slack: false,
             collectors_k: 1,
@@ -382,6 +413,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             require_precommit_qc:
                 iroha_config::parameters::defaults::sumeragi::REQUIRE_PRECOMMIT_QC,
             rbc_chunk_max_bytes: iroha_config::parameters::defaults::sumeragi::RBC_CHUNK_MAX_BYTES,
+            rbc_chunk_fanout: iroha_config::parameters::defaults::sumeragi::RBC_CHUNK_FANOUT,
             rbc_session_ttl: core::time::Duration::from_secs(
                 iroha_config::parameters::defaults::sumeragi::RBC_SESSION_TTL_SECS,
             ),
@@ -432,6 +464,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
         },
         block_sync: A::BlockSync {
             gossip_period: core::time::Duration::from_millis(200),
+            gossip_max_period: core::time::Duration::from_millis(200),
             gossip_size: nonzero!(32u32),
         },
         transaction_gossiper: A::TransactionGossiper {

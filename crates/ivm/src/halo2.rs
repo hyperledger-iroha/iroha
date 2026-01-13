@@ -972,7 +972,6 @@ impl<'a> Ed25519VerifyCircuit<'a> {
 // -----------------------------------------------------------------------------
 
 /// Dilithium security level.
-#[cfg(feature = "ml-dsa")]
 #[derive(Clone, Copy)]
 pub enum DilithiumLevel {
     Level2,
@@ -981,7 +980,6 @@ pub enum DilithiumLevel {
 }
 
 /// Circuit verifying a Dilithium signature over a message.
-#[cfg(feature = "ml-dsa")]
 pub struct DilithiumVerifyCircuit<'a> {
     /// Parameter set to use (2, 3 or 5).
     pub level: DilithiumLevel,
@@ -995,7 +993,6 @@ pub struct DilithiumVerifyCircuit<'a> {
     pub result: bool,
 }
 
-#[cfg(feature = "ml-dsa")]
 impl<'a> DilithiumVerifyCircuit<'a> {
     /// Verify the signature using the appropriate Dilithium level and compare
     /// with the expected `result` flag.

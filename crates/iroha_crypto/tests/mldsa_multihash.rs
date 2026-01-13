@@ -1,7 +1,4 @@
 //! End-to-end multihash roundtrip tests for `MlDsa` (Dilithium3) keys.
-//! Requires `--features ml-dsa`.
-
-#![cfg(feature = "ml-dsa")]
 
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PublicKey};
 use pqcrypto_dilithium::dilithium3 as dilithium;

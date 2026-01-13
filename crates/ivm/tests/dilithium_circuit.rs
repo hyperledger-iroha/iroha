@@ -1,12 +1,10 @@
+//! Dilithium circuit checks for the Halo2 verifier.
+
 #![cfg(feature = "ivm_zk_tests")]
-#[cfg(feature = "ml-dsa")]
 use ivm::halo2::{DilithiumLevel, DilithiumVerifyCircuit};
-#[cfg(feature = "ml-dsa")]
 use pqcrypto_dilithium::{dilithium2, dilithium3};
-#[cfg(feature = "ml-dsa")]
 use pqcrypto_traits::sign::{DetachedSignature, PublicKey, SecretKey};
 
-#[cfg(feature = "ml-dsa")]
 #[test]
 fn dilithium2_circuit_ok() {
     let (pk, sk) = dilithium2::keypair();
@@ -22,7 +20,6 @@ fn dilithium2_circuit_ok() {
     assert!(circuit.verify().is_ok());
 }
 
-#[cfg(feature = "ml-dsa")]
 #[test]
 fn dilithium3_circuit_bad_sig() {
     let (pk, sk) = dilithium3::keypair();

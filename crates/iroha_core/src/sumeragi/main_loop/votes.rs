@@ -1,6 +1,6 @@
 //! Vote handling for consensus messages.
 
-use std::collections::btree_map::Entry;
+use std::{collections::btree_map::Entry, time::Instant};
 
 use iroha_logger::prelude::*;
 
@@ -65,6 +65,22 @@ impl Actor {
         {
             return;
         }
+        if self.invalid_sig_penalty.is_suppressed(
+            InvalidSigKind::Vote,
+            vote.signer.into(),
+            Instant::now(),
+        ) {
+            debug!(
+                phase = ?vote.phase,
+                height = vote.height,
+                view = vote.view,
+                signer = vote.signer,
+                block_hash = %vote.block_hash,
+                kind = InvalidSigKind::Vote.as_str(),
+                "dropping vote from penalized signer"
+            );
+            return;
+        }
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(vote.height);
         let topology_peers = if matches!(vote.phase, Phase::NewView) {
             self.roster_for_new_view_with_mode(
@@ -122,63 +138,88 @@ impl Actor {
                                 block = %vote.block_hash,
                                 "skipping block sync update for aborted pending block"
                             );
-                        } else {
-                            let block_time = {
-                                let state_view = self.state.view();
-                                self.block_time_for_mode(&state_view, consensus_mode)
-                            };
-                            let cooldown = block_time.max(REBROADCAST_COOLDOWN_FLOOR);
-                            if self.block_sync_rebroadcast_log.allow(
-                                vote.block_hash,
-                                std::time::Instant::now(),
-                                cooldown,
-                            ) {
-                                let mut update = self.block_sync_update_for_precommit_vote(
-                                    &pending.block,
-                                    self.state.as_ref(),
-                                    self.kura.as_ref(),
-                                    &self.qc_cache,
-                                    &self.vote_log,
-                                    &vote,
-                                );
-                                if self.prepare_block_sync_update_for_broadcast(
-                                    &mut update,
-                                    consensus_mode,
-                                ) {
-                                    self.broadcast_block_sync_update(update, &topology_peers);
-                                    iroha_logger::info!(
-                                        height = vote.height,
-                                        view = vote.view,
-                                        block = %vote.block_hash,
-                                        signer = vote.signer,
-                                        targets = topology_peers.len(),
-                                        "sending block sync update with cached precommit votes to commit topology after recording vote"
-                                    );
-                                } else {
-                                    self.broadcast_block_created_for_block_sync(
-                                        super::message::BlockCreated::from(&pending.block),
-                                        &topology_peers,
-                                    );
-                                    iroha_logger::info!(
-                                        height = vote.height,
-                                        view = vote.view,
-                                        block = %vote.block_hash,
-                                        signer = vote.signer,
-                                        targets = topology_peers.len(),
-                                        "sending BlockCreated payload to commit topology (no verifiable roster yet)"
-                                    );
-                                }
-                            } else {
-                                iroha_logger::trace!(
-                                    height = vote.height,
-                                    view = vote.view,
-                                    block = %vote.block_hash,
-                                    signer = vote.signer,
-                                    cooldown_ms = cooldown.as_millis(),
-                                    "skipping block sync update broadcast due to cooldown"
-                                );
-                            }
+                            return;
                         }
+                    }
+                    let block = match self.pending.pending_blocks.get(&vote.block_hash) {
+                        Some(pending) => pending.block.clone(),
+                        None => return,
+                    };
+                    let block_time = {
+                        let state_view = self.state.view();
+                        self.block_time_for_mode(&state_view, consensus_mode)
+                    };
+                    let cooldown = block_time.max(REBROADCAST_COOLDOWN_FLOOR);
+                    if self.block_sync_rebroadcast_log.allow(
+                        vote.block_hash,
+                        std::time::Instant::now(),
+                        cooldown,
+                    ) {
+                        let mut update = self.block_sync_update_for_precommit_vote(
+                            &block,
+                            self.state.as_ref(),
+                            self.kura.as_ref(),
+                            &self.qc_cache,
+                            &self.vote_log,
+                            &vote,
+                        );
+                        let commit_votes = update.commit_votes.len();
+                        let has_commit_qc = update.commit_qc.is_some();
+                        let should_broadcast =
+                            match self.pending.pending_blocks.get_mut(&vote.block_hash) {
+                                Some(pending) => pending.should_broadcast_block_sync_update(
+                                    vote.view,
+                                    commit_votes,
+                                    has_commit_qc,
+                                ),
+                                None => false,
+                            };
+                        if !should_broadcast {
+                            iroha_logger::trace!(
+                                height = vote.height,
+                                view = vote.view,
+                                block = %vote.block_hash,
+                                signer = vote.signer,
+                                commit_votes,
+                                has_commit_qc,
+                                "skipping block sync update broadcast: no new commit votes"
+                            );
+                            return;
+                        }
+                        if self.prepare_block_sync_update_for_broadcast(&mut update, consensus_mode)
+                        {
+                            self.broadcast_block_sync_update(update, &topology_peers);
+                            iroha_logger::info!(
+                                height = vote.height,
+                                view = vote.view,
+                                block = %vote.block_hash,
+                                signer = vote.signer,
+                                targets = topology_peers.len(),
+                                "sending block sync update with cached precommit votes to commit topology after recording vote"
+                            );
+                        } else {
+                            self.broadcast_block_created_for_block_sync(
+                                super::message::BlockCreated::from(&block),
+                                &topology_peers,
+                            );
+                            iroha_logger::info!(
+                                height = vote.height,
+                                view = vote.view,
+                                block = %vote.block_hash,
+                                signer = vote.signer,
+                                targets = topology_peers.len(),
+                                "sending BlockCreated payload to commit topology (no verifiable roster yet)"
+                            );
+                        }
+                    } else {
+                        iroha_logger::trace!(
+                            height = vote.height,
+                            view = vote.view,
+                            block = %vote.block_hash,
+                            signer = vote.signer,
+                            cooldown_ms = cooldown.as_millis(),
+                            "skipping block sync update broadcast due to cooldown"
+                        );
                     }
                 }
             }

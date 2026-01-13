@@ -6,8 +6,9 @@ use eyre::{Result, WrapErr};
 use iroha::{
     client::Client,
     subscriptions::{
-        SubscriptionActionRequest, SubscriptionCreateRequest, SubscriptionListParams,
-        SubscriptionPlanCreateRequest, SubscriptionPlanListParams, SubscriptionUsageRequest,
+        SubscriptionActionRequest, SubscriptionCancelMode, SubscriptionCreateRequest,
+        SubscriptionListParams, SubscriptionPlanCreateRequest, SubscriptionPlanListParams,
+        SubscriptionUsageRequest,
     },
 };
 use iroha_crypto::PrivateKey;
@@ -138,6 +139,8 @@ pub enum SubscriptionCommand {
     Resume(SubscriptionActionArgs),
     /// Cancel a subscription and remove its billing trigger.
     Cancel(SubscriptionActionArgs),
+    /// Undo a scheduled period-end cancellation.
+    Keep(SubscriptionActionArgs),
     /// Execute billing immediately.
     ChargeNow(SubscriptionActionArgs),
     /// Record usage for a subscription usage plan.
@@ -166,6 +169,12 @@ impl Run for SubscriptionCommand {
                 let client: Client = context.client_from_config();
                 let request = args.to_request()?;
                 let response = client.cancel_subscription(&args.subscription_id, &request)?;
+                context.print_data(&response)
+            }
+            SubscriptionCommand::Keep(args) => {
+                let client: Client = context.client_from_config();
+                let request = args.to_request()?;
+                let response = client.keep_subscription(&args.subscription_id, &request)?;
                 context.print_data(&response)
             }
             SubscriptionCommand::ChargeNow(args) => {
@@ -301,6 +310,9 @@ pub struct SubscriptionActionArgs {
     /// Optional charge time override in UTC milliseconds.
     #[arg(long)]
     pub charge_at_ms: Option<u64>,
+    /// Cancel at the end of the current billing period (cancel only).
+    #[arg(long)]
+    pub cancel_at_period_end: bool,
 }
 
 impl SubscriptionActionArgs {
@@ -310,6 +322,9 @@ impl SubscriptionActionArgs {
             authority: self.authority.clone(),
             private_key: iroha::data_model::prelude::ExposedPrivateKey(private_key),
             charge_at_ms: self.charge_at_ms,
+            cancel_mode: self
+                .cancel_at_period_end
+                .then_some(SubscriptionCancelMode::PeriodEnd),
         })
     }
 }
@@ -550,6 +565,7 @@ mod tests {
             authority: subscriber.clone(),
             private_key: private_key_str,
             charge_at_ms: Some(500),
+            cancel_at_period_end: false,
         };
 
         let request = args.to_request().expect("request");

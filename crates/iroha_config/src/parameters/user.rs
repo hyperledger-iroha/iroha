@@ -5134,6 +5134,36 @@ pub struct Sumeragi {
     /// Whether to drop consensus messages from peers with repeated membership mismatches.
     #[config(default = "defaults::sumeragi::MEMBERSHIP_MISMATCH_FAIL_CLOSED")]
     pub membership_mismatch_fail_closed: bool,
+    /// Maximum height delta accepted for inbound consensus messages (0 disables future gating).
+    #[config(
+        env = "SUMERAGI_CONSENSUS_FUTURE_HEIGHT_WINDOW",
+        default = "defaults::sumeragi::CONSENSUS_FUTURE_HEIGHT_WINDOW"
+    )]
+    pub consensus_future_height_window: u64,
+    /// Maximum view delta accepted for inbound consensus messages (0 disables future gating).
+    #[config(
+        env = "SUMERAGI_CONSENSUS_FUTURE_VIEW_WINDOW",
+        default = "defaults::sumeragi::CONSENSUS_FUTURE_VIEW_WINDOW"
+    )]
+    pub consensus_future_view_window: u64,
+    /// Invalid signature count before temporarily suppressing a signer (0 disables).
+    #[config(
+        env = "SUMERAGI_INVALID_SIG_PENALTY_THRESHOLD",
+        default = "defaults::sumeragi::INVALID_SIG_PENALTY_THRESHOLD"
+    )]
+    pub invalid_sig_penalty_threshold: u32,
+    /// Window (ms) for invalid signature penalty counting.
+    #[config(
+        env = "SUMERAGI_INVALID_SIG_PENALTY_WINDOW_MS",
+        default = "defaults::sumeragi::INVALID_SIG_PENALTY_WINDOW_MS"
+    )]
+    pub invalid_sig_penalty_window_ms: u64,
+    /// Cooldown (ms) applied after invalid signature penalties trigger.
+    #[config(
+        env = "SUMERAGI_INVALID_SIG_PENALTY_COOLDOWN_MS",
+        default = "defaults::sumeragi::INVALID_SIG_PENALTY_COOLDOWN_MS"
+    )]
+    pub invalid_sig_penalty_cooldown_ms: u64,
     /// Maximum DA commitments (blobs) permitted in a single block.
     #[config(
         env = "SUMERAGI_DA_MAX_COMMITMENTS_PER_BLOCK",
@@ -5152,6 +5182,9 @@ pub struct Sumeragi {
         default = "defaults::sumeragi::RBC_CHUNK_MAX_BYTES"
     )]
     pub rbc_chunk_max_bytes: usize,
+    /// Optional fanout cap for RBC chunk broadcasts (null = auto).
+    #[config(env = "SUMERAGI_RBC_CHUNK_FANOUT")]
+    pub rbc_chunk_fanout: Option<NonZeroUsize>,
     /// Maximum pending RBC chunks stashed before INIT is observed.
     #[config(
         env = "SUMERAGI_RBC_PENDING_MAX_CHUNKS",
@@ -5638,9 +5671,15 @@ impl Sumeragi {
             missing_block_signer_fallback_attempts,
             membership_mismatch_alert_threshold,
             membership_mismatch_fail_closed,
+            consensus_future_height_window,
+            consensus_future_view_window,
+            invalid_sig_penalty_threshold,
+            invalid_sig_penalty_window_ms,
+            invalid_sig_penalty_cooldown_ms,
             da_max_commitments_per_block,
             da_max_proof_openings_per_block,
             rbc_chunk_max_bytes,
+            rbc_chunk_fanout,
             rbc_pending_max_chunks,
             rbc_pending_max_bytes,
             rbc_pending_ttl_ms,
@@ -5944,9 +5983,19 @@ impl Sumeragi {
             missing_block_signer_fallback_attempts,
             membership_mismatch_alert_threshold,
             membership_mismatch_fail_closed,
+            consensus_future_height_window,
+            consensus_future_view_window,
+            invalid_sig_penalty_threshold,
+            invalid_sig_penalty_window: std::time::Duration::from_millis(
+                invalid_sig_penalty_window_ms,
+            ),
+            invalid_sig_penalty_cooldown: std::time::Duration::from_millis(
+                invalid_sig_penalty_cooldown_ms,
+            ),
             da_max_commitments_per_block,
             da_max_proof_openings_per_block,
             rbc_chunk_max_bytes,
+            rbc_chunk_fanout,
             rbc_pending_max_chunks,
             rbc_pending_max_bytes,
             rbc_pending_ttl: std::time::Duration::from_millis(rbc_pending_ttl_ms),
@@ -7065,9 +7114,15 @@ pub struct Network {
     /// Interval between block gossip batches in milliseconds (clamped to >= 100ms).
     #[config(default = "defaults::network::BLOCK_GOSSIP_PERIOD.into()")]
     pub block_gossip_period_ms: DurationMs,
+    /// Maximum interval between block gossip batches in milliseconds (clamped to >= block_gossip_period_ms).
+    #[config(default = "defaults::network::BLOCK_GOSSIP_MAX_PERIOD.into()")]
+    pub block_gossip_max_period_ms: DurationMs,
     /// Interval between peer gossip batches in milliseconds (clamped to >= 100ms).
     #[config(default = "defaults::network::PEER_GOSSIP_PERIOD.into()")]
     pub peer_gossip_period_ms: DurationMs,
+    /// Maximum interval between peer gossip batches in milliseconds (clamped to >= peer_gossip_period_ms).
+    #[config(default = "defaults::network::PEER_GOSSIP_MAX_PERIOD.into()")]
+    pub peer_gossip_max_period_ms: DurationMs,
     /// Advertise and accept signed trust gossip frames.
     #[config(default = "defaults::network::TRUST_GOSSIP")]
     pub trust_gossip: bool,
@@ -7151,6 +7206,26 @@ pub struct Network {
     /// Capacity for the inbound P2P subscriber queue feeding the node relay.
     #[config(default = "defaults::network::P2P_SUBSCRIBER_QUEUE_CAP")]
     pub p2p_subscriber_queue_cap: NonZeroUsize,
+    /// Per-peer consensus ingress rate limit (msgs/sec). If unset, defaults apply.
+    pub consensus_ingress_rate_per_sec: Option<NonZeroU32>,
+    /// Per-peer consensus ingress burst (msgs). If unset, defaults apply.
+    pub consensus_ingress_burst: Option<NonZeroU32>,
+    /// Per-peer consensus ingress bytes/sec limit. If unset, defaults apply.
+    pub consensus_ingress_bytes_per_sec: Option<NonZeroU32>,
+    /// Per-peer consensus ingress bytes burst. If unset, defaults apply.
+    pub consensus_ingress_bytes_burst: Option<NonZeroU32>,
+    /// Maximum concurrent RBC sessions accepted per peer before throttling (0 disables).
+    #[config(default = "defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT")]
+    pub consensus_ingress_rbc_session_limit: usize,
+    /// Drop threshold (per window) before temporarily suppressing consensus ingress (0 disables).
+    #[config(default = "defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD")]
+    pub consensus_ingress_penalty_threshold: u32,
+    /// Window size (ms) for consensus ingress penalty tracking.
+    #[config(default = "defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS")]
+    pub consensus_ingress_penalty_window_ms: u64,
+    /// Cooldown (ms) applied after consensus ingress penalties trigger.
+    #[config(default = "defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS")]
+    pub consensus_ingress_penalty_cooldown_ms: u64,
     /// Stagger between parallel address dial attempts (Happy Eyeballs)
     #[config(default = "defaults::network::HAPPY_EYEBALLS_STAGGER.into()")]
     pub happy_eyeballs_stagger_ms: DurationMs,
@@ -7275,7 +7350,9 @@ impl Network {
             require_sm_openssl_preview_match,
             block_gossip_size,
             block_gossip_period_ms: block_gossip_period,
+            block_gossip_max_period_ms: block_gossip_max_period,
             peer_gossip_period_ms: peer_gossip_period,
+            peer_gossip_max_period_ms: peer_gossip_max_period,
             trust_gossip,
             trust_decay_half_life_ms,
             trust_penalty_bad_gossip,
@@ -7300,6 +7377,14 @@ impl Network {
             p2p_queue_cap_low,
             p2p_post_queue_cap,
             p2p_subscriber_queue_cap,
+            consensus_ingress_rate_per_sec,
+            consensus_ingress_burst,
+            consensus_ingress_bytes_per_sec,
+            consensus_ingress_bytes_burst,
+            consensus_ingress_rbc_session_limit,
+            consensus_ingress_penalty_threshold,
+            consensus_ingress_penalty_window_ms,
+            consensus_ingress_penalty_cooldown_ms,
             happy_eyeballs_stagger_ms,
             addr_ipv6_first,
             max_incoming,
@@ -7342,6 +7427,20 @@ impl Network {
             .or(defaults::network::TX_GOSSIP_RESTRICTED_TARGET_CAP);
         let transaction_gossip_public_target_cap =
             transaction_gossip_public_target_cap.or(defaults::network::TX_GOSSIP_PUBLIC_TARGET_CAP);
+        let consensus_ingress_rate_per_sec =
+            consensus_ingress_rate_per_sec.or(defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC);
+        let consensus_ingress_burst = if consensus_ingress_rate_per_sec.is_some() {
+            consensus_ingress_burst.or(consensus_ingress_rate_per_sec)
+        } else {
+            None
+        };
+        let consensus_ingress_bytes_per_sec =
+            consensus_ingress_bytes_per_sec.or(defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC);
+        let consensus_ingress_bytes_burst = if consensus_ingress_bytes_per_sec.is_some() {
+            consensus_ingress_bytes_burst.or(consensus_ingress_bytes_per_sec)
+        } else {
+            None
+        };
 
         let soranet_handshake = soranet_handshake.parse();
         let soranet_privacy = user_soranet_privacy.parse();
@@ -7387,7 +7486,9 @@ impl Network {
         let min_interval = MIN_TIMER_INTERVAL;
         let idle_timeout = idle_timeout.get().max(min_interval);
         let peer_gossip_period = peer_gossip_period.get().max(min_interval);
+        let peer_gossip_max_period = peer_gossip_max_period.get().max(peer_gossip_period);
         let block_gossip_period = block_gossip_period.get().max(min_interval);
+        let block_gossip_max_period = block_gossip_max_period.get().max(block_gossip_period);
         let transaction_gossip_period = transaction_gossip_period.get().max(min_interval);
         let transaction_gossip_public_target_reshuffle =
             transaction_gossip_public_target_reshuffle_ms
@@ -7416,6 +7517,7 @@ impl Network {
                 relay_ttl,
                 idle_timeout,
                 peer_gossip_period,
+                peer_gossip_max_period,
                 trust_gossip,
                 trust_decay_half_life: trust_decay_half_life_ms.get(),
                 trust_penalty_bad_gossip,
@@ -7432,6 +7534,18 @@ impl Network {
                 p2p_queue_cap_low,
                 p2p_post_queue_cap,
                 p2p_subscriber_queue_cap,
+                consensus_ingress_rate_per_sec,
+                consensus_ingress_burst,
+                consensus_ingress_bytes_per_sec,
+                consensus_ingress_bytes_burst,
+                consensus_ingress_rbc_session_limit,
+                consensus_ingress_penalty_threshold,
+                consensus_ingress_penalty_window: std::time::Duration::from_millis(
+                    consensus_ingress_penalty_window_ms,
+                ),
+                consensus_ingress_penalty_cooldown: std::time::Duration::from_millis(
+                    consensus_ingress_penalty_cooldown_ms,
+                ),
                 happy_eyeballs_stagger: happy_eyeballs_stagger_ms.get(),
                 addr_ipv6_first,
                 max_incoming,
@@ -7473,6 +7587,7 @@ impl Network {
             },
             actual::BlockSync {
                 gossip_period: block_gossip_period,
+                gossip_max_period: block_gossip_max_period,
                 gossip_size: block_gossip_size,
             },
             actual::TransactionGossiper {
@@ -14359,7 +14474,9 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .and_then(Value::as_table_mut)
             .expect("network table");
         network.insert("block_gossip_period_ms".into(), Value::Integer(0));
+        network.insert("block_gossip_max_period_ms".into(), Value::Integer(0));
         network.insert("peer_gossip_period_ms".into(), Value::Integer(0));
+        network.insert("peer_gossip_max_period_ms".into(), Value::Integer(0));
         network.insert("transaction_gossip_period_ms".into(), Value::Integer(0));
         network.insert(
             "transaction_gossip_public_target_reshuffle_ms".into(),
@@ -14373,6 +14490,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let actual = load_root(table);
         let min = StdDuration::from_millis(100);
         assert_eq!(actual.block_sync.gossip_period, min);
+        assert_eq!(actual.block_sync.gossip_max_period, min);
         assert_eq!(actual.transaction_gossiper.gossip_period, min);
         assert_eq!(
             actual
@@ -14389,6 +14507,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             min
         );
         assert_eq!(actual.network.peer_gossip_period, min);
+        assert_eq!(actual.network.peer_gossip_max_period, min);
         assert_eq!(actual.network.idle_timeout, min);
     }
 

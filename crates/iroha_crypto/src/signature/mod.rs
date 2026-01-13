@@ -58,7 +58,6 @@ impl Signature {
             crate::PrivateKeyInner::Secp256k1(sk) => {
                 secp256k1::EcdsaSecp256k1Sha256::sign(payload, sk)
             }
-            #[cfg(feature = "ml-dsa")]
             crate::PrivateKeyInner::MlDsa(sk) => sk.sign(payload),
             #[cfg(feature = "gost")]
             crate::PrivateKeyInner::Gost { algorithm, secret } => {
@@ -117,7 +116,6 @@ impl Signature {
             PublicKeyFull::Secp256k1(pk) => {
                 secp256k1::EcdsaSecp256k1Sha256::verify(payload, &self.payload, pk)
             }
-            #[cfg(feature = "ml-dsa")]
             PublicKeyFull::MlDsa(pk_bytes) => {
                 use pqcrypto_dilithium::dilithium3 as dilithium;
                 use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _};

@@ -410,6 +410,24 @@ static LOW_THROTTLED_POSTS: AtomicU64 = AtomicU64::new(0);
 static LOW_THROTTLED_BROADCASTS: AtomicU64 = AtomicU64::new(0);
 /// Count of trust-gossip frames skipped because the capability is disabled locally or remotely.
 static TRUST_GOSSIP_SKIPPED_CAP_OFF: AtomicU64 = AtomicU64::new(0);
+/// Count of inbound messages dropped because subscriber queues are full.
+static SUBSCRIBER_QUEUE_FULL: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIBER_QUEUE_FULL_CONSENSUS: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIBER_QUEUE_FULL_CONTROL: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIBER_QUEUE_FULL_BLOCK_SYNC: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIBER_QUEUE_FULL_TX_GOSSIP: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIBER_QUEUE_FULL_PEER_GOSSIP: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIBER_QUEUE_FULL_HEALTH: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIBER_QUEUE_FULL_OTHER: AtomicU64 = AtomicU64::new(0);
+/// Count of inbound frames dropped because no subscriber matches the topic.
+static SUBSCRIBER_UNROUTED: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIBER_UNROUTED_CONSENSUS: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIBER_UNROUTED_CONTROL: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIBER_UNROUTED_BLOCK_SYNC: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIBER_UNROUTED_TX_GOSSIP: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIBER_UNROUTED_PEER_GOSSIP: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIBER_UNROUTED_HEALTH: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIBER_UNROUTED_OTHER: AtomicU64 = AtomicU64::new(0);
 /// Count of per-peer post channel overflows (bounded per-topic channels).
 static POST_OVERFLOWS: AtomicU64 = AtomicU64::new(0);
 /// Per-topic frame cap violations
@@ -591,6 +609,72 @@ pub fn dropped_broadcast_low_count() -> u64 {
     DROPPED_BROADCASTS_LO.load(Ordering::Relaxed)
 }
 
+/// Returns the number of inbound messages dropped because subscriber queues are full.
+pub fn subscriber_queue_full_count() -> u64 {
+    SUBSCRIBER_QUEUE_FULL.load(Ordering::Relaxed)
+}
+/// Returns the number of subscriber-queue drops for topic Consensus.
+pub fn subscriber_queue_full_consensus_count() -> u64 {
+    SUBSCRIBER_QUEUE_FULL_CONSENSUS.load(Ordering::Relaxed)
+}
+/// Returns the number of subscriber-queue drops for topic Control.
+pub fn subscriber_queue_full_control_count() -> u64 {
+    SUBSCRIBER_QUEUE_FULL_CONTROL.load(Ordering::Relaxed)
+}
+/// Returns the number of subscriber-queue drops for topic BlockSync.
+pub fn subscriber_queue_full_block_sync_count() -> u64 {
+    SUBSCRIBER_QUEUE_FULL_BLOCK_SYNC.load(Ordering::Relaxed)
+}
+/// Returns the number of subscriber-queue drops for topic TxGossip.
+pub fn subscriber_queue_full_tx_gossip_count() -> u64 {
+    SUBSCRIBER_QUEUE_FULL_TX_GOSSIP.load(Ordering::Relaxed)
+}
+/// Returns the number of subscriber-queue drops for topic PeerGossip.
+pub fn subscriber_queue_full_peer_gossip_count() -> u64 {
+    SUBSCRIBER_QUEUE_FULL_PEER_GOSSIP.load(Ordering::Relaxed)
+}
+/// Returns the number of subscriber-queue drops for topic Health.
+pub fn subscriber_queue_full_health_count() -> u64 {
+    SUBSCRIBER_QUEUE_FULL_HEALTH.load(Ordering::Relaxed)
+}
+/// Returns the number of subscriber-queue drops for topic Other.
+pub fn subscriber_queue_full_other_count() -> u64 {
+    SUBSCRIBER_QUEUE_FULL_OTHER.load(Ordering::Relaxed)
+}
+
+/// Returns the number of inbound messages dropped due to no matching subscriber.
+pub fn subscriber_unrouted_count() -> u64 {
+    SUBSCRIBER_UNROUTED.load(Ordering::Relaxed)
+}
+/// Returns the number of unrouted inbound messages for topic Consensus.
+pub fn subscriber_unrouted_consensus_count() -> u64 {
+    SUBSCRIBER_UNROUTED_CONSENSUS.load(Ordering::Relaxed)
+}
+/// Returns the number of unrouted inbound messages for topic Control.
+pub fn subscriber_unrouted_control_count() -> u64 {
+    SUBSCRIBER_UNROUTED_CONTROL.load(Ordering::Relaxed)
+}
+/// Returns the number of unrouted inbound messages for topic BlockSync.
+pub fn subscriber_unrouted_block_sync_count() -> u64 {
+    SUBSCRIBER_UNROUTED_BLOCK_SYNC.load(Ordering::Relaxed)
+}
+/// Returns the number of unrouted inbound messages for topic TxGossip.
+pub fn subscriber_unrouted_tx_gossip_count() -> u64 {
+    SUBSCRIBER_UNROUTED_TX_GOSSIP.load(Ordering::Relaxed)
+}
+/// Returns the number of unrouted inbound messages for topic PeerGossip.
+pub fn subscriber_unrouted_peer_gossip_count() -> u64 {
+    SUBSCRIBER_UNROUTED_PEER_GOSSIP.load(Ordering::Relaxed)
+}
+/// Returns the number of unrouted inbound messages for topic Health.
+pub fn subscriber_unrouted_health_count() -> u64 {
+    SUBSCRIBER_UNROUTED_HEALTH.load(Ordering::Relaxed)
+}
+/// Returns the number of unrouted inbound messages for topic Other.
+pub fn subscriber_unrouted_other_count() -> u64 {
+    SUBSCRIBER_UNROUTED_OTHER.load(Ordering::Relaxed)
+}
+
 /// Testing helper: increment bounded queue drop counters directly.
 ///
 /// - `priority_high`: true for High, false for Low.
@@ -612,6 +696,20 @@ pub fn inc_queue_drop_for_test(priority_high: bool, broadcast: bool, n: u64) {
         } else {
             DROPPED_POSTS_LO.fetch_add(n, Relaxed);
         }
+    }
+}
+
+/// Testing helper: increment subscriber-queue-full counters directly for a topic.
+pub fn inc_subscriber_queue_full_for_test(topic: message::Topic, n: u64) {
+    for _ in 0..n {
+        inc_subscriber_queue_full_for(topic);
+    }
+}
+
+/// Testing helper: increment subscriber unrouted counters directly for a topic.
+pub fn inc_subscriber_unrouted_for_test(topic: message::Topic, n: u64) {
+    for _ in 0..n {
+        inc_subscriber_unrouted_for(topic);
     }
 }
 
@@ -738,6 +836,62 @@ pub fn trust_gossip_skipped_capability_off_count() -> u64 {
 /// Returns true when trust gossip is permitted for the given topic/capability flag.
 fn trust_gossip_allowed(topic: message::Topic, trust_gossip: bool) -> bool {
     !matches!(topic, message::Topic::TrustGossip) || trust_gossip
+}
+
+fn inc_subscriber_queue_full_for(topic: message::Topic) -> u64 {
+    let total = SUBSCRIBER_QUEUE_FULL.fetch_add(1, Ordering::Relaxed) + 1;
+    match topic {
+        message::Topic::Consensus => {
+            SUBSCRIBER_QUEUE_FULL_CONSENSUS.fetch_add(1, Ordering::Relaxed);
+        }
+        message::Topic::Control => {
+            SUBSCRIBER_QUEUE_FULL_CONTROL.fetch_add(1, Ordering::Relaxed);
+        }
+        message::Topic::BlockSync => {
+            SUBSCRIBER_QUEUE_FULL_BLOCK_SYNC.fetch_add(1, Ordering::Relaxed);
+        }
+        message::Topic::TxGossip | message::Topic::TxGossipRestricted => {
+            SUBSCRIBER_QUEUE_FULL_TX_GOSSIP.fetch_add(1, Ordering::Relaxed);
+        }
+        message::Topic::PeerGossip | message::Topic::TrustGossip => {
+            SUBSCRIBER_QUEUE_FULL_PEER_GOSSIP.fetch_add(1, Ordering::Relaxed);
+        }
+        message::Topic::Health => {
+            SUBSCRIBER_QUEUE_FULL_HEALTH.fetch_add(1, Ordering::Relaxed);
+        }
+        message::Topic::Other => {
+            SUBSCRIBER_QUEUE_FULL_OTHER.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    total
+}
+
+fn inc_subscriber_unrouted_for(topic: message::Topic) -> u64 {
+    let total = SUBSCRIBER_UNROUTED.fetch_add(1, Ordering::Relaxed) + 1;
+    match topic {
+        message::Topic::Consensus => {
+            SUBSCRIBER_UNROUTED_CONSENSUS.fetch_add(1, Ordering::Relaxed);
+        }
+        message::Topic::Control => {
+            SUBSCRIBER_UNROUTED_CONTROL.fetch_add(1, Ordering::Relaxed);
+        }
+        message::Topic::BlockSync => {
+            SUBSCRIBER_UNROUTED_BLOCK_SYNC.fetch_add(1, Ordering::Relaxed);
+        }
+        message::Topic::TxGossip | message::Topic::TxGossipRestricted => {
+            SUBSCRIBER_UNROUTED_TX_GOSSIP.fetch_add(1, Ordering::Relaxed);
+        }
+        message::Topic::PeerGossip | message::Topic::TrustGossip => {
+            SUBSCRIBER_UNROUTED_PEER_GOSSIP.fetch_add(1, Ordering::Relaxed);
+        }
+        message::Topic::Health => {
+            SUBSCRIBER_UNROUTED_HEALTH.fetch_add(1, Ordering::Relaxed);
+        }
+        message::Topic::Other => {
+            SUBSCRIBER_UNROUTED_OTHER.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    total
 }
 
 /// Returns the number of per-peer post channel overflows observed.
@@ -1276,6 +1430,38 @@ fn allow_ip_with_policy(
     true
 }
 
+/// Filter for peer-message subscriptions.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SubscriberFilter {
+    /// Receive every incoming message.
+    All,
+    /// Receive messages whose topic matches one of the listed entries.
+    Topics(Vec<message::Topic>),
+}
+
+impl SubscriberFilter {
+    /// Build a filter from an iterable of topics.
+    pub fn topics<I>(topics: I) -> Self
+    where
+        I: IntoIterator<Item = message::Topic>,
+    {
+        Self::Topics(topics.into_iter().collect())
+    }
+
+    fn matches(&self, topic: message::Topic) -> bool {
+        match self {
+            Self::All => true,
+            Self::Topics(topics) => topics.iter().any(|t| *t == topic),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct Subscriber<T: Pload> {
+    sender: mpsc::Sender<PeerMessage<T>>,
+    filter: SubscriberFilter,
+}
+
 /// `NetworkBase` actor handle.
 // NOTE: high/low network queues are now bounded by configuration to prevent
 // memory blow-ups. Separate channels for consensus/control versus
@@ -1285,7 +1471,7 @@ fn allow_ip_with_policy(
 #[debug("core::any::type_name::<Self>()")]
 pub struct NetworkBaseHandle<T: Pload, K: Kex, E: Enc> {
     /// Sender to subscribe for messages received form other peers in the network
-    subscribe_to_peers_messages_sender: mpsc::UnboundedSender<mpsc::Sender<PeerMessage<T>>>,
+    subscribe_to_peers_messages_sender: mpsc::UnboundedSender<Subscriber<T>>,
     /// Receiver of `OnlinePeer` message
     online_peers_receiver: watch::Receiver<OnlinePeers>,
     /// [`UpdateTopology`] message sender
@@ -1366,8 +1552,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
     /// The returned handle drops all outgoing messages and reports no online peers.
     #[must_use]
     pub fn closed_for_tests() -> Self {
-        let (subscribe_tx, _subscribe_rx) =
-            mpsc::unbounded_channel::<mpsc::Sender<PeerMessage<T>>>();
+        let (subscribe_tx, _subscribe_rx) = mpsc::unbounded_channel::<Subscriber<T>>();
         let (update_topology_tx, update_topology_rx) =
             mpsc::unbounded_channel::<message::UpdateTopology>();
         let (update_peers_tx, update_peers_rx) = mpsc::unbounded_channel::<message::UpdatePeers>();
@@ -1826,19 +2011,36 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
     ///
     /// Returns the supplied `sender` when the network actor has already
     /// terminated and cannot accept new subscriptions.
-    pub fn subscribe_to_peers_messages(
+    ///
+    /// The supplied [`SubscriberFilter`] limits which topics are delivered to
+    /// the subscriber queue.
+    pub fn subscribe_to_peers_messages_with_filter(
         &self,
         sender: mpsc::Sender<PeerMessage<T>>,
+        filter: SubscriberFilter,
     ) -> Result<(), mpsc::Sender<PeerMessage<T>>> {
-        self
-            .subscribe_to_peers_messages_sender
-            .send(sender)
+        let subscriber = Subscriber { sender, filter };
+        self.subscribe_to_peers_messages_sender
+            .send(subscriber)
             .map_err(|err| {
                 iroha_logger::warn!(
                     "P2P subscriber registration failed because the network actor has already shut down"
                 );
-                err.0
+                err.0.sender
             })
+    }
+
+    /// Subscribe to messages received from other peers using the default filter.
+    ///
+    /// # Errors
+    ///
+    /// Returns the supplied `sender` when the network actor has already
+    /// terminated and cannot accept new subscriptions.
+    pub fn subscribe_to_peers_messages(
+        &self,
+        sender: mpsc::Sender<PeerMessage<T>>,
+    ) -> Result<(), mpsc::Sender<PeerMessage<T>>> {
+        self.subscribe_to_peers_messages_with_filter(sender, SubscriberFilter::All)
     }
 
     /// Configured capacity for P2P subscriber queues.
@@ -1998,8 +2200,7 @@ mod handle_update_tests {
     impl message::ClassifyTopic for Dummy {}
 
     fn closed_handle() -> NetworkBaseHandle<Dummy, X25519Sha256, ChaCha20Poly1305> {
-        let (subscribe_tx, _subscribe_rx) =
-            mpsc::unbounded_channel::<mpsc::Sender<PeerMessage<Dummy>>>();
+        let (subscribe_tx, _subscribe_rx) = mpsc::unbounded_channel::<Subscriber<Dummy>>();
         let (update_topology_tx, update_topology_rx) =
             mpsc::unbounded_channel::<message::UpdateTopology>();
         let (update_peers_tx, update_peers_rx) = mpsc::unbounded_channel::<message::UpdatePeers>();
@@ -2216,6 +2417,7 @@ mod accept_stream_tests {
             require_sm_openssl_preview_match: true,
             idle_timeout: std::time::Duration::from_millis(200),
             peer_gossip_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
+            peer_gossip_max_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
                 iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
             trust_penalty_bad_gossip:
@@ -2235,6 +2437,24 @@ mod accept_stream_tests {
             p2p_post_queue_cap: core::num::NonZeroUsize::new(64).unwrap(),
             p2p_subscriber_queue_cap:
                 iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
+            consensus_ingress_rate_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
+            consensus_ingress_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
+            consensus_ingress_bytes_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
+            consensus_ingress_bytes_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+            consensus_ingress_rbc_session_limit:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
+            consensus_ingress_penalty_threshold:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
+            consensus_ingress_penalty_window: Duration::from_millis(
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
+            ),
+            consensus_ingress_penalty_cooldown: Duration::from_millis(
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
+            ),
             happy_eyeballs_stagger: std::time::Duration::from_millis(50),
             addr_ipv6_first: false,
             max_incoming: None,
@@ -2622,8 +2842,7 @@ mod accept_stream_tests {
             Err(e) => panic!("tcp listener from_std failed: {e:?}"),
         };
 
-        let (_subscribe_tx, subscribe_rx) =
-            mpsc::unbounded_channel::<mpsc::Sender<super::PeerMessage<Dummy>>>();
+        let (_subscribe_tx, subscribe_rx) = mpsc::unbounded_channel::<super::Subscriber<Dummy>>();
         let (_update_topology_tx, update_topology_rx) =
             mpsc::unbounded_channel::<super::message::UpdateTopology>();
         let (_update_peers_tx, update_peers_rx) =
@@ -2939,7 +3158,7 @@ mod accept_stream_tests {
         };
 
         let (_subscribe_tx, subscribe_rx): (
-            mpsc::UnboundedSender<mpsc::Sender<super::PeerMessage<DummyConsensus>>>,
+            mpsc::UnboundedSender<super::Subscriber<DummyConsensus>>,
             _,
         ) = mpsc::unbounded_channel();
         let (_update_topology_tx, update_topology_rx) =
@@ -3582,9 +3801,9 @@ struct NetworkBase<T: Pload, K: Kex, E: Enc> {
     /// Our app-level key pair
     key_pair: KeyPair,
     /// Recipients of messages received from other peers in the network.
-    subscribers_to_peers_messages: Vec<mpsc::Sender<PeerMessage<T>>>,
+    subscribers_to_peers_messages: Vec<Subscriber<T>>,
     /// Receiver to subscribe for messages received from other peers in the network.
-    subscribe_to_peers_messages_receiver: mpsc::UnboundedReceiver<mpsc::Sender<PeerMessage<T>>>,
+    subscribe_to_peers_messages_receiver: mpsc::UnboundedReceiver<Subscriber<T>>,
     /// Sender of `OnlinePeer` message
     online_peers_sender: watch::Sender<OnlinePeers>,
     /// [`UpdateTopology`] message receiver
@@ -4334,7 +4553,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         let outcome = match ref_peer.handle.post(frame) {
             Ok(()) => {
                 if is_consensus {
-                    iroha_logger::info!(
+                    iroha_logger::debug!(
                         peer=%peer_id,
                         high=is_high,
                         "consensus frame enqueued to peer"
@@ -4726,7 +4945,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         iroha_logger::trace!(peer=%peer_id, "Post message");
         let topic = data.topic();
         if matches!(topic, message::Topic::Consensus) {
-            iroha_logger::info!(
+            iroha_logger::debug!(
                 peer = %peer_id,
                 high = matches!(priority, Priority::High),
                 "sending consensus frame to peer"
@@ -4772,7 +4991,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         iroha_logger::trace!("Broadcast message");
         let topic = data.topic();
         if matches!(topic, message::Topic::Consensus) {
-            iroha_logger::info!(
+            iroha_logger::debug!(
                 high = matches!(priority, Priority::High),
                 "broadcasting consensus frame to all peers"
             );
@@ -4949,7 +5168,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         }
     }
 
-    fn subscribe_to_peers_messages(&mut self, subscriber: mpsc::Sender<PeerMessage<T>>) {
+    fn subscribe_to_peers_messages(&mut self, subscriber: Subscriber<T>) {
         self.subscribers_to_peers_messages.push(subscriber);
         iroha_logger::info!(
             subscribers = self.subscribers_to_peers_messages.len(),
@@ -4980,20 +5199,41 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             );
         }
         let mut next = Vec::with_capacity(self.subscribers_to_peers_messages.len());
+        let mut matched_any = false;
         for subscriber in self.subscribers_to_peers_messages.drain(..) {
-            match subscriber.try_send(msg.clone()) {
+            if !subscriber.filter.matches(topic) {
+                next.push(subscriber);
+                continue;
+            }
+            matched_any = true;
+            match subscriber.sender.try_send(msg.clone()) {
                 Ok(()) => next.push(subscriber),
                 Err(TrySendError::Full(_)) => {
-                    iroha_logger::warn!(
-                        peer = %msg.peer,
-                        topic = ?topic,
-                        "subscriber queue full; dropping inbound message"
-                    );
+                    let drops = inc_subscriber_queue_full_for(topic);
+                    if drops == 1 || drops % 1024 == 0 {
+                        iroha_logger::warn!(
+                            peer = %msg.peer,
+                            topic = ?topic,
+                            drops,
+                            "subscriber queue full; dropping inbound message"
+                        );
+                    }
                     next.push(subscriber);
                 }
                 Err(TrySendError::Closed(_)) => {
                     iroha_logger::debug!("subscriber channel closed; dropping subscriber");
                 }
+            }
+        }
+        if !matched_any {
+            let misses = inc_subscriber_unrouted_for(topic);
+            if misses == 1 || misses % 1024 == 0 {
+                iroha_logger::warn!(
+                    peer = %msg.peer,
+                    topic = ?topic,
+                    misses,
+                    "no subscribers registered for topic; dropping inbound message"
+                );
             }
         }
         self.subscribers_to_peers_messages = next;
@@ -5205,6 +5445,21 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy, Debug, Decode, Encode)]
+    enum TopicMsg {
+        Trust,
+        Peer,
+    }
+
+    impl message::ClassifyTopic for TopicMsg {
+        fn topic(&self) -> message::Topic {
+            match self {
+                Self::Trust => message::Topic::TrustGossip,
+                Self::Peer => message::Topic::PeerGossip,
+            }
+        }
+    }
+
     #[test]
     fn trust_gossip_allowed_blocks_when_disabled() {
         assert!(trust_gossip_allowed(
@@ -5223,6 +5478,57 @@ mod tests {
             message::Topic::TrustGossip,
             /*trust_gossip=*/ false
         ));
+    }
+
+    #[test]
+    fn subscriber_filter_routes_topics() {
+        let Some(mut network) = bare_network_with::<TopicMsg>() else {
+            return;
+        };
+        let (trust_tx, mut trust_rx) = mpsc::channel(1);
+        let (peer_tx, mut peer_rx) = mpsc::channel(1);
+
+        network.subscribe_to_peers_messages(Subscriber {
+            sender: trust_tx,
+            filter: SubscriberFilter::topics([message::Topic::TrustGossip]),
+        });
+        network.subscribe_to_peers_messages(Subscriber {
+            sender: peer_tx,
+            filter: SubscriberFilter::topics([message::Topic::PeerGossip]),
+        });
+
+        let peer = Peer::new(
+            socket_addr!(127.0.0.1:202),
+            KeyPair::random().public_key().clone(),
+        );
+
+        network.dispatch_to_subscribers(PeerMessage {
+            peer: peer.clone(),
+            payload: TopicMsg::Trust,
+            payload_bytes: 1,
+        });
+        assert!(matches!(trust_rx.try_recv(), Ok(msg) if matches!(msg.payload, TopicMsg::Trust)));
+        assert!(matches!(peer_rx.try_recv(), Err(TryRecvError::Empty)));
+
+        network.dispatch_to_subscribers(PeerMessage {
+            peer,
+            payload: TopicMsg::Peer,
+            payload_bytes: 1,
+        });
+        assert!(matches!(peer_rx.try_recv(), Ok(msg) if matches!(msg.payload, TopicMsg::Peer)));
+        assert!(matches!(trust_rx.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn subscribe_with_filter_returns_error_when_closed() {
+        let handle =
+            NetworkBaseHandle::<DummyMsg, X25519Sha256, ChaCha20Poly1305>::closed_for_tests();
+        let (tx, _rx) = mpsc::channel(1);
+        assert!(
+            handle
+                .subscribe_to_peers_messages_with_filter(tx, SubscriberFilter::All)
+                .is_err()
+        );
     }
 
     #[test]
@@ -5336,8 +5642,7 @@ mod tests {
             Err(e) => panic!("tcp listener from_std failed: {e:?}"),
         };
 
-        let (_subscribe_tx, subscribe_rx) =
-            mpsc::unbounded_channel::<mpsc::Sender<PeerMessage<T>>>();
+        let (_subscribe_tx, subscribe_rx) = mpsc::unbounded_channel::<Subscriber<T>>();
         let (_update_topology_tx, update_topology_rx) =
             mpsc::unbounded_channel::<message::UpdateTopology>();
         let (_update_peers_tx, update_peers_rx) = mpsc::unbounded_channel::<message::UpdatePeers>();
@@ -5871,7 +6176,10 @@ mod tests {
             payload_bytes: 1,
         };
         tx.try_send(msg.clone()).expect("fill channel");
-        network.subscribers_to_peers_messages.push(tx);
+        network.subscribers_to_peers_messages.push(Subscriber {
+            sender: tx,
+            filter: SubscriberFilter::All,
+        });
 
         network.dispatch_to_subscribers(msg);
 
@@ -5885,6 +6193,72 @@ mod tests {
             payload: DummyMsg, ..
         } = first;
         assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn dispatch_to_subscribers_tracks_unmatched_topics() {
+        let Some(mut network) = bare_network_with::<TopicMsg>() else {
+            return;
+        };
+        let (tx, mut rx) = mpsc::channel(1);
+        network.subscribe_to_peers_messages(Subscriber {
+            sender: tx,
+            filter: SubscriberFilter::topics([message::Topic::TrustGossip]),
+        });
+        let peer = Peer::new(
+            socket_addr!(127.0.0.1:303),
+            KeyPair::random().public_key().clone(),
+        );
+
+        let before = subscriber_unrouted_count();
+        network.dispatch_to_subscribers(PeerMessage {
+            peer,
+            payload: TopicMsg::Peer,
+            payload_bytes: 1,
+        });
+        let after = subscriber_unrouted_count();
+
+        assert!(
+            after >= before + 1,
+            "unmatched topics should increment the unrouted counter"
+        );
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn subscriber_queue_full_counts_increment_by_topic() {
+        let before_total = subscriber_queue_full_count();
+        let before_consensus = subscriber_queue_full_consensus_count();
+        inc_subscriber_queue_full_for_test(message::Topic::Consensus, 2);
+        let after_total = subscriber_queue_full_count();
+        let after_consensus = subscriber_queue_full_consensus_count();
+
+        assert!(
+            after_total >= before_total + 2,
+            "queue-full counter should increase by at least the increment"
+        );
+        assert!(
+            after_consensus >= before_consensus + 2,
+            "queue-full per-topic counter should track consensus drops"
+        );
+    }
+
+    #[test]
+    fn subscriber_unrouted_counts_increment_by_topic() {
+        let before = subscriber_unrouted_count();
+        let before_peer = subscriber_unrouted_peer_gossip_count();
+        inc_subscriber_unrouted_for_test(message::Topic::TrustGossip, 3);
+        let after = subscriber_unrouted_count();
+        let after_peer = subscriber_unrouted_peer_gossip_count();
+
+        assert!(
+            after >= before + 3,
+            "increment helper should increase subscriber unrouted count"
+        );
+        assert!(
+            after_peer >= before_peer + 3,
+            "trust-gossip should be grouped under peer gossip counters"
+        );
     }
 
     #[test]

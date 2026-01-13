@@ -1190,6 +1190,7 @@ impl Executor {
                 host.set_crypto_config(Arc::clone(&state_transaction.crypto));
                 host.set_halo2_config(&state_transaction.zk.halo2);
                 host.set_durable_state_snapshot_from_world(&state_transaction.world);
+                host.set_public_inputs_from_parameters(state_transaction.world.parameters.get());
                 host.set_query_state(state_transaction);
                 // Thread chain_id from StateTransaction into the IVM host for VRF binding
                 host.set_chain_id(&state_transaction.chain_id);

@@ -5926,6 +5926,37 @@ export class ToriiClient {
   }
 
   /**
+   * Keep a subscription (`POST /v1/subscriptions/{subscription_id}/keep`).
+   * @param {string} subscriptionId
+   * @param {SubscriptionActionRequest} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<SubscriptionActionResponse>}
+   */
+  async keepSubscription(subscriptionId, request, options = {}) {
+    const normalizedId = requireNonEmptyString(subscriptionId, "subscriptionId");
+    const payload = normalizeSubscriptionActionRequest(request, "keepSubscription");
+    const { signal } = normalizeSignalOnlyOption(options, "keepSubscription");
+    const response = await this._request(
+      "POST",
+      `/v1/subscriptions/${encodeURIComponent(normalizedId)}/keep`,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify(payload),
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200, 202]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("subscription keep endpoint returned no payload");
+    }
+    return normalizeSubscriptionActionResponse(body, "keepSubscription response");
+  }
+
+  /**
    * Charge a subscription immediately (`POST /v1/subscriptions/{subscription_id}/charge-now`).
    * @param {string} subscriptionId
    * @param {SubscriptionActionRequest} request
@@ -19598,6 +19629,14 @@ function normalizeSubscriptionActionRequest(input, context) {
       `${context}.chargeAtMs`,
       { allowZero: true },
     );
+  }
+  const cancelMode = pickOverride(record, "cancel_mode", "cancelMode");
+  if (cancelMode !== undefined && cancelMode !== null) {
+    const normalized = requireNonEmptyString(cancelMode, `${context}.cancelMode`).toLowerCase();
+    if (normalized !== "immediate" && normalized !== "period_end") {
+      throw new TypeError(`${context}.cancelMode must be immediate or period_end`);
+    }
+    payload.cancel_mode = normalized;
   }
   return payload;
 }

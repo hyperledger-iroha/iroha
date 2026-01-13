@@ -77,8 +77,6 @@ zk-halo2-ipa-poseidon = ["zk-halo2-ipa", "dep:halo2_gadgets"]
 circuit-params = ["halo2_proofs/circuit-params"]
 # Enable stateless pre-verify + dedup wiring (mock via metadata)
 zk-preverify = []
-## Enable PQC (ML‑DSA Dilithium) helpers in iroha_crypto for admission-time grouping.
-ml-dsa = ["iroha_crypto/ml-dsa"]
 # Gate zk-heavy tests; enable with `--features zk-tests` when needed
 zk-tests = []
 # Enable developer Halo2 test vectors (heavy tooling, opt-in only).

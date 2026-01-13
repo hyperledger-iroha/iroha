@@ -260,9 +260,9 @@
   "consensus_mode": "Npos",
   "bls_domain": "bls-iroha2:npos-sumeragi:v1",
   "wire_proto_versions": [
-    2
+    1
   ],
-  "consensus_fingerprint": "0x68e66a8a1768dae560d4c650487f45ef26ac8e4e0f2fba120fb35759515b7a2e",
+  "consensus_fingerprint": "0xfed0dd949356d73782acd30f024f9a1a72a64344417c96ff195f19362812fe62",
   "crypto": {
     "sm_openssl_preview": false,
     "sm_intrinsics": "auto",

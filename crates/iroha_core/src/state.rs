@@ -17952,6 +17952,7 @@ impl StateTransaction<'_, '_> {
                         host.set_telemetry(self.telemetry.clone());
                         host.set_crypto_config(self.crypto());
                         host.set_durable_state_snapshot_from_world(&self.world);
+                        host.set_public_inputs_from_parameters(self.world.parameters.get());
                         host.set_query_state(self);
                         if let Err(e) = vm.load_program(bytecode.as_ref()) {
                             return Err(ValidationFail::InternalError(e.to_string()).into());

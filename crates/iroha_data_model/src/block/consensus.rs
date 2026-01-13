@@ -22,7 +22,7 @@ use crate::{
 };
 
 /// Wire protocol version for consensus messages defined here.
-pub const PROTO_VERSION: u32 = 2;
+pub const PROTO_VERSION: u32 = 1;
 
 /// Mode tag for classic permissioned Sumeragi used in handshakes and hashing domains.
 pub const PERMISSIONED_TAG: &str = "iroha2-consensus::permissioned-sumeragi@v1";
@@ -1751,6 +1751,15 @@ pub struct RbcReady {
     pub signature: Vec<u8>,
 }
 
+/// READY signature included with RBC DELIVER to seed quorum recovery.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+pub struct RbcReadySignature {
+    /// Sender index within the active set.
+    pub sender: ValidatorIndex,
+    /// Signature authenticating the sender for this READY.
+    pub signature: Vec<u8>,
+}
+
 /// RBC DELIVER notification.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct RbcDeliver {
@@ -1770,6 +1779,8 @@ pub struct RbcDeliver {
     pub sender: ValidatorIndex,
     /// Signature authenticating the sender for this DELIVER.
     pub signature: Vec<u8>,
+    /// READY signatures observed by the sender for this session.
+    pub ready_signatures: Vec<RbcReadySignature>,
 }
 
 #[cfg(feature = "sumeragi-multiproof")]
@@ -1853,6 +1864,7 @@ impl_decode_from_slice_via_codec!(Reconfig);
 impl_decode_from_slice_via_codec!(RbcInit);
 impl_decode_from_slice_via_codec!(RbcChunk);
 impl_decode_from_slice_via_codec!(RbcReady);
+impl_decode_from_slice_via_codec!(RbcReadySignature);
 impl_decode_from_slice_via_codec!(RbcDeliver);
 #[cfg(feature = "sumeragi-multiproof")]
 impl_decode_from_slice_via_codec!(BlockMultiproof);
@@ -2017,6 +2029,10 @@ mod tests {
             chunk_root: Hash::prehashed([0xAA; Hash::LENGTH]),
             sender: 2,
             signature: vec![0x21, 0x22],
+            ready_signatures: vec![RbcReadySignature {
+                sender: 1,
+                signature: vec![0x31, 0x32],
+            }],
         }
     }
 

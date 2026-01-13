@@ -1118,6 +1118,11 @@ public enum ToriiSubscriptionStatus: String, Codable, Sendable, CaseIterable {
     case suspended
 }
 
+public enum ToriiSubscriptionCancelMode: String, Codable, Sendable, CaseIterable {
+    case immediate
+    case periodEnd = "period_end"
+}
+
 public struct ToriiSubscriptionPlanCreateRequest: Encodable, Sendable {
     public var authority: String
     public var privateKey: String
@@ -1361,19 +1366,23 @@ public struct ToriiSubscriptionActionRequest: Encodable, Sendable {
     public var authority: String
     public var privateKey: String
     public var chargeAtMs: UInt64?
+    public var cancelMode: ToriiSubscriptionCancelMode?
 
     public init(authority: String,
                 privateKey: String,
-                chargeAtMs: UInt64? = nil) {
+                chargeAtMs: UInt64? = nil,
+                cancelMode: ToriiSubscriptionCancelMode? = nil) {
         self.authority = authority
         self.privateKey = privateKey
         self.chargeAtMs = chargeAtMs
+        self.cancelMode = cancelMode
     }
 
     private enum CodingKeys: String, CodingKey {
         case authority
         case privateKey = "private_key"
         case chargeAtMs = "charge_at_ms"
+        case cancelMode = "cancel_mode"
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -1385,6 +1394,7 @@ public struct ToriiSubscriptionActionRequest: Encodable, Sendable {
         try container.encode(normalizedAuthority, forKey: .authority)
         try container.encode(normalizedPrivateKey, forKey: .privateKey)
         try container.encodeIfPresent(chargeAtMs, forKey: .chargeAtMs)
+        try container.encodeIfPresent(cancelMode, forKey: .cancelMode)
     }
 }
 
@@ -6826,6 +6836,12 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         runTask(completion) { try await self.cancelSubscription(subscriptionId: subscriptionId, requestBody: requestBody) }
     }
 
+    public func keepSubscription(subscriptionId: String,
+                                 requestBody: ToriiSubscriptionActionRequest,
+                                 completion: @escaping (Result<ToriiSubscriptionActionResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.keepSubscription(subscriptionId: subscriptionId, requestBody: requestBody) }
+    }
+
     @discardableResult
     public func chargeSubscriptionNow(subscriptionId: String,
                                       requestBody: ToriiSubscriptionActionRequest,
@@ -7455,6 +7471,13 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func cancelSubscription(subscriptionId: String,
                                    requestBody: ToriiSubscriptionActionRequest) async throws -> ToriiSubscriptionActionResponse {
         return try await executeSubscriptionAction(pathSuffix: "cancel",
+                                                   subscriptionId: subscriptionId,
+                                                   requestBody: requestBody)
+    }
+
+    public func keepSubscription(subscriptionId: String,
+                                 requestBody: ToriiSubscriptionActionRequest) async throws -> ToriiSubscriptionActionResponse {
+        return try await executeSubscriptionAction(pathSuffix: "keep",
                                                    subscriptionId: subscriptionId,
                                                    requestBody: requestBody)
     }

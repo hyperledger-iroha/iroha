@@ -1552,6 +1552,25 @@ pub mod confidential_metadata {
     }
 }
 
+/// IVM metadata helpers stored in the custom parameter registry.
+pub mod ivm_metadata {
+    use core::str::FromStr as _;
+
+    use super::*;
+    use crate::Name;
+
+    static PUBLIC_INPUTS_ID: LazyLock<CustomParameterId> = LazyLock::new(|| {
+        CustomParameterId::new(
+            Name::from_str("ivm_public_inputs").expect("ivm_public_inputs is a valid Name"),
+        )
+    });
+
+    /// Identifier of the custom parameter embedding the IVM public input registry.
+    pub fn public_inputs_id() -> CustomParameterId {
+        PUBLIC_INPUTS_ID.clone()
+    }
+}
+
 #[cfg(feature = "json")]
 impl JsonSerialize for Parameters {
     fn json_serialize(&self, out: &mut String) {

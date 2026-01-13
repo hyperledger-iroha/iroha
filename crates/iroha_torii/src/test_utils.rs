@@ -350,6 +350,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             require_sm_openssl_preview_match: true,
             idle_timeout: core::time::Duration::from_secs(5),
             peer_gossip_period: defaults::network::PEER_GOSSIP_PERIOD,
+            peer_gossip_max_period: defaults::network::PEER_GOSSIP_PERIOD,
             trust_gossip: defaults::network::TRUST_GOSSIP,
             trust_decay_half_life: defaults::network::TRUST_DECAY_HALF_LIFE,
             trust_penalty_bad_gossip: defaults::network::TRUST_PENALTY_BAD_GOSSIP,
@@ -365,6 +366,20 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             p2p_queue_cap_low: nonzero!(512usize),
             p2p_post_queue_cap: nonzero!(128usize),
             p2p_subscriber_queue_cap: nonzero!(128usize),
+            consensus_ingress_rate_per_sec: defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
+            consensus_ingress_burst: defaults::network::CONSENSUS_INGRESS_BURST,
+            consensus_ingress_bytes_per_sec: defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
+            consensus_ingress_bytes_burst: defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+            consensus_ingress_rbc_session_limit:
+                defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
+            consensus_ingress_penalty_threshold:
+                defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
+            consensus_ingress_penalty_window: Duration::from_millis(
+                defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
+            ),
+            consensus_ingress_penalty_cooldown: Duration::from_millis(
+                defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
+            ),
             happy_eyeballs_stagger: core::time::Duration::from_millis(100),
             addr_ipv6_first: false,
             max_incoming: None,
@@ -612,6 +627,15 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             membership_mismatch_alert_threshold:
                 defaults::sumeragi::MEMBERSHIP_MISMATCH_ALERT_THRESHOLD,
             membership_mismatch_fail_closed: defaults::sumeragi::MEMBERSHIP_MISMATCH_FAIL_CLOSED,
+            consensus_future_height_window: defaults::sumeragi::CONSENSUS_FUTURE_HEIGHT_WINDOW,
+            consensus_future_view_window: defaults::sumeragi::CONSENSUS_FUTURE_VIEW_WINDOW,
+            invalid_sig_penalty_threshold: defaults::sumeragi::INVALID_SIG_PENALTY_THRESHOLD,
+            invalid_sig_penalty_window: Duration::from_millis(
+                defaults::sumeragi::INVALID_SIG_PENALTY_WINDOW_MS,
+            ),
+            invalid_sig_penalty_cooldown: Duration::from_millis(
+                defaults::sumeragi::INVALID_SIG_PENALTY_COOLDOWN_MS,
+            ),
             role: A::NodeRole::Validator,
             allow_view0_slack: false,
             collectors_k: 1,
@@ -642,6 +666,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             zk_finality_k: 0,
             require_precommit_qc: false,
             rbc_chunk_max_bytes: 32 * 1024,
+            rbc_chunk_fanout: defaults::sumeragi::RBC_CHUNK_FANOUT,
             rbc_session_ttl: core::time::Duration::from_secs(10),
             rbc_store_max_sessions: defaults::sumeragi::RBC_STORE_MAX_SESSIONS,
             rbc_store_soft_sessions: defaults::sumeragi::RBC_STORE_SOFT_SESSIONS,
@@ -675,6 +700,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
         },
         block_sync: A::BlockSync {
             gossip_period: core::time::Duration::from_millis(200),
+            gossip_max_period: core::time::Duration::from_millis(200),
             gossip_size: nonzero!(32u32),
         },
         transaction_gossiper: A::TransactionGossiper {

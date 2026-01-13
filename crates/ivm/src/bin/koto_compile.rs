@@ -28,7 +28,7 @@ const EXPLAIN_ENTRIES: &[(&str, &str)] = &[
     ),
     (
         "E0004",
-        "Asset operations expect pointer literals. Use helpers such as `account_id(...)` and `asset_definition(...)`, or pass 0 to request sentinel defaults.",
+        "Asset operations expect pointer literals. Use helpers such as `account_id(...)` and `asset_definition(...)`.",
     ),
     (
         "E0005",

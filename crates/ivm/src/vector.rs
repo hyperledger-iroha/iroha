@@ -29,7 +29,7 @@ fn warm_up_core_graphics_display() {
         let _ = CGMainDisplayID();
     }
 }
-#[cfg(all(target_os = "macos", feature = "metal", feature = "ed25519"))]
+#[cfg(all(target_os = "macos", feature = "metal"))]
 const METAL_ED25519_SHADER: &str = include_str!("metal_ed25519.metal");
 
 use std::sync::{Mutex, MutexGuard};
@@ -590,7 +590,6 @@ struct MetalState {
     aesdec_batch: Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>,
     aesenc_rounds: Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>,
     aesdec_rounds: Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>,
-    #[cfg(feature = "ed25519")]
     ed25519_signature: Option<Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>>,
 }
 
@@ -1176,7 +1175,6 @@ impl MetalState {
             .newComputePipelineStateWithFunction_error(&func_dbr)
             .ok()?;
 
-        #[cfg(feature = "ed25519")]
         let ed25519_signature = {
             match device
                 .newLibraryWithSource_options_error(&NSString::from_str(METAL_ED25519_SHADER), None)
@@ -1762,7 +1760,6 @@ impl MetalState {
                 );
             }
 
-            #[cfg(feature = "ed25519")]
             let ed25519_ok = {
                 use core::ptr::NonNull;
 
@@ -1862,15 +1859,12 @@ impl MetalState {
                     true
                 }
             };
-            #[cfg(feature = "ed25519")]
             if debug_selftest {
                 eprintln!(
                     "ivm: metal self-test ed25519 {}",
                     if ed25519_ok { "ok" } else { "FAIL" }
                 );
             }
-            #[cfg(not(feature = "ed25519"))]
-            let ed25519_ok = true;
 
             add_ok && sha_ok && aes_ok && aes_fused_ok && keccak_ok && sha_pairs_ok && ed25519_ok
         };
@@ -1906,7 +1900,6 @@ impl MetalState {
             aesenc_rounds,
             aesdec_rounds,
             keccak,
-            #[cfg(feature = "ed25519")]
             ed25519_signature,
             // Store fused pipelines in place of single-round ones for future extension if needed
             // (keeping single-round as well)
@@ -2486,7 +2479,7 @@ pub fn metal_sha256_pairs_reduce(_digests: &[[u8; 32]]) -> Option<[u8; 32]> {
     None
 }
 
-#[cfg(all(target_os = "macos", feature = "metal", feature = "ed25519"))]
+#[cfg(all(target_os = "macos", feature = "metal"))]
 pub(crate) fn metal_ed25519_verify_batch(
     signatures: &[[u8; 64]],
     public_keys: &[[u8; 32]],
@@ -4511,7 +4504,7 @@ mod tests {
         );
     }
 
-    #[cfg(all(target_os = "macos", feature = "metal", feature = "ed25519"))]
+    #[cfg(all(target_os = "macos", feature = "metal"))]
     #[test]
     fn metal_ed25519_batch_matches_cpu() {
         use curve25519_dalek::scalar::Scalar;

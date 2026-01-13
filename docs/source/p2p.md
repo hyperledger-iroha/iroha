@@ -11,11 +11,14 @@ This section describes the peer-to-peer (P2P) queue capacities and the metrics e
   - Capacity of the low-priority network message queue (gossip/sync messages).
 - `p2p_post_queue_cap` (usize, default: 2048)
   - Capacity of the per-peer post channel (outbound messages to a specific peer).
+- `p2p_subscriber_queue_cap` (usize, default: 8192)
+  - Capacity of each inbound subscriber queue feeding the node relay.
 
 These defaults are tuned for blockchain workloads around 20,000 TPS: consensus/control traffic stays responsive, while gossip and synchronization get more headroom. Adjust these values based on your block size, block time, and network conditions.
 
 Notes
 - High-priority queues carry consensus/control traffic; low-priority queues handle gossip and sync paths.
+- The relay registers separate high/low subscribers, so total relay buffering is `2 * p2p_subscriber_queue_cap` plus any additional subscribers (e.g., genesis bootstrap, Torii Connect).
 
 ### Low-Priority Rate Limiting ([network] settings)
 
@@ -40,6 +43,10 @@ The following gauges are exposed via Prometheus when telemetry is enabled:
 
 - `p2p_dropped_posts`: number of post messages dropped due to a full bounded queue (monotonic).
 - `p2p_dropped_broadcasts`: number of broadcast messages dropped due to a full bounded queue (monotonic).
+- `p2p_subscriber_queue_full_total`: number of inbound messages dropped because subscriber queues were full.
+- `p2p_subscriber_queue_full_by_topic_total{topic="Consensus|Control|BlockSync|TxGossip|PeerGossip|Health|Other"}`: per-topic subscriber-queue drops.
+- `p2p_subscriber_unrouted_total`: number of inbound messages dropped because no subscriber matches the topic.
+- `p2p_subscriber_unrouted_by_topic_total{topic="Consensus|Control|BlockSync|TxGossip|PeerGossip|Health|Other"}`: per-topic unrouted inbound drops.
 - `p2p_queue_dropped_total{priority="High|Low",kind="Post|Broadcast"}`: bounded network actor queue drops by priority/kind.
 - `p2p_handshake_failures`: number of P2P handshake failures (timeouts, signature/verification errors).
 - `soranet_pow_revocation_store_total{reason}`: count of SoraNet PoW revocation store fallbacks
@@ -75,6 +82,22 @@ p2p_dropped_posts 0
 # HELP p2p_dropped_broadcasts Number of p2p broadcast messages dropped due to backpressure
 # TYPE p2p_dropped_broadcasts gauge
 p2p_dropped_broadcasts 12
+
+# HELP p2p_subscriber_queue_full_total Number of inbound messages dropped because subscriber queues were full
+# TYPE p2p_subscriber_queue_full_total gauge
+p2p_subscriber_queue_full_total 3
+
+# HELP p2p_subscriber_queue_full_by_topic_total Per-topic inbound drops caused by full subscriber queues
+# TYPE p2p_subscriber_queue_full_by_topic_total gauge
+p2p_subscriber_queue_full_by_topic_total{topic="Consensus"} 2
+
+# HELP p2p_subscriber_unrouted_total Number of inbound messages dropped because no subscriber matches the topic
+# TYPE p2p_subscriber_unrouted_total gauge
+p2p_subscriber_unrouted_total 7
+
+# HELP p2p_subscriber_unrouted_by_topic_total Per-topic inbound drops caused by no matching subscriber
+# TYPE p2p_subscriber_unrouted_by_topic_total gauge
+p2p_subscriber_unrouted_by_topic_total{topic="Consensus"} 1
 
 # HELP p2p_handshake_failures Number of p2p handshake failures
 # TYPE p2p_handshake_failures gauge
@@ -172,10 +195,14 @@ P2P_PUBLIC_ADDRESS = "peer1.example.com:1337"
 p2p_queue_cap_high = 8192     # consensus/control
 p2p_queue_cap_low  = 32768    # gossip/sync
 p2p_post_queue_cap = 2048     # per-peer post channel
+p2p_subscriber_queue_cap = 8192  # inbound relay subscriber queue
 
 # Other networking parameters (for reference)
 block_gossip_size = 4        # fanout cap for block-sync gossip (peer samples, block sync updates, availability votes, NEW_VIEW)
 block_gossip_period_ms = 10000
+block_gossip_max_period_ms = 30000
+peer_gossip_period_ms = 1000
+peer_gossip_max_period_ms = 30000
 transaction_gossip_size = 500
 transaction_gossip_period_ms = 1000
 idle_timeout_ms = 60000
@@ -187,6 +214,9 @@ trust_min_score = -20              # drop trust gossip at or below this score
 ```
 
 - Gossip/idle intervals are clamped to >=100ms to prevent zero-duration spin loops.
+- Peer-address gossip is change-driven with exponential backoff up to `peer_gossip_max_period_ms`
+  (and is throttled when the relay drops inbound frames); block-sync sampling similarly backs off
+  up to `block_gossip_max_period_ms` when no progress is observed.
 - NEW_VIEW gossip uses the same `block_gossip_size` fanout; peers rotate a deterministic,
   per-node sample window on each rebroadcast so all peers are eventually covered. Rebroadcasts
   are paced by the block-time-based cooldown (clamped >=200ms) and run on pacemaker ticks even
@@ -342,6 +372,8 @@ Observers that intentionally skip verification (`assume_valid=true`) must avoid 
 Per-topic metrics (when telemetry enabled):
 
 - `p2p_post_overflow_total{priority="High|Low",topic="Consensus|Control|BlockSync|TxGossip|PeerGossip|Health|Other"}`
+- `p2p_subscriber_queue_full_by_topic_total{topic="Consensus|Control|BlockSync|TxGossip|PeerGossip|Health|Other"}`
+- `p2p_subscriber_unrouted_by_topic_total{topic="Consensus|Control|BlockSync|TxGossip|PeerGossip|Health|Other"}`
 
 Behavior matrix (bounded queues enabled):
 

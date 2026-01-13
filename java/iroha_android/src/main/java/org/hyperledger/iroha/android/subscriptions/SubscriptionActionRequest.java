@@ -12,11 +12,13 @@ public final class SubscriptionActionRequest {
   private final String authority;
   private final String privateKey;
   private final Long chargeAtMs;
+  private final CancelMode cancelMode;
 
   private SubscriptionActionRequest(final Builder builder) {
     this.authority = requireNonBlank(builder.authority, "authority");
     this.privateKey = requireNonBlank(builder.privateKey, "private_key");
     this.chargeAtMs = builder.chargeAtMs;
+    this.cancelMode = builder.cancelMode;
   }
 
   public String authority() {
@@ -31,12 +33,19 @@ public final class SubscriptionActionRequest {
     return chargeAtMs;
   }
 
+  public CancelMode cancelMode() {
+    return cancelMode;
+  }
+
   public Map<String, Object> toJsonMap() {
     final Map<String, Object> json = new LinkedHashMap<>();
     json.put("authority", authority);
     json.put("private_key", privateKey);
     if (chargeAtMs != null) {
       json.put("charge_at_ms", chargeAtMs);
+    }
+    if (cancelMode != null) {
+      json.put("cancel_mode", cancelMode.value());
     }
     return Collections.unmodifiableMap(json);
   }
@@ -53,6 +62,7 @@ public final class SubscriptionActionRequest {
     private String authority;
     private String privateKey;
     private Long chargeAtMs;
+    private CancelMode cancelMode;
 
     private Builder() {}
 
@@ -74,8 +84,28 @@ public final class SubscriptionActionRequest {
       return this;
     }
 
+    public Builder cancelMode(final CancelMode cancelMode) {
+      this.cancelMode = cancelMode;
+      return this;
+    }
+
     public SubscriptionActionRequest build() {
       return new SubscriptionActionRequest(this);
+    }
+  }
+
+  public enum CancelMode {
+    IMMEDIATE("immediate"),
+    PERIOD_END("period_end");
+
+    private final String value;
+
+    CancelMode(final String value) {
+      this.value = value;
+    }
+
+    public String value() {
+      return value;
     }
   }
 

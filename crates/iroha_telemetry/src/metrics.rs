@@ -6436,6 +6436,14 @@ pub struct Metrics {
     pub p2p_dropped_posts: GenericGauge<AtomicU64>,
     /// Number of p2p dropped broadcast messages (bounded mode)
     pub p2p_dropped_broadcasts: GenericGauge<AtomicU64>,
+    /// Number of inbound messages dropped because subscriber queues were full.
+    pub p2p_subscriber_queue_full_total: GenericGauge<AtomicU64>,
+    /// Per-topic inbound drops caused by subscriber queues being full.
+    pub p2p_subscriber_queue_full_by_topic_total: GenericGaugeVec<AtomicU64>,
+    /// Number of inbound messages dropped because no subscriber matches the topic.
+    pub p2p_subscriber_unrouted_total: GenericGauge<AtomicU64>,
+    /// Per-topic inbound drops caused by no subscriber matches.
+    pub p2p_subscriber_unrouted_by_topic_total: GenericGaugeVec<AtomicU64>,
     /// Number of p2p handshake failures
     pub p2p_handshake_failures: GenericGauge<AtomicU64>,
     /// Number of low-priority post messages throttled
@@ -8820,6 +8828,32 @@ impl Default for Metrics {
         let p2p_dropped_broadcasts = GenericGauge::new(
             "p2p_dropped_broadcasts",
             "Number of p2p broadcast messages dropped due to backpressure",
+        )
+        .expect("Infallible");
+        let p2p_subscriber_queue_full_total = GenericGauge::new(
+            "p2p_subscriber_queue_full_total",
+            "Number of inbound messages dropped because subscriber queues were full",
+        )
+        .expect("Infallible");
+        let p2p_subscriber_queue_full_by_topic_total = GenericGaugeVec::new(
+            Opts::new(
+                "p2p_subscriber_queue_full_by_topic_total",
+                "Per-topic inbound drops caused by full subscriber queues",
+            ),
+            &["topic"],
+        )
+        .expect("Infallible");
+        let p2p_subscriber_unrouted_total = GenericGauge::new(
+            "p2p_subscriber_unrouted_total",
+            "Number of inbound messages dropped because no subscriber matches the topic",
+        )
+        .expect("Infallible");
+        let p2p_subscriber_unrouted_by_topic_total = GenericGaugeVec::new(
+            Opts::new(
+                "p2p_subscriber_unrouted_by_topic_total",
+                "Per-topic inbound drops caused by no matching subscriber",
+            ),
+            &["topic"],
         )
         .expect("Infallible");
         let p2p_handshake_failures =
@@ -12440,8 +12474,6 @@ impl Default for Metrics {
             settlement_swapline_utilisation,
             settlement_conversion_total,
             settlement_haircut_total,
-            subscription_billing_attempts_total,
-            subscription_billing_outcomes_total,
             sumeragi_tx_queue_depth,
             sumeragi_tx_queue_capacity,
             sumeragi_tx_queue_saturated,
@@ -12493,6 +12525,10 @@ impl Default for Metrics {
             sumeragi_vrf_rejects_total_by_reason,
             p2p_dropped_posts,
             p2p_dropped_broadcasts,
+            p2p_subscriber_queue_full_total,
+            p2p_subscriber_queue_full_by_topic_total,
+            p2p_subscriber_unrouted_total,
+            p2p_subscriber_unrouted_by_topic_total,
             p2p_handshake_failures,
             p2p_low_post_throttled_total,
             p2p_low_broadcast_throttled_total,
@@ -13028,6 +13064,10 @@ impl Default for Metrics {
             sumeragi_dropped_control_messages_total,
             p2p_dropped_posts,
             p2p_dropped_broadcasts,
+            p2p_subscriber_queue_full_total,
+            p2p_subscriber_queue_full_by_topic_total,
+            p2p_subscriber_unrouted_total,
+            p2p_subscriber_unrouted_by_topic_total,
             p2p_handshake_failures,
             p2p_low_post_throttled_total,
             p2p_low_broadcast_throttled_total,

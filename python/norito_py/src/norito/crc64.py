@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Iterable
 
 POLY = 0x42F0E1EBA9EA3693
 _MASK = 0xFFFFFFFFFFFFFFFF

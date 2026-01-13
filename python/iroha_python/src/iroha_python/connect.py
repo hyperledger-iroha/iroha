@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Type, Union
-from urllib.parse import ParseResult, urlencode, urlparse, parse_qs
+from urllib.parse import ParseResult, parse_qs, urlencode, urlparse
 
 from ._native import load_crypto_extension
 from .connect_stub import ConnectCodecStub

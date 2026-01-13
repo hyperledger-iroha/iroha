@@ -1965,6 +1965,7 @@ mod tests {
             chunk_root: Hash::prehashed([5u8; 32]),
             sender: 2,
             signature: Vec::new(),
+            ready_signatures: Vec::new(),
         });
 
         handle.incoming_block_message(msg.clone());

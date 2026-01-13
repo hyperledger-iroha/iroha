@@ -111,6 +111,7 @@ fn trust_config(
         require_sm_openssl_preview_match: true,
         idle_timeout,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
+        peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
         trust_penalty_bad_gossip:
             iroha_config::parameters::defaults::network::TRUST_PENALTY_BAD_GOSSIP,
@@ -131,6 +132,24 @@ fn trust_config(
         p2p_post_queue_cap: NonZeroUsize::new(2048).expect("non-zero"),
         p2p_subscriber_queue_cap:
             iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
+        consensus_ingress_rate_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
+        consensus_ingress_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
+        consensus_ingress_bytes_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
+        consensus_ingress_bytes_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+        consensus_ingress_rbc_session_limit:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
+        consensus_ingress_penalty_threshold:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
+        consensus_ingress_penalty_window: Duration::from_millis(
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
+        ),
+        consensus_ingress_penalty_cooldown: Duration::from_millis(
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
+        ),
         max_incoming: None,
         max_total_connections: None,
         accept_rate_per_ip_per_sec: None,
@@ -195,6 +214,7 @@ async fn network_create() {
         require_sm_openssl_preview_match: true,
         idle_timeout,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
+        peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
         trust_penalty_bad_gossip:
             iroha_config::parameters::defaults::network::TRUST_PENALTY_BAD_GOSSIP,
@@ -215,6 +235,24 @@ async fn network_create() {
         p2p_post_queue_cap: NonZeroUsize::new(2048).expect("non-zero"),
         p2p_subscriber_queue_cap:
             iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
+        consensus_ingress_rate_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
+        consensus_ingress_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
+        consensus_ingress_bytes_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
+        consensus_ingress_bytes_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+        consensus_ingress_rbc_session_limit:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
+        consensus_ingress_penalty_threshold:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
+        consensus_ingress_penalty_window: Duration::from_millis(
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
+        ),
+        consensus_ingress_penalty_cooldown: Duration::from_millis(
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
+        ),
         max_incoming: None,
         max_total_connections: None,
         accept_rate_per_ip_per_sec: None,
@@ -534,6 +572,7 @@ async fn ws_fallback_connects_and_handshakes() {
             require_sm_openssl_preview_match: true,
             idle_timeout: idle,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
+            peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
                 iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
             trust_penalty_bad_gossip:
@@ -555,6 +594,24 @@ async fn ws_fallback_connects_and_handshakes() {
             p2p_post_queue_cap: NonZeroUsize::new(64).unwrap(),
             p2p_subscriber_queue_cap:
                 iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
+            consensus_ingress_rate_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
+            consensus_ingress_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
+            consensus_ingress_bytes_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
+            consensus_ingress_bytes_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+            consensus_ingress_rbc_session_limit:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
+            consensus_ingress_penalty_threshold:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
+            consensus_ingress_penalty_window: Duration::from_millis(
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
+            ),
+            consensus_ingress_penalty_cooldown: Duration::from_millis(
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
+            ),
             max_incoming: None,
             max_total_connections: None,
             accept_rate_per_ip_per_sec: None,
@@ -723,6 +780,7 @@ async fn ws_fallback_connects_and_handshakes() {
             require_sm_openssl_preview_match: true,
             idle_timeout: idle,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
+            peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
                 iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
             trust_penalty_bad_gossip:
@@ -744,6 +802,24 @@ async fn ws_fallback_connects_and_handshakes() {
             p2p_post_queue_cap: NonZeroUsize::new(64).unwrap(),
             p2p_subscriber_queue_cap:
                 iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
+            consensus_ingress_rate_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
+            consensus_ingress_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
+            consensus_ingress_bytes_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
+            consensus_ingress_bytes_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+            consensus_ingress_rbc_session_limit:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
+            consensus_ingress_penalty_threshold:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
+            consensus_ingress_penalty_window: Duration::from_millis(
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
+            ),
+            consensus_ingress_penalty_cooldown: Duration::from_millis(
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
+            ),
             max_incoming: None,
             max_total_connections: None,
             accept_rate_per_ip_per_sec: None,
@@ -915,6 +991,7 @@ async fn two_networks() {
         require_sm_openssl_preview_match: true,
         idle_timeout,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
+        peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
         trust_penalty_bad_gossip:
             iroha_config::parameters::defaults::network::TRUST_PENALTY_BAD_GOSSIP,
@@ -935,6 +1012,24 @@ async fn two_networks() {
         p2p_post_queue_cap: NonZeroUsize::new(2048).expect("non-zero"),
         p2p_subscriber_queue_cap:
             iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
+        consensus_ingress_rate_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
+        consensus_ingress_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
+        consensus_ingress_bytes_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
+        consensus_ingress_bytes_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+        consensus_ingress_rbc_session_limit:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
+        consensus_ingress_penalty_threshold:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
+        consensus_ingress_penalty_window: Duration::from_millis(
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
+        ),
+        consensus_ingress_penalty_cooldown: Duration::from_millis(
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
+        ),
         max_incoming: None,
         max_total_connections: None,
         accept_rate_per_ip_per_sec: None,
@@ -1001,6 +1096,7 @@ async fn two_networks() {
         require_sm_openssl_preview_match: true,
         idle_timeout,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
+        peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
         trust_penalty_bad_gossip:
             iroha_config::parameters::defaults::network::TRUST_PENALTY_BAD_GOSSIP,
@@ -1021,6 +1117,24 @@ async fn two_networks() {
         p2p_post_queue_cap: NonZeroUsize::new(2048).expect("non-zero"),
         p2p_subscriber_queue_cap:
             iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
+        consensus_ingress_rate_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
+        consensus_ingress_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
+        consensus_ingress_bytes_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
+        consensus_ingress_bytes_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+        consensus_ingress_rbc_session_limit:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
+        consensus_ingress_penalty_threshold:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
+        consensus_ingress_penalty_window: Duration::from_millis(
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
+        ),
+        consensus_ingress_penalty_cooldown: Duration::from_millis(
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
+        ),
         max_incoming: None,
         max_total_connections: None,
         accept_rate_per_ip_per_sec: None,
@@ -1153,6 +1267,7 @@ async fn update_peers_triggers_immediate_connect() {
             require_sm_openssl_preview_match: true,
             idle_timeout,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
+            peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
                 iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
             trust_penalty_bad_gossip:
@@ -1174,6 +1289,24 @@ async fn update_peers_triggers_immediate_connect() {
             p2p_post_queue_cap: NonZeroUsize::new(2048).unwrap(),
             p2p_subscriber_queue_cap:
                 iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
+            consensus_ingress_rate_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
+            consensus_ingress_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
+            consensus_ingress_bytes_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
+            consensus_ingress_bytes_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+            consensus_ingress_rbc_session_limit:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
+            consensus_ingress_penalty_threshold:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
+            consensus_ingress_penalty_window: Duration::from_millis(
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
+            ),
+            consensus_ingress_penalty_cooldown: Duration::from_millis(
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
+            ),
             max_incoming: None,
             max_total_connections: None,
             accept_rate_per_ip_per_sec: None,
@@ -1241,6 +1374,7 @@ async fn update_peers_triggers_immediate_connect() {
             require_sm_openssl_preview_match: true,
             idle_timeout,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
+            peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
                 iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
             trust_penalty_bad_gossip:
@@ -1262,6 +1396,24 @@ async fn update_peers_triggers_immediate_connect() {
             p2p_post_queue_cap: NonZeroUsize::new(2048).unwrap(),
             p2p_subscriber_queue_cap:
                 iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
+            consensus_ingress_rate_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
+            consensus_ingress_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
+            consensus_ingress_bytes_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
+            consensus_ingress_bytes_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+            consensus_ingress_rbc_session_limit:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
+            consensus_ingress_penalty_threshold:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
+            consensus_ingress_penalty_window: Duration::from_millis(
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
+            ),
+            consensus_ingress_penalty_cooldown: Duration::from_millis(
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
+            ),
             max_incoming: None,
             max_total_connections: None,
             accept_rate_per_ip_per_sec: None,
@@ -1371,6 +1523,7 @@ async fn happy_eyeballs_parallel_dials() {
             require_sm_openssl_preview_match: true,
             idle_timeout,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
+            peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
                 iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
             trust_penalty_bad_gossip:
@@ -1392,6 +1545,24 @@ async fn happy_eyeballs_parallel_dials() {
             p2p_post_queue_cap: NonZeroUsize::new(2048).unwrap(),
             p2p_subscriber_queue_cap:
                 iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
+            consensus_ingress_rate_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
+            consensus_ingress_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
+            consensus_ingress_bytes_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
+            consensus_ingress_bytes_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+            consensus_ingress_rbc_session_limit:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
+            consensus_ingress_penalty_threshold:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
+            consensus_ingress_penalty_window: Duration::from_millis(
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
+            ),
+            consensus_ingress_penalty_cooldown: Duration::from_millis(
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
+            ),
             max_incoming: None,
             max_total_connections: None,
             accept_rate_per_ip_per_sec: None,
@@ -1460,6 +1631,7 @@ async fn happy_eyeballs_parallel_dials() {
             require_sm_openssl_preview_match: true,
             idle_timeout,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
+            peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
                 iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
             trust_penalty_bad_gossip:
@@ -1481,6 +1653,24 @@ async fn happy_eyeballs_parallel_dials() {
             p2p_post_queue_cap: NonZeroUsize::new(2048).unwrap(),
             p2p_subscriber_queue_cap:
                 iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
+            consensus_ingress_rate_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
+            consensus_ingress_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
+            consensus_ingress_bytes_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
+            consensus_ingress_bytes_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+            consensus_ingress_rbc_session_limit:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
+            consensus_ingress_penalty_threshold:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
+            consensus_ingress_penalty_window: Duration::from_millis(
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
+            ),
+            consensus_ingress_penalty_cooldown: Duration::from_millis(
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
+            ),
             max_incoming: None,
             max_total_connections: None,
             accept_rate_per_ip_per_sec: None,
@@ -1587,6 +1777,7 @@ async fn low_topics_do_not_starve_each_other() {
             require_sm_openssl_preview_match: true,
             idle_timeout,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
+            peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
                 iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
             trust_penalty_bad_gossip:
@@ -1608,6 +1799,24 @@ async fn low_topics_do_not_starve_each_other() {
             p2p_post_queue_cap: NonZeroUsize::new(1024).unwrap(),
             p2p_subscriber_queue_cap:
                 iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
+            consensus_ingress_rate_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
+            consensus_ingress_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
+            consensus_ingress_bytes_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
+            consensus_ingress_bytes_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+            consensus_ingress_rbc_session_limit:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
+            consensus_ingress_penalty_threshold:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
+            consensus_ingress_penalty_window: Duration::from_millis(
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
+            ),
+            consensus_ingress_penalty_cooldown: Duration::from_millis(
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
+            ),
             max_incoming: None,
             max_total_connections: None,
             accept_rate_per_ip_per_sec: None,
@@ -1676,6 +1885,7 @@ async fn low_topics_do_not_starve_each_other() {
             require_sm_openssl_preview_match: true,
             idle_timeout,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
+            peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
                 iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
             trust_penalty_bad_gossip:
@@ -1697,6 +1907,24 @@ async fn low_topics_do_not_starve_each_other() {
             p2p_post_queue_cap: NonZeroUsize::new(1024).unwrap(),
             p2p_subscriber_queue_cap:
                 iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
+            consensus_ingress_rate_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
+            consensus_ingress_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
+            consensus_ingress_bytes_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
+            consensus_ingress_bytes_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+            consensus_ingress_rbc_session_limit:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
+            consensus_ingress_penalty_threshold:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
+            consensus_ingress_penalty_window: Duration::from_millis(
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
+            ),
+            consensus_ingress_penalty_cooldown: Duration::from_millis(
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
+            ),
             max_incoming: None,
             max_total_connections: None,
             accept_rate_per_ip_per_sec: None,
@@ -1859,6 +2087,7 @@ async fn relay_hub_routes_consensus_between_spokes() {
             require_sm_openssl_preview_match: true,
             idle_timeout,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
+            peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
                 iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
             trust_penalty_bad_gossip:
@@ -1880,6 +2109,24 @@ async fn relay_hub_routes_consensus_between_spokes() {
             p2p_post_queue_cap: NonZeroUsize::new(2048).unwrap(),
             p2p_subscriber_queue_cap:
                 iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
+            consensus_ingress_rate_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
+            consensus_ingress_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
+            consensus_ingress_bytes_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
+            consensus_ingress_bytes_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+            consensus_ingress_rbc_session_limit:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
+            consensus_ingress_penalty_threshold:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
+            consensus_ingress_penalty_window: Duration::from_millis(
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
+            ),
+            consensus_ingress_penalty_cooldown: Duration::from_millis(
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
+            ),
             max_incoming: None,
             max_total_connections: None,
             accept_rate_per_ip_per_sec: None,
@@ -2131,6 +2378,7 @@ async fn start_network(
         require_sm_openssl_preview_match: true,
         idle_timeout,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
+        peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
         trust_penalty_bad_gossip:
             iroha_config::parameters::defaults::network::TRUST_PENALTY_BAD_GOSSIP,
@@ -2151,6 +2399,24 @@ async fn start_network(
         p2p_post_queue_cap: NonZeroUsize::new(2048).expect("non-zero"),
         p2p_subscriber_queue_cap:
             iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
+        consensus_ingress_rate_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
+        consensus_ingress_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
+        consensus_ingress_bytes_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
+        consensus_ingress_bytes_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+        consensus_ingress_rbc_session_limit:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
+        consensus_ingress_penalty_threshold:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
+        consensus_ingress_penalty_window: Duration::from_millis(
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
+        ),
+        consensus_ingress_penalty_cooldown: Duration::from_millis(
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
+        ),
         max_incoming: None,
         max_total_connections: None,
         accept_rate_per_ip_per_sec: None,
@@ -2289,6 +2555,7 @@ async fn tls_inbound_listener_smoke() {
         require_sm_openssl_preview_match: true,
         idle_timeout,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
+        peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
         trust_penalty_bad_gossip:
             iroha_config::parameters::defaults::network::TRUST_PENALTY_BAD_GOSSIP,
@@ -2309,6 +2576,24 @@ async fn tls_inbound_listener_smoke() {
         p2p_post_queue_cap: NonZeroUsize::new(256).unwrap(),
         p2p_subscriber_queue_cap:
             iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
+        consensus_ingress_rate_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
+        consensus_ingress_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
+        consensus_ingress_bytes_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
+        consensus_ingress_bytes_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+        consensus_ingress_rbc_session_limit:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
+        consensus_ingress_penalty_threshold:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
+        consensus_ingress_penalty_window: Duration::from_millis(
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
+        ),
+        consensus_ingress_penalty_cooldown: Duration::from_millis(
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
+        ),
         max_incoming: None,
         max_total_connections: None,
         accept_rate_per_ip_per_sec: None,
@@ -2382,6 +2667,7 @@ async fn tls_inbound_listener_smoke() {
             require_sm_openssl_preview_match: true,
             idle_timeout,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
+            peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
                 iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
             trust_penalty_bad_gossip:
@@ -2402,6 +2688,24 @@ async fn tls_inbound_listener_smoke() {
             p2p_post_queue_cap: NonZeroUsize::new(256).unwrap(),
             p2p_subscriber_queue_cap:
                 iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
+            consensus_ingress_rate_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
+            consensus_ingress_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
+            consensus_ingress_bytes_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
+            consensus_ingress_bytes_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+            consensus_ingress_rbc_session_limit:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
+            consensus_ingress_penalty_threshold:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
+            consensus_ingress_penalty_window: Duration::from_millis(
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
+            ),
+            consensus_ingress_penalty_cooldown: Duration::from_millis(
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
+            ),
             max_incoming: None,
             max_total_connections: None,
             accept_rate_per_ip_per_sec: None,

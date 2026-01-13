@@ -25,13 +25,18 @@ import time
 from pathlib import Path
 from typing import Callable, Iterable, List, Optional, Tuple
 
-PACKAGE_ROOT = Path(__file__).resolve().parent.parent
-SRC_DIR = PACKAGE_ROOT / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
+def _load_crc64() -> tuple[int, list[int], Callable[[bytes, int], int]]:
+    package_root = Path(__file__).resolve().parent.parent
+    src_dir = package_root / "src"
+    if str(src_dir) not in sys.path:
+        sys.path.insert(0, str(src_dir))
 
-from norito.crc64 import _MASK, _TABLE  # type: ignore[attr-defined]
-from norito.crc64 import crc64
+    from norito.crc64 import _MASK, _TABLE, crc64  # type: ignore[attr-defined]
+
+    return _MASK, _TABLE, crc64
+
+
+_MASK, _TABLE, crc64 = _load_crc64()
 
 
 def _random_payload(size_mib: float) -> bytes:

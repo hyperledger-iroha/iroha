@@ -16,11 +16,11 @@ use iroha_data_model::{
             EvidencePayload, EvidenceRecord, ExecKv, ExecWitness, ExecWitnessMsg,
             LaneBlockCommitment, LaneSettlementReceipt, NposGenesisParams, PERMISSIONED_TAG,
             Proposal, Qc, QcAggregate, QcRef, QcVote, RbcChunk, RbcDeliver, RbcInit, RbcReady,
-            Reconfig, SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus,
-            SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus, SumeragiDaGateReason,
-            SumeragiDaGateSatisfaction, SumeragiDaGateStatus, SumeragiDataspaceCommitment,
-            SumeragiKuraStoreStatus, SumeragiLaneCommitment, SumeragiLaneGovernance,
-            SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
+            RbcReadySignature, Reconfig, SumeragiBlockSyncRosterStatus,
+            SumeragiCommitInflightStatus, SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus,
+            SumeragiDaGateReason, SumeragiDaGateSatisfaction, SumeragiDaGateStatus,
+            SumeragiDataspaceCommitment, SumeragiKuraStoreStatus, SumeragiLaneCommitment,
+            SumeragiLaneGovernance, SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
             SumeragiMissingBlockFetchStatus, SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcEntry,
             SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcSnapshot, SumeragiQcStatus,
             SumeragiRbcEvictedSession, SumeragiRbcStoreStatus, SumeragiRuntimeUpgradeHook,
@@ -454,6 +454,13 @@ fn rng_rbc_ready_from(rng: &mut DeterministicRng, init: &RbcInit) -> RbcReady {
     }
 }
 
+fn rng_rbc_ready_signature_from(rng: &mut DeterministicRng) -> RbcReadySignature {
+    RbcReadySignature {
+        sender: rng.next_u32(),
+        signature: rng.bytes(64),
+    }
+}
+
 fn rng_rbc_deliver_from(rng: &mut DeterministicRng, init: &RbcInit) -> RbcDeliver {
     RbcDeliver {
         block_hash: init.block_hash,
@@ -464,6 +471,9 @@ fn rng_rbc_deliver_from(rng: &mut DeterministicRng, init: &RbcInit) -> RbcDelive
         chunk_root: init.chunk_root,
         sender: rng.next_u32(),
         signature: rng.bytes(64),
+        ready_signatures: (0..rng.up_to(2))
+            .map(|_| rng_rbc_ready_signature_from(rng))
+            .collect(),
     }
 }
 
@@ -1707,6 +1717,10 @@ fn consensus_messages_norito_roundtrip() {
         chunk_root: rbc_init.chunk_root,
         sender: 16,
         signature: sample_bytes(0x60, 64),
+        ready_signatures: vec![RbcReadySignature {
+            sender: 3,
+            signature: sample_bytes(0x61, 64),
+        }],
     };
     assert_roundtrip(&cert_header);
     assert_roundtrip(&block_header);

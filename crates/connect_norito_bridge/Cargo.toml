@@ -9,7 +9,7 @@ crate-type = ["cdylib", "staticlib"]
 [dependencies]
 norito = { path = "../norito", version = "2.0.0-rc.2.0", default-features = false, features = ["std", "derive", "json", "json-std-io", "columnar", "strict-safe"] }
 iroha_torii_shared = { workspace = true }
-iroha_crypto = { workspace = true, default-features = false, features = ["std", "ml-dsa"] }
+iroha_crypto = { workspace = true, default-features = false, features = ["std"] }
 iroha_data_model = { workspace = true }
 iroha_executor_data_model = { workspace = true }
 iroha_primitives = { workspace = true }

@@ -1322,6 +1322,7 @@ mod tests {
             require_sm_openssl_preview_match: defaults::network::REQUIRE_SM_OPENSSL_PREVIEW_MATCH,
             idle_timeout: defaults::network::IDLE_TIMEOUT,
             peer_gossip_period: defaults::network::PEER_GOSSIP_PERIOD,
+            peer_gossip_max_period: defaults::network::PEER_GOSSIP_PERIOD,
             trust_gossip: defaults::network::TRUST_GOSSIP,
             trust_decay_half_life: defaults::network::TRUST_DECAY_HALF_LIFE,
             trust_penalty_bad_gossip: defaults::network::TRUST_PENALTY_BAD_GOSSIP,
@@ -1337,6 +1338,20 @@ mod tests {
             p2p_queue_cap_low: defaults::network::P2P_QUEUE_CAP_LOW,
             p2p_post_queue_cap: defaults::network::P2P_POST_QUEUE_CAP,
             p2p_subscriber_queue_cap: defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
+            consensus_ingress_rate_per_sec: defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
+            consensus_ingress_burst: defaults::network::CONSENSUS_INGRESS_BURST,
+            consensus_ingress_bytes_per_sec: defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
+            consensus_ingress_bytes_burst: defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+            consensus_ingress_rbc_session_limit:
+                defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
+            consensus_ingress_penalty_threshold:
+                defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
+            consensus_ingress_penalty_window: Duration::from_millis(
+                defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
+            ),
+            consensus_ingress_penalty_cooldown: Duration::from_millis(
+                defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
+            ),
             happy_eyeballs_stagger: defaults::network::HAPPY_EYEBALLS_STAGGER,
             addr_ipv6_first: false,
             max_incoming: None,

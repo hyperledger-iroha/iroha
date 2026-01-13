@@ -36,6 +36,23 @@ impl Actor {
         self.schedule_background(BackgroundRequest::Post { peer, msg });
     }
 
+    pub(super) fn should_drop_future_block_sync_update(
+        &self,
+        block_hash: &HashOf<BlockHeader>,
+        parent_hash: Option<HashOf<BlockHeader>>,
+        height: u64,
+        view: u64,
+        requested_missing_block: bool,
+    ) -> bool {
+        if requested_missing_block || self.block_known_locally(*block_hash) {
+            return false;
+        }
+        if parent_hash.is_some_and(|hash| self.block_payload_available_locally(hash)) {
+            return false;
+        }
+        self.should_drop_future_consensus_message(height, view, "BlockSyncUpdate")
+    }
+
     #[allow(clippy::too_many_lines)]
     pub(super) fn handle_block_sync_update(
         &mut self,
@@ -52,10 +69,20 @@ impl Actor {
         let block_hash = block.hash();
         let block_height = block.header().height().get();
         let block_view = block.header().view_change_index();
+        let parent_hash = block.header().prev_block_hash();
         let requested_missing_block = self
             .pending
             .missing_block_requests
             .contains_key(&block_hash);
+        if self.should_drop_future_block_sync_update(
+            &block_hash,
+            parent_hash,
+            block_height,
+            block_view,
+            requested_missing_block,
+        ) {
+            return Ok(());
+        }
         if let Some(local_view) = self.stale_view(block_height, block_view) {
             let da_enabled = self.runtime_da_enabled();
             if !da_enabled && !requested_missing_block {

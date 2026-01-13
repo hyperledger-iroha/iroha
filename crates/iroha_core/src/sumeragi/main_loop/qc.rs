@@ -199,7 +199,10 @@ impl Actor {
         topology: &super::network_topology::Topology,
     ) -> bool {
         let da_enabled = self.runtime_da_enabled();
-        let retry_window = self.quorum_timeout(da_enabled);
+        let retry_window = self.rebroadcast_cooldown();
+        // Retry missing payload fetches on the rebroadcast cadence while keeping
+        // view-change gating tied to the quorum timeout to avoid premature churn under DA.
+        let view_change_window = Some(self.quorum_timeout(da_enabled));
         let peer_id = self.common_config.peer.id.clone();
         let network = self.network.clone();
         let mut requests = core::mem::take(&mut self.pending.missing_block_requests);
@@ -208,7 +211,7 @@ impl Actor {
         let deferred = defer_qc_for_missing_block(
             self.block_payload_available_locally(block_hash),
             retry_window,
-            Some(retry_window),
+            view_change_window,
             now,
             block_hash,
             height,

@@ -779,15 +779,6 @@ impl Actor {
                 }
                 self.schedule_background(BackgroundRequest::Post {
                     peer: peer.clone(),
-                    msg: BlockMessage::ProposalHint(proposal_hint),
-                });
-            }
-            for peer in topology_peers {
-                if peer == &local_peer_id {
-                    continue;
-                }
-                self.schedule_background(BackgroundRequest::Post {
-                    peer: peer.clone(),
                     msg: BlockMessage::Proposal(proposal.clone()),
                 });
             }
@@ -1091,10 +1082,11 @@ impl Actor {
         let local_idx = self.local_validator_index_for_topology(&topology);
         let local_peer = local_idx.map(|_| local_peer_id.clone());
 
-        if da_enabled && pending_queue_len == 0 && empty_child_ctx.is_none() {
+        let has_work = pending_queue_len > 0 || empty_child_ctx.is_some();
+        if da_enabled && !has_work {
             trace!(
                 da_enabled,
-                "DA enabled and transaction queue is empty; proposing heartbeat"
+                "DA enabled and transaction queue is empty; deferring heartbeat proposals"
             );
         }
 
@@ -1220,6 +1212,13 @@ impl Actor {
                     "pending block already assembled for current slot; waiting for view-change"
                 );
             }
+        }
+        if !has_work {
+            trace!(
+                height = view_height,
+                "deferring proposal: no queued transactions or empty-child fallback"
+            );
+            return false;
         }
 
         let new_view_summary: Vec<String> = self

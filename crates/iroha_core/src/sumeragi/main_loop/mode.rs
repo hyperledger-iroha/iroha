@@ -121,7 +121,6 @@ impl Actor {
         };
         let (_, redundant_r) = self.collector_plan_params_for_mode(effective_mode);
         self.subsystems.propose.collector_redundant_limit = redundant_r.max(1);
-        self.pending.pending_replay_last_sent.clear();
         self.pending.missing_block_requests.clear();
         self.subsystems.da_rbc.da.da_bundles.clear();
         self.subsystems.da_rbc.da.da_pin_bundles.clear();

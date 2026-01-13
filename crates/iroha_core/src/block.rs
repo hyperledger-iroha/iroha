@@ -4294,11 +4294,8 @@ pub(crate) mod valid {
                 );
             }
 
-            // PQC (e.g., ML‑DSA Dilithium) deterministic grouping (feature-gated).
-            // Activated when `iroha_core/ml-dsa` is enabled, which pulls `iroha_crypto/ml-dsa`.
-            #[cfg(feature = "ml-dsa")]
+            // PQC (e.g., ML‑DSA Dilithium) deterministic grouping.
             let mut pqc_preverified = false;
-            #[cfg(feature = "ml-dsa")]
             {
                 #[derive(Clone)]
                 struct PqcItem {
@@ -4479,16 +4476,7 @@ pub(crate) mod valid {
                                         false
                                     }
                                 })
-                                || ({
-                                    #[cfg(feature = "ml-dsa")]
-                                    {
-                                        algo == iroha_crypto::Algorithm::MlDsa && pqc_preverified
-                                    }
-                                    #[cfg(not(feature = "ml-dsa"))]
-                                    {
-                                        false
-                                    }
-                                })
+                                || (algo == iroha_crypto::Algorithm::MlDsa && pqc_preverified)
                         }
                         AccountController::Multisig(_) => false,
                     };

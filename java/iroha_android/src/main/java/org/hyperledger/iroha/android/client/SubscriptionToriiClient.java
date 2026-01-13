@@ -114,6 +114,11 @@ public final class SubscriptionToriiClient {
     return executeSubscriptionAction(subscriptionId, "cancel", request);
   }
 
+  public CompletableFuture<SubscriptionActionResponse> keepSubscription(
+      final String subscriptionId, final SubscriptionActionRequest request) {
+    return executeSubscriptionAction(subscriptionId, "keep", request);
+  }
+
   public CompletableFuture<SubscriptionActionResponse> chargeSubscriptionNow(
       final String subscriptionId, final SubscriptionActionRequest request) {
     return executeSubscriptionAction(subscriptionId, "charge-now", request);

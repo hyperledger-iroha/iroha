@@ -329,9 +329,8 @@ pub enum Instr {
         args: Vec<Temp>,
         dests: Vec<Temp>,
     },
-    /// Host helper: set account detail (pointer-ABI or sentinel defaults).
-    /// Accepts either pointer temps produced by `account_id/name/json` builtins
-    /// or integer sentinels (0s) to use host defaults.
+    /// Host helper: set account detail (pointer-ABI).
+    /// Accepts pointer temps produced by `account_id/name/json` builtins.
     SetAccountDetail {
         account: Temp,
         key: Temp,

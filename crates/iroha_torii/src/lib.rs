@@ -4621,6 +4621,49 @@ async fn handler_subscription_cancel(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_subscription_keep(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    AxPath(subscription_raw): AxPath<String>,
+    crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
+        crate::routing::SubscriptionActionDto,
+    >,
+) -> Result<impl IntoResponse, Error> {
+    let subscription_id = parse_nft_id(&subscription_raw)?;
+    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        return routing::handle_post_v1_subscription_keep(
+            app.chain_id.clone(),
+            app.queue.clone(),
+            app.state.clone(),
+            app.telemetry.clone(),
+            subscription_id,
+            crate::utils::extractors::NoritoJson(req),
+        )
+        .await;
+    }
+
+    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    check_access_enforced(
+        &app,
+        &headers,
+        None,
+        "v1/subscriptions/{subscription_id}/keep",
+        enforce,
+    )
+    .await?;
+
+    routing::handle_post_v1_subscription_keep(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        app.telemetry.clone(),
+        subscription_id,
+        crate::utils::extractors::NoritoJson(req),
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_subscription_usage(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -12038,6 +12081,10 @@ impl Torii {
                 .route(
                     "/v1/subscriptions/{subscription_id}/cancel",
                     post(handler_subscription_cancel),
+                )
+                .route(
+                    "/v1/subscriptions/{subscription_id}/keep",
+                    post(handler_subscription_keep),
                 )
                 .route(
                     "/v1/subscriptions/{subscription_id}/usage",

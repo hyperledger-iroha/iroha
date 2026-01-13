@@ -1,6 +1,5 @@
 //! Regression tests for ML-DSA key pair construction.
 
-#[cfg(feature = "ml-dsa")]
 mod mldsa_tests {
     use iroha_crypto::{Algorithm, Error, KeyPair, PrivateKey, PublicKey, Signature};
     use pqcrypto_dilithium::dilithium3 as dilithium;

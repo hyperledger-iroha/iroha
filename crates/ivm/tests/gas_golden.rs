@@ -1,3 +1,5 @@
+//! Gas cost golden tests for IVM opcodes and syscalls.
+
 mod common;
 
 use instruction::wide;
@@ -10,7 +12,6 @@ fn halt32(code: &mut Vec<u8>) {
     code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
 }
 
-#[cfg(feature = "ed25519")]
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     use iroha_crypto::Hash;
     let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
@@ -886,7 +887,6 @@ fn crypto_schedule_cost_constants() {
     assert_eq!(cost_of(mk(wide::crypto::DILITHIUMVERIFY)), 5000);
 }
 
-#[cfg(feature = "ed25519")]
 #[test]
 fn ed25519_batchverify_charges_per_entry() {
     use ed25519_dalek::{Signer, SigningKey};

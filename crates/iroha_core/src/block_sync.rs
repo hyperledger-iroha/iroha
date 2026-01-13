@@ -199,6 +199,78 @@ mod queue_cap_tests {
 }
 
 #[cfg(test)]
+mod gossip_backoff_tests {
+    use std::{collections::BTreeSet, num::NonZeroU32, sync::Arc, time::Instant};
+
+    use iroha_crypto::KeyPair;
+    use iroha_data_model::peer::{Peer, PeerId};
+
+    use super::*;
+    use crate::prelude::World;
+    use crate::query::store::LiveQueryStore;
+    use crate::sumeragi::test_sumeragi_handle;
+
+    fn dummy_block_sync() -> BlockSynchronizer {
+        let (sumeragi, _rx) = test_sumeragi_handle(0);
+        let kura = Kura::blank_kura_for_testing();
+        let state = Arc::new(State::new_for_testing(
+            World::new(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        ));
+        let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+        let peer = Peer::new(
+            "127.0.0.1:0".parse().expect("valid socket address"),
+            peer_id,
+        );
+        BlockSynchronizer {
+            sumeragi,
+            kura,
+            peer,
+            gossip_period: Duration::from_secs(1),
+            gossip_max_period: Duration::from_secs(8),
+            gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
+            gossip_backoff: Duration::from_secs(1),
+            gossip_next_deadline: Instant::now(),
+            network: crate::IrohaNetwork::closed_for_tests(),
+            relay_ttl: 1,
+            block_sync_frame_cap: 1024,
+            state,
+            seen_blocks: BTreeSet::new(),
+            unknown_prev_hashes: BTreeMap::new(),
+            latest_height: 0,
+            last_peers: BTreeSet::new(),
+            last_drop_count: 0,
+            last_drop_at: None,
+            fallback_consensus_mode: ConsensusMode::Permissioned,
+        }
+    }
+
+    #[test]
+    fn block_sync_backoff_doubles_until_max() {
+        let min = Duration::from_secs(1);
+        let max = Duration::from_secs(8);
+        let backoff = BlockSynchronizer::next_block_sync_backoff(min, min, max, false);
+        assert_eq!(backoff, Duration::from_secs(2));
+        let backoff = BlockSynchronizer::next_block_sync_backoff(backoff, min, max, false);
+        assert_eq!(backoff, Duration::from_secs(4));
+        let backoff = BlockSynchronizer::next_block_sync_backoff(backoff, min, max, false);
+        assert_eq!(backoff, Duration::from_secs(8));
+        let reset = BlockSynchronizer::next_block_sync_backoff(backoff, min, max, true);
+        assert_eq!(reset, min);
+    }
+
+    #[test]
+    fn peer_set_changed_detects_updates() {
+        let mut sync = dummy_block_sync();
+        assert!(!sync.peer_set_changed(&[]));
+        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        assert!(sync.peer_set_changed(&[peer.clone()]));
+        assert!(!sync.peer_set_changed(&[peer]));
+    }
+}
+
+#[cfg(test)]
 mod unknown_prev_hash_tests {
     use std::collections::BTreeMap;
 
@@ -239,7 +311,10 @@ pub struct BlockSynchronizer {
     kura: Arc<Kura>,
     peer: Peer,
     gossip_period: Duration,
+    gossip_max_period: Duration,
     gossip_size: NonZeroU32,
+    gossip_backoff: Duration,
+    gossip_next_deadline: std::time::Instant,
     network: IrohaNetwork,
     relay_ttl: u8,
     block_sync_frame_cap: usize,
@@ -247,6 +322,9 @@ pub struct BlockSynchronizer {
     seen_blocks: BTreeSet<(NonZeroU64, HashOf<BlockHeader>)>,
     unknown_prev_hashes: BTreeMap<PeerId, (HashOf<BlockHeader>, u64)>,
     latest_height: u64,
+    last_peers: BTreeSet<PeerId>,
+    last_drop_count: u64,
+    last_drop_at: Option<std::time::Instant>,
     fallback_consensus_mode: ConsensusMode,
 }
 
@@ -300,8 +378,41 @@ impl BlockSynchronizer {
         seen_blocks.retain(|(height, _hash)| height.get() >= now_height);
     }
 
+    fn next_block_sync_backoff(
+        current: Duration,
+        min: Duration,
+        max: Duration,
+        progress: bool,
+    ) -> Duration {
+        if progress {
+            return min;
+        }
+        current.saturating_mul(2).min(max)
+    }
+
+    fn peer_set_changed(&mut self, peers: &[PeerId]) -> bool {
+        let mut set = BTreeSet::new();
+        set.extend(peers.iter().cloned());
+        if set == self.last_peers {
+            return false;
+        }
+        self.last_peers = set;
+        true
+    }
+
+    fn block_sync_backpressure_active(&mut self, now: std::time::Instant) -> bool {
+        let current = iroha_p2p::network::subscriber_queue_full_count();
+        if current > self.last_drop_count {
+            self.last_drop_count = current;
+            self.last_drop_at = Some(now);
+        }
+        self.last_drop_at
+            .is_some_and(|last| now.saturating_duration_since(last) < self.gossip_backoff)
+    }
+
     /// Sends requests for the latest blocks to a subset of online peers
     async fn request_block(&mut self) {
+        let now = std::time::Instant::now();
         let now_height = match u64::try_from(self.state.view().height()) {
             Ok(height) => height,
             Err(_) => {
@@ -320,7 +431,37 @@ impl BlockSynchronizer {
         let peers = self
             .network
             .online_peers(|set| set.iter().map(|peer| peer.id().clone()).collect::<Vec<_>>());
+        let peers_changed = self.peer_set_changed(&peers);
+        let has_unknown_prev = !self.unknown_prev_hashes.is_empty();
+        let height_changed = now_height != previous_height;
+        let progress = height_changed || peers_changed || has_unknown_prev;
+        if progress {
+            self.gossip_backoff = self.gossip_period;
+            let next = now.checked_add(self.gossip_period).unwrap_or(now);
+            if next < self.gossip_next_deadline {
+                self.gossip_next_deadline = next;
+            }
+        }
+        if now < self.gossip_next_deadline {
+            return;
+        }
+        if self.block_sync_backpressure_active(now) {
+            self.gossip_next_deadline = now.checked_add(self.gossip_backoff).unwrap_or(now);
+            iroha_logger::trace!(
+                drops = self.last_drop_count,
+                cooldown_ms = self.gossip_backoff.as_millis(),
+                "block sync skipping request due to relay backpressure"
+            );
+            return;
+        }
         if peers.is_empty() {
+            self.gossip_backoff = Self::next_block_sync_backoff(
+                self.gossip_backoff,
+                self.gossip_period,
+                self.gossip_max_period,
+                progress,
+            );
+            self.gossip_next_deadline = now.checked_add(self.gossip_backoff).unwrap_or(now);
             return;
         }
 
@@ -357,6 +498,13 @@ impl BlockSynchronizer {
         for peer_id in targets {
             self.request_latest_blocks_from_peer(peer_id).await;
         }
+        self.gossip_backoff = Self::next_block_sync_backoff(
+            self.gossip_backoff,
+            self.gossip_period,
+            self.gossip_max_period,
+            progress,
+        );
+        self.gossip_next_deadline = now.checked_add(self.gossip_backoff).unwrap_or(now);
     }
 
     /// Sends request for latest blocks to a chosen peer
@@ -390,12 +538,18 @@ impl BlockSynchronizer {
         relay_ttl: u8,
         block_sync_frame_cap: usize,
     ) -> Self {
+        let gossip_period = config.gossip_period;
+        let gossip_max_period = config.gossip_max_period.max(gossip_period);
+        let now = std::time::Instant::now();
         Self {
             peer,
             sumeragi,
             kura,
-            gossip_period: config.gossip_period,
+            gossip_period,
+            gossip_max_period,
             gossip_size: config.gossip_size,
+            gossip_backoff: gossip_period,
+            gossip_next_deadline: now,
             network,
             relay_ttl,
             block_sync_frame_cap,
@@ -403,6 +557,9 @@ impl BlockSynchronizer {
             seen_blocks: BTreeSet::new(),
             unknown_prev_hashes: BTreeMap::new(),
             latest_height: 0,
+            last_peers: BTreeSet::new(),
+            last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
+            last_drop_at: None,
             fallback_consensus_mode,
         }
     }
@@ -2949,7 +3106,10 @@ pub mod message {
                     kura,
                     peer,
                     gossip_period: Duration::from_secs(1),
+                    gossip_max_period: Duration::from_secs(1),
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
+                    gossip_backoff: Duration::from_secs(1),
+                    gossip_next_deadline: Instant::now(),
                     network: crate::IrohaNetwork::closed_for_tests(),
                     relay_ttl: 1,
                     block_sync_frame_cap: 1024,
@@ -2957,6 +3117,9 @@ pub mod message {
                     seen_blocks: BTreeSet::new(),
                     unknown_prev_hashes: BTreeMap::new(),
                     latest_height: 0,
+                    last_peers: BTreeSet::new(),
+                    last_drop_count: 0,
+                    last_drop_at: None,
                     fallback_consensus_mode: ConsensusMode::Permissioned,
                 };
 

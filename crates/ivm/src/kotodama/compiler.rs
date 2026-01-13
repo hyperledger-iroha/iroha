@@ -1656,68 +1656,54 @@ impl Compiler {
                             amount,
                         } => {
                             // Pointer-ABI: accept literal pointers (from string_map) or runtime pointers.
-                            // Sentinel mode: x10=x11=0; host resolves authority and rose#wonderland.
-                            if int_const_map.get(&(func_idx, *account)) == Some(&0)
-                                && int_const_map.get(&(func_idx, *asset)) == Some(&0)
+                            if int_const_map.contains_key(&(func_idx, *account))
+                                || int_const_map.contains_key(&(func_idx, *asset))
                             {
-                                let r_amt = src_reg(amount, scratch1, &mut code);
-                                emit_addi(&mut code, 10, 0, 0);
-                                emit_addi(&mut code, 11, 0, 0);
-                                code.extend_from_slice(&encode_addi(12, r_amt, 0).to_le_bytes());
-                            } else {
-                                if int_const_map.contains_key(&(func_idx, *account))
-                                    || int_const_map.contains_key(&(func_idx, *asset))
-                                {
-                                    return Err(i18n::translate(
-                                        self.lang,
-                                        Message::UnsupportedBinaryOp(
-                                            "mint_asset expects (account, asset) as pointers or 0 sentinels",
-                                        ),
-                                    ));
-                                }
-                                // r10 = &AccountId
-                                if let Some(k_acc) = string_map
-                                    .get(&(func_idx, *account))
-                                    .map(|s| DataKey(DataKind::Account, s.clone()))
-                                {
-                                    emit_literal_stub(&mut code, &mut fixups, 10, k_acc);
-                                } else {
-                                    let r_acc = src_reg(account, scratch1, &mut code);
-                                    code.extend_from_slice(
-                                        &encode_addi(10, r_acc, 0).to_le_bytes(),
-                                    );
-                                }
-                                // r11 = &AssetDefinitionId
-                                if let Some(k_asset) = string_map
-                                    .get(&(func_idx, *asset))
-                                    .map(|s| DataKey(DataKind::AssetDef, s.clone()))
-                                {
-                                    emit_literal_stub(&mut code, &mut fixups, 11, k_asset);
-                                } else {
-                                    let r_asset = src_reg(asset, scratch2, &mut code);
-                                    code.extend_from_slice(
-                                        &encode_addi(11, r_asset, 0).to_le_bytes(),
-                                    );
-                                }
-                                // r12 = amount
-                                let r_amt = src_reg(amount, scratch1, &mut code);
-                                code.extend_from_slice(&encode_addi(12, r_amt, 0).to_le_bytes());
-
-                                // Mirror TLVs for r10 and r11 into INPUT to satisfy pointer‑ABI validation.
-                                let pub_word = encoding::wide::encode_sys(
-                                    instruction::wide::system::SCALL,
-                                    syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
-                                );
-                                // Publish r10 and preserve it in x13.
-                                code.extend_from_slice(&pub_word.to_le_bytes());
-                                code.extend_from_slice(&encode_addi(13, 10, 0).to_le_bytes());
-                                // Publish r11: x10 <- x11; publish; x11 <- x10.
-                                code.extend_from_slice(&encode_addi(10, 11, 0).to_le_bytes());
-                                code.extend_from_slice(&pub_word.to_le_bytes());
-                                code.extend_from_slice(&encode_addi(11, 10, 0).to_le_bytes());
-                                // Restore account pointer: x10 <- x13.
-                                code.extend_from_slice(&encode_addi(10, 13, 0).to_le_bytes());
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::UnsupportedBinaryOp(
+                                        "mint_asset expects (account, asset) pointers",
+                                    ),
+                                ));
                             }
+                            // r10 = &AccountId
+                            if let Some(k_acc) = string_map
+                                .get(&(func_idx, *account))
+                                .map(|s| DataKey(DataKind::Account, s.clone()))
+                            {
+                                emit_literal_stub(&mut code, &mut fixups, 10, k_acc);
+                            } else {
+                                let r_acc = src_reg(account, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r_acc, 0).to_le_bytes());
+                            }
+                            // r11 = &AssetDefinitionId
+                            if let Some(k_asset) = string_map
+                                .get(&(func_idx, *asset))
+                                .map(|s| DataKey(DataKind::AssetDef, s.clone()))
+                            {
+                                emit_literal_stub(&mut code, &mut fixups, 11, k_asset);
+                            } else {
+                                let r_asset = src_reg(asset, scratch2, &mut code);
+                                code.extend_from_slice(&encode_addi(11, r_asset, 0).to_le_bytes());
+                            }
+                            // r12 = amount
+                            let r_amt = src_reg(amount, scratch1, &mut code);
+                            code.extend_from_slice(&encode_addi(12, r_amt, 0).to_le_bytes());
+
+                            // Mirror TLVs for r10 and r11 into INPUT to satisfy pointer-ABI validation.
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            // Publish r10 and preserve it in x13.
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            code.extend_from_slice(&encode_addi(13, 10, 0).to_le_bytes());
+                            // Publish r11: x10 <- x11; publish; x11 <- x10.
+                            code.extend_from_slice(&encode_addi(10, 11, 0).to_le_bytes());
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            code.extend_from_slice(&encode_addi(11, 10, 0).to_le_bytes());
+                            // Restore account pointer: x10 <- x13.
+                            code.extend_from_slice(&encode_addi(10, 13, 0).to_le_bytes());
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_MINT_ASSET as u8,
@@ -3709,14 +3695,17 @@ impl Compiler {
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
                             );
                             code.extend_from_slice(&pub_word.to_le_bytes());
+                            code.extend_from_slice(&encode_addi(scratch1, 10, 0).to_le_bytes());
                             if let Some(s) = string_map.get(&(func_idx, *json)) {
                                 let key = DataKey(DataKind::Json, s.clone());
-                                emit_literal_stub(&mut code, &mut fixups, 11, key);
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
                                 let r = src_reg(json, scratch2, &mut code);
-                                code.extend_from_slice(&encode_addi(11, r, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             code.extend_from_slice(&pub_word.to_le_bytes());
+                            code.extend_from_slice(&encode_addi(11, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(10, scratch1, 0).to_le_bytes());
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_SCHEMA_ENCODE as u8,
@@ -3748,14 +3737,17 @@ impl Compiler {
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
                             );
                             code.extend_from_slice(&pub_word.to_le_bytes());
+                            code.extend_from_slice(&encode_addi(scratch1, 10, 0).to_le_bytes());
                             if let Some(s) = string_map.get(&(func_idx, *blob)) {
                                 let key = DataKey(DataKind::NoritoBytes, s.clone());
-                                emit_literal_stub(&mut code, &mut fixups, 11, key);
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
                                 let r = src_reg(blob, scratch2, &mut code);
-                                code.extend_from_slice(&encode_addi(11, r, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             code.extend_from_slice(&pub_word.to_le_bytes());
+                            code.extend_from_slice(&encode_addi(11, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(10, scratch1, 0).to_le_bytes());
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_SCHEMA_DECODE as u8,

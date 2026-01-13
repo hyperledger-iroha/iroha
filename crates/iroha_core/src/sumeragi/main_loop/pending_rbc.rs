@@ -547,9 +547,15 @@ pub(super) fn rbc_ready_stash_bytes(ready: &RbcReady) -> usize {
 }
 
 pub(super) fn rbc_deliver_stash_bytes(deliver: &RbcDeliver) -> usize {
+    let ready_bytes = deliver
+        .ready_signatures
+        .iter()
+        .map(|entry| std::mem::size_of::<u32>().saturating_add(entry.signature.len()))
+        .sum::<usize>();
     deliver
         .signature
         .len()
+        .saturating_add(ready_bytes)
         .saturating_add(deliver.roster_hash.as_ref().len())
         .saturating_add(deliver.chunk_root.as_ref().len())
         .saturating_add(deliver.block_hash.as_ref().as_ref().len())

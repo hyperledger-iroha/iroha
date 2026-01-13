@@ -3,20 +3,12 @@
 /// This module provides wrappers around common signature libraries so that
 /// callers can choose between classical Ed25519 and post-quantum ML-DSA
 /// (Crystals Dilithium) verification.
-
-#[cfg(feature = "ed25519")]
 use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey as Ed25519VerifyingKey};
-#[cfg(feature = "secp256k1")]
-use iroha_crypto::EcdsaSecp256k1Sha256;
-#[cfg(feature = "ed25519")]
-use iroha_crypto::ed25519_verify_batch_deterministic;
-#[cfg(feature = "ml-dsa")]
+use iroha_crypto::{EcdsaSecp256k1Sha256, ed25519_verify_batch_deterministic};
 use pqcrypto_dilithium::dilithium3 as dilithium;
-#[cfg(feature = "ml-dsa")]
 use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _};
 
 /// Norito-encoded bundle describing a single Ed25519 verification item.
-#[cfg(feature = "ed25519")]
 #[derive(Debug, Clone, norito::Encode, norito::Decode, PartialEq, Eq)]
 pub struct Ed25519BatchEntry {
     /// Message bytes to verify.
@@ -28,7 +20,6 @@ pub struct Ed25519BatchEntry {
 }
 
 /// Norito-encoded request for deterministic Ed25519 batch verification.
-#[cfg(feature = "ed25519")]
 #[derive(Debug, Clone, norito::Encode, norito::Decode, PartialEq, Eq)]
 pub struct Ed25519BatchRequest {
     /// Domain-separation seed used by the deterministic batch verifier.
@@ -38,7 +29,6 @@ pub struct Ed25519BatchRequest {
 }
 
 /// Outcome of deterministic Ed25519 batch verification.
-#[cfg(feature = "ed25519")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ed25519BatchError {
     /// Request contained no entries.
@@ -55,18 +45,14 @@ pub enum Ed25519BatchError {
 #[derive(Clone, Copy, Debug)]
 pub enum SignatureScheme {
     /// Ed25519 using the `ed25519-dalek` crate.
-    #[cfg(feature = "ed25519")]
     Ed25519,
     /// ML-DSA (Crystals Dilithium) using the `ml-dsa` crate.
-    #[cfg(feature = "ml-dsa")]
     MlDsa,
     /// Secp256k1 ECDSA using the `k256` crate.
-    #[cfg(feature = "secp256k1")]
     Secp256k1,
 }
 
 /// Ed25519 batch verification input.
-#[cfg(feature = "ed25519")]
 #[derive(Clone, Debug)]
 pub struct Ed25519BatchItem<'a> {
     /// Message to verify.
@@ -87,72 +73,53 @@ pub fn verify_signature(
     signature: &[u8],
     public_key: &[u8],
 ) -> bool {
-    #[cfg(not(any(feature = "ed25519", feature = "ml-dsa", feature = "secp256k1")))]
-    {
-        let _ = scheme;
-        let _ = message;
-        let _ = signature;
-        let _ = public_key;
-        return false;
+    match scheme {
+        SignatureScheme::Ed25519 => {
+            let pk_bytes: &[u8; 32] = match public_key.try_into() {
+                Ok(b) => b,
+                Err(_) => return false,
+            };
+            let pk = match Ed25519VerifyingKey::from_bytes(pk_bytes) {
+                Ok(pk) => pk,
+                Err(_) => return false,
+            };
+            let sig = match Ed25519Signature::from_slice(signature) {
+                Ok(s) => s,
+                Err(_) => return false,
+            };
+            pk.verify_strict(message, &sig).is_ok()
+        }
+        SignatureScheme::MlDsa => {
+            if public_key.len() != dilithium::public_key_bytes()
+                || signature.len() != dilithium::signature_bytes()
+            {
+                return false;
+            }
+            let pk = match dilithium::PublicKey::from_bytes(public_key) {
+                Ok(pk) => pk,
+                Err(_) => return false,
+            };
+            let sig = match dilithium::DetachedSignature::from_bytes(signature) {
+                Ok(s) => s,
+                Err(_) => return false,
+            };
+            dilithium::verify_detached_signature(&sig, message, &pk).is_ok()
+        }
+        SignatureScheme::Secp256k1 => {
+            if signature.len() != 64 {
+                return false;
+            }
+            let pk = match EcdsaSecp256k1Sha256::parse_public_key(public_key) {
+                Ok(pk) => pk,
+                Err(_) => return false,
+            };
+            EcdsaSecp256k1Sha256::verify(message, signature, &pk).is_ok()
+        }
     }
-
-    #[cfg(any(feature = "ed25519", feature = "ml-dsa", feature = "secp256k1"))]
-    {
-        return match scheme {
-            #[cfg(feature = "ed25519")]
-            SignatureScheme::Ed25519 => {
-                let pk_bytes: &[u8; 32] = match public_key.try_into() {
-                    Ok(b) => b,
-                    Err(_) => return false,
-                };
-                let pk = match Ed25519VerifyingKey::from_bytes(pk_bytes) {
-                    Ok(pk) => pk,
-                    Err(_) => return false,
-                };
-                let sig = match Ed25519Signature::from_slice(signature) {
-                    Ok(s) => s,
-                    Err(_) => return false,
-                };
-                pk.verify_strict(message, &sig).is_ok()
-            }
-            #[cfg(feature = "ml-dsa")]
-            SignatureScheme::MlDsa => {
-                if public_key.len() != dilithium::public_key_bytes()
-                    || signature.len() != dilithium::signature_bytes()
-                {
-                    return false;
-                }
-                let pk = match dilithium::PublicKey::from_bytes(public_key) {
-                    Ok(pk) => pk,
-                    Err(_) => return false,
-                };
-                let sig = match dilithium::DetachedSignature::from_bytes(signature) {
-                    Ok(s) => s,
-                    Err(_) => return false,
-                };
-                dilithium::verify_detached_signature(&sig, message, &pk).is_ok()
-            }
-            #[cfg(feature = "secp256k1")]
-            SignatureScheme::Secp256k1 => {
-                if signature.len() != 64 {
-                    return false;
-                }
-                let pk = match EcdsaSecp256k1Sha256::parse_public_key(public_key) {
-                    Ok(pk) => pk,
-                    Err(_) => return false,
-                };
-                EcdsaSecp256k1Sha256::verify(message, signature, &pk).is_ok()
-            }
-        };
-    }
-
-    #[allow(unreachable_code)]
-    false
 }
 
 /// Deterministically verify a batch of Ed25519 signatures, returning the first
 /// failing entry index on error.
-#[cfg(feature = "ed25519")]
 pub fn verify_ed25519_batch(
     request: &Ed25519BatchRequest,
     max_entries: usize,
@@ -213,7 +180,6 @@ pub fn verify_ed25519_batch(
 /// Verify a batch of Ed25519 signatures. Entries that fail to parse are marked
 /// as invalid. Tries the CUDA per-signature path when available, otherwise
 /// falls back to deterministic CPU verification.
-#[cfg(feature = "ed25519")]
 pub fn verify_ed25519_batch_items(items: &[Ed25519BatchItem<'_>]) -> Vec<bool> {
     if items.is_empty() {
         return Vec::new();
@@ -229,7 +195,7 @@ pub fn verify_ed25519_batch_items(items: &[Ed25519BatchItem<'_>]) -> Vec<bool> {
         None
     };
 
-    for (index, item) in items.iter().enumerate() {
+    for (_index, item) in items.iter().enumerate() {
         let Ok(sig) = Ed25519Signature::from_slice(&item.signature) else {
             parsed.push(None);
             continue;
@@ -251,7 +217,7 @@ pub fn verify_ed25519_batch_items(items: &[Ed25519BatchItem<'_>]) -> Vec<bool> {
             hrams.push(Scalar::from_hash(hasher).to_bytes());
             sigs.push(item.signature);
             pks.push(item.public_key);
-            map.push(index);
+            map.push(_index);
         }
 
         parsed.push(Some((sig, pk)));

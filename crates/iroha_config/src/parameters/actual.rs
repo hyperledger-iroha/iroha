@@ -1177,6 +1177,8 @@ pub struct Network {
     pub idle_timeout: Duration,
     /// Interval between peer gossip batches.
     pub peer_gossip_period: Duration,
+    /// Maximum interval between peer gossip batches (idle backoff ceiling).
+    pub peer_gossip_max_period: Duration,
     /// Whether to advertise and accept signed trust gossip frames.
     pub trust_gossip: bool,
     /// Half-life for peer trust decay (toward zero).
@@ -1214,6 +1216,22 @@ pub struct Network {
     pub p2p_post_queue_cap: NonZeroUsize,
     /// Capacity for the inbound P2P subscriber queue feeding the node relay.
     pub p2p_subscriber_queue_cap: NonZeroUsize,
+    /// Optional per-peer consensus ingress rate (msgs/sec). When None, ingress limiting is disabled.
+    pub consensus_ingress_rate_per_sec: Option<std::num::NonZeroU32>,
+    /// Optional burst for consensus ingress rate limiting. Defaults to `rate` when None.
+    pub consensus_ingress_burst: Option<std::num::NonZeroU32>,
+    /// Optional per-peer consensus ingress bytes/sec budget. When None, bytes limiting is disabled.
+    pub consensus_ingress_bytes_per_sec: Option<std::num::NonZeroU32>,
+    /// Optional burst (bytes) for consensus ingress bytes limiting. Defaults to `bytes_per_sec` when None.
+    pub consensus_ingress_bytes_burst: Option<std::num::NonZeroU32>,
+    /// Maximum concurrent RBC sessions accepted per peer before throttling (0 disables).
+    pub consensus_ingress_rbc_session_limit: usize,
+    /// Drop threshold (per window) before temporarily suppressing consensus ingress.
+    pub consensus_ingress_penalty_threshold: u32,
+    /// Window for consensus ingress penalty tracking.
+    pub consensus_ingress_penalty_window: Duration,
+    /// Cooldown applied after consensus ingress penalties trigger.
+    pub consensus_ingress_penalty_cooldown: Duration,
     /// Stagger between parallel dial attempts for multi-address peers.
     pub happy_eyeballs_stagger: Duration,
     /// Prefer IPv6 addresses over hostnames/IPv4 when dialing.
@@ -3569,6 +3587,16 @@ pub struct Sumeragi {
     pub membership_mismatch_alert_threshold: u32,
     /// Whether to drop consensus messages from peers with repeated membership mismatches.
     pub membership_mismatch_fail_closed: bool,
+    /// Maximum height delta accepted for inbound consensus messages (0 disables future gating).
+    pub consensus_future_height_window: u64,
+    /// Maximum view delta accepted for inbound consensus messages (0 disables future gating).
+    pub consensus_future_view_window: u64,
+    /// Invalid signature count before temporarily suppressing a signer (0 disables).
+    pub invalid_sig_penalty_threshold: u32,
+    /// Window for invalid signature penalty counting.
+    pub invalid_sig_penalty_window: Duration,
+    /// Cooldown applied after invalid signature penalties trigger.
+    pub invalid_sig_penalty_cooldown: Duration,
     /// Maximum DA commitments (blobs) permitted in a single block.
     pub da_max_commitments_per_block: usize,
     /// Maximum DA proof openings permitted in a single block (aggregate cap).
@@ -3584,6 +3612,8 @@ pub struct Sumeragi {
     pub require_precommit_qc: bool,
     /// RBC chunk maximum bytes per chunk.
     pub rbc_chunk_max_bytes: usize,
+    /// Optional fanout cap for RBC chunk broadcasts (None = auto based on topology).
+    pub rbc_chunk_fanout: Option<NonZeroUsize>,
     /// Maximum pending RBC chunks stashed before INIT.
     pub rbc_pending_max_chunks: usize,
     /// Maximum pending RBC bytes per session before INIT.
@@ -3847,6 +3877,8 @@ impl Default for LiveQueryStore {
 pub struct BlockSync {
     /// Block gossip interval.
     pub gossip_period: Duration,
+    /// Maximum block gossip interval (idle backoff ceiling).
+    pub gossip_max_period: Duration,
     /// Fanout cap for block-sync gossip (peer samples, block sync updates, availability votes, and NEW_VIEW gossip).
     pub gossip_size: NonZeroU32,
 }
