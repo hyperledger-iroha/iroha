@@ -6140,6 +6140,8 @@ pub struct Metrics {
     pub sumeragi_block_sync_roster_source_total: IntCounterVec,
     /// Sumeragi: block-sync roster drops grouped by reason.
     pub sumeragi_block_sync_roster_drop_total: IntCounterVec,
+    /// Sumeragi: block-sync ShareBlocks dropped because no request was tracked.
+    pub sumeragi_block_sync_share_blocks_unsolicited_total: IntCounter,
     /// Sumeragi: view-change triggers grouped by cause.
     pub sumeragi_view_change_cause_total: IntCounterVec,
     /// Sumeragi: unix timestamp (ms) of the last view-change trigger grouped by cause.
@@ -6518,6 +6520,8 @@ pub struct Metrics {
     pub p2p_ws_inbound_total: GenericGauge<AtomicU64>,
     /// Successful outbound WebSocket P2P connections
     pub p2p_ws_outbound_total: GenericGauge<AtomicU64>,
+    /// Network message queue depth by priority (High/Low).
+    pub p2p_queue_depth: GenericGaugeVec<AtomicU64>,
     /// Bounded network message queue drops split by priority and kind
     pub p2p_queue_dropped_total: GenericGaugeVec<AtomicU64>,
     /// Handshake latency histogram emulation (buckets by `le` in ms)
@@ -9616,6 +9620,14 @@ impl Default for Metrics {
             "Sumeragi aggregate pipeline EMA latency (ms) across pacemaker-controlled phases",
         )
         .expect("Infallible");
+        let p2p_queue_depth = GenericGaugeVec::new(
+            Opts::new(
+                "p2p_queue_depth",
+                "Network message queue depth by priority (High/Low)",
+            ),
+            &["priority"],
+        )
+        .expect("Infallible");
         let p2p_queue_dropped_total = GenericGaugeVec::new(
             Opts::new(
                 "p2p_queue_dropped_total",
@@ -9822,6 +9834,11 @@ impl Default for Metrics {
         )
         .expect("Infallible");
         let _ = sumeragi_block_sync_roster_drop_total.with_label_values(&["missing"]);
+        let sumeragi_block_sync_share_blocks_unsolicited_total = IntCounter::new(
+            "sumeragi_block_sync_share_blocks_unsolicited_total",
+            "Block-sync ShareBlocks dropped because no matching request was tracked",
+        )
+        .expect("Infallible");
         let sumeragi_view_change_cause_total = IntCounterVec::new(
             Opts::new(
                 "sumeragi_view_change_cause_total",
@@ -12563,6 +12580,7 @@ impl Default for Metrics {
             tx_gossip_restricted_public_policy,
             p2p_ws_inbound_total,
             p2p_ws_outbound_total,
+            p2p_queue_depth,
             p2p_queue_dropped_total,
             p2p_handshake_ms_bucket,
             p2p_handshake_ms_sum,
@@ -12586,6 +12604,7 @@ impl Default for Metrics {
             sumeragi_validation_reject_last_timestamp_ms,
             sumeragi_block_sync_roster_source_total,
             sumeragi_block_sync_roster_drop_total,
+            sumeragi_block_sync_share_blocks_unsolicited_total,
             sumeragi_view_change_cause_total,
             sumeragi_view_change_cause_last_timestamp_ms,
             sumeragi_qc_signer_counts,
@@ -13105,6 +13124,7 @@ impl Default for Metrics {
             tx_gossip_caps,
             p2p_ws_inbound_total,
             p2p_ws_outbound_total,
+            p2p_queue_depth,
             p2p_queue_dropped_total,
             p2p_handshake_ms_bucket,
             p2p_handshake_ms_sum,
@@ -13127,6 +13147,7 @@ impl Default for Metrics {
             sumeragi_validation_reject_last_timestamp_ms,
             sumeragi_block_sync_roster_source_total,
             sumeragi_block_sync_roster_drop_total,
+            sumeragi_block_sync_share_blocks_unsolicited_total,
             sumeragi_view_change_cause_total,
             sumeragi_view_change_cause_last_timestamp_ms,
             sumeragi_qc_signer_counts,
@@ -15742,6 +15763,18 @@ mod test {
         );
         println!("{:?}", Status::from(&metrics));
         println!("{:?}", Status::default());
+    }
+
+    #[test]
+    fn p2p_queue_depth_metric_accepts_updates() {
+        let metrics = Metrics::default();
+        metrics.p2p_queue_depth.with_label_values(&["High"]).set(12);
+        metrics.p2p_queue_depth.with_label_values(&["Low"]).set(7);
+        assert_eq!(
+            metrics.p2p_queue_depth.with_label_values(&["High"]).get(),
+            12
+        );
+        assert_eq!(metrics.p2p_queue_depth.with_label_values(&["Low"]).get(), 7);
     }
 
     #[test]

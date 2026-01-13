@@ -72,8 +72,8 @@ fn bls_batch_verify_rejects_empty_input() {
 fn bls_normal_same_message_aggregate_ok_and_fail() {
     let (pk1, sk1) = BlsNormal::keypair(KeyGenOption::Random);
     let (pk2, sk2) = BlsNormal::keypair(KeyGenOption::Random);
-    let kp1: KeyPair = (pk1.clone(), sk1.clone()).into();
-    let kp2: KeyPair = (pk2.clone(), sk2.clone()).into();
+    let kp1: KeyPair = (pk1, sk1.clone()).into();
+    let kp2: KeyPair = (pk2, sk2.clone()).into();
     let pop1 = bls_normal_pop_prove(kp1.private_key()).expect("pop");
     let pop2 = bls_normal_pop_prove(kp2.private_key()).expect("pop");
 
@@ -102,8 +102,8 @@ fn bls_normal_same_message_aggregate_ok_and_fail() {
 fn bls_normal_preaggregated_same_message_roundtrip() {
     let (pk1, sk1) = BlsNormal::keypair(KeyGenOption::Random);
     let (pk2, sk2) = BlsNormal::keypair(KeyGenOption::Random);
-    let kp1: KeyPair = (pk1.clone(), sk1.clone()).into();
-    let kp2: KeyPair = (pk2.clone(), sk2.clone()).into();
+    let kp1: KeyPair = (pk1, sk1.clone()).into();
+    let kp2: KeyPair = (pk2, sk2.clone()).into();
     let pop1 = bls_normal_pop_prove(kp1.private_key()).expect("pop");
     let pop2 = bls_normal_pop_prove(kp2.private_key()).expect("pop");
 
@@ -142,7 +142,7 @@ fn bls_normal_preaggregated_same_message_roundtrip() {
 #[test]
 fn bls_normal_same_message_rejects_duplicate_public_keys() {
     let (pk, sk) = BlsNormal::keypair(KeyGenOption::Random);
-    let kp: KeyPair = (pk.clone(), sk.clone()).into();
+    let kp: KeyPair = (pk, sk.clone()).into();
     let pop = bls_normal_pop_prove(kp.private_key()).expect("pop");
     let msg = b"dup-pk-same-message".to_vec();
     let sig = BlsNormal::sign(&msg, &sk);
@@ -165,8 +165,8 @@ fn bls_normal_same_message_rejects_duplicate_public_keys() {
 fn bls_normal_same_message_rejects_invalid_pop() {
     let (pk1, sk1) = BlsNormal::keypair(KeyGenOption::Random);
     let (pk2, sk2) = BlsNormal::keypair(KeyGenOption::Random);
-    let kp1: KeyPair = (pk1.clone(), sk1.clone()).into();
-    let kp2: KeyPair = (pk2.clone(), sk2.clone()).into();
+    let kp1: KeyPair = (pk1, sk1.clone()).into();
+    let kp2: KeyPair = (pk2, sk2.clone()).into();
     let mut pop1 = bls_normal_pop_prove(kp1.private_key()).expect("pop");
     let pop2 = bls_normal_pop_prove(kp2.private_key()).expect("pop");
 
@@ -188,8 +188,8 @@ fn bls_normal_same_message_rejects_invalid_pop() {
 fn bls_small_same_message_aggregate_ok_and_fail() {
     let (pk1, sk1) = BlsSmall::keypair(KeyGenOption::Random);
     let (pk2, sk2) = BlsSmall::keypair(KeyGenOption::Random);
-    let kp1: KeyPair = (pk1.clone(), sk1.clone()).into();
-    let kp2: KeyPair = (pk2.clone(), sk2.clone()).into();
+    let kp1: KeyPair = (pk1, sk1.clone()).into();
+    let kp2: KeyPair = (pk2, sk2.clone()).into();
     let pop1 = bls_small_pop_prove(kp1.private_key()).expect("pop");
     let pop2 = bls_small_pop_prove(kp2.private_key()).expect("pop");
 
@@ -217,7 +217,7 @@ fn bls_small_same_message_aggregate_ok_and_fail() {
 #[test]
 fn bls_small_same_message_rejects_duplicate_public_keys() {
     let (pk, sk) = BlsSmall::keypair(KeyGenOption::Random);
-    let kp: KeyPair = (pk.clone(), sk.clone()).into();
+    let kp: KeyPair = (pk, sk.clone()).into();
     let pop = bls_small_pop_prove(kp.private_key()).expect("pop");
     let msg = b"dup-pk-same-message-small".to_vec();
     let sig = BlsSmall::sign(&msg, &sk);
@@ -232,8 +232,8 @@ fn bls_small_same_message_rejects_duplicate_public_keys() {
 fn bls_small_same_message_rejects_invalid_pop() {
     let (pk1, sk1) = BlsSmall::keypair(KeyGenOption::Random);
     let (pk2, sk2) = BlsSmall::keypair(KeyGenOption::Random);
-    let kp1: KeyPair = (pk1.clone(), sk1.clone()).into();
-    let kp2: KeyPair = (pk2.clone(), sk2.clone()).into();
+    let kp1: KeyPair = (pk1, sk1.clone()).into();
+    let kp2: KeyPair = (pk2, sk2.clone()).into();
     let mut pop1 = bls_small_pop_prove(kp1.private_key()).expect("pop");
     let pop2 = bls_small_pop_prove(kp2.private_key()).expect("pop");
 

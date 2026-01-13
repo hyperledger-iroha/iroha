@@ -964,6 +964,9 @@ pub struct SumeragiBlockSyncRosterStatus {
     /// Block-sync drops due to missing/invalid roster proofs.
     #[norito(default)]
     pub drop_missing_total: u64,
+    /// Block-sync ShareBlocks drops without a matching request.
+    #[norito(default)]
+    pub drop_unsolicited_share_blocks_total: u64,
 }
 
 /// View-change cause counters surfaced via `/v1/sumeragi/status`.

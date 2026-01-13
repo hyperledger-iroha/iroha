@@ -4,7 +4,7 @@ use std::{
     fmt::Debug,
     num::{NonZeroU32, NonZeroU64},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use iroha_config::parameters::actual::{BlockSync as Config, ConsensusMode};
@@ -34,15 +34,81 @@ use crate::{
         stake_snapshot::{CommitStakeSnapshot, stake_quorum_reached_for_snapshot},
         status,
     },
+    telemetry::Telemetry,
 };
 
 const BLOCK_SYNC_QUEUE_CAP_MULTIPLIER: usize = 4;
 const BLOCK_SYNC_QUEUE_CAP_FLOOR: usize = 4;
+const BLOCK_SYNC_REQUEST_MAX_PENDING: u8 = 2;
+const BLOCK_SYNC_REQUEST_TTL_FLOOR_MS: u64 = 1_000;
 
 fn block_sync_channel_cap(gossip_size: NonZeroU32) -> usize {
     let base = usize::try_from(gossip_size.get()).unwrap_or(1);
     base.saturating_mul(BLOCK_SYNC_QUEUE_CAP_MULTIPLIER)
         .max(BLOCK_SYNC_QUEUE_CAP_FLOOR)
+}
+
+fn block_sync_request_ttl(gossip_period: Duration, gossip_max_period: Duration) -> Duration {
+    let ttl = gossip_max_period.saturating_add(gossip_period);
+    ttl.max(Duration::from_millis(BLOCK_SYNC_REQUEST_TTL_FLOOR_MS))
+}
+
+#[derive(Debug, Clone)]
+struct BlockSyncRequestState {
+    last_request: Instant,
+    pending: u8,
+}
+
+#[derive(Debug)]
+struct BlockSyncRequestTracker {
+    pending: BTreeMap<PeerId, BlockSyncRequestState>,
+    ttl: Duration,
+}
+
+impl BlockSyncRequestTracker {
+    fn new(ttl: Duration) -> Self {
+        Self {
+            pending: BTreeMap::new(),
+            ttl,
+        }
+    }
+
+    fn record_request(&mut self, peer_id: PeerId, now: Instant) {
+        self.prune_expired(now);
+        let entry = self
+            .pending
+            .entry(peer_id)
+            .or_insert(BlockSyncRequestState {
+                last_request: now,
+                pending: 0,
+            });
+        entry.last_request = now;
+        entry.pending = entry
+            .pending
+            .saturating_add(1)
+            .min(BLOCK_SYNC_REQUEST_MAX_PENDING);
+    }
+
+    fn allow_response(&mut self, peer_id: &PeerId, now: Instant) -> bool {
+        self.prune_expired(now);
+        let Some(entry) = self.pending.get_mut(peer_id) else {
+            return false;
+        };
+        if now.saturating_duration_since(entry.last_request) > self.ttl || entry.pending == 0 {
+            self.pending.remove(peer_id);
+            return false;
+        }
+        entry.pending = entry.pending.saturating_sub(1);
+        if entry.pending == 0 {
+            self.pending.remove(peer_id);
+        }
+        true
+    }
+
+    fn prune_expired(&mut self, now: Instant) {
+        self.pending
+            .retain(|_, entry| now.saturating_duration_since(entry.last_request) <= self.ttl);
+    }
 }
 
 fn should_share_unknown_prev_hash(
@@ -199,6 +265,49 @@ mod queue_cap_tests {
 }
 
 #[cfg(test)]
+mod request_tracker_tests {
+    use iroha_crypto::KeyPair;
+    use iroha_data_model::peer::PeerId;
+
+    use super::*;
+
+    #[test]
+    fn block_sync_request_tracker_allows_single_response() {
+        let mut tracker = BlockSyncRequestTracker::new(Duration::from_secs(5));
+        let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+        let now = Instant::now();
+
+        tracker.record_request(peer_id.clone(), now);
+        assert!(tracker.allow_response(&peer_id, now));
+        assert!(!tracker.allow_response(&peer_id, now));
+    }
+
+    #[test]
+    fn block_sync_request_tracker_caps_pending_responses() {
+        let mut tracker = BlockSyncRequestTracker::new(Duration::from_secs(5));
+        let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+        let now = Instant::now();
+
+        tracker.record_request(peer_id.clone(), now);
+        tracker.record_request(peer_id.clone(), now + Duration::from_millis(10));
+        assert!(tracker.allow_response(&peer_id, now + Duration::from_millis(20)));
+        assert!(tracker.allow_response(&peer_id, now + Duration::from_millis(20)));
+        assert!(!tracker.allow_response(&peer_id, now + Duration::from_millis(20)));
+    }
+
+    #[test]
+    fn block_sync_request_tracker_expires_requests() {
+        let mut tracker = BlockSyncRequestTracker::new(Duration::from_millis(50));
+        let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+        let now = Instant::now();
+
+        tracker.record_request(peer_id.clone(), now);
+        let later = now + Duration::from_millis(75);
+        assert!(!tracker.allow_response(&peer_id, later));
+    }
+}
+
+#[cfg(test)]
 mod gossip_backoff_tests {
     use std::{collections::BTreeSet, num::NonZeroU32, sync::Arc, time::Instant};
 
@@ -236,8 +345,13 @@ mod gossip_backoff_tests {
             relay_ttl: 1,
             block_sync_frame_cap: 1024,
             state,
+            telemetry: None,
             seen_blocks: BTreeSet::new(),
             unknown_prev_hashes: BTreeMap::new(),
+            request_tracker: BlockSyncRequestTracker::new(block_sync_request_ttl(
+                Duration::from_secs(1),
+                Duration::from_secs(8),
+            )),
             latest_height: 0,
             last_peers: BTreeSet::new(),
             last_drop_count: 0,
@@ -319,8 +433,10 @@ pub struct BlockSynchronizer {
     relay_ttl: u8,
     block_sync_frame_cap: usize,
     state: Arc<State>,
+    telemetry: Option<Telemetry>,
     seen_blocks: BTreeSet<(NonZeroU64, HashOf<BlockHeader>)>,
     unknown_prev_hashes: BTreeMap<PeerId, (HashOf<BlockHeader>, u64)>,
+    request_tracker: BlockSyncRequestTracker,
     latest_height: u64,
     last_peers: BTreeSet<PeerId>,
     last_drop_count: u64,
@@ -513,6 +629,8 @@ impl BlockSynchronizer {
             let state_view = self.state.view();
             (state_view.prev_block_hash(), state_view.latest_block_hash())
         };
+        self.request_tracker
+            .record_request(peer_id.clone(), Instant::now());
         message::Message::GetBlocksAfter(message::GetBlocksAfter::new(
             self.peer.id().clone(),
             prev_hash,
@@ -534,6 +652,7 @@ impl BlockSynchronizer {
         peer: Peer,
         network: IrohaNetwork,
         state: Arc<State>,
+        telemetry: Option<Telemetry>,
         fallback_consensus_mode: ConsensusMode,
         relay_ttl: u8,
         block_sync_frame_cap: usize,
@@ -554,8 +673,13 @@ impl BlockSynchronizer {
             relay_ttl,
             block_sync_frame_cap,
             state,
+            telemetry,
             seen_blocks: BTreeSet::new(),
             unknown_prev_hashes: BTreeMap::new(),
+            request_tracker: BlockSyncRequestTracker::new(block_sync_request_ttl(
+                gossip_period,
+                gossip_max_period,
+            )),
             latest_height: 0,
             last_peers: BTreeSet::new(),
             last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
@@ -2775,12 +2899,28 @@ pub mod message {
                     }
                 }
                 Message::ShareBlocks(ShareBlocks {
+                    peer_id,
                     blocks,
                     qcs,
                     rosters,
-                    ..
                 }) => {
                     use crate::sumeragi::message::BlockSyncUpdate;
+
+                    if !block_sync
+                        .request_tracker
+                        .allow_response(&peer_id, Instant::now())
+                    {
+                        debug!(
+                            peer = %peer_id,
+                            total = blocks.len(),
+                            "dropping unsolicited block sync batch"
+                        );
+                        status::inc_block_sync_roster_drop_unsolicited_share_blocks();
+                        if let Some(telemetry) = block_sync.telemetry.as_ref() {
+                            telemetry.note_block_sync_unsolicited_share_blocks_drop();
+                        }
+                        return;
+                    }
 
                     let total = blocks.len();
                     if let Err(err) = validate_share_blocks_sequence(blocks) {
@@ -3101,6 +3241,7 @@ pub mod message {
                     "127.0.0.1:0".parse().expect("valid socket address"),
                     peer_id.clone(),
                 );
+                let sender_peer_id = PeerId::new(KeyPair::random().public_key().clone());
                 let mut block_sync = BlockSynchronizer {
                     sumeragi,
                     kura,
@@ -3114,14 +3255,22 @@ pub mod message {
                     relay_ttl: 1,
                     block_sync_frame_cap: 1024,
                     state,
+                    telemetry: None,
                     seen_blocks: BTreeSet::new(),
                     unknown_prev_hashes: BTreeMap::new(),
+                    request_tracker: BlockSyncRequestTracker::new(block_sync_request_ttl(
+                        Duration::from_secs(1),
+                        Duration::from_secs(1),
+                    )),
                     latest_height: 0,
                     last_peers: BTreeSet::new(),
                     last_drop_count: 0,
                     last_drop_at: None,
                     fallback_consensus_mode: ConsensusMode::Permissioned,
                 };
+                block_sync
+                    .request_tracker
+                    .record_request(sender_peer_id.clone(), Instant::now());
 
                 let keypair = KeyPair::random();
                 let block =
@@ -3138,7 +3287,10 @@ pub mod message {
                     stake_snapshot: None,
                 }];
                 let msg = message::Message::ShareBlocks(message::ShareBlocks::new(
-                    blocks, peer_id, qcs, rosters,
+                    blocks,
+                    sender_peer_id,
+                    qcs,
+                    rosters,
                 ));
 
                 let unblock_delay = Duration::from_millis(200);
@@ -3171,6 +3323,88 @@ pub mod message {
 
                 handle_message.await;
                 unblock.join().expect("unblock thread");
+            });
+        }
+
+        #[test]
+        fn unsolicited_share_blocks_increments_telemetry() {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .expect("tokio runtime");
+
+            runtime.block_on(async {
+                let (sumeragi, _block_rx) = test_sumeragi_handle(0);
+                let kura = Kura::blank_kura_for_testing();
+                let state = Arc::new(State::new_for_testing(
+                    World::new(),
+                    Arc::clone(&kura),
+                    LiveQueryStore::start_test(),
+                ));
+                let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let peer = Peer::new(
+                    "127.0.0.1:0".parse().expect("valid socket address"),
+                    peer_id,
+                );
+                let sender_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
+                let telemetry = Telemetry::new(metrics.clone(), true);
+                let mut block_sync = BlockSynchronizer {
+                    sumeragi,
+                    kura,
+                    peer,
+                    gossip_period: Duration::from_secs(1),
+                    gossip_max_period: Duration::from_secs(1),
+                    gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
+                    gossip_backoff: Duration::from_secs(1),
+                    gossip_next_deadline: Instant::now(),
+                    network: crate::IrohaNetwork::closed_for_tests(),
+                    relay_ttl: 1,
+                    block_sync_frame_cap: 1024,
+                    state,
+                    telemetry: Some(telemetry),
+                    seen_blocks: BTreeSet::new(),
+                    unknown_prev_hashes: BTreeMap::new(),
+                    request_tracker: BlockSyncRequestTracker::new(block_sync_request_ttl(
+                        Duration::from_secs(1),
+                        Duration::from_secs(1),
+                    )),
+                    latest_height: 0,
+                    last_peers: BTreeSet::new(),
+                    last_drop_count: 0,
+                    last_drop_at: None,
+                    fallback_consensus_mode: ConsensusMode::Permissioned,
+                };
+
+                let keypair = KeyPair::random();
+                let block =
+                    ValidBlock::new_dummy_and_modify_header(keypair.private_key(), |header| {
+                        let height = NonZeroU64::new(1).expect("non-zero height");
+                        header.set_height(height);
+                        header.set_prev_block_hash(None);
+                    });
+                let blocks = vec![block.into()];
+                let qcs = vec![None];
+                let rosters = vec![RosterMetadata {
+                    commit_qc: None,
+                    validator_checkpoint: None,
+                    stake_snapshot: None,
+                }];
+                let msg = message::Message::ShareBlocks(message::ShareBlocks::new(
+                    blocks,
+                    sender_peer_id,
+                    qcs,
+                    rosters,
+                ));
+
+                msg.handle_message(&mut block_sync).await;
+
+                assert_eq!(
+                    metrics
+                        .sumeragi_block_sync_share_blocks_unsolicited_total
+                        .get(),
+                    1
+                );
             });
         }
     }

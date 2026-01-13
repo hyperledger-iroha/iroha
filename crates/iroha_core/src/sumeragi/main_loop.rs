@@ -9125,6 +9125,60 @@ impl Actor {
         true
     }
 
+    fn prune_stale_view_state(&mut self, height: u64, min_view: u64) {
+        let stale_pending: Vec<_> = self
+            .pending
+            .pending_blocks
+            .iter()
+            .filter(|(_, pending)| pending.height == height && pending.view < min_view)
+            .map(|(hash, _)| *hash)
+            .collect();
+        let mut pending_removed = 0usize;
+        for hash in stale_pending {
+            if let Some(pending) = self.pending.pending_blocks.remove(&hash) {
+                self.clean_rbc_sessions_for_block(hash, pending.height);
+                pending_removed = pending_removed.saturating_add(1);
+            }
+        }
+
+        let mut missing_removed = 0usize;
+        self.pending
+            .missing_block_requests
+            .retain(|_, request| {
+                let stale = request.height == height && request.view < min_view;
+                if stale {
+                    missing_removed = missing_removed.saturating_add(1);
+                }
+                !stale
+            });
+
+        let stale_rbc: Vec<_> = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .keys()
+            .filter(|key| key.1 == height && key.2 < min_view)
+            .cloned()
+            .collect();
+        let mut rbc_removed = 0usize;
+        for key in stale_rbc {
+            self.purge_rbc_state(key, key.0, key.1, key.2);
+            rbc_removed = rbc_removed.saturating_add(1);
+        }
+
+        if pending_removed > 0 || missing_removed > 0 || rbc_removed > 0 {
+            info!(
+                height,
+                min_view,
+                pending_removed,
+                missing_removed,
+                rbc_removed,
+                "pruned stale view state after view change"
+            );
+        }
+    }
+
     #[allow(clippy::too_many_lines)]
     fn empty_child_fallback(&self, now: Instant) -> Option<EmptyChildContext> {
         let lock = self.locked_qc?;
@@ -9382,6 +9436,7 @@ impl Actor {
             }
         }
         self.subsystems.propose.forced_view_after_timeout = Some((height, next_view));
+        self.prune_stale_view_state(height, next_view);
         // Drop earlier views for the active height so proposals_seen can't grow unbounded.
         self.subsystems
             .propose

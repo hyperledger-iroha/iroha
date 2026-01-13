@@ -47,6 +47,7 @@ The following gauges are exposed via Prometheus when telemetry is enabled:
 - `p2p_subscriber_queue_full_by_topic_total{topic="Consensus|Control|BlockSync|TxGossip|PeerGossip|Health|Other"}`: per-topic subscriber-queue drops.
 - `p2p_subscriber_unrouted_total`: number of inbound messages dropped because no subscriber matches the topic.
 - `p2p_subscriber_unrouted_by_topic_total{topic="Consensus|Control|BlockSync|TxGossip|PeerGossip|Health|Other"}`: per-topic unrouted inbound drops.
+- `p2p_queue_depth{priority="High|Low"}`: bounded network actor queue depth by priority.
 - `p2p_queue_dropped_total{priority="High|Low",kind="Post|Broadcast"}`: bounded network actor queue drops by priority/kind.
 - `p2p_handshake_failures`: number of P2P handshake failures (timeouts, signature/verification errors).
 - `soranet_pow_revocation_store_total{reason}`: count of SoraNet PoW revocation store fallbacks

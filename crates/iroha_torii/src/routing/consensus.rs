@@ -2055,6 +2055,10 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "drop_missing_total",
             snap.block_sync_roster.drop_missing_total,
         ),
+        json_entry(
+            "drop_unsolicited_share_blocks_total",
+            snap.block_sync_roster.drop_unsolicited_share_blocks_total,
+        ),
     ]);
     let block_sync = json_object(vec![
         json_entry(
@@ -3071,10 +3075,14 @@ mod status_tests {
             Some(0)
         );
 
-        let roster = payload
-            .get("block_sync_roster")
+        let block_sync = payload
+            .get("block_sync")
             .and_then(Value::as_object)
-            .expect("block_sync_roster object");
+            .expect("block_sync object");
+        let roster = block_sync
+            .get("roster")
+            .and_then(Value::as_object)
+            .expect("block_sync roster object");
         assert_eq!(
             roster
                 .get("commit_roster_journal_total")
@@ -3083,6 +3091,12 @@ mod status_tests {
         );
         assert_eq!(
             roster.get("drop_missing_total").and_then(Value::as_u64),
+            Some(0)
+        );
+        assert_eq!(
+            roster
+                .get("drop_unsolicited_share_blocks_total")
+                .and_then(Value::as_u64),
             Some(0)
         );
     }
@@ -3227,6 +3241,9 @@ pub async fn handle_v1_sumeragi_status(
                 roster_sidecar_total: snap.block_sync_roster.roster_sidecar_total,
                 commit_roster_journal_total: snap.block_sync_roster.commit_roster_journal_total,
                 drop_missing_total: snap.block_sync_roster.drop_missing_total,
+                drop_unsolicited_share_blocks_total: snap
+                    .block_sync_roster
+                    .drop_unsolicited_share_blocks_total,
             },
             pacemaker_backpressure_deferrals_total: snap.pacemaker_backpressure_deferrals_total,
             commit_pipeline_tick_total: snap.commit_pipeline_tick_total,

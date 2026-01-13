@@ -53,6 +53,10 @@ pub enum CalendarError {
 /// The anchor uses the given `anchor_day` (clamped to the last day of the
 /// month) and `anchor_time_ms` within the UTC day. If `ts_ms` is exactly on
 /// the anchor, that anchor is returned.
+///
+/// # Errors
+/// Returns `CalendarError::InvalidAnchorDay`, `CalendarError::InvalidAnchorTime`,
+/// or `CalendarError::Overflow` if the conversion fails.
 pub fn monthly_anchor_at_or_before(
     ts_ms: u64,
     anchor_day: u8,
@@ -73,6 +77,10 @@ pub fn monthly_anchor_at_or_before(
 ///
 /// If `ts_ms` is before the anchor for its month, that anchor is returned.
 /// If `ts_ms` is on or after the anchor, the next month's anchor is returned.
+///
+/// # Errors
+/// Returns `CalendarError::InvalidAnchorDay`, `CalendarError::InvalidAnchorTime`,
+/// or `CalendarError::Overflow` if the conversion fails.
 pub fn monthly_anchor_after(
     ts_ms: u64,
     anchor_day: u8,
@@ -93,6 +101,10 @@ pub fn monthly_anchor_after(
 ///
 /// The period boundaries are derived from the monthly anchors defined by
 /// `anchor_day` and `anchor_time_ms`.
+///
+/// # Errors
+/// Returns `CalendarError::InvalidAnchorDay`, `CalendarError::InvalidAnchorTime`,
+/// or `CalendarError::Overflow` if the anchors cannot be computed.
 pub fn monthly_billing_period(
     charge_at_ms: u64,
     anchor_day: u8,
@@ -150,7 +162,7 @@ fn anchor_for_month(
     if ms < 0 || ms > i128::from(u64::MAX) {
         return Err(CalendarError::Overflow);
     }
-    Ok(ms as u64)
+    u64::try_from(ms).map_err(|_| CalendarError::Overflow)
 }
 
 fn prev_month(year: i32, month: u8) -> Result<(i32, u8), CalendarError> {
@@ -213,7 +225,7 @@ fn civil_from_days(days: i64) -> Result<(i32, u8, u8), CalendarError> {
     let mp = (5 * doy + 2) / 153;
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = mp + if mp < 10 { 3 } else { -9 };
-    let year = y + if m <= 2 { 1 } else { 0 };
+    let year = y + i64::from(m <= 2);
     let year = i32::try_from(year).map_err(|_| CalendarError::Overflow)?;
     let month = u8::try_from(m).map_err(|_| CalendarError::Overflow)?;
     let day = u8::try_from(d).map_err(|_| CalendarError::Overflow)?;
@@ -306,7 +318,8 @@ mod tests {
     #[test]
     fn invalid_anchor_time_is_rejected() {
         let ts = unix_ms(2024, 1, 1, 0, 0, 0, 0);
-        let err = monthly_anchor_at_or_before(ts, 1, MS_PER_DAY as u32);
+        let invalid = u32::try_from(MS_PER_DAY).expect("MS_PER_DAY fits u32");
+        let err = monthly_anchor_at_or_before(ts, 1, invalid);
         assert_eq!(err, Err(CalendarError::InvalidAnchorTime));
     }
 }

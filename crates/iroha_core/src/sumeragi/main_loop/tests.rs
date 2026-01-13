@@ -22297,6 +22297,149 @@ async fn trigger_view_change_prunes_proposals_seen_for_height() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn trigger_view_change_prunes_stale_pending_and_missing_block_state() {
+    let _guard = super::status::view_change_proof_test_guard();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = 3u64;
+    let current_view = 2u64;
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, Instant::now());
+
+    let leader_kp = &harness.key_pairs[0];
+    let make_block = |view| -> SignedBlock {
+        super::ValidBlock::new_dummy_and_modify_header(leader_kp.private_key(), |header| {
+            header.set_height(NonZeroU64::new(height).expect("height nonzero"));
+            header.set_view_change_index(view);
+        })
+        .into()
+    };
+
+    let stale_block_0 = make_block(0);
+    let stale_block_1 = make_block(1);
+    let keep_block = make_block(current_view.saturating_add(1));
+
+    let payload_hash_0 = Hash::prehashed([0x10; Hash::LENGTH]);
+    let payload_hash_1 = Hash::prehashed([0x11; Hash::LENGTH]);
+    let payload_hash_keep = Hash::prehashed([0x12; Hash::LENGTH]);
+
+    actor.pending.pending_blocks.insert(
+        stale_block_0.hash(),
+        PendingBlock::new(stale_block_0.clone(), payload_hash_0, height, 0),
+    );
+    actor.pending.pending_blocks.insert(
+        stale_block_1.hash(),
+        PendingBlock::new(stale_block_1.clone(), payload_hash_1, height, 1),
+    );
+    actor.pending.pending_blocks.insert(
+        keep_block.hash(),
+        PendingBlock::new(
+            keep_block.clone(),
+            payload_hash_keep,
+            height,
+            current_view.saturating_add(1),
+        ),
+    );
+
+    let chunk_root_0 = Hash::prehashed([0x21; Hash::LENGTH]);
+    let chunk_root_1 = Hash::prehashed([0x22; Hash::LENGTH]);
+    let chunk_root_keep = Hash::prehashed([0x23; Hash::LENGTH]);
+    let session_0 = RbcSession::test_new(1, Some(payload_hash_0), Some(chunk_root_0), 0);
+    let session_1 = RbcSession::test_new(1, Some(payload_hash_1), Some(chunk_root_1), 0);
+    let session_keep = RbcSession::test_new(1, Some(payload_hash_keep), Some(chunk_root_keep), 0);
+    let key_0 = (stale_block_0.hash(), height, 0);
+    let key_1 = (stale_block_1.hash(), height, 1);
+    let key_keep = (keep_block.hash(), height, current_view.saturating_add(1));
+    actor.subsystems.da_rbc.rbc.sessions.insert(key_0, session_0);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key_1, session_1);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key_keep, session_keep);
+
+    let now = Instant::now();
+    let retry_window = Duration::from_secs(1);
+    let request = |view| MissingBlockRequest {
+        height,
+        view,
+        phase: Phase::Commit,
+        priority: MissingBlockPriority::Consensus,
+        retry_window,
+        view_change_window: Some(retry_window),
+        first_seen: now,
+        last_requested: now,
+        view_change_triggered: false,
+        attempts: 0,
+    };
+    actor
+        .pending
+        .missing_block_requests
+        .insert(stale_block_0.hash(), request(0));
+    actor
+        .pending
+        .missing_block_requests
+        .insert(stale_block_1.hash(), request(1));
+    actor
+        .pending
+        .missing_block_requests
+        .insert(keep_block.hash(), request(current_view.saturating_add(1)));
+
+    actor.trigger_view_change_with_cause(height, 0, super::ViewChangeCause::QuorumTimeout);
+
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&stale_block_0.hash()),
+        "stale pending block should be pruned"
+    );
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&stale_block_1.hash()),
+        "stale pending block should be pruned"
+    );
+    assert!(
+        actor.pending.pending_blocks.contains_key(&keep_block.hash()),
+        "pending block for the new view should remain"
+    );
+    assert!(
+        !actor.subsystems.da_rbc.rbc.sessions.contains_key(&key_0),
+        "stale RBC session should be pruned"
+    );
+    assert!(
+        !actor.subsystems.da_rbc.rbc.sessions.contains_key(&key_1),
+        "stale RBC session should be pruned"
+    );
+    assert!(
+        actor.subsystems.da_rbc.rbc.sessions.contains_key(&key_keep),
+        "RBC session for the new view should remain"
+    );
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&stale_block_0.hash()),
+        "stale missing-block request should be pruned"
+    );
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&stale_block_1.hash()),
+        "stale missing-block request should be pruned"
+    );
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .contains_key(&keep_block.hash()),
+        "missing-block request for the new view should remain"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn proposals_seen_prunes_far_future_heights() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -35436,7 +35579,10 @@ async fn block_sync_update_future_window_allows_known_block() {
         actor.block_known_locally(block_hash),
         "pending block should be known locally"
     );
-    assert!(!requested_missing_block, "missing request should not be seeded");
+    assert!(
+        !requested_missing_block,
+        "missing request should not be seeded"
+    );
     assert!(!actor.should_drop_future_block_sync_update(
         &block_hash,
         parent_hash,
@@ -35460,12 +35606,7 @@ async fn block_sync_update_future_window_allows_known_parent() {
     let parent_block = sample_block(parent_height, view, None);
     let parent_hash = parent_block.hash();
     let parent_payload_hash = Hash::prehashed([0xBB; Hash::LENGTH]);
-    let pending_parent = PendingBlock::new(
-        parent_block,
-        parent_payload_hash,
-        parent_height,
-        view,
-    );
+    let pending_parent = PendingBlock::new(parent_block, parent_payload_hash, parent_height, view);
     actor
         .pending
         .pending_blocks
@@ -35483,7 +35624,10 @@ async fn block_sync_update_future_window_allows_known_parent() {
         actor.block_payload_available_locally(parent_hash),
         "parent block should be available locally"
     );
-    assert!(!requested_missing_block, "missing request should not be seeded");
+    assert!(
+        !requested_missing_block,
+        "missing request should not be seeded"
+    );
     assert!(!actor.should_drop_future_block_sync_update(
         &block_hash,
         Some(parent_hash),

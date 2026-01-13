@@ -19953,6 +19953,10 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "drop_missing_total",
             snap.block_sync_roster.drop_missing_total,
         ),
+        json_entry(
+            "drop_unsolicited_share_blocks_total",
+            snap.block_sync_roster.drop_unsolicited_share_blocks_total,
+        ),
     ]);
     let block_sync = json_object(vec![
         json_entry(
@@ -21981,6 +21985,9 @@ pub async fn handle_v1_sumeragi_status(
                 roster_sidecar_total: snap.block_sync_roster.roster_sidecar_total,
                 commit_roster_journal_total: snap.block_sync_roster.commit_roster_journal_total,
                 drop_missing_total: snap.block_sync_roster.drop_missing_total,
+                drop_unsolicited_share_blocks_total: snap
+                    .block_sync_roster
+                    .drop_unsolicited_share_blocks_total,
             },
             pacemaker_backpressure_deferrals_total: snap.pacemaker_backpressure_deferrals_total,
             commit_pipeline_tick_total: snap.commit_pipeline_tick_total,

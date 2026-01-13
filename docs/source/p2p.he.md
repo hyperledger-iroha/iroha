@@ -57,6 +57,7 @@ translator: manual
 - `p2p_subscriber_queue_full_by_topic_total{topic="Consensus|Control|BlockSync|TxGossip|PeerGossip|Health|Other"}`: נפילות תורי מנויים לפי נושא.
 - `p2p_subscriber_unrouted_total`: כמות הודעות נכנסות שנפלו כי אין מנוי תואם לנושא.
 - `p2p_subscriber_unrouted_by_topic_total{topic="Consensus|Control|BlockSync|TxGossip|PeerGossip|Health|Other"}`: פירוט נפילות לפי נושא ללא מנוי תואם.
+- `p2p_queue_depth{priority="High|Low"}`: עומק תור הודעות הרשת לפי עדיפות.
 - `p2p_queue_dropped_total{priority="High|Low",kind="Post|Broadcast"}`: נפילות לפי עדיפות וסוג.
 - `p2p_handshake_failures`: כשלי handshake (timeouts, שגיאות חתימה).
 - `p2p_low_post_throttled_total`: מספר הודעות post בעדיפות נמוכה שנחסמו בטוקן-באקט.
