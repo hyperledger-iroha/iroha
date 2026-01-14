@@ -69,6 +69,7 @@ translator: manual
 ### RBC / DA (זמינות נתונים)
 - RBC משתמש בקבוצת האספנים כדי להפיץ את גוף הבלוק. כותרת הבלוק מכילה מזהה סשן ומטא-נתונים.
 - `sumeragi.da_enabled = true` עוקב אחרי עדות זמינות (`availability evidence`) אבל לא מעכב קומיט (ל־RBC `DELIVER` מקומי אין תנאי). כאשר עדות זמינות חסרה, `sumeragi_da_gate_block_total{reason="missing_local_data"}` גדל ו־`da_reschedule_total` הוא legacy ולכן בדרך כלל נשאר 0.
+- `sumeragi.rbc_rebroadcast_sessions_per_tick` מגביל את מספר סשני ה־RBC שנשלחים מחדש בכל tick כדי למנוע סופות שידור כשיש backlog. להאצת התאוששות מעלים את הערך, ובמקרה של עומס תורים מורידים.
 - תרחישים של ≥10 MiB נבחנים בסוויטת האינטגרציה ומודדים זמני RBC, קומיט, סף סינון תורים וזרימות P2P. הפרת SLO נכשלת במבחן ומפעילה התרעה.
 
 ### דוגמאות CLI לטופולוגיה ותפקידים
@@ -125,6 +126,7 @@ translator: manual
 ### RBC
 - סשני RBC מזוהים באמצעות `RbcSessionId` ומכילים מטא-נתונים על גובה, hash, ומספר חלקים. הם מפיצים את גוף הבלוק ומספקים זמינות נתונים.
 - כאשר `sumeragi.da_enabled` פעיל, קומיט תלוי ב-`availability evidence` (ולא בהשלמה מקומית של RBC). RBC משמש כמנגנון הפצה/שחזור של ה-payload.
+- שידורי READY חוזרים מוגבלים לתת־קבוצה דטרמיניסטית של f+1 (כולל תמיד את המנהיג) כדי לצמצם סערות הודעות.
 
 ### הגדרת `proof_policy`
 - `proof_policy = "off"` (ברירת מחדל): commit QC בלבד.

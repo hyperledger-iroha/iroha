@@ -4082,12 +4082,24 @@ pub async fn handle_v1_sumeragi_rbc_status(
             m.sumeragi_rbc_ready_broadcasts_total.get(),
         ),
         json_entry(
+            "ready_rebroadcasts_skipped_total",
+            m.sumeragi_rbc_rebroadcast_skipped_total
+                .with_label_values(&["ready"])
+                .get(),
+        ),
+        json_entry(
             "deliver_broadcasts_total",
             m.sumeragi_rbc_deliver_broadcasts_total.get(),
         ),
         json_entry(
             "payload_bytes_delivered_total",
             m.sumeragi_rbc_payload_bytes_delivered_total.get(),
+        ),
+        json_entry(
+            "payload_rebroadcasts_skipped_total",
+            m.sumeragi_rbc_rebroadcast_skipped_total
+                .with_label_values(&["payload"])
+                .get(),
         ),
     ]);
     let body = norito::json::to_json_pretty(&payload).map_err(|e| {

@@ -3794,8 +3794,7 @@ fn read_ledger_export(path: &Path) -> Result<LedgerExportFile> {
                         buf.copy_from_slice(slice);
                         buf
                     })
-                    .map(hex::encode)
-                    .unwrap_or_else(|| "<missing>".to_string());
+                    .map_or_else(|| "<missing>".to_string(), hex::encode);
                 eyre!(
                     "schema mismatch (expected {}, got {actual})",
                     hex::encode(expected)
@@ -6010,7 +6009,7 @@ impl HandshakeTokenIssueArgs {
         let transcript_hash = parse_hex_array::<32>(&self.transcript_hash, "--transcript-hash")?;
 
         let issued_dt = parse_timestamp(self.issued_at.as_deref(), "--issued-at")?
-            .map_or_else(|| OffsetDateTime::from(default_now), |value| value);
+            .unwrap_or_else(|| OffsetDateTime::from(default_now));
         let issued_secs = issued_dt.unix_timestamp();
 
         let expires_dt =
@@ -11645,19 +11644,20 @@ mod tests {
 
     #[test]
     fn ledger_export_schema_mismatch_reports_expected_and_actual() {
+        const SCHEMA_OFFSET: usize = 4 + 1 + 1;
+
         let export = LedgerExportFile {
             version: LedgerExportFile::VERSION,
             transfers: vec![sample_transfer_record(TransferKind::Payout, 5)],
         };
         let mut bytes = to_bytes(&export).expect("encode ledger export");
-        const SCHEMA_OFFSET: usize = 4 + 1 + 1;
         bytes[SCHEMA_OFFSET] ^= 0xFF;
         let file = NamedTempFile::new().expect("temp file");
         fs::write(file.path(), bytes).expect("write ledger export");
         let err = read_ledger_export(file.path()).expect_err("schema mismatch should fail");
         let messages = err
             .chain()
-            .map(|cause| cause.to_string())
+            .map(ToString::to_string)
             .collect::<Vec<_>>();
         let combined = messages.join("\n");
         assert!(

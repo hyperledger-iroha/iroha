@@ -493,11 +493,7 @@ fn select_digest_with_fallback(
         }
     }
     match (main, tmp) {
-        (Some(expected), _) => Err(TryReadError::ChecksumMismatch {
-            expected,
-            actual: actual_digest.to_owned(),
-        }),
-        (None, Some(expected)) => Err(TryReadError::ChecksumMismatch {
+        (Some(expected), _) | (None, Some(expected)) => Err(TryReadError::ChecksumMismatch {
             expected,
             actual: actual_digest.to_owned(),
         }),
@@ -625,6 +621,7 @@ fn sync_dir_best_effort(path: &Path) {
     }
 }
 
+#[allow(clippy::struct_excessive_bools)]
 struct SnapshotReadOutcome {
     state: State,
     data_used_tmp: bool,
@@ -634,6 +631,7 @@ struct SnapshotReadOutcome {
 }
 
 #[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
 fn try_read_snapshot_bundle(
     bytes: &[u8],
     data_used_tmp: bool,
@@ -748,6 +746,8 @@ fn try_read_snapshot_bundle(
 /// - IO errors
 /// - Deserialization errors
 #[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::needless_pass_by_value)]
 pub fn try_read_snapshot(
     store_dir: impl AsRef<Path>,
     kura: &Arc<Kura>,
@@ -976,6 +976,7 @@ fn promote_tmp_snapshot_file(tmp: &Path, dest: &Path) -> Result<(), TryWriteErro
 
 /// Error variants for snapshot reading
 #[derive(thiserror::Error, Debug, displaydoc::Display)]
+#[ignore_extra_doc_attributes]
 pub enum TryReadError {
     /// The snapshot was not found
     NotFound,
@@ -1039,14 +1040,14 @@ pub enum TryReadError {
         /// Chain id recorded in the snapshot payload.
         actual: ChainId,
     },
-    /// Snapshot is in a non-consistent state. Snapshot has greater height ({snapshot_height}) than kura block store ({kura_height})
+    /// Snapshot is in a non-consistent state. Snapshot has greater height (`{snapshot_height}`) than kura block store (`{kura_height}`)
     MismatchedHeight {
         /// The amount of block hashes stored by snapshot
         snapshot_height: usize,
         /// The amount of blocks stored by [`Kura`]
         kura_height: usize,
     },
-    /// Snapshot is in a non-consistent state. Hash of the block at height {height} is different between snapshot ({snapshot_block_hash}) and kura ({kura_block_hash})
+    /// Snapshot is in a non-consistent state. Hash of the block at height `{height}` is different between snapshot (`{snapshot_block_hash}`) and kura (`{kura_block_hash}`)
     MismatchedHash {
         /// Height at which block hashes differs between snapshot and [`Kura`]
         height: usize,

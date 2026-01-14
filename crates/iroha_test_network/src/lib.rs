@@ -67,7 +67,7 @@ use norito::json::{self, Value as JsonValue};
 use rand::prelude::IteratorRandom;
 use tokio::{
     fs::File,
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader},
     process::Child,
     runtime::{self, Runtime},
     sync::{Mutex, Notify, broadcast, oneshot, watch},
@@ -735,10 +735,10 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 
 fn add_target_dir_to_ignore(root: &Path, ignore: &mut IgnoreList) {
     let target_dir = resolve_target_dir(root);
-    if let Ok(relative) = target_dir.strip_prefix(root) {
-        if !relative.as_os_str().is_empty() {
-            ignore.dirs.insert(relative.to_path_buf());
-        }
+    if let Ok(relative) = target_dir.strip_prefix(root)
+        && !relative.as_os_str().is_empty()
+    {
+        ignore.dirs.insert(relative.to_path_buf());
     }
 }
 
@@ -1337,7 +1337,7 @@ fn test_concurrency_threads() -> usize {
     let peers = DEFAULT_NETWORK_PARALLELISM_PEERS.max(1);
     let total_peers = networks.saturating_mul(peers).max(1);
     let oversub = TEST_CONCURRENCY_OVERSUBSCRIPTION.max(1);
-    let min_threads = cores.min(TEST_CONCURRENCY_MIN_THREADS).max(1);
+    let min_threads = cores.clamp(1, TEST_CONCURRENCY_MIN_THREADS);
     cores
         .saturating_mul(oversub)
         .saturating_div(total_peers)
@@ -1397,10 +1397,10 @@ fn try_acquire_file_permit(limit: usize) -> Option<FilePermit> {
 }
 
 fn permit_is_stale(path: &Path) -> bool {
-    if let Some(pid) = read_permit_pid(path) {
-        if let Some(alive) = pid_alive(pid) {
-            return !alive;
-        }
+    if let Some(pid) = read_permit_pid(path)
+        && let Some(alive) = pid_alive(pid)
+    {
+        return !alive;
     }
     let Ok(metadata) = fs::metadata(path) else {
         return false;
@@ -1418,12 +1418,11 @@ fn read_permit_pid(path: &Path) -> Option<u32> {
     let contents = fs::read_to_string(path).ok()?;
     for line in contents.lines() {
         let line = line.trim();
-        if let Some(value) = line.strip_prefix("pid=") {
-            if let Ok(pid) = value.trim().parse::<u32>() {
-                if pid > 0 {
-                    return Some(pid);
-                }
-            }
+        if let Some(value) = line.strip_prefix("pid=")
+            && let Ok(pid) = value.trim().parse::<u32>()
+            && pid > 0
+        {
+            return Some(pid);
         }
     }
     None
@@ -2626,6 +2625,57 @@ fn sanitize_preview_for_display(value: &str) -> String {
     snapshot_snippet(&value.replace('\n', "\\n"))
 }
 
+async fn drain_log_lines<R, F>(
+    output: R,
+    mut file: File,
+    fatal_notify: Arc<Notify>,
+    is_running: Arc<AtomicBool>,
+    mut on_line: F,
+    ready_notify: Option<Arc<Notify>>,
+    label: &'static str,
+) where
+    R: AsyncRead + Unpin,
+    F: FnMut(&str),
+{
+    let mut lines = BufReader::new(output).lines();
+    loop {
+        tokio::select! {
+            line = lines.next_line() => match line {
+                Ok(Some(line)) => {
+                    on_line(&line);
+                    if let Err(err) = file.write_all(line.as_bytes()).await {
+                        error!(?err, log = label, "writing log line failed");
+                        break;
+                    }
+                    if let Err(err) = file.write_all(b"\n").await {
+                        error!(?err, log = label, "writing log newline failed");
+                        break;
+                    }
+                    if let Err(err) = file.flush().await {
+                        error!(?err, log = label, "flushing log file failed");
+                        break;
+                    }
+                }
+                Ok(None) => break,
+                Err(err) => {
+                    error!(?err, log = label, "reading log stream failed");
+                    break;
+                }
+            },
+            _ = fatal_notify.notified() => break,
+        }
+        if !is_running.load(Ordering::Relaxed) {
+            break;
+        }
+    }
+    if let Err(err) = file.flush().await {
+        error!(?err, log = label, "flushing log file failed");
+    }
+    if let Some(notify) = ready_notify {
+        notify.notify_waiters();
+    }
+}
+
 /// Builder of [`Network`]
 pub struct NetworkBuilder {
     env: Environment,
@@ -3792,36 +3842,35 @@ impl NetworkPeer {
 
         {
             let tasks = &mut tasks;
+            let fatal_notify = fatal_notify.clone();
+            let is_running = self.is_running.clone();
             let output = child
                 .stdout
                 .take()
                 .ok_or_else(|| eyre!("failed to capture child stdout"))?;
             let path = self.dir.join(format!("run-{run_num}-stdout.log"));
-            let mut file = File::create(path)
+            let file = File::create(path)
                 .await
                 .wrap_err("failed to create stdout log file")?;
             tasks.spawn(async move {
-                let mut lines = BufReader::new(output).lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    if let Err(err) = file.write_all(line.as_bytes()).await {
-                        error!(?err, "writing logs to file failed");
-                        break;
-                    }
-                    if let Err(err) = file.write_all("\n".as_bytes()).await {
-                        error!(?err, "writing logs to file failed");
-                        break;
-                    }
-                    if let Err(err) = file.flush().await {
-                        error!(?err, "flushing logs to file failed");
-                        break;
-                    }
-                }
+                drain_log_lines(
+                    output,
+                    file,
+                    fatal_notify,
+                    is_running,
+                    |_| {},
+                    None,
+                    "stdout",
+                )
+                .await;
                 // stdout logs are best-effort; no synchronization needed.
             });
         }
         {
             let tasks = &mut tasks;
             let span = span.clone();
+            let fatal_notify = fatal_notify.clone();
+            let is_running = self.is_running.clone();
             let output = child
                 .stderr
                 .take()
@@ -3832,8 +3881,7 @@ impl NetworkPeer {
             let stderr_live = Arc::clone(&self.stderr_live);
             tasks.spawn(async move {
                 let buffer = PeerStderrBuffer::new(span, log_path, stderr_live);
-                let mut lines = BufReader::new(output).lines();
-                let mut file = match File::create(&path).await {
+                let file = match File::create(&path).await {
                     Ok(file) => file,
                     Err(err) => {
                         error!(?err, ?path, "failed to create stderr log file");
@@ -3842,22 +3890,16 @@ impl NetworkPeer {
                     }
                 };
 
-                while let Ok(Some(line)) = lines.next_line().await {
-                    buffer.push_line(&line);
-                    if let Err(err) = file.write_all(line.as_bytes()).await {
-                        error!(?err, "failed to write stderr log line");
-                        break;
-                    }
-                    if let Err(err) = file.write_all(b"\n").await {
-                        error!(?err, "failed to write stderr newline");
-                        break;
-                    }
-                }
-
-                if let Err(err) = file.flush().await {
-                    error!(?err, "failed to flush stderr log");
-                }
-                stderr_log_ready.notify_waiters();
+                drain_log_lines(
+                    output,
+                    file,
+                    fatal_notify,
+                    is_running,
+                    |line| buffer.push_line(line),
+                    Some(stderr_log_ready),
+                    "stderr",
+                )
+                .await;
             });
         }
 
@@ -5251,6 +5293,8 @@ mod shutdown_tests {
     use std::process::Stdio;
 
     use tempfile::tempdir;
+    use tokio::fs::File;
+    use tokio::io::{AsyncWriteExt, duplex};
     use tokio::process::Command;
 
     use super::*;
@@ -5297,6 +5341,35 @@ mod shutdown_tests {
             !log.contains("SIGQUIT"),
             "SIGQUIT should not be used for a responsive shutdown, log: {log:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn log_drain_exits_on_shutdown_notify() {
+        let dir = tempdir().expect("tempdir");
+        let log_path = dir.path().join("stdout.log");
+        let file = File::create(&log_path).await.expect("create log file");
+        let (mut writer, reader) = duplex(64);
+        let fatal_notify = Arc::new(Notify::new());
+        let is_running = Arc::new(AtomicBool::new(true));
+        let handle = tokio::spawn(drain_log_lines(
+            reader,
+            file,
+            fatal_notify.clone(),
+            is_running.clone(),
+            |_| {},
+            None,
+            "stdout",
+        ));
+
+        writer.write_all(b"hello\n").await.expect("write line");
+        writer.flush().await.expect("flush");
+        is_running.store(false, Ordering::Relaxed);
+        fatal_notify.notify_waiters();
+
+        tokio::time::timeout(Duration::from_secs(1), handle)
+            .await
+            .expect("log task should exit")
+            .expect("log task should not panic");
     }
 }
 

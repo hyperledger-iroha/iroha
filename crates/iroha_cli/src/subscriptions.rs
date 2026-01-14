@@ -249,7 +249,7 @@ pub struct SubscriptionListArgs {
     /// Filter by plan provider account.
     #[arg(long, value_name = "ACCOUNT@DOMAIN")]
     pub provider: Option<String>,
-    /// Filter by status (active, paused, past_due, canceled, suspended).
+    /// Filter by status (active, paused, `past_due`, canceled, suspended).
     #[arg(long)]
     pub status: Option<String>,
     /// Limit number of results.

@@ -875,6 +875,7 @@ fn minimal_config_snapshot() {
                 rbc_pending_max_bytes: 8388608,
                 rbc_pending_ttl: 30s,
                 rbc_session_ttl: 120s,
+                rbc_rebroadcast_sessions_per_tick: 8,
                 rbc_store_max_sessions: 1024,
                 rbc_store_soft_sessions: 768,
                 rbc_store_max_bytes: 536870912,
@@ -2073,6 +2074,13 @@ fn nexus_lane_overrides_rejected_when_disabled() {
 fn sumeragi_rejects_zero_rbc_chunk_max_bytes() {
     let result = load_config_from_fixtures("bad.sumeragi_rbc_chunk_max_bytes_zero.toml");
     assert!(result.is_err(), "zero chunk size must be rejected");
+}
+
+#[test]
+fn sumeragi_rejects_zero_rbc_rebroadcast_sessions_per_tick() {
+    let result =
+        load_config_from_fixtures("bad.sumeragi_rbc_rebroadcast_sessions_per_tick_zero.toml");
+    assert!(result.is_err(), "zero rebroadcast budget must be rejected");
 }
 
 #[test]

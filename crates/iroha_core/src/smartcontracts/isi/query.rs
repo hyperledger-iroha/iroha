@@ -524,7 +524,7 @@ where
         let mut pairs: Vec<(Option<Json>, Vec<u8>, I::Item)> = Vec::new();
         for value in iter {
             count = count.saturating_add(1);
-            if budget_items.map_or(false, |limit| count > limit) {
+            if budget_items.is_some_and(|limit| count > limit) {
                 return Err(Error::GasBudgetExceeded);
             }
             let key = value.get_metadata_sorting_key(key);
@@ -572,7 +572,7 @@ where
             let mut output = Vec::new();
             for value in iter.paginate(params.pagination) {
                 count = count.saturating_add(1);
-                if budget_items.map_or(false, |limit| count > limit) {
+                if budget_items.is_some_and(|limit| count > limit) {
                     return Err(Error::GasBudgetExceeded);
                 }
                 output.push(value);

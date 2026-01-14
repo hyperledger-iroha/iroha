@@ -28,6 +28,7 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn zk_vote_get_tally_roundtrip_from_snapshot() {
     if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
         eprintln!("Skipping: zk vote tally from snapshot gated. Set IROHA_RUN_IGNORED=1 to run.");
@@ -66,8 +67,10 @@ fn zk_vote_get_tally_roundtrip_from_snapshot() {
         fixture.schema_hash,
         vk_commitment,
     );
-    vk_record.vk_len = vk_box.bytes.len() as u32;
-    vk_record.max_proof_bytes = fixture.proof_bytes.len() as u32;
+    vk_record.vk_len =
+        u32::try_from(vk_box.bytes.len()).expect("verifying key length fits into u32");
+    vk_record.max_proof_bytes =
+        u32::try_from(fixture.proof_bytes.len()).expect("proof length fits into u32");
     vk_record.gas_schedule_id = Some("halo2_default".into());
     vk_record.key = Some(vk_box);
     vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;

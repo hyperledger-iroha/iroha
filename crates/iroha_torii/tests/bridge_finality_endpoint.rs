@@ -46,6 +46,7 @@ impl Drop for CommitCertHistoryGuard {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn bridge_finality_endpoint_roundtrips_into_verifier() {
     let _guard = CommitCertHistoryGuard::new();
     let cfg = test_utils::mk_minimal_root_cfg();

@@ -165,14 +165,14 @@ impl LiveQueryStore {
     // If query becomes depleted, it will be removed from the store.
     fn get_query_next_batch(
         &self,
-        query_id: QueryId,
+        query_id: &QueryId,
         cursor: NonZeroU64,
     ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<NonZeroU64>), QueryExecutionFail> {
         trace!(%query_id, "Advancing existing query");
         let (next_batch, remaining, next_cursor) = {
             let mut entry = self
                 .queries
-                .get_mut(&query_id)
+                .get_mut(query_id)
                 .ok_or(QueryExecutionFail::Expired)?;
             let (next_batch, next_cursor) = entry.live_query.next_batch(cursor.get())?;
             let remaining = entry.live_query.remaining();
@@ -180,7 +180,7 @@ impl LiveQueryStore {
             (next_batch, remaining, next_cursor)
         };
         if next_cursor.is_none() {
-            self.remove(&query_id);
+            self.remove(query_id);
         }
         Ok((next_batch, remaining, next_cursor))
     }
@@ -290,8 +290,7 @@ impl LiveQueryStoreHandle {
             gas_budget,
         }: ForwardCursor,
     ) -> Result<QueryOutput, QueryExecutionFail> {
-        let (batch, remaining, next_cursor) =
-            self.store.get_query_next_batch(query.clone(), cursor)?;
+        let (batch, remaining, next_cursor) = self.store.get_query_next_batch(&query, cursor)?;
 
         Ok(Self::construct_query_response(
             batch,

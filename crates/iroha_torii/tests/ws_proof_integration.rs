@@ -101,12 +101,12 @@ async fn ws_proof_json_integration() {
             }
             Message::Binary(bytes) => {
                 let EventMessage(event) = norito::decode_from_bytes(&bytes).expect("event message");
-                if let EventBox::Data(data) = event {
-                    if let DataEvent::Proof(ProofEvent::Verified(verified)) = data.as_ref() {
-                        assert_eq!(verified.id.backend, "halo2/ipa");
-                        matched = true;
-                        break;
-                    }
+                if let EventBox::Data(data) = event
+                    && let DataEvent::Proof(ProofEvent::Verified(verified)) = data.as_ref()
+                {
+                    assert_eq!(verified.id.backend, "halo2/ipa");
+                    matched = true;
+                    break;
                 }
             }
             Message::Close(_) | Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}

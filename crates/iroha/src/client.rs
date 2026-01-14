@@ -5146,13 +5146,15 @@ impl Client {
         outcome.map_or_else(
             || Err(fallback_err),
             |result| match result {
-                TxConfirmationStatus::Committed | TxConfirmationStatus::Applied => Ok(hash),
+                TxConfirmationStatus::Applied => Ok(hash),
                 TxConfirmationStatus::Rejected(Some(reason)) => {
                     Err(tx_rejection_to_report(&reason))
                 }
                 TxConfirmationStatus::Rejected(None) => Err(eyre!("Transaction rejected")),
                 TxConfirmationStatus::Expired => Err(eyre!("Transaction expired")),
-                TxConfirmationStatus::Queued | TxConfirmationStatus::Approved(_) => {
+                TxConfirmationStatus::Committed
+                | TxConfirmationStatus::Queued
+                | TxConfirmationStatus::Approved(_) => {
                     Err(eyre!("Transaction status not finalized"))
                 }
             },
@@ -5171,7 +5173,9 @@ impl Client {
         for attempt in 0..=retries {
             match check() {
                 Ok(Some(outcome)) => match outcome {
-                    status @ (TxConfirmationStatus::Queued | TxConfirmationStatus::Approved(_)) => {
+                    status @ (TxConfirmationStatus::Queued
+                    | TxConfirmationStatus::Approved(_)
+                    | TxConfirmationStatus::Committed) => {
                         debug!(
                             attempt,
                             ?delay,
@@ -8455,10 +8459,7 @@ where
                             }
                             PipelineEventBox::Block(block_event) => {
                                 if Some(block_event.header().height()) == block_height
-                                    && matches!(
-                                        block_event.status(),
-                                        BlockStatus::Applied | BlockStatus::Committed
-                                    )
+                                    && matches!(block_event.status(), BlockStatus::Applied)
                                 {
                                     debug!(
                                         %hash,
@@ -8584,6 +8585,7 @@ mod subscription_http_tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn subscription_endpoints_build_requests() {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let (provider, provider_key) = gen_account_in("commerce");
@@ -8743,13 +8745,14 @@ mod subscription_http_tests {
                     (HttpMethod::GET, "/v1/subscriptions/sub-1$subscriptions") => {
                         json_response(StatusCode::OK, &subscription_get_json)
                     }
-                    (HttpMethod::POST, "/v1/subscriptions/sub-1$subscriptions/pause")
-                    | (HttpMethod::POST, "/v1/subscriptions/sub-1$subscriptions/resume")
-                    | (HttpMethod::POST, "/v1/subscriptions/sub-1$subscriptions/cancel")
-                    | (HttpMethod::POST, "/v1/subscriptions/sub-1$subscriptions/charge-now")
-                    | (HttpMethod::POST, "/v1/subscriptions/sub-1$subscriptions/usage") => {
-                        json_response(StatusCode::OK, &action_json)
-                    }
+                    (
+                        HttpMethod::POST,
+                        "/v1/subscriptions/sub-1$subscriptions/pause"
+                        | "/v1/subscriptions/sub-1$subscriptions/resume"
+                        | "/v1/subscriptions/sub-1$subscriptions/cancel"
+                        | "/v1/subscriptions/sub-1$subscriptions/charge-now"
+                        | "/v1/subscriptions/sub-1$subscriptions/usage",
+                    ) => json_response(StatusCode::OK, &action_json),
                     _ => HttpResponse::builder()
                         .status(StatusCode::NOT_FOUND)
                         .body(Vec::new())
@@ -8838,10 +8841,13 @@ mod subscription_http_tests {
                 (HttpMethod::GET, "/v1/subscriptions/sub-1$subscriptions") => {
                     assert!(snapshot.body.is_empty());
                 }
-                (HttpMethod::POST, "/v1/subscriptions/sub-1$subscriptions/pause")
-                | (HttpMethod::POST, "/v1/subscriptions/sub-1$subscriptions/resume")
-                | (HttpMethod::POST, "/v1/subscriptions/sub-1$subscriptions/cancel")
-                | (HttpMethod::POST, "/v1/subscriptions/sub-1$subscriptions/charge-now") => {
+                (
+                    HttpMethod::POST,
+                    "/v1/subscriptions/sub-1$subscriptions/pause"
+                    | "/v1/subscriptions/sub-1$subscriptions/resume"
+                    | "/v1/subscriptions/sub-1$subscriptions/cancel"
+                    | "/v1/subscriptions/sub-1$subscriptions/charge-now",
+                ) => {
                     match_body(snapshot, &action_request);
                 }
                 (HttpMethod::POST, "/v1/subscriptions/sub-1$subscriptions/usage") => {
@@ -8895,8 +8901,10 @@ mod tx_hash_tests {
                 let count = attempts_clone.fetch_add(1, Ordering::SeqCst);
                 if count == 0 {
                     Err(eyre!("injected failure"))
-                } else {
+                } else if count == 1 {
                     Ok(Some(super::TxConfirmationStatus::Committed))
+                } else {
+                    Ok(Some(super::TxConfirmationStatus::Applied))
                 }
             },
             Duration::from_millis(0),
@@ -8907,8 +8915,8 @@ mod tx_hash_tests {
         let outcome = result
             .unwrap()
             .expect("expected committed transaction outcome");
-        assert!(matches!(outcome, super::TxConfirmationStatus::Committed));
-        assert!(attempts.load(Ordering::SeqCst) >= 2);
+        assert!(matches!(outcome, super::TxConfirmationStatus::Applied));
+        assert!(attempts.load(Ordering::SeqCst) >= 3);
     }
 
     #[tokio::test]
@@ -8925,8 +8933,10 @@ mod tx_hash_tests {
                 let count = attempts_clone.fetch_add(1, Ordering::SeqCst);
                 if count < 2 {
                     Ok(None)
-                } else {
+                } else if count == 2 {
                     Ok(Some(super::TxConfirmationStatus::Committed))
+                } else {
+                    Ok(Some(super::TxConfirmationStatus::Applied))
                 }
             },
             Duration::from_millis(0),
@@ -8937,8 +8947,8 @@ mod tx_hash_tests {
         let outcome = result
             .unwrap()
             .expect("expected committed transaction outcome");
-        assert!(matches!(outcome, super::TxConfirmationStatus::Committed));
-        assert!(attempts.load(Ordering::SeqCst) >= 3);
+        assert!(matches!(outcome, super::TxConfirmationStatus::Applied));
+        assert!(attempts.load(Ordering::SeqCst) >= 4);
     }
 
     #[tokio::test]
@@ -8956,7 +8966,8 @@ mod tx_hash_tests {
                 match count {
                     0 => Ok(Some(super::TxConfirmationStatus::Queued)),
                     1 => Ok(Some(super::TxConfirmationStatus::Approved(None))),
-                    _ => Ok(Some(super::TxConfirmationStatus::Committed)),
+                    2 => Ok(Some(super::TxConfirmationStatus::Committed)),
+                    _ => Ok(Some(super::TxConfirmationStatus::Applied)),
                 }
             },
             Duration::from_millis(0),
@@ -8967,8 +8978,8 @@ mod tx_hash_tests {
         let outcome = result
             .unwrap()
             .expect("expected committed transaction outcome");
-        assert!(matches!(outcome, super::TxConfirmationStatus::Committed));
-        assert!(attempts.load(Ordering::SeqCst) >= 3);
+        assert!(matches!(outcome, super::TxConfirmationStatus::Applied));
+        assert!(attempts.load(Ordering::SeqCst) >= 4);
     }
 
     #[tokio::test]
@@ -9197,7 +9208,7 @@ mod tx_hash_tests {
         let wrapped = err.wrap_err(super::Client::tx_confirmation_timeout_report(
             Duration::from_secs(1),
         ));
-        let messages: Vec<String> = wrapped.chain().map(|cause| cause.to_string()).collect();
+        let messages: Vec<String> = wrapped.chain().map(ToString::to_string).collect();
         assert!(
             messages
                 .iter()
@@ -9396,6 +9407,72 @@ mod tx_confirmation_stream_tests {
         .await;
         assert_eq!(result.unwrap(), hash);
         assert!(checks >= 3);
+    }
+
+    #[tokio::test]
+    async fn committed_block_event_waits_for_applied() {
+        let hash: HashOf<SignedTransaction> =
+            HashOf::from_untyped_unchecked(Hash::prehashed([14_u8; Hash::LENGTH]));
+        let height = std::num::NonZeroU64::new(15).expect("nonzero height");
+        let committed_event = EventBox::Pipeline(PipelineEventBox::Block(BlockEvent {
+            header: BlockHeader {
+                height,
+                prev_block_hash: None,
+                merkle_root: None,
+                result_merkle_root: None,
+                da_proof_policies_hash: None,
+                da_commitments_hash: None,
+                da_pin_intents_hash: None,
+                creation_time_ms: 0,
+                view_change_index: 0,
+                confidential_features: None,
+            },
+            status: BlockStatus::Committed,
+        }));
+        let applied_event = EventBox::Pipeline(PipelineEventBox::Block(BlockEvent {
+            header: BlockHeader {
+                height,
+                prev_block_hash: None,
+                merkle_root: None,
+                result_merkle_root: None,
+                da_proof_policies_hash: None,
+                da_commitments_hash: None,
+                da_pin_intents_hash: None,
+                creation_time_ms: 0,
+                view_change_index: 0,
+                confidential_features: None,
+            },
+            status: BlockStatus::Applied,
+        }));
+        let (tx, rx) = mpsc::unbounded_channel::<Result<EventBox, eyre::Report>>();
+        let mut events = UnboundedReceiverStream::new(rx);
+        let mut handle = tokio::spawn(async move {
+            listen_for_tx_confirmation_stream_with_status_check(
+                &mut events,
+                hash,
+                Duration::from_secs(1),
+                Duration::from_millis(1),
+                || Ok(Some(super::TxConfirmationStatus::Approved(Some(height)))),
+            )
+            .await
+        });
+
+        let _ = tx.send(Ok(committed_event));
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(5), &mut handle)
+                .await
+                .is_err(),
+            "confirmation should wait for applied"
+        );
+
+        let _ = tx.send(Ok(applied_event));
+        let result = tokio::time::timeout(Duration::from_secs(1), &mut handle)
+            .await
+            .expect("confirmation should finish")
+            .expect("join handle")
+            .expect("confirmation ok");
+        assert_eq!(result, hash);
     }
 
     #[tokio::test]

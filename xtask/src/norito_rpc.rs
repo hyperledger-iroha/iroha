@@ -43,7 +43,7 @@ const SDK_MANIFESTS: &[(&str, &str, bool)] = &[
     (
         "java",
         "java/iroha_android/src/test/resources/transaction_fixtures.manifest.json",
-        false,
+        true,
     ),
     (
         "swift",

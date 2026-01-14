@@ -6310,6 +6310,8 @@ pub struct Metrics {
     pub sumeragi_rbc_sessions_pruned_total: IntCounter,
     /// Sumeragi RBC: READY broadcasts sent (cumulative)
     pub sumeragi_rbc_ready_broadcasts_total: IntCounter,
+    /// Sumeragi RBC: rebroadcasts skipped (kind=payload|ready)
+    pub sumeragi_rbc_rebroadcast_skipped_total: IntCounterVec,
     /// Sumeragi RBC: DELIVER broadcasts sent (cumulative)
     pub sumeragi_rbc_deliver_broadcasts_total: IntCounter,
     /// Sumeragi RBC: total payload bytes delivered and cached (gauge)
@@ -9254,6 +9256,14 @@ impl Default for Metrics {
         let sumeragi_rbc_ready_broadcasts_total = IntCounter::new(
             "sumeragi_rbc_ready_broadcasts_total",
             "Sumeragi RBC READY broadcasts sent",
+        )
+        .expect("Infallible");
+        let sumeragi_rbc_rebroadcast_skipped_total = IntCounterVec::new(
+            Opts::new(
+                "sumeragi_rbc_rebroadcast_skipped_total",
+                "Sumeragi RBC rebroadcasts skipped (kind=payload|ready)",
+            ),
+            &["kind"],
         )
         .expect("Infallible");
         let sumeragi_rbc_deliver_broadcasts_total = IntCounter::new(
@@ -12761,6 +12771,7 @@ impl Default for Metrics {
             registry,
             sumeragi_rbc_sessions_pruned_total,
             sumeragi_rbc_ready_broadcasts_total,
+            sumeragi_rbc_rebroadcast_skipped_total,
             sumeragi_rbc_deliver_broadcasts_total,
             sumeragi_da_votes_ingested_total
         );
@@ -13222,6 +13233,7 @@ impl Default for Metrics {
             sumeragi_rbc_sessions_active,
             sumeragi_rbc_sessions_pruned_total,
             sumeragi_rbc_ready_broadcasts_total,
+            sumeragi_rbc_rebroadcast_skipped_total,
             sumeragi_rbc_deliver_broadcasts_total,
             sumeragi_rbc_payload_bytes_delivered_total,
             sumeragi_rbc_lane_tx_count,
@@ -15851,6 +15863,33 @@ mod test {
             metrics
                 .torii_operator_auth_lockout_total
                 .with_label_values(&["gate", "invalid_session"])
+                .get(),
+            1
+        );
+    }
+
+    #[test]
+    fn records_rbc_rebroadcast_skips_by_kind() {
+        let metrics = Metrics::default();
+        metrics
+            .sumeragi_rbc_rebroadcast_skipped_total
+            .with_label_values(&["payload"])
+            .inc();
+        metrics
+            .sumeragi_rbc_rebroadcast_skipped_total
+            .with_label_values(&["ready"])
+            .inc();
+        assert_eq!(
+            metrics
+                .sumeragi_rbc_rebroadcast_skipped_total
+                .with_label_values(&["payload"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .sumeragi_rbc_rebroadcast_skipped_total
+                .with_label_values(&["ready"])
                 .get(),
             1
         );

@@ -195,7 +195,16 @@ pub fn verify_ed25519_batch_items(items: &[Ed25519BatchItem<'_>]) -> Vec<bool> {
         None
     };
 
-    for (_index, item) in items.iter().enumerate() {
+    #[cfg(all(target_os = "macos", feature = "metal"))]
+    let mut metal_index = 0usize;
+
+    for item in items.iter() {
+        #[cfg(all(target_os = "macos", feature = "metal"))]
+        let current_index = {
+            let idx = metal_index;
+            metal_index += 1;
+            idx
+        };
         let Ok(sig) = Ed25519Signature::from_slice(&item.signature) else {
             parsed.push(None);
             continue;
@@ -217,7 +226,7 @@ pub fn verify_ed25519_batch_items(items: &[Ed25519BatchItem<'_>]) -> Vec<bool> {
             hrams.push(Scalar::from_hash(hasher).to_bytes());
             sigs.push(item.signature);
             pks.push(item.public_key);
-            map.push(_index);
+            map.push(current_index);
         }
 
         parsed.push(Some((sig, pk)));

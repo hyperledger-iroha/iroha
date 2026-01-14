@@ -1347,6 +1347,15 @@ impl Queue {
         batch
     }
 
+    /// Resolve routing for an inbound gossip transaction using the active router.
+    pub(crate) fn route_for_gossip(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+        state_view: &StateView<'_>,
+    ) -> RoutingDecision {
+        self.router.read().route(tx, state_view)
+    }
+
     /// Return transactions back to the gossip backlog by their hashes.
     pub fn requeue_gossip_hashes(&self, hashes: impl IntoIterator<Item = SignedTxHash>) {
         for hash in hashes {
@@ -1816,14 +1825,13 @@ impl Queue {
         #[cfg(not(feature = "telemetry"))]
         let backpressure_telemetry: Option<&StateTelemetry> = None;
         loop {
-            let hash = match self.tx_hashes.pop() {
-                Some(hash) => hash,
-                None => {
-                    if self.resync_hash_queue_if_needed(state_view) {
-                        continue;
-                    }
-                    return None;
+            let hash = if let Some(hash) = self.tx_hashes.pop() {
+                hash
+            } else {
+                if self.resync_hash_queue_if_needed(state_view) {
+                    continue;
                 }
+                return None;
             };
             if self.removed_hashes.remove(&hash).is_some() {
                 continue;
@@ -1894,7 +1902,7 @@ impl Queue {
 
     /// Rebuild the hash queue when it is empty but transactions remain in the map.
     /// Skip resync if there are in-flight guards to avoid re-enqueuing active selections.
-    fn resync_hash_queue_if_needed(&self, _state_view: &StateView) -> bool {
+    fn resync_hash_queue_if_needed(&self, state_view: &StateView) -> bool {
         if !self.tx_hashes.is_empty() || self.txs.is_empty() {
             return false;
         }
@@ -1902,9 +1910,11 @@ impl Queue {
             return false;
         }
         #[cfg(feature = "telemetry")]
-        let backpressure_telemetry: Option<&StateTelemetry> = Some(_state_view.telemetry);
+        let backpressure_telemetry: Option<&StateTelemetry> = Some(state_view.telemetry);
         #[cfg(not(feature = "telemetry"))]
         let backpressure_telemetry: Option<&StateTelemetry> = None;
+        #[cfg(not(feature = "telemetry"))]
+        let _ = state_view;
 
         let _guard = self.push_remove_lock.lock();
         if !self.tx_hashes.is_empty() || self.txs.is_empty() {
@@ -4244,6 +4254,32 @@ pub mod tests {
         assert_eq!(entry.tx.as_ref().hash(), hash);
         assert_eq!(entry.routing.lane_id, LaneId::SINGLE);
         assert_eq!(entry.routing.dataspace_id, DataSpaceId::GLOBAL);
+    }
+
+    #[test]
+    fn route_for_gossip_uses_router_decision() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let expected_lane = LaneId::new(2);
+        let expected_dataspace = DataSpaceId::new(7);
+        let queue = Queue::test_with_router(
+            config_factory(),
+            &time_source,
+            Arc::new(StaticRouter {
+                lane: expected_lane,
+                dataspace: expected_dataspace,
+            }),
+        );
+
+        let tx = accepted_tx_by_someone(&time_source);
+        let state_view = state.view();
+        let routing = queue.route_for_gossip(&tx, &state_view);
+
+        assert_eq!(routing.lane_id, expected_lane);
+        assert_eq!(routing.dataspace_id, expected_dataspace);
     }
 
     fn config_factory() -> Config {

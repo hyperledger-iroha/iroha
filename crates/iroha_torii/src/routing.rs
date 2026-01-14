@@ -16837,6 +16837,7 @@ mod tx_query_integration_smoke {
     }
 }
 #[cfg(all(test, feature = "app_api"))]
+#[allow(clippy::await_holding_lock)]
 mod app_api_integration_tests {
     use std::borrow::Cow;
     use std::sync::{LazyLock, Mutex, MutexGuard};
@@ -18613,9 +18614,9 @@ pub fn handle_v1_events_sse(
     } = parse_sse_filter_params(params.filter.as_deref())?;
     let proof_only = filters.is_none()
         && crate::proof_filters::has_any_proof_filters(
-            &proof_backend,
-            &proof_call_hash,
-            &proof_envelope_hash,
+            proof_backend.as_ref(),
+            proof_call_hash.as_ref(),
+            proof_envelope_hash.as_ref(),
         );
     let rx = events.subscribe();
     let stream = stream::unfold(rx, move |mut rx| {
@@ -18636,9 +18637,9 @@ pub fn handle_v1_events_sse(
                         }
                         if !crate::proof_filters::event_matches_proof_filters(
                             &event_box,
-                            &proof_backend,
-                            &proof_call_hash,
-                            &proof_envelope_hash,
+                            proof_backend.as_ref(),
+                            proof_call_hash.as_ref(),
+                            proof_envelope_hash.as_ref(),
                             proof_only,
                         ) {
                             continue;
@@ -22916,12 +22917,24 @@ pub async fn handle_v1_sumeragi_rbc_status(
             m.sumeragi_rbc_ready_broadcasts_total.get(),
         ),
         json_entry(
+            "ready_rebroadcasts_skipped_total",
+            m.sumeragi_rbc_rebroadcast_skipped_total
+                .with_label_values(&["ready"])
+                .get(),
+        ),
+        json_entry(
             "deliver_broadcasts_total",
             m.sumeragi_rbc_deliver_broadcasts_total.get(),
         ),
         json_entry(
             "payload_bytes_delivered_total",
             m.sumeragi_rbc_payload_bytes_delivered_total.get(),
+        ),
+        json_entry(
+            "payload_rebroadcasts_skipped_total",
+            m.sumeragi_rbc_rebroadcast_skipped_total
+                .with_label_values(&["payload"])
+                .get(),
         ),
     ]);
     let body = norito::json::to_json_pretty(&payload).map_err(|e| {
@@ -34984,15 +34997,16 @@ pub async fn handle_post_v1_subscription_plan(
     }
 
     let plan_key = (*SUBSCRIPTION_PLAN_KEY).clone();
-    let mut instructions = Vec::new();
-    instructions.push(InstructionBox::from(Register::asset_definition(
-        AssetDefinition::numeric(plan_id.clone()),
-    )));
-    instructions.push(InstructionBox::from(SetKeyValue::asset_definition(
-        plan_id.clone(),
-        plan_key,
-        IrohaJson::new(plan),
-    )));
+    let instructions = vec![
+        InstructionBox::from(Register::asset_definition(AssetDefinition::numeric(
+            plan_id.clone(),
+        ))),
+        InstructionBox::from(SetKeyValue::asset_definition(
+            plan_id.clone(),
+            plan_key,
+            IrohaJson::new(plan),
+        )),
+    ];
 
     let tx = TransactionBuilder::new((*chain_id).clone(), authority.clone())
         .with_instructions(instructions)
@@ -36252,8 +36266,8 @@ mod subscription_api_tests {
     async fn handle_v1_subscription_plans_filters_provider() {
         let provider = ALICE_ID.clone();
         let other = BOB_ID.clone();
-        let plan_a_id: AssetDefinitionId = "plan-a#wonderland".parse().unwrap();
-        let plan_b_id: AssetDefinitionId = "plan-b#wonderland".parse().unwrap();
+        let plan_primary_id: AssetDefinitionId = "plan-a#wonderland".parse().unwrap();
+        let plan_secondary_id: AssetDefinitionId = "plan-b#wonderland".parse().unwrap();
         let plan_a = SubscriptionPlan {
             provider: provider.clone(),
             billing: SubscriptionBilling {
@@ -36277,7 +36291,10 @@ mod subscription_api_tests {
         let state = state_with_plans_and_subscriptions(
             provider.clone(),
             other.clone(),
-            vec![(plan_a_id.clone(), plan_a), (plan_b_id, plan_b)],
+            vec![
+                (plan_primary_id.clone(), plan_a),
+                (plan_secondary_id, plan_b),
+            ],
             Vec::new(),
         );
         let params = SubscriptionPlanListParams {
@@ -36294,7 +36311,7 @@ mod subscription_api_tests {
         let items = json["items"].as_array().unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(json["total"].as_u64(), Some(1));
-        let plan_id = plan_a_id.to_string();
+        let plan_id = plan_primary_id.to_string();
         assert_eq!(items[0]["plan_id"].as_str(), Some(plan_id.as_str()));
     }
 
@@ -36369,9 +36386,9 @@ mod subscription_api_tests {
             items[0]["subscription_id"].as_str(),
             Some(paused_id_str.as_str())
         );
-        let parsed_state: SubscriptionState =
+        let decoded_state: SubscriptionState =
             norito::json::from_value(items[0]["subscription"].clone()).unwrap();
-        assert_eq!(parsed_state.status, SubscriptionStatus::Paused);
+        assert_eq!(decoded_state.status, SubscriptionStatus::Paused);
     }
 
     #[tokio::test]

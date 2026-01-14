@@ -2283,6 +2283,8 @@ pub mod sumeragi {
     pub const RBC_CHUNK_FANOUT: Option<NonZeroUsize> = None;
     /// Default RBC session TTL (seconds) before pruning inactive sessions.
     pub const RBC_SESSION_TTL_SECS: u64 = 120; // 2 minutes
+    /// Maximum RBC sessions rebroadcast per tick to avoid payload storms.
+    pub const RBC_REBROADCAST_SESSIONS_PER_TICK: usize = 8;
     /// Default maximum number of persisted RBC session summaries kept on disk.
     pub const RBC_STORE_MAX_SESSIONS: usize = 1024;
     /// Default soft quota for persisted RBC sessions. Back-pressure engages beyond this.

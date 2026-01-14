@@ -212,7 +212,7 @@ impl EpochScheduleSnapshot {
             .unwrap_or(fallback_epoch_length)
             .max(1);
         let last_finalized_epoch = finalized.last().map(|(epoch, _)| *epoch);
-        let last_finalized_end = finalized.last().map(|(_, end)| *end).unwrap_or(0);
+        let last_finalized_end = finalized.last().map_or(0, |(_, end)| *end);
 
         Self {
             finalized,
@@ -240,9 +240,9 @@ impl EpochScheduleSnapshot {
             }
         }
         let fallback_len = self.fallback_epoch_length.max(1);
-        match self.last_finalized_epoch {
-            None => height.saturating_sub(1) / fallback_len,
-            Some(last_epoch) => {
+        self.last_finalized_epoch.map_or_else(
+            || height.saturating_sub(1) / fallback_len,
+            |last_epoch| {
                 let start = self.last_finalized_end.saturating_add(1);
                 if height < start {
                     last_epoch
@@ -250,8 +250,8 @@ impl EpochScheduleSnapshot {
                     let offset = height.saturating_sub(start);
                     last_epoch.saturating_add(1 + offset / fallback_len)
                 }
-            }
-        }
+            },
+        )
     }
 
     pub(crate) fn is_epoch_boundary(&self, height: u64) -> bool {
@@ -266,7 +266,7 @@ impl EpochScheduleSnapshot {
             return false;
         }
         let offset = height.saturating_sub(start);
-        (offset + 1) % self.fallback_epoch_length.max(1) == 0
+        (offset + 1).is_multiple_of(self.fallback_epoch_length.max(1))
     }
 }
 
@@ -307,7 +307,7 @@ pub(crate) fn load_npos_epoch_params(
     )
 }
 
-/// Resolve the NPoS pacemaker block time from on-chain parameters, falling back to config.
+/// Resolve the `NPoS` pacemaker block time from on-chain parameters, falling back to config.
 pub(crate) fn resolve_npos_block_time(view: &StateView<'_>, fallback: &SumeragiNpos) -> Duration {
     view.world
         .sumeragi_npos_parameters()
@@ -318,7 +318,7 @@ pub(crate) fn resolve_npos_block_time(view: &StateView<'_>, fallback: &SumeragiN
         .unwrap_or(fallback.block_time)
 }
 
-/// Resolve NPoS pacemaker timeouts from on-chain parameters, falling back to config values.
+/// Resolve `NPoS` pacemaker timeouts from on-chain parameters, falling back to config values.
 pub(crate) fn resolve_npos_timeouts(
     view: &StateView<'_>,
     fallback: &SumeragiNpos,
@@ -343,7 +343,7 @@ pub(crate) fn resolve_npos_timeouts(
     out
 }
 
-/// Resolve NPoS election parameters from on-chain values, falling back to config defaults.
+/// Resolve `NPoS` election parameters from on-chain values, falling back to config defaults.
 pub(crate) fn resolve_npos_election_params(
     view: &StateView<'_>,
     fallback: &SumeragiNpos,
@@ -370,7 +370,7 @@ pub(crate) fn resolve_npos_election_params(
     )
 }
 
-/// Resolve NPoS activation lag for penalties from on-chain parameters or config.
+/// Resolve `NPoS` activation lag for penalties from on-chain parameters or config.
 pub(crate) fn resolve_npos_activation_lag_blocks(
     view: &StateView<'_>,
     fallback: &SumeragiNpos,
@@ -1251,8 +1251,10 @@ mod tests {
 
     #[test]
     fn resolve_npos_block_time_uses_on_chain_or_fallback() {
-        let mut fallback = SumeragiNpos::default();
-        fallback.block_time = Duration::from_millis(2_500);
+        let fallback = SumeragiNpos {
+            block_time: Duration::from_millis(2_500),
+            ..SumeragiNpos::default()
+        };
 
         let state = state_with_npos_params(SumeragiNposParameters {
             block_time_ms: 1_500,
@@ -2360,7 +2362,7 @@ mod tests {
     }
 
     #[test]
-    fn try_incoming_block_message_waits_when_rbc_ready_queue_full() {
+    fn try_incoming_block_message_drops_when_rbc_ready_queue_full() {
         const CAP: usize = 1;
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(CAP);
         let (block_tx, _block_rx) = mpsc::sync_channel(CAP);
@@ -2427,30 +2429,13 @@ mod tests {
             signature: vec![0x11],
         });
 
-        let (done_tx, done_rx) = mpsc::channel();
-        let handle_clone = handle.clone();
-        let join = std::thread::spawn(move || {
-            let accepted = handle_clone.try_incoming_block_message(ready);
-            let _ = done_tx.send(accepted);
-        });
-
-        assert!(
-            done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
-            "RbcReady should wait for block payload queue capacity"
-        );
-        let _ = block_payload_rx
-            .recv()
-            .expect("drain block payload queue to unblock sender");
-        let accepted = done_rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("RbcReady should be enqueued after space is available");
-        assert!(accepted);
-        join.join().expect("join RbcReady sender");
+        let accepted = handle.try_incoming_block_message(ready);
+        assert!(!accepted, "RbcReady should be dropped when queue is full");
 
         let received = block_payload_rx
-            .try_recv()
-            .expect("RbcReady should be enqueued after space is freed");
-        assert!(matches!(received, BlockMessage::RbcReady(_)));
+            .recv()
+            .expect("drain existing block payload");
+        assert!(matches!(received, BlockMessage::BlockCreated(_)));
         assert!(matches!(
             block_payload_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
@@ -4878,25 +4863,10 @@ impl SumeragiHandle {
     /// Enqueue an incoming block message without blocking the caller.
     /// Returns `true` if the message was accepted by the queue.
     ///
-    /// Note: `BlockSyncUpdate`, `RbcReady`, and `RbcDeliver` payloads may block under
-    /// backpressure to avoid dropping commit/QC evidence or RBC quorum signals needed
-    /// for recovery.
+    /// Note: this is a best-effort enqueue that drops messages when queues are saturated
+    /// to avoid stalling upstream relays.
     pub fn try_incoming_block_message(&self, msg: BlockMessage) -> bool {
-        match msg {
-            BlockMessage::BlockSyncUpdate(update) => self.incoming_block_message_with_mode(
-                BlockMessage::BlockSyncUpdate(update),
-                IngressMode::Blocking,
-            ),
-            BlockMessage::RbcReady(ready) => self.incoming_block_message_with_mode(
-                BlockMessage::RbcReady(ready),
-                IngressMode::Blocking,
-            ),
-            BlockMessage::RbcDeliver(deliver) => self.incoming_block_message_with_mode(
-                BlockMessage::RbcDeliver(deliver),
-                IngressMode::Blocking,
-            ),
-            other => self.incoming_block_message_with_mode(other, IngressMode::NonBlocking),
-        }
+        self.incoming_block_message_with_mode(msg, IngressMode::NonBlocking)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -6498,10 +6468,7 @@ fn run_worker_loop<A: WorkerActor>(
                     let due_wait = deadline.saturating_duration_since(now);
                     let min_gap_wait =
                         idle_wait_duration(now, loop_state.last_tick, cfg.tick_min_gap);
-                    let mut wait = match min_gap_wait {
-                        Some(min_gap) => min_gap.max(due_wait),
-                        None => due_wait,
-                    };
+                    let mut wait = min_gap_wait.map_or(due_wait, |min_gap| min_gap.max(due_wait));
                     if wait.is_zero() {
                         None
                     } else {

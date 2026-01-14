@@ -321,6 +321,7 @@ impl Actor {
     ) {
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) fn retry_missing_block_requests(&mut self, now: Instant) -> bool {
         if self.pending.missing_block_requests.is_empty() {
             return false;
@@ -331,7 +332,7 @@ impl Actor {
             .pending
             .missing_block_requests
             .keys()
-            .cloned()
+            .copied()
             .collect();
         for block_hash in pending_keys {
             if self.block_payload_available_locally(block_hash) {
@@ -434,14 +435,14 @@ impl Actor {
                 .pending
                 .missing_block_requests
                 .get(&block_hash)
-                .map(|stats| stats.retry_window)
-                .unwrap_or(stats_snapshot.retry_window);
+                .map_or(stats_snapshot.retry_window, |stats| stats.retry_window);
             let view_change_window = self
                 .pending
                 .missing_block_requests
                 .get(&block_hash)
-                .map(|stats| stats.view_change_window)
-                .unwrap_or(stats_snapshot.view_change_window);
+                .map_or(stats_snapshot.view_change_window, |stats| {
+                    stats.view_change_window
+                });
             let decision = if let Some(ref topology) = topology {
                 super::plan_missing_block_fetch(
                     &mut self.pending.missing_block_requests,
@@ -609,6 +610,7 @@ impl Actor {
         self.update_missing_block_gauges();
     }
 
+    #[allow(clippy::unused_self)]
     pub(super) fn build_qc_from_signers(
         &self,
         ctx: QcBuildContext,
@@ -667,13 +669,13 @@ impl Actor {
         height: u64,
         view: u64,
         epoch: u64,
-        topology: super::network_topology::Topology,
+        topology: &super::network_topology::Topology,
     ) {
         if self.is_observer() {
             return;
         }
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
-        let signature_topology = topology_for_view(&topology, height, view, mode_tag, prf_seed);
+        let signature_topology = topology_for_view(topology, height, view, mode_tag, prf_seed);
         let required = signature_topology.min_votes_for_commit();
         let voting_len = signature_topology.as_ref().len();
         if let Some(existing) = self.qc_cache.get(&(phase, block_hash, height, view, epoch)) {
@@ -839,21 +841,18 @@ impl Actor {
                 if candidate.phase != crate::sumeragi::consensus::Phase::Commit {
                     continue;
                 }
-                selected = Some(match selected {
-                    None => candidate,
-                    Some(current) => {
-                        let incoming = (candidate.height, candidate.view);
-                        let existing = (current.height, current.view);
-                        let promotes_phase = incoming == existing
-                            && candidate.phase == crate::sumeragi::consensus::Phase::Commit
-                            && current.phase != crate::sumeragi::consensus::Phase::Commit;
-                        if incoming > existing || promotes_phase {
-                            candidate
-                        } else {
-                            current
-                        }
+                selected = Some(selected.map_or(candidate, |current| {
+                    let incoming = (candidate.height, candidate.view);
+                    let existing = (current.height, current.view);
+                    let promotes_phase = incoming == existing
+                        && candidate.phase == crate::sumeragi::consensus::Phase::Commit
+                        && current.phase != crate::sumeragi::consensus::Phase::Commit;
+                    if incoming > existing || promotes_phase {
+                        candidate
+                    } else {
+                        current
                     }
-                });
+                }));
             }
             selected
         } else {
@@ -872,7 +871,7 @@ impl Actor {
         let canonical_signers = super::normalize_signer_indices_to_canonical(
             &snapshot.signers,
             &signature_topology,
-            &topology,
+            topology,
         );
         if canonical_signers.len() != snapshot.signers.len() {
             warn!(
@@ -913,7 +912,7 @@ impl Actor {
                 highest_qc,
             },
             &canonical_signers,
-            &topology,
+            topology,
             aggregate_signature,
             roots,
         );
@@ -1084,7 +1083,7 @@ impl Actor {
             }
         }
 
-        let deferred = if block_known {
+        if block_known {
             false
         } else {
             self.defer_qc_if_block_missing(
@@ -1095,8 +1094,7 @@ impl Actor {
                 signers,
                 signature_topology,
             )
-        };
-        deferred
+        }
     }
 
     fn precommit_qc_extends_locked(
@@ -1191,14 +1189,7 @@ impl Actor {
                     signers = signer_count,
                     "rebuilding QC from cached votes"
                 );
-                self.try_form_qc_from_votes(
-                    phase,
-                    block_hash,
-                    height,
-                    view,
-                    epoch,
-                    topology.clone(),
-                );
+                self.try_form_qc_from_votes(phase, block_hash, height, view, epoch, &topology);
                 if let Some(qc) = self.qc_cache.get(&(phase, block_hash, height, view, epoch)) {
                     if qc.phase == phase {
                         if !cached_before {
@@ -1561,7 +1552,7 @@ impl Actor {
             );
             return false;
         }
-        let block_view = u64::from(block.header().view_change_index());
+        let block_view = block.header().view_change_index();
         if block_view != qc.view {
             warn!(
                 qc_height = qc.height,
@@ -1648,7 +1639,7 @@ impl Actor {
         );
     }
 
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::unnecessary_wraps)]
     pub(super) fn handle_qc(&mut self, qc: crate::sumeragi::consensus::Qc) -> Result<()> {
         // Prepare certificates are view-scoped; commit/new-view certificates can safely arrive
         // after a local view change and still unlock progress, so don't drop them as stale.
@@ -2142,10 +2133,10 @@ mod tests {
         let height = 8;
         let view = 3;
         let epoch = 0;
-        let root_a_parent = Hash::prehashed([0x11; Hash::LENGTH]);
-        let root_a_post = Hash::prehashed([0x12; Hash::LENGTH]);
-        let root_b_parent = Hash::prehashed([0x21; Hash::LENGTH]);
-        let root_b_post = Hash::prehashed([0x22; Hash::LENGTH]);
+        let primary_parent_root = Hash::prehashed([0x11; Hash::LENGTH]);
+        let primary_post_root = Hash::prehashed([0x12; Hash::LENGTH]);
+        let secondary_parent_root = Hash::prehashed([0x21; Hash::LENGTH]);
+        let secondary_post_root = Hash::prehashed([0x22; Hash::LENGTH]);
 
         let mut vote_log = BTreeMap::new();
         vote_log.insert(
@@ -2156,8 +2147,8 @@ mod tests {
                 view,
                 epoch,
                 0,
-                root_a_parent,
-                root_a_post,
+                primary_parent_root,
+                primary_post_root,
             ),
         );
         vote_log.insert(
@@ -2168,8 +2159,8 @@ mod tests {
                 view,
                 epoch,
                 1,
-                root_a_parent,
-                root_a_post,
+                primary_parent_root,
+                primary_post_root,
             ),
         );
         vote_log.insert(
@@ -2180,8 +2171,8 @@ mod tests {
                 view,
                 epoch,
                 2,
-                root_b_parent,
-                root_b_post,
+                secondary_parent_root,
+                secondary_post_root,
             ),
         );
 
@@ -2204,10 +2195,10 @@ mod tests {
         let height = 5;
         let view = 1;
         let epoch = 0;
-        let root_a_parent = Hash::prehashed([0x01; Hash::LENGTH]);
-        let root_a_post = Hash::prehashed([0x02; Hash::LENGTH]);
-        let root_b_parent = Hash::prehashed([0x02; Hash::LENGTH]);
-        let root_b_post = Hash::prehashed([0x03; Hash::LENGTH]);
+        let primary_parent_root = Hash::prehashed([0x01; Hash::LENGTH]);
+        let primary_post_root = Hash::prehashed([0x02; Hash::LENGTH]);
+        let secondary_parent_root = Hash::prehashed([0x02; Hash::LENGTH]);
+        let secondary_post_root = Hash::prehashed([0x03; Hash::LENGTH]);
 
         let mut vote_log = BTreeMap::new();
         vote_log.insert(
@@ -2218,8 +2209,8 @@ mod tests {
                 view,
                 epoch,
                 1,
-                root_a_parent,
-                root_a_post,
+                primary_parent_root,
+                primary_post_root,
             ),
         );
         vote_log.insert(
@@ -2230,8 +2221,8 @@ mod tests {
                 view,
                 epoch,
                 2,
-                root_b_parent,
-                root_b_post,
+                secondary_parent_root,
+                secondary_post_root,
             ),
         );
 

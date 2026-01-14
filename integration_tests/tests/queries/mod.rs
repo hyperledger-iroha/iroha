@@ -1,14 +1,28 @@
 //! Integration tests covering Torii query APIs.
 
+use std::time::Duration;
+
 use integration_tests::sandbox;
 use iroha::{
-    client::QueryError,
+    client::{Client, QueryError},
     data_model::{
         prelude::*,
         query::{error::QueryExecutionFail, parameters::MAX_FETCH_SIZE},
     },
 };
 use iroha_test_network::*;
+
+const QUERY_TX_STATUS_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn query_network_builder() -> NetworkBuilder {
+    NetworkBuilder::new()
+}
+
+fn query_client(network: &Network) -> Client {
+    let mut client = network.client();
+    client.transaction_status_timeout = QUERY_TX_STATUS_TIMEOUT;
+    client
+}
 
 /// Account query scenarios.
 mod account;
@@ -28,12 +42,12 @@ mod smart_contract;
 #[test]
 fn too_big_fetch_size_is_not_allowed() {
     if let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
-        NetworkBuilder::new(),
+        query_network_builder(),
         stringify!(too_big_fetch_size_is_not_allowed),
     )
     .unwrap()
     {
-        let client = network.client();
+        let client = query_client(&network);
 
         let result: eyre::Result<()> = {
             let err = client
@@ -59,13 +73,13 @@ fn too_big_fetch_size_is_not_allowed() {
 #[test]
 fn find_blocks_reversed() -> eyre::Result<()> {
     let Some((network, rt)) = sandbox::start_network_blocking_or_skip(
-        NetworkBuilder::new(),
+        query_network_builder(),
         stringify!(find_blocks_reversed),
     )?
     else {
         return Ok(());
     };
-    let client = network.client();
+    let client = query_client(&network);
 
     // Force the chain to advance by submitting two transactions; idle peers may not emit empty blocks.
     let register_first_domain = Register::domain(Domain::new("domain1".parse()?));
@@ -100,13 +114,13 @@ fn find_blocks_reversed() -> eyre::Result<()> {
 fn find_transactions_reversed() -> eyre::Result<()> {
     let result: eyre::Result<()> = {
         let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
-            NetworkBuilder::new(),
+            query_network_builder(),
             stringify!(find_transactions_reversed),
         )?
         else {
             return Ok(());
         };
-        let client = network.client();
+        let client = query_client(&network);
 
         let register_domain = Register::domain(Domain::new("domain1".parse()?));
         client.submit_blocking(register_domain.clone())?;

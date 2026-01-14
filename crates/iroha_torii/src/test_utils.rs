@@ -676,6 +676,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 defaults::sumeragi::RBC_DISK_STORE_TTL_SECS,
             ),
             rbc_disk_store_max_bytes: defaults::sumeragi::RBC_DISK_STORE_MAX_BYTES,
+            rbc_rebroadcast_sessions_per_tick:
+                defaults::sumeragi::RBC_REBROADCAST_SESSIONS_PER_TICK,
             key_activation_lead_blocks: defaults::sumeragi::KEY_ACTIVATION_LEAD_BLOCKS,
             key_overlap_grace_blocks: defaults::sumeragi::KEY_OVERLAP_GRACE_BLOCKS,
             key_expiry_grace_blocks: defaults::sumeragi::KEY_EXPIRY_GRACE_BLOCKS,

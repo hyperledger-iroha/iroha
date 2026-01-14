@@ -206,10 +206,7 @@ impl Handle {
             if remaining == Duration::ZERO {
                 return Some(Duration::ZERO);
             }
-            next_due = Some(match next_due {
-                Some(prev) => prev.min(remaining),
-                None => remaining,
-            });
+            next_due = Some(next_due.map_or(remaining, |prev| prev.min(remaining)));
         }
         next_due
     }
@@ -454,8 +451,7 @@ impl DiskStore {
             })
             .collect();
         entries.sort_by_key(|stored| stored.updated_at_ms);
-        let encoded =
-            to_bytes(&entries).map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+        let encoded = to_bytes(&entries).map_err(io::Error::other)?;
         let tmp = temp_store_path(&self.file);
         {
             let mut file = fs::OpenOptions::new()

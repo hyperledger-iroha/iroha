@@ -1,9 +1,14 @@
 #![allow(clippy::float_cmp)]
 #![allow(clippy::uninlined_format_args)]
-#![allow(clippy::unchecked_duration_subtraction)]
+#![allow(clippy::unchecked_time_subtraction)]
 #![allow(clippy::too_many_lines)]
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::unnested_or_patterns)]
+#![allow(clippy::large_futures)]
+#![allow(clippy::similar_names)]
+#![allow(clippy::useless_conversion)]
+#![allow(clippy::clone_on_copy)]
+#![allow(clippy::needless_borrows_for_generic_args)]
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
@@ -526,14 +531,14 @@ fn qc_with_view_bitmap(
     height: u64,
     view: u64,
     epoch: u64,
-    signers_bitmap: Vec<u8>,
+    signers_bitmap: &[u8],
     phase: Phase,
     signature_topology: &super::network_topology::Topology,
     canonical_topology: &super::network_topology::Topology,
     keypairs: &[KeyPair],
 ) -> crate::sumeragi::consensus::Qc {
     let canonical_signers =
-        canonical_signers_from_view_bitmap(&signers_bitmap, signature_topology, canonical_topology);
+        canonical_signers_from_view_bitmap(signers_bitmap, signature_topology, canonical_topology);
     let canonical_bitmap =
         super::build_signers_bitmap(&canonical_signers, canonical_topology.as_ref().len());
     qc_with_bitmap(
@@ -966,6 +971,8 @@ fn test_sumeragi_config() -> SumeragiConfig {
         rbc_session_ttl: Duration::from_secs(
             iroha_config::parameters::defaults::sumeragi::RBC_SESSION_TTL_SECS,
         ),
+        rbc_rebroadcast_sessions_per_tick:
+            iroha_config::parameters::defaults::sumeragi::RBC_REBROADCAST_SESSIONS_PER_TICK,
         rbc_store_max_sessions:
             iroha_config::parameters::defaults::sumeragi::RBC_STORE_MAX_SESSIONS,
         rbc_store_soft_sessions:
@@ -1402,8 +1409,8 @@ async fn test_actor_harness_with_config_and_height_and_kura(
         "DA must remain enabled in sumeragi tests; disabling it can deadlock consensus startup"
     );
 
-    let _commit_history_guard = super::status::commit_history_test_guard();
-    let _rbc_status_guard = super::status::rbc_status_test_guard();
+    let commit_history_guard = super::status::commit_history_test_guard();
+    let rbc_status_guard = super::status::rbc_status_test_guard();
     super::status::reset_commit_certs_for_tests();
     super::status::reset_validator_checkpoints_for_tests();
     super::status::reset_precommit_signer_history_for_tests();
@@ -1659,8 +1666,8 @@ async fn test_actor_harness_with_config_and_height_and_kura(
         shutdown,
         _network_child: network_child,
         _gossiper_child: gossiper_child,
-        _commit_history_guard,
-        _rbc_status_guard,
+        _commit_history_guard: commit_history_guard,
+        _rbc_status_guard: rbc_status_guard,
         key_pairs,
     }
 }
@@ -2122,7 +2129,7 @@ async fn observer_skips_qc_aggregation() {
     }
 
     let _ = harness.background_rx.try_iter().count();
-    actor.try_form_qc_from_votes(Phase::Commit, block_hash, height, view, epoch, topology);
+    actor.try_form_qc_from_votes(Phase::Commit, block_hash, height, view, epoch, &topology);
     assert!(
         actor.qc_cache.is_empty(),
         "observer should not aggregate QCs"
@@ -2769,9 +2776,10 @@ async fn rbc_persist_worker_persists_full_session() {
         {
             break;
         }
-        if Instant::now() >= deadline {
-            panic!("timed out waiting for RBC persistence worker");
-        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for RBC persistence worker"
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
 
@@ -2910,9 +2918,10 @@ async fn rbc_persist_worker_does_not_block_on_full_wake_channel() {
         {
             break;
         }
-        if Instant::now() >= deadline {
-            panic!("timed out waiting for RBC persistence worker");
-        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for RBC persistence worker"
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
 
@@ -3161,7 +3170,7 @@ async fn block_sync_update_accepts_uncertified_next_height_in_permissioned_mode(
         .expect("block sync update");
 
     assert!(
-        actor.vote_roster_cache.get(&block.hash()).is_some(),
+        actor.vote_roster_cache.contains_key(&block.hash()),
         "block sync roster should be cached for vote validation"
     );
     let pending = actor.pending.pending_blocks.get(&block.hash());
@@ -3304,7 +3313,7 @@ async fn block_sync_update_accepts_uncertified_missing_block_when_behind() {
         .expect("block sync update");
 
     assert!(
-        actor.vote_roster_cache.get(&block.hash()).is_some(),
+        actor.vote_roster_cache.contains_key(&block.hash()),
         "block sync roster should be cached for vote validation"
     );
     let pending = actor.pending.pending_blocks.get(&block.hash());
@@ -4323,7 +4332,7 @@ async fn block_sync_update_known_block_records_commit_qc() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn block_sync_update_known_block_records_commit_votes_without_roster_hint() {
+async fn block_sync_update_known_block_prunes_commit_votes_without_roster_hint() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -4362,8 +4371,8 @@ async fn block_sync_update_known_block_records_commit_votes_without_roster_hint(
 
     let key = (Phase::Commit, height, view, epoch, vote.signer);
     assert!(
-        actor.vote_log.contains_key(&key),
-        "commit vote should be recorded for known blocks without roster hints"
+        !actor.vote_log.contains_key(&key),
+        "commit votes for known committed blocks should be pruned"
     );
 
     harness.shutdown.send();
@@ -4588,7 +4597,7 @@ async fn block_sync_update_allows_nonextending_qc_without_commit_qc() {
         2,
         1,
         0,
-        vec![0b0000_1111],
+        &[0b0000_1111],
         Phase::Commit,
         &qc_topology,
         &topology,
@@ -4942,7 +4951,7 @@ async fn fetch_pending_block_skips_invalid_pending() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn block_sync_update_requests_pending_block_for_missing_qc() {
+async fn block_sync_update_skips_fetch_when_checkpoint_present() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -5036,11 +5045,11 @@ async fn block_sync_update_requests_pending_block_for_missing_qc() {
         .expect("block sync update");
 
     assert!(
-        actor
+        !actor
             .block_sync_fetch_log
             .last_sent
             .contains_key(&block.hash()),
-        "missing QC should trip fetch throttle"
+        "checkpoint evidence should suppress missing-QC fetch"
     );
 
     harness.shutdown.send();
@@ -5816,7 +5825,7 @@ async fn process_precommit_qc_upgrades_highest_qc_phase() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn quorum_reschedule_rebroadcasts_block_sync_update() {
+async fn quorum_reschedule_rebroadcasts_block_created_without_roster() {
     let mut harness = test_actor_harness(4).await;
     let block = sample_block(1, 0, None);
     let block_hash = block.hash();
@@ -5848,16 +5857,32 @@ async fn quorum_reschedule_rebroadcasts_block_sync_update() {
             )
         })
         .count();
+    let block_created = posts
+        .iter()
+        .filter(|post| {
+            matches!(
+                post,
+                BackgroundPost::Post {
+                    msg: BlockMessage::BlockCreated(created),
+                    ..
+                } if created.block.hash() == block_hash
+            )
+        })
+        .count();
     assert_eq!(
-        sync_updates, expected_targets,
-        "quorum reschedule should post a block-sync update to every topology peer"
+        sync_updates, 0,
+        "quorum reschedule should skip unverifiable block-sync updates"
+    );
+    assert_eq!(
+        block_created, expected_targets,
+        "quorum reschedule should rebroadcast the block payload to topology peers"
     );
 
     harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn quorum_reschedule_skips_duplicate_block_sync_updates() {
+async fn quorum_reschedule_skips_duplicate_block_rebroadcasts() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -5925,9 +5950,9 @@ async fn quorum_reschedule_skips_duplicate_block_sync_updates() {
             )
         })
         .count();
-    assert!(
-        sync_updates_first > 0,
-        "first reschedule should broadcast a block sync update"
+    assert_eq!(
+        sync_updates_first, 0,
+        "first reschedule should skip unverifiable block sync updates"
     );
     assert!(
         block_created_first > 0,
@@ -6677,8 +6702,8 @@ async fn commit_pipeline_rebuilds_qcs_with_empty_active_roster() {
         let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
         let mut journal = state.commit_roster_journal.write();
         journal.upsert(commit_qc, checkpoint, None);
-        state.commit_topology.mutate_vec(|vec| vec.clear());
-        state.prev_commit_topology.mutate_vec(|vec| vec.clear());
+        state.commit_topology.mutate_vec(Vec::clear);
+        state.prev_commit_topology.mutate_vec(Vec::clear);
         let mut block = state.world.block();
         block.peers.get_mut().clear();
         block.commit();
@@ -7007,7 +7032,7 @@ async fn commit_outcome_persists_roster_sidecar_from_cached_qc() {
         "vote should be deferred until roster is available"
     );
     assert!(
-        actor.deferred_votes.get(&deferred_hash).is_some(),
+        actor.deferred_votes.contains_key(&deferred_hash),
         "deferred vote should be buffered"
     );
 
@@ -7120,7 +7145,7 @@ async fn commit_outcome_persists_roster_sidecar_from_cached_qc() {
         "deferred vote should be recorded after commit advances roster"
     );
     assert!(
-        actor.deferred_votes.get(&deferred_hash).is_none(),
+        !actor.deferred_votes.contains_key(&deferred_hash),
         "deferred votes should be cleared after replay"
     );
 
@@ -7187,8 +7212,8 @@ async fn finalize_pending_block_revives_aborted_on_tip_with_commit_qc() {
 
     {
         let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
-        state.commit_topology.mutate_vec(|vec| vec.clear());
-        state.prev_commit_topology.mutate_vec(|vec| vec.clear());
+        state.commit_topology.mutate_vec(Vec::clear);
+        state.prev_commit_topology.mutate_vec(Vec::clear);
         let mut block = state.world.block();
         block.peers.get_mut().clear();
         block.commit();
@@ -7590,17 +7615,21 @@ async fn rbc_payload_rebroadcast_sends_single_init_and_respects_cooldown() {
         bytes: vec![0xAA; 16],
     };
 
-    harness
-        .actor
-        .rebroadcast_rbc_payload_bundle(key, init.clone(), vec![chunk.clone()], 0);
+    let seed = super::rbc::shuffle_seed(&key.0, key.1, key.2);
+    let local_peer_id = harness.actor.common_config.peer.id().clone();
+    let should_rebroadcast = super::rbc::is_payload_rebroadcaster(&roster, &local_peer_id, seed);
+    if should_rebroadcast {
+        harness
+            .actor
+            .rebroadcast_rbc_payload_bundle(key, init.clone(), vec![chunk.clone()], 0);
+    }
 
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
-    let local_peer_id = harness.actor.common_config.peer.id();
     let expected_targets = harness
         .actor
         .effective_commit_topology()
         .iter()
-        .filter(|peer| *peer != local_peer_id)
+        .filter(|peer| *peer != &local_peer_id)
         .count();
     let init_posts = posts
         .iter()
@@ -7615,17 +7644,24 @@ async fn rbc_payload_rebroadcast_sends_single_init_and_respects_cooldown() {
         })
         .count();
     assert_eq!(
-        init_posts, expected_targets,
+        init_posts,
+        if should_rebroadcast {
+            expected_targets
+        } else {
+            0
+        },
         "expected RBC INIT posts to commit topology"
     );
 
-    harness
-        .actor
-        .rebroadcast_rbc_payload_bundle(key, init, vec![chunk], 0);
-    assert!(
-        harness.background_rx.try_iter().next().is_none(),
-        "expected payload rebroadcast to be rate-limited per session"
-    );
+    if should_rebroadcast {
+        harness
+            .actor
+            .rebroadcast_rbc_payload_bundle(key, init, vec![chunk], 0);
+        assert!(
+            harness.background_rx.try_iter().next().is_none(),
+            "expected payload rebroadcast to be rate-limited per session"
+        );
+    }
 
     harness.shutdown.send();
 }
@@ -7648,17 +7684,21 @@ async fn rbc_payload_rebroadcast_sends_init_without_chunks() {
         chunk_root: Hash::prehashed([0x77; 32]),
     };
 
-    harness
-        .actor
-        .rebroadcast_rbc_payload_bundle(key, init, Vec::new(), 0);
+    let seed = super::rbc::shuffle_seed(&key.0, key.1, key.2);
+    let local_peer_id = harness.actor.common_config.peer.id().clone();
+    let should_rebroadcast = super::rbc::is_payload_rebroadcaster(&roster, &local_peer_id, seed);
+    if should_rebroadcast {
+        harness
+            .actor
+            .rebroadcast_rbc_payload_bundle(key, init, Vec::new(), 0);
+    }
 
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
-    let local_peer_id = harness.actor.common_config.peer.id();
     let expected_targets = harness
         .actor
         .effective_commit_topology()
         .iter()
-        .filter(|peer| *peer != local_peer_id)
+        .filter(|peer| *peer != &local_peer_id)
         .count();
     let init_posts = posts
         .iter()
@@ -7685,10 +7725,18 @@ async fn rbc_payload_rebroadcast_sends_init_without_chunks() {
         })
         .count();
     assert_eq!(
-        init_posts, expected_targets,
+        init_posts,
+        if should_rebroadcast {
+            expected_targets
+        } else {
+            0
+        },
         "expected RBC INIT posts even without cached chunks"
     );
-    assert_eq!(chunk_posts, 0, "expected no chunk rebroadcasts");
+    assert_eq!(
+        chunk_posts, 0,
+        "expected no chunk rebroadcasts for missing cache"
+    );
 
     harness.shutdown.send();
 }
@@ -7893,19 +7941,21 @@ async fn rbc_ready_rebroadcast_is_rate_limited_per_session() {
     assert!(session.record_ready(1, vec![0xBB]));
 
     let roster = harness.actor.effective_commit_topology();
+    let seed = super::rbc::shuffle_seed(&key.0, key.1, key.2);
+    let local_peer_id = harness.actor.common_config.peer.id().clone();
+    let should_rebroadcast = super::rbc::is_ready_rebroadcaster(&roster, &local_peer_id, seed);
     harness
         .actor
-        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
+        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Network);
     let roster_hash = roster_hash(&roster);
     let readies = Actor::rbc_ready_bundle(key, &session, roster_hash).expect("readies");
     harness.actor.rebroadcast_rbc_ready_bundle(key, readies);
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
-    let local_peer_id = harness.actor.common_config.peer.id();
     let expected_targets = harness
         .actor
         .effective_commit_topology()
         .iter()
-        .filter(|peer| *peer != local_peer_id)
+        .filter(|peer| *peer != &local_peer_id)
         .count();
     let ready_posts = posts
         .iter()
@@ -7919,14 +7969,23 @@ async fn rbc_ready_rebroadcast_is_rate_limited_per_session() {
             )
         })
         .count();
-    assert_eq!(ready_posts, expected_targets.saturating_mul(2));
+    assert_eq!(
+        ready_posts,
+        if should_rebroadcast {
+            expected_targets.saturating_mul(2)
+        } else {
+            0
+        }
+    );
 
     let readies = Actor::rbc_ready_bundle(key, &session, roster_hash).expect("readies");
     harness.actor.rebroadcast_rbc_ready_bundle(key, readies);
-    assert!(
-        harness.background_rx.try_iter().next().is_none(),
-        "expected READY rebroadcast to be rate-limited per session"
-    );
+    if should_rebroadcast {
+        assert!(
+            harness.background_rx.try_iter().next().is_none(),
+            "expected READY rebroadcast to be rate-limited per session"
+        );
+    }
 
     harness.shutdown.send();
 }
@@ -8763,10 +8822,15 @@ async fn precommit_vote_block_sync_update_targets_snapshot_roster() {
     let online_peers = actor
         .network
         .online_peers(|set| set.iter().map(|peer| peer.id().clone()).collect::<Vec<_>>());
+    let registered_peers = {
+        let view = actor.state.view();
+        view.world().peers().iter().cloned().collect::<Vec<_>>()
+    };
     let expected_targets = Actor::block_sync_update_targets_for_peers(
         actor.common_config.peer.id(),
         actor.block_sync_gossip_limit,
         &snapshot_roster,
+        &registered_peers,
         &online_peers,
         block_hash.as_ref(),
     );
@@ -9113,7 +9177,14 @@ async fn qc_broadcast_targets_snapshot_roster() {
     }
 
     let _ = harness.background_rx.try_iter().count();
-    actor.try_form_qc_from_votes(Phase::Commit, block_hash, height, view_idx, epoch, topology);
+    actor.try_form_qc_from_votes(
+        Phase::Commit,
+        block_hash,
+        height,
+        view_idx,
+        epoch,
+        &topology,
+    );
 
     let expected_targets: BTreeSet<_> = snapshot_roster
         .iter()
@@ -9875,7 +9946,7 @@ async fn try_form_qc_from_votes_skips_aborted_pending_off_tip() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn handle_vote_accepts_committed_block_commit_vote() {
+async fn handle_vote_prunes_committed_block_commit_vote() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
 
@@ -9907,8 +9978,8 @@ async fn handle_vote_accepts_committed_block_commit_vote() {
     actor.handle_vote(vote);
 
     assert!(
-        actor.vote_log.contains_key(&(Phase::Commit, 1, 0, 0, 0)),
-        "commit votes for committed blocks should be recorded"
+        !actor.vote_log.contains_key(&(Phase::Commit, 1, 0, 0, 0)),
+        "commit votes for committed blocks should be pruned"
     );
 
     harness.shutdown.send();
@@ -9956,7 +10027,7 @@ async fn handle_vote_defers_until_roster_available() {
         "vote should be deferred until roster is available"
     );
     assert!(
-        actor.deferred_votes.get(&block_hash).is_some(),
+        actor.deferred_votes.contains_key(&block_hash),
         "vote should be retained for roster resolution"
     );
 
@@ -9969,7 +10040,7 @@ async fn handle_vote_defers_until_roster_available() {
         "deferred vote should be replayed once roster is cached"
     );
     assert!(
-        actor.deferred_votes.get(&block_hash).is_none(),
+        !actor.deferred_votes.contains_key(&block_hash),
         "deferred votes should be cleared after replay"
     );
 
@@ -10067,7 +10138,7 @@ async fn deferred_votes_replay_after_commit_roster_history_arrives() {
         "vote should be deferred until roster history is available"
     );
     assert!(
-        actor.deferred_votes.get(&hash_height5).is_some(),
+        actor.deferred_votes.contains_key(&hash_height5),
         "deferred vote should be buffered"
     );
 
@@ -10118,7 +10189,7 @@ async fn deferred_votes_replay_after_commit_roster_history_arrives() {
         "deferred vote should be recorded after roster resolution"
     );
     assert!(
-        actor.deferred_votes.get(&hash_height5).is_none(),
+        !actor.deferred_votes.contains_key(&hash_height5),
         "deferred vote should be cleared after replay"
     );
 
@@ -11363,7 +11434,7 @@ async fn handle_qc_accepts_stale_precommit_qc_for_unknown_block() {
         height,
         stale_view,
         0,
-        signers_bitmap,
+        &signers_bitmap,
         Phase::Commit,
         &signature_topology,
         &topology,
@@ -11478,7 +11549,7 @@ async fn handle_qc_missing_block_fetch_falls_back_after_signer_attempts() {
         height,
         view,
         0,
-        signers_bitmap.clone(),
+        &signers_bitmap,
         Phase::Commit,
         &signature_topology,
         &topology,
@@ -11539,7 +11610,7 @@ async fn handle_qc_missing_block_fetch_falls_back_after_signer_attempts() {
         height,
         view,
         0,
-        signers_bitmap,
+        &signers_bitmap,
         Phase::Commit,
         &signature_topology,
         &topology,
@@ -12769,20 +12840,23 @@ async fn rebroadcast_stalled_rbc_payloads_retries_chunks_after_ready_quorum() {
 
     let roster = harness.actor.effective_commit_topology();
     assert!(!roster.is_empty());
+    let seed = super::rbc::shuffle_seed(&key.0, key.1, key.2);
+    let local_peer_id = harness.actor.common_config.peer.id();
+    let should_rebroadcast = super::rbc::is_payload_rebroadcaster(&roster, local_peer_id, seed);
     let topology = super::network_topology::Topology::new(roster.clone());
     let required = harness.actor.rbc_deliver_quorum(&topology);
     assert!(required > 0, "ready quorum should be non-zero");
     for idx in 0..required {
         session.record_ready(
             u32::try_from(idx).expect("sender fits u32"),
-            vec![idx as u8],
+            vec![u8::try_from(idx).expect("index fits u8")],
         );
     }
 
     let missing_idx = session
         .chunks
         .iter()
-        .position(|entry| entry.is_some())
+        .position(Option::is_some)
         .expect("chunk present");
     session.chunks[missing_idx] = None;
     session.received_chunks = session.received_chunks.saturating_sub(1);
@@ -12802,16 +12876,100 @@ async fn rebroadcast_stalled_rbc_payloads_retries_chunks_after_ready_quorum() {
     let progress = harness
         .actor
         .rebroadcast_stalled_rbc_payloads(Instant::now());
-    assert!(progress, "expected payload rebroadcast for missing chunks");
-    assert!(
+    assert_eq!(
+        progress, should_rebroadcast,
+        "payload rebroadcast eligibility should control progress"
+    );
+    let payload_rebroadcasted = harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .payload_rebroadcast_last_sent
+        .contains_key(&key);
+    assert_eq!(
+        payload_rebroadcasted, should_rebroadcast,
+        "payload rebroadcast timestamp should track eligibility"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rebroadcast_stalled_rbc_payloads_respects_session_budget() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.rbc_rebroadcast_sessions_per_tick = 1;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let local_peer_id = harness.actor.common_config.peer.id().clone();
+    let mut roster = vec![local_peer_id.clone()];
+    for peer in harness.actor.effective_commit_topology() {
+        if peer != local_peer_id {
+            roster.push(peer);
+        }
+    }
+    assert!(roster.len() > 1, "test requires a multi-peer roster");
+
+    let payload = vec![0xAB; 64];
+    let payload_hash = Hash::new(&payload);
+    for height in 10..=12_u64 {
+        let key = pending_session_key(height);
+        let session =
+            Actor::build_rbc_session_from_payload(&payload, payload_hash, 32, 0).expect("session");
+        harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .insert(key, session);
+        harness.actor.record_rbc_session_roster(
+            key,
+            roster.clone(),
+            super::RbcRosterSource::Network,
+        );
+    }
+
+    let progress = harness
+        .actor
+        .rebroadcast_stalled_rbc_payloads(Instant::now());
+    assert!(progress);
+    assert_eq!(
         harness
             .actor
             .subsystems
             .da_rbc
             .rbc
             .payload_rebroadcast_last_sent
-            .contains_key(&key),
-        "payload rebroadcast timestamp should be recorded"
+            .len(),
+        1
+    );
+
+    let _ = harness
+        .actor
+        .rebroadcast_stalled_rbc_payloads(Instant::now());
+    assert_eq!(
+        harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .payload_rebroadcast_last_sent
+            .len(),
+        2
+    );
+
+    let _ = harness
+        .actor
+        .rebroadcast_stalled_rbc_payloads(Instant::now());
+    assert_eq!(
+        harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .payload_rebroadcast_last_sent
+            .len(),
+        3
     );
 
     harness.shutdown.send();
@@ -14229,7 +14387,7 @@ async fn handle_rbc_deliver_sets_expected_chunk_root_when_missing() {
     for idx in 0..required {
         session.record_ready(
             u32::try_from(idx).expect("sender fits u32"),
-            vec![idx as u8],
+            vec![u8::try_from(idx).expect("index fits u8")],
         );
     }
 
@@ -14755,7 +14913,7 @@ async fn maybe_emit_rbc_deliver_accepts_derived_roster() {
     for idx in 0..required {
         session.record_ready(
             u32::try_from(idx).expect("sender fits u32"),
-            vec![idx as u8],
+            vec![u8::try_from(idx).expect("index fits u8")],
         );
     }
 
@@ -14808,14 +14966,14 @@ async fn maybe_emit_rbc_deliver_defers_until_chunks_complete() {
     for idx in 0..required {
         session.record_ready(
             u32::try_from(idx).expect("sender fits u32"),
-            vec![idx as u8],
+            vec![u8::try_from(idx).expect("index fits u8")],
         );
     }
 
     let missing_idx = session
         .chunks
         .iter()
-        .position(|entry| entry.is_some())
+        .position(Option::is_some)
         .expect("chunk present");
     session.chunks[missing_idx] = None;
     session.received_chunks = session.received_chunks.saturating_sub(1);
@@ -14872,7 +15030,7 @@ async fn maybe_emit_rbc_deliver_rejects_chunk_root_mismatch() {
     for idx in 0..required {
         session.record_ready(
             u32::try_from(idx).expect("sender fits u32"),
-            vec![idx as u8],
+            vec![u8::try_from(idx).expect("index fits u8")],
         );
     }
 
@@ -16794,15 +16952,15 @@ fn state_with_peers(peers: Vec<PeerId>) -> State {
     State::new(world, kura, query)
 }
 
-fn state_with_peers_and_keys(peers: Vec<PeerId>, keys: &[KeyPair]) -> State {
+fn state_with_peers_and_keys(peers: &[PeerId], keys: &[KeyPair]) -> State {
     let world = World::default();
     {
         let mut block = world.block();
         let vec = block.peers.get_mut();
-        for pid in &peers {
+        for pid in peers {
             let _ = vec.push(pid.clone());
         }
-        insert_consensus_keys_for_peers(&mut block, &peers, keys);
+        insert_consensus_keys_for_peers(&mut block, peers, keys);
         block.commit();
     }
     let kura = Kura::blank_kura_for_testing();
@@ -17090,7 +17248,7 @@ fn block_sync_selection_prefers_matching_validator_checkpoint_history() {
     let trusted = trusted_with_pops(me_peer.clone(), vec![other_peer.clone()], pops);
     let roster = vec![other_peer.id().clone(), me_peer.id().clone()];
     let keypairs = vec![other_kp.clone(), me_kp.clone()];
-    let state = state_with_peers_and_keys(roster.clone(), &keypairs);
+    let state = state_with_peers_and_keys(&roster, &keypairs);
     let block_header = BlockHeader::new(NonZeroU64::new(7).unwrap(), None, None, None, 0, 0);
     let block_hash = block_header.hash();
     let block_sig = BlockSignature::new(0, SignatureOf::from_hash(me_kp.private_key(), block_hash));
@@ -17163,7 +17321,7 @@ fn block_sync_selection_prefers_matching_commit_qc_history() {
     pops.insert(me_peer.id().public_key().clone(), me_pop);
     let trusted = trusted_with_pops(me_peer.clone(), Vec::new(), pops);
     let keypairs = vec![me_kp.clone()];
-    let state = state_with_peers_and_keys(vec![me_peer.id().clone()], &keypairs);
+    let state = state_with_peers_and_keys(std::slice::from_ref(me_peer.id()), &keypairs);
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD0; Hash::LENGTH]));
     let block_sig = BlockSignature::new(0, SignatureOf::from_hash(me_kp.private_key(), block_hash));
@@ -17218,7 +17376,7 @@ fn block_sync_selection_prefers_paired_hints() {
     pops.insert(me_peer.id().public_key().clone(), me_pop);
     let trusted = trusted_with_pops(me_peer.clone(), Vec::new(), pops);
     let keypairs = vec![me_kp.clone()];
-    let state = state_with_peers_and_keys(vec![me_peer.id().clone()], &keypairs);
+    let state = state_with_peers_and_keys(std::slice::from_ref(me_peer.id()), &keypairs);
     let block_header = BlockHeader::new(NonZeroU64::new(3).unwrap(), None, None, None, 0, 0);
     let height = block_header.height().get();
     let block_hash = block_header.hash();
@@ -17327,7 +17485,7 @@ fn block_sync_selection_uses_persisted_commit_roster_snapshot() {
     pops.insert(me_peer.id().public_key().clone(), me_pop);
     let trusted = trusted_with_pops(me_peer.clone(), Vec::new(), pops);
     let keypairs = vec![me_kp.clone()];
-    let state = state_with_peers_and_keys(vec![me_peer.id().clone()], &keypairs);
+    let state = state_with_peers_and_keys(std::slice::from_ref(me_peer.id()), &keypairs);
     let roster = vec![me_peer.id().clone()];
     let header = BlockHeader {
         height: NonZeroU64::new(3).expect("non-zero height"),
@@ -17445,7 +17603,7 @@ fn block_sync_update_uses_journal_roster() {
     pops.insert(me_peer.id().public_key().clone(), me_pop);
     let trusted = trusted_with_pops(me_peer.clone(), Vec::new(), pops);
     let keypairs = vec![me_kp.clone()];
-    let state = state_with_peers_and_keys(vec![me_peer.id().clone()], &keypairs);
+    let state = state_with_peers_and_keys(std::slice::from_ref(me_peer.id()), &keypairs);
 
     let height = 4;
     let header = BlockHeader {
@@ -17583,7 +17741,7 @@ fn block_sync_update_includes_commit_qc_from_history() {
     pops.insert(me_peer.id().public_key().clone(), me_pop);
     let trusted = trusted_with_pops(me_peer.clone(), Vec::new(), pops);
     let keypairs = vec![me_kp.clone()];
-    let state = state_with_peers_and_keys(vec![me_peer.id().clone()], &keypairs);
+    let state = state_with_peers_and_keys(std::slice::from_ref(me_peer.id()), &keypairs);
 
     let height = 5;
     let header = BlockHeader {
@@ -17690,7 +17848,7 @@ fn block_sync_update_includes_commit_qc_from_precommit_signers() {
     pops.insert(me_peer.id().public_key().clone(), me_pop);
     let trusted = trusted_with_pops(me_peer.clone(), Vec::new(), pops);
     let keypairs = vec![me_kp.clone()];
-    let state = state_with_peers_and_keys(vec![me_peer.id().clone()], &keypairs);
+    let state = state_with_peers_and_keys(std::slice::from_ref(me_peer.id()), &keypairs);
 
     let height = 7;
     let header = BlockHeader {
@@ -17778,7 +17936,7 @@ fn block_sync_update_includes_checkpoint_from_history() {
     pops.insert(me_peer.id().public_key().clone(), me_pop);
     let trusted = trusted_with_pops(me_peer.clone(), Vec::new(), pops);
     let keypairs = vec![me_kp.clone()];
-    let state = state_with_peers_and_keys(vec![me_peer.id().clone()], &keypairs);
+    let state = state_with_peers_and_keys(std::slice::from_ref(me_peer.id()), &keypairs);
 
     let height = 6;
     let header = BlockHeader {
@@ -18090,7 +18248,7 @@ fn block_sync_update_uses_history_after_restart_like_path() {
     pops.insert(me_peer.id().public_key().clone(), me_pop);
     let trusted = trusted_with_pops(me_peer.clone(), Vec::new(), pops);
     let keypairs = vec![me_kp.clone()];
-    let state = state_with_peers_and_keys(vec![me_peer.id().clone()], &keypairs);
+    let state = state_with_peers_and_keys(std::slice::from_ref(me_peer.id()), &keypairs);
 
     let height = 7;
     let header = BlockHeader {
@@ -18823,7 +18981,7 @@ fn roster_validation_inputs_from_state_collects_pops_for_roster() {
     let peer2 = PeerId::new(kp2.public_key().clone());
     let peers = vec![peer1.clone(), peer2.clone()];
     let keys = vec![kp1, kp2];
-    let state = state_with_peers_and_keys(peers.clone(), &keys);
+    let state = state_with_peers_and_keys(&peers, &keys);
     let view = state.view();
 
     let inputs =
@@ -19602,7 +19760,7 @@ fn validate_commit_qc_roster_requires_stake_quorum() {
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC4; Hash::LENGTH]));
     let topology = super::network_topology::Topology::new(roster.clone());
     let signers_bitmap = vec![0b0000_0110];
-    let keypairs: Vec<_> = keypairs.iter().cloned().collect();
+    let keypairs: Vec<_> = keypairs.to_vec();
     let bls_aggregate_signature = aggregate_signature_for_bitmap(
         &state.chain_id,
         super::NPOS_TAG,
@@ -19670,7 +19828,7 @@ fn validate_checkpoint_roster_rejects_hash_mismatch() {
     let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let peer = PeerId::new(kp.public_key().clone());
     let keypairs = vec![kp.clone()];
-    let world = world_with_consensus_keys(&[peer.clone()], &keypairs);
+    let world = world_with_consensus_keys(std::slice::from_ref(&peer), &keypairs);
     let world_view = world.view();
     let chain: ChainId = "checkpoint-hash-mismatch".parse().expect("chain id parses");
     let block_hash =
@@ -19718,7 +19876,7 @@ fn validate_checkpoint_roster_rejects_hash_version_mismatch() {
     let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let peer = PeerId::new(kp.public_key().clone());
     let keypairs = vec![kp.clone()];
-    let world = world_with_consensus_keys(&[peer.clone()], &keypairs);
+    let world = world_with_consensus_keys(std::slice::from_ref(&peer), &keypairs);
     let world_view = world.view();
     let chain: ChainId = "checkpoint-hash-version".parse().expect("chain id parses");
     let block_hash =
@@ -19769,7 +19927,7 @@ fn validate_checkpoint_roster_rejects_view_mismatch() {
     let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let peer = PeerId::new(kp.public_key().clone());
     let keypairs = vec![kp.clone()];
-    let world = world_with_consensus_keys(&[peer.clone()], &keypairs);
+    let world = world_with_consensus_keys(std::slice::from_ref(&peer), &keypairs);
     let world_view = world.view();
     let chain: ChainId = "checkpoint-view-mismatch".parse().expect("chain id parses");
     let block_hash =
@@ -19820,7 +19978,7 @@ fn validate_checkpoint_roster_rejects_expired_checkpoint() {
     let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let peer = PeerId::new(kp.public_key().clone());
     let keypairs = vec![kp.clone()];
-    let world = world_with_consensus_keys(&[peer.clone()], &keypairs);
+    let world = world_with_consensus_keys(std::slice::from_ref(&peer), &keypairs);
     let world_view = world.view();
     let chain: ChainId = "checkpoint-expired".parse().expect("chain id parses");
     let block_hash =
@@ -20619,9 +20777,9 @@ fn missing_block_view_change_triggers_once_after_dwell() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn retry_missing_block_requests_triggers_view_change_after_dwell() {
+    let mut harness = test_actor_harness(4).await;
     let _guard = super::status::view_change_proof_test_guard();
     super::status::reset_view_change_cause_counters_for_tests();
-    let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let height = actor.state.view().height() as u64 + 1;
     let view = 0;
@@ -22204,8 +22362,8 @@ fn record_view_change_cause_helper_updates_status() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn trigger_view_change_with_cause_uses_current_view_for_stale_input() {
-    let _guard = super::status::view_change_proof_test_guard();
     let mut harness = test_actor_harness(4).await;
+    let _guard = super::status::view_change_proof_test_guard();
     let actor = &mut harness.actor;
     let height = 1;
     let current_view = 3u64;
@@ -22229,11 +22387,10 @@ async fn trigger_view_change_with_cause_uses_current_view_for_stale_input() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn trigger_view_change_updates_view_change_counters_and_index() {
+    let mut harness = test_actor_harness(4).await;
     let _guard = super::status::view_change_proof_test_guard();
     super::status::reset_view_change_proof_counters_for_tests();
     super::status::set_view_change_index(0);
-
-    let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let height = 1;
     let current_view = 2u64;
@@ -22253,8 +22410,8 @@ async fn trigger_view_change_updates_view_change_counters_and_index() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn trigger_view_change_prunes_proposals_seen_for_height() {
-    let _guard = super::status::view_change_proof_test_guard();
     let mut harness = test_actor_harness(4).await;
+    let _guard = super::status::view_change_proof_test_guard();
     let actor = &mut harness.actor;
     let height = 2u64;
     let current_view = 1u64;
@@ -22298,8 +22455,8 @@ async fn trigger_view_change_prunes_proposals_seen_for_height() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn trigger_view_change_prunes_stale_pending_and_missing_block_state() {
-    let _guard = super::status::view_change_proof_test_guard();
     let mut harness = test_actor_harness(4).await;
+    let _guard = super::status::view_change_proof_test_guard();
     let actor = &mut harness.actor;
 
     let height = 3u64;
@@ -22352,8 +22509,18 @@ async fn trigger_view_change_prunes_stale_pending_and_missing_block_state() {
     let key_0 = (stale_block_0.hash(), height, 0);
     let key_1 = (stale_block_1.hash(), height, 1);
     let key_keep = (keep_block.hash(), height, current_view.saturating_add(1));
-    actor.subsystems.da_rbc.rbc.sessions.insert(key_0, session_0);
-    actor.subsystems.da_rbc.rbc.sessions.insert(key_1, session_1);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key_0, session_0);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key_1, session_1);
     actor
         .subsystems
         .da_rbc
@@ -22391,15 +22558,24 @@ async fn trigger_view_change_prunes_stale_pending_and_missing_block_state() {
     actor.trigger_view_change_with_cause(height, 0, super::ViewChangeCause::QuorumTimeout);
 
     assert!(
-        !actor.pending.pending_blocks.contains_key(&stale_block_0.hash()),
+        !actor
+            .pending
+            .pending_blocks
+            .contains_key(&stale_block_0.hash()),
         "stale pending block should be pruned"
     );
     assert!(
-        !actor.pending.pending_blocks.contains_key(&stale_block_1.hash()),
+        !actor
+            .pending
+            .pending_blocks
+            .contains_key(&stale_block_1.hash()),
         "stale pending block should be pruned"
     );
     assert!(
-        actor.pending.pending_blocks.contains_key(&keep_block.hash()),
+        actor
+            .pending
+            .pending_blocks
+            .contains_key(&keep_block.hash()),
         "pending block for the new view should remain"
     );
     assert!(
@@ -22816,8 +22992,8 @@ async fn on_block_commit_keeps_pending_on_order_only_topology_change() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn trigger_view_change_with_cause_ignores_stale_height() {
-    let _guard = super::status::view_change_proof_test_guard();
     let mut harness = test_actor_harness(4).await;
+    let _guard = super::status::view_change_proof_test_guard();
     let actor = &mut harness.actor;
     let height = 2u64;
     let current_view = 1u64;
@@ -22838,13 +23014,13 @@ async fn trigger_view_change_with_cause_ignores_stale_height() {
 async fn trigger_view_change_uses_commit_qc_roster_for_new_view_vote() {
     use crate::sumeragi::status;
 
-    let _guard = status::view_change_proof_test_guard();
-    status::reset_commit_certs_for_tests();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da_enabled = true;
     consensus_cfg.rbc_chunk_max_bytes = 1024;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let _guard = status::view_change_proof_test_guard();
+    status::reset_commit_certs_for_tests();
     let actor = &mut harness.actor;
 
     let active_roster = actor.effective_commit_topology();
@@ -22956,9 +23132,9 @@ async fn trigger_view_change_uses_commit_qc_roster_for_new_view_vote() {
 async fn trigger_view_change_skips_new_view_vote_without_roster() {
     use crate::sumeragi::status;
 
+    let mut harness = test_actor_harness(4).await;
     let _guard = status::view_change_proof_test_guard();
     status::reset_commit_certs_for_tests();
-    let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let committed_height = u64::try_from(actor.state.view().height()).unwrap_or(0);
     let highest_height = committed_height.saturating_add(2);
@@ -22984,8 +23160,8 @@ async fn trigger_view_change_skips_new_view_vote_without_roster() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn record_phase_sample_skips_stale_height_and_view() {
-    let _guard = super::status::view_change_proof_test_guard();
     let mut harness = test_actor_harness(4).await;
+    let _guard = super::status::view_change_proof_test_guard();
     let actor = &mut harness.actor;
     let height = 3u64;
     let current_view = 2u64;
@@ -23005,11 +23181,10 @@ async fn record_phase_sample_skips_stale_height_and_view() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn record_phase_sample_updates_view_change_index_and_install() {
+    let mut harness = test_actor_harness(4).await;
     let _guard = super::status::view_change_proof_test_guard();
     super::status::reset_view_change_proof_counters_for_tests();
     super::status::set_view_change_index(0);
-
-    let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let height = 3u64;
     let view = 1u64;
@@ -23282,6 +23457,94 @@ async fn force_view_change_if_idle_skips_when_no_work() {
     assert!(snapshot.last_cause.is_none());
 
     super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn force_view_change_if_idle_skips_when_rbc_backlog() {
+    use std::borrow::Cow;
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_height = actor.state.view().height() as u64;
+    let highest_qc = sample_qc_ref(committed_height, 0);
+    actor.highest_qc = Some(highest_qc);
+    let height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    let current_view = 0u64;
+    let now = Instant::now();
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+    );
+    let start = now
+        .checked_sub(timeout + Duration::from_millis(1))
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, start);
+
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x22; 32]));
+    let session_key = Actor::session_key(&block_hash, height, current_view);
+    let payload_hash = Hash::new(b"rbc-payload");
+    let chunk_root = Hash::new(b"rbc-root");
+    let session = RbcSession::test_new(1, Some(payload_hash), Some(chunk_root), 0);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(session_key, session);
+
+    assert!(
+        !actor.force_view_change_if_idle(now),
+        "idle view change should not trigger while RBC backlog is unresolved"
+    );
+
+    let snapshot = super::status::snapshot().view_change_causes;
+    assert_eq!(snapshot.missing_qc_total, 0);
+    assert!(snapshot.last_cause.is_none());
+
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn should_defer_proposal_when_rbc_backlog_unresolved() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x33; 32]));
+    let session_key = Actor::session_key(&block_hash, 1, 0);
+    let session = RbcSession::test_new(1, Some(Hash::new(b"rbc-payload")), None, 0);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(session_key, session);
+
+    assert!(
+        actor.should_defer_proposal(),
+        "proposal assembly should defer while unresolved RBC sessions are present"
+    );
+
     harness.shutdown.send();
 }
 
@@ -25093,7 +25356,7 @@ async fn roster_for_vote_uses_commit_qc_history_for_next_height() {
             0,
         ])));
     }
-    let block_hash = hashes.iter().last().cloned().expect("block hash appended");
+    let block_hash = hashes.iter().last().copied().expect("block hash appended");
     hashes.commit_for_tests();
 
     let roster = vec![actor.common_config.peer.id().clone()];
@@ -25646,7 +25909,7 @@ async fn new_view_vote_rejects_mismatched_highest_block_hash() {
 
     let key = (Phase::NewView, height, view, epoch, signer);
     assert!(
-        actor.vote_log.get(&key).is_none(),
+        !actor.vote_log.contains_key(&key),
         "mismatched highest hash should not be recorded"
     );
     assert_eq!(
@@ -25702,7 +25965,7 @@ async fn new_view_vote_rejects_mismatched_highest_height() {
 
     let key = (Phase::NewView, height, view, epoch, signer);
     assert!(
-        actor.vote_log.get(&key).is_none(),
+        !actor.vote_log.contains_key(&key),
         "mismatched highest height should not be recorded"
     );
     assert_eq!(
@@ -25759,7 +26022,7 @@ async fn new_view_vote_rejects_mismatched_highest_epoch() {
 
     let key = (Phase::NewView, height, view, epoch, signer);
     assert!(
-        actor.vote_log.get(&key).is_none(),
+        !actor.vote_log.contains_key(&key),
         "mismatched highest epoch should not be recorded"
     );
     assert_eq!(
@@ -25827,7 +26090,7 @@ async fn new_view_vote_rejects_mismatched_highest_view_when_parent_known() {
 
     let key = (Phase::NewView, height, view, epoch, signer);
     assert!(
-        actor.vote_log.get(&key).is_none(),
+        !actor.vote_log.contains_key(&key),
         "highest QC view mismatch should not be recorded"
     );
     assert_eq!(
@@ -28711,7 +28974,7 @@ async fn pacemaker_bootstraps_with_commit_qc_when_active_roster_empty() {
 
     {
         let mut topo_block = actor.state.commit_topology.block();
-        topo_block.mutate_vec(|vec| vec.clear());
+        topo_block.mutate_vec(Vec::clear);
         topo_block.commit();
     }
     {
@@ -30873,8 +31136,8 @@ async fn block_created_uses_snapshot_roster_for_missing_parent_when_active_empty
         let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
         let mut journal = state.commit_roster_journal.write();
         journal.upsert(commit_qc, checkpoint, None);
-        state.commit_topology.mutate_vec(|vec| vec.clear());
-        state.prev_commit_topology.mutate_vec(|vec| vec.clear());
+        state.commit_topology.mutate_vec(Vec::clear);
+        state.prev_commit_topology.mutate_vec(Vec::clear);
         let mut world_block = state.world.block();
         world_block.peers.get_mut().clear();
         world_block.commit();
@@ -31834,7 +32097,7 @@ fn validate_block_sync_qc_rejects_bitmap_length_mismatch() {
         &topology,
         &world_view,
         &block_signers,
-        0,
+        qc.view,
         &chain,
         ConsensusMode::Permissioned,
         None,
@@ -32175,7 +32438,7 @@ fn validate_block_sync_qc_rejects_validator_set_mismatch() {
         &topology,
         &world_view,
         &block_signers,
-        0,
+        qc.view,
         &chain,
         ConsensusMode::Permissioned,
         None,
@@ -32237,7 +32500,7 @@ fn validate_block_sync_qc_accepts_trimmed_block_signatures() {
         &topology,
         &world_view,
         &block_signers,
-        0,
+        qc.view,
         &chain,
         ConsensusMode::Permissioned,
         None,
@@ -32524,7 +32787,7 @@ fn validate_block_sync_qc_accepts_valid_bitmap_and_block_signers() {
         &topology,
         &world_view,
         &block_signers,
-        0,
+        qc.view,
         &chain,
         ConsensusMode::Permissioned,
         None,
@@ -33172,7 +33435,7 @@ fn validate_block_sync_qc_allows_signer_missing_from_block() {
         &topology,
         &world_view,
         &block_signers,
-        0,
+        qc.view,
         &chain,
         ConsensusMode::Permissioned,
         None,
@@ -35716,6 +35979,111 @@ fn evaluate_deliver_acceptance_rejects_mismatched_root() {
     assert_eq!(decision, super::rbc::DeliverAcceptance::InvalidChunkRoot);
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn rbc_deliver_deferral_throttles_until_cooldown_or_progress() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let key = session_key();
+    let now = Instant::now();
+    let cooldown = Duration::from_secs(5);
+
+    assert!(actor.should_emit_rbc_deliver_deferral(key, now, 0, 0, 1, cooldown));
+    assert!(
+        !actor.should_emit_rbc_deliver_deferral(
+            key,
+            now + Duration::from_secs(1),
+            0,
+            0,
+            1,
+            cooldown
+        ),
+        "deferral should throttle until cooldown expires"
+    );
+    assert!(
+        actor.should_emit_rbc_deliver_deferral(
+            key,
+            now + Duration::from_secs(1),
+            1,
+            0,
+            1,
+            cooldown
+        ),
+        "deferral should emit after READY quorum progresses"
+    );
+    assert!(
+        actor.should_emit_rbc_deliver_deferral(
+            key,
+            now + cooldown + Duration::from_millis(1),
+            1,
+            0,
+            1,
+            cooldown
+        ),
+        "deferral should emit after cooldown"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn maybe_emit_rbc_deliver_throttles_repeated_deferral() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x55; 32]));
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0u64;
+    let key = Actor::session_key(&block_hash, height, view);
+    let roster: Vec<PeerId> = harness
+        .key_pairs
+        .iter()
+        .map(|kp| PeerId::from(kp.public_key().clone()))
+        .collect();
+
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .session_rosters
+        .insert(key, roster);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .session_roster_sources
+        .insert(key, super::RbcRosterSource::Network);
+
+    let session = RbcSession::test_new(0, Some(Hash::new(b"payload")), None, 0);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    actor.maybe_emit_rbc_deliver(key).expect("first deferral");
+    let first = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .deliver_deferral
+        .get(&key)
+        .copied()
+        .expect("deferral tracked");
+    actor.maybe_emit_rbc_deliver(key).expect("second deferral");
+    let second = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .deliver_deferral
+        .get(&key)
+        .copied()
+        .expect("deferral tracked");
+
+    assert_eq!(
+        first.last_attempt, second.last_attempt,
+        "repeat deferral should be throttled within cooldown"
+    );
+
+    harness.shutdown.send();
+}
+
 #[test]
 fn phase_tracker_on_view_change_sets_height_and_resets() {
     let start = Instant::now();
@@ -35770,8 +36138,6 @@ fn dispatch_background_request_post_enqueues() {
     }
 }
 
-#[cfg(feature = "telemetry")]
-#[cfg(feature = "telemetry")]
 #[cfg(feature = "telemetry")]
 #[test]
 fn dispatch_background_request_full_blocks_until_space() {
@@ -37074,6 +37440,25 @@ fn payload_rebroadcast_cooldown_tracks_block_time() {
 }
 
 #[test]
+fn relay_backpressure_tracks_recent_drops() {
+    let mut gate = super::RelayBackpressure::default();
+    let now = Instant::now();
+    assert!(!gate.active(now, Duration::from_secs(1)));
+
+    iroha_p2p::network::inc_subscriber_queue_full_for_test(
+        iroha_p2p::network::message::Topic::Consensus,
+        1,
+    );
+    assert!(gate.active(now, Duration::from_secs(1)));
+
+    gate.reset_to_current();
+    assert!(!gate.active(now, Duration::from_secs(1)));
+
+    let later = now + Duration::from_secs(2);
+    assert!(!gate.active(later, Duration::from_secs(1)));
+}
+
+#[test]
 fn commit_quorum_timeout_tracks_sumeragi_parameters() {
     use iroha_data_model::parameter::system::SumeragiParameters;
 
@@ -37295,8 +37680,8 @@ async fn reschedule_stale_pending_blocks_skips_empty_roster() {
 
     {
         let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
-        state.commit_topology.mutate_vec(|vec| vec.clear());
-        state.prev_commit_topology.mutate_vec(|vec| vec.clear());
+        state.commit_topology.mutate_vec(Vec::clear);
+        state.prev_commit_topology.mutate_vec(Vec::clear);
         let mut block = state.world.block();
         block.peers.get_mut().clear();
         block.commit();

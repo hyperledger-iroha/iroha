@@ -672,6 +672,7 @@ mod tests {
         State::with_telemetry(World::default(), kura, query, StateTelemetry::default())
     }
 
+    #[allow(clippy::too_many_lines)]
     fn test_sumeragi_config() -> SumeragiConfig {
         SumeragiConfig {
             debug_force_soft_fork: false,
@@ -746,6 +747,7 @@ mod tests {
             rbc_pending_max_bytes: 0,
             rbc_pending_ttl: Duration::from_secs(0),
             rbc_session_ttl: Duration::from_secs(0),
+            rbc_rebroadcast_sessions_per_tick: 1,
             rbc_store_max_sessions: 0,
             rbc_store_soft_sessions: 0,
             rbc_store_max_bytes: 0,
@@ -1382,6 +1384,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn consensus_penalties_apply_censorship_evidence() -> Result<()> {
         let state = fresh_state();
         let mut config = test_sumeragi_config();

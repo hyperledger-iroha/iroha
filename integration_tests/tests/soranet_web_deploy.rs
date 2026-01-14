@@ -1,6 +1,6 @@
-//! Deploy a static HTML page to SoraFS storage, verify fetch, and derive public
+//! Deploy a static HTML page to `SoraFS` storage, verify fetch, and derive public
 //! DNS settings (including delegation placeholders) for a regular internet zone
-//! pointing at the SoraDNS gateway.
+//! pointing at the `SoraDNS` gateway.
 
 use std::collections::HashMap;
 
@@ -103,7 +103,7 @@ impl ReferenceAuthoritativeDns {
         self.alias_records
             .get(&key)
             .or_else(|| self.cname_records.get(&key))
-            .map(|values| values.as_slice())
+            .map(Vec::as_slice)
     }
 }
 
@@ -123,7 +123,8 @@ fn delegation_records_for_zone(zone: &str) -> Vec<DnsRecord> {
             zone.to_string(),
             PLACEHOLDER_NS_HOSTS
                 .iter()
-                .map(|host| host.to_string())
+                .copied()
+                .map(str::to_string)
                 .collect(),
         ),
         DnsRecord::ds(zone.to_string(), vec![ds_placeholder_value()]),
@@ -260,7 +261,8 @@ fn public_dns_settings_include_delegation_placeholders() {
         ns_records[0].values,
         PLACEHOLDER_NS_HOSTS
             .iter()
-            .map(|host| host.to_string())
+            .copied()
+            .map(str::to_string)
             .collect::<Vec<_>>()
     );
     assert_eq!(ds_records.len(), 1, "expected DS delegation record");
@@ -336,16 +338,16 @@ async fn soranet_webpage_deploy_and_dns_settings() -> Result<()> {
     let zone = "sora";
     let bindings = derive_gateway_hosts(fqdn)?;
     let dns_records = public_dns_settings_for_domain(&bindings, zone);
-    let cname_records: Vec<_> = dns_records
+    let cname_count = dns_records
         .iter()
         .filter(|record| record.record_type == "CNAME")
-        .collect();
-    let alias_records: Vec<_> = dns_records
+        .count();
+    let alias_count = dns_records
         .iter()
         .filter(|record| record.record_type == "ALIAS")
-        .collect();
-    assert_eq!(cname_records.len(), 1, "expected one CNAME record");
-    assert_eq!(alias_records.len(), 1, "expected one ALIAS record");
+        .count();
+    assert_eq!(cname_count, 1, "expected one CNAME record");
+    assert_eq!(alias_count, 1, "expected one ALIAS record");
     assert!(
         dns_records
             .iter()

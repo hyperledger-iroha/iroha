@@ -517,10 +517,9 @@ pub fn data_frame_wire_len<T: Encode + Clone>(
     priority: message::Priority,
     payload: &T,
 ) -> usize {
-    let target = match target {
-        Some(peer_id) => RelayTarget::Direct(peer_id.clone()),
-        None => RelayTarget::Broadcast,
-    };
+    let target = target.map_or(RelayTarget::Broadcast, |peer_id| {
+        RelayTarget::Direct(peer_id.clone())
+    });
     let frame = RelayMessage::new(origin.clone(), target, ttl, priority, payload.clone());
     crate::peer::data_message_wire_len(frame)
 }
@@ -644,15 +643,15 @@ pub fn subscriber_queue_full_consensus_count() -> u64 {
 pub fn subscriber_queue_full_control_count() -> u64 {
     SUBSCRIBER_QUEUE_FULL_CONTROL.load(Ordering::Relaxed)
 }
-/// Returns the number of subscriber-queue drops for topic BlockSync.
+/// Returns the number of subscriber-queue drops for topic `BlockSync`.
 pub fn subscriber_queue_full_block_sync_count() -> u64 {
     SUBSCRIBER_QUEUE_FULL_BLOCK_SYNC.load(Ordering::Relaxed)
 }
-/// Returns the number of subscriber-queue drops for topic TxGossip.
+/// Returns the number of subscriber-queue drops for topic `TxGossip`.
 pub fn subscriber_queue_full_tx_gossip_count() -> u64 {
     SUBSCRIBER_QUEUE_FULL_TX_GOSSIP.load(Ordering::Relaxed)
 }
-/// Returns the number of subscriber-queue drops for topic PeerGossip.
+/// Returns the number of subscriber-queue drops for topic `PeerGossip`.
 pub fn subscriber_queue_full_peer_gossip_count() -> u64 {
     SUBSCRIBER_QUEUE_FULL_PEER_GOSSIP.load(Ordering::Relaxed)
 }
@@ -677,15 +676,15 @@ pub fn subscriber_unrouted_consensus_count() -> u64 {
 pub fn subscriber_unrouted_control_count() -> u64 {
     SUBSCRIBER_UNROUTED_CONTROL.load(Ordering::Relaxed)
 }
-/// Returns the number of unrouted inbound messages for topic BlockSync.
+/// Returns the number of unrouted inbound messages for topic `BlockSync`.
 pub fn subscriber_unrouted_block_sync_count() -> u64 {
     SUBSCRIBER_UNROUTED_BLOCK_SYNC.load(Ordering::Relaxed)
 }
-/// Returns the number of unrouted inbound messages for topic TxGossip.
+/// Returns the number of unrouted inbound messages for topic `TxGossip`.
 pub fn subscriber_unrouted_tx_gossip_count() -> u64 {
     SUBSCRIBER_UNROUTED_TX_GOSSIP.load(Ordering::Relaxed)
 }
-/// Returns the number of unrouted inbound messages for topic PeerGossip.
+/// Returns the number of unrouted inbound messages for topic `PeerGossip`.
 pub fn subscriber_unrouted_peer_gossip_count() -> u64 {
     SUBSCRIBER_UNROUTED_PEER_GOSSIP.load(Ordering::Relaxed)
 }
@@ -5124,6 +5123,32 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             priority,
             payload,
         } = msg.payload;
+        let mut allow_origin_mismatch = false;
+        if matches!(
+            self.relay_mode,
+            iroha_config::parameters::actual::RelayMode::Spoke
+        ) {
+            let hub_peer = self
+                .relay_hub_peer
+                .clone()
+                .or_else(|| self.ensure_hub_peer());
+            if hub_peer
+                .as_ref()
+                .is_some_and(|hub| hub == incoming_peer.id())
+            {
+                allow_origin_mismatch = true;
+            } else if let Some(hub_addr) = self.relay_hub_address.as_ref() {
+                allow_origin_mismatch = hub_addr == incoming_peer.address();
+            }
+        }
+        if origin != *incoming_peer.id() && !allow_origin_mismatch {
+            iroha_logger::warn!(
+                peer = %incoming_peer,
+                origin = %origin,
+                "dropping relay frame with mismatched origin"
+            );
+            return;
+        }
         if matches!(topic, message::Topic::BlockSync) {
             iroha_logger::debug!(
                 from=%incoming_peer,
@@ -6172,6 +6197,82 @@ mod tests {
             after,
             before + 1,
             "trust gossip from peers without negotiated support should be rejected"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn peer_message_drops_mismatched_origin_without_hub() {
+        let Some(mut network) = bare_network_with::<DummyMsg>() else {
+            return;
+        };
+        let (tx, mut rx) = mpsc::channel(1);
+        network.subscribe_to_peers_messages(Subscriber {
+            sender: tx,
+            filter: SubscriberFilter::All,
+        });
+        let incoming_peer = Peer::new(
+            socket_addr!(127.0.0.1:202),
+            KeyPair::random().public_key().clone(),
+        );
+        let origin = PeerId::from(KeyPair::random().public_key().clone());
+        let payload = RelayMessage::new(
+            origin,
+            RelayTarget::Direct(network.self_id.clone()),
+            DEFAULT_RELAY_TTL,
+            Priority::Low,
+            DummyMsg,
+        );
+        let msg = PeerMessage {
+            peer: incoming_peer,
+            payload,
+            payload_bytes: 1,
+        };
+
+        network.peer_message(msg).await;
+
+        assert!(
+            matches!(rx.try_recv(), Err(TryRecvError::Empty)),
+            "mismatched origin should be dropped when not relaying from the hub"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn peer_message_allows_mismatched_origin_from_hub_in_spoke_mode() {
+        let Some(mut network) = bare_network_with::<DummyMsg>() else {
+            return;
+        };
+        network.relay_mode = iroha_config::parameters::actual::RelayMode::Spoke;
+        let hub_peer = Peer::new(
+            socket_addr!(127.0.0.1:203),
+            KeyPair::random().public_key().clone(),
+        );
+        network.relay_hub_peer = Some(hub_peer.id().clone());
+        let (tx, mut rx) = mpsc::channel(1);
+        network.subscribe_to_peers_messages(Subscriber {
+            sender: tx,
+            filter: SubscriberFilter::All,
+        });
+        let origin = PeerId::from(KeyPair::random().public_key().clone());
+        let payload = RelayMessage::new(
+            origin.clone(),
+            RelayTarget::Direct(network.self_id.clone()),
+            DEFAULT_RELAY_TTL,
+            Priority::Low,
+            DummyMsg,
+        );
+        let msg = PeerMessage {
+            peer: hub_peer,
+            payload,
+            payload_bytes: 1,
+        };
+
+        network.peer_message(msg).await;
+
+        let received = rx.try_recv().expect("expected relay message");
+        assert_eq!(
+            received.peer.id(),
+            &origin,
+            "origin should be preserved when relaying through the hub"
         );
     }
 

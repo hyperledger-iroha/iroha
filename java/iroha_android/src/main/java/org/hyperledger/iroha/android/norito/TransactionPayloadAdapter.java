@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.android.norito;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -11,51 +13,58 @@ import org.hyperledger.iroha.android.model.instructions.InstructionKind;
 import org.hyperledger.iroha.norito.NoritoAdapters;
 import org.hyperledger.iroha.norito.NoritoDecoder;
 import org.hyperledger.iroha.norito.NoritoEncoder;
+import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.norito.TypeAdapter;
 
 /**
  * Norito adapter that mirrors the {@link TransactionPayload} structure used by the Android library.
  * The current implementation focuses on the IVM bytecode variant of `Executable`; instruction-list
- * support will be added alongside dedicated builders.
+ * support will be added alongside dedicated builders. Metadata values are encoded as JSON strings
+ * to match the Rust `Json` wrapper.
  */
 final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload> {
 
   private static final TypeAdapter<String> STRING_ADAPTER = NoritoAdapters.stringAdapter();
+  private static final TypeAdapter<String> CHAIN_ID_ADAPTER = new ChainIdAdapter();
+  private static final JsonStringAdapter JSON_STRING_ADAPTER = new JsonStringAdapter();
+  private static final TypeAdapter<String> JSON_ADAPTER = new JsonAdapter();
   private static final TypeAdapter<Long> UINT64_ADAPTER = NoritoAdapters.uint(64);
   private static final TypeAdapter<Long> UINT32_AS_LONG_ADAPTER = NoritoAdapters.uint(32);
-  private static final TypeAdapter<byte[]> BYTES_ADAPTER = NoritoAdapters.bytesAdapter();
+  private static final TypeAdapter<byte[]> BYTE_VECTOR_ADAPTER = NoritoAdapters.byteVecAdapter();
+  private static final TypeAdapter<byte[]> IVM_BYTECODE_ADAPTER = new IvmBytecodeAdapter();
   private static final TypeAdapter<Map<String, String>> STRING_MAP_ADAPTER =
       NoritoAdapters.map(STRING_ADAPTER, STRING_ADAPTER);
   private static final TypeAdapter<List<InstructionBox>> INSTRUCTION_LIST_ADAPTER =
       NoritoAdapters.sequence(new InstructionAdapter());
-  private static final TypeAdapter<Long> ENUM_TAG_ADAPTER = NoritoAdapters.uint(8);
+  private static final TypeAdapter<Long> ENUM_TAG_ADAPTER = NoritoAdapters.uint(32);
   private static final TypeAdapter<Optional<Long>> TTL_ADAPTER =
       NoritoAdapters.option(NoritoAdapters.uint(64));
   private static final TypeAdapter<Optional<Long>> NONCE_ADAPTER =
       NoritoAdapters.option(NoritoAdapters.uint(32));
-  private static final TypeAdapter<Map<String, String>> METADATA_ADAPTER =
-      NoritoAdapters.map(STRING_ADAPTER, STRING_ADAPTER);
+  private static final TypeAdapter<Executable> EXECUTABLE_ADAPTER = new ExecutableAdapter();
+  private static final TypeAdapter<Map<String, String>> METADATA_ADAPTER = new MetadataAdapter();
 
   @Override
   public void encode(final NoritoEncoder encoder, final TransactionPayload value) {
-    STRING_ADAPTER.encode(encoder, value.chainId());
-    STRING_ADAPTER.encode(encoder, value.authority());
-    UINT64_ADAPTER.encode(encoder, value.creationTimeMs());
-    encodeExecutable(encoder, value.executable());
-    TTL_ADAPTER.encode(encoder, value.timeToLiveMs());
-    NONCE_ADAPTER.encode(encoder, value.nonce().map(Integer::longValue));
-    METADATA_ADAPTER.encode(encoder, value.metadata());
+    encodeSizedField(encoder, CHAIN_ID_ADAPTER, value.chainId());
+    encodeSizedField(encoder, STRING_ADAPTER, value.authority());
+    encodeSizedField(encoder, UINT64_ADAPTER, value.creationTimeMs());
+    encodeSizedField(encoder, EXECUTABLE_ADAPTER, value.executable());
+    encodeSizedField(encoder, TTL_ADAPTER, value.timeToLiveMs());
+    encodeSizedField(encoder, NONCE_ADAPTER, value.nonce().map(Integer::longValue));
+    encodeSizedField(encoder, METADATA_ADAPTER, value.metadata());
   }
 
   @Override
   public TransactionPayload decode(final NoritoDecoder decoder) {
-    final String chainId = STRING_ADAPTER.decode(decoder);
-    final String authority = STRING_ADAPTER.decode(decoder);
-    final long creationTimeMs = UINT64_ADAPTER.decode(decoder);
-    final Executable executable = decodeExecutable(decoder);
-    final Optional<Long> ttl = TTL_ADAPTER.decode(decoder);
-    final Optional<Long> nonceRaw = NONCE_ADAPTER.decode(decoder);
-    final Map<String, String> metadata = new LinkedHashMap<>(METADATA_ADAPTER.decode(decoder));
+    final String chainId = decodeSizedField(decoder, CHAIN_ID_ADAPTER);
+    final String authority = decodeSizedField(decoder, STRING_ADAPTER);
+    final long creationTimeMs = decodeSizedField(decoder, UINT64_ADAPTER);
+    final Executable executable = decodeSizedField(decoder, EXECUTABLE_ADAPTER);
+    final Optional<Long> ttl = decodeSizedField(decoder, TTL_ADAPTER);
+    final Optional<Long> nonceRaw = decodeSizedField(decoder, NONCE_ADAPTER);
+    final Map<String, String> metadata =
+        new LinkedHashMap<>(decodeSizedField(decoder, METADATA_ADAPTER));
 
     final TransactionPayload.Builder builder =
         TransactionPayload.builder()
@@ -69,24 +78,24 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     return builder.build();
   }
 
-  private void encodeExecutable(final NoritoEncoder encoder, final Executable executable) {
+  private static void encodeExecutable(final NoritoEncoder encoder, final Executable executable) {
     if (executable.isIvm()) {
       ENUM_TAG_ADAPTER.encode(encoder, 1L);
-      BYTES_ADAPTER.encode(encoder, executable.ivmBytes());
+      encodeSizedField(encoder, IVM_BYTECODE_ADAPTER, executable.ivmBytes());
       return;
     }
     ENUM_TAG_ADAPTER.encode(encoder, 0L);
-    INSTRUCTION_LIST_ADAPTER.encode(encoder, executable.instructions());
+    encodeSizedField(encoder, INSTRUCTION_LIST_ADAPTER, executable.instructions());
   }
 
-  private Executable decodeExecutable(final NoritoDecoder decoder) {
+  private static Executable decodeExecutable(final NoritoDecoder decoder) {
     final long tag = ENUM_TAG_ADAPTER.decode(decoder);
     if (tag == 1L) {
-      final byte[] bytes = BYTES_ADAPTER.decode(decoder);
+      final byte[] bytes = decodeSizedField(decoder, IVM_BYTECODE_ADAPTER);
       return Executable.ivm(bytes);
     }
     if (tag == 0L) {
-      final List<InstructionBox> instructions = INSTRUCTION_LIST_ADAPTER.decode(decoder);
+      final List<InstructionBox> instructions = decodeSizedField(decoder, INSTRUCTION_LIST_ADAPTER);
       return Executable.instructions(instructions);
     }
     throw new IllegalArgumentException("Unknown Executable discriminant: " + tag);
@@ -95,16 +104,279 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   private static final class InstructionAdapter implements TypeAdapter<InstructionBox> {
     @Override
     public void encode(final NoritoEncoder encoder, final InstructionBox value) {
-      ENUM_TAG_ADAPTER.encode(encoder, (long) value.kind().discriminant());
-      STRING_MAP_ADAPTER.encode(encoder, value.arguments());
+      encodeSizedField(encoder, ENUM_TAG_ADAPTER, (long) value.kind().discriminant());
+      encodeSizedField(encoder, STRING_MAP_ADAPTER, value.arguments());
     }
 
     @Override
     public InstructionBox decode(final NoritoDecoder decoder) {
-      final long discriminant = ENUM_TAG_ADAPTER.decode(decoder);
-      final Map<String, String> arguments = new LinkedHashMap<>(STRING_MAP_ADAPTER.decode(decoder));
+      final long discriminant = decodeSizedField(decoder, ENUM_TAG_ADAPTER);
+      final Map<String, String> arguments =
+          new LinkedHashMap<>(decodeSizedField(decoder, STRING_MAP_ADAPTER));
       final InstructionKind kind = InstructionKind.fromDiscriminant(discriminant);
       return InstructionBox.fromNorito(kind, arguments);
     }
   }
+
+  private static final class ExecutableAdapter implements TypeAdapter<Executable> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final Executable value) {
+      encodeExecutable(encoder, value);
+    }
+
+    @Override
+    public Executable decode(final NoritoDecoder decoder) {
+      return decodeExecutable(decoder);
+    }
+  }
+
+  private static <T> void encodeSizedField(
+      final NoritoEncoder encoder, final TypeAdapter<T> adapter, final T value) {
+    final NoritoEncoder child = encoder.childEncoder();
+    adapter.encode(child, value);
+    final byte[] payload = child.toByteArray();
+    final boolean compact = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+    encoder.writeLength(payload.length, compact);
+    encoder.writeBytes(payload);
+  }
+
+  private static <T> T decodeSizedField(final NoritoDecoder decoder, final TypeAdapter<T> adapter) {
+    final long length = decoder.readLength(decoder.compactLenActive());
+    if (length > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException("Field payload too large");
+    }
+    final byte[] payload = decoder.readBytes((int) length);
+    final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+    final T value = adapter.decode(child);
+    if (child.remaining() != 0) {
+      throw new IllegalArgumentException("Trailing bytes after field payload");
+    }
+    return value;
+  }
+
+  private static final class ChainIdAdapter implements TypeAdapter<String> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final String value) {
+      encodeSizedField(encoder, STRING_ADAPTER, value);
+    }
+
+    @Override
+    public String decode(final NoritoDecoder decoder) {
+      return decodeSizedField(decoder, STRING_ADAPTER);
+    }
+  }
+
+  private static final class IvmBytecodeAdapter implements TypeAdapter<byte[]> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final byte[] value) {
+      encodeSizedField(encoder, BYTE_VECTOR_ADAPTER, value);
+    }
+
+    @Override
+    public byte[] decode(final NoritoDecoder decoder) {
+      return decodeSizedField(decoder, BYTE_VECTOR_ADAPTER);
+    }
+  }
+
+  private static final class JsonAdapter implements TypeAdapter<String> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final String value) {
+      if (value == null) {
+        throw new IllegalArgumentException("Metadata values must not be null");
+      }
+      encodeSizedField(encoder, JSON_STRING_ADAPTER, value);
+    }
+
+    @Override
+    public String decode(final NoritoDecoder decoder) {
+      return decodeSizedField(decoder, JSON_STRING_ADAPTER);
+    }
+
+    @Override
+    public boolean isSelfDelimiting() {
+      return true;
+    }
+  }
+
+  private static final class MetadataAdapter implements TypeAdapter<Map<String, String>> {
+    private static final TypeAdapter<List<MetadataEntry>> ENTRY_LIST_ADAPTER =
+        NoritoAdapters.sequence(new MetadataEntryAdapter());
+
+    @Override
+    public void encode(final NoritoEncoder encoder, final Map<String, String> value) {
+      final List<MetadataEntry> entries = new ArrayList<>(value.size());
+      final List<String> keys = new ArrayList<>(value.keySet());
+      Collections.sort(keys);
+      for (final String key : keys) {
+        final String entryValue = value.get(key);
+        if (entryValue == null) {
+          throw new IllegalArgumentException("Metadata values must not be null");
+        }
+        entries.add(new MetadataEntry(key, entryValue));
+      }
+      ENTRY_LIST_ADAPTER.encode(encoder, entries);
+    }
+
+    @Override
+    public Map<String, String> decode(final NoritoDecoder decoder) {
+      final List<MetadataEntry> entries = ENTRY_LIST_ADAPTER.decode(decoder);
+      final Map<String, String> decoded = new LinkedHashMap<>(entries.size());
+      for (final MetadataEntry entry : entries) {
+        if (decoded.put(entry.key(), entry.value()) != null) {
+          throw new IllegalArgumentException("Duplicate metadata key");
+        }
+      }
+      return decoded;
+    }
+  }
+
+  private static final class MetadataEntry {
+    private final String key;
+    private final String value;
+
+    private MetadataEntry(final String key, final String value) {
+      this.key = key;
+      this.value = value;
+    }
+
+    private String key() {
+      return key;
+    }
+
+    private String value() {
+      return value;
+    }
+  }
+
+  private static final class MetadataEntryAdapter implements TypeAdapter<MetadataEntry> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final MetadataEntry entry) {
+      encodeSizedField(encoder, STRING_ADAPTER, entry.key());
+      encodeSizedField(encoder, JSON_ADAPTER, entry.value());
+    }
+
+    @Override
+    public MetadataEntry decode(final NoritoDecoder decoder) {
+      final String key = decodeSizedField(decoder, STRING_ADAPTER);
+      final String value = decodeSizedField(decoder, JSON_ADAPTER);
+      return new MetadataEntry(key, value);
+    }
+  }
+
+  private static final class JsonStringAdapter implements TypeAdapter<String> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final String value) {
+      if (value == null) {
+        throw new IllegalArgumentException("Metadata values must not be null");
+      }
+      STRING_ADAPTER.encode(encoder, encodeJsonString(value));
+    }
+
+    @Override
+    public String decode(final NoritoDecoder decoder) {
+      final String raw = STRING_ADAPTER.decode(decoder);
+      return decodeJsonString(raw);
+    }
+
+    @Override
+    public boolean isSelfDelimiting() {
+      return true;
+    }
+  }
+
+  private static String encodeJsonString(final String value) {
+    final StringBuilder builder = new StringBuilder(value.length() + 2);
+    builder.append('"');
+    for (int i = 0; i < value.length(); i++) {
+      final char c = value.charAt(i);
+      switch (c) {
+        case '"' -> builder.append("\\\"");
+        case '\\' -> builder.append("\\\\");
+        case '\b' -> builder.append("\\b");
+        case '\f' -> builder.append("\\f");
+        case '\n' -> builder.append("\\n");
+        case '\r' -> builder.append("\\r");
+        case '\t' -> builder.append("\\t");
+        default -> {
+          if (c < 0x20) {
+            builder.append("\\u00");
+            builder.append(HEX_DIGITS[(c >> 4) & 0xF]);
+            builder.append(HEX_DIGITS[c & 0xF]);
+          } else {
+            builder.append(c);
+          }
+        }
+      }
+    }
+    builder.append('"');
+    return builder.toString();
+  }
+
+  private static String decodeJsonString(final String raw) {
+    if (raw == null) {
+      return null;
+    }
+    final String trimmed = raw.trim();
+    if (trimmed.length() < 2 || trimmed.charAt(0) != '"' || trimmed.charAt(trimmed.length() - 1) != '"') {
+      return raw;
+    }
+    try {
+      return parseJsonString(trimmed);
+    } catch (final IllegalArgumentException ex) {
+      return raw;
+    }
+  }
+
+  private static String parseJsonString(final String input) {
+    final StringBuilder builder = new StringBuilder();
+    for (int i = 1; i < input.length() - 1; ) {
+      final char c = input.charAt(i++);
+      if (c == '\\') {
+        if (i >= input.length() - 1) {
+          throw new IllegalArgumentException("Invalid JSON escape");
+        }
+        final char esc = input.charAt(i++);
+        switch (esc) {
+          case '"' -> builder.append('"');
+          case '\\' -> builder.append('\\');
+          case '/' -> builder.append('/');
+          case 'b' -> builder.append('\b');
+          case 'f' -> builder.append('\f');
+          case 'n' -> builder.append('\n');
+          case 'r' -> builder.append('\r');
+          case 't' -> builder.append('\t');
+          case 'u' -> {
+            if (i + 4 > input.length() - 1) {
+              throw new IllegalArgumentException("Invalid unicode escape");
+            }
+            int codePoint = 0;
+            for (int j = 0; j < 4; j++) {
+              codePoint = (codePoint << 4) | hexNibble(input.charAt(i + j));
+            }
+            builder.append((char) codePoint);
+            i += 4;
+          }
+          default -> throw new IllegalArgumentException("Unsupported escape: \\" + esc);
+        }
+      } else {
+        builder.append(c);
+      }
+    }
+    return builder.toString();
+  }
+
+  private static int hexNibble(final char c) {
+    if (c >= '0' && c <= '9') {
+      return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+      return 10 + (c - 'a');
+    }
+    if (c >= 'A' && c <= 'F') {
+      return 10 + (c - 'A');
+    }
+    throw new IllegalArgumentException("Invalid hex digit: " + c);
+  }
+
+  private static final char[] HEX_DIGITS = "0123456789ABCDEF".toCharArray();
 }

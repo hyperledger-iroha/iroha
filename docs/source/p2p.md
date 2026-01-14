@@ -23,11 +23,11 @@ Notes
 ### Low-Priority Rate Limiting ([network] settings)
 
 - `low_priority_rate_per_sec` (optional; msgs/sec)
-  - Enables per-peer token-bucket for Low-priority traffic (gossip/sync). When unset, disabled.
+  - Enables per-peer token-bucket for Low-priority traffic (gossip/sync) on both ingress and egress. When unset, disabled.
 - `low_priority_burst` (optional; msgs)
   - Bucket burst capacity; defaults to `low_priority_rate_per_sec` when unset.
 
-When enabled, excess Low-priority posts/broadcast deliveries are throttled per peer. High-priority traffic is unaffected.
+When enabled, inbound Low-priority frames are dropped before relay dispatch (tx gossip, peer/trust gossip, health/time), and outbound Low-priority posts/broadcast deliveries are throttled per peer. Streaming control frames are also gated by the ingress limiter to prevent control-plane floods. High-priority consensus/control traffic is otherwise unaffected.
 
 ### DNS Hostname Refresh ([network] setting)
 

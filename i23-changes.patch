@@ -1,0 +1,1176 @@
+diff --git a/.github/workflows/pr.yml b/.github/workflows/pr.yml
+index 3b1ea7de0..fe23677cf 100644
+--- a/.github/workflows/pr.yml
++++ b/.github/workflows/pr.yml
+@@ -91,6 +91,32 @@ jobs:
+         working-directory: wasm
+         run: cargo fmt --all -- --check
+ 
++  norito_rpc_verify:
++    runs-on: ubuntu-latest
++    container:
++      image: hyperledger/iroha2-ci:nightly-2025-05-08
++    steps:
++      - uses: actions/checkout@v4
++      - uses: Swatinem/rust-cache@v2
++        with:
++          cache-on-failure: "true"
++      - name: Norito-RPC fixture parity
++        run: cargo xtask norito-rpc-verify
++
++  android_fixture_compat:
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v4
++      - uses: actions/setup-java@v4
++        with:
++          distribution: "temurin"
++          java-version: "21"
++      - name: Android fixture compatibility
++        working-directory: java/iroha_android
++        run: |
++          chmod +x ./gradlew
++          ./gradlew :core:test --tests org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests
++
+   clippy:
+     runs-on: [self-hosted, Linux, iroha2]
+     container:
+diff --git a/java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/TransactionPayload.java b/java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/TransactionPayload.java
+index d8c41aae7..35c842364 100644
+--- a/java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/TransactionPayload.java
++++ b/java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/TransactionPayload.java
+@@ -157,7 +157,7 @@ public final class TransactionPayload {
+     }
+ 
+     private static String normalize(final String value, final String field) {
+-      if (value == null || value.isBlank()) {
++      if (value == null || value.trim().isEmpty()) {
+         throw new IllegalArgumentException(field + " must not be blank");
+       }
+       return value;
+diff --git a/java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/NoritoJavaCodecAdapter.java b/java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/NoritoJavaCodecAdapter.java
+index 16036a7f8..03220b033 100644
+--- a/java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/NoritoJavaCodecAdapter.java
++++ b/java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/NoritoJavaCodecAdapter.java
+@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.norito;
+ 
+ import org.hyperledger.iroha.android.model.TransactionPayload;
+ import org.hyperledger.iroha.norito.NoritoCodec;
++import org.hyperledger.iroha.norito.NoritoHeader;
+ import org.hyperledger.iroha.norito.TypeAdapter;
+ 
+ /**
+@@ -28,7 +29,7 @@ public final class NoritoJavaCodecAdapter implements NoritoCodecAdapter {
+   @Override
+   public byte[] encodeTransaction(final TransactionPayload payload) throws NoritoException {
+     try {
+-      return NoritoCodec.encode(payload, schemaName, adapter);
++      return NoritoCodec.encodeAdaptive(payload, adapter).payload();
+     } catch (final Exception ex) {
+       throw new NoritoException("Failed to encode Norito transaction payload", ex);
+     }
+@@ -37,7 +38,10 @@ public final class NoritoJavaCodecAdapter implements NoritoCodecAdapter {
+   @Override
+   public TransactionPayload decodeTransaction(final byte[] encoded) throws NoritoException {
+     try {
+-      return NoritoCodec.decode(encoded, adapter, schemaName);
++      if (hasHeader(encoded)) {
++        return NoritoCodec.decode(encoded, adapter, schemaName);
++      }
++      return NoritoCodec.decodeAdaptive(encoded, adapter);
+     } catch (final Exception ex) {
+       throw new NoritoException("Failed to decode Norito transaction payload", ex);
+     }
+@@ -47,4 +51,14 @@ public final class NoritoJavaCodecAdapter implements NoritoCodecAdapter {
+   public String schemaName() {
+     return schemaName;
+   }
++
++  private static boolean hasHeader(final byte[] encoded) {
++    if (encoded == null || encoded.length < NoritoHeader.HEADER_LENGTH) {
++      return false;
++    }
++    return encoded[0] == 'N'
++        && encoded[1] == 'R'
++        && encoded[2] == 'T'
++        && encoded[3] == '0';
++  }
+ }
+diff --git a/java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/SignedTransactionEncoder.java b/java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/SignedTransactionEncoder.java
+index 72aa1079a..b73ce862e 100644
+--- a/java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/SignedTransactionEncoder.java
++++ b/java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/SignedTransactionEncoder.java
+@@ -11,7 +11,7 @@ import org.hyperledger.iroha.norito.TypeAdapter;
+ 
+ public final class SignedTransactionEncoder {
+ 
+-  private static final String SIGNED_SCHEMA = "iroha.transaction.SignedTransaction.v1";
++  private static final byte VERSION_BYTE = 0x01;
+   private static final TransactionPayloadAdapter PAYLOAD_ADAPTER = new TransactionPayloadAdapter();
+   private static final TypeAdapter<byte[]> SIGNATURE_ADAPTER = NoritoAdapters.bytesAdapter();
+   private static final TypeAdapter<Optional<List<byte[]>>> ATTACHMENTS_ADAPTER =
+@@ -24,13 +24,37 @@ public final class SignedTransactionEncoder {
+     final TransactionPayload payload = PAYLOAD_CODEC.decodeTransaction(transaction.encodedPayload());
+     final SignedRecord record = new SignedRecord(transaction.signature(), payload);
+     try {
+-      return NoritoCodec.encode(record, SIGNED_SCHEMA, SignedTransactionAdapter.INSTANCE);
++      return NoritoCodec.encodeAdaptive(record, SignedTransactionAdapter.INSTANCE).payload();
+     } catch (final Exception ex) {
+       throw new NoritoException("Failed to encode signed transaction", ex);
+     }
+   }
+ 
+-  private record SignedRecord(byte[] signature, TransactionPayload payload) {}
++  public static byte[] encodeVersioned(final SignedTransaction transaction) throws NoritoException {
++    final byte[] bare = encode(transaction);
++    final byte[] out = new byte[1 + bare.length];
++    out[0] = VERSION_BYTE;
++    System.arraycopy(bare, 0, out, 1, bare.length);
++    return out;
++  }
++
++  private static final class SignedRecord {
++    private final byte[] signature;
++    private final TransactionPayload payload;
++
++    private SignedRecord(final byte[] signature, final TransactionPayload payload) {
++      this.signature = signature;
++      this.payload = payload;
++    }
++
++    private byte[] signature() {
++      return signature;
++    }
++
++    private TransactionPayload payload() {
++      return payload;
++    }
++  }
+ 
+   private static final class SignedTransactionAdapter implements TypeAdapter<SignedRecord> {
+     private static final SignedTransactionAdapter INSTANCE = new SignedTransactionAdapter();
+diff --git a/java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/TransactionPayloadAdapter.java b/java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/TransactionPayloadAdapter.java
+index 3d618c698..3e98d0df0 100644
+--- a/java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/TransactionPayloadAdapter.java
++++ b/java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/TransactionPayloadAdapter.java
+@@ -16,7 +16,8 @@ import org.hyperledger.iroha.norito.TypeAdapter;
+ /**
+  * Norito adapter that mirrors the {@link TransactionPayload} structure used by the Android library.
+  * The current implementation focuses on the IVM bytecode variant of `Executable`; instruction-list
+- * support will be added alongside dedicated builders.
++ * support will be added alongside dedicated builders. Metadata values are encoded as JSON strings
++ * to match the Rust `Json` wrapper.
+  */
+ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload> {
+ 
+@@ -33,8 +34,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
+       NoritoAdapters.option(NoritoAdapters.uint(64));
+   private static final TypeAdapter<Optional<Long>> NONCE_ADAPTER =
+       NoritoAdapters.option(NoritoAdapters.uint(32));
+-  private static final TypeAdapter<Map<String, String>> METADATA_ADAPTER =
+-      NoritoAdapters.map(STRING_ADAPTER, STRING_ADAPTER);
++  private static final TypeAdapter<Map<String, String>> METADATA_ADAPTER = new MetadataAdapter();
+ 
+   @Override
+   public void encode(final NoritoEncoder encoder, final TransactionPayload value) {
+diff --git a/java/iroha_android/src/test/java/org/hyperledger/iroha/android/governance/GovernanceInstructionBuilderTests.java b/java/iroha_android/src/test/java/org/hyperledger/iroha/android/governance/GovernanceInstructionBuilderTests.java
+index 4aed3daa8..7559c1915 100644
+--- a/java/iroha_android/src/test/java/org/hyperledger/iroha/android/governance/GovernanceInstructionBuilderTests.java
++++ b/java/iroha_android/src/test/java/org/hyperledger/iroha/android/governance/GovernanceInstructionBuilderTests.java
+@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.governance;
+ 
+ import java.math.BigInteger;
+ import java.util.List;
++import java.util.Map;
+ import org.hyperledger.iroha.android.model.InstructionBox;
+ import org.hyperledger.iroha.android.model.instructions.CastPlainBallotInstruction;
+ import org.hyperledger.iroha.android.model.instructions.CastZkBallotInstruction;
+diff --git a/java/iroha_android/src/test/java/org/hyperledger/iroha/android/norito/NoritoCodecAdapterTests.java b/java/iroha_android/src/test/java/org/hyperledger/iroha/android/norito/NoritoCodecAdapterTests.java
+index 71da89436..3b42ce019 100644
+--- a/java/iroha_android/src/test/java/org/hyperledger/iroha/android/norito/NoritoCodecAdapterTests.java
++++ b/java/iroha_android/src/test/java/org/hyperledger/iroha/android/norito/NoritoCodecAdapterTests.java
+@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.norito;
+ 
+ import java.util.Arrays;
+ import java.util.Base64;
++import java.util.LinkedHashMap;
+ import java.util.List;
+ import java.util.Map;
+ import org.hyperledger.iroha.android.IrohaKeyManager;
+@@ -55,8 +56,6 @@ import org.hyperledger.iroha.android.model.instructions.UpdateVerifyingKeyInstru
+ import org.hyperledger.iroha.android.model.zk.VerifyingKeyBackendTag;
+ import org.hyperledger.iroha.android.model.zk.VerifyingKeyRecordDescription;
+ import org.hyperledger.iroha.android.model.zk.VerifyingKeyStatus;
+-import org.hyperledger.iroha.norito.NoritoHeader;
+-import org.hyperledger.iroha.norito.SchemaHash;
+ import org.hyperledger.iroha.android.crypto.Blake2b;
+ import org.hyperledger.iroha.android.tx.SignedTransaction;
+ import org.hyperledger.iroha.android.tx.SignedTransactionHasher;
+@@ -119,13 +118,7 @@ public final class NoritoCodecAdapterTests {
+     assert decoded.timeToLiveMs().orElseThrow() == 5_000L : "TTL must round-trip";
+     assert decoded.nonce().orElseThrow() == 42 : "Nonce must round-trip";
+     assert "unit-test".equals(decoded.metadata().get("purpose")) : "Metadata must round-trip";
+-
+-    final NoritoHeader.DecodeResult result = NoritoHeader.decode(encoded, null);
+-    assert Arrays.equals(
+-            SchemaHash.hash16(adapter.schemaName()), result.header().schemaHash())
+-        : "Encoded payload must advertise the configured schema hash";
+-    assert result.header().payloadLength() == result.payload().length
+-        : "Header payload length must match decoded bytes";
++    assertBarePayload(encoded);
+   }
+ 
+   private static void javaCodecSupportsInstructionsVariant() throws NoritoException {
+@@ -136,9 +129,9 @@ public final class NoritoCodecAdapterTests {
+             .setCreationTimeMs(1_735_111_111_000L)
+             .setExecutable(
+                 Executable.instructions(
+-                    List.of(
+-                        InstructionBuilders.custom(InstructionKind.REGISTER, Map.of("action", "InstrA", "arg", "1")),
+-                        InstructionBuilders.custom(InstructionKind.CUSTOM, Map.of("action", "InstrB")))))
++                    listOf(
++                        InstructionBuilders.custom(InstructionKind.REGISTER, mapOf("action", "InstrA", "arg", "1")),
++                        InstructionBuilders.custom(InstructionKind.CUSTOM, mapOf("action", "InstrB")))))
+             .build();
+ 
+     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+@@ -185,7 +178,7 @@ public final class NoritoCodecAdapterTests {
+             .setChainId("00000010")
+             .setAuthority("registrar@wonderland")
+             .setExecutable(
+-                Executable.instructions(List.of(registerDomain, registerAccount, registerAsset)))
++                Executable.instructions(listOf(registerDomain, registerAccount, registerAsset)))
+             .build();
+ 
+     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+@@ -247,7 +240,7 @@ public final class NoritoCodecAdapterTests {
+         TransactionPayload.builder()
+             .setChainId("00000011")
+             .setAuthority("alice@wonderland")
+-            .setExecutable(Executable.instructions(List.of(transferAsset, transferDomain, transferDefinition)))
++            .setExecutable(Executable.instructions(listOf(transferAsset, transferDomain, transferDefinition)))
+             .build();
+ 
+     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+@@ -285,7 +278,7 @@ public final class NoritoCodecAdapterTests {
+             .setChainId("00000020")
+             .setAuthority("alice@wonderland")
+             .setCreationTimeMs(1_735_003_300_000L)
+-            .setExecutable(Executable.instructions(List.of(transfer)))
++            .setExecutable(Executable.instructions(listOf(transfer)))
+             .build();
+ 
+     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+@@ -328,7 +321,7 @@ public final class NoritoCodecAdapterTests {
+         TransactionPayload.builder()
+             .setChainId("00000012")
+             .setAuthority("alice@wonderland")
+-            .setExecutable(Executable.instructions(List.of(mint, burn)))
++            .setExecutable(Executable.instructions(listOf(mint, burn)))
+             .build();
+ 
+     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+@@ -357,7 +350,7 @@ public final class NoritoCodecAdapterTests {
+             .setChainId("0000001C")
+             .setAuthority("alice@wonderland")
+             .setCreationTimeMs(1_735_002_900_000L)
+-            .setExecutable(Executable.instructions(List.of(mint, burn)))
++            .setExecutable(Executable.instructions(listOf(mint, burn)))
+             .build();
+ 
+     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+@@ -398,7 +391,7 @@ public final class NoritoCodecAdapterTests {
+         TransactionPayload.builder()
+             .setChainId("00000013")
+             .setAuthority("alice@wonderland")
+-            .setExecutable(Executable.instructions(List.of(grant, revoke)))
++            .setExecutable(Executable.instructions(listOf(grant, revoke)))
+             .build();
+ 
+     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+@@ -452,7 +445,7 @@ public final class NoritoCodecAdapterTests {
+             .setAuthority("alice@wonderland")
+             .setExecutable(
+                 Executable.instructions(
+-                    List.of(grantRole, revokeRole, grantRolePermission, revokeRolePermission)))
++                    listOf(grantRole, revokeRole, grantRolePermission, revokeRolePermission)))
+             .build();
+ 
+     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+@@ -509,7 +502,7 @@ public final class NoritoCodecAdapterTests {
+             .setAuthority("alice@enterprise")
+             .setExecutable(
+                 Executable.instructions(
+-                    List.of(
++                    listOf(
+                         setDomain,
+                         setAccount,
+                         setDefinition,
+@@ -584,7 +577,7 @@ public final class NoritoCodecAdapterTests {
+         TransactionPayload.builder()
+             .setChainId("00000011")
+             .setAuthority("alice@wonderland")
+-            .setExecutable(Executable.instructions(List.of(setParameter)))
++            .setExecutable(Executable.instructions(listOf(setParameter)))
+             .build();
+ 
+     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+@@ -612,7 +605,7 @@ public final class NoritoCodecAdapterTests {
+             .setAuthority("admin@wonderland")
+             .setExecutable(
+                 Executable.instructions(
+-                    List.of(unregisterDomain, unregisterAccount, unregisterTrigger)))
++                    listOf(unregisterDomain, unregisterAccount, unregisterTrigger)))
+             .build();
+ 
+     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+@@ -647,7 +640,7 @@ public final class NoritoCodecAdapterTests {
+         TransactionPayload.builder()
+             .setChainId("00000017")
+             .setAuthority("ops@wonderland")
+-            .setExecutable(Executable.instructions(List.of(executeTrigger, logInstruction)))
++            .setExecutable(Executable.instructions(listOf(executeTrigger, logInstruction)))
+             .build();
+ 
+     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+@@ -675,7 +668,7 @@ public final class NoritoCodecAdapterTests {
+         TransactionPayload.builder()
+             .setChainId("00000018")
+             .setAuthority("governance@wonderland")
+-            .setExecutable(Executable.instructions(List.of(upgrade)))
++            .setExecutable(Executable.instructions(listOf(upgrade)))
+             .build();
+ 
+     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+@@ -703,7 +696,7 @@ public final class NoritoCodecAdapterTests {
+         TransactionPayload.builder()
+             .setChainId("00000019")
+             .setAuthority("genesis@wonderland")
+-            .setExecutable(Executable.instructions(List.of(registerPeer)))
++            .setExecutable(Executable.instructions(listOf(registerPeer)))
+             .build();
+ 
+     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+@@ -722,7 +715,7 @@ public final class NoritoCodecAdapterTests {
+   }
+ 
+   private static void javaCodecHydratesRegisterRoleInstruction() throws NoritoException {
+-    final List<String> permissions = List.of("CanRegisterDomain", "CanUnregisterDomain");
++    final List<String> permissions = listOf("CanRegisterDomain", "CanUnregisterDomain");
+     final InstructionBox registerRole =
+         InstructionBuilders.registerRole("AUDITOR", "ops@wonderland", permissions);
+ 
+@@ -730,7 +723,7 @@ public final class NoritoCodecAdapterTests {
+         TransactionPayload.builder()
+             .setChainId("0000001A")
+             .setAuthority("ops@wonderland")
+-            .setExecutable(Executable.instructions(List.of(registerRole)))
++            .setExecutable(Executable.instructions(listOf(registerRole)))
+             .build();
+ 
+     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+@@ -749,7 +742,7 @@ public final class NoritoCodecAdapterTests {
+   }
+ 
+   private static void javaCodecHydratesRegisterNftInstruction() throws NoritoException {
+-    final Map<String, String> metadata = Map.of("category", "collectible", "edition", "1");
++    final Map<String, String> metadata = mapOf("category", "collectible", "edition", "1");
+     final InstructionBox registerNft =
+         InstructionBuilders.registerNft("rare_card$wonderland", metadata);
+ 
+@@ -758,7 +751,7 @@ public final class NoritoCodecAdapterTests {
+             .setChainId("0000001B")
+             .setAuthority("alice@wonderland")
+             .setCreationTimeMs(1_735_002_800_000L)
+-            .setExecutable(Executable.instructions(List.of(registerNft)))
++            .setExecutable(Executable.instructions(listOf(registerNft)))
+             .build();
+ 
+     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+@@ -783,12 +776,12 @@ public final class NoritoCodecAdapterTests {
+   private static void javaCodecHydratesRegisterTimeTriggerInstruction() throws NoritoException {
+     final InstructionBox nested =
+         InstructionBuilders.mintAsset("rose#wonderland#treasury@wonderland", "5");
+-    final Map<String, String> metadata = Map.of("label", "periodic");
++    final Map<String, String> metadata = mapOf("label", "periodic");
+     final InstructionBox register =
+         InstructionBuilders.registerTimeTrigger(
+             "daily_report",
+             "alice@wonderland",
+-            List.of(nested),
++            listOf(nested),
+             1_735_000_000_000L,
+             60_000L,
+             3,
+@@ -799,7 +792,7 @@ public final class NoritoCodecAdapterTests {
+             .setChainId("0000001C")
+             .setAuthority("alice@wonderland")
+             .setCreationTimeMs(1_735_003_000_000L)
+-            .setExecutable(Executable.instructions(List.of(register)))
++            .setExecutable(Executable.instructions(listOf(register)))
+             .build();
+ 
+     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+@@ -842,12 +835,12 @@ public final class NoritoCodecAdapterTests {
+             .setTransactionHash(sampleHash)
+             .setTransactionBlockHeight(42L)
+             .setTransactionStatus("Approved");
+-    final Map<String, String> metadata = Map.of("label", "pipeline");
++    final Map<String, String> metadata = mapOf("label", "pipeline");
+     final InstructionBox register =
+         InstructionBuilders.registerPipelineTrigger(
+             "tx_monitor",
+             "monitor@wonderland",
+-            List.of(nested),
++            listOf(nested),
+             filter,
+             5,
+             metadata);
+@@ -857,7 +850,7 @@ public final class NoritoCodecAdapterTests {
+             .setChainId("0000001E")
+             .setAuthority("monitor@wonderland")
+             .setCreationTimeMs(1_735_003_200_000L)
+-            .setExecutable(Executable.instructions(List.of(register)))
++            .setExecutable(Executable.instructions(listOf(register)))
+             .build();
+ 
+     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+@@ -902,12 +895,12 @@ public final class NoritoCodecAdapterTests {
+   private static void javaCodecHydratesRegisterPrecommitTriggerInstruction() throws NoritoException {
+     final InstructionBox nested =
+         InstructionBuilders.grantPermission("bob@wonderland", "CanSubmitTransactions");
+-    final Map<String, String> metadata = Map.of("purpose", "guard");
++    final Map<String, String> metadata = mapOf("purpose", "guard");
+     final InstructionBox register =
+         InstructionBuilders.registerPrecommitTrigger(
+             "pc_guard",
+             "carol@wonderland",
+-            List.of(nested),
++            listOf(nested),
+             null,
+             metadata);
+ 
+@@ -916,7 +909,7 @@ public final class NoritoCodecAdapterTests {
+             .setChainId("0000001D")
+             .setAuthority("carol@wonderland")
+             .setCreationTimeMs(1_735_003_100_000L)
+-            .setExecutable(Executable.instructions(List.of(register)))
++            .setExecutable(Executable.instructions(listOf(register)))
+             .build();
+ 
+     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+@@ -1033,7 +1026,7 @@ public final class NoritoCodecAdapterTests {
+             .setAuthority("ed0120HOST@wonderland")
+             .setExecutable(
+                 Executable.instructions(
+-                    List.of(
++                    listOf(
+                         InstructionBox.of(createInstruction),
+                         InstructionBox.of(joinInstruction),
+                         InstructionBox.of(leaveInstruction),
+@@ -1150,7 +1143,7 @@ public final class NoritoCodecAdapterTests {
+             .setAuthority("ed0120VK@wonderland")
+             .setExecutable(
+                 Executable.instructions(
+-                    List.of(
++                    listOf(
+                         InstructionBox.of(registerInstruction),
+                         InstructionBox.of(updateInstruction))))
+             .build();
+@@ -1218,4 +1211,28 @@ public final class NoritoCodecAdapterTests {
+     }
+     return builder.toString();
+   }
++
++  private static void assertBarePayload(final byte[] encoded) {
++    if (encoded.length < 4) {
++      return;
++    }
++    final boolean hasMagic =
++        encoded[0] == 'N' && encoded[1] == 'R' && encoded[2] == 'T' && encoded[3] == '0';
++    assert !hasMagic : "Encoded payload should be bare (no Norito header)";
++  }
++
++  private static <T> List<T> listOf(final T... items) {
++    return Arrays.asList(items);
++  }
++
++  private static Map<String, String> mapOf(final String... entries) {
++    if (entries.length % 2 != 0) {
++      throw new IllegalArgumentException("mapOf requires an even number of arguments");
++    }
++    final Map<String, String> map = new LinkedHashMap<>();
++    for (int i = 0; i < entries.length; i += 2) {
++      map.put(entries[i], entries[i + 1]);
++    }
++    return map;
++  }
+ }
+diff --git a/java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/SignedTransactionHasherTests.java b/java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/SignedTransactionHasherTests.java
+index 12ef3f391..0bd6badd8 100644
+--- a/java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/SignedTransactionHasherTests.java
++++ b/java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/SignedTransactionHasherTests.java
+@@ -1,7 +1,7 @@
+ package org.hyperledger.iroha.android.tx;
+ 
+ import java.util.Arrays;
+-import java.util.Map;
++import java.util.Collections;
+ import org.hyperledger.iroha.android.model.TransactionPayload;
+ import org.hyperledger.iroha.android.norito.NoritoException;
+ import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
+@@ -70,7 +70,7 @@ public final class SignedTransactionHasherTests {
+             .setInstructionBytes(new byte[] {seed, (byte) (seed + 1)})
+             .setTimeToLiveMs(5_000L)
+             .setNonce(99)
+-            .setMetadata(Map.of("note", "txn-" + seed))
++            .setMetadata(Collections.singletonMap("note", "txn-" + seed))
+             .build();
+     final byte[] encodedPayload = codec.encodeTransaction(payload);
+     final byte[] signature = new byte[64];
+diff --git a/java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionFixtureManifestTests.java b/java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionFixtureManifestTests.java
+index 7a743f618..7e790f4ff 100644
+--- a/java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionFixtureManifestTests.java
++++ b/java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionFixtureManifestTests.java
+@@ -3,8 +3,11 @@ package org.hyperledger.iroha.android.tx;
+ import java.nio.charset.StandardCharsets;
+ import java.nio.file.Files;
+ import java.nio.file.Path;
++import java.nio.file.Paths;
+ import java.security.MessageDigest;
+ import java.security.NoSuchAlgorithmException;
++import java.util.ArrayList;
++import java.util.Arrays;
+ import java.util.Base64;
+ import java.util.LinkedHashMap;
+ import java.util.List;
+@@ -12,10 +15,17 @@ import java.util.Map;
+ import java.util.Objects;
+ import java.util.Optional;
+ import java.util.regex.Pattern;
++import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters;
++import org.bouncycastle.crypto.signers.Ed25519Signer;
+ import org.hyperledger.iroha.android.crypto.Blake2b;
+ import org.hyperledger.iroha.android.model.TransactionPayload;
++import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
++import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
+ import org.hyperledger.iroha.android.testing.SimpleJson;
+-import org.hyperledger.iroha.android.tx.SignedTransactionHasher;
++import org.junit.Test;
++import static org.junit.Assert.assertArrayEquals;
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertTrue;
+ 
+ /**
+  * Validates the Norito fixture manifest emitted by {@code scripts/export_norito_fixtures}.
+@@ -28,12 +38,27 @@ public final class TransactionFixtureManifestTests {
+ 
+   private static final Pattern HEX_64 = Pattern.compile("^[0-9a-fA-F]{64}$");
+   private static final String HASH_ALGORITHM = "BLAKE2B-256";
++  private static final String SIGNING_SEED_HEX =
++      "616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032";
++  private static final String SIGNED_SCHEMA = "iroha.transaction.SignedTransaction.v1";
++  private static final byte VERSION_BYTE = 0x01;
++  private static final NoritoJavaCodecAdapter PAYLOAD_CODEC = new NoritoJavaCodecAdapter();
++  private static final byte[] SIGNING_SEED = hexToBytes(SIGNING_SEED_HEX);
++  private static int compatChecked = 0;
++  private static int compatSkipped = 0;
+ 
+-  private TransactionFixtureManifestTests() {}
++  @Test
++  public void validateManifest() throws Exception {
++    runValidation();
++  }
+ 
+   public static void main(final String[] args) throws Exception {
++    runValidation();
++  }
++
++  private static void runValidation() throws Exception {
+     final Path manifestPath = resolveFixturePath("transaction_fixtures.manifest.json");
+-    final String json = Files.readString(manifestPath, StandardCharsets.UTF_8);
++    final String json = new String(Files.readAllBytes(manifestPath), StandardCharsets.UTF_8);
+     final Map<String, Object> manifest = asMap(SimpleJson.parse(json), "manifest");
+ 
+     final Object fixturesValue = manifest.get("fixtures");
+@@ -50,7 +75,12 @@ public final class TransactionFixtureManifestTests {
+       validateFixture(entry, manifestPath, payloadFixtures);
+     }
+ 
++    assertTrue(
++        "No fixtures were validated for SDK compatibility (checked=0, skipped=" + compatSkipped + ")",
++        compatChecked > 0);
+     System.out.println("[IrohaAndroid] Transaction fixture manifest tests passed.");
++    System.out.println("[IrohaAndroid] Compatibility checks: " + compatChecked
++        + " checked, " + compatSkipped + " skipped.");
+   }
+ 
+   private static void validateFixture(
+@@ -75,56 +105,73 @@ public final class TransactionFixtureManifestTests {
+ 
+     final Path baseDir = manifestPath != null ? manifestPath.getParent() : null;
+     final Path encodedPath = (baseDir == null)
+-        ? Path.of(encodedFile)
++        ? Paths.get(encodedFile)
+         : baseDir.resolve(encodedFile).normalize();
+     if (!Files.exists(encodedPath)) {
+       throw new IllegalStateException(name + ": encoded file not found: " + encodedPath);
+     }
+     final byte[] encodedBytes = Files.readAllBytes(encodedPath);
+-    assert encodedBytes.length == encodedLen
+-        : name + ": encoded_len mismatch (expected " + encodedLen + ", found " + encodedBytes.length + ")";
++    assertEquals(
++        name + ": encoded_len mismatch (expected " + encodedLen + ", found " + encodedBytes.length + ")",
++        encodedLen,
++        encodedBytes.length);
+     final String actualBase64 = Base64.getEncoder().encodeToString(encodedBytes);
+-    assert Objects.equals(actualBase64, payloadBase64)
+-        : name + ": payload_base64 does not match encoded file";
++    assertEquals(
++        name + ": payload_base64 does not match encoded file",
++        payloadBase64,
++        actualBase64);
+ 
+     // Validate the signed payload looks well-formed base64 and matches the advertised length.
+     final byte[] payloadBytes = decodeBase64(payloadBase64, name + ".payload_base64");
+     final byte[] signedBytes = decodeBase64(signedBase64, name + ".signed_base64");
+-    assert signedBytes.length == signedLen
+-        : name + ": signed_len mismatch (expected " + signedLen + ", found " + signedBytes.length + ")";
++    assertEquals(
++        name + ": signed_len mismatch (expected " + signedLen + ", found " + signedBytes.length + ")",
++        signedLen,
++        signedBytes.length);
+ 
+-    assert HEX_64.matcher(payloadHash).matches()
+-        : name + ": payload_hash must be a 64-character hex string";
+-    assert HEX_64.matcher(signedHash).matches()
+-        : name + ": signed_hash must be a 64-character hex string";
++    assertTrue(name + ": payload_hash must be a 64-character hex string",
++        HEX_64.matcher(payloadHash).matches());
++    assertTrue(name + ": signed_hash must be a 64-character hex string",
++        HEX_64.matcher(signedHash).matches());
+     final String computedPayloadHash = canonicalHashHex(payloadBytes);
+-    assert computedPayloadHash.equals(payloadHash)
+-        : name + ": payload hash mismatch (expected " + payloadHash + ", computed " + computedPayloadHash + ")";
++    assertEquals(
++        name + ": payload hash mismatch (expected " + payloadHash + ", computed " + computedPayloadHash + ")",
++        payloadHash,
++        computedPayloadHash);
+     final String computedSignedHash = SignedTransactionHasher.hashCanonicalHex(signedBytes);
+-    assert computedSignedHash.equals(signedHash)
+-        : name + ": signed hash mismatch (expected " + signedHash + ", computed " + computedSignedHash + ")";
++    assertEquals(
++        name + ": signed hash mismatch (expected " + signedHash + ", computed " + computedSignedHash + ")",
++        signedHash,
++        computedSignedHash);
+ 
+     final TransactionPayloadFixtures.Fixture payloadFixture = payloadFixtures.get(name);
+     if (payloadFixture != null) {
+       payloadFixture.encoded().ifPresent(encoded -> {
+-        assert Objects.equals(encoded, payloadBase64)
+-            : name + ": manifest payload mismatch vs transaction_payloads entry";
++        assertEquals(
++            name + ": manifest payload mismatch vs transaction_payloads entry",
++            payloadBase64,
++            encoded);
+       });
+-      if (!payloadFixture.isDecodable()) {
+-        return;
++      if (payloadFixture.isDecodable()) {
++        final TransactionPayload payload = payloadFixture.toPayload();
++        assertEquals(
++            name + ": chain mismatch vs transaction_payloads",
++            chain,
++            payload.chainId());
++        assertEquals(
++            name + ": authority mismatch vs transaction_payloads",
++            authority,
++            payload.authority());
++        assertTrue(
++            name + ": TTL mismatch vs transaction_payloads",
++            optionalLongEquals(payload.timeToLiveMs(), ttl));
++        assertTrue(
++            name + ": nonce mismatch vs transaction_payloads",
++            optionalIntEquals(payload.nonce(), nonce));
+       }
+-      final TransactionPayload payload = payloadFixture.toPayload();
+-      assert Objects.equals(payload.chainId(), chain)
+-          : name + ": chain mismatch vs transaction_payloads";
+-      assert Objects.equals(payload.authority(), authority)
+-          : name + ": authority mismatch vs transaction_payloads";
+-      assert optionalLongEquals(payload.timeToLiveMs(), ttl)
+-          : name + ": TTL mismatch vs transaction_payloads";
+-      assert optionalIntEquals(payload.nonce(), nonce)
+-          : name + ": nonce mismatch vs transaction_payloads";
+-      return;
+     }
+ 
++    validateCompatibility(name, payloadBytes, signedBytes);
+   }
+ 
+   private static byte[] decodeBase64(final String value, final String fieldName) {
+@@ -136,6 +183,15 @@ public final class TransactionFixtureManifestTests {
+   }
+ 
+   private static String canonicalHashHex(final byte[] data) {
++    final byte[] digest = canonicalHashBytes(data);
++    final StringBuilder builder = new StringBuilder(digest.length * 2);
++    for (byte b : digest) {
++      builder.append(String.format("%02x", b));
++    }
++    return builder.toString();
++  }
++
++  private static byte[] canonicalHashBytes(final byte[] data) {
+     byte[] digest;
+     try {
+       final MessageDigest md = MessageDigest.getInstance(HASH_ALGORITHM);
+@@ -144,11 +200,75 @@ public final class TransactionFixtureManifestTests {
+       digest = Blake2b.digest(data);
+     }
+     digest[digest.length - 1] |= 1;
+-    final StringBuilder builder = new StringBuilder(digest.length * 2);
+-    for (byte b : digest) {
+-      builder.append(String.format("%02x", b));
++    return digest;
++  }
++
++  private static void validateCompatibility(
++      final String name, final byte[] payloadBytes, final byte[] signedBytes) {
++    final TransactionPayload payload;
++    try {
++      payload = PAYLOAD_CODEC.decodeTransaction(payloadBytes);
++    } catch (final Exception ex) {
++      compatSkipped++;
++      return;
+     }
+-    return builder.toString();
++    if (!payload.executable().isIvm()) {
++      compatSkipped++;
++      return;
++    }
++
++    final byte[] reencoded;
++    try {
++      reencoded = PAYLOAD_CODEC.encodeTransaction(payload);
++    } catch (final Exception ex) {
++      throw new IllegalStateException(name + ": failed to re-encode payload", ex);
++    }
++    assertArrayEquals(
++        name + ": payload bytes differ after Android re-encoding",
++        payloadBytes,
++        reencoded);
++
++    final byte[] signature = signPayloadHash(payloadBytes);
++    final SignedTransaction signed =
++        new SignedTransaction(payloadBytes, signature, new byte[0], SIGNED_SCHEMA);
++    final byte[] encodedSigned;
++    try {
++      encodedSigned = SignedTransactionEncoder.encode(signed);
++    } catch (final Exception ex) {
++      throw new IllegalStateException(name + ": failed to encode signed transaction", ex);
++    }
++    assertArrayEquals(
++        name + ": signed bytes differ after Android re-encoding",
++        signedBytes,
++        encodedSigned);
++
++    final byte[] versioned;
++    try {
++      versioned = SignedTransactionEncoder.encodeVersioned(signed);
++    } catch (final Exception ex) {
++      throw new IllegalStateException(name + ": failed to encode versioned signed transaction", ex);
++    }
++    assertEquals(
++        name + ": versioned length mismatch",
++        signedBytes.length + 1,
++        versioned.length);
++    assertEquals(name + ": versioned prefix mismatch", VERSION_BYTE, versioned[0]);
++    assertArrayEquals(
++        name + ": versioned payload mismatch",
++        signedBytes,
++        Arrays.copyOfRange(versioned, 1, versioned.length));
++
++    compatChecked++;
++  }
++
++  private static byte[] signPayloadHash(final byte[] payloadBytes) {
++    final byte[] hash = canonicalHashBytes(payloadBytes);
++    final Ed25519PrivateKeyParameters privateKey =
++        new Ed25519PrivateKeyParameters(SIGNING_SEED, 0);
++    final Ed25519Signer signer = new Ed25519Signer();
++    signer.init(true, privateKey);
++    signer.update(hash, 0, hash.length);
++    return signer.generateSignature();
+   }
+ 
+   private static Map<String, TransactionPayloadFixtures.Fixture> loadPayloadFixtures(final Path baseDir)
+@@ -177,24 +297,24 @@ public final class TransactionFixtureManifestTests {
+           "../../src/test/resources/" + filename
+         };
+     for (final String candidate : candidates) {
+-      final Path path = Path.of(candidate);
++      final Path path = Paths.get(candidate);
+       if (Files.exists(path)) {
+         return path;
+       }
+     }
+     throw new IllegalStateException(
+-        "Fixture not found: " + Path.of(candidates[0]).toAbsolutePath());
++        "Fixture not found: " + Paths.get(candidates[0]).toAbsolutePath());
+   }
+ 
+   private static boolean optionalLongEquals(final Optional<Long> optional, final Long expected) {
+-    if (optional.isEmpty() && expected == null) {
++    if (!optional.isPresent() && expected == null) {
+       return true;
+     }
+     return optional.isPresent() && expected != null && Objects.equals(optional.get(), expected);
+   }
+ 
+   private static boolean optionalIntEquals(final Optional<Integer> optional, final Long expected) {
+-    if (optional.isEmpty() && expected == null) {
++    if (!optional.isPresent() && expected == null) {
+       return true;
+     }
+     return optional.isPresent()
+@@ -203,42 +323,77 @@ public final class TransactionFixtureManifestTests {
+   }
+ 
+   private static Map<String, Object> asMap(final Object value, final String field) {
+-    if (!(value instanceof Map<?, ?> raw)) {
++    if (!(value instanceof Map)) {
+       throw new IllegalStateException("Expected object for " + field);
+     }
++    @SuppressWarnings("unchecked")
++    final Map<?, ?> raw = (Map<?, ?>) value;
+     final Map<String, Object> copy = new LinkedHashMap<>();
+     raw.forEach((key, v) -> copy.put(Objects.toString(key), v));
+     return copy;
+   }
+ 
+   private static List<Object> asList(final Object value, final String field) {
+-    if (!(value instanceof List<?> list)) {
++    if (!(value instanceof List)) {
+       throw new IllegalStateException("Expected array for " + field);
+     }
+-    return List.copyOf(list);
++    @SuppressWarnings("unchecked")
++    final List<Object> list = (List<Object>) value;
++    return new ArrayList<>(list);
+   }
+ 
+   private static String requireString(final Object value, final String field) {
+-    if (!(value instanceof String str) || str.isBlank()) {
++    if (!(value instanceof String) || ((String) value).trim().isEmpty()) {
+       throw new IllegalStateException(field + " must be a non-empty string");
+     }
+-    return str;
++    return (String) value;
+   }
+ 
+   private static long requireNumber(final Object value, final String field) {
+-    if (!(value instanceof Number number)) {
++    if (!(value instanceof Number)) {
+       throw new IllegalStateException(field + " must be a number");
+     }
+-    return number.longValue();
++    return ((Number) value).longValue();
+   }
+ 
+   private static Long optionalNumber(final Object value) {
+     if (value == null) {
+       return null;
+     }
+-    if (!(value instanceof Number number)) {
++    if (!(value instanceof Number)) {
+       throw new IllegalStateException("Expected number or null");
+     }
+-    return number.longValue();
++    return ((Number) value).longValue();
++  }
++
++  private static byte[] hexToBytes(final String hex) {
++    if (hex == null) {
++      throw new IllegalArgumentException("hex must not be null");
++    }
++    final String normalized = hex.trim();
++    if (normalized.length() % 2 != 0) {
++      throw new IllegalArgumentException("hex length must be even");
++    }
++    final int length = normalized.length() / 2;
++    final byte[] out = new byte[length];
++    for (int i = 0; i < length; i++) {
++      final int high = hexNibble(normalized.charAt(i * 2));
++      final int low = hexNibble(normalized.charAt(i * 2 + 1));
++      out[i] = (byte) ((high << 4) | low);
++    }
++    return out;
++  }
++
++  private static int hexNibble(final char c) {
++    if (c >= '0' && c <= '9') {
++      return c - '0';
++    }
++    if (c >= 'a' && c <= 'f') {
++      return 10 + (c - 'a');
++    }
++    if (c >= 'A' && c <= 'F') {
++      return 10 + (c - 'A');
++    }
++    throw new IllegalArgumentException("Invalid hex digit: " + c);
+   }
+ }
+diff --git a/java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionPayloadFixtures.java b/java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionPayloadFixtures.java
+index 47706107c..21d147740 100644
+--- a/java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionPayloadFixtures.java
++++ b/java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionPayloadFixtures.java
+@@ -4,7 +4,10 @@ import java.io.IOException;
+ import java.nio.charset.StandardCharsets;
+ import java.nio.file.Files;
+ import java.nio.file.Path;
++import java.nio.file.Paths;
+ import java.util.ArrayList;
++import java.util.Arrays;
++import java.util.Collections;
+ import java.util.LinkedHashMap;
+ import java.util.List;
+ import java.util.Map;
+@@ -24,11 +27,13 @@ final class TransactionPayloadFixtures {
+   private TransactionPayloadFixtures() {}
+ 
+   static List<Fixture> load(final Path path) throws IOException {
+-    final String json = Files.readString(path, StandardCharsets.UTF_8);
++    final String json = new String(Files.readAllBytes(path), StandardCharsets.UTF_8);
+     final Object parsed = SimpleJson.parse(json);
+-    if (!(parsed instanceof List<?> fixturesRaw)) {
++    if (!(parsed instanceof List)) {
+       throw new IllegalStateException("Fixture root must be an array");
+     }
++    @SuppressWarnings("unchecked")
++    final List<Object> fixturesRaw = (List<Object>) parsed;
+     final List<Fixture> fixtures = new ArrayList<>();
+     for (Object entry : fixturesRaw) {
+       fixtures.add(Fixture.fromObject(entry));
+@@ -38,11 +43,11 @@ final class TransactionPayloadFixtures {
+ 
+   static Path resolveFixturePath() throws IOException {
+     final List<Path> candidates =
+-        List.of(
+-            Path.of("java/iroha_android/src/test/resources/transaction_payloads.json"),
+-            Path.of("src/test/resources/transaction_payloads.json"),
+-            Path.of("../src/test/resources/transaction_payloads.json"),
+-            Path.of("../../src/test/resources/transaction_payloads.json"));
++        Arrays.asList(
++            Paths.get("java/iroha_android/src/test/resources/transaction_payloads.json"),
++            Paths.get("src/test/resources/transaction_payloads.json"),
++            Paths.get("../src/test/resources/transaction_payloads.json"),
++            Paths.get("../../src/test/resources/transaction_payloads.json"));
+     for (final Path candidate : candidates) {
+       if (Files.exists(candidate)) {
+         return candidate;
+@@ -65,9 +70,11 @@ final class TransactionPayloadFixtures {
+     }
+ 
+     static Fixture fromObject(final Object value) {
+-      if (!(value instanceof Map<?, ?> map)) {
++      if (!(value instanceof Map)) {
+         throw new IllegalStateException("Fixture entries must be objects");
+       }
++      @SuppressWarnings("unchecked")
++      final Map<Object, Object> map = (Map<Object, Object>) value;
+       final String name = Objects.toString(map.get("name"), "<unnamed>");
+       final Map<String, Object> payload =
+           map.containsKey("payload") ? asMap(map.get("payload"), "payload", name) : null;
+@@ -120,7 +127,7 @@ final class TransactionPayloadFixtures {
+                 InstructionKind.fromDisplayName(asString(instructionMap.get("kind"), "instruction.kind"));
+           }
+           final Map<String, Object> args = instructionMap.get("arguments") == null
+-              ? Map.of()
++              ? Collections.emptyMap()
+               : asMap(instructionMap.get("arguments"), "instruction.arguments", name);
+           final Map<String, String> convertedArgs = new LinkedHashMap<>();
+           args.forEach((key, value) -> convertedArgs.put(key, Objects.toString(value)));
+@@ -147,7 +154,7 @@ final class TransactionPayloadFixtures {
+       builder.setNonce(nonce == null ? null : asNumber(nonce, "nonce").intValue());
+ 
+       final Map<String, Object> metadataRaw = payload.get("metadata") == null
+-          ? Map.of()
++          ? Collections.emptyMap()
+           : asMap(payload.get("metadata"), "metadata", name);
+       final Map<String, String> metadata = new LinkedHashMap<>();
+       metadataRaw.forEach((key, value) -> metadata.put(key, Objects.toString(value)));
+@@ -167,35 +174,37 @@ final class TransactionPayloadFixtures {
+   }
+ 
+   private static List<?> asList(final Object value, final String field) {
+-    if (!(value instanceof List<?> list)) {
++    if (!(value instanceof List)) {
+       throw new IllegalStateException("Expected array for " + field);
+     }
+-    return list;
++    return (List<?>) value;
+   }
+ 
+   private static Map<String, Object> asMap(
+       final Object value, final String field, final String fixtureName) {
+-    if (!(value instanceof Map<?, ?> raw)) {
++    if (!(value instanceof Map)) {
+       throw new IllegalStateException(
+           fixtureName + ": expected object for " + field + " but found " + value);
+     }
+     final Map<String, Object> checked = new LinkedHashMap<>();
++    @SuppressWarnings("unchecked")
++    final Map<Object, Object> raw = (Map<Object, Object>) value;
+     raw.forEach((k, v) -> checked.put(Objects.toString(k), v));
+     return checked;
+   }
+ 
+   private static String asString(final Object value, final String field) {
+-    if (!(value instanceof String str)) {
++    if (!(value instanceof String)) {
+       throw new IllegalStateException("Expected string for " + field);
+     }
+-    return str;
++    return (String) value;
+   }
+ 
+   private static Number asNumber(final Object value, final String field) {
+-    if (!(value instanceof Number number)) {
++    if (!(value instanceof Number)) {
+       throw new IllegalStateException("Expected number for " + field);
+     }
+-    return number;
++    return (Number) value;
+   }
+ 
+ }
+diff --git a/java/norito_java/src/main/java/org/hyperledger/iroha/norito/NoritoAdapters.java b/java/norito_java/src/main/java/org/hyperledger/iroha/norito/NoritoAdapters.java
+index cc6431039..93feddf3a 100644
+--- a/java/norito_java/src/main/java/org/hyperledger/iroha/norito/NoritoAdapters.java
++++ b/java/norito_java/src/main/java/org/hyperledger/iroha/norito/NoritoAdapters.java
+@@ -282,7 +282,12 @@ public final class NoritoAdapters {
+     public void encode(NoritoEncoder encoder, Optional<T> value) {
+       if (value.isPresent()) {
+         encoder.writeByte(1);
+-        inner.encode(encoder, value.get());
++        NoritoEncoder child = encoder.childEncoder();
++        inner.encode(child, value.get());
++        byte[] payload = child.toByteArray();
++        boolean compact = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
++        encoder.writeLength(payload.length, compact);
++        encoder.writeBytes(payload);
+       } else {
+         encoder.writeByte(0);
+       }
+@@ -291,11 +296,23 @@ public final class NoritoAdapters {
+     @Override
+     public Optional<T> decode(NoritoDecoder decoder) {
+       int tag = decoder.readByte();
+-      return switch (tag) {
+-        case 0 -> Optional.empty();
+-        case 1 -> Optional.of(inner.decode(decoder));
+-        default -> throw new IllegalArgumentException("Invalid Option tag: " + tag);
+-      };
++      if (tag == 0) {
++        return Optional.empty();
++      }
++      if (tag != 1) {
++        throw new IllegalArgumentException("Invalid Option tag: " + tag);
++      }
++      long length = decoder.readLength(decoder.compactLenActive());
++      if (length > Integer.MAX_VALUE) {
++        throw new IllegalArgumentException("Option payload too large");
++      }
++      byte[] payload = decoder.readBytes((int) length);
++      NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
++      T value = inner.decode(child);
++      if (child.remaining() != 0) {
++        throw new IllegalArgumentException("Trailing bytes after Option payload");
++      }
++      return Optional.of(value);
+     }
+ 
+     @Override
+@@ -317,10 +334,20 @@ public final class NoritoAdapters {
+     public void encode(NoritoEncoder encoder, Result<T, E> value) {
+       if (value instanceof Result.Ok<T, E> okValue) {
+         encoder.writeByte(0);
+-        ok.encode(encoder, okValue.value());
++        NoritoEncoder child = encoder.childEncoder();
++        ok.encode(child, okValue.value());
++        byte[] payload = child.toByteArray();
++        boolean compact = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
++        encoder.writeLength(payload.length, compact);
++        encoder.writeBytes(payload);
+       } else if (value instanceof Result.Err<T, E> errValue) {
+         encoder.writeByte(1);
+-        err.encode(encoder, errValue.error());
++        NoritoEncoder child = encoder.childEncoder();
++        err.encode(child, errValue.error());
++        byte[] payload = child.toByteArray();
++        boolean compact = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
++        encoder.writeLength(payload.length, compact);
++        encoder.writeBytes(payload);
+       } else {
+         throw new IllegalArgumentException("Unknown Result variant");
+       }
+@@ -329,11 +356,27 @@ public final class NoritoAdapters {
+     @Override
+     public Result<T, E> decode(NoritoDecoder decoder) {
+       int tag = decoder.readByte();
+-      return switch (tag) {
+-        case 0 -> new Result.Ok<>(ok.decode(decoder));
+-        case 1 -> new Result.Err<>(err.decode(decoder));
+-        default -> throw new IllegalArgumentException("Invalid Result tag: " + tag);
+-      };
++      if (tag != 0 && tag != 1) {
++        throw new IllegalArgumentException("Invalid Result tag: " + tag);
++      }
++      long length = decoder.readLength(decoder.compactLenActive());
++      if (length > Integer.MAX_VALUE) {
++        throw new IllegalArgumentException("Result payload too large");
++      }
++      byte[] payload = decoder.readBytes((int) length);
++      NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
++      Object value = tag == 0 ? ok.decode(child) : err.decode(child);
++      if (child.remaining() != 0) {
++        throw new IllegalArgumentException("Trailing bytes after Result payload");
++      }
++      if (tag == 0) {
++        @SuppressWarnings("unchecked")
++        T okValue = (T) value;
++        return new Result.Ok<>(okValue);
++      }
++      @SuppressWarnings("unchecked")
++      E errValue = (E) value;
++      return new Result.Err<>(errValue);
+     }
+ 
+     @Override
+diff --git a/status.md b/status.md
+index 13490f935..9ad79a427 100644
+--- a/status.md
++++ b/status.md
+@@ -1,6 +1,8 @@
+ # Status
+ 
+ ## Latest Updates
++- Android SDK/Norito: add fixture-based Rust/Android compatibility test (JUnit), enforce Java manifest parity in `cargo xtask norito-rpc-verify`, and add CI jobs for xtask parity + Android fixture compatibility.
++- Tests: not run (not requested).
+ - Subscriptions: biller now suspends at `failure_count >= max_failures`, records failed invoices, adds retry/suspension unit coverage, and ships Kotodama wrapper samples for billing/usage triggers.
+ - IVM: add subscription syscalls to the ABI golden list and regenerate syscall docs/gas assets from `syscalls.toml`.
+ - Docs: align the subscription API design with invoice metadata stored on the subscription NFT.
+diff --git a/xtask/src/norito_rpc.rs b/xtask/src/norito_rpc.rs
+index 2c013024e..70979bec5 100644
+--- a/xtask/src/norito_rpc.rs
++++ b/xtask/src/norito_rpc.rs
+@@ -43,7 +43,7 @@ const SDK_MANIFESTS: &[(&str, &str, bool)] = &[
+     (
+         "java",
+         "java/iroha_android/src/test/resources/transaction_fixtures.manifest.json",
+-        false,
++        true,
+     ),
+     (
+         "swift",

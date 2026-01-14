@@ -686,10 +686,7 @@ impl<'set> SetBlock<'set> {
                             .as_ref()
                             .and_then(|key| act.metadata().get(key))
                             .and_then(|json| json.try_into_any_norito::<u64>().ok());
-                        match registered_height {
-                            Some(height) => height != current_block_height,
-                            None => false,
-                        }
+                        registered_height.is_some_and(|height| height != current_block_height)
                     })
             })
     }
@@ -880,7 +877,7 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
     ///
     /// Return `false` if [`Set`] doesn't contain the trigger with the given `id`.
     /// Logs and continues if the internal storage is inconsistent.
-    pub fn remove(&mut self, id: TriggerId) -> bool {
+    pub fn remove(&mut self, id: &TriggerId) -> bool {
         let Some(event_type) = self.ids.remove(id.clone()) else {
             return false;
         };
@@ -1498,6 +1495,7 @@ fn load_trigger_entries<F>(
 
 impl TryFrom<SetDto> for Set {
     type Error = String;
+    #[allow(clippy::too_many_lines)]
     fn try_from(dto: SetDto) -> Result<Self, Self::Error> {
         let SetDto {
             data,

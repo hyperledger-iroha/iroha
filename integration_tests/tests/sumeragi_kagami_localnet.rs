@@ -86,17 +86,20 @@ async fn kagami_localnet_bootstrap_produces_blocks() -> Result<()> {
 
 fn alloc_port_block(count: u16) -> Result<AllocatedPortBlock> {
     std::panic::catch_unwind(|| AllocatedPortBlock::new(count))
-        .map_err(|panic| eyre!(panic_message(panic)))
+        .map_err(|panic| eyre!(panic_message(&panic)))
 }
 
-fn panic_message(panic: Box<dyn Any + Send>) -> String {
-    if let Some(message) = panic.as_ref().downcast_ref::<&str>() {
-        (*message).to_string()
-    } else if let Some(message) = panic.as_ref().downcast_ref::<String>() {
-        message.clone()
-    } else {
-        "port allocation panicked".to_string()
-    }
+fn panic_message(panic: &Box<dyn Any + Send>) -> String {
+    let panic = panic.as_ref();
+    panic.downcast_ref::<&str>().map_or_else(
+        || {
+            panic
+                .downcast_ref::<String>()
+                .cloned()
+                .unwrap_or_else(|| "port allocation panicked".to_string())
+        },
+        |message| (*message).to_string(),
+    )
 }
 
 struct KagamiLocalnet {

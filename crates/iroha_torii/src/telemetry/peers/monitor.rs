@@ -293,10 +293,7 @@ fn is_public_geo_host(host: &str) -> bool {
     if host.eq_ignore_ascii_case("localhost") {
         return false;
     }
-    match host.parse::<IpAddr>() {
-        Ok(ip) => is_public_ip(ip),
-        Err(_) => true,
-    }
+    host.parse::<IpAddr>().map_or(true, is_public_ip)
 }
 
 fn is_public_ip(ip: IpAddr) -> bool {
@@ -373,10 +370,10 @@ fn construct_geo_query(
             host: host.to_owned(),
         });
     }
-    let mut url = match endpoint {
-        Some(endpoint) => endpoint.clone(),
-        None => Url::parse(DEFAULT_GEO_ENDPOINT).expect("default geo endpoint is valid"),
-    };
+    let mut url = endpoint.map_or_else(
+        || Url::parse(DEFAULT_GEO_ENDPOINT).expect("default geo endpoint is valid"),
+        std::clone::Clone::clone,
+    );
     let endpoint_label = url.to_string();
     {
         let mut segments =

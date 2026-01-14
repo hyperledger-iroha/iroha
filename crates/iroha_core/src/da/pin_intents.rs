@@ -106,7 +106,6 @@ pub fn load_pin_intents(
                     path = %path.display(),
                     "failed to decode DA pin intent file; skipping"
                 );
-                continue;
             }
         }
     }

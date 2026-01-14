@@ -1,7 +1,7 @@
 //! Bounded-latency localnet smoke test for permissioned Sumeragi with DA enabled.
 
 use std::{
-    sync::{Mutex, OnceLock},
+    sync::OnceLock,
     time::{Duration, Instant},
 };
 
@@ -15,7 +15,7 @@ use iroha::data_model::{
 };
 use iroha_test_network::{Network, NetworkBuilder, init_instruction_registry};
 use nonzero_ext::nonzero;
-use tokio::time::sleep;
+use tokio::{sync::Mutex, time::sleep};
 
 static LOCALNET_SMOKE_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
 const SMOKE_PIPELINE_TIME: Duration = Duration::from_secs(2);
@@ -63,7 +63,7 @@ async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
     let _guard = LOCALNET_SMOKE_GUARD
         .get_or_init(|| Mutex::new(()))
         .lock()
-        .expect("localnet smoke guard");
+        .await;
 
     let builder = NetworkBuilder::new()
         .with_peers(4)
@@ -196,7 +196,7 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
     let _guard = LOCALNET_SMOKE_GUARD
         .get_or_init(|| Mutex::new(()))
         .lock()
-        .expect("localnet smoke guard");
+        .await;
 
     let builder = NetworkBuilder::new()
         .with_peers(4)
@@ -302,7 +302,7 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
     let _guard = LOCALNET_SMOKE_GUARD
         .get_or_init(|| Mutex::new(()))
         .lock()
-        .expect("localnet smoke guard");
+        .await;
 
     let previous_ttl = std::env::var_os("IROHA_TEST_CLIENT_TTL_MS");
     // Extend TTL so early transactions do not expire during the soak run.
@@ -393,40 +393,37 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
         let mut last_snapshot: Vec<StatusSnapshot> = Vec::new();
 
         loop {
-            match collect_statuses(&network, SOAK_STATUS_POLL_TIMEOUT).await {
-                Ok(statuses) => {
-                    let min_non_empty = statuses
-                        .iter()
-                        .map(|status| status.blocks_non_empty)
-                        .min()
-                        .unwrap_or_default();
-                    let max_non_empty = statuses
-                        .iter()
-                        .map(|status| status.blocks_non_empty)
-                        .max()
-                        .unwrap_or_default();
-                    if min_non_empty > last_min_non_empty {
-                        last_min_non_empty = min_non_empty;
-                        last_progress = Instant::now();
-                    }
-                    last_snapshot = statuses
-                        .iter()
-                        .map(StatusSnapshot::from_status)
-                        .collect();
-                    if last_log.elapsed() >= SOAK_PROGRESS_LOG_INTERVAL {
-                        eprintln!(
-                            "localnet soak progress (target_non_empty={target_height}, min_non_empty={min_non_empty}, max_non_empty={max_non_empty}): {last_snapshot:?}"
-                        );
-                        last_log = Instant::now();
-                    }
-                    if statuses
-                        .iter()
-                        .all(|status| status.blocks_non_empty >= target_height)
-                    {
-                        break;
-                    }
+            if let Ok(statuses) = collect_statuses(&network, SOAK_STATUS_POLL_TIMEOUT).await {
+                let min_non_empty = statuses
+                    .iter()
+                    .map(|status| status.blocks_non_empty)
+                    .min()
+                    .unwrap_or_default();
+                let max_non_empty = statuses
+                    .iter()
+                    .map(|status| status.blocks_non_empty)
+                    .max()
+                    .unwrap_or_default();
+                if min_non_empty > last_min_non_empty {
+                    last_min_non_empty = min_non_empty;
+                    last_progress = Instant::now();
                 }
-                Err(_) => {}
+                last_snapshot = statuses
+                    .iter()
+                    .map(StatusSnapshot::from_status)
+                    .collect();
+                if last_log.elapsed() >= SOAK_PROGRESS_LOG_INTERVAL {
+                    eprintln!(
+                        "localnet soak progress (target_non_empty={target_height}, min_non_empty={min_non_empty}, max_non_empty={max_non_empty}): {last_snapshot:?}"
+                    );
+                    last_log = Instant::now();
+                }
+                if statuses
+                    .iter()
+                    .all(|status| status.blocks_non_empty >= target_height)
+                {
+                    break;
+                }
             }
 
             if last_progress.elapsed() >= SOAK_STALL_THRESHOLD {
@@ -469,34 +466,39 @@ async fn collect_statuses(
     status_timeout: Duration,
 ) -> Result<Vec<iroha::client::Status>> {
     try_join_all(network.peers().iter().map(|peer| async move {
-        match tokio::time::timeout(status_timeout, peer.status()).await {
-            Ok(result) => result.map_err(|err| {
-                eprintln!(
-                    "status request failed for peer {}: {err:?} (best_effort={:?}, last_known_peers={:?}, stdout={:?})",
-                    peer.mnemonic(),
-                    peer.best_effort_block_height(),
-                    peer.last_known_peers(),
-                    peer.latest_stdout_log_path()
-                );
-                err
-            })
-            .wrap_err_with(|| format!("status request failed for peer {}", peer.mnemonic())),
-            Err(_) => {
-                eprintln!(
-                    "status request timed out for peer {} after {:?} (best_effort={:?}, last_known_peers={:?}, stdout={:?})",
-                    peer.mnemonic(),
-                    status_timeout,
-                    peer.best_effort_block_height(),
-                    peer.last_known_peers(),
-                    peer.latest_stdout_log_path()
-                );
-                Err(eyre!(
-                "status request timed out after {:?} for peer {}",
-                status_timeout,
-                peer.mnemonic()
-                ))
-            }
-        }
+        tokio::time::timeout(status_timeout, peer.status())
+            .await
+            .map_or_else(
+                |_| {
+                    eprintln!(
+                        "status request timed out for peer {} after {:?} (best_effort={:?}, last_known_peers={:?}, stdout={:?})",
+                        peer.mnemonic(),
+                        status_timeout,
+                        peer.best_effort_block_height(),
+                        peer.last_known_peers(),
+                        peer.latest_stdout_log_path()
+                    );
+                    Err(eyre!(
+                        "status request timed out after {:?} for peer {}",
+                        status_timeout,
+                        peer.mnemonic()
+                    ))
+                },
+                |result| {
+                    result
+                        .map_err(|err| {
+                            eprintln!(
+                                "status request failed for peer {}: {err:?} (best_effort={:?}, last_known_peers={:?}, stdout={:?})",
+                                peer.mnemonic(),
+                                peer.best_effort_block_height(),
+                                peer.last_known_peers(),
+                                peer.latest_stdout_log_path()
+                            );
+                            err
+                        })
+                        .wrap_err_with(|| format!("status request failed for peer {}", peer.mnemonic()))
+                },
+            )
     }))
     .await
 }
@@ -512,8 +514,7 @@ async fn wait_for_status_responses(network: &Network, timeout: Duration) -> Resu
             Err(err) => {
                 if last_log.elapsed() >= STATUS_LOG_INTERVAL {
                     eprintln!(
-                        "waiting for status responses (timeout={:?}): last_error={err:?}",
-                        timeout
+                        "waiting for status responses (timeout={timeout:?}): last_error={err:?}"
                     );
                     last_log = Instant::now();
                 }
@@ -555,8 +556,8 @@ async fn wait_for_queue_depth(
                 if submitter_queue <= max_queue {
                     return Ok(());
                 }
-                let progressed = last_queue.map_or(false, |prev| submitter_queue < prev)
-                    || last_blocks_non_empty.map_or(false, |prev| min_non_empty > prev);
+                let progressed = last_queue.is_some_and(|prev| submitter_queue < prev)
+                    || last_blocks_non_empty.is_some_and(|prev| min_non_empty > prev);
                 if progressed {
                     last_progress = Instant::now();
                 }
@@ -588,24 +589,24 @@ async fn wait_for_queue_depth(
     }
 }
 
-#[test]
-fn env_or_default_reads_positive_values() {
+#[tokio::test]
+async fn env_or_default_reads_positive_values() {
     let _guard = LOCALNET_SMOKE_GUARD
         .get_or_init(|| Mutex::new(()))
         .lock()
-        .expect("localnet smoke guard");
+        .await;
     let key = "IROHA_ENV_OR_DEFAULT_TEST";
     set_env_var(key, "42");
     assert_eq!(env_or_default(key, 7), 42);
     remove_env_var(key);
 }
 
-#[test]
-fn env_or_default_ignores_invalid_or_zero() {
+#[tokio::test]
+async fn env_or_default_ignores_invalid_or_zero() {
     let _guard = LOCALNET_SMOKE_GUARD
         .get_or_init(|| Mutex::new(()))
         .lock()
-        .expect("localnet smoke guard");
+        .await;
     let key = "IROHA_ENV_OR_DEFAULT_TEST";
     set_env_var(key, "0");
     assert_eq!(env_or_default(key, 7), 7);

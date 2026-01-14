@@ -31,7 +31,7 @@ pub struct CommitStakeSnapshot {
 
 /// Errors returned when checking stake quorum for a roster.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum StakeQuorumError {
+pub enum StakeQuorumError {
     MissingStake,
     SignerOutOfRoster,
     Overflow,
@@ -61,7 +61,7 @@ impl CommitStakeSnapshot {
 }
 
 /// Determine whether 2/3 stake quorum is reached for the provided signers.
-pub(crate) fn stake_quorum_reached_for_peers(
+pub fn stake_quorum_reached_for_peers(
     view: &StateView<'_>,
     roster: &[PeerId],
     signers: &BTreeSet<PeerId>,
@@ -126,7 +126,7 @@ pub(crate) fn stake_quorum_reached_for_peers(
 }
 
 /// Determine whether 2/3 stake quorum is reached for the provided signers and snapshot.
-pub(crate) fn stake_quorum_reached_for_snapshot(
+pub fn stake_quorum_reached_for_snapshot(
     snapshot: &CommitStakeSnapshot,
     roster: &[PeerId],
     signers: &BTreeSet<PeerId>,
@@ -202,8 +202,7 @@ pub(super) fn stake_map_from_world(world: &impl WorldReadOnly) -> BTreeMap<PeerI
 pub(super) fn fallback_stake_for_world(world: &impl WorldReadOnly) -> Numeric {
     let min_self_bond = world
         .sumeragi_npos_parameters()
-        .map(|params| params.min_self_bond)
-        .unwrap_or(1);
+        .map_or(1, |params| params.min_self_bond);
     Numeric::from(min_self_bond.max(1))
 }
 
@@ -230,13 +229,13 @@ pub(super) fn commit_stake_snapshot_from_map(
     let mut entries = Vec::with_capacity(roster.len());
     let mut missing = 0usize;
     for peer in roster {
-        let stake = match stake_map.get(peer) {
-            Some(stake) => stake.clone(),
-            None => {
+        let stake = stake_map.get(peer).map_or_else(
+            || {
                 missing = missing.saturating_add(1);
                 fallback_stake.clone()
-            }
-        };
+            },
+            Clone::clone,
+        );
         entries.push(CommitStakeSnapshotEntry {
             peer_id: peer.clone(),
             stake,
@@ -408,8 +407,9 @@ mod tests {
         let view = state.view();
         let missing_peer = PeerId::new(KeyPair::random().public_key().clone());
         let fallback = fallback_stake_for_world(view.world());
-        let snapshot = CommitStakeSnapshot::from_roster(view.world(), &[missing_peer.clone()])
-            .expect("snapshot");
+        let snapshot =
+            CommitStakeSnapshot::from_roster(view.world(), std::slice::from_ref(&missing_peer))
+                .expect("snapshot");
         assert_eq!(snapshot.entries[0].peer_id, missing_peer);
         assert_eq!(snapshot.entries[0].stake, fallback);
 

@@ -83,6 +83,10 @@ public final class NoritoAdapters {
     return BytesAdapter.INSTANCE;
   }
 
+  public static TypeAdapter<byte[]> byteVecAdapter() {
+    return ByteVecAdapter.INSTANCE;
+  }
+
   public static TypeAdapter<byte[]> fixedBytes(int length) {
     return new FixedBytesAdapter(length);
   }
@@ -220,6 +224,139 @@ public final class NoritoAdapters {
     }
   }
 
+  private static final class ByteVecAdapter implements TypeAdapter<byte[]> {
+    private static final ByteVecAdapter INSTANCE = new ByteVecAdapter();
+
+    @Override
+    public void encode(NoritoEncoder encoder, byte[] value) {
+      boolean compactSeq = (encoder.flags() & NoritoHeader.COMPACT_SEQ_LEN) != 0;
+      encoder.writeLength(value.length, compactSeq);
+      if ((encoder.flags() & NoritoHeader.PACKED_SEQ) != 0) {
+        encodePacked(encoder, value);
+      } else {
+        boolean compactLen = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+        for (byte b : value) {
+          encoder.writeLength(1, compactLen);
+          encoder.writeByte(b);
+        }
+      }
+    }
+
+    @Override
+    public byte[] decode(NoritoDecoder decoder) {
+      long length = decoder.readLength(decoder.compactSeqLenActive());
+      if (length > Integer.MAX_VALUE) {
+        throw new IllegalArgumentException("Byte vector too large");
+      }
+      int count = (int) length;
+      if ((decoder.flags() & NoritoHeader.PACKED_SEQ) != 0) {
+        return decodePacked(decoder, count);
+      }
+      byte[] out = new byte[count];
+      boolean compactLen = decoder.compactLenActive();
+      for (int i = 0; i < count; i++) {
+        long elemLen = decoder.readLength(compactLen);
+        if (elemLen > Integer.MAX_VALUE) {
+          throw new IllegalArgumentException("Byte vector element too large");
+        }
+        int elemSize = (int) elemLen;
+        if (elemSize == 1) {
+          out[i] = (byte) decoder.readByte();
+          continue;
+        }
+        byte[] payload = decoder.readBytes(elemSize);
+        NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+        int value = child.readByte();
+        if (child.remaining() != 0) {
+          throw new IllegalArgumentException("Byte vector element did not consume all bytes");
+        }
+        out[i] = (byte) value;
+      }
+      return out;
+    }
+
+    @Override
+    public boolean isSelfDelimiting() {
+      return true;
+    }
+
+    private void encodePacked(NoritoEncoder encoder, byte[] value) {
+      if ((encoder.flags() & NoritoHeader.VARINT_OFFSETS) != 0) {
+        for (int i = 0; i < value.length; i++) {
+          encoder.append(Varint.encode(1));
+        }
+      } else {
+        long offset = 0;
+        encoder.writeUInt(offset, 64);
+        for (int i = 0; i < value.length; i++) {
+          offset += 1;
+          encoder.writeUInt(offset, 64);
+        }
+      }
+      encoder.writeBytes(value);
+    }
+
+    private byte[] decodePacked(NoritoDecoder decoder, int count) {
+      if (count == 0) {
+        int tailLen = decoder.remaining();
+        if (tailLen == 0) {
+          return new byte[0];
+        }
+        if (tailLen >= Long.BYTES) {
+          byte[] prefix = decoder.readBytes(Long.BYTES);
+          for (byte b : prefix) {
+            if (b != 0) {
+              throw new IllegalArgumentException(
+                  "Packed byte vector declared zero length but carried trailing data");
+            }
+          }
+          return new byte[0];
+        }
+        throw new IllegalArgumentException(
+            "Packed byte vector declared zero length but carried trailing data");
+      }
+
+      boolean varintOffsets = (decoder.flags() & NoritoHeader.VARINT_OFFSETS) != 0;
+      List<Integer> sizes = new ArrayList<>(count);
+      if (varintOffsets) {
+        for (int i = 0; i < count; i++) {
+          long size = decoder.readVarint();
+          if (size > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("Packed byte element too large");
+          }
+          sizes.add((int) size);
+        }
+      } else {
+        long previous = decoder.readUInt(64);
+        if (previous != 0) {
+          throw new IllegalArgumentException("Packed offsets must start at 0");
+        }
+        for (int i = 0; i < count; i++) {
+          long current = decoder.readUInt(64);
+          long delta = current - previous;
+          if (delta < 0 || delta > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("Invalid packed offsets");
+          }
+          sizes.add((int) delta);
+          previous = current;
+        }
+      }
+
+      byte[] out = new byte[count];
+      for (int i = 0; i < count; i++) {
+        int size = sizes.get(i);
+        byte[] payload = decoder.readBytes(size);
+        NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+        int value = child.readByte();
+        if (child.remaining() != 0) {
+          throw new IllegalArgumentException("Packed byte element did not consume all bytes");
+        }
+        out[i] = (byte) value;
+      }
+      return out;
+    }
+  }
+
   private static final class FixedBytesAdapter implements TypeAdapter<byte[]> {
     private final int length;
 
@@ -282,7 +419,12 @@ public final class NoritoAdapters {
     public void encode(NoritoEncoder encoder, Optional<T> value) {
       if (value.isPresent()) {
         encoder.writeByte(1);
-        inner.encode(encoder, value.get());
+        NoritoEncoder child = encoder.childEncoder();
+        inner.encode(child, value.get());
+        byte[] payload = child.toByteArray();
+        boolean compact = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+        encoder.writeLength(payload.length, compact);
+        encoder.writeBytes(payload);
       } else {
         encoder.writeByte(0);
       }
@@ -291,11 +433,23 @@ public final class NoritoAdapters {
     @Override
     public Optional<T> decode(NoritoDecoder decoder) {
       int tag = decoder.readByte();
-      return switch (tag) {
-        case 0 -> Optional.empty();
-        case 1 -> Optional.of(inner.decode(decoder));
-        default -> throw new IllegalArgumentException("Invalid Option tag: " + tag);
-      };
+      if (tag == 0) {
+        return Optional.empty();
+      }
+      if (tag != 1) {
+        throw new IllegalArgumentException("Invalid Option tag: " + tag);
+      }
+      long length = decoder.readLength(decoder.compactLenActive());
+      if (length > Integer.MAX_VALUE) {
+        throw new IllegalArgumentException("Option payload too large");
+      }
+      byte[] payload = decoder.readBytes((int) length);
+      NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+      T value = inner.decode(child);
+      if (child.remaining() != 0) {
+        throw new IllegalArgumentException("Trailing bytes after Option payload");
+      }
+      return Optional.of(value);
     }
 
     @Override
@@ -317,10 +471,20 @@ public final class NoritoAdapters {
     public void encode(NoritoEncoder encoder, Result<T, E> value) {
       if (value instanceof Result.Ok<T, E> okValue) {
         encoder.writeByte(0);
-        ok.encode(encoder, okValue.value());
+        NoritoEncoder child = encoder.childEncoder();
+        ok.encode(child, okValue.value());
+        byte[] payload = child.toByteArray();
+        boolean compact = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+        encoder.writeLength(payload.length, compact);
+        encoder.writeBytes(payload);
       } else if (value instanceof Result.Err<T, E> errValue) {
         encoder.writeByte(1);
-        err.encode(encoder, errValue.error());
+        NoritoEncoder child = encoder.childEncoder();
+        err.encode(child, errValue.error());
+        byte[] payload = child.toByteArray();
+        boolean compact = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+        encoder.writeLength(payload.length, compact);
+        encoder.writeBytes(payload);
       } else {
         throw new IllegalArgumentException("Unknown Result variant");
       }
@@ -329,11 +493,27 @@ public final class NoritoAdapters {
     @Override
     public Result<T, E> decode(NoritoDecoder decoder) {
       int tag = decoder.readByte();
-      return switch (tag) {
-        case 0 -> new Result.Ok<>(ok.decode(decoder));
-        case 1 -> new Result.Err<>(err.decode(decoder));
-        default -> throw new IllegalArgumentException("Invalid Result tag: " + tag);
-      };
+      if (tag != 0 && tag != 1) {
+        throw new IllegalArgumentException("Invalid Result tag: " + tag);
+      }
+      long length = decoder.readLength(decoder.compactLenActive());
+      if (length > Integer.MAX_VALUE) {
+        throw new IllegalArgumentException("Result payload too large");
+      }
+      byte[] payload = decoder.readBytes((int) length);
+      NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+      Object value = tag == 0 ? ok.decode(child) : err.decode(child);
+      if (child.remaining() != 0) {
+        throw new IllegalArgumentException("Trailing bytes after Result payload");
+      }
+      if (tag == 0) {
+        @SuppressWarnings("unchecked")
+        T okValue = (T) value;
+        return new Result.Ok<>(okValue);
+      }
+      @SuppressWarnings("unchecked")
+      E errValue = (E) value;
+      return new Result.Err<>(errValue);
     }
 
     @Override
@@ -356,8 +536,13 @@ public final class NoritoAdapters {
       if ((encoder.flags() & NoritoHeader.PACKED_SEQ) != 0) {
         encodePacked(encoder, values);
       } else {
+        boolean compact = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
         for (T value : values) {
-          element.encode(encoder, value);
+          NoritoEncoder child = encoder.childEncoder();
+          element.encode(child, value);
+          byte[] payload = child.toByteArray();
+          encoder.writeLength(payload.length, compact);
+          encoder.writeBytes(payload);
         }
       }
     }
@@ -397,8 +582,19 @@ public final class NoritoAdapters {
         return decodePacked(decoder, count);
       }
       List<T> values = new ArrayList<>(count);
+      boolean compact = decoder.compactLenActive();
       for (int i = 0; i < count; i++) {
-        values.add(element.decode(decoder));
+        long elemLen = decoder.readLength(compact);
+        if (elemLen > Integer.MAX_VALUE) {
+          throw new IllegalArgumentException("Sequence element too large");
+        }
+        byte[] payload = decoder.readBytes((int) elemLen);
+        NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+        T value = element.decode(child);
+        if (child.remaining() != 0) {
+          throw new IllegalArgumentException("Sequence element did not consume all bytes");
+        }
+        values.add(value);
       }
       return values;
     }

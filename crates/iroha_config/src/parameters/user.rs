@@ -5209,6 +5209,12 @@ pub struct Sumeragi {
         default = "defaults::sumeragi::RBC_SESSION_TTL_SECS"
     )]
     pub rbc_session_ttl_secs: u64,
+    /// Maximum RBC sessions rebroadcast per tick (prevents message storms).
+    #[config(
+        env = "SUMERAGI_RBC_REBROADCAST_SESSIONS_PER_TICK",
+        default = "defaults::sumeragi::RBC_REBROADCAST_SESSIONS_PER_TICK"
+    )]
+    pub rbc_rebroadcast_sessions_per_tick: usize,
     /// Maximum number of RBC session summaries persisted to disk.
     #[config(
         env = "SUMERAGI_RBC_STORE_MAX_SESSIONS",
@@ -5684,6 +5690,7 @@ impl Sumeragi {
             rbc_pending_max_bytes,
             rbc_pending_ttl_ms,
             rbc_session_ttl_secs,
+            rbc_rebroadcast_sessions_per_tick,
             rbc_store_max_sessions,
             rbc_store_soft_sessions,
             rbc_store_max_bytes,
@@ -5867,6 +5874,15 @@ impl Sumeragi {
         } else {
             true
         };
+        let rbc_rebroadcast_budget_ok = if rbc_rebroadcast_sessions_per_tick == 0 {
+            emitter
+                .emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                    "sumeragi.rbc_rebroadcast_sessions_per_tick must be greater than zero",
+                ));
+            false
+        } else {
+            true
+        };
 
         let adaptive_observability = adaptive_observability.parse(emitter)?;
         let npos = npos.parse(
@@ -5892,6 +5908,7 @@ impl Sumeragi {
             && da_availability_multiplier_ok
             && rbc_chunk_max_ok
             && pending_caps_ok
+            && rbc_rebroadcast_budget_ok
             && da_caps_ok
             && da_openings_ok
             && kura_retry_ok
@@ -6000,6 +6017,7 @@ impl Sumeragi {
             rbc_pending_max_bytes,
             rbc_pending_ttl: std::time::Duration::from_millis(rbc_pending_ttl_ms),
             rbc_session_ttl: std::time::Duration::from_secs(rbc_session_ttl_secs),
+            rbc_rebroadcast_sessions_per_tick,
             rbc_store_max_sessions,
             rbc_store_soft_sessions,
             rbc_store_max_bytes,
@@ -9059,6 +9077,7 @@ impl NexusStorage {
 
 /// User-level configuration container for Nexus storage budget weights.
 #[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
+#[allow(clippy::struct_field_names)]
 pub struct NexusStorageWeights {
     /// Budget share for Kura block storage (basis points).
     #[config(default = "defaults::nexus::storage::KURA_BLOCKS_BPS")]
@@ -10751,15 +10770,14 @@ impl Nexus {
             .iter()
             .map(|lane| (lane.id, lane.dataspace_id))
             .collect();
-        let default_lane_dataspace = match lane_dataspaces.get(&default_lane) {
-            Some(id) => *id,
-            None => {
-                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                    "routing default lane {} is missing from lane_catalog",
-                    default_lane.as_u32()
-                )));
-                return None;
-            }
+        let default_lane_dataspace = if let Some(id) = lane_dataspaces.get(&default_lane) {
+            *id
+        } else {
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                "routing default lane {} is missing from lane_catalog",
+                default_lane.as_u32()
+            )));
+            return None;
         };
         if default_lane_dataspace != default_dataspace {
             emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
@@ -10815,16 +10833,15 @@ impl Nexus {
             } else {
                 None
             };
-            let lane_dataspace = match lane_dataspaces.get(&lane) {
-                Some(id) => *id,
-                None => {
-                    routing_errors = true;
-                    emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                        "routing rule[{idx}] references lane {} not present in lane_catalog",
-                        lane.as_u32()
-                    )));
-                    continue;
-                }
+            let lane_dataspace = if let Some(id) = lane_dataspaces.get(&lane) {
+                *id
+            } else {
+                routing_errors = true;
+                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                    "routing rule[{idx}] references lane {} not present in lane_catalog",
+                    lane.as_u32()
+                )));
+                continue;
             };
             let effective_dataspace = dataspace.unwrap_or(default_dataspace);
             if lane_dataspace != effective_dataspace {

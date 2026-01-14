@@ -964,7 +964,7 @@ pub struct SumeragiBlockSyncRosterStatus {
     /// Block-sync drops due to missing/invalid roster proofs.
     #[norito(default)]
     pub drop_missing_total: u64,
-    /// Block-sync ShareBlocks drops without a matching request.
+    /// Block-sync `ShareBlocks` drops without a matching request.
     #[norito(default)]
     pub drop_unsolicited_share_blocks_total: u64,
 }
@@ -1931,7 +1931,7 @@ mod tests {
     }
 
     fn roster_hash(roster: &[PeerId]) -> Hash {
-        Hash::new(&roster.to_vec().encode())
+        Hash::new(roster.to_vec().encode())
     }
 
     fn sample_qc_ref() -> QcRef {

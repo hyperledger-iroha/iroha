@@ -56,6 +56,7 @@ pub struct ValidatorSetCheckpoint {
 impl ValidatorSetCheckpoint {
     /// Construct a checkpoint using the supplied block hash, validator set, and signatures.
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         height: u64,
         view: u64,

@@ -695,7 +695,7 @@ mod tests {
             .unwrap()
             .signature()
             .clone();
-        let dummy_signatures = vec![
+        let dummy_signatures = [
             BlockSignature::new(0, dummy_signature.clone()),
             BlockSignature::new(u64::MAX, dummy_signature.clone()),
         ];

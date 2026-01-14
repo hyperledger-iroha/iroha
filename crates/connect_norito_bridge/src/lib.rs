@@ -1189,7 +1189,12 @@ fn generate_offline_fastpq_replay_proof(
 
 fn offline_fastpq_proof_sum(request_json: &[u8]) -> BridgeResult<Vec<u8>> {
     let request: OfflineProofRequestSum =
-        norito::json::from_slice(request_json).map_err(|_| BridgeError::OfflineSerialize)?;
+        norito::json::from_slice(request_json).map_err(|err| {
+            if cfg!(test) {
+                eprintln!("offline sum proof JSON parse failed: {err}");
+            }
+            BridgeError::OfflineSerialize
+        })?;
     let proof = generate_offline_fastpq_sum_proof(&request)?;
     to_bytes(&proof).map_err(|_| BridgeError::OfflineSerialize)
 }

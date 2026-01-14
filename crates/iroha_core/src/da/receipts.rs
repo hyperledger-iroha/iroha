@@ -367,7 +367,6 @@ pub fn load_receipt_entries(spool_dir: &Path) -> Result<Vec<DaReceiptEntry>, DaR
                     path = %path.display(),
                     "failed to decode DA receipt file; skipping"
                 );
-                continue;
             }
         }
     }

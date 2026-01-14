@@ -259,10 +259,10 @@ fn rng_proposal(rng: &mut DeterministicRng) -> Proposal {
 fn rng_commit_vote(rng: &mut DeterministicRng) -> QcVote {
     let phase = rng_cert_phase_any(rng);
     let highest_qc = matches!(phase, CertPhase::NewView).then(|| rng_commit_qc_ref(rng));
-    let (block_hash, height, epoch) = highest_qc
-        .as_ref()
-        .map(|cert| (cert.subject_block_hash, cert.height, cert.epoch))
-        .unwrap_or_else(|| (rng_block_hash(rng), rng.next_u64(), rng.next_u64()));
+    let (block_hash, height, epoch) = highest_qc.as_ref().map_or_else(
+        || (rng_block_hash(rng), rng.next_u64(), rng.next_u64()),
+        |cert| (cert.subject_block_hash, cert.height, cert.epoch),
+    );
     let (parent_state_root, post_state_root) = if matches!(phase, CertPhase::Commit) {
         (rng_hash(rng), rng_hash(rng))
     } else {
@@ -288,10 +288,10 @@ fn rng_commit_vote(rng: &mut DeterministicRng) -> QcVote {
 fn rng_commit_qc(rng: &mut DeterministicRng) -> Qc {
     let phase = rng_cert_phase_any(rng);
     let highest_qc = matches!(phase, CertPhase::NewView).then(|| rng_commit_qc_ref(rng));
-    let (subject_block_hash, height, epoch) = highest_qc
-        .as_ref()
-        .map(|cert| (cert.subject_block_hash, cert.height, cert.epoch))
-        .unwrap_or_else(|| (rng_block_hash(rng), rng.next_u64(), rng.next_u64()));
+    let (subject_block_hash, height, epoch) = highest_qc.as_ref().map_or_else(
+        || (rng_block_hash(rng), rng.next_u64(), rng.next_u64()),
+        |cert| (cert.subject_block_hash, cert.height, cert.epoch),
+    );
     let (parent_state_root, post_state_root) = if matches!(phase, CertPhase::Commit) {
         (rng_hash(rng), rng_hash(rng))
     } else {
@@ -401,7 +401,7 @@ fn rng_roster(rng: &mut DeterministicRng) -> Vec<PeerId> {
 
 fn rng_rbc_init(rng: &mut DeterministicRng) -> RbcInit {
     let roster = rng_roster(rng);
-    let roster_hash = Hash::new(&roster.encode());
+    let roster_hash = Hash::new(roster.encode());
     let total_chunks = u32::try_from(rng.range_inclusive(1, 8)).expect("range bound fits u32");
     let mut chunk_digests = Vec::with_capacity(total_chunks as usize);
     for _ in 0..total_chunks {
@@ -488,9 +488,8 @@ fn rng_evidence(rng: &mut DeterministicRng) -> Evidence {
             let mut v2 = v1.clone();
             v2.block_hash = rng_block_hash(rng);
             let kind = match v1.phase {
-                CertPhase::Prepare => EvidenceKind::DoublePrepare,
                 CertPhase::Commit => EvidenceKind::DoubleCommit,
-                CertPhase::NewView => EvidenceKind::DoublePrepare,
+                CertPhase::Prepare | CertPhase::NewView => EvidenceKind::DoublePrepare,
             };
             Evidence {
                 kind,
@@ -1621,7 +1620,7 @@ fn consensus_messages_norito_roundtrip() {
     let invalid_proposal = Evidence {
         kind: EvidenceKind::InvalidProposal,
         payload: EvidencePayload::InvalidProposal {
-            proposal: proposal.clone(),
+            proposal,
             reason: "payload commitment mismatch".to_owned(),
         },
     };
@@ -1674,7 +1673,7 @@ fn consensus_messages_norito_roundtrip() {
         PeerId::from(KeyPair::random().public_key().clone()),
         PeerId::from(KeyPair::random().public_key().clone()),
     ];
-    let roster_hash = Hash::new(&roster.encode());
+    let roster_hash = Hash::new(roster.encode());
     let chunk_digests = vec![[0x31; 32], [0x32; 32], [0x33; 32]];
     let chunk_root = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(chunk_digests.clone())
         .root()

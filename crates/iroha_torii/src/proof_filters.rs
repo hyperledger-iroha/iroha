@@ -1,7 +1,7 @@
 use iroha_data_model::events::EventBox;
 use iroha_data_model::prelude::DataEvent;
 
-pub(crate) fn normalize_proof_filters(
+pub fn normalize_proof_filters(
     proof_backend: Option<Vec<String>>,
     proof_call_hash: Option<Vec<[u8; 32]>>,
     proof_envelope_hash: Option<Vec<[u8; 32]>>,
@@ -17,26 +17,24 @@ pub(crate) fn normalize_proof_filters(
     )
 }
 
-pub(crate) fn has_any_proof_filters(
-    proof_backend: &Option<Vec<String>>,
-    proof_call_hash: &Option<Vec<[u8; 32]>>,
-    proof_envelope_hash: &Option<Vec<[u8; 32]>>,
+pub fn has_any_proof_filters(
+    proof_backend: Option<&Vec<String>>,
+    proof_call_hash: Option<&Vec<[u8; 32]>>,
+    proof_envelope_hash: Option<&Vec<[u8; 32]>>,
 ) -> bool {
     has_values(proof_backend) || has_values(proof_call_hash) || has_values(proof_envelope_hash)
 }
 
-pub(crate) fn event_matches_proof_filters(
+pub fn event_matches_proof_filters(
     event: &EventBox,
-    proof_backend: &Option<Vec<String>>,
-    proof_call_hash: &Option<Vec<[u8; 32]>>,
-    proof_envelope_hash: &Option<Vec<[u8; 32]>>,
+    proof_backend: Option<&Vec<String>>,
+    proof_call_hash: Option<&Vec<[u8; 32]>>,
+    proof_envelope_hash: Option<&Vec<[u8; 32]>>,
     proof_only: bool,
 ) -> bool {
-    let proof_backend = proof_backend.as_ref().filter(|values| !values.is_empty());
-    let proof_call_hash = proof_call_hash.as_ref().filter(|values| !values.is_empty());
-    let proof_envelope_hash = proof_envelope_hash
-        .as_ref()
-        .filter(|values| !values.is_empty());
+    let proof_backend = proof_backend.filter(|values| !values.is_empty());
+    let proof_call_hash = proof_call_hash.filter(|values| !values.is_empty());
+    let proof_envelope_hash = proof_envelope_hash.filter(|values| !values.is_empty());
     let has_filters =
         proof_backend.is_some() || proof_call_hash.is_some() || proof_envelope_hash.is_some();
 
@@ -126,8 +124,8 @@ fn normalize_vec<T>(value: Option<Vec<T>>) -> Option<Vec<T>> {
     }
 }
 
-fn has_values<T>(value: &Option<Vec<T>>) -> bool {
-    value.as_ref().is_some_and(|values| !values.is_empty())
+fn has_values<T>(value: Option<&Vec<T>>) -> bool {
+    value.is_some_and(|values| !values.is_empty())
 }
 
 #[cfg(test)]
@@ -224,9 +222,9 @@ mod tests {
 
         assert!(event_matches_proof_filters(
             &event,
-            &proof_backend,
-            &proof_call_hash,
-            &proof_envelope_hash,
+            proof_backend.as_ref(),
+            proof_call_hash.as_ref(),
+            proof_envelope_hash.as_ref(),
             false,
         ));
     }
@@ -238,9 +236,9 @@ mod tests {
 
         assert!(!event_matches_proof_filters(
             &event,
-            &None,
-            &proof_call_hash,
-            &None,
+            None,
+            proof_call_hash.as_ref(),
+            None,
             false,
         ));
     }
@@ -252,9 +250,9 @@ mod tests {
 
         assert!(!event_matches_proof_filters(
             &event,
-            &None,
-            &proof_call_hash,
-            &None,
+            None,
+            proof_call_hash.as_ref(),
+            None,
             false,
         ));
     }
@@ -266,9 +264,9 @@ mod tests {
 
         assert!(event_matches_proof_filters(
             &event,
-            &proof_backend,
-            &None,
-            &None,
+            proof_backend.as_ref(),
+            None,
+            None,
             false,
         ));
     }
@@ -280,16 +278,16 @@ mod tests {
 
         assert!(!event_matches_proof_filters(
             &event,
-            &proof_backend,
-            &None,
-            &None,
+            proof_backend.as_ref(),
+            None,
+            None,
             true,
         ));
         assert!(event_matches_proof_filters(
             &event,
-            &proof_backend,
-            &None,
-            &None,
+            proof_backend.as_ref(),
+            None,
+            None,
             false,
         ));
     }
@@ -301,9 +299,9 @@ mod tests {
 
         assert!(event_matches_proof_filters(
             &event,
-            &proof_backend,
-            &None,
-            &None,
+            proof_backend.as_ref(),
+            None,
+            None,
             false,
         ));
     }

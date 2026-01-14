@@ -88,6 +88,7 @@ async fn trigger_completion_success_should_produce_event() -> Result<()> {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn trigger_completion_failure_reports_error() -> Result<()> {
     let Some(network) = sandbox::start_network_async_or_skip(
         NetworkBuilder::new().with_min_peers(4),

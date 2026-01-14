@@ -47,9 +47,7 @@ fn schedule_start(network: &sandbox::SerializedNetwork) -> (Duration, u64) {
     let pipeline_time = network.pipeline_time();
     let gap = std::cmp::max(
         Duration::from_millis(200),
-        pipeline_time
-            .checked_div(2)
-            .unwrap_or_else(|| pipeline_time),
+        pipeline_time.checked_div(2).unwrap_or(pipeline_time),
     );
     let start = now + gap;
     let start_ms = u64::try_from(start.as_millis()).expect("timestamp should fit in u64");
@@ -134,10 +132,10 @@ async fn wait_for_invoice_status(
                 move || subscription_invoice_for_nft(&client, &nft_id)
             })
             .await??;
-            if let Some(invoice) = invoice {
-                if invoice.status == status {
-                    return Ok(invoice);
-                }
+            if let Some(invoice) = invoice
+                && invoice.status == status
+            {
+                return Ok(invoice);
             }
             sleep(poll_delay).await;
         }
@@ -147,6 +145,7 @@ async fn wait_for_invoice_status(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)]
 async fn subscription_usage_arrears_billing_charges_usage() -> Result<()> {
     let Some(network) = sandbox::start_network_async_or_skip(
         NetworkBuilder::new()
@@ -409,6 +408,7 @@ async fn subscription_usage_arrears_billing_charges_usage() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)]
 async fn subscription_fixed_advance_billing_charges_future_period() -> Result<()> {
     let Some(network) = sandbox::start_network_async_or_skip(
         NetworkBuilder::new()
@@ -613,6 +613,7 @@ async fn subscription_fixed_advance_billing_charges_future_period() -> Result<()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)]
 async fn subscription_retry_grace_failure_marks_past_due() -> Result<()> {
     let Some(network) = sandbox::start_network_async_or_skip(
         NetworkBuilder::new()

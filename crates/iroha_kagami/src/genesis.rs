@@ -13,7 +13,7 @@ pub mod profile;
 mod sign;
 mod validate;
 
-pub(crate) use generate::{
+pub use generate::{
     ConsensusPolicy, build_line_from_env, generate_default, validate_consensus_mode_for_line,
 };
 pub use npos::ensure_npos_parameters;

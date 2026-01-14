@@ -204,7 +204,10 @@ use iroha_core::{
     prelude::*,
     query::store::LiveQueryStoreHandle,
     queue::{self, Queue},
-    state::{BlockProofError, State as CoreState, StateReadOnly, StateReadOnlyWithTransactions},
+    state::{
+        BlockProofError, State as CoreState, StateReadOnly, StateReadOnlyWithTransactions,
+        TransactionsReadOnly,
+    },
     sumeragi::rbc_store::SoftwareManifest,
 };
 use iroha_crypto::{
@@ -232,7 +235,7 @@ use iroha_data_model::{
     domain::DomainId,
     events::{
         EventBox,
-        pipeline::{PipelineEventBox, TransactionStatus},
+        pipeline::{BlockStatus, PipelineEventBox, TransactionStatus},
     },
     name::Name,
     nft::NftId,
@@ -634,6 +637,7 @@ struct AppState {
     allow_nets: Arc<Vec<limits::IpNet>>,
     preauth_gate: Arc<limits::PreAuthGate>,
     queue: Arc<Queue>,
+    pipeline_status_cache: Arc<PipelineStatusCache>,
     high_load_tx_threshold: usize,
     high_load_stream_tx_threshold: usize,
     high_load_subscription_tx_threshold: usize,
@@ -725,6 +729,361 @@ struct SamplingBudgetEntry {
 fn json_string_or_null(opt: Option<String>) -> norito::json::native::Value {
     opt.map(norito::json::native::Value::from)
         .unwrap_or(norito::json::native::Value::Null)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PipelineStatusKind {
+    Queued,
+    Approved,
+    Committed,
+    Applied,
+    Rejected,
+    Expired,
+}
+
+const PIPELINE_STATUS_CACHE_CAP: usize = 100_000;
+const PIPELINE_STATUS_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
+const PIPELINE_STATUS_CACHE_PRUNE_INTERVAL_SECS: u64 = 30;
+
+impl PipelineStatusKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "Queued",
+            Self::Approved => "Approved",
+            Self::Committed => "Committed",
+            Self::Applied => "Applied",
+            Self::Rejected => "Rejected",
+            Self::Expired => "Expired",
+        }
+    }
+
+    fn rank(self) -> u8 {
+        match self {
+            Self::Queued => 0,
+            Self::Approved => 1,
+            Self::Expired => 2,
+            Self::Committed => 3,
+            Self::Applied => 4,
+            Self::Rejected => 5,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct PipelineStatusEntry {
+    kind: PipelineStatusKind,
+    block_height: Option<NonZeroU64>,
+    rejection: Option<iroha_data_model::transaction::error::TransactionRejectionReason>,
+    observed_at: Instant,
+}
+
+impl PipelineStatusEntry {
+    fn fresh(
+        kind: PipelineStatusKind,
+        block_height: Option<NonZeroU64>,
+        rejection: Option<iroha_data_model::transaction::error::TransactionRejectionReason>,
+    ) -> Self {
+        Self::at_time(kind, block_height, rejection, Instant::now())
+    }
+
+    fn at_time(
+        kind: PipelineStatusKind,
+        block_height: Option<NonZeroU64>,
+        rejection: Option<iroha_data_model::transaction::error::TransactionRejectionReason>,
+        observed_at: Instant,
+    ) -> Self {
+        Self {
+            kind,
+            block_height,
+            rejection,
+            observed_at,
+        }
+    }
+
+    fn merge_from_event(&mut self, incoming: PipelineStatusEntry) {
+        let incoming_observed_at = incoming.observed_at;
+        match incoming.kind.rank().cmp(&self.kind.rank()) {
+            std::cmp::Ordering::Greater => {
+                *self = incoming;
+                return;
+            }
+            std::cmp::Ordering::Equal => {
+                if self.block_height.is_none() {
+                    self.block_height = incoming.block_height;
+                }
+                if self.rejection.is_none() && incoming.rejection.is_some() {
+                    self.rejection = incoming.rejection;
+                }
+            }
+            std::cmp::Ordering::Less => {}
+        }
+        if incoming_observed_at > self.observed_at {
+            self.observed_at = incoming_observed_at;
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct PendingBlockStatus {
+    kind: PipelineStatusKind,
+    block_hash: HashOf<BlockHeader>,
+    observed_at: Instant,
+}
+
+#[derive(Debug)]
+struct PipelineStatusCache {
+    entries: DashMap<HashOf<SignedTransaction>, PipelineStatusEntry>,
+    pending_blocks: DashMap<NonZeroU64, PendingBlockStatus>,
+    capacity: usize,
+    ttl: Duration,
+    start: Instant,
+    last_prune_secs: std::sync::atomic::AtomicU64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BlockRecordOutcome {
+    Recorded,
+    MissingBlock,
+    HashMismatch,
+}
+
+impl PipelineStatusCache {
+    fn new() -> Self {
+        Self::with_limits(PIPELINE_STATUS_CACHE_CAP, PIPELINE_STATUS_CACHE_TTL)
+    }
+
+    fn with_limits(capacity: usize, ttl: Duration) -> Self {
+        let cap = capacity.max(1);
+        Self {
+            entries: DashMap::new(),
+            pending_blocks: DashMap::new(),
+            capacity: cap,
+            ttl,
+            start: Instant::now(),
+            last_prune_secs: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    fn record_transaction_event(
+        &self,
+        event: &iroha_data_model::events::pipeline::TransactionEvent,
+    ) {
+        let (kind, rejection) = match event.status() {
+            TransactionStatus::Queued => (PipelineStatusKind::Queued, None),
+            TransactionStatus::Expired => (PipelineStatusKind::Expired, None),
+            TransactionStatus::Approved => (PipelineStatusKind::Approved, None),
+            TransactionStatus::Rejected(reason) => {
+                (PipelineStatusKind::Rejected, Some((**reason).clone()))
+            }
+        };
+        let incoming = PipelineStatusEntry::fresh(kind, event.block_height(), rejection);
+        self.entries
+            .entry(*event.hash())
+            .and_modify(|entry| entry.merge_from_event(incoming.clone()))
+            .or_insert(incoming);
+        self.prune_if_needed(Instant::now());
+    }
+
+    fn record_block_event(
+        &self,
+        event: &iroha_data_model::events::pipeline::BlockEvent,
+        kura: &Kura,
+    ) {
+        let kind = match event.status {
+            BlockStatus::Committed => PipelineStatusKind::Committed,
+            BlockStatus::Applied => PipelineStatusKind::Applied,
+            _ => return,
+        };
+        let height = event.header.height();
+        let block_hash = event.header.hash();
+        let now = Instant::now();
+        match self.record_block_results(height, block_hash, kind, kura, now) {
+            BlockRecordOutcome::Recorded => {
+                self.pending_blocks.remove(&height);
+                self.prune_if_needed(now);
+            }
+            BlockRecordOutcome::MissingBlock => {
+                self.pending_blocks.insert(
+                    height,
+                    PendingBlockStatus {
+                        kind,
+                        block_hash,
+                        observed_at: now,
+                    },
+                );
+                self.prune_if_needed(now);
+            }
+            BlockRecordOutcome::HashMismatch => {}
+        }
+    }
+
+    fn lookup(&self, hash: &HashOf<SignedTransaction>) -> Option<PipelineStatusEntry> {
+        self.entries.get(hash).map(|entry| entry.clone())
+    }
+
+    fn record_entry(&self, hash: HashOf<SignedTransaction>, entry: PipelineStatusEntry) {
+        self.entries
+            .entry(hash)
+            .and_modify(|current| current.merge_from_event(entry.clone()))
+            .or_insert(entry);
+        self.prune_if_needed(Instant::now());
+    }
+
+    fn refresh_pending_blocks(&self, kura: &Kura) {
+        if self.pending_blocks.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        let pending: Vec<_> = self
+            .pending_blocks
+            .iter()
+            .map(|entry| (*entry.key(), entry.value().clone()))
+            .collect();
+        for (height, pending) in pending {
+            match self.record_block_results(height, pending.block_hash, pending.kind, kura, now) {
+                BlockRecordOutcome::Recorded | BlockRecordOutcome::HashMismatch => {
+                    self.pending_blocks.remove(&height);
+                }
+                BlockRecordOutcome::MissingBlock => {}
+            }
+        }
+        self.prune_if_needed(now);
+    }
+
+    fn prune_if_needed(&self, now: Instant) {
+        let entries_len = self.entries.len();
+        let pending_len = self.pending_blocks.len();
+        let elapsed_secs = now.saturating_duration_since(self.start).as_secs().max(1);
+        let last_prune = self
+            .last_prune_secs
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let prune_due =
+            elapsed_secs.saturating_sub(last_prune) >= PIPELINE_STATUS_CACHE_PRUNE_INTERVAL_SECS;
+        let over_cap = entries_len > self.capacity || pending_len > self.capacity;
+        if !over_cap && !prune_due {
+            return;
+        }
+        self.last_prune_secs
+            .store(elapsed_secs, std::sync::atomic::Ordering::Relaxed);
+        self.prune(now);
+    }
+
+    fn prune(&self, now: Instant) {
+        if !self.ttl.is_zero() {
+            let ttl = self.ttl;
+            let stale_keys: Vec<_> = self
+                .entries
+                .iter()
+                .filter_map(|entry| {
+                    let age = now.saturating_duration_since(entry.observed_at);
+                    (age > ttl).then_some(*entry.key())
+                })
+                .collect();
+            for key in stale_keys {
+                self.entries.remove(&key);
+            }
+
+            let stale_pending: Vec<_> = self
+                .pending_blocks
+                .iter()
+                .filter_map(|entry| {
+                    let age = now.saturating_duration_since(entry.observed_at);
+                    (age > ttl).then_some(*entry.key())
+                })
+                .collect();
+            for key in stale_pending {
+                self.pending_blocks.remove(&key);
+            }
+        }
+
+        self.evict_over_capacity();
+    }
+
+    fn evict_over_capacity(&self) {
+        let len = self.entries.len();
+        if len <= self.capacity {
+            return;
+        }
+        let mut ordered: Vec<_> = self
+            .entries
+            .iter()
+            .map(|entry| (*entry.key(), entry.observed_at))
+            .collect();
+        ordered.sort_by_key(|(_, observed_at)| *observed_at);
+        let excess = len - self.capacity;
+        for (hash, _) in ordered.into_iter().take(excess) {
+            self.entries.remove(&hash);
+        }
+
+        let pending_len = self.pending_blocks.len();
+        if pending_len <= self.capacity {
+            return;
+        }
+        let mut pending_ordered: Vec<_> = self
+            .pending_blocks
+            .iter()
+            .map(|entry| (*entry.key(), entry.observed_at))
+            .collect();
+        pending_ordered.sort_by_key(|(_, observed_at)| *observed_at);
+        let excess = pending_len - self.capacity;
+        for (height, _) in pending_ordered.into_iter().take(excess) {
+            self.pending_blocks.remove(&height);
+        }
+    }
+
+    fn record_block_results(
+        &self,
+        height: NonZeroU64,
+        expected_hash: HashOf<BlockHeader>,
+        kind: PipelineStatusKind,
+        kura: &Kura,
+        now: Instant,
+    ) -> BlockRecordOutcome {
+        let height_usize = match usize::try_from(height.get()) {
+            Ok(value) => value,
+            Err(_) => {
+                iroha_logger::debug!(
+                    height = height.get(),
+                    "pipeline status cache skipped block: height exceeds usize"
+                );
+                return BlockRecordOutcome::MissingBlock;
+            }
+        };
+        let Some(height_nz) = NonZeroUsize::new(height_usize) else {
+            return BlockRecordOutcome::MissingBlock;
+        };
+        let Some(block) = kura.get_block(height_nz) else {
+            iroha_logger::debug!(
+                height = height.get(),
+                "pipeline status cache skipped block: block not in kura"
+            );
+            return BlockRecordOutcome::MissingBlock;
+        };
+        let block_ref = block.as_ref();
+        if block_ref.hash() != expected_hash {
+            iroha_logger::debug!(
+                height = height.get(),
+                "pipeline status cache skipped block: hash mismatch"
+            );
+            return BlockRecordOutcome::HashMismatch;
+        }
+        let external_total = block_ref.external_transactions().len();
+        for (tx, result) in block_ref
+            .external_transactions()
+            .zip(block_ref.results().take(external_total))
+        {
+            let (entry_kind, rejection) = match &result.0 {
+                Ok(_) => (kind, None),
+                Err(reason) => (PipelineStatusKind::Rejected, Some(reason.clone())),
+            };
+            let incoming = PipelineStatusEntry::at_time(entry_kind, Some(height), rejection, now);
+            self.entries
+                .entry(tx.hash())
+                .and_modify(|entry| entry.merge_from_event(incoming.clone()))
+                .or_insert(incoming);
+        }
+        BlockRecordOutcome::Recorded
+    }
 }
 
 fn telemetry_unavailable_response(
@@ -9582,6 +9941,138 @@ async fn handler_pipeline_recovery(
     )
 }
 
+#[derive(JsonDeserialize)]
+struct PipelineStatusQuery {
+    #[norito(default)]
+    hash: Option<String>,
+}
+
+fn parse_signed_transaction_hash(raw: &str) -> Result<HashOf<SignedTransaction>, Error> {
+    raw.trim()
+        .parse::<HashOf<SignedTransaction>>()
+        .map_err(|_| conversion_error("invalid signed transaction hash".to_owned()))
+}
+
+fn pipeline_status_payload(
+    hash: &HashOf<SignedTransaction>,
+    entry: &PipelineStatusEntry,
+) -> norito::json::Value {
+    let mut status = norito::json::Map::new();
+    status.insert(
+        "kind".into(),
+        norito::json::Value::from(entry.kind.as_str()),
+    );
+    if let Some(height) = entry.block_height {
+        status.insert(
+            "block_height".into(),
+            norito::json::Value::from(height.get()),
+        );
+    }
+    let rejection = match entry.kind {
+        PipelineStatusKind::Rejected => entry.rejection.as_ref().and_then(|reason| {
+            norito::to_bytes(reason)
+                .ok()
+                .map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes))
+        }),
+        _ => None,
+    };
+    status.insert(
+        "content".into(),
+        rejection
+            .map(norito::json::Value::from)
+            .unwrap_or(norito::json::Value::Null),
+    );
+
+    let mut content = norito::json::Map::new();
+    content.insert("hash".into(), norito::json::Value::from(hash.to_string()));
+    content.insert("status".into(), norito::json::Value::Object(status));
+
+    let mut envelope = norito::json::Map::new();
+    envelope.insert("kind".into(), norito::json::Value::from("Transaction"));
+    envelope.insert("content".into(), norito::json::Value::Object(content));
+    norito::json::Value::Object(envelope)
+}
+
+fn pipeline_status_from_state(
+    app: &AppState,
+    hash: &HashOf<SignedTransaction>,
+) -> Option<PipelineStatusEntry> {
+    let height = app.state.view().transactions().get(hash)?;
+    let height_u64 = u64::try_from(height.get()).ok()?;
+    let height_nz = NonZeroU64::new(height_u64)?;
+    let block = app.kura.get_block(height)?;
+    let block_ref = block.as_ref();
+    let external_total = block_ref.external_transactions().len();
+    for (tx, result) in block_ref
+        .external_transactions()
+        .zip(block_ref.results().take(external_total))
+    {
+        if tx.hash() != *hash {
+            continue;
+        }
+        let (kind, rejection) = match &result.0 {
+            Ok(_) => (PipelineStatusKind::Applied, None),
+            Err(reason) => (PipelineStatusKind::Rejected, Some(reason.clone())),
+        };
+        return Some(PipelineStatusEntry::fresh(kind, Some(height_nz), rejection));
+    }
+    None
+}
+
+async fn handler_pipeline_transaction_status(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+    AxQuery(query): AxQuery<PipelineStatusQuery>,
+) -> Result<Response, Error> {
+    check_access(&app, &headers, None, "v1/pipeline/transactions/status").await?;
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
+        Ok(format) => format,
+        Err(resp) => return Ok(resp),
+    };
+    let hash_raw = query
+        .hash
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| conversion_error("missing hash query parameter".to_owned()))?;
+    let hash = parse_signed_transaction_hash(hash_raw)?;
+    app.pipeline_status_cache.refresh_pending_blocks(&app.kura);
+
+    if let Some(entry) = app.pipeline_status_cache.lookup(&hash) {
+        return Ok(crate::utils::respond_value_with_format(
+            pipeline_status_payload(&hash, &entry),
+            format,
+        ));
+    }
+
+    let view = app.state.view();
+    if app
+        .queue
+        .all_transactions(&view)
+        .any(|tx| tx.as_ref().hash() == hash)
+    {
+        let entry = PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None);
+        app.pipeline_status_cache.record_entry(hash, entry.clone());
+        return Ok(crate::utils::respond_value_with_format(
+            pipeline_status_payload(&hash, &entry),
+            format,
+        ));
+    }
+
+    if let Some(entry) = pipeline_status_from_state(&app, &hash) {
+        app.pipeline_status_cache.record_entry(hash, entry.clone());
+        return Ok(crate::utils::respond_value_with_format(
+            pipeline_status_payload(&hash, &entry),
+            format,
+        ));
+    }
+
+    Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::NotFound,
+    )))
+}
+
 async fn handler_policy(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -11028,6 +11519,7 @@ pub struct Torii {
     chain_id: Arc<ChainId>,
     kiso: KisoHandle,
     queue: Arc<Queue>,
+    pipeline_status_cache: Arc<PipelineStatusCache>,
     events: EventsSender,
     query_service: LiveQueryStoreHandle,
     kura: Arc<Kura>,
@@ -11771,6 +12263,10 @@ impl Torii {
         let _ = self;
         builder.apply(|router| {
             router
+                .route(
+                    "/v1/pipeline/transactions/status",
+                    get(handler_pipeline_transaction_status),
+                )
                 .route(
                     "/v1/pipeline/recovery/{height}",
                     get(handler_pipeline_recovery),
@@ -12885,11 +13381,13 @@ impl Torii {
                 allowed_controllers: cfg.allowed_controllers.clone(),
             }
         });
+        let pipeline_status_cache = Arc::new(PipelineStatusCache::new());
 
         Self {
             chain_id: Arc::new(chain_id),
             kiso,
             queue,
+            pipeline_status_cache,
             events,
             query_service,
             kura,
@@ -13140,6 +13638,7 @@ impl Torii {
             allow_nets: self.allow_nets.clone(),
             preauth_gate: self.preauth_gate.clone(),
             queue: self.queue.clone(),
+            pipeline_status_cache: self.pipeline_status_cache.clone(),
             fee_policy: self.fee_policy.clone(),
             norito_rpc: self.norito_rpc.clone(),
             high_load_tx_threshold: self.high_load_tx_threshold,
@@ -13434,6 +13933,29 @@ impl Torii {
                                 }
                                 TransactionStatus::Queued => {}
                             }
+                        }
+                        Ok(_) => {}
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            // Skip on lag to catch up with the latest events
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
+        }
+
+        {
+            let mut rx = self.events.subscribe();
+            let cache = self.pipeline_status_cache.clone();
+            let kura = self.kura.clone();
+            tokio::spawn(async move {
+                loop {
+                    match rx.recv().await {
+                        Ok(EventBox::Pipeline(PipelineEventBox::Transaction(event))) => {
+                            cache.record_transaction_event(&event);
+                        }
+                        Ok(EventBox::Pipeline(PipelineEventBox::Block(event))) => {
+                            cache.record_block_event(&event, &kura);
                         }
                         Ok(_) => {}
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
@@ -14611,7 +15133,13 @@ fn _assert_torii_types_are_send_sync() {
 
 #[cfg(test)]
 pub(crate) mod tests_runtime_handlers {
-    use std::{collections::HashSet, net::SocketAddr, sync::Arc};
+    use std::{
+        collections::HashSet,
+        net::SocketAddr,
+        num::{NonZeroU64, NonZeroUsize},
+        sync::Arc,
+        time::{Duration, Instant},
+    };
 
     use axum::{
         extract::{Extension, State},
@@ -14633,18 +15161,27 @@ pub(crate) mod tests_runtime_handlers {
             consensus::{PERMISSIONED_TAG, Phase, Vote, vote_preimage},
             status::record_commit_qc,
         },
+        tx::AcceptedTransaction,
     };
     use iroha_crypto::{Algorithm, KeyPair, Signature, SignatureOf};
     use iroha_data_model::{
+        ValidationFail,
+        account::AccountId,
         block::{BlockSignature, SignedBlock},
         consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
+        events::pipeline::{BlockEvent, BlockStatus, TransactionEvent, TransactionStatus},
+        isi::Log,
+        level::Level,
         nexus::{AxtPolicySnapshot, AxtRejectReason, DataSpaceId, LaneId},
         peer::{Peer, PeerId},
         soranet::privacy_metrics::{
             SoranetPrivacyEventHandshakeSuccessV1, SoranetPrivacyEventKindV1,
             SoranetPrivacyEventV1, SoranetPrivacyModeV1, SoranetPrivacyPrioShareV1,
         },
-        transaction::signed::{TransactionBuilder, TransactionResultInner},
+        transaction::{
+            error::TransactionRejectionReason,
+            signed::{TransactionBuilder, TransactionResultInner},
+        },
         trigger::DataTriggerSequence,
     };
 
@@ -14703,6 +15240,7 @@ pub(crate) mod tests_runtime_handlers {
         let events: EventsSender = tokio::sync::broadcast::channel(1).0;
         let queue_cfg = iroha_config::parameters::actual::Queue::default();
         let queue = Arc::new(Queue::from_config(queue_cfg, events.clone()));
+        let pipeline_status_cache = Arc::new(PipelineStatusCache::new());
         let chain_id: ChainId = "chain".parse().unwrap();
         // Minimal Kiso and peers provider (mocked to avoid spawning the full actor in tests)
         let cfg = crate::test_utils::mk_minimal_root_cfg();
@@ -14851,6 +15389,7 @@ pub(crate) mod tests_runtime_handlers {
             allow_nets: Arc::new(vec![]),
             preauth_gate: Arc::new(limits::PreAuthGate::disabled()),
             queue,
+            pipeline_status_cache,
             fee_policy: FeePolicy::Disabled,
             norito_rpc: norito_rpc_cfg,
             high_load_tx_threshold: usize::MAX,
@@ -15574,6 +16113,268 @@ pub(crate) mod tests_runtime_handlers {
         let hash = block.hash();
         app.kura.store_block(Arc::new(block)).expect("store block");
         hash
+    }
+
+    #[test]
+    fn pipeline_status_merge_prefers_higher_rank() {
+        let now = Instant::now();
+        let mut entry = PipelineStatusEntry::at_time(PipelineStatusKind::Applied, None, None, now);
+        entry.merge_from_event(PipelineStatusEntry::at_time(
+            PipelineStatusKind::Expired,
+            None,
+            None,
+            now + Duration::from_secs(1),
+        ));
+        assert_eq!(entry.kind, PipelineStatusKind::Applied);
+
+        let height = NonZeroU64::new(7).expect("height");
+        let rejection = TransactionRejectionReason::Validation(ValidationFail::TooComplex);
+        entry.merge_from_event(PipelineStatusEntry::at_time(
+            PipelineStatusKind::Rejected,
+            Some(height),
+            Some(rejection.clone()),
+            now + Duration::from_secs(2),
+        ));
+        assert_eq!(entry.kind, PipelineStatusKind::Rejected);
+        assert_eq!(entry.block_height, Some(height));
+        assert_eq!(entry.rejection, Some(rejection));
+    }
+
+    #[test]
+    fn pipeline_status_cache_records_transaction_event() {
+        let cache = PipelineStatusCache::new();
+        let (block, _) = make_signed_block(1, None);
+        let tx_hash = block.external_transactions().next().expect("tx").hash();
+        let height = NonZeroU64::new(2).expect("height");
+        let event = TransactionEvent {
+            hash: tx_hash,
+            block_height: Some(height),
+            lane_id: LaneId::new(1),
+            dataspace_id: DataSpaceId::new(1),
+            status: TransactionStatus::Approved,
+        };
+        cache.record_transaction_event(&event);
+        let stored = cache.lookup(&tx_hash).expect("entry");
+        assert_eq!(stored.kind, PipelineStatusKind::Approved);
+        assert_eq!(stored.block_height, Some(height));
+        assert!(stored.rejection.is_none());
+    }
+
+    #[test]
+    fn pipeline_status_cache_records_block_event() {
+        let app = mk_app_state_for_tests();
+        let (block, _) = make_signed_block(1, None);
+        let header = block.header();
+        let tx_hash = block.external_transactions().next().expect("tx").hash();
+        store_block(&app, block);
+        let event = BlockEvent {
+            header,
+            status: BlockStatus::Applied,
+        };
+        app.pipeline_status_cache
+            .record_block_event(&event, &app.kura);
+        let stored = app.pipeline_status_cache.lookup(&tx_hash).expect("entry");
+        assert_eq!(stored.kind, PipelineStatusKind::Applied);
+        let height = NonZeroU64::new(1).expect("height");
+        assert_eq!(stored.block_height, Some(height));
+    }
+
+    #[test]
+    fn pipeline_status_cache_refreshes_pending_block() {
+        let app = mk_app_state_for_tests();
+        let (block, _) = make_signed_block(1, None);
+        let header = block.header();
+        let tx_hash = block.external_transactions().next().expect("tx").hash();
+        let event = BlockEvent {
+            header,
+            status: BlockStatus::Committed,
+        };
+        app.pipeline_status_cache
+            .record_block_event(&event, &app.kura);
+        assert!(app.pipeline_status_cache.lookup(&tx_hash).is_none());
+        store_block(&app, block);
+        app.pipeline_status_cache.refresh_pending_blocks(&app.kura);
+        let stored = app.pipeline_status_cache.lookup(&tx_hash).expect("entry");
+        assert_eq!(stored.kind, PipelineStatusKind::Committed);
+    }
+
+    #[test]
+    fn pipeline_status_cache_prunes_stale_entries() {
+        let cache = PipelineStatusCache::with_limits(10, Duration::from_secs(1));
+        let (block, _) = make_signed_block(1, None);
+        let tx_hash = block.external_transactions().next().expect("tx").hash();
+        let now = Instant::now();
+        cache.record_entry(
+            tx_hash,
+            PipelineStatusEntry::at_time(
+                PipelineStatusKind::Queued,
+                None,
+                None,
+                now - Duration::from_secs(5),
+            ),
+        );
+        cache.prune(now);
+        assert!(cache.lookup(&tx_hash).is_none());
+    }
+
+    #[test]
+    fn pipeline_status_cache_eviction_respects_capacity() {
+        let cache = PipelineStatusCache::with_limits(1, Duration::from_secs(60));
+        let (block_a, _) = make_signed_block(1, None);
+        let (block_b, _) = make_signed_block(2, None);
+        let hash_a = block_a.external_transactions().next().expect("tx").hash();
+        let hash_b = block_b.external_transactions().next().expect("tx").hash();
+        let now = Instant::now();
+        cache.record_entry(
+            hash_a,
+            PipelineStatusEntry::at_time(
+                PipelineStatusKind::Queued,
+                None,
+                None,
+                now - Duration::from_secs(5),
+            ),
+        );
+        cache.record_entry(
+            hash_b,
+            PipelineStatusEntry::at_time(PipelineStatusKind::Queued, None, None, now),
+        );
+        cache.prune(now);
+        assert!(cache.lookup(&hash_a).is_none());
+        assert!(cache.lookup(&hash_b).is_some());
+    }
+
+    #[test]
+    fn parse_signed_transaction_hash_rejects_invalid() {
+        assert!(parse_signed_transaction_hash("not-a-hash").is_err());
+    }
+
+    #[tokio::test]
+    async fn pipeline_status_handler_returns_queued() {
+        let app = mk_app_state_for_tests();
+        let keypair = KeyPair::random();
+        let authority = AccountId::new(
+            "wonderland".parse().expect("domain"),
+            keypair.public_key().clone(),
+        );
+        let tx = TransactionBuilder::new((*app.chain_id).clone(), authority)
+            .with_instructions([Log {
+                level: Level::INFO,
+                msg: "queued".to_string(),
+            }])
+            .sign(keypair.private_key());
+        let params = app.state.world.view().parameters().clone();
+        let max_clock_drift = params.sumeragi().max_clock_drift();
+        let tx_limits = params.transaction();
+        let crypto_cfg = app.state.crypto();
+        let accepted = AcceptedTransaction::accept(
+            tx.clone(),
+            app.chain_id.as_ref(),
+            max_clock_drift,
+            tx_limits,
+            crypto_cfg.as_ref(),
+        )
+        .expect("accepted");
+        app.queue
+            .push(accepted, app.state.view())
+            .expect("queue push");
+
+        let resp = super::handler_pipeline_transaction_status(
+            State(app.clone()),
+            HeaderMap::new(),
+            None,
+            crate::NoritoQuery(PipelineStatusQuery {
+                hash: Some(tx.hash().to_string()),
+            }),
+        )
+        .await
+        .expect("ok");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
+        let status_kind = payload
+            .get("content")
+            .and_then(|content| content.get("status"))
+            .and_then(|status| status.get("kind"))
+            .and_then(norito::json::Value::as_str);
+        assert_eq!(status_kind, Some("Queued"));
+    }
+
+    #[tokio::test]
+    async fn pipeline_status_handler_returns_applied_from_state() {
+        let app = mk_app_state_for_tests();
+        let (block, _) = make_signed_block(1, None);
+        let header = block.header();
+        let tx_hash = block.external_transactions().next().expect("tx").hash();
+        store_block(&app, block);
+
+        let height = header.height();
+        let height_usize = usize::try_from(height.get()).expect("height usize");
+        let height_nz = NonZeroUsize::new(height_usize).expect("height");
+        let mut state_block = app.state.block(header);
+        let tx_hashes: HashSet<_> = [tx_hash].into_iter().collect();
+        state_block.transactions.insert_block(tx_hashes, height_nz);
+        state_block.commit().expect("commit");
+
+        let resp = super::handler_pipeline_transaction_status(
+            State(app.clone()),
+            HeaderMap::new(),
+            None,
+            crate::NoritoQuery(PipelineStatusQuery {
+                hash: Some(tx_hash.to_string()),
+            }),
+        )
+        .await
+        .expect("ok");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
+        let status_kind = payload
+            .get("content")
+            .and_then(|content| content.get("status"))
+            .and_then(|status| status.get("kind"))
+            .and_then(norito::json::Value::as_str);
+        assert_eq!(status_kind, Some("Applied"));
+    }
+
+    #[tokio::test]
+    async fn pipeline_status_handler_encodes_rejection_as_base64() {
+        let app = mk_app_state_for_tests();
+        let (block, _) = make_signed_block(1, None);
+        let tx_hash = block.external_transactions().next().expect("tx").hash();
+        let reason = TransactionRejectionReason::Validation(ValidationFail::TooComplex);
+        app.pipeline_status_cache.record_entry(
+            tx_hash,
+            PipelineStatusEntry::fresh(PipelineStatusKind::Rejected, None, Some(reason.clone())),
+        );
+
+        let resp = super::handler_pipeline_transaction_status(
+            State(app.clone()),
+            HeaderMap::new(),
+            None,
+            crate::NoritoQuery(PipelineStatusQuery {
+                hash: Some(tx_hash.to_string()),
+            }),
+        )
+        .await
+        .expect("ok");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
+        let rejection_payload = payload
+            .get("content")
+            .and_then(|content| content.get("status"))
+            .and_then(|status| status.get("content"))
+            .and_then(norito::json::Value::as_str)
+            .expect("rejection content");
+        let expected =
+            base64::engine::general_purpose::STANDARD.encode(norito::to_bytes(&reason).unwrap());
+        assert_eq!(rejection_payload, expected);
     }
 
     fn sample_commit_qc(

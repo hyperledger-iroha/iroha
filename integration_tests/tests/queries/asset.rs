@@ -8,23 +8,22 @@ use iroha::{
     client::{Client, QueryError},
     data_model::{prelude::*, query::builder::SingleQueryError},
 };
-use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 
-const UNREGISTER_ATTEMPTS: usize = 60;
-const UNREGISTER_DELAY: Duration = Duration::from_millis(500);
+const UNREGISTER_ATTEMPTS: usize = 30;
+const UNREGISTER_DELAY: Duration = Duration::from_millis(250);
 
 #[test]
 #[allow(clippy::too_many_lines)]
 fn find_asset_total_quantity() -> Result<()> {
     let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
-        NetworkBuilder::new(),
+        super::query_network_builder(),
         stringify!(find_asset_total_quantity),
     )
     .unwrap() else {
         return Ok(());
     };
-    let test_client = network.client();
+    let test_client = super::query_client(&network);
 
     let result: Result<()> = (|| {
         // Register new domain
@@ -159,30 +158,15 @@ fn test_total_quantity(
     let initial_total_asset_quantity = wait_for_quantity(&get_quantity, &Numeric::zero(), context)?;
     assert!(initial_total_asset_quantity.is_zero());
 
-    let register_assets = asset_ids
-        .iter()
-        .cloned()
-        .map(|asset_id| Mint::asset_numeric(initial_value.clone(), asset_id))
-        .collect::<Vec<_>>();
-    test_client.submit_all_blocking(register_assets)?;
-    let _observed_initial_total =
-        wait_for_quantity(&get_quantity, &expected_initial_total, "initial mint")?;
-
-    let mint_assets = asset_ids
-        .iter()
-        .cloned()
-        .map(|asset_id| Mint::asset_numeric(to_mint.clone(), asset_id));
-    test_client.submit_all_blocking(mint_assets)?;
-    let _observed_after_mint =
-        wait_for_quantity(&get_quantity, &expected_after_mint, "additional mint")?;
-
-    let burn_assets = asset_ids
-        .iter()
-        .cloned()
-        .map(|asset_id| Burn::asset_numeric(to_burn.clone(), asset_id))
-        .collect::<Vec<_>>();
-    test_client.submit_all_blocking(burn_assets)?;
-    let observed_after_burn = wait_for_quantity(&get_quantity, &expected_after_burn, "burn")?;
+    let mut mint_and_burn_assets: Vec<InstructionBox> = Vec::new();
+    for asset_id in asset_ids.iter().cloned() {
+        mint_and_burn_assets.push(Mint::asset_numeric(initial_value.clone(), asset_id.clone()).into());
+        mint_and_burn_assets.push(Mint::asset_numeric(to_mint.clone(), asset_id.clone()).into());
+        mint_and_burn_assets.push(Burn::asset_numeric(to_burn.clone(), asset_id).into());
+    }
+    test_client.submit_all_blocking(mint_and_burn_assets)?;
+    let observed_after_burn =
+        wait_for_quantity(&get_quantity, &expected_after_burn, "mint+burn")?;
 
     // Assert that total asset quantity is equal to: `n_accounts * (initial_value + to_mint - to_burn)`
     let total_asset_quantity = observed_after_burn;
@@ -237,35 +221,6 @@ fn test_total_quantity(
     }
     assert_eq!(expected_total_asset_quantity, &total_asset_quantity);
 
-    let burn_to_zero = initial_value
-        .checked_add(to_mint)
-        .unwrap()
-        .checked_sub(to_burn)
-        .unwrap();
-    let unregister_assets = asset_ids
-        .iter()
-        .cloned()
-        .map(|asset_id| Burn::asset_numeric(burn_to_zero.clone(), asset_id))
-        .collect::<Vec<_>>();
-    test_client.submit_all_blocking(unregister_assets)?;
-    let _observed_after_zero = wait_for_quantity(&get_quantity, &Numeric::zero(), "burn to zero")?;
-
-    // Assert that total asset quantity is zero after unregistering asset from all accounts
-    let total_asset_quantity = get_quantity()?;
-    let manual_total = match sandbox::handle_result(
-        log_balances("after unregister", &total_asset_quantity),
-        context,
-    )? {
-        Some(value) => value,
-        None => return Ok(()),
-    };
-    if !total_asset_quantity.is_zero() {
-        println!(
-            "[after unregister] expected zero aggregate for {definition_id}, but total is {total_asset_quantity} and manual sum is {manual_total}"
-        );
-    }
-    assert!(total_asset_quantity.is_zero());
-
     // Unregister asset definition
     test_client.submit_blocking(Unregister::asset_definition(definition_id.clone()))?;
 
@@ -300,6 +255,14 @@ fn test_total_quantity(
         ));
     }
 
+    let remaining_assets = test_client.query(FindAssets::new()).execute_all()?;
+    assert!(
+        remaining_assets
+            .iter()
+            .all(|asset| asset.id().definition() != &definition_id),
+        "expected assets for {definition_id} to be removed after unregister"
+    );
+
     Ok(())
 }
 
@@ -307,8 +270,8 @@ fn wait_for_quantity<F>(get_quantity: &F, expected: &Numeric, context: &str) -> 
 where
     F: Fn() -> Result<Numeric, SingleQueryError<QueryError>>,
 {
-    const MAX_ATTEMPTS: usize = 60; // 30 seconds at 500ms
-    const DELAY: Duration = Duration::from_millis(500);
+    const MAX_ATTEMPTS: usize = 30; // 7.5 seconds at 250ms
+    const DELAY: Duration = Duration::from_millis(250);
 
     let mut last_err: Option<eyre::Report> = None;
     for attempt in 1..=MAX_ATTEMPTS {

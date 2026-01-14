@@ -75,6 +75,8 @@ async fn rbc_status_json_shape() {
     let v: norito::json::Value = norito::json::from_slice(&body).unwrap();
     assert!(v.get("sessions_active").is_some());
     assert!(v.get("ready_broadcasts_total").is_some());
+    assert!(v.get("ready_rebroadcasts_skipped_total").is_some());
+    assert!(v.get("payload_rebroadcasts_skipped_total").is_some());
 }
 
 #[tokio::test]

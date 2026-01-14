@@ -1170,15 +1170,19 @@ fn generate_account_key_pair(
     base_seed: Option<&[u8]>,
     extra_seed: &[u8],
 ) -> (iroha_crypto::PublicKey, ExposedPrivateKey) {
-    let (public_key, private_key) = match base_seed {
-        Some(seed) => iroha_crypto::KeyPair::from_seed(
-            seed.iter().chain(extra_seed).copied().collect::<Vec<_>>(),
-            iroha_crypto::Algorithm::default(),
-        )
-        .into_parts(),
-        None => iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::default())
-            .into_parts(),
-    };
+    let (public_key, private_key) = base_seed.map_or_else(
+        || {
+            iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::default())
+                .into_parts()
+        },
+        |seed| {
+            iroha_crypto::KeyPair::from_seed(
+                seed.iter().chain(extra_seed).copied().collect::<Vec<_>>(),
+                iroha_crypto::Algorithm::default(),
+            )
+            .into_parts()
+        },
+    );
     (public_key, ExposedPrivateKey(private_key))
 }
 

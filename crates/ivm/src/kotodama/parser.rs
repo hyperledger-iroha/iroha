@@ -972,36 +972,35 @@ impl<'a> Parser<'a> {
                 Ok(self.inc_statement(name))
             } else {
                 let save = self.pos;
-                if let Ok(target) = self.try_parse_lvalue_expr() {
-                    if self.peek(TokenKind::Equal)
+                if let Ok(target) = self.try_parse_lvalue_expr()
+                    && (self.peek(TokenKind::Equal)
                         || self.peek(TokenKind::PlusEqual)
                         || self.peek(TokenKind::MinusEqual)
                         || self.peek(TokenKind::StarEqual)
                         || self.peek(TokenKind::SlashEqual)
-                        || self.peek(TokenKind::PercentEqual)
-                    {
-                        let op_tok = self.bump().kind.clone();
-                        let rhs = self.parse_expr()?;
-                        let op = match op_tok {
-                            TokenKind::Equal => AssignOp::Set,
-                            TokenKind::PlusEqual => AssignOp::Add,
-                            TokenKind::MinusEqual => AssignOp::Sub,
-                            TokenKind::StarEqual => AssignOp::Mul,
-                            TokenKind::SlashEqual => AssignOp::Div,
-                            TokenKind::PercentEqual => AssignOp::Mod,
-                            _ => unreachable!(),
-                        };
-                        return Ok(match (target, op) {
-                            (Expr::Ident(name), AssignOp::Set) => {
-                                Statement::Assign { name, value: rhs }
-                            }
-                            (t, op) => Statement::AssignExpr {
-                                target: t,
-                                op,
-                                value: rhs,
-                            },
-                        });
-                    }
+                        || self.peek(TokenKind::PercentEqual))
+                {
+                    let op_tok = self.bump().kind.clone();
+                    let rhs = self.parse_expr()?;
+                    let op = match op_tok {
+                        TokenKind::Equal => AssignOp::Set,
+                        TokenKind::PlusEqual => AssignOp::Add,
+                        TokenKind::MinusEqual => AssignOp::Sub,
+                        TokenKind::StarEqual => AssignOp::Mul,
+                        TokenKind::SlashEqual => AssignOp::Div,
+                        TokenKind::PercentEqual => AssignOp::Mod,
+                        _ => unreachable!(),
+                    };
+                    return Ok(match (target, op) {
+                        (Expr::Ident(name), AssignOp::Set) => {
+                            Statement::Assign { name, value: rhs }
+                        }
+                        (t, op) => Statement::AssignExpr {
+                            target: t,
+                            op,
+                            value: rhs,
+                        },
+                    });
                 }
                 self.pos = save;
                 let expr = self.parse_expr()?;

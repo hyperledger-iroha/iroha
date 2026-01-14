@@ -65,7 +65,6 @@ impl Actor {
             validator_checkpoint,
             stake_snapshot,
         } = update;
-        let incoming_qc = incoming_qc;
         let block_hash = block.hash();
         let block_height = block.header().height().get();
         let block_view = block.header().view_change_index();
@@ -154,11 +153,14 @@ impl Actor {
             (consensus_mode, mode_tag, prf_seed, local_height)
         };
         let expected_epoch = self.epoch_for_height(block_height);
-        let mut commit_votes = commit_votes;
         let has_commit_votes = !commit_votes.is_empty();
+        let mut commit_votes = Some(commit_votes);
         let mut process_commit_votes = |actor: &mut Actor| {
+            let Some(commit_votes) = commit_votes.take() else {
+                return;
+            };
             let mut dropped_votes = 0usize;
-            for vote in commit_votes.drain(..) {
+            for vote in commit_votes {
                 if vote.phase != crate::sumeragi::consensus::Phase::Commit
                     || vote.block_hash != block_hash
                     || vote.height != block_height
@@ -425,6 +427,7 @@ impl Actor {
         let original_candidate_qc = candidate_qc.clone();
 
         let commit_cert_present = selection.commit_qc.is_some();
+        let checkpoint_present = selection.checkpoint.is_some();
         let candidate_qc_present = candidate_qc.is_some();
         let candidate_qc_signers = candidate_qc.as_ref().map(qc_signer_count);
         let block_signer_count = block_signers.len();
@@ -624,7 +627,7 @@ impl Actor {
             signature_quorum_met,
             qc_evidence_present,
             commit_cert_present,
-            selection.checkpoint.is_some(),
+            checkpoint_present,
             requested_missing_block,
             block_height,
             local_height,
@@ -681,7 +684,12 @@ impl Actor {
                 .is_ok()
             })
             || incoming_qc_validated;
-        if incoming_qc.is_none() && block_signer_count < commit_quorum && !requested_missing_block {
+        if !qc_evidence_present
+            && !commit_cert_present
+            && !checkpoint_present
+            && block_signer_count < commit_quorum
+            && !requested_missing_block
+        {
             let now = Instant::now();
             let cooldown = self.rebroadcast_cooldown();
             if self.block_sync_fetch_log.allow(block_hash, now, cooldown) {
@@ -954,6 +962,8 @@ impl Actor {
 
     /// Cache a validated precommit QC from block sync when the block payload is not ready yet.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::needless_pass_by_value)]
     pub(super) fn cache_block_sync_qc_for_unknown_block(
         &mut self,
         qc: crate::sumeragi::consensus::Qc,
@@ -1092,6 +1102,7 @@ impl Actor {
     }
 
     #[allow(clippy::too_many_lines)]
+    #[allow(clippy::unnecessary_wraps)]
     pub(super) fn handle_fetch_pending_block(
         &mut self,
         request: super::message::FetchPendingBlock,

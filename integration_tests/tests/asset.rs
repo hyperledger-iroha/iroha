@@ -176,13 +176,10 @@ fn wait_for_asset_value(
     let deadline = Instant::now() + NON_EMPTY_BLOCK_TIMEOUT;
     loop {
         let client = clients.next();
-        match client.query_single(FindAssetById::new(asset_id.clone())) {
-            Ok(asset) if asset.value() == expected => return Ok(()),
-            Ok(_) => {}
-            Err(QueryError::Validation(ValidationFail::QueryFailed(
-                QueryExecutionFail::Find(FindError::Asset(_)) | QueryExecutionFail::NotFound,
-            ))) => {}
-            Err(_) => {}
+        if let Ok(asset) = client.query_single(FindAssetById::new(asset_id.clone()))
+            && asset.value() == expected
+        {
+            return Ok(());
         }
         if Instant::now() >= deadline {
             return Err(eyre!(
@@ -201,12 +198,11 @@ fn wait_for_asset_absent(
     let deadline = Instant::now() + NON_EMPTY_BLOCK_TIMEOUT;
     loop {
         let client = clients.next();
-        match client.query_single(FindAssetById::new(asset_id.clone())) {
-            Ok(_) => {}
-            Err(QueryError::Validation(ValidationFail::QueryFailed(
-                QueryExecutionFail::Find(FindError::Asset(_)) | QueryExecutionFail::NotFound,
-            ))) => return Ok(()),
-            Err(_) => {}
+        if let Err(QueryError::Validation(ValidationFail::QueryFailed(
+            QueryExecutionFail::Find(FindError::Asset(_)) | QueryExecutionFail::NotFound,
+        ))) = client.query_single(FindAssetById::new(asset_id.clone()))
+        {
+            return Ok(());
         }
         if Instant::now() >= deadline {
             return Err(eyre!(
@@ -575,6 +571,7 @@ fn client_add_big_asset_quantity_to_existing_asset_should_increase_asset_amount(
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn client_add_asset_with_decimal_should_increase_asset_amount() -> Result<()> {
     // Given
     let account_id = ALICE_ID.clone();

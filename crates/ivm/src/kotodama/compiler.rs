@@ -436,8 +436,10 @@ mod tests {
 
     #[test]
     fn meta_max_cycles_zero_uses_compiler_default() {
-        let mut opts = CompilerOptions::default();
-        opts.max_cycles = 42;
+        let opts = CompilerOptions {
+            max_cycles: 42,
+            ..CompilerOptions::default()
+        };
         let compiler = Compiler::new_with_options(opts);
         let src = r#"
 seiyaku MyC {
@@ -896,12 +898,10 @@ impl Compiler {
                         op: UnaryOp::Neg,
                         operand,
                     } = instr
+                        && let Some(value) = int_const_map.get(&(func_idx, *operand)).copied()
+                        && let Some(neg) = value.checked_neg()
                     {
-                        if let Some(value) = int_const_map.get(&(func_idx, *operand)).copied() {
-                            if let Some(neg) = value.checked_neg() {
-                                int_const_map.insert((func_idx, *dest), neg);
-                            }
-                        }
+                        int_const_map.insert((func_idx, *dest), neg);
                     }
                     if let ir::Instr::DataRef { dest, kind, value } = instr {
                         // Track typed refs in string_map keyed by temp; kind is handled at use sites
@@ -1031,28 +1031,28 @@ impl Compiler {
         for (func_idx, func) in ir_prog.functions.iter().enumerate() {
             for bb in &func.blocks {
                 for instr in &bb.instrs {
-                    if let ir::Instr::PointerFromString { kind, src, .. } = instr {
-                        if !string_map.contains_key(&(func_idx, *src)) {
-                            let name = match kind {
-                                ir::DataRefKind::Account => "account_id",
-                                ir::DataRefKind::AssetDef => "asset_definition",
-                                ir::DataRefKind::AssetId => "asset_id",
-                                ir::DataRefKind::NftId => "nft_id",
-                                ir::DataRefKind::Name => "name",
-                                ir::DataRefKind::Json => "json",
-                                ir::DataRefKind::Domain => "domain",
-                                ir::DataRefKind::Blob => "blob",
-                                ir::DataRefKind::NoritoBytes => "norito_bytes",
-                                ir::DataRefKind::DataSpaceId => "dataspace_id",
-                                ir::DataRefKind::AxtDescriptor => "axt_descriptor",
-                                ir::DataRefKind::AssetHandle => "asset_handle",
-                                ir::DataRefKind::ProofBlob => "proof_blob",
-                            };
-                            let msg = format!(
-                                "{name} expects a string literal; pass a literal or Blob|bytes"
-                            );
-                            return Err(i18n::translate(self.lang, Message::SemanticError(&msg)));
-                        }
+                    if let ir::Instr::PointerFromString { kind, src, .. } = instr
+                        && !string_map.contains_key(&(func_idx, *src))
+                    {
+                        let name = match kind {
+                            ir::DataRefKind::Account => "account_id",
+                            ir::DataRefKind::AssetDef => "asset_definition",
+                            ir::DataRefKind::AssetId => "asset_id",
+                            ir::DataRefKind::NftId => "nft_id",
+                            ir::DataRefKind::Name => "name",
+                            ir::DataRefKind::Json => "json",
+                            ir::DataRefKind::Domain => "domain",
+                            ir::DataRefKind::Blob => "blob",
+                            ir::DataRefKind::NoritoBytes => "norito_bytes",
+                            ir::DataRefKind::DataSpaceId => "dataspace_id",
+                            ir::DataRefKind::AxtDescriptor => "axt_descriptor",
+                            ir::DataRefKind::AssetHandle => "asset_handle",
+                            ir::DataRefKind::ProofBlob => "proof_blob",
+                        };
+                        let msg = format!(
+                            "{name} expects a string literal; pass a literal or Blob|bytes"
+                        );
+                        return Err(i18n::translate(self.lang, Message::SemanticError(&msg)));
                     }
                 }
             }
@@ -5137,17 +5137,17 @@ fn build_entrypoint_descriptors(
         })
         .collect();
 
-    if entrypoints.is_empty() {
-        if let Some(func) = typed.items.iter().find_map(|item| match item {
+    if entrypoints.is_empty()
+        && let Some(func) = typed.items.iter().find_map(|item| match item {
             TypedItem::Function(func)
                 if func.modifiers.kind == FunctionKind::Free && func.name == "main" =>
             {
                 Some(func)
             }
             _ => None,
-        }) {
-            entrypoints.push(build_descriptor(func, EntryPointKind::Public));
-        }
+        })
+    {
+        entrypoints.push(build_descriptor(func, EntryPointKind::Public));
     }
 
     entrypoints

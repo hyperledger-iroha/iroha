@@ -76,6 +76,7 @@ fn build_signers_bitmap(signers: &BTreeSet<ValidatorIndex>, roster_len: usize) -
     bitmap
 }
 
+#[allow(clippy::too_many_arguments)]
 fn aggregate_signature_for_signers(
     chain_id: &ChainId,
     mode_tag: &str,

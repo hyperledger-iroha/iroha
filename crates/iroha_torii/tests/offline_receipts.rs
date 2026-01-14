@@ -174,7 +174,7 @@ fn build_receipt_harness() -> ReceiptHarness {
         chain_id.clone(),
     ));
 
-    let fixtures = build_receipt_fixtures(chain_id.clone());
+    let fixtures = build_receipt_fixtures(&chain_id);
     seed_offline_receipts(&state, &fixtures);
 
     let queue_cfg = QueueConfig::default();
@@ -205,7 +205,7 @@ fn build_receipt_harness() -> ReceiptHarness {
 }
 
 #[allow(clippy::too_many_lines)]
-fn build_receipt_fixtures(chain_id: ChainId) -> ReceiptFixtures {
+fn build_receipt_fixtures(chain_id: &ChainId) -> ReceiptFixtures {
     let domain = iroha_data_model::domain::DomainId::from_str("merchants").expect("domain id");
     let operator_keys = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
     let operator = AccountId::of(domain.clone(), operator_keys.public_key().clone());
@@ -272,7 +272,7 @@ fn build_receipt_fixtures(chain_id: ChainId) -> ReceiptFixtures {
 
     let claimed_delta = Numeric::new(150, 0);
     let balance_proof = build_balance_proof_for_allowance(
-        &chain_id,
+        chain_id,
         &certificate.allowance,
         &claimed_delta,
         scalar_bytes(1),
@@ -284,7 +284,7 @@ fn build_receipt_fixtures(chain_id: ChainId) -> ReceiptFixtures {
         .clone_from(&balance_proof.initial_commitment.commitment);
 
     let receipt_one = build_receipt(
-        &chain_id,
+        chain_id,
         b"receipt-1",
         "INV-001",
         1,
@@ -297,7 +297,7 @@ fn build_receipt_fixtures(chain_id: ChainId) -> ReceiptFixtures {
         "offline_provisioning_v1",
     );
     let receipt_two = build_receipt(
-        &chain_id,
+        chain_id,
         b"receipt-2",
         "INV-002",
         2,

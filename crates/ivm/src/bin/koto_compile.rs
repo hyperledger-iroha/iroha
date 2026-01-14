@@ -207,11 +207,10 @@ fn main() {
                 std::process::exit(2);
             }
             path => {
-                if input.is_some() {
+                if let Some(existing) = input.as_deref() {
                     eprintln!(
                         "Multiple input files specified: '{}' and '{}'",
-                        input.unwrap(),
-                        path
+                        existing, path
                     );
                     std::process::exit(2);
                 }

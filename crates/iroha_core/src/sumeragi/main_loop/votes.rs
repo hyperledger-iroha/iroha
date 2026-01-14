@@ -57,6 +57,7 @@ impl Actor {
         (consensus_mode, mode_tag, prf_seed)
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) fn handle_vote(&mut self, vote: crate::sumeragi::consensus::Vote) {
         let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
         let stale_view = self.stale_view(vote.height, vote.view);
@@ -127,7 +128,7 @@ impl Actor {
                     vote.height,
                     vote.view,
                     vote.epoch,
-                    topology,
+                    &topology,
                 );
                 if matches!(vote.phase, Phase::Commit) {
                     if let Some(pending) = self.pending.pending_blocks.get(&vote.block_hash) {
@@ -146,8 +147,8 @@ impl Actor {
                         None => return,
                     };
                     let block_time = {
-                        let state_view = self.state.view();
-                        self.block_time_for_mode(&state_view, consensus_mode)
+                        let current_view = self.state.view();
+                        self.block_time_for_mode(&current_view, consensus_mode)
                     };
                     let cooldown = block_time.max(REBROADCAST_COOLDOWN_FLOOR);
                     if self.block_sync_rebroadcast_log.allow(
@@ -282,7 +283,7 @@ impl Actor {
                     vote.height,
                     vote.view,
                     vote.epoch,
-                    topology,
+                    &topology,
                 );
             }
         }
@@ -292,9 +293,8 @@ impl Actor {
         let highest_commit = self
             .highest_qc
             .filter(|qc| qc.phase == crate::sumeragi::consensus::Phase::Commit);
-        let anchor_height = highest_commit
-            .map(|qc| qc.height.max(committed_height))
-            .unwrap_or(committed_height);
+        let anchor_height =
+            highest_commit.map_or(committed_height, |qc| qc.height.max(committed_height));
         let active_height = anchor_height.saturating_add(1);
         let min_height = active_height.saturating_sub(super::VOTE_CACHE_HEIGHT_WINDOW);
         let max_height = active_height.saturating_add(super::VOTE_CACHE_HEIGHT_WINDOW);
@@ -429,6 +429,7 @@ impl Actor {
         false
     }
 
+    #[allow(clippy::too_many_lines)]
     fn observe_new_view_highest_qc(&mut self, highest: crate::sumeragi::consensus::QcHeaderRef) {
         let should_update = self.highest_qc.is_none_or(|current| {
             let incoming = (highest.height, highest.view);
@@ -601,6 +602,7 @@ impl Actor {
         false
     }
 
+    #[allow(clippy::too_many_lines)]
     fn validate_and_record_vote(
         &mut self,
         vote: &crate::sumeragi::consensus::Vote,
@@ -1152,6 +1154,7 @@ impl Actor {
         Some(hashes)
     }
 
+    #[allow(clippy::unused_self)]
     fn roster_from_commit_qc_history(&self, height: u64) -> Option<Vec<PeerId>> {
         let parent_height = height.checked_sub(1)?;
         let cert = super::status::commit_qc_history()
@@ -1208,11 +1211,8 @@ impl Actor {
             }
         }
         let candidate_matches_known_chain = |candidate: &crate::sumeragi::consensus::Qc| {
-            if let Some(known_hash) = known_hash_for_height(candidate.height) {
-                known_hash == candidate.subject_block_hash
-            } else {
-                true
-            }
+            known_hash_for_height(candidate.height)
+                .is_none_or(|known_hash| known_hash == candidate.subject_block_hash)
         };
         let cert = target_parent_hash
             .and_then(|target_hash| {

@@ -58,6 +58,7 @@ impl PendingRbcMessages {
         }
     }
 
+    #[allow(clippy::unused_self)]
     pub(super) fn touch(&mut self, _now: Instant) {
         // TTL is anchored to `first_seen` for pre-INIT stashes; active sessions bypass TTL.
     }
@@ -294,7 +295,7 @@ impl Actor {
             let oldest = pending
                 .iter()
                 .filter(|(session_key, _)| {
-                    active_sessions.map_or(true, |sessions| !sessions.contains_key(session_key))
+                    active_sessions.is_none_or(|sessions| !sessions.contains_key(session_key))
                 })
                 .min_by_key(|(_, entry)| entry.first_seen())
                 .map(|(session_key, _)| *session_key);
@@ -451,6 +452,38 @@ impl Actor {
     }
 }
 
+pub(super) fn rbc_ready_stash_bytes(ready: &RbcReady) -> usize {
+    ready
+        .signature
+        .len()
+        .saturating_add(ready.roster_hash.as_ref().len())
+        .saturating_add(ready.chunk_root.as_ref().len())
+        .saturating_add(ready.block_hash.as_ref().as_ref().len())
+        .saturating_add(std::mem::size_of::<u64>() * 3)
+        .saturating_add(std::mem::size_of::<u32>())
+}
+
+pub(super) fn rbc_deliver_stash_bytes(deliver: &RbcDeliver) -> usize {
+    let ready_bytes = deliver
+        .ready_signatures
+        .iter()
+        .map(|entry| std::mem::size_of::<u32>().saturating_add(entry.signature.len()))
+        .sum::<usize>();
+    deliver
+        .signature
+        .len()
+        .saturating_add(ready_bytes)
+        .saturating_add(deliver.roster_hash.as_ref().len())
+        .saturating_add(deliver.chunk_root.as_ref().len())
+        .saturating_add(deliver.block_hash.as_ref().as_ref().len())
+        .saturating_add(std::mem::size_of::<u64>() * 3)
+        .saturating_add(std::mem::size_of::<u32>())
+}
+
+/// Hard cap on how many pending RBC stashes we buffer; active-session stashes are retained,
+/// and new sessions are rejected once the cap is reached.
+pub(super) const PENDING_RBC_STASH_LIMIT: usize = 256;
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -534,35 +567,3 @@ mod tests {
         assert!(pending.contains_key(&key_b));
     }
 }
-
-pub(super) fn rbc_ready_stash_bytes(ready: &RbcReady) -> usize {
-    ready
-        .signature
-        .len()
-        .saturating_add(ready.roster_hash.as_ref().len())
-        .saturating_add(ready.chunk_root.as_ref().len())
-        .saturating_add(ready.block_hash.as_ref().as_ref().len())
-        .saturating_add(std::mem::size_of::<u64>() * 3)
-        .saturating_add(std::mem::size_of::<u32>())
-}
-
-pub(super) fn rbc_deliver_stash_bytes(deliver: &RbcDeliver) -> usize {
-    let ready_bytes = deliver
-        .ready_signatures
-        .iter()
-        .map(|entry| std::mem::size_of::<u32>().saturating_add(entry.signature.len()))
-        .sum::<usize>();
-    deliver
-        .signature
-        .len()
-        .saturating_add(ready_bytes)
-        .saturating_add(deliver.roster_hash.as_ref().len())
-        .saturating_add(deliver.chunk_root.as_ref().len())
-        .saturating_add(deliver.block_hash.as_ref().as_ref().len())
-        .saturating_add(std::mem::size_of::<u64>() * 3)
-        .saturating_add(std::mem::size_of::<u32>())
-}
-
-/// Hard cap on how many pending RBC stashes we buffer; active-session stashes are retained,
-/// and new sessions are rejected once the cap is reached.
-pub(super) const PENDING_RBC_STASH_LIMIT: usize = 256;

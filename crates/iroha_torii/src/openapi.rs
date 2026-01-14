@@ -1633,10 +1633,18 @@ fn offline_receipt_query_parameters() -> Vec<Value> {
 }
 
 fn string_query_param(name: &str, description: &str) -> Value {
+    string_query_param_with_required(name, description, false)
+}
+
+fn required_string_query_param(name: &str, description: &str) -> Value {
+    string_query_param_with_required(name, description, true)
+}
+
+fn string_query_param_with_required(name: &str, description: &str, required: bool) -> Value {
     let mut param = Map::new();
     param.insert("name".into(), Value::String(name.to_owned()));
     param.insert("in".into(), Value::String("query".to_owned()));
-    param.insert("required".into(), Value::Bool(false));
+    param.insert("required".into(), Value::Bool(required));
     param.insert("description".into(), Value::String(description.to_owned()));
     let mut schema = Map::new();
     schema.insert("type".into(), Value::String("string".to_owned()));
@@ -2376,6 +2384,19 @@ fn transaction_paths() -> Map {
             "Submit a signed transaction.",
             "Submit a SignedTransaction encoded as Norito bytes.",
             "#/components/schemas/JsonValue",
+        )),
+    );
+    paths.insert(
+        "/v1/pipeline/transactions/status".to_owned(),
+        Value::Object(json_get_operation(
+            "Transactions",
+            "Fetch pipeline transaction status.",
+            "Return the latest pipeline status for a signed transaction hash.",
+            "#/components/schemas/JsonValue",
+            vec![required_string_query_param(
+                "hash",
+                "Signed transaction hash (hex).",
+            )],
         )),
     );
     paths.insert(

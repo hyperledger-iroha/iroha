@@ -97,6 +97,7 @@ fn consensus_mode_prompt(
 pub struct LocalnetWizardArgs;
 
 impl<T: Write> RunArgs<T> for LocalnetWizardArgs {
+    #[allow(clippy::too_many_lines)]
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         let peers: NonZeroU16 = CustomType::new("How many peers?")
             .with_default(4u16)

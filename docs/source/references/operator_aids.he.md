@@ -42,7 +42,7 @@ translator: manual
   - צילום מצב של פרמטרי Sumeragi על השרשרת `{ block_time_ms, commit_time_ms, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`.
   - כאשר `da_enabled` הוא true, ה-commit ממתין ל-`availability evidence` (ולא לאירוע `DELIVER` מקומי של RBC); בדקו את מצב ה-RBC דרך נקודות הקצה הבאות.
 - `GET /v1/sumeragi/rbc`
-  - מוני שידור אמין במצטבר: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, deliver_broadcasts_total, payload_bytes_delivered_total }`.
+  - מוני שידור אמין במצטבר: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, ready_rebroadcasts_skipped_total, deliver_broadcasts_total, payload_bytes_delivered_total, payload_rebroadcasts_skipped_total }`.
 - `GET /v1/sumeragi/rbc/sessions`
   - צילום מצב לפי סשן (hash בלוק, גובה/תצוגה, מספר והתקדמות chunks, דגלי `ready`, `delivered`, `invalid`, hash מטען, שדה `recovered`) כדי לזהות עיכובים או שחזור לאחר אתחול.
   - קיצור CLI: ‏`iroha sumeragi rbc sessions --summary` מדפיס `hash`, ‏`height/view`, התקדמות chunks, מוני ready ודגלי invalid/delivered.

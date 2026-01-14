@@ -5,6 +5,7 @@ use iroha_logger::prelude::*;
 use super::*;
 
 impl Actor {
+    #[allow(clippy::unnecessary_wraps)]
     fn rebuild_npos_state(&mut self) -> Result<Option<[u8; 32]>> {
         let view = self.state.view();
         let mut collectors = super::load_npos_collector_config(&view).or_else(|| {
@@ -95,6 +96,7 @@ impl Actor {
         self.pending.pending_blocks.clear();
         self.subsystems.da_rbc.rbc.pending.clear();
         self.subsystems.da_rbc.rbc.sessions.clear();
+        self.subsystems.da_rbc.rbc.deliver_deferral.clear();
         self.subsystems.propose.proposal_cache = ProposalCache::new(PROPOSAL_CACHE_LIMIT);
         self.subsystems.propose.proposals_seen.clear();
         self.qc_cache.clear();

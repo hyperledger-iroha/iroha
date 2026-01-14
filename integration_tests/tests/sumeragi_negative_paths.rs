@@ -84,7 +84,10 @@ fn valid_double_prepare_evidence(network: &Network) -> (Evidence, Vote, Vote) {
         .peers()
         .iter()
         .enumerate()
-        .find_map(|(idx, peer)| peer.bls_key_pair().map(|kp| (idx as u32, kp)))
+        .find_map(|(idx, peer)| {
+            peer.bls_key_pair()
+                .and_then(|kp| u32::try_from(idx).ok().map(|idx| (idx, kp)))
+        })
         .expect("network should expose at least one BLS keypair");
     let chain_id = network.chain_id();
     let v1 = signed_vote(0x90, signer_idx, &chain_id, signer_kp, 10, 0, 0);
@@ -499,7 +502,10 @@ fn posting_stale_evidence_is_not_persisted() -> Result<()> {
         .peers()
         .iter()
         .enumerate()
-        .find_map(|(idx, peer)| peer.bls_key_pair().map(|kp| (idx as u32, kp)))
+        .find_map(|(idx, peer)| {
+            peer.bls_key_pair()
+                .and_then(|kp| u32::try_from(idx).ok().map(|idx| (idx, kp)))
+        })
         .expect("network should expose at least one BLS keypair");
     let chain_id = network.chain_id();
     let v1 = signed_vote(0x61, signer_idx, &chain_id, signer_kp, 0, 0, 0);

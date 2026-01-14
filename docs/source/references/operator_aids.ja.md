@@ -40,7 +40,7 @@ translator: manual
   - オンチェーンの Sumeragi パラメータ `{ block_time_ms, commit_time_ms, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`。
   - `da_enabled` が true の場合、コミットは `availability evidence` を待機します（ローカルの RBC `DELIVER` は条件ではありません）。後述のエンドポイントで RBC の輸送状況を確認できます。
 - `GET /v1/sumeragi/rbc`
-  - Reliable Broadcast の集計カウンター `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, deliver_broadcasts_total, payload_bytes_delivered_total }`。
+  - Reliable Broadcast の集計カウンター `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, ready_rebroadcasts_skipped_total, deliver_broadcasts_total, payload_bytes_delivered_total, payload_rebroadcasts_skipped_total }`。
 - `GET /v1/sumeragi/rbc/sessions`
   - セッションごとの状態（ブロックハッシュ、height/view、チャンク総数／受信数、`ready_count`、`delivered`/`invalid` フラグ、ペイロードハッシュ、`recovered`）を確認し、停滞や再起動後の復旧を診断。
   - CLI ショートカット: `iroha sumeragi rbc sessions --summary` が `hash`、`height/view`、チャンク進捗、`ready` 数、`invalid`／`delivered` フラグを出力。

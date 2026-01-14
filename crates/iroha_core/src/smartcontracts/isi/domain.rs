@@ -108,7 +108,7 @@ pub mod isi {
                     state_transaction
                         .world
                         .triggers
-                        .remove(trigger_id)
+                        .remove(&trigger_id)
                         .then_some(())
                         .expect("should succeed")
                 });

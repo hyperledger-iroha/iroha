@@ -249,6 +249,10 @@ pub mod json_wrappers {
     }
 
     /// Convert a JSON-wrapped query request into the native query request.
+    ///
+    /// # Errors
+    /// Returns an error string when required fields are missing or the payload
+    /// cannot be decoded into a query request.
     pub fn query_request_from_json(req: QueryRequestJson) -> Result<QueryRequest, &'static str> {
         match req {
             QueryRequestJson::Singular(q) => Ok(QueryRequest::Singular(q)),
