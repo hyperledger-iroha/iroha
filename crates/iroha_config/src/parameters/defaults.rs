@@ -1152,6 +1152,10 @@ pub mod torii {
     // Default burst capacity in tokens per authority.
     /// Maximum burst tokens accumulated per authority.
     pub const QUERY_BURST_PER_AUTHORITY: Option<u32> = Some(50);
+    /// Default steady-state transaction submission rate tokens per authority every second.
+    pub const TX_RATE_PER_AUTHORITY_PER_SEC: Option<u32> = Some(10_000);
+    /// Default transaction submission burst tokens per authority.
+    pub const TX_BURST_PER_AUTHORITY: Option<u32> = Some(20_000);
     /// Default steady-state deploy rate tokens issued per origin every second.
     pub const DEPLOY_RATE_PER_ORIGIN_PER_SEC: Option<u32> = Some(4);
     /// Maximum burst tokens accumulated per origin for deploy endpoints.

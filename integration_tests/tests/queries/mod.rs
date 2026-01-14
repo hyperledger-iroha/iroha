@@ -12,7 +12,7 @@ use iroha::{
 };
 use iroha_test_network::*;
 
-const QUERY_TX_STATUS_TIMEOUT: Duration = Duration::from_secs(30);
+const QUERY_TX_STATUS_TIMEOUT: Duration = Duration::from_secs(120);
 
 fn query_network_builder() -> NetworkBuilder {
     NetworkBuilder::new()

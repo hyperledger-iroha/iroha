@@ -32157,7 +32157,7 @@ fn validate_block_sync_qc_rejects_aggregate_mismatch() {
         &topology,
         &world_view,
         &block_signers,
-        0,
+        qc.view,
         &chain,
         ConsensusMode::Permissioned,
         None,

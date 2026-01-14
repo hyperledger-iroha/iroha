@@ -719,6 +719,8 @@ mod tests {
                 data_dir: iroha_config::parameters::defaults::torii::data_dir(),
                 query_rate_per_authority_per_sec: None,
                 query_burst_per_authority: None,
+                tx_rate_per_authority_per_sec: None,
+                tx_burst_per_authority: None,
                 deploy_rate_per_origin_per_sec: None,
                 deploy_burst_per_origin: None,
                 require_api_token: false,

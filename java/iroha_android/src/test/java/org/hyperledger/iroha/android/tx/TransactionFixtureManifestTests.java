@@ -17,6 +17,7 @@ import java.util.Optional;
 import java.util.regex.Pattern;
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters;
 import org.bouncycastle.crypto.signers.Ed25519Signer;
+import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.crypto.Blake2b;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
@@ -45,9 +46,22 @@ public final class TransactionFixtureManifestTests {
   private static final String HASH_ALGORITHM = "BLAKE2B-256";
   private static final String PAYLOAD_SCHEMA = "iroha.android.transaction.Payload.v1";
   private static final String SIGNED_SCHEMA = "iroha.transaction.SignedTransaction.v1";
+  private static final int CONTROLLER_SINGLE = 0x00;
+  private static final int CURVE_ED25519 = 0x01;
   private static final byte VERSION_BYTE = 0x01;
   private static final NoritoJavaCodecAdapter PAYLOAD_CODEC = new NoritoJavaCodecAdapter();
+  private static final TypeAdapter<String> STRING_ADAPTER = NoritoAdapters.stringAdapter();
+  private static final TypeAdapter<Long> UINT64_ADAPTER = NoritoAdapters.uint(64);
+  private static final TypeAdapter<Long> UINT32_ADAPTER = NoritoAdapters.uint(32);
+  private static final TypeAdapter<Optional<Long>> TTL_ADAPTER =
+      NoritoAdapters.option(NoritoAdapters.uint(64));
+  private static final TypeAdapter<Optional<Long>> NONCE_ADAPTER =
+      NoritoAdapters.option(NoritoAdapters.uint(32));
   private static final TypeAdapter<byte[]> BYTE_VECTOR_ADAPTER = NoritoAdapters.byteVecAdapter();
+  private static final TypeAdapter<List<InstructionEnvelope>> INSTRUCTION_LIST_ADAPTER =
+      NoritoAdapters.sequence(new InstructionEnvelopeAdapter());
+  private static final TypeAdapter<List<MetadataEntry>> METADATA_ENTRY_LIST_ADAPTER =
+      NoritoAdapters.sequence(new MetadataEntryAdapter());
   private static int compatChecked = 0;
 
   @Test
@@ -71,7 +85,7 @@ public final class TransactionFixtureManifestTests {
     final Path manifestPath = resolveFixturePath("transaction_fixtures.manifest.json");
     final Map<String, Object> manifest = loadManifest(manifestPath);
     assertSchemaMatches(manifest);
-    final SigningKeyInfo signingKey = parseSigningKey(manifest);
+    assertSigningKeyFormat(manifest);
 
     final Object fixturesValue = manifest.get("fixtures");
     final List<Object> fixtures = asList(fixturesValue, "fixtures");
@@ -84,7 +98,7 @@ public final class TransactionFixtureManifestTests {
         loadPayloadFixtures(manifestPath.getParent());
 
     for (Object entry : fixtures) {
-      validateFixture(entry, manifestPath, payloadFixtures, signingKey);
+      validateFixture(entry, manifestPath, payloadFixtures);
     }
 
     assertEquals(
@@ -98,8 +112,7 @@ public final class TransactionFixtureManifestTests {
   private static void validateFixture(
       final Object entry,
       final Path manifestPath,
-      final Map<String, TransactionPayloadFixtures.Fixture> payloadFixtures,
-      final SigningKeyInfo signingKey)
+      final Map<String, TransactionPayloadFixtures.Fixture> payloadFixtures)
       throws Exception {
     final Map<String, Object> map = asMap(entry, "fixture");
     final String name = requireString(map.get("name"), "fixture.name");
@@ -111,6 +124,7 @@ public final class TransactionFixtureManifestTests {
     final long signedLen = requireNumber(map.get("signed_len"), name + ".signed_len");
     final String chain = requireString(map.get("chain"), name + ".chain");
     final String authority = requireString(map.get("authority"), name + ".authority");
+    final AuthorityKey authorityKey = parseAuthorityKey(authority, name + ".authority");
     final Long ttl = optionalNumber(map.get("time_to_live_ms"));
     final Long nonce = optionalNumber(map.get("nonce"));
     final String payloadHash = requireString(map.get("payload_hash"), name + ".payload_hash");
@@ -184,7 +198,7 @@ public final class TransactionFixtureManifestTests {
       }
     }
 
-    validateCompatibility(name, payloadBytes, signedBytes, signingKey);
+    validateCompatibility(name, payloadBytes, signedBytes, chain, authority, ttl, nonce, authorityKey);
   }
 
   private static byte[] decodeBase64(final String value, final String fieldName) {
@@ -233,7 +247,7 @@ public final class TransactionFixtureManifestTests {
         requireString(schema.get("signed"), "schema.signed"));
   }
 
-  private static SigningKeyInfo parseSigningKey(final Map<String, Object> manifest) {
+  private static void assertSigningKeyFormat(final Map<String, Object> manifest) {
     final Map<String, Object> signingKey = asMap(manifest.get("signing_key"), "signing_key");
     final String algorithm =
         requireString(signingKey.get("algorithm"), "signing_key.algorithm").toLowerCase();
@@ -247,21 +261,31 @@ public final class TransactionFixtureManifestTests {
       throw new IllegalStateException(
           "signing_key.public_key_hex must be 32 bytes (found " + publicKey.length + ")");
     }
-    return new SigningKeyInfo(publicKey);
+    final String seedHex = requireString(signingKey.get("seed_hex"), "signing_key.seed_hex");
+    hexToBytes(seedHex, "signing_key.seed_hex");
   }
 
   private static void verifySignature(
       final String name,
-      final SigningKeyInfo signingKey,
+      final AuthorityKey authorityKey,
       final byte[] payloadBytes,
       final byte[] signature) {
+    if (authorityKey.curveId() != CURVE_ED25519) {
+      throw new IllegalStateException(
+          name + ": unsupported authority curve id " + authorityKey.curveId());
+    }
+    final byte[] publicKey = authorityKey.publicKey();
+    if (publicKey.length != 32) {
+      throw new IllegalStateException(
+          name + ": authority public key must be 32 bytes (found " + publicKey.length + ")");
+    }
     if (signature.length != 64) {
       throw new IllegalStateException(
           name + ": signature length mismatch (expected 64, found " + signature.length + ")");
     }
     final byte[] hash = canonicalHashBytes(payloadBytes);
     final Ed25519Signer verifier = new Ed25519Signer();
-    verifier.init(false, new Ed25519PublicKeyParameters(signingKey.publicKey(), 0));
+    verifier.init(false, new Ed25519PublicKeyParameters(publicKey, 0));
     verifier.update(hash, 0, hash.length);
     if (!verifier.verifySignature(signature)) {
       throw new IllegalStateException(name + ": signature verification failed");
@@ -272,58 +296,101 @@ public final class TransactionFixtureManifestTests {
       final String name,
       final byte[] payloadBytes,
       final byte[] signedBytes,
-      final SigningKeyInfo signingKey) {
-    final TransactionPayload payload;
-    try {
-      payload = PAYLOAD_CODEC.decodeTransaction(payloadBytes);
-    } catch (final Exception ex) {
-      throw new IllegalStateException(name + ": failed to decode payload", ex);
+      final String chain,
+      final String authority,
+      final Long ttl,
+      final Long nonce,
+      final AuthorityKey authorityKey) {
+    final RawPayload raw = decodePayloadRaw(name, payloadBytes);
+    assertEquals(
+        name + ": chain mismatch vs payload bytes",
+        chain,
+        raw.chainId());
+    assertEquals(
+        name + ": authority mismatch vs payload bytes",
+        authority,
+        raw.authority());
+    assertTrue(
+        name + ": TTL mismatch vs payload bytes",
+        optionalLongEquals(raw.timeToLiveMs(), ttl));
+    assertTrue(
+        name + ": nonce mismatch vs payload bytes",
+        optionalLongEquals(raw.nonce(), nonce));
+    if (raw.executable().isIvm()) {
+      final TransactionPayload payload;
+      try {
+        payload = PAYLOAD_CODEC.decodeTransaction(payloadBytes);
+      } catch (final Exception ex) {
+        throw new IllegalStateException(name + ": failed to decode payload", ex);
+      }
+      assertEquals(
+          name + ": chain mismatch vs decoded payload",
+          chain,
+          payload.chainId());
+      assertEquals(
+          name + ": authority mismatch vs decoded payload",
+          authority,
+          payload.authority());
+      assertTrue(
+          name + ": TTL mismatch vs decoded payload",
+          optionalLongEquals(payload.timeToLiveMs(), ttl));
+      assertTrue(
+          name + ": nonce mismatch vs decoded payload",
+          optionalIntEquals(payload.nonce(), nonce));
+      assertArrayEquals(
+          name + ": IVM bytes mismatch vs decoded payload",
+          raw.executable().ivmBytes(),
+          payload.executable().ivmBytes());
+      final byte[] reencoded;
+      try {
+        reencoded = PAYLOAD_CODEC.encodeTransaction(payload);
+      } catch (final Exception ex) {
+        throw new IllegalStateException(name + ": failed to re-encode payload", ex);
+      }
+      assertArrayEquals(
+          name + ": payload bytes differ after Android re-encoding",
+          payloadBytes,
+          reencoded);
+    } else {
+      // TODO: Re-encode instruction payloads once Android SDK can build instruction transactions.
     }
-    final byte[] reencoded;
-    try {
-      reencoded = PAYLOAD_CODEC.encodeTransaction(payload);
-    } catch (final Exception ex) {
-      throw new IllegalStateException(name + ": failed to re-encode payload", ex);
-    }
-    assertArrayEquals(
-        name + ": payload bytes differ after Android re-encoding",
-        payloadBytes,
-        reencoded);
 
     final SignedParts signedParts = decodeSignedParts(name, signedBytes);
     assertArrayEquals(
         name + ": signed payload mismatch vs manifest payload bytes",
         payloadBytes,
         signedParts.payloadBytes());
-    verifySignature(name, signingKey, payloadBytes, signedParts.signature());
-    final SignedTransaction signed =
-        new SignedTransaction(payloadBytes, signedParts.signature(), new byte[0], SIGNED_SCHEMA);
-    final byte[] encodedSigned;
-    try {
-      encodedSigned = SignedTransactionEncoder.encode(signed);
-    } catch (final Exception ex) {
-      throw new IllegalStateException(name + ": failed to encode signed transaction", ex);
-    }
-    assertArrayEquals(
-        name + ": signed bytes differ after Android re-encoding",
-        signedBytes,
-        encodedSigned);
+    verifySignature(name, authorityKey, payloadBytes, signedParts.signature());
+    if (raw.executable().isIvm()) {
+      final SignedTransaction signed =
+          new SignedTransaction(payloadBytes, signedParts.signature(), new byte[0], SIGNED_SCHEMA);
+      final byte[] encodedSigned;
+      try {
+        encodedSigned = SignedTransactionEncoder.encode(signed);
+      } catch (final Exception ex) {
+        throw new IllegalStateException(name + ": failed to encode signed transaction", ex);
+      }
+      assertArrayEquals(
+          name + ": signed bytes differ after Android re-encoding",
+          signedBytes,
+          encodedSigned);
 
-    final byte[] versioned;
-    try {
-      versioned = SignedTransactionEncoder.encodeVersioned(signed);
-    } catch (final Exception ex) {
-      throw new IllegalStateException(name + ": failed to encode versioned signed transaction", ex);
+      final byte[] versioned;
+      try {
+        versioned = SignedTransactionEncoder.encodeVersioned(signed);
+      } catch (final Exception ex) {
+        throw new IllegalStateException(name + ": failed to encode versioned signed transaction", ex);
+      }
+      assertEquals(
+          name + ": versioned length mismatch",
+          signedBytes.length + 1,
+          versioned.length);
+      assertEquals(name + ": versioned prefix mismatch", VERSION_BYTE, versioned[0]);
+      assertArrayEquals(
+          name + ": versioned payload mismatch",
+          signedBytes,
+          Arrays.copyOfRange(versioned, 1, versioned.length));
     }
-    assertEquals(
-        name + ": versioned length mismatch",
-        signedBytes.length + 1,
-        versioned.length);
-    assertEquals(name + ": versioned prefix mismatch", VERSION_BYTE, versioned[0]);
-    assertArrayEquals(
-        name + ": versioned payload mismatch",
-        signedBytes,
-        Arrays.copyOfRange(versioned, 1, versioned.length));
 
     compatChecked++;
   }
@@ -380,6 +447,58 @@ public final class TransactionFixtureManifestTests {
     return Optional.of(payload);
   }
 
+  private static AuthorityKey parseAuthorityKey(final String authority, final String context) {
+    final int atIndex = authority.indexOf('@');
+    if (atIndex <= 0 || atIndex == authority.length() - 1) {
+      throw new IllegalStateException(context + " must be in address@domain form");
+    }
+    final String addressPart = authority.substring(0, atIndex);
+    final AccountAddress.ParseResult parsed;
+    try {
+      parsed = AccountAddress.parseAny(addressPart, null);
+    } catch (final AccountAddress.AccountAddressException ex) {
+      throw new IllegalStateException(context + " is not a valid account address", ex);
+    }
+    final byte[] canonical = parsed.address.canonicalBytes();
+    return extractAuthorityKey(canonical, context);
+  }
+
+  private static AuthorityKey extractAuthorityKey(final byte[] canonical, final String context) {
+    if (canonical.length < 4) {
+      throw new IllegalStateException(context + ": canonical address too short");
+    }
+    int cursor = 1;
+    final int domainTag = canonical[cursor++] & 0xFF;
+    switch (domainTag) {
+      case 0x00 -> {}
+      case 0x01 -> cursor += 12;
+      case 0x02 -> cursor += 4;
+      default -> throw new IllegalStateException(context + ": unknown domain tag " + domainTag);
+    }
+    if (cursor >= canonical.length) {
+      throw new IllegalStateException(context + ": missing controller tag");
+    }
+    final int controllerTag = canonical[cursor++] & 0xFF;
+    if (controllerTag != CONTROLLER_SINGLE) {
+      throw new IllegalStateException(
+          context + ": unsupported controller tag " + controllerTag);
+    }
+    if (cursor + 2 > canonical.length) {
+      throw new IllegalStateException(context + ": missing curve id/key length");
+    }
+    final int curveId = canonical[cursor++] & 0xFF;
+    final int keyLen = canonical[cursor++] & 0xFF;
+    if (keyLen <= 0) {
+      throw new IllegalStateException(context + ": invalid key length " + keyLen);
+    }
+    final int end = cursor + keyLen;
+    if (end != canonical.length) {
+      throw new IllegalStateException(context + ": unexpected trailing bytes in authority");
+    }
+    final byte[] publicKey = Arrays.copyOfRange(canonical, cursor, end);
+    return new AuthorityKey(curveId, publicKey);
+  }
+
   private static byte[] readField(final NoritoDecoder decoder, final String field) {
     final boolean compact = decoder.compactLenActive();
     final long length = decoder.readLength(compact);
@@ -387,6 +506,113 @@ public final class TransactionFixtureManifestTests {
       throw new IllegalStateException(field + " length too large: " + length);
     }
     return decoder.readBytes((int) length);
+  }
+
+  private static RawPayload decodePayloadRaw(final String name, final byte[] payloadBytes) {
+    final NoritoDecoder decoder = new NoritoDecoder(payloadBytes, NoritoHeader.MINOR_VERSION);
+    final byte[] chainField = readField(decoder, name + ".payload.chain_id");
+    final byte[] authorityField = readField(decoder, name + ".payload.authority");
+    final byte[] creationField = readField(decoder, name + ".payload.creation_time_ms");
+    final byte[] executableField = readField(decoder, name + ".payload.executable");
+    final byte[] ttlField = readField(decoder, name + ".payload.time_to_live_ms");
+    final byte[] nonceField = readField(decoder, name + ".payload.nonce");
+    final byte[] metadataField = readField(decoder, name + ".payload.metadata");
+    if (decoder.remaining() != 0) {
+      throw new IllegalStateException(name + ": payload has trailing bytes");
+    }
+    final String chainId = decodeFieldPayload(chainField, STRING_ADAPTER, name + ".payload.chain_id");
+    final String authority =
+        decodeFieldPayload(authorityField, STRING_ADAPTER, name + ".payload.authority");
+    decodeFieldPayload(creationField, UINT64_ADAPTER, name + ".payload.creation_time_ms");
+    final ExecutableEnvelope executable =
+        decodeExecutableEnvelope(name, executableField);
+    final Optional<Long> ttl =
+        decodeFieldPayload(ttlField, TTL_ADAPTER, name + ".payload.time_to_live_ms");
+    final Optional<Long> nonce =
+        decodeFieldPayload(nonceField, NONCE_ADAPTER, name + ".payload.nonce");
+    validateMetadataField(metadataField, name + ".payload.metadata");
+    return new RawPayload(chainId, authority, ttl, nonce, executable);
+  }
+
+  private static ExecutableEnvelope decodeExecutableEnvelope(
+      final String name,
+      final byte[] executableField) {
+    final NoritoDecoder decoder = new NoritoDecoder(executableField, NoritoHeader.MINOR_VERSION);
+    final long tag = UINT32_ADAPTER.decode(decoder);
+    if (tag == 1L) {
+      final byte[] bytecodeField =
+          readField(decoder, name + ".payload.executable.ivm");
+      final byte[] ivmBytes =
+          decodeFieldPayload(bytecodeField, BYTE_VECTOR_ADAPTER, name + ".payload.executable.ivm");
+      if (decoder.remaining() != 0) {
+        throw new IllegalStateException(name + ": executable has trailing bytes");
+      }
+      return ExecutableEnvelope.forIvm(ivmBytes);
+    }
+    if (tag == 0L) {
+      final byte[] instructionsField =
+          readField(decoder, name + ".payload.executable.instructions");
+      final List<InstructionEnvelope> instructions =
+          decodeInstructionEnvelopes(instructionsField, name + ".payload.executable.instructions");
+      if (decoder.remaining() != 0) {
+        throw new IllegalStateException(name + ": executable has trailing bytes");
+      }
+      return ExecutableEnvelope.forInstructions(instructions);
+    }
+    throw new IllegalStateException(name + ": unknown executable tag " + tag);
+  }
+
+  private static List<InstructionEnvelope> decodeInstructionEnvelopes(
+      final byte[] payload,
+      final String field) {
+    final NoritoDecoder decoder = new NoritoDecoder(payload, NoritoHeader.MINOR_VERSION);
+    final List<InstructionEnvelope> instructions = INSTRUCTION_LIST_ADAPTER.decode(decoder);
+    if (decoder.remaining() != 0) {
+      throw new IllegalStateException(field + ": instruction list has trailing bytes");
+    }
+    for (final InstructionEnvelope envelope : instructions) {
+      if (envelope.wireName().isBlank()) {
+        throw new IllegalStateException(field + ": instruction name must not be blank");
+      }
+      final NoritoHeader.DecodeResult decoded = NoritoHeader.decode(envelope.payload(), null);
+      decoded.header().validateChecksum(decoded.payload());
+    }
+    return instructions;
+  }
+
+  private static void validateMetadataField(final byte[] payload, final String field) {
+    final NoritoDecoder decoder = new NoritoDecoder(payload, NoritoHeader.MINOR_VERSION);
+    final List<MetadataEntry> entries = METADATA_ENTRY_LIST_ADAPTER.decode(decoder);
+    if (decoder.remaining() != 0) {
+      throw new IllegalStateException(field + ": metadata has trailing bytes");
+    }
+    final Map<String, String> seen = new LinkedHashMap<>();
+    String previousKey = null;
+    for (final MetadataEntry entry : entries) {
+      final String key = entry.key();
+      if (key.isBlank()) {
+        throw new IllegalStateException(field + ": metadata key must not be blank");
+      }
+      if (seen.put(key, entry.value()) != null) {
+        throw new IllegalStateException(field + ": duplicate metadata key " + key);
+      }
+      if (previousKey != null && previousKey.compareTo(key) > 0) {
+        throw new IllegalStateException(field + ": metadata keys must be sorted");
+      }
+      previousKey = key;
+    }
+  }
+
+  private static <T> T decodeFieldPayload(
+      final byte[] payload,
+      final TypeAdapter<T> adapter,
+      final String field) {
+    final NoritoDecoder decoder = new NoritoDecoder(payload, NoritoHeader.MINOR_VERSION);
+    final T value = adapter.decode(decoder);
+    if (decoder.remaining() != 0) {
+      throw new IllegalStateException(field + ": trailing bytes after field payload");
+    }
+    return value;
   }
 
   private static final class SignedParts {
@@ -407,11 +633,164 @@ public final class TransactionFixtureManifestTests {
     }
   }
 
-  private static final class SigningKeyInfo {
+  private static final class RawPayload {
+    private final String chainId;
+    private final String authority;
+    private final Optional<Long> timeToLiveMs;
+    private final Optional<Long> nonce;
+    private final ExecutableEnvelope executable;
+
+    private RawPayload(
+        final String chainId,
+        final String authority,
+        final Optional<Long> timeToLiveMs,
+        final Optional<Long> nonce,
+        final ExecutableEnvelope executable) {
+      this.chainId = chainId;
+      this.authority = authority;
+      this.timeToLiveMs = timeToLiveMs;
+      this.nonce = nonce;
+      this.executable = executable;
+    }
+
+    private String chainId() {
+      return chainId;
+    }
+
+    private String authority() {
+      return authority;
+    }
+
+    private Optional<Long> timeToLiveMs() {
+      return timeToLiveMs;
+    }
+
+    private Optional<Long> nonce() {
+      return nonce;
+    }
+
+    private ExecutableEnvelope executable() {
+      return executable;
+    }
+  }
+
+  private static final class ExecutableEnvelope {
+    private final byte[] ivmBytes;
+    private final List<InstructionEnvelope> instructions;
+
+    private ExecutableEnvelope(final byte[] ivmBytes, final List<InstructionEnvelope> instructions) {
+      this.ivmBytes = ivmBytes;
+      this.instructions = instructions;
+    }
+
+    private static ExecutableEnvelope forIvm(final byte[] ivmBytes) {
+      return new ExecutableEnvelope(Arrays.copyOf(ivmBytes, ivmBytes.length), null);
+    }
+
+    private static ExecutableEnvelope forInstructions(final List<InstructionEnvelope> instructions) {
+      return new ExecutableEnvelope(new byte[0], new ArrayList<>(instructions));
+    }
+
+    private boolean isIvm() {
+      return instructions == null;
+    }
+
+    private byte[] ivmBytes() {
+      return Arrays.copyOf(ivmBytes, ivmBytes.length);
+    }
+  }
+
+  private static final class InstructionEnvelope {
+    private final String wireName;
+    private final byte[] payload;
+
+    private InstructionEnvelope(final String wireName, final byte[] payload) {
+      this.wireName = wireName;
+      this.payload = payload;
+    }
+
+    private String wireName() {
+      return wireName;
+    }
+
+    private byte[] payload() {
+      return Arrays.copyOf(payload, payload.length);
+    }
+  }
+
+  private static final class InstructionEnvelopeAdapter implements TypeAdapter<InstructionEnvelope> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final InstructionEnvelope value) {
+      throw new UnsupportedOperationException("Instruction envelope encoding is not supported");
+    }
+
+    @Override
+    public InstructionEnvelope decode(final NoritoDecoder decoder) {
+      final String name = STRING_ADAPTER.decode(decoder);
+      final byte[] payload = BYTE_VECTOR_ADAPTER.decode(decoder);
+      if (decoder.remaining() != 0) {
+        throw new IllegalArgumentException("Instruction envelope has trailing bytes");
+      }
+      return new InstructionEnvelope(name, payload);
+    }
+
+    @Override
+    public boolean isSelfDelimiting() {
+      return true;
+    }
+  }
+
+  private static final class MetadataEntry {
+    private final String key;
+    private final String value;
+
+    private MetadataEntry(final String key, final String value) {
+      this.key = key;
+      this.value = value;
+    }
+
+    private String key() {
+      return key;
+    }
+
+    private String value() {
+      return value;
+    }
+  }
+
+  private static final class MetadataEntryAdapter implements TypeAdapter<MetadataEntry> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final MetadataEntry value) {
+      throw new UnsupportedOperationException("Metadata entry encoding is not supported");
+    }
+
+    @Override
+    public MetadataEntry decode(final NoritoDecoder decoder) {
+      final String key = STRING_ADAPTER.decode(decoder);
+      final String value = STRING_ADAPTER.decode(decoder);
+      if (decoder.remaining() != 0) {
+        throw new IllegalArgumentException("Metadata entry has trailing bytes");
+      }
+      return new MetadataEntry(key, value);
+    }
+
+    @Override
+    public boolean isSelfDelimiting() {
+      return true;
+    }
+  }
+
+  private static final class AuthorityKey {
+    private final int curveId;
     private final byte[] publicKey;
 
-    private SigningKeyInfo(final byte[] publicKey) {
+    private AuthorityKey(final int curveId, final byte[] publicKey) {
+      this.curveId = curveId;
       this.publicKey = publicKey;
+    }
+
+    private int curveId() {
+      return curveId;
     }
 
     private byte[] publicKey() {

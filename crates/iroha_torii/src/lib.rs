@@ -618,6 +618,7 @@ struct AppState {
     kiso: KisoHandle,
     query_service: LiveQueryStoreHandle,
     rate_limiter: limits::RateLimiter,
+    tx_rate_limiter: limits::RateLimiter,
     deploy_rate_limiter: limits::RateLimiter,
     proof_rate_limiter: limits::RateLimiter,
     proof_egress_limiter: limits::RateLimiter,
@@ -9736,7 +9737,7 @@ async fn handler_post_transaction(
     let auth_id = format!("{}", transaction.authority());
     let key = token_hdr.unwrap_or(auth_id);
     let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
-    if !limits::allow_conditionally(&app.rate_limiter, &key, enforce).await {
+    if !limits::allow_conditionally(&app.tx_rate_limiter, &key, enforce).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
@@ -11538,16 +11539,21 @@ pub struct Torii {
     sumeragi: Option<iroha_core::sumeragi::SumeragiHandle>,
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     p2p: Option<iroha_core::IrohaNetwork>,
-    // Query rate limits and optional fee policy (operator-local)
+    // Query and transaction rate limits (operator-local)
     #[allow(dead_code)]
     query_rate_per_authority_per_sec: Option<std::num::NonZeroU32>,
     #[allow(dead_code)]
     query_burst_per_authority: Option<std::num::NonZeroU32>,
     #[allow(dead_code)]
+    tx_rate_per_authority_per_sec: Option<std::num::NonZeroU32>,
+    #[allow(dead_code)]
+    tx_burst_per_authority: Option<std::num::NonZeroU32>,
+    #[allow(dead_code)]
     deploy_rate_per_origin_per_sec: Option<std::num::NonZeroU32>,
     #[allow(dead_code)]
     deploy_burst_per_origin: Option<std::num::NonZeroU32>,
     rate_limiter: limits::RateLimiter,
+    tx_rate_limiter: limits::RateLimiter,
     deploy_rate_limiter: limits::RateLimiter,
     proof_rate_limiter: limits::RateLimiter,
     proof_egress_limiter: limits::RateLimiter,
@@ -13171,6 +13177,14 @@ impl Torii {
                 .query_burst_per_authority
                 .map(std::num::NonZeroU32::get),
         );
+        let tx_rl = limits::RateLimiter::new(
+            config
+                .tx_rate_per_authority_per_sec
+                .map(std::num::NonZeroU32::get),
+            config
+                .tx_burst_per_authority
+                .map(std::num::NonZeroU32::get),
+        );
         let deploy_rl = limits::RateLimiter::new(
             config
                 .deploy_rate_per_origin_per_sec
@@ -13271,7 +13285,13 @@ impl Torii {
             _ => FeePolicy::Disabled,
         };
         // Default threshold if not provided
-        let high_load_tx_threshold = config.api_high_load_tx_threshold.unwrap_or(4_096);
+        let default_high_load_tx_threshold = std::cmp::max(
+            1,
+            queue.current_backpressure().capacity().get() / 2,
+        );
+        let high_load_tx_threshold = config
+            .api_high_load_tx_threshold
+            .unwrap_or(default_high_load_tx_threshold);
         // Default higher threshold for streaming endpoints if not provided
         let high_load_stream_tx_threshold = config.api_high_load_stream_threshold.unwrap_or(16_384);
         // Subscription WS may use its own threshold; default to stream threshold
@@ -13409,9 +13429,12 @@ impl Torii {
             p2p: None,
             query_rate_per_authority_per_sec: config.query_rate_per_authority_per_sec,
             query_burst_per_authority: config.query_burst_per_authority,
+            tx_rate_per_authority_per_sec: config.tx_rate_per_authority_per_sec,
+            tx_burst_per_authority: config.tx_burst_per_authority,
             deploy_rate_per_origin_per_sec: config.deploy_rate_per_origin_per_sec,
             deploy_burst_per_origin: config.deploy_burst_per_origin,
             rate_limiter: rl,
+            tx_rate_limiter: tx_rl,
             deploy_rate_limiter: deploy_rl,
             proof_rate_limiter,
             proof_egress_limiter,
@@ -13619,6 +13642,7 @@ impl Torii {
             kiso: self.kiso.clone(),
             query_service: self.query_service.clone(),
             rate_limiter: self.rate_limiter.clone(),
+            tx_rate_limiter: self.tx_rate_limiter.clone(),
             deploy_rate_limiter: self.deploy_rate_limiter.clone(),
             proof_rate_limiter: self.proof_rate_limiter.clone(),
             proof_egress_limiter: self.proof_egress_limiter.clone(),
@@ -15136,7 +15160,7 @@ pub(crate) mod tests_runtime_handlers {
     use std::{
         collections::HashSet,
         net::SocketAddr,
-        num::{NonZeroU64, NonZeroUsize},
+        num::{NonZeroU32, NonZeroU64, NonZeroUsize},
         sync::Arc,
         time::{Duration, Instant},
     };
@@ -15144,6 +15168,7 @@ pub(crate) mod tests_runtime_handlers {
     use axum::{
         extract::{Extension, State},
         http::{HeaderMap, HeaderValue, StatusCode},
+        response::IntoResponse,
     };
     use base64::Engine as _;
     use futures::executor;
@@ -15156,15 +15181,19 @@ pub(crate) mod tests_runtime_handlers {
     };
     use iroha_core::{
         kiso::KisoHandle,
+        kura::Kura,
+        queue::Queue,
         query::store::LiveQueryStore,
         sumeragi::{
             consensus::{PERMISSIONED_TAG, Phase, Vote, vote_preimage},
             status::record_commit_qc,
         },
+        state::{State, World},
         tx::AcceptedTransaction,
     };
     use iroha_crypto::{Algorithm, KeyPair, Signature, SignatureOf};
     use iroha_data_model::{
+        ChainId,
         ValidationFail,
         account::AccountId,
         block::{BlockSignature, SignedBlock},
@@ -15370,6 +15399,7 @@ pub(crate) mod tests_runtime_handlers {
             kiso,
             query_service: query_handle,
             rate_limiter: limits::RateLimiter::new(None, None),
+            tx_rate_limiter: limits::RateLimiter::new(None, None),
             deploy_rate_limiter,
             proof_rate_limiter: limits::RateLimiter::new(None, None),
             proof_egress_limiter: limits::RateLimiter::new_u64(None, None),
@@ -15518,6 +15548,90 @@ pub(crate) mod tests_runtime_handlers {
             norito::json::from_slice(&bytes).expect("decode json");
         assert_eq!(hash.policy, "V1");
         assert_eq!(hash.abi_hash_hex.len(), 64);
+    }
+
+    #[tokio::test]
+    async fn torii_tx_rate_uses_config_and_queue_default() {
+        let mut cfg = crate::test_utils::mk_minimal_root_cfg();
+        cfg.torii.tx_rate_per_authority_per_sec =
+            Some(NonZeroU32::new(123).expect("nonzero tx rate"));
+        cfg.torii.tx_burst_per_authority =
+            Some(NonZeroU32::new(456).expect("nonzero tx burst"));
+        cfg.torii.api_high_load_tx_threshold = None;
+
+        let (kiso, _child) = KisoHandle::start(cfg.clone());
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(World::default(), kura.clone(), query));
+        let queue_cfg = iroha_config::parameters::actual::Queue {
+            capacity: NonZeroUsize::new(100).expect("queue capacity non-zero"),
+            capacity_per_user: NonZeroUsize::new(100).expect("queue per-user capacity non-zero"),
+            transaction_time_to_live: Duration::from_secs(60),
+        };
+        let queue_events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
+        let queue = Arc::new(Queue::from_config(queue_cfg, queue_events));
+        let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
+        let _ = peers_tx;
+        let torii = Torii::new_with_handle(
+            ChainId::from("tx-rate-test"),
+            kiso,
+            cfg.torii.clone(),
+            queue,
+            tokio::sync::broadcast::channel(1).0,
+            LiveQueryStore::start_test(),
+            kura,
+            state,
+            cfg.common.key_pair.clone(),
+            OnlinePeersProvider::new(peers_rx),
+            None,
+            routing::MaybeTelemetry::disabled(),
+        );
+
+        assert_eq!(
+            torii.tx_rate_per_authority_per_sec.unwrap().get(),
+            123
+        );
+        assert_eq!(torii.tx_burst_per_authority.unwrap().get(), 456);
+        assert_eq!(torii.high_load_tx_threshold, 50);
+    }
+
+    #[tokio::test]
+    async fn handler_post_transaction_uses_tx_rate_limiter() {
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            app_mut.high_load_tx_threshold = 0;
+            app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
+        }
+
+        let keypair = KeyPair::random();
+        let authority = AccountId::new(
+            "wonderland".parse().expect("domain"),
+            keypair.public_key().clone(),
+        );
+        let chain = (*app.chain_id).clone();
+        let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
+            .sign(keypair.private_key());
+        let tx2 = TransactionBuilder::new(chain, authority).sign(keypair.private_key());
+        let headers = HeaderMap::new();
+
+        let ok = super::handler_post_transaction(
+            State(app.clone()),
+            headers.clone(),
+            NoritoVersioned(tx1),
+        )
+        .await
+        .expect("accepted");
+        assert_eq!(ok.into_response().status(), StatusCode::ACCEPTED);
+
+        let err = super::handler_post_transaction(
+            State(app),
+            headers,
+            NoritoVersioned(tx2),
+        )
+        .await
+        .expect_err("rate limited");
+        assert_eq!(err.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
     #[cfg(feature = "telemetry")]

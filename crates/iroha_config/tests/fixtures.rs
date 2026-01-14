@@ -362,6 +362,12 @@ fn minimal_config_snapshot() {
                 query_burst_per_authority: Some(
                     50,
                 ),
+                tx_rate_per_authority_per_sec: Some(
+                    10000,
+                ),
+                tx_burst_per_authority: Some(
+                    20000,
+                ),
                 deploy_rate_per_origin_per_sec: Some(
                     4,
                 ),
