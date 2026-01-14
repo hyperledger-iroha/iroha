@@ -4100,6 +4100,10 @@ pub struct Torii {
     pub query_rate_per_authority_per_sec: Option<NonZeroU32>,
     /// Optional per-authority burst capacity (tokens).
     pub query_burst_per_authority: Option<NonZeroU32>,
+    /// Optional per-authority transaction submission rate (tokens/sec). None disables limiting.
+    pub tx_rate_per_authority_per_sec: Option<NonZeroU32>,
+    /// Optional per-authority transaction burst capacity (tokens).
+    pub tx_burst_per_authority: Option<NonZeroU32>,
     /// Optional per-origin deploy rate (tokens/sec). None disables limiting.
     pub deploy_rate_per_origin_per_sec: Option<NonZeroU32>,
     /// Optional per-origin deploy burst capacity (tokens).

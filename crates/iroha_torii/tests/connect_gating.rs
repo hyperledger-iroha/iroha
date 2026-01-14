@@ -186,6 +186,8 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             // minimal defaults
             query_rate_per_authority_per_sec: None,
             query_burst_per_authority: None,
+            tx_rate_per_authority_per_sec: None,
+            tx_burst_per_authority: None,
             deploy_rate_per_origin_per_sec: None,
             deploy_burst_per_origin: None,
             proof_api: A::ProofApi {

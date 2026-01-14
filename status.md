@@ -1,13 +1,28 @@
 # Status
 
 ## Latest Updates
+- Torii: add tx-specific rate limiter knobs (default 10k TPS), route `/v1/transaction` through the tx limiter, and derive the high-load threshold from half the queue capacity; add unit tests for tx rate handling and high-load defaults.
+- Tests: not run (per request).
+- Tests: `CARGO_TARGET_DIR=target-codex-itest IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=target/debug/irohad TEST_NETWORK_BIN_IROHA=target/debug/iroha cargo test -p integration_tests --test mod queries -- --nocapture` (timed out after 600s; suite still in progress when timeout hit).
+- Tests: `CARGO_TARGET_DIR=target-codex-itest IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=target/debug/irohad TEST_NETWORK_BIN_IROHA=target/debug/iroha cargo test -p integration_tests --test mod queries -- --nocapture` (completed in sandbox but skipped network startups due to loopback bind denial; tests reported ok).
+- Android/Norito: tighten fixture manifest validation (instruction header checksum + metadata ordering), decode instruction payloads with Vec<u8> adapter, and add packed ByteVec encoding coverage; instruction payload roundtrip still pending.
+- Tests: `./java/norito_java/run_tests.sh` (pass).
+- Tests: `GRADLE_USER_HOME=/Users/takemiyamakoto/dev/iroha/.gradle ./java/iroha_android/gradlew -p java/iroha_android :core:test` (failed: Gradle wrapper download could not reach `services.gradle.org`).
+- Tests: `CARGO_TARGET_DIR=target-codex-itest IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=target/debug/irohad TEST_NETWORK_BIN_IROHA=target/debug/iroha cargo test -p integration_tests --test mod queries -- --nocapture` (timed out after 300s; tests still running and waiting on network permits).
+- Queries/tests: raise query tx confirmation timeout to 120s to avoid flaking after waiting for `Applied` confirmation.
+- Tests: `CARGO_TARGET_DIR=target-codex-itest IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=target/debug/irohad TEST_NETWORK_BIN_IROHA=target/debug/iroha cargo test -p integration_tests --test mod queries::account::find_accounts_with_asset -- --nocapture` (pass; ran >60s).
+- Tests: `IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test mod queries::account::find_accounts_with_asset -- --nocapture` (failed: tx confirmation timed out after 30s).
+- Tests: `CARGO_TARGET_DIR=target-codex-itest IROHA_TEST_NETWORK_KEEP_DIRS=1 IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=target/debug/irohad TEST_NETWORK_BIN_IROHA=target/debug/iroha cargo test -p integration_tests --test mod queries::account::find_accounts_with_asset -- --nocapture` (pass).
 - Queries/tests: reuse query network/client helpers with shorter tx status timeouts, streamline `find_asset_total_quantity` (combined mint+burn plus tighter unregister polling), and assert asset cleanup after unregister.
 - Tests: `cargo test -p integration_tests --test mod queries::account::find_accounts_with_asset -- --nocapture` (pass).
 - Tests: `cargo test -p integration_tests --test mod queries::asset::find_asset_total_quantity -- --nocapture` (pass).
 - Tests: `cargo test -p integration_tests --test mod queries::find_blocks_reversed -- --nocapture` (pass).
 - Tests: `cargo test -p integration_tests --test mod queries -- --nocapture` (timed out after 300s; tests still running).
+- Tests: `IROHA_TEST_NETWORK_PARALLELISM=1 cargo test -p integration_tests --test mod queries -- --nocapture --test-threads=1` (timed out after 1200s; early failures from tx confirmation timeouts at 30s in `queries::account::find_accounts_with_asset`, `queries::asset::find_asset_total_quantity`, `queries::find_blocks_reversed`).
+- Tests: `CARGO_TARGET_DIR=target/codex-queries-mod cargo test -p integration_tests --test mod queries::account -- --nocapture` (pass).
+- Tests: `CARGO_TARGET_DIR=target/codex-queries-mod cargo test -p integration_tests --test mod queries::<module> -- --nocapture` for `asset`, `metadata`, `proof`, `query_errors`, `role`, `smart_contract`, `too_big_fetch_size_is_not_allowed`, `find_blocks_reversed`, and `find_transactions_reversed` (skipped: port allocation failed binding to 127.0.0.1:30000; tests reported ok via sandbox skip).
 - Sumeragi/block sync: normalize QC signer indices to the canonical topology across view rotations, skip missing-QC fetches when commit certificates or checkpoints are present, and stabilize block-sync counter tests with a dedicated guard; align block-sync QC unit tests with view expectations.
-- Tests: `cargo test -p iroha_core --lib block_sync_ -- --nocapture` (timed out after 120s waiting on the build directory lock); `CARGO_TARGET_DIR=target-codex-block-sync cargo test -p iroha_core --lib block_sync_ -- --nocapture` (timed out after 300s during compilation).
+- Tests: `cargo test -p iroha_core --lib block_sync_ -- --nocapture` (timed out after 120s waiting on the build directory lock); `CARGO_TARGET_DIR=target-codex-block-sync cargo test -p iroha_core --lib block_sync_ -- --nocapture` (timed out after 300s during compilation; later run timed out after 1200s with 1 failing test: `validate_block_sync_qc_rejects_aggregate_mismatch`); `CARGO_TARGET_DIR=target-codex-block-sync cargo test -p iroha_core --lib validate_block_sync_qc_rejects_aggregate_mismatch -- --nocapture` (pass); `CARGO_TARGET_DIR=target-codex-block-sync cargo test -p iroha_core --lib block_sync_ -- --nocapture` (pass).
 - Client tx confirmation: wait for `Applied` block events, treat `Committed` as non-final in retry/fallback, and add committed-block wait coverage; update retry tests accordingly.
 - Tests: `cargo test -p iroha tx_hash_tests::retry_transaction_committed_ -- --nocapture` (pass on rerun).
 - Tests: `cargo test -p iroha committed_block_event_waits_for_applied -- --nocapture` (pass).
@@ -2317,6 +2332,13 @@
 - Tests: `cargo test -p integration_tests trigger_completion_failure_reports_error -- --nocapture` (timed out after 600s; compile finished; test `events::notification::trigger_completion_failure_reports_error` still running).
 - Sumeragi NEW_VIEW quorum selection now filters senders against the active roster (only counts local if it is in-roster), with coverage for non-roster senders.
 - Sumeragi now rejects NEW_VIEW votes with mismatched highest QC hashes/heights before recording, with regressions for invalid highest fields.
+- Tests: `CARGO_TARGET_DIR=target-codex-queries-mod cargo test -p integration_tests --test mod queries::smart_contract::live_query_is_dropped_after_smart_contract_end -- --nocapture --test-threads=1` (passed).
+- Added smart-contract query test metadata helper to include `gas_limit` derived from IVM program metadata so admissions accept the transactions.
+- Tests: `CARGO_TARGET_DIR=target/codex-queries-mod cargo test -p integration_tests --test mod queries::smart_contract::live_query_is_dropped_after_smart_contract_end -- --nocapture --test-threads=1`.
+- Tests: `CARGO_TARGET_DIR=target/codex-queries-mod cargo test -p integration_tests --test mod queries::smart_contract::smart_contract_can_filter_queries -- --nocapture --test-threads=1`.
+- Tests: `CARGO_TARGET_DIR=target/codex-queries-mod cargo test -p integration_tests --test mod queries::too_big_fetch_size_is_not_allowed -- --nocapture --test-threads=1`.
+- Tests: `CARGO_TARGET_DIR=target/codex-queries-mod cargo test -p integration_tests --test mod queries::find_blocks_reversed -- --nocapture --test-threads=1`.
+- Tests: `CARGO_TARGET_DIR=target/codex-queries-mod cargo test -p integration_tests --test mod queries::find_transactions_reversed -- --nocapture --test-threads=1`.
 - Fixed Kotodama `encode_schema`/`decode_schema` lowering to publish schema/data TLVs into INPUT before invoking CoreHost schema syscalls, added a roundtrip schema-encode test, and confirmed SMARTCONTRACT_EXECUTE_QUERY smoke (stored query response metadata on the local swarm).
 - Tests: `cargo test -p ivm --test kotodama_schema_encode` (passes; warnings about unused fields in `crates/ivm/src/iso20022.rs` and unused import in `crates/ivm/tests/crypto.rs`).
 - Cleaned up Norito Python ruff issues (benchmark import order, __all__ exports, adapter fixed-size check) and excluded build artifacts from linting.

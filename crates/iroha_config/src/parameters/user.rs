@@ -11478,6 +11478,10 @@ pub struct Torii {
     pub query_rate_per_authority_per_sec: Option<u32>,
     /// Per-authority burst capacity (tokens). None disables.
     pub query_burst_per_authority: Option<u32>,
+    /// Per-authority transaction submission rate (tokens/sec). None disables.
+    pub tx_rate_per_authority_per_sec: Option<u32>,
+    /// Per-authority transaction submission burst (tokens). None disables.
+    pub tx_burst_per_authority: Option<u32>,
     /// Per-origin deploy rate (tokens/sec). None disables.
     pub deploy_rate_per_origin_per_sec: Option<u32>,
     /// Per-origin deploy burst tokens. None disables.
@@ -11957,6 +11961,14 @@ impl Torii {
             query_burst_per_authority: self
                 .query_burst_per_authority
                 .or(super::defaults::torii::QUERY_BURST_PER_AUTHORITY)
+                .and_then(std::num::NonZeroU32::new),
+            tx_rate_per_authority_per_sec: self
+                .tx_rate_per_authority_per_sec
+                .or(super::defaults::torii::TX_RATE_PER_AUTHORITY_PER_SEC)
+                .and_then(std::num::NonZeroU32::new),
+            tx_burst_per_authority: self
+                .tx_burst_per_authority
+                .or(super::defaults::torii::TX_BURST_PER_AUTHORITY)
                 .and_then(std::num::NonZeroU32::new),
             deploy_rate_per_origin_per_sec: self
                 .deploy_rate_per_origin_per_sec
