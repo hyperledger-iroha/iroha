@@ -107,12 +107,13 @@ impl FaultConfig {
         if start == end {
             return start;
         }
-        let delta = end - start;
+        let delta = end.saturating_sub(start);
         let upper = u64::try_from(delta.as_millis()).unwrap_or(u64::MAX);
         start + Duration::from_millis(rng.random_range(0..=upper))
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_fault_loop<P: FaultPeer>(
     peer: P,
     config: FaultConfig,
@@ -149,8 +150,8 @@ pub async fn run_fault_loop<P: FaultPeer>(
         };
         debug!(target: "izanami::faults", peer = peer.mnemonic(), ?scenario, ?delay, "scheduling next fault");
         tokio::select! {
-            _ = sleep(delay) => {},
-            _ = stop_notify.notified() => break,
+            () = sleep(delay) => {},
+            () = stop_notify.notified() => break,
         }
     }
 }
@@ -545,7 +546,7 @@ fn sample_duration<R: Rng>(rng: &mut R, range: &RangeInclusive<Duration>) -> Dur
     if start == end {
         return start;
     }
-    let delta = end - start;
+    let delta = end.saturating_sub(start);
     let upper = u64::try_from(delta.as_millis()).unwrap_or(u64::MAX);
     start + Duration::from_millis(rng.random_range(0..=upper))
 }
@@ -801,7 +802,9 @@ mod tests {
     #[test]
     fn bounded_delay_returns_none_when_expired() {
         let now = Instant::now();
-        let deadline = now - Duration::from_millis(1);
+        let deadline = now
+            .checked_sub(Duration::from_millis(1))
+            .expect("deadline should be in the past");
         assert!(bounded_delay(now, deadline, Duration::from_secs(1)).is_none());
     }
 

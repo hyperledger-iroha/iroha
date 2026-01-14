@@ -258,7 +258,7 @@ pub mod isi {
             let trigger_id = self.object().clone();
 
             let triggers = &mut state_transaction.world.triggers;
-            if triggers.remove(trigger_id.clone()) {
+            if triggers.remove(&trigger_id) {
                 state_transaction
                     .world
                     .emit_events(Some(TriggerEvent::Deleted(trigger_id)));
@@ -329,7 +329,7 @@ pub mod isi {
                 .inspect_by_id(&trigger, |action| action.repeats().is_depleted())
                 .unwrap_or(false);
             if should_remove {
-                let _ = triggers.remove(trigger.clone());
+                let _ = triggers.remove(&trigger);
             }
             state_transaction
                 .world

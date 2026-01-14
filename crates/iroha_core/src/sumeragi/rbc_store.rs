@@ -285,8 +285,7 @@ impl ChunkStore {
     fn write_session(&self, persisted: &PersistedSession) -> io::Result<()> {
         let path = Self::make_session_path(&self.dir, &persisted.key());
         let tmp = temp_session_path(&path);
-        let encoded =
-            to_bytes(persisted).map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+        let encoded = to_bytes(persisted).map_err(io::Error::other)?;
         {
             let mut file = fs::OpenOptions::new()
                 .create(true)

@@ -1579,10 +1579,10 @@ fn map_get_handles_spills() {
     let mut saw_map_get_spill = false;
     for bb in &func.blocks {
         for ins in &bb.instrs {
-            if let Instr::MapGet { dest, map, key } = ins {
-                if is_spilled(dest) || is_spilled(map) || is_spilled(key) {
-                    saw_map_get_spill = true;
-                }
+            if let Instr::MapGet { dest, map, key } = ins
+                && (is_spilled(dest) || is_spilled(map) || is_spilled(key))
+            {
+                saw_map_get_spill = true;
             }
         }
     }
@@ -1697,10 +1697,9 @@ fn map_load_pair_handles_spilled_map_base() {
                 map,
                 ..
             } = ins
+                && (is_spilled(map) || is_spilled(dest_key) || is_spilled(dest_val))
             {
-                if is_spilled(map) || is_spilled(dest_key) || is_spilled(dest_val) {
-                    saw_map_load_pair_spill = true;
-                }
+                saw_map_load_pair_spill = true;
             }
         }
     }

@@ -1353,7 +1353,9 @@ mod tests {
         let sid = [0x21u8; 32];
         let _app_inbox = bus.attach(sid, proto::Role::App).await;
         let sess = bus.get_or_create(&sid).await;
-        *sess.last_activity.lock().await = Instant::now() - Duration::from_mins(10);
+        *sess.last_activity.lock().await = Instant::now()
+            .checked_sub(Duration::from_mins(10))
+            .expect("activity instant fits");
 
         let removed = bus.prune_expired_sessions(Instant::now()).await;
         assert_eq!(removed, 0);
@@ -1365,7 +1367,9 @@ mod tests {
         let bus = Bus::new();
         let sid = [0x22u8; 32];
         let sess = bus.get_or_create(&sid).await;
-        *sess.last_activity.lock().await = Instant::now() - Duration::from_mins(10);
+        *sess.last_activity.lock().await = Instant::now()
+            .checked_sub(Duration::from_mins(10))
+            .expect("activity instant fits");
 
         let removed = bus.prune_expired_sessions(Instant::now()).await;
         assert_eq!(removed, 1);
@@ -1687,7 +1691,9 @@ mod tests {
         assert_eq!(got.seq, 1);
         assert_eq!(*session.last_seq_wallet_to_app.lock().await, Some(1));
 
-        let before_activity = Instant::now() - Duration::from_secs(5);
+        let before_activity = Instant::now()
+            .checked_sub(Duration::from_secs(5))
+            .expect("activity instant fits");
         *session.last_activity.lock().await = before_activity;
 
         let control = proto::ConnectControlV1::ServerEvent {
@@ -1743,7 +1749,9 @@ mod tests {
         let session = bus.get_or_create(&sid).await;
 
         *session.last_seq_app_to_wallet.lock().await = Some(7);
-        let before_activity = Instant::now() - Duration::from_secs(10);
+        let before_activity = Instant::now()
+            .checked_sub(Duration::from_secs(10))
+            .expect("activity instant fits");
         *session.last_activity.lock().await = before_activity;
 
         bus.notify_close(session.clone(), sid, proto::Role::Wallet, "test close")

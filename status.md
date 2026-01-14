@@ -1,8 +1,79 @@
 # Status
 
 ## Latest Updates
-- Torii/status: align the JSON status test with the `block_sync.roster` nesting.
+- Queries/tests: reuse query network/client helpers with shorter tx status timeouts, streamline `find_asset_total_quantity` (combined mint+burn plus tighter unregister polling), and assert asset cleanup after unregister.
+- Tests: `cargo test -p integration_tests --test mod queries::account::find_accounts_with_asset -- --nocapture` (pass).
+- Tests: `cargo test -p integration_tests --test mod queries::asset::find_asset_total_quantity -- --nocapture` (pass).
+- Tests: `cargo test -p integration_tests --test mod queries::find_blocks_reversed -- --nocapture` (pass).
+- Tests: `cargo test -p integration_tests --test mod queries -- --nocapture` (timed out after 300s; tests still running).
+- Sumeragi/block sync: normalize QC signer indices to the canonical topology across view rotations, skip missing-QC fetches when commit certificates or checkpoints are present, and stabilize block-sync counter tests with a dedicated guard; align block-sync QC unit tests with view expectations.
+- Tests: `cargo test -p iroha_core --lib block_sync_ -- --nocapture` (timed out after 120s waiting on the build directory lock); `CARGO_TARGET_DIR=target-codex-block-sync cargo test -p iroha_core --lib block_sync_ -- --nocapture` (timed out after 300s during compilation).
+- Client tx confirmation: wait for `Applied` block events, treat `Committed` as non-final in retry/fallback, and add committed-block wait coverage; update retry tests accordingly.
+- Tests: `cargo test -p iroha tx_hash_tests::retry_transaction_committed_ -- --nocapture` (pass on rerun).
+- Tests: `cargo test -p iroha committed_block_event_waits_for_applied -- --nocapture` (pass).
+- Tests: `IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test mod queries::account::find_accounts_with_asset -- --nocapture` (pass).
+- Sumeragi/RBC: defer proposals and idle view changes while unresolved RBC payloads are pending, throttle RBC DELIVER deferral rebroadcasts, and add unit coverage for backlog gating + deferral throttling.
 - Tests: not run (per request).
+- Android/Norito: re-encode signed transaction fixtures using decoded signatures (no re-signing) and assert signed payload parity for serialization drift checks.
+- Tests: `./java/iroha_android/gradlew -p java/iroha_android :core:test --tests org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests` (pass).
+- Tests: `cargo test -p iroha_core --lib gossiper_ -- --nocapture` (pass).
+- Block sync/tests: replace the share-blocks timer check with a yield-based progress signal to avoid flakiness under parallel load; keep the enqueue wait assertion.
+- CoreHost/tests: use the canonical `ALICE_ID` in the queue-instructions gas/enqueue test to avoid alias parsing failures.
+- Tests: `cargo test -p iroha_core --lib queue_ -- --nocapture` (failed: `queue_instructions_accumulates_gas_and_enqueues` parse error; `share_blocks_enqueue_does_not_block_tokio_timer` timer delay).
+- Tests: `cargo test -p iroha_core --lib queue_instructions_accumulates_gas_and_enqueues -- --nocapture` and `cargo test -p iroha_core --lib share_blocks_enqueue_does_not_block_tokio_timer -- --nocapture` (pass).
+- Android SDK/Norito: add fixture-based Rust/Android compatibility test (JUnit), enforce Java manifest parity in `cargo xtask norito-rpc-verify`, and add CI jobs for xtask parity + Android fixture compatibility.
+- Tests: not run (not requested).
+- Test network: stop stdout/stderr log-drain tasks on shutdown notify to avoid peer-task timeout warnings; add `drain_log_lines` helper and shutdown log-drain unit test.
+- Tests: `cargo test -p iroha_test_network log_drain_exits_on_shutdown_notify -- --nocapture` (pass).
+- Tx gossip: add restricted-plane route-match acceptance coverage.
+- Tests: `cargo test -p iroha_core --lib gossip_accepts_restricted_route_match -- --nocapture` (pass).
+- Torii/tests: add missing `rbc_rebroadcast_sessions_per_tick` to the connect-gating Sumeragi config.
+- Tests: not run (not requested).
+- Torii: add pipeline status cache eviction + pending-block refresh (Kura lag), and mark the status `hash` query as required in OpenAPI; expand pipeline status unit coverage.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Tests: `cargo test --workspace` (timed out after 120s during compilation).
+- Tests: `cargo test -p iroha_torii pipeline_status_ -- --nocapture` (timed out after 120s during compilation).
+- Queue: silence the unused `state_view` warning in `resync_hash_queue_if_needed` for non-telemetry builds.
+- Tests: `cargo test -p iroha_core --lib route_for_gossip_uses_router_decision -- --nocapture` and `cargo test -p iroha_core --lib gossip_drops_route_mismatch -- --nocapture` (pass).
+- Tx gossip: re-derive routes locally for inbound gossip, drop mismatched lane/dataspace metadata using expected-route telemetry labels, and keep `StateView` out of signature acceptance; add `Queue::route_for_gossip` coverage and update Nexus gossip docs.
+- Tests: `cargo test -p iroha_core --lib route_for_gossip_uses_router_decision -- --nocapture` and `cargo test -p iroha_core --lib gossip_drops_route_mismatch -- --nocapture` (pass; warning: unused variable `state_view` in `crates/iroha_core/src/queue.rs`).
+- Torii: restore `/v1/pipeline/transactions/status` with pipeline event caching plus state/Kura fallback, add OpenAPI entry, and add handler/cache unit coverage (queued/applied/rejected paths, base64 rejection payload).
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Tests: `cargo test --workspace` (timed out after 120s during compilation).
+- Offline FASTPQ: add test-only JSON parse diagnostics for sum proof requests; reran the sum proof regression.
+- Tests: `cargo test -p connect_norito_bridge offline_fastpq_sum_proof_matches_generator -- --nocapture` (pass).
+- Tests: `cargo test --workspace` timed out after 60m while running `integration_tests/tests/mod.rs` (tests prior to timeout passed; multiple `iroha_test_network` shutdown timeouts logged).
+- Lint: resolve clippy warnings in integration tests (async localnet guard, DNS helpers, offline fixtures) and re-export `AnonymityPolicy` for config tests.
+- Tests: `CARGO_TARGET_DIR=target-clippy cargo clippy --workspace --all-targets -- -D warnings` (pass).
+- Sumeragi/RBC: limit READY rebroadcasts to the deterministic f+1 sender subset (leader included), expose rebroadcast-skip counters in `/v1/sumeragi/rbc` + CLI, and update docs/translations + unit coverage for the new gating.
+- Tests: not run (per request).
+- Telemetry/RBC: add `sumeragi_rbc_rebroadcast_skipped_total` metric wiring and unit coverage to fix the missing-field build error.
+- Tests: not run (not requested).
+- Tx gossip: re-derive routes locally for inbound gossip and drop mismatched lane/dataspace metadata; add `Queue::route_for_gossip` coverage and update Nexus gossip docs.
+- Tests: not run (per request).
+- Sumeragi/RBC: limit payload rebroadcasts to a deterministic f+1 subset per session to cut chunk storms; update unit coverage and `docs/source/sumeragi.md`.
+- Tests: not run (per request).
+- Relay/ingress: apply per-peer low-priority ingress throttling (tx/peer/trust gossip + health/time + streaming control) using `low_priority_*` config; add unit coverage and document the ingress behavior in P2P docs.
+- Tests: `cargo test -p irohad low_priority_ingress_ -- --nocapture` (pass; warning: unused mut in `crates/iroha_core/src/sumeragi/main_loop/commit.rs`).
+- P2P/relay: add bounded relay work queues + worker pool to keep subscriber ingress draining under load; log work-queue drops, make `enqueue_sumeragi_block_message` synchronous, and update relay tests to use `NetworkRelayShared`.
+- Sumeragi: gate vote/block-sync/RBC payload rebroadcasts and idle view changes on relay backpressure (subscriber queue full counters), add RelayBackpressure unit coverage, and document the new pause behavior.
+- Tests: not run (per request).
+- Relay/block sync: reject block-sync requests/responses whose declared `peer_id` mismatches the transport sender; add unit coverage, and log the stricter validation in Sumeragi docs. Fix relay work-item alias to use the public `PeerMessage` type and bring `ClassifyTopic` into scope for relay queue logs.
+- Tests: `cargo test -p irohad block_sync_ -- --nocapture` (pass).
+- P2P/relay: drop relay frames whose `origin` does not match the incoming peer unless the peer is the configured relay hub in spoke mode (prevents origin spoofing in non-relay links); add unit coverage.
+- Tests: `cargo test -p iroha_p2p peer_message_ -- --nocapture` (pass).
+- Sumeragi/relay: make `try_incoming_block_message` always non-blocking (drop on full queues) to keep the P2P relay draining; remove the spawn-blocking enqueue path and update relay/Sumeragi tests to expect best-effort drops instead of blocking.
+- Build: `CARGO_TARGET_DIR=target/localnet-debug cargo build -p irohad --bin irohad` (pass).
+- Tests: not run (per request).
+- Docs: update `docs/source/sumeragi.md` to reflect best-effort relay enqueue/drop behavior for block-sync updates and drop counters.
+- Localnet/run2: started 4-peer 1s debug localnet with per-peer `KURA_STORE_DIR` overrides (avoiding snapshot decode failures), ran `transaction ping --count 3000 --parallel 16 --no-wait`; no `subscriber queue full` logs in `localnet-1s-debug/peer*.run2.log`, only initial unrouted PeerGossip and 1 view-change warning per peer; localnet stopped.
+- CLI/load: add batch `transaction ping` flags (`--count`, `--parallel`, `--no-wait`, `--no-index`) with unit coverage for batch scheduling/message suffixing and ping validation; build `CARGO_TARGET_DIR=target/localnet-debug cargo build -p iroha_cli --bin iroha` (warns: unused assignment in `crates/iroha_core/src/peers_gossiper.rs`, dead code in `crates/iroha_core/src/smartcontracts/ivm/host.rs`).
+- Localnet/load: ran bulk ping (`--count 10000 --parallel 32 --no-wait`) against 4-peer 1s debug localnet; 4260 submissions accepted then 429 Too Many Requests; no `subscriber queue full` logs observed in `localnet-1s-debug/peer*.log`.
+- Tests: not run (per request).
+- P2P: make `data_message_wire_len` crate-visible so `data_frame_wire_len` compiles; run block-sync request-tracker unit tests.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-block-sync-tracker cargo test -p iroha_core --lib block_sync_request_tracker_ -- --nocapture` (pass; warnings: unused imports in `crates/iroha_core/src/smartcontracts/ivm/host.rs`, unused assignment in `crates/iroha_core/src/peers_gossiper.rs`).
+- Torii/status: align the JSON status test with the `block_sync.roster` nesting.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-status cargo test -p iroha_torii status_snapshot_json_includes_da_gate_and_kura_store -- --nocapture` (pass; warnings: unused fields in `crates/ivm/src/iso20022.rs`, unused assignment in `crates/iroha_core/src/peers_gossiper.rs`, dead code in `crates/iroha_core/src/smartcontracts/ivm/host.rs`).
 - Sumeragi/status JSON: include block-sync roster fields when converting Norito payloads and refresh status docs to show `block_sync.roster`.
 - Tests: not run (per request).
 - Sumeragi/status: expose unsolicited ShareBlocks drop counter in block-sync roster snapshots and `/v1/sumeragi/status` payloads; update tests and docs.

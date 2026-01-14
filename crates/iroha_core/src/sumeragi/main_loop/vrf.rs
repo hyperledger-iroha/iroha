@@ -498,6 +498,7 @@ impl Actor {
         Ok(note_result)
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     pub(super) fn persist_vrf_snapshot(
         &self,
         snapshot: EpochSnapshot,

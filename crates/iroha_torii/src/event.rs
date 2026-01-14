@@ -70,14 +70,14 @@ impl<'ws> Consumer<'ws> {
             return Ok(());
         }
         if proof_filters::has_any_proof_filters(
-            &self.proof_backend,
-            &self.proof_call_hash,
-            &self.proof_envelope_hash,
+            self.proof_backend.as_ref(),
+            self.proof_call_hash.as_ref(),
+            self.proof_envelope_hash.as_ref(),
         ) && !proof_filters::event_matches_proof_filters(
             &event,
-            &self.proof_backend,
-            &self.proof_call_hash,
-            &self.proof_envelope_hash,
+            self.proof_backend.as_ref(),
+            self.proof_call_hash.as_ref(),
+            self.proof_envelope_hash.as_ref(),
             false,
         ) {
             return Ok(());

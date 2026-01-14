@@ -81,6 +81,7 @@ struct CollectContext<'a> {
 impl TieredStateBackend {
     /// Construct a backend with explicit limits.
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         enabled: bool,
         hot_retained_keys: usize,
@@ -156,6 +157,8 @@ impl TieredStateBackend {
         Ok(())
     }
 
+    #[allow(clippy::unused_self)]
+    #[allow(clippy::too_many_lines)]
     fn recover_snapshot_artifacts(&self, root: &Path) -> Result<()> {
         #[derive(Default)]
         struct SnapshotArtifacts {
@@ -279,6 +282,7 @@ impl TieredStateBackend {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     fn plan_world_snapshot(&mut self, world: &World) -> Result<Option<TieredSnapshotPlan>> {
         if !self.enabled {
             return Ok(None);
@@ -346,6 +350,7 @@ impl TieredStateBackend {
         };
         let max_bytes = self.hot_retained_bytes;
 
+        #[allow(clippy::too_many_arguments)]
         fn try_select_entry(
             entry: &EntryScore,
             entries: &BTreeMap<TieredEntryId, EntryMetadata>,
@@ -578,42 +583,40 @@ impl TieredStateBackend {
                 }
             }
 
-            let payload_len = match payload_len {
-                Some(bytes) => bytes,
-                None => {
-                    let payload = cold.entry.encode_value(world).with_context(|| {
-                        format!(
-                            "failed to encode value for cold shard {path}",
-                            path = abs_path.display()
-                        )
-                    })?;
-                    let mut file =
-                        BufWriter::new(fs::File::create(&abs_path).wrap_err_with(|| {
-                            format!(
-                                "failed to open cold shard {path} for writing",
-                                path = abs_path.display()
-                            )
-                        })?);
-                    file.write_all(&payload).wrap_err_with(|| {
-                        format!(
-                            "failed to persist cold shard {path}",
-                            path = abs_path.display()
-                        )
-                    })?;
-                    file.flush().wrap_err_with(|| {
-                        format!(
-                            "failed to flush cold shard {path}",
-                            path = abs_path.display()
-                        )
-                    })?;
-                    file.get_ref().sync_all().wrap_err_with(|| {
-                        format!(
-                            "failed to sync cold shard {path}",
-                            path = abs_path.display()
-                        )
-                    })?;
-                    payload.len() as u64
-                }
+            let payload_len = if let Some(bytes) = payload_len {
+                bytes
+            } else {
+                let payload = cold.entry.encode_value(world).with_context(|| {
+                    format!(
+                        "failed to encode value for cold shard {path}",
+                        path = abs_path.display()
+                    )
+                })?;
+                let mut file = BufWriter::new(fs::File::create(&abs_path).wrap_err_with(|| {
+                    format!(
+                        "failed to open cold shard {path} for writing",
+                        path = abs_path.display()
+                    )
+                })?);
+                file.write_all(&payload).wrap_err_with(|| {
+                    format!(
+                        "failed to persist cold shard {path}",
+                        path = abs_path.display()
+                    )
+                })?;
+                file.flush().wrap_err_with(|| {
+                    format!(
+                        "failed to flush cold shard {path}",
+                        path = abs_path.display()
+                    )
+                })?;
+                file.get_ref().sync_all().wrap_err_with(|| {
+                    format!(
+                        "failed to sync cold shard {path}",
+                        path = abs_path.display()
+                    )
+                })?;
+                payload.len() as u64
             };
             cold_bytes_total = cold_bytes_total.saturating_add(payload_len);
             if reused {
@@ -798,7 +801,7 @@ impl TieredStateBackend {
             let path = root.join(format!("{snapshot_index:020}")).join(rel_path);
             match fs::read(&path) {
                 Ok(bytes) => return Ok(Some(bytes)),
-                Err(err) if err.kind() == ErrorKind::NotFound => continue,
+                Err(err) if err.kind() == ErrorKind::NotFound => {}
                 Err(err) => {
                     return Err(err).wrap_err_with(|| {
                         format!("failed to read cold payload {path}", path = path.display())
@@ -810,6 +813,7 @@ impl TieredStateBackend {
     }
 
     /// Update configuration knobs at runtime.
+    #[allow(clippy::too_many_arguments)]
     pub fn reconfigure(
         &mut self,
         enabled: bool,
@@ -925,6 +929,7 @@ impl TieredStateBackend {
     }
 
     /// Relabel snapshot directories when lane aliases (and therefore slugs) change.
+    #[allow(clippy::too_many_lines)]
     pub fn relabel_lane_geometry(
         &mut self,
         migrations: &[(&LaneConfigEntry, &LaneConfigEntry)],
@@ -1383,7 +1388,7 @@ impl TieredStateBackend {
                 entry
                     .file_type()
                     .ok()
-                    .filter(|ft| ft.is_dir())
+                    .filter(std::fs::FileType::is_dir)
                     .and_then(|_| Self::parse_snapshot_dir_name(&entry.file_name()))
                     .map(|idx| (idx, entry))
             })
@@ -1571,7 +1576,7 @@ impl TieredStateBackend {
 
     fn parse_snapshot_dir_name(name: &std::ffi::OsStr) -> Option<u64> {
         let name = name.to_str()?;
-        if name.len() != 20 || !name.as_bytes().iter().all(|b| b.is_ascii_digit()) {
+        if name.len() != 20 || !name.as_bytes().iter().all(u8::is_ascii_digit) {
             return None;
         }
         name.parse::<u64>().ok()
@@ -1600,6 +1605,7 @@ fn compute_json_hash(value: &impl json::JsonSerialize) -> Result<([u8; 32], usiz
     Ok((sha256(&encoded), encoded.len()))
 }
 
+#[allow(clippy::unnecessary_wraps)]
 fn compute_hot_bytes(value: &impl NoritoSerialize) -> Result<usize> {
     if let Some(exact) = value.encoded_len_exact() {
         return Ok(exact);
@@ -2315,7 +2321,7 @@ mod tests {
             .record_world_snapshot(&world)
             .expect("snapshot recorded");
         let manifest = backend.last_manifest().expect("manifest recorded");
-        assert!(manifest.cold_entries.len() > 0);
+        assert!(!manifest.cold_entries.is_empty());
         assert!(
             manifest.hot_entries.len() < manifest.total_entries,
             "byte budget should force some entries into cold tier"
@@ -2520,7 +2526,7 @@ mod tests {
             .unwrap()
             .filter_map(|entry| {
                 let entry = entry.ok()?;
-                TieredStateBackend::parse_snapshot_dir_name(&entry.file_name()).map(|idx| idx)
+                TieredStateBackend::parse_snapshot_dir_name(&entry.file_name())
             })
             .collect::<Vec<_>>();
         snapshots.sort_unstable();

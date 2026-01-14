@@ -255,22 +255,21 @@ impl PendingBlock {
         let backoff_shift = self.kura_retry_attempts.saturating_sub(1).min(16);
         let multiplier = 1u32.checked_shl(backoff_shift).unwrap_or(u32::MAX).max(1);
         let backoff = interval.saturating_mul(multiplier);
-        let deadline = match now.checked_add(backoff) {
-            Some(deadline) => deadline,
-            None => {
-                warn!(
-                    height = self.height,
-                    view = self.view,
-                    attempts = self.kura_retry_attempts,
-                    backoff_ms = backoff.as_millis(),
-                    "kura retry backoff overflow; aborting retries"
-                );
-                self.kura_aborted = true;
-                self.next_kura_retry = None;
-                return KuraRetryDecision::Abort {
-                    attempts: self.kura_retry_attempts,
-                };
-            }
+        let deadline = if let Some(deadline) = now.checked_add(backoff) {
+            deadline
+        } else {
+            warn!(
+                height = self.height,
+                view = self.view,
+                attempts = self.kura_retry_attempts,
+                backoff_ms = backoff.as_millis(),
+                "kura retry backoff overflow; aborting retries"
+            );
+            self.kura_aborted = true;
+            self.next_kura_retry = None;
+            return KuraRetryDecision::Abort {
+                attempts: self.kura_retry_attempts,
+            };
         };
         self.next_kura_retry = Some(deadline);
 

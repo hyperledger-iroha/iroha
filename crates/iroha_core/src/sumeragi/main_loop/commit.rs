@@ -3,6 +3,7 @@
 use std::{
     collections::BTreeSet,
     sync::{Arc, mpsc},
+    time::Instant,
 };
 
 use iroha_crypto::blake2::{Blake2b512, Digest as BlakeDigest};
@@ -12,6 +13,7 @@ use iroha_logger::prelude::*;
 use super::pacing::{Pacemaker, PacemakerBackpressure, PacemakerBackpressureAction};
 use super::*;
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(super) enum EpochRefreshPhase {
     PreCommit,
     PostCommit,
@@ -189,11 +191,12 @@ fn has_commit_quorum_signers(
     qc_signers: Option<&BTreeSet<ValidatorIndex>>,
     min_votes_for_commit: usize,
 ) -> bool {
-    qc_signers.map_or(false, |signers| signers.len() >= min_votes_for_commit)
+    qc_signers.is_some_and(|signers| signers.len() >= min_votes_for_commit)
 }
 
 impl Actor {
     /// Attach cached commit certificates and votes for the given block to a `BlockSyncUpdate`.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn apply_cached_qcs_to_block_sync_update(
         update: &mut super::message::BlockSyncUpdate,
         qc_cache: &BTreeMap<QcVoteKey, crate::sumeragi::consensus::Qc>,
@@ -245,7 +248,7 @@ impl Actor {
                     ) {
                         update.commit_qc = Some(derived);
                         if update.stake_snapshot.is_none() {
-                            update.stake_snapshot = record.stake_snapshot.clone();
+                            update.stake_snapshot.clone_from(&record.stake_snapshot);
                         }
                     }
                 }
@@ -293,6 +296,7 @@ impl Actor {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn precommit_signer_record_from_cached_qc(
         qc: &crate::sumeragi::consensus::Qc,
         commit_topology: &[PeerId],
@@ -359,9 +363,7 @@ impl Actor {
                     let Ok(idx) = usize::try_from(*signer) else {
                         return None;
                     };
-                    let Some(peer) = commit_topology.get(idx) else {
-                        return None;
-                    };
+                    let peer = commit_topology.get(idx)?;
                     signer_peers.insert(peer.clone());
                 }
                 match super::stake_snapshot::stake_quorum_reached_for_snapshot(
@@ -605,7 +607,9 @@ impl Actor {
         let view_signers = qc_signers.as_ref().and_then(|signers| {
             let mapped =
                 super::normalize_signer_indices_to_view(signers, &topology, &canonical_topology);
-            if mapped.len() != signers.len() {
+            if mapped.len() == signers.len() {
+                Some(mapped)
+            } else {
                 warn!(
                     height = pending_height,
                     view = pending_view,
@@ -614,8 +618,6 @@ impl Actor {
                     "skipping vote aggregation: signer mapping to view topology incomplete"
                 );
                 None
-            } else {
-                Some(mapped)
             }
         });
 
@@ -1681,6 +1683,11 @@ impl Actor {
             .rbc
             .ready_rebroadcast_last_sent
             .remove(&session_key);
+        self.subsystems
+            .da_rbc
+            .rbc
+            .deliver_deferral
+            .remove(&session_key);
         // Retain the aborted payload so late commit QCs can still recover via block sync.
         self.pending.pending_blocks.insert(block_hash, pending);
         super::status::record_commit_inflight_timeout(height, view, block_hash, elapsed);
@@ -1697,6 +1704,7 @@ impl Actor {
         true
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn handle_validation_reject(
         &mut self,
         invalid_hash: HashOf<BlockHeader>,
@@ -2037,10 +2045,7 @@ impl Actor {
             let finalize_start = Instant::now();
             if enable_qc_pipeline && emit_precommit {
                 let parent_hash = pending.block.header().prev_block_hash();
-                let pending_roots = pending
-                    .parent_state_root
-                    .clone()
-                    .zip(pending.post_state_root.clone());
+                let pending_roots = pending.parent_state_root.zip(pending.post_state_root);
                 if self.emit_precommit_vote(
                     hash,
                     pending_height,
@@ -2227,6 +2232,7 @@ impl Actor {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_vote(
         &self,
         phase: crate::sumeragi::consensus::Phase,
@@ -2240,17 +2246,16 @@ impl Actor {
     ) -> Option<crate::sumeragi::consensus::Vote> {
         let (parent_state_root, post_state_root) =
             if phase == crate::sumeragi::consensus::Phase::Commit {
-                match roots {
-                    Some(roots) => roots,
-                    None => {
-                        warn!(
-                            height,
-                            view,
-                            block = %block_hash,
-                            "missing execution roots; skipping commit vote"
-                        );
-                        return None;
-                    }
+                if let Some(roots) = roots {
+                    roots
+                } else {
+                    warn!(
+                        height,
+                        view,
+                        block = %block_hash,
+                        "missing execution roots; skipping commit vote"
+                    );
+                    return None;
                 }
             } else {
                 let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
@@ -2276,6 +2281,7 @@ impl Actor {
     }
 
     #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn emit_precommit_vote(
         &mut self,
         block_hash: HashOf<BlockHeader>,
@@ -2544,7 +2550,7 @@ impl Actor {
 
         let vote_msg = BlockMessage::QcVote(vote);
         let local_peer_id = self.common_config.peer.id().clone();
-        let mut targets: Vec<_> = signature_topology
+        let targets: Vec<_> = signature_topology
             .as_ref()
             .iter()
             .filter(|peer| *peer != &local_peer_id)
@@ -2560,7 +2566,7 @@ impl Actor {
             targets = targets.len(),
             "sending NEW_VIEW vote to view-aligned commit topology"
         );
-        for peer in targets.drain(..) {
+        for peer in targets {
             self.schedule_background(BackgroundRequest::Post {
                 peer,
                 msg: vote_msg.clone(),
@@ -2685,6 +2691,16 @@ impl Actor {
         height: u64,
         view: u64,
     ) -> usize {
+        if self.relay_backpressure_active(Instant::now(), self.rebroadcast_cooldown()) {
+            debug!(
+                height,
+                view,
+                block = ?block_hash,
+                phase = ?phase,
+                "skipping vote rebroadcast due to relay backpressure"
+            );
+            return 0;
+        }
         let votes: Vec<_> = self
             .vote_log
             .values()
@@ -3064,6 +3080,7 @@ impl Actor {
         gate
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     pub(super) fn broadcast_block_sync_update(
         &mut self,
         update: super::message::BlockSyncUpdate,
@@ -3072,18 +3089,23 @@ impl Actor {
         let online_peers = self
             .network
             .online_peers(|set| set.iter().map(|peer| peer.id().clone()).collect::<Vec<_>>());
+        let registered_peers = {
+            let view = self.state.view();
+            view.world().peers().iter().cloned().collect::<Vec<_>>()
+        };
         let seed = update.block.hash();
         let targets = Self::block_sync_update_targets_for_peers(
             self.common_config.peer.id(),
             self.block_sync_gossip_limit,
             peers,
+            &registered_peers,
             &online_peers,
             seed.as_ref(),
         );
         if targets.is_empty() {
             trace!(
                 height = update.block.header().height().get(),
-                view = u64::from(update.block.header().view_change_index()),
+                view = update.block.header().view_change_index(),
                 block = ?update.block.hash(),
                 "skipping block sync update gossip: no targets"
             );
@@ -3097,6 +3119,7 @@ impl Actor {
         }
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     pub(super) fn broadcast_block_created_for_block_sync(
         &mut self,
         created: super::message::BlockCreated,
@@ -3105,18 +3128,23 @@ impl Actor {
         let online_peers = self
             .network
             .online_peers(|set| set.iter().map(|peer| peer.id().clone()).collect::<Vec<_>>());
+        let registered_peers = {
+            let view = self.state.view();
+            view.world().peers().iter().cloned().collect::<Vec<_>>()
+        };
         let seed = created.block.hash();
         let targets = Self::block_sync_update_targets_for_peers(
             self.common_config.peer.id(),
             self.block_sync_gossip_limit,
             peers,
+            &registered_peers,
             &online_peers,
             seed.as_ref(),
         );
         if targets.is_empty() {
             trace!(
                 height = created.block.header().height().get(),
-                view = u64::from(created.block.header().view_change_index()),
+                view = created.block.header().view_change_index(),
                 block = ?created.block.hash(),
                 "skipping block payload gossip: no targets"
             );
@@ -3134,6 +3162,7 @@ impl Actor {
         local_peer: &PeerId,
         gossip_limit: usize,
         peers: &[PeerId],
+        registered_peers: &[PeerId],
         online_peers: &[PeerId],
         seed: &[u8],
     ) -> Vec<PeerId> {
@@ -3142,9 +3171,13 @@ impl Actor {
         }
 
         let world_peers: BTreeSet<_> = peers.iter().cloned().collect();
+        // Only target online peers that remain registered (e.g., observers), not unregistered strays.
+        let registered: BTreeSet<_> = registered_peers.iter().cloned().collect();
         let strays: Vec<PeerId> = online_peers
             .iter()
-            .filter(|peer| *peer != local_peer && !world_peers.contains(*peer))
+            .filter(|peer| {
+                *peer != local_peer && !world_peers.contains(*peer) && registered.contains(*peer)
+            })
             .cloned()
             .collect();
         let world_online: Vec<PeerId> = online_peers
@@ -3206,6 +3239,7 @@ impl Actor {
     }
 
     #[allow(dead_code)]
+    #[allow(clippy::needless_pass_by_value)]
     fn broadcast_block_created(&mut self, created: super::message::BlockCreated, peers: &[PeerId]) {
         for peer in peers {
             self.schedule_background(BackgroundRequest::Post {
@@ -3325,6 +3359,7 @@ impl Actor {
         self.rebroadcast_highest_qc_payload(qc, topology_peers);
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) fn materialize_qc_for_header(
         &mut self,
         qc: crate::sumeragi::consensus::QcHeaderRef,
@@ -3361,7 +3396,7 @@ impl Actor {
             qc.height,
             qc.view,
             qc.epoch,
-            topology.clone(),
+            &topology,
         );
         if let Some(formed) = self.qc_cache.get(&key).cloned() {
             return Some(formed);
@@ -3756,6 +3791,18 @@ impl Actor {
                 .ready_rebroadcast_last_sent
                 .remove(&key);
         }
+        let deferral_keys: Vec<_> = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .deliver_deferral
+            .keys()
+            .filter(|(hash, _, _)| *hash == block_hash)
+            .copied()
+            .collect();
+        for key in deferral_keys {
+            self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
+        }
         self.subsystems
             .da_rbc
             .rbc
@@ -3972,7 +4019,7 @@ impl Actor {
                 phase: crate::sumeragi::consensus::Phase::Commit,
                 subject_block_hash: block.hash(),
                 height,
-                view: u64::from(block.header().view_change_index()),
+                view: block.header().view_change_index(),
                 epoch: self.epoch_for_height(height),
             };
             if self
@@ -4143,6 +4190,7 @@ impl Actor {
         Ok(())
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     fn run_validator_election(
         &self,
         epoch: u64,
@@ -4228,6 +4276,7 @@ impl Actor {
         Some((activate_at, election.validator_set.clone(), apply_now))
     }
 
+    #[allow(clippy::unused_self)]
     fn collect_candidate_profiles(
         &self,
         view: &StateView<'_>,
@@ -4280,6 +4329,7 @@ impl Actor {
             .collect()
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     pub(super) fn install_elected_roster(&self, roster: &[PeerId]) -> Result<()> {
         if roster.is_empty() {
             return Ok(());
@@ -4327,9 +4377,7 @@ impl Actor {
             return CommitTopologyChange::None;
         }
 
-        let membership_changed = self
-            .last_commit_topology_membership_hash
-            .map_or(true, |last| last != membership_hash);
+        let membership_changed = self.last_commit_topology_membership_hash != Some(membership_hash);
         self.last_commit_topology_hash = Some(order_hash);
         self.last_commit_topology_membership_hash = Some(membership_hash);
 
@@ -4380,6 +4428,7 @@ impl Actor {
             .rbc
             .ready_rebroadcast_last_sent
             .clear();
+        self.subsystems.da_rbc.rbc.deliver_deferral.clear();
         self.subsystems.da_rbc.rbc.persisted_full_sessions.clear();
         self.subsystems.da_rbc.rbc.persist_inflight.clear();
         self.subsystems.da_rbc.rbc.status_handle.clear();
@@ -4417,7 +4466,7 @@ impl Actor {
             self.queue.clear_all();
             // Keep existing connections so block sync can still fetch updates after removal.
             if current != self.last_advertised_topology {
-                self.last_advertised_topology = current.clone();
+                self.last_advertised_topology.clone_from(&current);
                 self.peers_gossiper
                     .update_topology(UpdateTopology(current.into_iter().collect()));
             }
@@ -4470,7 +4519,7 @@ impl Actor {
             );
         }
 
-        self.last_advertised_topology = advertise.clone();
+        self.last_advertised_topology.clone_from(&advertise);
         self.peers_gossiper
             .update_topology(UpdateTopology(advertise.into_iter().collect()));
     }
@@ -4513,6 +4562,7 @@ impl Actor {
         (log_initial_deferral, false, should_fire_now)
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     pub(super) fn telemetry_handle(&self) -> Option<&crate::telemetry::Telemetry> {
         #[cfg(feature = "telemetry")]
         {
@@ -4795,8 +4845,9 @@ mod tests {
         online.extend(peers.clone());
         let seed = [0xB1; 32];
         let targets =
-            Actor::block_sync_update_targets_for_peers(&local, 3, &online, &online, &seed);
-        let repeat = Actor::block_sync_update_targets_for_peers(&local, 3, &online, &online, &seed);
+            Actor::block_sync_update_targets_for_peers(&local, 3, &online, &online, &online, &seed);
+        let repeat =
+            Actor::block_sync_update_targets_for_peers(&local, 3, &online, &online, &online, &seed);
 
         assert_eq!(targets, repeat);
         assert_eq!(targets.len(), 3);
@@ -4820,12 +4871,49 @@ mod tests {
         let mut world = Vec::with_capacity(world_peers.len() + 1);
         world.push(local.clone());
         world.extend(world_peers.clone());
+        let mut registered = world.clone();
+        registered.extend(stray_peers.clone());
         let seed = [0xCA; 32];
-        let targets = Actor::block_sync_update_targets_for_peers(&local, 2, &world, &online, &seed);
+        let targets = Actor::block_sync_update_targets_for_peers(
+            &local,
+            2,
+            &world,
+            &registered,
+            &online,
+            &seed,
+        );
 
         assert_eq!(targets.len(), 2);
         assert!(!targets.contains(&local));
         assert!(targets.iter().all(|peer| stray_peers.contains(peer)));
+    }
+
+    #[test]
+    fn block_sync_update_targets_skip_unregistered_strays() {
+        let local = PeerId::new(KeyPair::random().public_key().clone());
+        let world_peers: Vec<_> = (0..2)
+            .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
+            .collect();
+        let stray = PeerId::new(KeyPair::random().public_key().clone());
+        let mut online = Vec::new();
+        online.push(local.clone());
+        online.extend(world_peers.clone());
+        online.push(stray.clone());
+        let mut world = Vec::with_capacity(world_peers.len() + 1);
+        world.push(local.clone());
+        world.extend(world_peers.clone());
+        let registered = world.clone();
+        let seed = [0x5E; 32];
+        let targets = Actor::block_sync_update_targets_for_peers(
+            &local,
+            3,
+            &world,
+            &registered,
+            &online,
+            &seed,
+        );
+
+        assert!(!targets.contains(&stray));
     }
 
     #[test]
@@ -4837,7 +4925,8 @@ mod tests {
         let peers = vec![local.clone(), peer_a, peer_b.clone(), peer_c];
         let online = vec![local.clone(), peer_b.clone()];
         let seed = [0x12; 32];
-        let targets = Actor::block_sync_update_targets_for_peers(&local, 3, &peers, &online, &seed);
+        let targets =
+            Actor::block_sync_update_targets_for_peers(&local, 3, &peers, &peers, &online, &seed);
 
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0], peer_b);
@@ -4853,8 +4942,10 @@ mod tests {
         let peers = vec![local.clone(), peer_a.clone(), peer_b.clone()];
         let online = vec![local.clone()];
         let seed = [0xDE; 32];
-        let targets = Actor::block_sync_update_targets_for_peers(&local, 1, &peers, &online, &seed);
-        let repeat = Actor::block_sync_update_targets_for_peers(&local, 1, &peers, &online, &seed);
+        let targets =
+            Actor::block_sync_update_targets_for_peers(&local, 1, &peers, &peers, &online, &seed);
+        let repeat =
+            Actor::block_sync_update_targets_for_peers(&local, 1, &peers, &peers, &online, &seed);
 
         assert_eq!(targets, repeat);
         assert_eq!(targets.len(), 1);
@@ -4988,6 +5079,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn block_sync_update_has_roster_requires_stake_snapshot_in_npos() {
         let block = sample_block(4, 0);
         let mut update = super::super::message::BlockSyncUpdate::from(&block);
@@ -5217,7 +5309,7 @@ mod tests {
             LiveQueryStore::start_test(),
         );
         let height = block.header().height().get();
-        let view = u64::from(block.header().view_change_index());
+        let view = block.header().view_change_index();
         let epoch = 0;
         let keypairs = vec![
             KeyPair::random_with_algorithm(Algorithm::BlsNormal),
@@ -5296,7 +5388,7 @@ mod tests {
         let block = sample_block(8, 1);
         let block_hash = block.hash();
         let height = block.header().height().get();
-        let view = u64::from(block.header().view_change_index());
+        let view = block.header().view_change_index();
         let epoch = 0;
         let roster_len = 4;
         let signers_bitmap = vec![0b0000_0111];
@@ -5371,7 +5463,7 @@ mod tests {
             phase: crate::sumeragi::consensus::Phase::Commit,
             subject_block_hash: block_hash,
             height: block.header().height().get(),
-            view: u64::from(block.header().view_change_index()),
+            view: block.header().view_change_index(),
             epoch: 0,
         };
         let keypairs = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];

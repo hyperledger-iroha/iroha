@@ -1213,7 +1213,7 @@ impl Executor {
                 }
                 runtime.vm.set_gas_limit(effective_limit);
                 if let Err(err) = runtime.vm.run_with_host(&mut host) {
-                    return Err(crate::smartcontracts::ivm::map_vm_error_to_validation(err));
+                    return Err(crate::smartcontracts::ivm::map_vm_error_to_validation(&err));
                 }
                 let gas_used = effective_limit.saturating_sub(runtime.vm.remaining_gas());
 

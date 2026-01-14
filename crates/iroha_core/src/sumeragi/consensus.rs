@@ -162,6 +162,7 @@ pub fn compute_consensus_fingerprint_from_params(
 }
 
 /// Derive consensus handshake capabilities (mode tag, BLS domain, fingerprint) from the current state view and configuration.
+#[allow(clippy::too_many_lines)]
 pub fn compute_consensus_handshake_caps_from_view(
     view: &StateView<'_>,
     common_config: &CommonConfig,
@@ -184,69 +185,72 @@ pub fn compute_consensus_handshake_caps_from_view(
         ),
     };
     let (npos_params, epoch_length_blocks) = if matches!(effective_mode, ConsensusMode::Npos) {
-        if let Some(npos) = view.world().sumeragi_npos_parameters() {
-            (
-                Some(NposGenesisParams {
-                    block_time_ms: npos.block_time_ms(),
-                    timeout_propose_ms: npos.timeout_propose_ms(),
-                    timeout_prevote_ms: npos.timeout_prevote_ms(),
-                    timeout_precommit_ms: npos.timeout_precommit_ms(),
-                    timeout_commit_ms: npos.timeout_commit_ms(),
-                    timeout_da_ms: npos.timeout_da_ms(),
-                    timeout_aggregator_ms: npos.timeout_aggregator_ms(),
-                    k_aggregators: npos.k_aggregators(),
-                    redundant_send_r: npos.redundant_send_r(),
-                    epoch_seed: npos.epoch_seed(),
-                    vrf_commit_window_blocks: npos.vrf_commit_window_blocks(),
-                    vrf_reveal_window_blocks: npos.vrf_reveal_window_blocks(),
-                    max_validators: npos.max_validators(),
-                    min_self_bond: npos.min_self_bond(),
-                    min_nomination_bond: npos.min_nomination_bond(),
-                    max_nominator_concentration_pct: npos.max_nominator_concentration_pct(),
-                    seat_band_pct: npos.seat_band_pct(),
-                    max_entity_correlation_pct: npos.max_entity_correlation_pct(),
-                    finality_margin_blocks: npos.finality_margin_blocks(),
-                    evidence_horizon_blocks: npos.evidence_horizon_blocks(),
-                    activation_lag_blocks: npos.activation_lag_blocks(),
-                }),
-                npos.epoch_length_blocks().max(1),
-            )
-        } else {
-            let npos_cfg = &sumeragi_config.npos;
-            let duration_ms = |d: Duration| -> u64 {
-                let ms = d.as_millis();
-                u64::try_from(ms).expect("NPoS timeout exceeds supported millisecond range")
-            };
-            (
-                Some(NposGenesisParams {
-                    block_time_ms: duration_ms(npos_cfg.block_time),
-                    timeout_propose_ms: duration_ms(npos_cfg.timeouts.propose),
-                    timeout_prevote_ms: duration_ms(npos_cfg.timeouts.prevote),
-                    timeout_precommit_ms: duration_ms(npos_cfg.timeouts.precommit),
-                    timeout_commit_ms: duration_ms(npos_cfg.timeouts.commit),
-                    timeout_da_ms: duration_ms(npos_cfg.timeouts.da),
-                    timeout_aggregator_ms: duration_ms(npos_cfg.timeouts.aggregator),
-                    k_aggregators: u16::try_from(npos_cfg.k_aggregators)
-                        .expect("npos.k_aggregators must fit into u16"),
-                    redundant_send_r: npos_cfg.redundant_send_r,
-                    epoch_seed: super::chain_epoch_seed(&common_config.chain),
-                    vrf_commit_window_blocks: npos_cfg.vrf.commit_window_blocks,
-                    vrf_reveal_window_blocks: npos_cfg.vrf.reveal_window_blocks,
-                    max_validators: npos_cfg.election.max_validators,
-                    min_self_bond: npos_cfg.election.min_self_bond,
-                    min_nomination_bond: npos_cfg.election.min_nomination_bond,
-                    max_nominator_concentration_pct: npos_cfg
-                        .election
-                        .max_nominator_concentration_pct,
-                    seat_band_pct: npos_cfg.election.seat_band_pct,
-                    max_entity_correlation_pct: npos_cfg.election.max_entity_correlation_pct,
-                    finality_margin_blocks: npos_cfg.election.finality_margin_blocks,
-                    evidence_horizon_blocks: npos_cfg.reconfig.evidence_horizon_blocks,
-                    activation_lag_blocks: npos_cfg.reconfig.activation_lag_blocks,
-                }),
-                sumeragi_config.epoch_length_blocks.max(1),
-            )
-        }
+        view.world().sumeragi_npos_parameters().map_or_else(
+            || {
+                let npos_cfg = &sumeragi_config.npos;
+                let duration_ms = |d: Duration| -> u64 {
+                    let ms = d.as_millis();
+                    u64::try_from(ms).expect("NPoS timeout exceeds supported millisecond range")
+                };
+                (
+                    Some(NposGenesisParams {
+                        block_time_ms: duration_ms(npos_cfg.block_time),
+                        timeout_propose_ms: duration_ms(npos_cfg.timeouts.propose),
+                        timeout_prevote_ms: duration_ms(npos_cfg.timeouts.prevote),
+                        timeout_precommit_ms: duration_ms(npos_cfg.timeouts.precommit),
+                        timeout_commit_ms: duration_ms(npos_cfg.timeouts.commit),
+                        timeout_da_ms: duration_ms(npos_cfg.timeouts.da),
+                        timeout_aggregator_ms: duration_ms(npos_cfg.timeouts.aggregator),
+                        k_aggregators: u16::try_from(npos_cfg.k_aggregators)
+                            .expect("npos.k_aggregators must fit into u16"),
+                        redundant_send_r: npos_cfg.redundant_send_r,
+                        epoch_seed: super::chain_epoch_seed(&common_config.chain),
+                        vrf_commit_window_blocks: npos_cfg.vrf.commit_window_blocks,
+                        vrf_reveal_window_blocks: npos_cfg.vrf.reveal_window_blocks,
+                        max_validators: npos_cfg.election.max_validators,
+                        min_self_bond: npos_cfg.election.min_self_bond,
+                        min_nomination_bond: npos_cfg.election.min_nomination_bond,
+                        max_nominator_concentration_pct: npos_cfg
+                            .election
+                            .max_nominator_concentration_pct,
+                        seat_band_pct: npos_cfg.election.seat_band_pct,
+                        max_entity_correlation_pct: npos_cfg.election.max_entity_correlation_pct,
+                        finality_margin_blocks: npos_cfg.election.finality_margin_blocks,
+                        evidence_horizon_blocks: npos_cfg.reconfig.evidence_horizon_blocks,
+                        activation_lag_blocks: npos_cfg.reconfig.activation_lag_blocks,
+                    }),
+                    sumeragi_config.epoch_length_blocks.max(1),
+                )
+            },
+            |npos| {
+                (
+                    Some(NposGenesisParams {
+                        block_time_ms: npos.block_time_ms(),
+                        timeout_propose_ms: npos.timeout_propose_ms(),
+                        timeout_prevote_ms: npos.timeout_prevote_ms(),
+                        timeout_precommit_ms: npos.timeout_precommit_ms(),
+                        timeout_commit_ms: npos.timeout_commit_ms(),
+                        timeout_da_ms: npos.timeout_da_ms(),
+                        timeout_aggregator_ms: npos.timeout_aggregator_ms(),
+                        k_aggregators: npos.k_aggregators(),
+                        redundant_send_r: npos.redundant_send_r(),
+                        epoch_seed: npos.epoch_seed(),
+                        vrf_commit_window_blocks: npos.vrf_commit_window_blocks(),
+                        vrf_reveal_window_blocks: npos.vrf_reveal_window_blocks(),
+                        max_validators: npos.max_validators(),
+                        min_self_bond: npos.min_self_bond(),
+                        min_nomination_bond: npos.min_nomination_bond(),
+                        max_nominator_concentration_pct: npos.max_nominator_concentration_pct(),
+                        seat_band_pct: npos.seat_band_pct(),
+                        max_entity_correlation_pct: npos.max_entity_correlation_pct(),
+                        finality_margin_blocks: npos.finality_margin_blocks(),
+                        evidence_horizon_blocks: npos.evidence_horizon_blocks(),
+                        activation_lag_blocks: npos.activation_lag_blocks(),
+                    }),
+                    npos.epoch_length_blocks().max(1),
+                )
+            },
+        )
     } else {
         (None, 0)
     };
@@ -506,7 +510,7 @@ mod tests {
         let chunk_root = iroha_crypto::Hash::prehashed([4u8; 32]);
 
         let vote = Vote {
-            block_hash: block_hash.clone(),
+            block_hash,
             parent_state_root: iroha_crypto::Hash::prehashed([1u8; 32]),
             post_state_root: iroha_crypto::Hash::prehashed([2u8; 32]),
             height: 11,
@@ -528,7 +532,7 @@ mod tests {
         );
 
         let ready = RbcReady {
-            block_hash: block_hash.clone(),
+            block_hash,
             height: 11,
             view: 2,
             epoch: 0,

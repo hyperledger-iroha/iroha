@@ -307,9 +307,9 @@ impl MergeLedgerLog {
     fn append(&mut self, entry: &MergeLedgerEntry) -> Result<()> {
         let encoded = Encode::encode(entry);
         if encoded.len() > MERGE_LEDGER_MAX_ENTRY_BYTES {
-            return Err(Error::NoritoFrame(norito::core::Error::Message(
-                format!("merge ledger entry exceeds {MERGE_LEDGER_MAX_ENTRY_BYTES} bytes").into(),
-            )));
+            return Err(Error::NoritoFrame(norito::core::Error::Message(format!(
+                "merge ledger entry exceeds {MERGE_LEDGER_MAX_ENTRY_BYTES} bytes"
+            ))));
         }
         let len: u32 = encoded.len().try_into().map_err(|_| {
             Error::NoritoFrame(norito::core::Error::Message(
@@ -1981,8 +1981,8 @@ impl Kura {
             return;
         }
         // (Genesis block is used in metrics to get genesis timestamp.)
-        for idx in 1..limit {
-            block_data[idx].1 = None;
+        for entry in block_data.iter_mut().take(limit).skip(1) {
+            entry.1 = None;
         }
     }
 
@@ -2616,8 +2616,9 @@ impl Kura {
                     sidecar_height = sidecar.height,
                     "roster sidecar height mismatch"
                 );
-                None
-            } else if let Ok(height_usize) = usize::try_from(height)
+                return None;
+            }
+            if let Ok(height_usize) = usize::try_from(height)
                 && let Some(expected) =
                     NonZeroUsize::new(height_usize).and_then(|height| self.get_block_hash(height))
                 && expected != sidecar.block_hash
@@ -2628,35 +2629,38 @@ impl Kura {
                     actual = %sidecar.block_hash,
                     "roster sidecar block hash mismatch"
                 );
-                None
-            } else if let Some(cert) = sidecar.commit_qc.as_ref()
-                && (cert.height != sidecar.height || cert.subject_block_hash != sidecar.block_hash)
-            {
-                iroha_logger::warn!(
-                    height,
-                    sidecar_height = sidecar.height,
-                    sidecar_hash = %sidecar.block_hash,
-                    cert_height = cert.height,
-                    cert_hash = %cert.subject_block_hash,
-                    "roster sidecar commit certificate metadata mismatch"
-                );
-                None
-            } else if let Some(checkpoint) = sidecar.validator_checkpoint.as_ref()
-                && (checkpoint.height != sidecar.height
-                    || checkpoint.block_hash != sidecar.block_hash)
-            {
-                iroha_logger::warn!(
-                    height,
-                    sidecar_height = sidecar.height,
-                    sidecar_hash = %sidecar.block_hash,
-                    checkpoint_height = checkpoint.height,
-                    checkpoint_hash = %checkpoint.block_hash,
-                    "roster sidecar checkpoint metadata mismatch"
-                );
-                None
-            } else {
-                Some(sidecar)
+                return None;
             }
+            if let Some(cert) = sidecar.commit_qc.as_ref() {
+                let cert_block_hash = cert.subject_block_hash;
+                if cert.height != sidecar.height || cert_block_hash != sidecar.block_hash {
+                    iroha_logger::warn!(
+                        height,
+                        sidecar_height = sidecar.height,
+                        sidecar_hash = %sidecar.block_hash,
+                        cert_height = cert.height,
+                        cert_hash = %cert_block_hash,
+                        "roster sidecar commit certificate metadata mismatch"
+                    );
+                    return None;
+                }
+            }
+            if let Some(checkpoint) = sidecar.validator_checkpoint.as_ref() {
+                if checkpoint.height != sidecar.height
+                    || checkpoint.block_hash != sidecar.block_hash
+                {
+                    iroha_logger::warn!(
+                        height,
+                        sidecar_height = sidecar.height,
+                        sidecar_hash = %sidecar.block_hash,
+                        checkpoint_height = checkpoint.height,
+                        checkpoint_hash = %checkpoint.block_hash,
+                        "roster sidecar checkpoint metadata mismatch"
+                    );
+                    return None;
+                }
+            }
+            Some(sidecar)
         })
     }
 
@@ -2692,38 +2696,34 @@ impl Kura {
                     (None, false)
                 }
             };
-            if let Some(data_len) = data_len {
+            data_len.is_some_and(|data_len| {
                 if !temp_index_sane {
                     warn!(
                         ?temp_index_path,
                         kind, "refusing to promote invalid sidecar temp index"
                     );
+                    return false;
+                }
+                if temp_data_exists {
+                    return Self::promote_sidecar_temp(&temp_index_path, index_path, kind, "index");
+                }
+                let main_index_sane = if index_path.exists() {
+                    Self::sidecar_index_sane_with_label(index_path, data_len, kind, "main")
+                } else {
+                    false
+                };
+                if main_index_sane {
+                    iroha_logger::debug!(
+                        ?temp_index_path,
+                        ?index_path,
+                        kind,
+                        "skipping temp sidecar index promotion because main index is valid"
+                    );
                     false
                 } else {
-                    if !temp_data_exists {
-                        let main_index_sane = if index_path.exists() {
-                            Self::sidecar_index_sane_with_label(index_path, data_len, kind, "main")
-                        } else {
-                            false
-                        };
-                        if main_index_sane {
-                            iroha_logger::debug!(
-                                ?temp_index_path,
-                                ?index_path,
-                                kind,
-                                "skipping temp sidecar index promotion because main index is valid"
-                            );
-                            false
-                        } else {
-                            Self::promote_sidecar_temp(&temp_index_path, index_path, kind, "index")
-                        }
-                    } else {
-                        Self::promote_sidecar_temp(&temp_index_path, index_path, kind, "index")
-                    }
+                    Self::promote_sidecar_temp(&temp_index_path, index_path, kind, "index")
                 }
-            } else {
-                false
-            }
+            })
         } else {
             false
         };
@@ -2874,19 +2874,18 @@ impl Kura {
                 );
                 return false;
             }
-            let entry_end = match entry.offset.checked_add(entry.len) {
-                Some(end) => end,
-                None => {
-                    warn!(
-                        offset = entry.offset,
-                        len = entry.len,
-                        ?index_path,
-                        kind,
-                        label,
-                        "sidecar index entry overflows offset"
-                    );
-                    return false;
-                }
+            let entry_end = if let Some(end) = entry.offset.checked_add(entry.len) {
+                end
+            } else {
+                warn!(
+                    offset = entry.offset,
+                    len = entry.len,
+                    ?index_path,
+                    kind,
+                    label,
+                    "sidecar index entry overflows offset"
+                );
+                return false;
             };
             if entry_end > data_len {
                 warn!(
@@ -3253,6 +3252,7 @@ impl Kura {
         true
     }
 
+    #[allow(clippy::too_many_lines)]
     fn read_indexed_sidecar<T, F>(
         &self,
         height: u64,
@@ -3554,26 +3554,25 @@ impl Kura {
                 }
                 continue;
             };
-            let entry_end = match entry.offset.checked_add(entry.len) {
-                Some(end) => end,
-                None => {
+            let entry_end = if let Some(end) = entry.offset.checked_add(entry.len) {
+                end
+            } else {
+                iroha_logger::warn!(
+                    offset = entry.offset,
+                    len = entry.len,
+                    kind,
+                    "sidecar payload range overflow during prune; dropping entry"
+                );
+                if let Err(err) = new_index.write_all(&empty_entry) {
                     iroha_logger::warn!(
-                        offset = entry.offset,
-                        len = entry.len,
+                        ?err,
+                        ?temp_index_path,
                         kind,
-                        "sidecar payload range overflow during prune; dropping entry"
+                        "failed to write pruned sidecar index entry"
                     );
-                    if let Err(err) = new_index.write_all(&empty_entry) {
-                        iroha_logger::warn!(
-                            ?err,
-                            ?temp_index_path,
-                            kind,
-                            "failed to write pruned sidecar index entry"
-                        );
-                        return false;
-                    }
-                    continue;
+                    return false;
                 }
+                continue;
             };
             if entry_end > data_len {
                 iroha_logger::warn!(
@@ -3952,8 +3951,8 @@ impl BlockStore {
                 .open(&tmp_path)
                 .map_err(|err| Error::IO(err, tmp_path.clone()))?;
             file.write_all(&bytes)
-                .and_then(|_| file.flush())
-                .and_then(|_| file.sync_data())
+                .and_then(|()| file.flush())
+                .and_then(|()| file.sync_data())
                 .map_err(|err| Error::IO(err, tmp_path.clone()))?;
         }
         if let Err(err) = std::fs::rename(&tmp_path, &path) {
@@ -3999,12 +3998,11 @@ impl BlockStore {
         while candidate > 0 {
             match self.read_block_index(candidate - 1) {
                 Ok(index) => {
-                    let end = match index.start.checked_add(index.length) {
-                        Some(end) => end,
-                        None => {
-                            candidate = candidate.saturating_sub(1);
-                            continue;
-                        }
+                    let end = if let Some(end) = index.start.checked_add(index.length) {
+                        end
+                    } else {
+                        candidate = candidate.saturating_sub(1);
+                        continue;
                     };
                     if index.length == 0
                         || index.length > STRICT_INIT_MAX_BLOCK_BYTES
@@ -4066,12 +4064,11 @@ impl BlockStore {
             return Ok(());
         }
 
-        let mut durable_count = match self.read_commit_marker()? {
-            Some(marker) => marker.count,
-            None => {
-                self.write_commit_marker(data_backed_count)?;
-                data_backed_count
-            }
+        let mut durable_count = if let Some(marker) = self.read_commit_marker()? {
+            marker.count
+        } else {
+            self.write_commit_marker(data_backed_count)?;
+            data_backed_count
         };
 
         if durable_count > data_backed_count {
@@ -4349,12 +4346,18 @@ impl BlockStore {
     }
 
     /// Return the logical index count based on the index file length.
+    ///
+    /// # Errors
+    /// Returns any underlying IO errors when reading the index file metadata.
     #[allow(clippy::integer_division)]
     pub fn read_index_count(&mut self) -> Result<u64> {
         self.read_index_count_from_len()
     }
 
     /// Return the durable index count as recorded by the commit marker.
+    ///
+    /// # Errors
+    /// Returns any underlying IO errors when reading the index file metadata.
     pub fn read_durable_index_count(&mut self) -> Result<u64> {
         if self.path_to_blockchain.as_os_str().is_empty() {
             return Ok(0);
@@ -4968,7 +4971,7 @@ pub enum Error {
     NoritoFrame(#[from] norito::core::Error),
     /// Failed to allocate buffer
     Alloc(#[from] std::collections::TryReserveError),
-    /// Tried reading block data out of bounds: start {start_block_height}, count {block_count}
+    /// Tried reading block data out of bounds: start `{start_block_height}`, count `{block_count}`
     OutOfBoundsBlockRead {
         /// The block height from which the read was supposed to start
         start_block_height: u64,
@@ -6521,7 +6524,7 @@ mod tests {
         assert_ne!(replacement.hash(), block2.hash(), "replacement must differ");
 
         block_store
-            .append_block_batch_at(1, &[replacement.clone()])
+            .append_block_batch_at(1, std::slice::from_ref(&replacement))
             .unwrap();
 
         assert_eq!(block_store.read_index_count().unwrap(), 2);
@@ -7928,7 +7931,7 @@ mod tests {
         let data_path = dir.join(PIPELINE_SIDECARS_DATA_FILE);
         let index_path = dir.join(PIPELINE_SIDECARS_INDEX_FILE);
 
-        std::fs::write(&data_path, &[]).expect("create sidecar data file");
+        std::fs::write(&data_path, []).expect("create sidecar data file");
         let entry = SidecarIndexEntry {
             offset: 0,
             len: STRICT_INIT_MAX_BLOCK_BYTES + 1,

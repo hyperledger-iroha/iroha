@@ -473,24 +473,23 @@ impl PeersGossiper {
     ) {
         let mut gossip_period = tokio::time::interval(Self::gossip_interval(self.gossip_period));
         loop {
-            let mut should_check_gossip = false;
-            tokio::select! {
+            let should_check_gossip = tokio::select! {
                 Some(update_topology) = update_topology_receiver.recv() => {
                     let changed = self.set_current_topology(update_topology);
                     if changed {
                         self.note_gossip_change(std::time::Instant::now());
                     }
-                    should_check_gossip = true;
+                    true
                 }
                 _ = gossip_period.tick() => {
-                    should_check_gossip = true;
+                    true
                 }
                 result = self.network.wait_online_peers_update(|_| ()) => {
                     match result {
                         Ok(()) => {
                             self.network_update_peers_addresses();
                             self.note_gossip_change(std::time::Instant::now());
-                            should_check_gossip = true;
+                            true
                         }
                         Err(err) => {
                             iroha_logger::debug!(?err, "Network online peers channel closed");
@@ -511,13 +510,13 @@ impl PeersGossiper {
                             }
                         }
                     }
-                    should_check_gossip = true;
+                    true
                 }
                 () = shutdown_signal.receive() => {
                     iroha_logger::debug!("Shutting down peers gossiper");
                     break;
                 },
-            }
+            };
             if should_check_gossip {
                 self.maybe_gossip(std::time::Instant::now());
             }
@@ -725,11 +724,11 @@ impl PeersGossiper {
         if outcome.drop_sender && self.evict_if_low_trust(from_peer.id(), now) {
             return false;
         }
-        let mut trust_changed = false;
-        if !outcome.newly_trusted.is_empty() {
-            self.trusted_peers.extend(outcome.newly_trusted.clone());
-            self.trust_candidates.extend(outcome.newly_trusted);
-            trust_changed = true;
+        let newly_trusted = outcome.newly_trusted;
+        let trust_changed = !newly_trusted.is_empty();
+        if trust_changed {
+            self.trusted_peers.extend(newly_trusted.iter().cloned());
+            self.trust_candidates.extend(newly_trusted);
         }
         if trust_changed {
             self.update_trusted_peers_on_network();

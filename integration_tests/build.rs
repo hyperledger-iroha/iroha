@@ -26,13 +26,21 @@ fn default_max_cycles() -> u64 {
 
 const LITERAL_DATA_START: i16 = 16;
 
+fn len_u32(len: usize) -> u32 {
+    u32::try_from(len).expect("length fits in u32")
+}
+
+fn syscall_u8(id: u32) -> u8 {
+    u8::try_from(id).expect("syscall id fits in u8")
+}
+
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     use iroha_data_model::prelude::Hash;
 
     let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
     out.extend_from_slice(&type_id.to_be_bytes());
     out.push(1);
-    out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    out.extend_from_slice(&len_u32(payload.len()).to_be_bytes());
     out.extend_from_slice(payload);
     let h: [u8; Hash::LENGTH] = Hash::new(payload).into();
     out.extend_from_slice(&h);
@@ -49,7 +57,7 @@ fn assemble_program_with_literals(code: &[u8], literal_data: &[u8]) -> Vec<u8> {
         program.extend_from_slice(b"LTLB");
         program.extend_from_slice(&0u32.to_le_bytes()); // literal entries
         program.extend_from_slice(&0u32.to_le_bytes()); // post-pad bytes
-        program.extend_from_slice(&(literal_data.len() as u32).to_le_bytes());
+        program.extend_from_slice(&len_u32(literal_data.len()).to_le_bytes());
         program.extend_from_slice(literal_data);
     }
     program.extend_from_slice(code);
@@ -100,8 +108,11 @@ fn build_program_mint_rose_for_authority() -> Vec<u8> {
     let mut code = Vec::new();
     // r10 <- &AccountId(authority)
     code.extend_from_slice(
-        &encoding::wide::encode_sys(wide::system::SCALL, ivm_sys::SYSCALL_GET_AUTHORITY as u8)
-            .to_le_bytes(),
+        &encoding::wide::encode_sys(
+            wide::system::SCALL,
+            syscall_u8(ivm_sys::SYSCALL_GET_AUTHORITY),
+        )
+        .to_le_bytes(),
     );
     code.extend_from_slice(&encode_addi(13, 10, 0).to_le_bytes()); // save account pointer
     // r10 <- &AssetDefinitionId (literal TLV)
@@ -109,7 +120,7 @@ fn build_program_mint_rose_for_authority() -> Vec<u8> {
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             wide::system::SCALL,
-            ivm_sys::SYSCALL_INPUT_PUBLISH_TLV as u8,
+            syscall_u8(ivm_sys::SYSCALL_INPUT_PUBLISH_TLV),
         )
         .to_le_bytes(),
     );
@@ -117,7 +128,7 @@ fn build_program_mint_rose_for_authority() -> Vec<u8> {
     code.extend_from_slice(&encode_addi(10, 13, 0).to_le_bytes()); // r10 = account ptr
     code.extend_from_slice(&encode_addi(12, 0, 1).to_le_bytes()); // amount = 1
     code.extend_from_slice(
-        &encoding::wide::encode_sys(wide::system::SCALL, ivm_sys::SYSCALL_MINT_ASSET as u8)
+        &encoding::wide::encode_sys(wide::system::SCALL, syscall_u8(ivm_sys::SYSCALL_MINT_ASSET))
             .to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
@@ -174,8 +185,11 @@ fn build_program_set_account_detail_defaults() -> Vec<u8> {
     let mut code = Vec::new();
     // r10 <- &AccountId(authority)
     code.extend_from_slice(
-        &encoding::wide::encode_sys(wide::system::SCALL, ivm_sys::SYSCALL_GET_AUTHORITY as u8)
-            .to_le_bytes(),
+        &encoding::wide::encode_sys(
+            wide::system::SCALL,
+            syscall_u8(ivm_sys::SYSCALL_GET_AUTHORITY),
+        )
+        .to_le_bytes(),
     );
     code.extend_from_slice(&encode_addi(13, 10, 0).to_le_bytes()); // save account pointer
     // r10 <- &Name("cursor")
@@ -183,7 +197,7 @@ fn build_program_set_account_detail_defaults() -> Vec<u8> {
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             wide::system::SCALL,
-            ivm_sys::SYSCALL_INPUT_PUBLISH_TLV as u8,
+            syscall_u8(ivm_sys::SYSCALL_INPUT_PUBLISH_TLV),
         )
         .to_le_bytes(),
     );
@@ -193,7 +207,7 @@ fn build_program_set_account_detail_defaults() -> Vec<u8> {
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             wide::system::SCALL,
-            ivm_sys::SYSCALL_INPUT_PUBLISH_TLV as u8,
+            syscall_u8(ivm_sys::SYSCALL_INPUT_PUBLISH_TLV),
         )
         .to_le_bytes(),
     );
@@ -202,7 +216,7 @@ fn build_program_set_account_detail_defaults() -> Vec<u8> {
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             wide::system::SCALL,
-            ivm_sys::SYSCALL_SET_ACCOUNT_DETAIL as u8,
+            syscall_u8(ivm_sys::SYSCALL_SET_ACCOUNT_DETAIL),
         )
         .to_le_bytes(),
     );

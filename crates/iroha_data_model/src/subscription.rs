@@ -243,7 +243,6 @@ pub enum SubscriptionInvoiceStatus {
 
 /// Re-exports of commonly used subscription types.
 pub mod prelude {
-    //! Subscription prelude re-exports.
     pub use super::{
         SubscriptionBillFor, SubscriptionBilling, SubscriptionCadence,
         SubscriptionFixedPeriodCadence, SubscriptionFixedPricing, SubscriptionInvoice,

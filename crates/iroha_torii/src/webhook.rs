@@ -613,9 +613,9 @@ pub fn enqueue_event_for_matching_webhooks(
         if let Some(ref expr) = w.filter {
             let (proof_backend, proof_call_hash, proof_envelope_hash) = parse_proof_filters(expr);
             let has_proof_filters = crate::proof_filters::has_any_proof_filters(
-                &proof_backend,
-                &proof_call_hash,
-                &proof_envelope_hash,
+                proof_backend.as_ref(),
+                proof_call_hash.as_ref(),
+                proof_envelope_hash.as_ref(),
             );
             let only_proof_filters = has_proof_filters && expr_contains_only_proof_filters(expr);
             if !event_matches_filter(event, expr) && !only_proof_filters {
@@ -624,9 +624,9 @@ pub fn enqueue_event_for_matching_webhooks(
             if has_proof_filters
                 && !crate::proof_filters::event_matches_proof_filters(
                     event,
-                    &proof_backend,
-                    &proof_call_hash,
-                    &proof_envelope_hash,
+                    proof_backend.as_ref(),
+                    proof_call_hash.as_ref(),
+                    proof_envelope_hash.as_ref(),
                     only_proof_filters,
                 )
             {

@@ -1438,7 +1438,7 @@ pub enum BlockValidationError {
 /// Error during signature verification
 #[derive(Debug, displaydoc::Display, Clone, Copy, PartialEq, Eq, Error)]
 pub enum SignatureVerificationError {
-    /// The block doesn't have enough valid signatures to be committed ({votes_count} out of {min_votes_for_commit})
+    /// The block doesn't have enough valid signatures to be committed (`{votes_count}` out of `{min_votes_for_commit}`)
     NotEnoughSignatures {
         /// Current number of signatures
         votes_count: usize,

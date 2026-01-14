@@ -250,26 +250,23 @@ fn ensure_in_memory_map_word_types(map_expr: &TypedExpr) -> Result<(), SemanticE
     if typed_map_expr_is_state(map_expr) {
         return Ok(());
     }
-    match resolve_struct_type(&map_expr.ty) {
-        Type::Map(k, v) => {
-            if !is_in_memory_map_word_type(&k) {
-                return Err(SemanticError {
-                    message: format!(
-                        "in-memory Map key type `{}` is not supported; use int, bool, string, Blob, bytes, Json, or pointer types",
-                        type_name(&k)
-                    ),
-                });
-            }
-            if !is_in_memory_map_word_type(&v) {
-                return Err(SemanticError {
-                    message: format!(
-                        "in-memory Map value type `{}` is not supported; use int, bool, string, Blob, bytes, Json, or pointer types",
-                        type_name(&v)
-                    ),
-                });
-            }
+    if let Type::Map(k, v) = resolve_struct_type(&map_expr.ty) {
+        if !is_in_memory_map_word_type(&k) {
+            return Err(SemanticError {
+                message: format!(
+                    "in-memory Map key type `{}` is not supported; use int, bool, string, Blob, bytes, Json, or pointer types",
+                    type_name(&k)
+                ),
+            });
         }
-        _ => {}
+        if !is_in_memory_map_word_type(&v) {
+            return Err(SemanticError {
+                message: format!(
+                    "in-memory Map value type `{}` is not supported; use int, bool, string, Blob, bytes, Json, or pointer types",
+                    type_name(&v)
+                ),
+            });
+        }
     }
     Ok(())
 }
@@ -759,16 +756,14 @@ fn analyze_statement(
                                 key: key_ident,
                                 value: value_expr,
                             });
-                            return Ok(out);
+                            Ok(out)
                         }
-                        other => {
-                            return Err(SemanticError {
-                                message: format!(
-                                    "map assignment expects Map<K,V> target, got {}",
-                                    type_name(&other)
-                                ),
-                            });
-                        }
+                        other => Err(SemanticError {
+                            message: format!(
+                                "map assignment expects Map<K,V> target, got {}",
+                                type_name(&other)
+                            ),
+                        }),
                     }
                 }
                 Expr::Ident(name) => {
@@ -828,11 +823,9 @@ fn analyze_statement(
                     bind_tuple_fields_rec(&mut out, vars, name, &value_expr, &value_expr.ty);
                     Ok(out)
                 }
-                _ => {
-                    return Err(SemanticError {
-                        message: "assignment target must be a variable or map index".into(),
-                    });
-                }
+                _ => Err(SemanticError {
+                    message: "assignment target must be a variable or map index".into(),
+                }),
             }
         }
         Statement::Expr(e) => Ok(vec![TypedStatement::Expr(analyze_expr(e, vars)?)]),

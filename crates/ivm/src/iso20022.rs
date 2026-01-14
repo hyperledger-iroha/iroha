@@ -3457,6 +3457,7 @@ fn parse_xml_into_current(message_type: &str, text: &str) -> Result<(), MsgError
     Ok(())
 }
 
+#[allow(dead_code)]
 struct HttpEndpoint {
     host: String,
     port: u16,
@@ -3820,18 +3821,18 @@ pub fn msg_sign(key: &[u8]) -> Vec<u8> {
     {
         use pqcrypto_dilithium::dilithium3 as dilithium;
         use pqcrypto_traits::sign::{DetachedSignature as _, SecretKey as _};
-        if key.len() == dilithium::secret_key_bytes() {
-            if let Ok(sk) = dilithium::SecretKey::from_bytes(key) {
-                let sig = dilithium::detached_sign(&msg, &sk);
-                return sig.as_bytes().to_vec();
-            }
+        if key.len() == dilithium::secret_key_bytes()
+            && let Ok(sk) = dilithium::SecretKey::from_bytes(key)
+        {
+            let sig = dilithium::detached_sign(&msg, &sk);
+            return sig.as_bytes().to_vec();
         }
     }
     {
-        if let Ok(sk_bytes) = <[u8; 32]>::try_from(key) {
-            if let Ok(sk) = EcdsaSecp256k1Sha256::parse_private_key(&sk_bytes) {
-                return EcdsaSecp256k1Sha256::sign(&msg, &sk);
-            }
+        if let Ok(sk_bytes) = <[u8; 32]>::try_from(key)
+            && let Ok(sk) = EcdsaSecp256k1Sha256::parse_private_key(&sk_bytes)
+        {
+            return EcdsaSecp256k1Sha256::sign(&msg, &sk);
         }
     }
     Vec::new()
@@ -5648,7 +5649,7 @@ mod tests {
 
     #[test]
     fn msg_sign_and_verify_roundtrip_secp256k1() {
-        use k256::ecdsa::{SigningKey, VerifyingKey, signature::Signer as _};
+        use k256::ecdsa::{SigningKey, VerifyingKey};
         reset();
         msg_parse("pacs.008", b"field=value").unwrap();
         let sk = SigningKey::from_bytes(&[9u8; 32].into()).expect("sk");

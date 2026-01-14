@@ -25,7 +25,7 @@ use tokio::sync::mpsc;
 
 use crate::{
     IrohaNetwork, NetworkMessage,
-    queue::{GossipBatchEntry, Queue},
+    queue::{GossipBatchEntry, Queue, RoutingDecision},
     state::State,
     tx::AcceptedTransaction,
 };
@@ -55,6 +55,7 @@ enum RestrictedTargetPlan {
 
 const DROP_REASON_NO_RESTRICTED_TARGETS: &str = "no_restricted_targets";
 const DROP_REASON_PUBLIC_OVERLAY_REFUSED: &str = "restricted_public_overlay_refused";
+const DROP_REASON_ROUTE_MISMATCH: &str = "route_mismatch";
 const OUTCOME_PUBLIC_OVERLAY_FORWARD: &str = "restricted_public_overlay_forward";
 const SURFACE_PUBLIC_OVERLAY: &str = "public_overlay";
 const GOSSIP_SEED_PUBLIC_DOMAIN: u64 = 0x5055_424C_4943_5F00;
@@ -1016,8 +1017,34 @@ impl TransactionGossiper {
                 crypto_cfg.as_ref(),
             ) {
                 Ok(tx) => {
+                    let state_view = self.state.view();
+                    let advertised_route = RoutingDecision::new(route.lane_id, route.dataspace_id);
+                    let local_route = self.queue.route_for_gossip(&tx, &state_view);
                     let tx_hash = tx.as_ref().hash();
-                    match self.queue.push(tx, self.state.view()) {
+                    if local_route != advertised_route {
+                        iroha_logger::warn!(
+                            %tx_hash,
+                            advertised_lane_id = %route.lane_id,
+                            advertised_dataspace_id = %route.dataspace_id,
+                            expected_lane_id = %local_route.lane_id,
+                            expected_dataspace_id = %local_route.dataspace_id,
+                            "dropping transaction gossip entry due to routing mismatch"
+                        );
+                        self.record_drop_metric(
+                            plane,
+                            local_route.dataspace_id,
+                            &[local_route.lane_id],
+                            DROP_REASON_ROUTE_MISMATCH,
+                            false,
+                            None,
+                            &[],
+                            self.target_cap_for_plane(plane),
+                            1,
+                            0,
+                        );
+                        continue;
+                    }
+                    match self.queue.push(tx, state_view) {
                         Ok(()) => {
                             iroha_logger::info!(%tx_hash, "transaction enqueued from gossip");
                         }
@@ -1266,7 +1293,13 @@ fn partition_gossip_batch(
 
 #[cfg(test)]
 mod tests {
-    use std::{borrow::Cow, collections::BTreeSet, num::NonZeroUsize, sync::Arc, time::Duration};
+    use std::{
+        borrow::Cow,
+        collections::BTreeSet,
+        num::{NonZeroU32, NonZeroUsize},
+        sync::Arc,
+        time::Duration,
+    };
 
     use iroha_config::{
         kura::{FsyncMode, InitMode},
@@ -1281,7 +1314,12 @@ mod tests {
     };
     use iroha_config_base::WithOrigin;
     use iroha_crypto::KeyPair;
-    use iroha_data_model::{ChainId, Level, isi::Log, transaction::TransactionBuilder};
+    use iroha_data_model::{
+        ChainId, DataSpaceId, Level,
+        isi::Log,
+        nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneId, LaneVisibility},
+        transaction::TransactionBuilder,
+    };
     use iroha_primitives::{addr::socket_addr, time::TimeSource};
     use iroha_test_samples::{
         ALICE_ID, ALICE_KEYPAIR, BOB_KEYPAIR, CARPENTER_KEYPAIR, PEER_KEYPAIR,
@@ -1292,7 +1330,7 @@ mod tests {
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
-        queue::RoutingDecision,
+        queue::{LaneRouter, RoutingDecision},
         state::{State, World},
     };
 
@@ -2018,6 +2056,213 @@ mod tests {
             txs: vec![invalid_signed, valid_signed],
             routes: vec![invalid_route, valid_route],
             plane: GossipPlane::Public,
+        });
+
+        assert_eq!(queue.tx_len(), 1);
+        shutdown.send();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn gossip_drops_route_mismatch() {
+        struct FixedRouter {
+            lane: LaneId,
+            dataspace: DataSpaceId,
+        }
+
+        impl LaneRouter for FixedRouter {
+            fn route(
+                &self,
+                _tx: &crate::tx::AcceptedTransaction<'_>,
+                _state_view: &crate::state::StateView<'_>,
+            ) -> RoutingDecision {
+                RoutingDecision::new(self.lane, self.dataspace)
+            }
+        }
+
+        let temp_dir = tempdir().expect("temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
+            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: FsyncMode::Batched,
+            fsync_interval: defaults::kura::FSYNC_INTERVAL,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
+        let live_query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        let queue = Arc::new(Queue::test_with_router(
+            QueueConfig::default(),
+            &TimeSource::new_system(),
+            Arc::new(FixedRouter {
+                lane: LaneId::new(1),
+                dataspace: DataSpaceId::new(7),
+            }),
+        ));
+
+        let shutdown = ShutdownSignal::new();
+        let network_cfg = test_network_config(socket_addr!(127.0.0.1:0));
+        let (network, _child) = IrohaNetwork::start(
+            KeyPair::random(),
+            network_cfg,
+            None,
+            None,
+            None,
+            shutdown.clone(),
+        )
+        .await
+        .expect("network starts");
+
+        let now = Instant::now();
+        let gossiper = TransactionGossiper {
+            chain_id: "test-chain".parse().expect("chain id"),
+            gossip_period: Duration::from_millis(50),
+            gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+            network,
+            queue: Arc::clone(&queue),
+            state,
+            tx_frame_cap: 1024,
+            dataspace_cfg: DataspaceGossip::default(),
+            public_seed: GossipTargetSeed::new(0xBEEF_0001, Duration::from_secs(1), now),
+            restricted_seed: GossipTargetSeed::new(0xBEEF_0002, Duration::from_secs(1), now),
+        };
+
+        let (signed, _) = build_transaction("route-mismatch");
+        let route = GossipRoute {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::GLOBAL,
+        };
+        gossiper.handle_transaction_gossip(TransactionGossip {
+            txs: vec![signed],
+            routes: vec![route],
+            plane: GossipPlane::Public,
+        });
+
+        assert_eq!(queue.tx_len(), 0);
+        shutdown.send();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn gossip_accepts_restricted_route_match() {
+        struct FixedRouter {
+            lane: LaneId,
+            dataspace: DataSpaceId,
+        }
+
+        impl LaneRouter for FixedRouter {
+            fn route(
+                &self,
+                _tx: &crate::tx::AcceptedTransaction<'_>,
+                _state_view: &crate::state::StateView<'_>,
+            ) -> RoutingDecision {
+                RoutingDecision::new(self.lane, self.dataspace)
+            }
+        }
+
+        let temp_dir = tempdir().expect("temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
+            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: FsyncMode::Batched,
+            fsync_interval: defaults::kura::FSYNC_INTERVAL,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
+        let live_query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+
+        let restricted_dataspace = DataSpaceId::new(7);
+        let restricted_lane = LaneId::new(1);
+        let lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(2).expect("nonzero lanes"),
+            vec![
+                iroha_data_model::nexus::LaneConfig {
+                    id: LaneId::SINGLE,
+                    alias: "public".to_string(),
+                    ..iroha_data_model::nexus::LaneConfig::default()
+                },
+                iroha_data_model::nexus::LaneConfig {
+                    id: restricted_lane,
+                    dataspace_id: restricted_dataspace,
+                    alias: "restricted".to_string(),
+                    visibility: LaneVisibility::Restricted,
+                    ..iroha_data_model::nexus::LaneConfig::default()
+                },
+            ],
+        )
+        .expect("lane catalog");
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: restricted_dataspace,
+                alias: "restricted".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        {
+            let mut nexus = state.nexus.write();
+            nexus.enabled = true;
+            nexus.lane_catalog = lane_catalog.clone();
+            nexus.lane_config = LaneGeometry::from_catalog(&lane_catalog);
+            nexus.dataspace_catalog = dataspace_catalog;
+        }
+
+        let queue = Arc::new(Queue::test_with_router(
+            QueueConfig::default(),
+            &TimeSource::new_system(),
+            Arc::new(FixedRouter {
+                lane: restricted_lane,
+                dataspace: restricted_dataspace,
+            }),
+        ));
+
+        let shutdown = ShutdownSignal::new();
+        let network_cfg = test_network_config(socket_addr!(127.0.0.1:0));
+        let (network, _child) = IrohaNetwork::start(
+            KeyPair::random(),
+            network_cfg,
+            None,
+            None,
+            None,
+            shutdown.clone(),
+        )
+        .await
+        .expect("network starts");
+
+        let now = Instant::now();
+        let gossiper = TransactionGossiper {
+            chain_id: "test-chain".parse().expect("chain id"),
+            gossip_period: Duration::from_millis(50),
+            gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+            network,
+            queue: Arc::clone(&queue),
+            state,
+            tx_frame_cap: 1024,
+            dataspace_cfg: DataspaceGossip::default(),
+            public_seed: GossipTargetSeed::new(0xBEEF_0001, Duration::from_secs(1), now),
+            restricted_seed: GossipTargetSeed::new(0xBEEF_0002, Duration::from_secs(1), now),
+        };
+
+        let (signed, _) = build_transaction("restricted-route");
+        let route = GossipRoute {
+            lane_id: restricted_lane,
+            dataspace_id: restricted_dataspace,
+        };
+        gossiper.handle_transaction_gossip(TransactionGossip {
+            txs: vec![signed],
+            routes: vec![route],
+            plane: GossipPlane::Restricted,
         });
 
         assert_eq!(queue.tx_len(), 1);

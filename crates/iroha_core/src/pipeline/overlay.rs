@@ -1196,8 +1196,10 @@ mod tests {
     }
 
     fn program_with_literals(code: &[u8], literal_data: &[u8]) -> Vec<u8> {
-        let mut meta = ivm::ProgramMetadata::default();
-        meta.max_cycles = 10_000;
+        let meta = ivm::ProgramMetadata {
+            max_cycles: 10_000,
+            ..Default::default()
+        };
         let mut program = meta.encode();
         program.extend_from_slice(b"LTLB");
         program.extend_from_slice(&0_u32.to_le_bytes());
@@ -1287,6 +1289,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn overlay_rejects_axt_without_policy_entries() {
         use std::sync::Arc;
 

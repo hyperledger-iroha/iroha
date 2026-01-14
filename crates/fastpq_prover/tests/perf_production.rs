@@ -80,7 +80,8 @@ fn synthetic_batch(rows: usize) -> TransitionBatch {
     batch.sort();
     let mut dsid = [0u8; 16];
     for (idx, byte) in dsid.iter_mut().enumerate() {
-        *byte = (idx as u8).wrapping_mul(11);
+        let idx = u8::try_from(idx).expect("dsid index fits u8");
+        *byte = idx.wrapping_mul(11);
     }
     batch.public_inputs.dsid = dsid;
     batch.public_inputs.slot = 1_726_128_000_000_000;
@@ -132,13 +133,13 @@ fn transfer_pair(index: usize) -> (TransferTranscript, StateTransition, StateTra
         poseidon_preimage_digest: Some(digest),
     };
     let sender = StateTransition::new(
-        format!("asset/{}/{}", asset_definition, from_account).into_bytes(),
+        format!("asset/{asset_definition}/{from_account}").into_bytes(),
         from_pre.to_le_bytes().to_vec(),
         from_post.to_le_bytes().to_vec(),
         OperationKind::Transfer,
     );
     let receiver = StateTransition::new(
-        format!("asset/{}/{}", asset_definition, to_account).into_bytes(),
+        format!("asset/{asset_definition}/{to_account}").into_bytes(),
         to_pre.to_le_bytes().to_vec(),
         to_post.to_le_bytes().to_vec(),
         OperationKind::Transfer,

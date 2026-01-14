@@ -77,6 +77,7 @@ fn derive_ballot_nullifier(
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn ballot_verify_then_vendor_bridge_gated_ok_when_flag_forced() {
     // Minimal state
     let world = iroha_core::state::World::new();
@@ -115,8 +116,10 @@ fn ballot_verify_then_vendor_bridge_gated_ok_when_flag_forced() {
         ballot_fixture.schema_hash,
         vk_commitment,
     );
-    vk_record.vk_len = ballot_vk.bytes.len() as u32;
-    vk_record.max_proof_bytes = ballot_fixture.proof_bytes.len() as u32;
+    vk_record.vk_len =
+        u32::try_from(ballot_vk.bytes.len()).expect("verifying key length fits into u32");
+    vk_record.max_proof_bytes =
+        u32::try_from(ballot_fixture.proof_bytes.len()).expect("proof length fits into u32");
     vk_record.gas_schedule_id = Some("halo2_default".into());
     vk_record.key = Some(VerifyingKeyBox::new(
         "halo2/ipa".into(),

@@ -66,6 +66,7 @@ translator: manual
 ### RBC／DA（データ可用性）
 - RBC はトポロジから導出された Collector 集合を使用してブロック本体を配布します。ブロックヘッダーには RBC セッション ID とパケットメタデータが含まれます。
 - `sumeragi.da_enabled` を有効にすると、可用性証跡（`availability evidence`）を追跡しますがコミットは待機しません（ローカルの RBC `DELIVER` は条件になりません）。可用性証跡が不足している間は `sumeragi_da_gate_block_total{reason="missing_local_data"}` が増加し、`da_reschedule_total` はレガシーのため通常 0 のままです。
+- `sumeragi.rbc_rebroadcast_sessions_per_tick` が tick あたりの RBC 再送セッション数を制限し、バックログ時の再送嵐を抑制します。復旧速度を上げたい場合は増やし、P2P キューが詰まる場合は下げます。
 - 大規模ペイロード（≥10 MiB）を扱うシナリオでは RBC デリバリー時間、コミット時間、スループット、キュー深さをテレメトリで監視し、SLO 違反をアラートします。
 
 ### トポロジ／役割取得の CLI 例
@@ -138,6 +139,7 @@ translator: manual
 - RBC セッションは `RbcSessionId` で識別され、メタデータにはブロック高さ・ハッシュ・収集に必要な閾値が含まれます。
 - RBC は Gossip でブロック断片を流通させ、全ピアが復元できるようにすることで DA を実現します。
 - `sumeragi.da_enabled` を有効にすると、コミット前に `availability evidence` が必要になります。RBC は同じ設定で有効になり、ペイロード配布と欠落回復に使われます（コミットはローカルの `RbcDeliver` を待ちません）。
+- READY 再送信は決定論的な f+1 サブセット（リーダーを常に含む）に限定し、メッセージ嵐を抑制します。
 
 ### `proof_policy` の設定
 - `proof_policy = "off"`（既定）: commit QC のみ要求。

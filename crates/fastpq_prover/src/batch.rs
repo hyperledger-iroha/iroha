@@ -10,6 +10,7 @@ use norito::{NoritoDeserialize, NoritoSerialize};
     Debug,
     Copy,
     Clone,
+    Default,
     PartialEq,
     Eq,
     NoritoSerialize,
@@ -30,19 +31,6 @@ pub struct PublicInputs {
     pub perm_root: [u8; 32],
     /// Transaction set hash recorded by the scheduler.
     pub tx_set_hash: [u8; 32],
-}
-
-impl Default for PublicInputs {
-    fn default() -> Self {
-        Self {
-            dsid: [0; 16],
-            slot: 0,
-            old_root: [0; 32],
-            new_root: [0; 32],
-            perm_root: [0; 32],
-            tx_set_hash: [0; 32],
-        }
-    }
 }
 
 /// A single key-value transition touched by a transaction batch.

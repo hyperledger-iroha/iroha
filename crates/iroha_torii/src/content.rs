@@ -771,7 +771,7 @@ mod tests {
         chunks.insert([0x03; 32], b"ijkl".to_vec());
 
         let body = assemble_range_from_chunks(4, &chunk_hashes, 2, 10, |hash| {
-            chunks.get(hash).map(|chunk| chunk.as_slice())
+            chunks.get(hash).map(Vec::as_slice)
         })
         .expect("assemble range");
 

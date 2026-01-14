@@ -277,8 +277,7 @@ mod tests {
             .expect("persist session");
 
         let err = sample_from_store(dir.path(), key, &chain_hash, &manifest, 3, None)
-            .err()
-            .expect("oversized request should fail");
+            .expect_err("oversized request should fail");
         assert!(matches!(err, SamplingError::InvalidSampleCount));
     }
 }

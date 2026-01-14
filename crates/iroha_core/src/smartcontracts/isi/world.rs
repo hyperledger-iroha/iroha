@@ -89,6 +89,7 @@ pub mod isi {
             .is_some_and(|perms| perms.iter().any(|p| p.name() == name))
     }
 
+    #[allow(clippy::too_many_lines)]
     fn validate_consensus_key_record(
         record: &ConsensusKeyRecord,
         sumeragi: &iroha_data_model::parameter::system::SumeragiParameters,
@@ -326,14 +327,12 @@ pub mod isi {
         if !circuit_id_matches(backend, &vk_record.circuit_id, &envelope.circuit_id) {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!("{label} verifying key circuit mismatch").into(),
-            )
-            .into());
+            ));
         }
         if envelope.vk_hash != [0u8; 32] && envelope.vk_hash != vk_record.commitment {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!("{label} verifying key commitment mismatch").into(),
-            )
-            .into());
+            ));
         }
         Ok(())
     }
@@ -346,11 +345,10 @@ pub mod isi {
         let max = vk_record.max_proof_bytes;
         if max > 0 && proof_len > usize::try_from(max).unwrap_or(usize::MAX) {
             return Err(InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(
-                    format!("{label} proof exceeds verifying key max_proof_bytes").into(),
-                ),
-            )
-            .into());
+                InvalidParameterError::SmartContract(format!(
+                    "{label} proof exceeds verifying key max_proof_bytes"
+                )),
+            ));
         }
         Ok(())
     }
@@ -435,8 +433,7 @@ pub mod isi {
         if columns.len() != expected_len || columns.iter().any(|col| col.len() != 1) {
             return Err(InstructionExecutionError::InvariantViolation(
                 "tally proof must expose one public input per option".into(),
-            )
-            .into());
+            ));
         }
         let mut tally = Vec::with_capacity(expected_len);
         for column in columns {
@@ -1472,23 +1469,22 @@ pub mod isi {
             let public_inputs = if self.public_inputs_json.trim().is_empty() {
                 None
             } else {
-                let value = match norito::json::from_str::<norito::json::Value>(
-                    self.public_inputs_json.as_str(),
-                ) {
-                    Ok(value) => value,
-                    Err(_) => {
-                        state_transaction.world.emit_events(Some(
-                            iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                                iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                                    referendum_id: self.election_id.clone(),
-                                    reason: "public inputs must be valid JSON".into(),
-                                },
-                            ),
-                        ));
-                        return Err(InstructionExecutionError::InvariantViolation(
-                            "public inputs must be valid JSON".into(),
-                        ));
-                    }
+                let value = if let Ok(value) =
+                    norito::json::from_str::<norito::json::Value>(self.public_inputs_json.as_str())
+                {
+                    value
+                } else {
+                    state_transaction.world.emit_events(Some(
+                        iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                            iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                                referendum_id: self.election_id.clone(),
+                                reason: "public inputs must be valid JSON".into(),
+                            },
+                        ),
+                    ));
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "public inputs must be valid JSON".into(),
+                    ));
                 };
                 if !value.is_object() {
                     state_transaction.world.emit_events(Some(
@@ -7190,8 +7186,7 @@ pub mod isi {
                         "proof attachments must include exactly one verifying key (inline or reference)"
                             .into(),
                     ),
-                )
-                .into());
+                ));
             }
             (Some(_), Some(_)) => {
                 return Err(InstructionExecutionError::InvalidParameter(
@@ -7199,8 +7194,7 @@ pub mod isi {
                         "proof attachments must not mix inline and referenced verifying keys"
                             .into(),
                     ),
-                )
-                .into());
+                ));
             }
             _ => {}
         }
@@ -7298,8 +7292,7 @@ pub mod isi {
                         "proof attachments must include exactly one verifying key (inline or reference)"
                             .into(),
                     ),
-                )
-                .into());
+                ));
             }
             (Some(_), Some(_)) => {
                 return Err(InstructionExecutionError::InvalidParameter(
@@ -7307,8 +7300,7 @@ pub mod isi {
                         "proof attachments must not mix inline and referenced verifying keys"
                             .into(),
                     ),
-                )
-                .into());
+                ));
             }
             _ => {}
         }
@@ -7487,6 +7479,7 @@ pub mod isi {
     }
 
     impl Execute for zk::SubmitBallot {
+        #[allow(clippy::too_many_lines)]
         fn execute(
             self,
             authority: &AccountId,
@@ -8742,7 +8735,7 @@ pub mod isi {
                     state_transaction
                         .world
                         .triggers
-                        .remove(trigger_id)
+                        .remove(&trigger_id)
                         .then_some(())
                         .expect("should succeed")
                 });
@@ -8762,7 +8755,7 @@ pub mod isi {
             }
             for (hash, record) in state_transaction.world.domain_endorsements.iter() {
                 if record.endorsement.domain_id == domain_id {
-                    endorsement_hashes.insert(hash.clone());
+                    endorsement_hashes.insert(*hash);
                 }
             }
             for hash in endorsement_hashes {
@@ -9496,7 +9489,7 @@ pub mod isi {
             let halo_env = Halo2ProofEnvelope::new(18, 1, 1, 0, inputs.clone(), vec![0xaa])
                 .expect("halo2 envelope");
             let proof_bytes = halo_env.to_bytes();
-            let columns: Vec<Vec<[u8; 32]>> = inputs.iter().cloned().map(|v| vec![v]).collect();
+            let columns: Vec<Vec<[u8; 32]>> = inputs.iter().copied().map(|v| vec![v]).collect();
             let public_inputs = flatten_instance_columns(&columns);
             let envelope = OpenVerifyEnvelope::new(
                 BackendTag::Halo2IpaPasta,
@@ -9628,12 +9621,15 @@ pub mod isi {
             );
             rec.status = ConfidentialStatus::Active;
             rec.key = Some(vk_box.clone());
-            rec.vk_len = vk_box.bytes.len() as u32;
+            rec.vk_len =
+                u32::try_from(vk_box.bytes.len()).expect("verifying key length fits into u32");
             stx.world.verifying_keys.insert(vk_id.clone(), rec);
 
-            let mut st = crate::state::ElectionState::default();
-            st.vk_ballot = Some(vk_id.clone());
-            st.vk_tally = Some(vk_id.clone());
+            let st = crate::state::ElectionState {
+                vk_ballot: Some(vk_id.clone()),
+                vk_tally: Some(vk_id.clone()),
+                ..Default::default()
+            };
 
             let proof = ProofBox::new("halo2/ipa".into(), vec![0xaa]);
             let ballot_att =

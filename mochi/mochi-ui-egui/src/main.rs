@@ -14247,7 +14247,7 @@ mod tests {
 
     fn spawn_mock_torii_server(port: u16) -> std::thread::JoinHandle<()> {
         let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind mock torii");
-        let handle = std::thread::spawn(move || {
+        std::thread::spawn(move || {
             for stream in listener.incoming().take(2) {
                 let mut stream = match stream {
                     Ok(stream) => stream,
@@ -14293,8 +14293,7 @@ mod tests {
                     }
                 }
             }
-        });
-        handle
+        })
     }
 
     fn genesis_invocation_count(path: &Path) -> usize {

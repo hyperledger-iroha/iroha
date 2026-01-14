@@ -34,6 +34,7 @@ impl Actor {
             .max(4);
         let aborted_retention = quorum_reschedule_cooldown.saturating_mul(retention_factor);
         let now = Instant::now();
+        let relay_backpressure = self.relay_backpressure_active(now, self.rebroadcast_cooldown());
         let (tip_height, tip_hash) = {
             let view = self.state.view();
             (view.height(), view.latest_block_hash())
@@ -98,7 +99,7 @@ impl Actor {
             let mut commit_roster =
                 self.roster_for_vote_with_mode(*hash, pending.height, pending.view, consensus_mode);
             if commit_roster.is_empty() {
-                commit_roster = active_roster.clone();
+                commit_roster.clone_from(&active_roster);
             }
             if commit_roster.is_empty() {
                 debug!(
@@ -225,20 +226,17 @@ impl Actor {
                 let txs: Vec<SignedTransaction> = pending.block.transactions_vec().clone();
                 let (requeued, failures, _duplicate_failures, _gossip_hashes) =
                     requeue_block_transactions(self.queue.as_ref(), self.state.as_ref(), txs);
-                let msg = BlockMessage::BlockCreated(super::message::BlockCreated {
-                    block: pending.block.clone(),
-                });
-                for peer in &commit_roster {
-                    if peer == &local_peer_id {
-                        continue;
-                    }
-                    self.schedule_background(BackgroundRequest::Post {
-                        peer: peer.clone(),
-                        msg: msg.clone(),
+                if relay_backpressure {
+                    debug!(
+                        height = key.1,
+                        view = key.2,
+                        block = %key.0,
+                        "skipping prevote-timeout rebroadcast due to relay backpressure"
+                    );
+                } else {
+                    let msg = BlockMessage::BlockCreated(super::message::BlockCreated {
+                        block: pending.block.clone(),
                     });
-                }
-                if let Some(qc) = qc {
-                    let msg = BlockMessage::Qc(qc.clone());
                     for peer in &commit_roster {
                         if peer == &local_peer_id {
                             continue;
@@ -247,6 +245,18 @@ impl Actor {
                             peer: peer.clone(),
                             msg: msg.clone(),
                         });
+                    }
+                    if let Some(qc) = qc {
+                        let msg = BlockMessage::Qc(qc.clone());
+                        for peer in &commit_roster {
+                            if peer == &local_peer_id {
+                                continue;
+                            }
+                            self.schedule_background(BackgroundRequest::Post {
+                                peer: peer.clone(),
+                                msg: msg.clone(),
+                            });
+                        }
                     }
                 }
                 #[cfg(feature = "telemetry")]
@@ -320,7 +330,7 @@ impl Actor {
         progress
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     pub(super) fn reschedule_pending_quorum_block(
         &mut self,
         mut pending: PendingBlock,
@@ -467,6 +477,19 @@ impl Actor {
         topology_peers: &[PeerId],
         now: Instant,
     ) -> RescheduleRebroadcast {
+        if self.relay_backpressure_active(now, self.rebroadcast_cooldown()) {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                "skipping reschedule rebroadcast due to relay backpressure"
+            );
+            return RescheduleRebroadcast {
+                votes: 0,
+                block_sync: false,
+                block: false,
+            };
+        }
         let votes = self.rebroadcast_block_votes(
             crate::sumeragi::consensus::Phase::Commit,
             block_hash,

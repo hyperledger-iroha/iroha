@@ -9826,7 +9826,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     pub fn remove_account_roles(&mut self, account: &AccountId) {
         let roles_to_remove = self
             .account_roles_iter(account)
-            .cloned()
             .map(|role| RoleIdWithOwner::new(account.clone(), role.clone()))
             .collect::<Vec<_>>();
 
@@ -10346,8 +10345,9 @@ impl State {
 
     fn upsert_commit_qc_in_world(&self, commit_qc: &Qc) {
         let mut commit_qcs = self.world.commit_qcs.block();
-        let should_update = match commit_qcs.get(&commit_qc.subject_block_hash) {
-            Some(existing) => {
+        let should_update = commit_qcs
+            .get(&commit_qc.subject_block_hash)
+            .is_none_or(|existing| {
                 if existing.height != commit_qc.height {
                     warn!(
                         height = commit_qc.height,
@@ -10357,9 +10357,7 @@ impl State {
                     );
                 }
                 existing.view <= commit_qc.view
-            }
-            None => true,
-        };
+            });
         if !should_update {
             return;
         }
@@ -10383,13 +10381,12 @@ impl State {
             );
             return false;
         }
-        if checkpoint.height != commit_qc.height
-            || checkpoint.block_hash != commit_qc.subject_block_hash
-        {
+        let subject_block_hash = commit_qc.subject_block_hash;
+        if checkpoint.height != commit_qc.height || checkpoint.block_hash != subject_block_hash {
             warn!(
                 height = commit_qc.height,
                 view = commit_qc.view,
-                block = %commit_qc.subject_block_hash,
+                block = %subject_block_hash,
                 checkpoint_height = checkpoint.height,
                 checkpoint_block = %checkpoint.block_hash,
                 "skipping commit roster record: checkpoint metadata mismatch"
@@ -12257,13 +12254,13 @@ impl State {
         let commit_topology = self.commit_topology.view();
         let prev_commit_topology = self.prev_commit_topology.view();
         let nexus = self.nexus_snapshot();
-        let _view_lock = match self.view_lock.try_read() {
-            Some(guard) => Some(guard),
-            None => {
+        let _view_lock = self.view_lock.try_read().map_or_else(
+            || {
                 warn!("state view lock contended; returning unlocked view");
                 None
-            }
-        };
+            },
+            Some,
+        );
         StateView {
             world,
             block_hashes,
@@ -13533,16 +13530,16 @@ pub trait StateReadOnly: WorldStateSnapshot {
     ) -> impl DoubleEndedIterator<Item = Arc<SignedBlock>> + '_ {
         (start.get()..=self.height()).filter_map(|height| {
             let height = NonZeroUsize::new(height)?;
-            match self.kura().get_block(height) {
-                Some(block) => Some(block),
-                None => {
+            self.kura().get_block(height).map_or_else(
+                || {
                     warn!(
                         height = height.get(),
                         "missing block in Kura; skipping entry"
                     );
                     None
-                }
-            }
+                },
+                Some,
+            )
         })
     }
 
@@ -14566,6 +14563,7 @@ impl<'state> StateBlock<'state> {
     /// Assuming all transactions in the block have been processed,
     /// apply the remaining block effects outside the world state.
     #[allow(clippy::too_many_lines)]
+    #[allow(clippy::needless_pass_by_value)]
     #[iroha_logger::log(
         skip_all,
         fields(block_height = block.as_ref().header().height())
@@ -14678,15 +14676,7 @@ impl<'state> StateBlock<'state> {
                         && matches!(cert.phase, crate::sumeragi::consensus::Phase::Commit)
                 })
             {
-                if commit_cert.validator_set != checkpoint_topology {
-                    warn!(
-                        height = block_height,
-                        block = %block_hash,
-                        expected = checkpoint_topology.len(),
-                        actual = commit_cert.validator_set.len(),
-                        "skipping commit roster record: validator set mismatch"
-                    );
-                } else {
+                if commit_cert.validator_set == checkpoint_topology {
                     let checkpoint = ValidatorSetCheckpoint::new(
                         block_height,
                         commit_cert.view,
@@ -14716,6 +14706,14 @@ impl<'state> StateBlock<'state> {
                                 .insert(commit_cert.subject_block_hash, commit_cert.clone());
                         }
                     }
+                } else {
+                    warn!(
+                        height = block_height,
+                        block = %block_hash,
+                        expected = checkpoint_topology.len(),
+                        actual = commit_cert.validator_set.len(),
+                        "skipping commit roster record: validator set mismatch"
+                    );
                 }
             } else {
                 warn!(
@@ -14818,10 +14816,7 @@ impl<'state> StateBlock<'state> {
                     .metadata()
                     .get(&key_h)
                     .and_then(|json| json.try_into_any_norito::<u64>().ok());
-                match registered_height {
-                    Some(height) => height != current_block_height,
-                    None => false,
-                }
+                registered_height.is_some_and(|height| height != current_block_height)
             })
             .collect();
         let matched_count = matched.len();
@@ -17508,6 +17503,7 @@ impl StateTransaction<'_, '_> {
     }
 
     /// Apply transaction making it's changes visible
+    #[allow(clippy::too_many_lines)]
     pub fn apply(self) {
         // NOTE: intentionally destruct self not to forget apply some fields
         let Self {
@@ -17740,7 +17736,7 @@ impl StateTransaction<'_, '_> {
                     trigger_id = %id,
                     "by-call trigger is depleted; removing"
                 );
-                let _ = self.world.triggers.remove(id.clone());
+                let _ = self.world.triggers.remove(id);
                 return Err(
                     ValidationFail::from(Error::from(FindError::Trigger(id.clone()))).into(),
                 );
@@ -17794,7 +17790,7 @@ impl StateTransaction<'_, '_> {
                         trigger_id = %trg_id,
                         "data trigger missing while executing trigger events"
                     );
-                    let _ = self.world.triggers.remove(trg_id.clone());
+                    let _ = self.world.triggers.remove(&trg_id);
                     continue;
                 };
 
@@ -17803,7 +17799,7 @@ impl StateTransaction<'_, '_> {
                         trigger_id = %trg_id,
                         "data trigger is depleted while executing trigger events; removing"
                     );
-                    let _ = self.world.triggers.remove(trg_id.clone());
+                    let _ = self.world.triggers.remove(&trg_id);
                     continue;
                 }
                 if !trigger_is_enabled(action.metadata()) {
@@ -17876,6 +17872,7 @@ impl StateTransaction<'_, '_> {
     ///
     /// Returns the execution step on success, or the rejection reason on failure.
     #[allow(clippy::needless_pass_by_value)]
+    #[allow(clippy::too_many_lines)]
     fn execute_trigger(
         &mut self,
         id: &TriggerId,
@@ -17891,102 +17888,98 @@ impl StateTransaction<'_, '_> {
                 None,
             ),
             ExecutableRef::Ivm(blob_hash) => {
-                match self.world.triggers.get_original_contract(blob_hash) {
-                    Some(bytecode) => {
-                        // Extract args if this was an ExecuteTrigger event
-                        let trigger_args = match &event {
-                            EventBox::ExecuteTrigger(ev) => ev.args().clone(),
-                            _ => iroha_primitives::json::Json::default(),
-                        };
-                        let bytecode = bytecode.clone();
-                        let parsed = ivm::ProgramMetadata::parse(bytecode.as_ref())
-                            .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
-                        let meta = parsed.metadata;
-                        let pipeline_cap = self.pipeline.ivm_max_cycles_upper_bound;
-                        let mut eff_cycles = meta.max_cycles;
-                        if eff_cycles == 0 {
-                            eff_cycles = u64::MAX;
-                        }
-                        if pipeline_cap > 0 {
-                            eff_cycles = eff_cycles.min(pipeline_cap);
-                        }
-                        if eff_cycles == u64::MAX {
-                            eff_cycles = 0;
-                        }
-                        let gas_cap_cycles = if eff_cycles == 0 {
-                            meta.max_cycles
-                        } else {
-                            eff_cycles
-                        };
-                        let gas_cap =
-                            crate::smartcontracts::ivm::gas_limit_for_cycles(gas_cap_cycles);
-                        let remaining_block_budget = if self.gas_limit_per_block == 0 {
-                            u64::MAX
-                        } else {
-                            self.gas_limit_per_block
-                                .saturating_sub(self.gas_used_in_block_so_far)
-                        };
-                        let mut gas_limit = gas_cap.min(remaining_block_budget);
-                        if gas_limit == u64::MAX {
-                            gas_limit = DEFAULT_TRIGGER_GAS_LIMIT;
-                        }
-                        let mut vm = ivm::IVM::new(gas_limit);
-                        // Attach core IVM host adapter. Stateful syscalls enqueue ISIs
-                        // which we collect after `vm.run()` and return as the trigger step.
-                        let accounts = self.trigger_accounts_snapshot();
-                        let mut host =
-                            crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
-                                authority.clone(),
-                                accounts,
-                                trigger_args,
-                            );
-                        let current_block_time_ms =
-                            u64::try_from(self._curr_block.creation_time().as_millis())
-                                .expect("block creation timestamp must fit into u64");
-                        host.set_trigger_id(id.clone());
-                        host.set_block_time_ms(current_block_time_ms);
-                        // Seed sample NFT helper sequence with the current block height so repeated
-                        // executions across blocks generate unique ids.
-                        host.set_nft_seq_base(self._curr_block.height().get().saturating_mul(256));
-                        #[cfg(feature = "telemetry")]
-                        host.set_telemetry(self.telemetry.clone());
-                        host.set_crypto_config(self.crypto());
-                        host.set_durable_state_snapshot_from_world(&self.world);
-                        host.set_public_inputs_from_parameters(self.world.parameters.get());
-                        host.set_query_state(self);
-                        if let Err(e) = vm.load_program(bytecode.as_ref()) {
-                            return Err(ValidationFail::InternalError(e.to_string()).into());
-                        }
-                        if eff_cycles > 0 {
-                            vm.set_max_cycles(eff_cycles);
-                        }
-                        vm.set_gas_limit(gas_limit);
-                        if let Err(e) = vm.run_with_host(&mut host) {
-                            return Err(
-                                crate::smartcontracts::ivm::map_vm_error_to_validation(e).into()
-                            );
-                        }
-                        // Collect queued ISIs from the host, execute them via the executor,
-                        // and return them as the step.
-                        let artifacts = host.into_execution_artifacts()?;
-                        let queued = artifacts.apply_to_transaction(self, authority)?;
-                        let cvs: ConstVec<InstructionBox> = ConstVec::from(queued);
-                        (Ok(cvs.into()), None)
+                if let Some(bytecode) = self.world.triggers.get_original_contract(blob_hash) {
+                    // Extract args if this was an ExecuteTrigger event
+                    let trigger_args = match &event {
+                        EventBox::ExecuteTrigger(ev) => ev.args().clone(),
+                        _ => iroha_primitives::json::Json::default(),
+                    };
+                    let bytecode = bytecode.clone();
+                    let parsed = ivm::ProgramMetadata::parse(bytecode.as_ref())
+                        .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+                    let meta = parsed.metadata;
+                    let pipeline_cap = self.pipeline.ivm_max_cycles_upper_bound;
+                    let mut eff_cycles = meta.max_cycles;
+                    if eff_cycles == 0 {
+                        eff_cycles = u64::MAX;
                     }
-                    None => {
-                        warn!(
-                            trigger_id = %id,
-                            ?blob_hash,
-                            "missing trigger bytecode; dropping trigger"
+                    if pipeline_cap > 0 {
+                        eff_cycles = eff_cycles.min(pipeline_cap);
+                    }
+                    if eff_cycles == u64::MAX {
+                        eff_cycles = 0;
+                    }
+                    let gas_cap_cycles = if eff_cycles == 0 {
+                        meta.max_cycles
+                    } else {
+                        eff_cycles
+                    };
+                    let gas_cap = crate::smartcontracts::ivm::gas_limit_for_cycles(gas_cap_cycles);
+                    let remaining_block_budget = if self.gas_limit_per_block == 0 {
+                        u64::MAX
+                    } else {
+                        self.gas_limit_per_block
+                            .saturating_sub(self.gas_used_in_block_so_far)
+                    };
+                    let mut gas_limit = gas_cap.min(remaining_block_budget);
+                    if gas_limit == u64::MAX {
+                        gas_limit = DEFAULT_TRIGGER_GAS_LIMIT;
+                    }
+                    let mut vm = ivm::IVM::new(gas_limit);
+                    // Attach core IVM host adapter. Stateful syscalls enqueue ISIs
+                    // which we collect after `vm.run()` and return as the trigger step.
+                    let accounts = self.trigger_accounts_snapshot();
+                    let mut host =
+                        crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
+                            authority.clone(),
+                            accounts,
+                            trigger_args,
                         );
-                        self.world.triggers.remove(id.clone());
-                        (
-                            Ok(Self::execution_step_from_executable(executable)),
-                            Some(TriggerCompletedOutcome::Failure(
-                                "missing trigger bytecode".to_owned(),
-                            )),
-                        )
+                    let current_block_time_ms =
+                        u64::try_from(self._curr_block.creation_time().as_millis())
+                            .expect("block creation timestamp must fit into u64");
+                    host.set_trigger_id(id.clone());
+                    host.set_block_time_ms(current_block_time_ms);
+                    // Seed sample NFT helper sequence with the current block height so repeated
+                    // executions across blocks generate unique ids.
+                    host.set_nft_seq_base(self._curr_block.height().get().saturating_mul(256));
+                    #[cfg(feature = "telemetry")]
+                    host.set_telemetry(self.telemetry.clone());
+                    host.set_crypto_config(self.crypto());
+                    host.set_durable_state_snapshot_from_world(&self.world);
+                    host.set_public_inputs_from_parameters(self.world.parameters.get());
+                    host.set_query_state(self);
+                    if let Err(e) = vm.load_program(bytecode.as_ref()) {
+                        return Err(ValidationFail::InternalError(e.to_string()).into());
                     }
+                    if eff_cycles > 0 {
+                        vm.set_max_cycles(eff_cycles);
+                    }
+                    vm.set_gas_limit(gas_limit);
+                    if let Err(e) = vm.run_with_host(&mut host) {
+                        return Err(
+                            crate::smartcontracts::ivm::map_vm_error_to_validation(&e).into()
+                        );
+                    }
+                    // Collect queued ISIs from the host, execute them via the executor,
+                    // and return them as the step.
+                    let artifacts = host.into_execution_artifacts()?;
+                    let queued = artifacts.apply_to_transaction(self, authority)?;
+                    let cvs: ConstVec<InstructionBox> = ConstVec::from(queued);
+                    (Ok(cvs.into()), None)
+                } else {
+                    warn!(
+                        trigger_id = %id,
+                        ?blob_hash,
+                        "missing trigger bytecode; dropping trigger"
+                    );
+                    self.world.triggers.remove(id);
+                    (
+                        Ok(Self::execution_step_from_executable(executable)),
+                        Some(TriggerCompletedOutcome::Failure(
+                            "missing trigger bytecode".to_owned(),
+                        )),
+                    )
                 }
             }
         };

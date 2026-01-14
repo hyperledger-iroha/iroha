@@ -1,4 +1,11 @@
 //! RBC planning, chunking, and hydration helpers.
+#![allow(
+    clippy::items_after_statements,
+    clippy::needless_pass_by_value,
+    clippy::too_many_lines,
+    clippy::unnecessary_wraps,
+    clippy::unused_self
+)]
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -63,7 +70,7 @@ const RBC_PERSIST_WORK_QUEUE_CAP: usize = 8;
 const RBC_PERSIST_RESULT_QUEUE_CAP: usize = 8;
 
 pub(super) fn rbc_roster_hash(roster: &[PeerId]) -> Hash {
-    Hash::new(&roster.to_vec().encode())
+    Hash::new(roster.to_vec().encode())
 }
 
 fn roster_has_duplicates(roster: &[PeerId]) -> bool {
@@ -331,6 +338,60 @@ fn select_rbc_chunk_targets(
     candidates
 }
 
+#[allow(dead_code)]
+fn rbc_rebroadcasters_count(roster_len: usize) -> usize {
+    if roster_len == 0 {
+        return 0;
+    }
+    let max_faults = roster_len.saturating_sub(1) / 3;
+    max_faults.saturating_add(1).min(roster_len)
+}
+
+#[allow(dead_code)]
+fn rbc_rebroadcast_indices(roster_len: usize, seed: u64) -> Vec<usize> {
+    let rebroadcaster_count = rbc_rebroadcasters_count(roster_len);
+    if rebroadcaster_count == 0 {
+        return Vec::new();
+    }
+    if rebroadcaster_count >= roster_len {
+        return (0..roster_len).collect();
+    }
+
+    let leader_idx = 0;
+    let mut selected = Vec::with_capacity(rebroadcaster_count);
+    selected.push(leader_idx);
+
+    let mut candidates: Vec<usize> = (1..roster_len).collect();
+    let mut rng = StdRng::seed_from_u64(seed);
+    candidates.shuffle(&mut rng);
+    selected.extend(
+        candidates
+            .into_iter()
+            .take(rebroadcaster_count.saturating_sub(1)),
+    );
+    selected
+}
+
+#[allow(dead_code)]
+pub(super) fn is_payload_rebroadcaster(
+    roster: &[PeerId],
+    local_peer_id: &PeerId,
+    seed: u64,
+) -> bool {
+    let Some(local_idx) = roster.iter().position(|peer| peer == local_peer_id) else {
+        return false;
+    };
+    rbc_rebroadcast_indices(roster.len(), seed).contains(&local_idx)
+}
+
+#[allow(dead_code)]
+pub(super) fn is_ready_rebroadcaster(roster: &[PeerId], local_peer_id: &PeerId, seed: u64) -> bool {
+    let Some(local_idx) = roster.iter().position(|peer| peer == local_peer_id) else {
+        return false;
+    };
+    rbc_rebroadcast_indices(roster.len(), seed).contains(&local_idx)
+}
+
 pub(super) fn distribute_chunks(total_chunks: u32, weights: &[u128]) -> Vec<u32> {
     if weights.is_empty() {
         return Vec::new();
@@ -428,6 +489,48 @@ mod tests {
         assert_eq!(targets, targets_repeat);
         assert_eq!(targets.len(), 2);
         assert!(targets.iter().all(|(_, peer)| peer != &local));
+    }
+
+    #[test]
+    fn rbc_rebroadcaster_count_tracks_fault_tolerance() {
+        assert_eq!(rbc_rebroadcasters_count(0), 0);
+        assert_eq!(rbc_rebroadcasters_count(1), 1);
+        assert_eq!(rbc_rebroadcasters_count(2), 1);
+        assert_eq!(rbc_rebroadcasters_count(3), 1);
+        assert_eq!(rbc_rebroadcasters_count(4), 2);
+        assert_eq!(rbc_rebroadcasters_count(7), 3);
+    }
+
+    #[test]
+    fn rbc_rebroadcast_subset_includes_leader_and_is_deterministic() {
+        let roster = sample_roster(4);
+        let seed = 99;
+        let indices = rbc_rebroadcast_indices(roster.len(), seed);
+        assert_eq!(indices.len(), rbc_rebroadcasters_count(roster.len()));
+        assert!(indices.contains(&0));
+        let repeat = rbc_rebroadcast_indices(roster.len(), seed);
+        assert_eq!(indices, repeat);
+    }
+
+    #[test]
+    fn rbc_rebroadcaster_selection_is_deterministic() {
+        let roster = sample_roster(5);
+        let local = roster[2].clone();
+        let seed = 73;
+        let first = is_payload_rebroadcaster(&roster, &local, seed);
+        let second = is_payload_rebroadcaster(&roster, &local, seed);
+        assert_eq!(first, second);
+        assert_eq!(is_ready_rebroadcaster(&roster, &local, seed), first);
+
+        let rebroadcasters = roster
+            .iter()
+            .filter(|peer| is_payload_rebroadcaster(&roster, peer, seed))
+            .count();
+        assert_eq!(rebroadcasters, rbc_rebroadcasters_count(roster.len()));
+
+        let outsider = sample_roster(1).pop().expect("sample peer");
+        assert!(!is_payload_rebroadcaster(&roster, &outsider, seed));
+        assert!(!is_ready_rebroadcaster(&roster, &outsider, seed));
     }
 }
 
@@ -1550,7 +1653,9 @@ impl Actor {
         let mut reset_ready_state = false;
         if let Some(existing_roster) = self.subsystems.da_rbc.rbc.session_rosters.get(&key) {
             let existing_hash = rbc_roster_hash(existing_roster);
-            if existing_hash != init.roster_hash {
+            if existing_hash == init.roster_hash {
+                self.record_rbc_session_roster(key, init.roster.clone(), RbcRosterSource::Network);
+            } else {
                 let source = self
                     .rbc_session_roster_source(key)
                     .unwrap_or(RbcRosterSource::Derived);
@@ -1598,9 +1703,8 @@ impl Actor {
                     .rbc
                     .ready_rebroadcast_last_sent
                     .remove(&key);
+                self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
                 reset_ready_state = true;
-            } else {
-                self.record_rbc_session_roster(key, init.roster.clone(), RbcRosterSource::Network);
             }
         } else {
             self.record_rbc_session_roster(key, init.roster.clone(), RbcRosterSource::Network);
@@ -2812,6 +2916,16 @@ impl Actor {
             self.update_rbc_status_entry(key, &session, false);
             self.persist_rbc_session(key, &session);
         }
+        if self
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .get(&key)
+            .is_some_and(|session| session.delivered || session.is_invalid())
+        {
+            self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
+        }
         if roster_updated && self.subsystems.da_rbc.rbc.pending.contains_key(&key) {
             self.flush_pending_rbc(key)?;
         }
@@ -3142,6 +3256,7 @@ impl Actor {
                 .rbc
                 .ready_rebroadcast_last_sent
                 .remove(key);
+            self.subsystems.da_rbc.rbc.deliver_deferral.remove(key);
             self.subsystems
                 .da_rbc
                 .rbc
@@ -3193,6 +3308,7 @@ impl Actor {
                 .rbc
                 .ready_rebroadcast_last_sent
                 .remove(key);
+            self.subsystems.da_rbc.rbc.deliver_deferral.remove(key);
             self.subsystems
                 .da_rbc
                 .rbc

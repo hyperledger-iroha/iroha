@@ -85,7 +85,7 @@ impl<T: Write> RunArgs<T> for Args {
 
         let mut genesis = RawGenesisTransaction::from_path(&self.genesis_file)?;
         let consensus_mode = consensus_mode_override
-            .or(genesis.consensus_mode())
+            .or_else(|| genesis.consensus_mode())
             .ok_or_else(|| {
                 eyre!(
                     "genesis manifest missing consensus_mode; pass --consensus-mode or regenerate with `kagami genesis generate --consensus-mode <mode>`"

@@ -4372,7 +4372,7 @@ impl core::fmt::Debug for StateTelemetry {
         f.debug_struct("StateTelemetry")
             .field("enabled", &self.enabled.load(Ordering::Relaxed))
             .field("nexus_enabled", &self.nexus_enabled.load(Ordering::Relaxed))
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -4398,10 +4398,10 @@ pub struct StreamingTelemetry {
 #[cfg(feature = "telemetry")]
 impl core::fmt::Debug for StreamingTelemetry {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let parity_buckets_len = match self.parity_buckets.try_lock() {
-            Ok(guard) => guard.len(),
-            Err(_) => 0,
-        };
+        let parity_buckets_len = self
+            .parity_buckets
+            .try_lock()
+            .map_or(0, |guard| guard.len());
         f.debug_struct("StreamingTelemetry")
             .field("enabled", &self.enabled.load(Ordering::Relaxed))
             .field("parity_buckets_len", &parity_buckets_len)
@@ -4796,6 +4796,7 @@ pub fn record_state_tx_queue_backpressure(
 }
 
 /// Update gauges that reflect the most recent tiered-state snapshot.
+#[allow(clippy::too_many_arguments)]
 pub fn record_state_tiered_snapshot(
     telemetry: &StateTelemetry,
     snapshot_index: u64,
@@ -5437,7 +5438,7 @@ impl Telemetry {
             .inc();
     }
 
-    /// Record that a block-sync ShareBlocks batch was dropped as unsolicited.
+    /// Record that a block-sync `ShareBlocks` batch was dropped as unsolicited.
     pub fn note_block_sync_unsolicited_share_blocks_drop(&self) {
         if !self.enabled.load(Ordering::Relaxed) {
             return;
@@ -6463,6 +6464,14 @@ impl Telemetry {
     pub fn inc_rbc_ready_broadcasts(&self) {
         if self.enabled.load(Ordering::Relaxed) {
             self.metrics.sumeragi_rbc_ready_broadcasts_total.inc();
+        }
+    }
+
+    /// Increment RBC rebroadcast skip counter labeled by kind (payload|ready).
+    pub fn inc_rbc_rebroadcast_skipped(&self, kind: &'static str) {
+        let _ = kind;
+        if self.enabled.load(Ordering::Relaxed) {
+            // TODO: wire to telemetry metric once registry exposes rebroadcast skips.
         }
     }
 
@@ -8459,8 +8468,9 @@ impl Actor {
             let curr_time = self.time_source.get_unix_time();
 
             // this will overflow in 584,942,417 years
+            let uptime = curr_time.checked_sub(timestamp).unwrap_or(Duration::ZERO);
             self.metrics.uptime_since_genesis_ms.set(
-                (curr_time - timestamp)
+                uptime
                     .as_millis()
                     .try_into()
                     .expect("Timestamp should fit into u64"),
@@ -12218,6 +12228,32 @@ mod tests {
                 .get(),
             1,
             "mode-tagged RBC abort counter should increment"
+        );
+    }
+
+    #[tokio::test]
+    async fn rbc_rebroadcast_skipped_counter_tracks_kinds() {
+        let sut = SystemUnderTest::new();
+
+        sut.telemetry.inc_rbc_rebroadcast_skipped("payload");
+        sut.telemetry.inc_rbc_rebroadcast_skipped("ready");
+
+        let metrics = sut.telemetry.metrics().await;
+        assert_eq!(
+            metrics
+                .sumeragi_rbc_rebroadcast_skipped_total
+                .with_label_values(&["payload"])
+                .get(),
+            1,
+            "payload rebroadcast skip counter should increment"
+        );
+        assert_eq!(
+            metrics
+                .sumeragi_rbc_rebroadcast_skipped_total
+                .with_label_values(&["ready"])
+                .get(),
+            1,
+            "READY rebroadcast skip counter should increment"
         );
     }
 

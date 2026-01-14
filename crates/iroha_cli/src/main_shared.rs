@@ -3633,6 +3633,13 @@ mod query {
 
 mod transaction {
     use iroha::data_model::{Level as LogLevel, isi::Log};
+    use std::{
+        sync::{
+            Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+        thread,
+    };
 
     use super::*;
 
@@ -3688,12 +3695,191 @@ mod transaction {
         /// Log message
         #[arg(short, long)]
         pub msg: String,
+        /// Number of ping transactions to send
+        #[arg(long, default_value_t = 1)]
+        pub count: usize,
+        /// Number of parallel workers to use when sending multiple pings
+        #[arg(long, default_value_t = 1)]
+        pub parallel: usize,
+        /// Submit without waiting for confirmation
+        #[arg(long)]
+        pub no_wait: bool,
+        /// Do not suffix message with "-<index>" when count > 1
+        #[arg(long)]
+        pub no_index: bool,
+    }
+
+    struct PingBatchResult {
+        attempted: usize,
+        failed: usize,
+        first_error: Option<eyre::Report>,
+    }
+
+    fn ping_message(base: &str, index: usize, count: usize, no_index: bool) -> String {
+        if count <= 1 || no_index {
+            return base.to_owned();
+        }
+        format!("{base}-{}", index + 1)
+    }
+
+    fn dispatch_ping_work<F, G>(count: usize, parallel: usize, make_worker: F) -> PingBatchResult
+    where
+        F: Fn() -> G + Sync,
+        G: FnMut(usize) -> Result<()> + Send,
+    {
+        let parallel = parallel.min(count);
+        let next = AtomicUsize::new(0);
+        let failures = AtomicUsize::new(0);
+        let first_error: Mutex<Option<eyre::Report>> = Mutex::new(None);
+
+        thread::scope(|scope| {
+            for _ in 0..parallel {
+                let make_worker = &make_worker;
+                let next = &next;
+                let failures = &failures;
+                let first_error = &first_error;
+                scope.spawn(move || {
+                    let mut worker = make_worker();
+                    loop {
+                        let index = next.fetch_add(1, Ordering::Relaxed);
+                        if index >= count {
+                            break;
+                        }
+                        if let Err(err) = worker(index) {
+                            failures.fetch_add(1, Ordering::Relaxed);
+                            let mut guard = first_error.lock().expect("lock");
+                            if guard.is_none() {
+                                *guard = Some(err);
+                            }
+                        }
+                    }
+                });
+            }
+        });
+
+        PingBatchResult {
+            attempted: count,
+            failed: failures.load(Ordering::Relaxed),
+            first_error: first_error.lock().expect("lock").take(),
+        }
     }
 
     impl Run for Ping {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let instruction = Log::new(self.log_level, self.msg);
-            context.finish([instruction])
+            let Ping {
+                log_level,
+                msg,
+                count,
+                parallel,
+                no_wait,
+                no_index,
+            } = self;
+            if count == 0 {
+                eyre::bail!("`--count` must be greater than zero");
+            }
+            if parallel == 0 {
+                eyre::bail!("`--parallel` must be greater than zero");
+            }
+            if count > 1 || parallel > 1 {
+                if context.input_instructions() || context.output_instructions() {
+                    eyre::bail!(
+                        "Incompatible `--input` `--output` flags with batch `iroha transaction ping`"
+                    );
+                }
+                let config = context.config().clone();
+                let metadata = context.transaction_metadata().cloned().unwrap_or_default();
+                let i18n = context.i18n().clone();
+                let base_msg = msg;
+                let result = dispatch_ping_work(count, parallel, move || {
+                    let client = Client::new(config.clone());
+                    let metadata = metadata.clone();
+                    let i18n = i18n.clone();
+                    let base_msg = base_msg.clone();
+                    move |index| {
+                        let message = ping_message(&base_msg, index, count, no_index);
+                        let instruction = Log::new(log_level, message);
+                        let transaction = client.build_transaction([instruction], metadata.clone());
+                        let submit = if no_wait {
+                            client.submit_transaction(&transaction).map(|_| ())
+                        } else {
+                            client.submit_transaction_blocking(&transaction).map(|_| ())
+                        };
+                        submit.map_err(|err| {
+                            let err = map_account_admission_error(err, &i18n);
+                            let err_msg = if cfg!(debug_assertions) {
+                                let tx = format!("{transaction:?}");
+                                i18n.t_with(
+                                    "error.submit_transaction_debug",
+                                    &[("transaction", tx.as_str())],
+                                )
+                            } else {
+                                i18n.t("error.submit_transaction")
+                            };
+                            err.wrap_err(err_msg)
+                        })
+                    }
+                });
+                let submitted = result.attempted.saturating_sub(result.failed);
+                if no_wait {
+                    context.println(format!(
+                        "Submitted {submitted}/{} ping transactions without confirmation",
+                        result.attempted
+                    ))?;
+                } else {
+                    context.println(format!(
+                        "Submitted {submitted}/{} ping transactions with confirmation",
+                        result.attempted
+                    ))?;
+                }
+                if result.failed > 0 {
+                    if let Some(err) = result.first_error {
+                        return Err(err.wrap_err(format!(
+                            "{} ping submissions failed",
+                            result.failed
+                        )));
+                    }
+                    eyre::bail!("{} ping submissions failed", result.failed);
+                }
+                return Ok(());
+            }
+            let instruction = Log::new(log_level, msg);
+            if no_wait {
+                context.finish_unconfirmed([instruction])
+            } else {
+                context.finish([instruction])
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn ping_message_appends_index_when_multiple() {
+            assert_eq!(ping_message("hello", 0, 3, false), "hello-1");
+            assert_eq!(ping_message("hello", 2, 3, false), "hello-3");
+        }
+
+        #[test]
+        fn ping_message_respects_no_index() {
+            assert_eq!(ping_message("hello", 0, 3, true), "hello");
+            assert_eq!(ping_message("hello", 0, 1, false), "hello");
+        }
+
+        #[test]
+        fn dispatch_ping_work_tracks_failures() {
+            let result = dispatch_ping_work(5, 3, || {
+                move |index| {
+                    if index % 2 == 0 {
+                        eyre::bail!("boom");
+                    }
+                    Ok(())
+                }
+            });
+            assert_eq!(result.attempted, 5);
+            assert!(result.failed >= 2);
+            assert!(result.first_error.is_some());
         }
     }
 
@@ -5953,7 +6139,9 @@ mod tests {
     use iroha::crypto::{Algorithm, KeyPair};
     use iroha::data_model::{
         ChainId,
+        Level,
         events::{data::DataEventFilter, execute_trigger::ExecuteTriggerEventFilter, EventFilterBox},
+        isi::Log,
         metadata::Metadata,
         transaction::Executable,
     };
@@ -6137,6 +6325,55 @@ mod tests {
             self.captured = Some(instructions.into());
             Ok(())
         }
+    }
+
+    #[test]
+    fn ping_rejects_zero_count() {
+        let account: AccountId =
+            "ed25519:ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C@wonderland"
+                .parse()
+                .expect("account");
+        let mut ctx = CaptureContext::new(account);
+        let cmd = transaction::Ping {
+            log_level: Level::INFO,
+            msg: "ping".to_string(),
+            count: 0,
+            parallel: 1,
+            no_wait: false,
+            no_index: false,
+        };
+        let err = cmd.run(&mut ctx).expect_err("count must be rejected");
+        assert!(err.to_string().contains("`--count` must be greater than zero"));
+    }
+
+    #[test]
+    fn ping_submits_single_log_instruction() {
+        let account: AccountId =
+            "ed25519:ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C@wonderland"
+                .parse()
+                .expect("account");
+        let mut ctx = CaptureContext::new(account);
+        let cmd = transaction::Ping {
+            log_level: Level::WARN,
+            msg: "hello".to_string(),
+            count: 1,
+            parallel: 1,
+            no_wait: false,
+            no_index: false,
+        };
+        cmd.run(&mut ctx).expect("ping run");
+        let exec = ctx.captured.expect("captured instructions");
+        let instructions = match exec {
+            Executable::Instructions(instructions) => instructions.into_vec(),
+            Executable::Ivm(_) => panic!("expected instructions"),
+        };
+        assert_eq!(instructions.len(), 1);
+        let log = instructions[0]
+            .as_any()
+            .downcast_ref::<Log>()
+            .expect("log instruction");
+        assert_eq!(log.level, Level::WARN);
+        assert_eq!(log.msg, "hello");
     }
 
     #[test]

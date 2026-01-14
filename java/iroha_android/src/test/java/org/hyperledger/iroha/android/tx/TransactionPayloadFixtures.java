@@ -4,7 +4,10 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -24,11 +27,13 @@ final class TransactionPayloadFixtures {
   private TransactionPayloadFixtures() {}
 
   static List<Fixture> load(final Path path) throws IOException {
-    final String json = Files.readString(path, StandardCharsets.UTF_8);
+    final String json = new String(Files.readAllBytes(path), StandardCharsets.UTF_8);
     final Object parsed = SimpleJson.parse(json);
-    if (!(parsed instanceof List<?> fixturesRaw)) {
+    if (!(parsed instanceof List)) {
       throw new IllegalStateException("Fixture root must be an array");
     }
+    @SuppressWarnings("unchecked")
+    final List<Object> fixturesRaw = (List<Object>) parsed;
     final List<Fixture> fixtures = new ArrayList<>();
     for (Object entry : fixturesRaw) {
       fixtures.add(Fixture.fromObject(entry));
@@ -38,11 +43,11 @@ final class TransactionPayloadFixtures {
 
   static Path resolveFixturePath() throws IOException {
     final List<Path> candidates =
-        List.of(
-            Path.of("java/iroha_android/src/test/resources/transaction_payloads.json"),
-            Path.of("src/test/resources/transaction_payloads.json"),
-            Path.of("../src/test/resources/transaction_payloads.json"),
-            Path.of("../../src/test/resources/transaction_payloads.json"));
+        Arrays.asList(
+            Paths.get("java/iroha_android/src/test/resources/transaction_payloads.json"),
+            Paths.get("src/test/resources/transaction_payloads.json"),
+            Paths.get("../src/test/resources/transaction_payloads.json"),
+            Paths.get("../../src/test/resources/transaction_payloads.json"));
     for (final Path candidate : candidates) {
       if (Files.exists(candidate)) {
         return candidate;
@@ -65,9 +70,11 @@ final class TransactionPayloadFixtures {
     }
 
     static Fixture fromObject(final Object value) {
-      if (!(value instanceof Map<?, ?> map)) {
+      if (!(value instanceof Map)) {
         throw new IllegalStateException("Fixture entries must be objects");
       }
+      @SuppressWarnings("unchecked")
+      final Map<Object, Object> map = (Map<Object, Object>) value;
       final String name = Objects.toString(map.get("name"), "<unnamed>");
       final Map<String, Object> payload =
           map.containsKey("payload") ? asMap(map.get("payload"), "payload", name) : null;
@@ -120,7 +127,7 @@ final class TransactionPayloadFixtures {
                 InstructionKind.fromDisplayName(asString(instructionMap.get("kind"), "instruction.kind"));
           }
           final Map<String, Object> args = instructionMap.get("arguments") == null
-              ? Map.of()
+              ? Collections.emptyMap()
               : asMap(instructionMap.get("arguments"), "instruction.arguments", name);
           final Map<String, String> convertedArgs = new LinkedHashMap<>();
           args.forEach((key, value) -> convertedArgs.put(key, Objects.toString(value)));
@@ -147,7 +154,7 @@ final class TransactionPayloadFixtures {
       builder.setNonce(nonce == null ? null : asNumber(nonce, "nonce").intValue());
 
       final Map<String, Object> metadataRaw = payload.get("metadata") == null
-          ? Map.of()
+          ? Collections.emptyMap()
           : asMap(payload.get("metadata"), "metadata", name);
       final Map<String, String> metadata = new LinkedHashMap<>();
       metadataRaw.forEach((key, value) -> metadata.put(key, Objects.toString(value)));
@@ -167,35 +174,37 @@ final class TransactionPayloadFixtures {
   }
 
   private static List<?> asList(final Object value, final String field) {
-    if (!(value instanceof List<?> list)) {
+    if (!(value instanceof List)) {
       throw new IllegalStateException("Expected array for " + field);
     }
-    return list;
+    return (List<?>) value;
   }
 
   private static Map<String, Object> asMap(
       final Object value, final String field, final String fixtureName) {
-    if (!(value instanceof Map<?, ?> raw)) {
+    if (!(value instanceof Map)) {
       throw new IllegalStateException(
           fixtureName + ": expected object for " + field + " but found " + value);
     }
     final Map<String, Object> checked = new LinkedHashMap<>();
+    @SuppressWarnings("unchecked")
+    final Map<Object, Object> raw = (Map<Object, Object>) value;
     raw.forEach((k, v) -> checked.put(Objects.toString(k), v));
     return checked;
   }
 
   private static String asString(final Object value, final String field) {
-    if (!(value instanceof String str)) {
+    if (!(value instanceof String)) {
       throw new IllegalStateException("Expected string for " + field);
     }
-    return str;
+    return (String) value;
   }
 
   private static Number asNumber(final Object value, final String field) {
-    if (!(value instanceof Number number)) {
+    if (!(value instanceof Number)) {
       throw new IllegalStateException("Expected number for " + field);
     }
-    return number;
+    return (Number) value;
   }
 
 }

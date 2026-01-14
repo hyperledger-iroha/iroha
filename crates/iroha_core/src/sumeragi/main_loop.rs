@@ -7,6 +7,7 @@ use std::{
     convert::TryFrom,
     fs,
     num::NonZeroUsize,
+    ops::Bound::{Excluded, Unbounded},
     path::{Path, PathBuf},
     sync::{Arc, mpsc},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -779,6 +780,7 @@ fn record_qc_validation_error(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn validate_qc_with_evidence(
     vote_log: &BTreeMap<
         (
@@ -1312,6 +1314,7 @@ impl RosterValidationCache {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn validate_block_sync_qc(
     qc: &crate::sumeragi::consensus::Qc,
     topology: &super::network_topology::Topology,
@@ -1341,11 +1344,16 @@ pub(crate) fn validate_block_sync_qc(
         return Err(QcValidationError::ValidatorSetMismatch);
     }
     let parsed_signers = qc_signer_indices(qc, roster_len, voting_len)?;
-    if block_signers.len() >= parsed_signers.voting.len() {
+    // Normalize block signer indices to canonical topology so view rotations align with QC bitmaps.
+    let block_signature_topology =
+        topology_for_view(topology, qc.height, block_view, mode_tag, prf_seed);
+    let block_signers_canonical =
+        normalize_signer_indices_to_canonical(block_signers, &block_signature_topology, topology);
+    if block_signers_canonical.len() >= parsed_signers.voting.len() {
         if let Some(missing) = parsed_signers
             .voting
             .iter()
-            .find(|signer| !block_signers.contains(*signer))
+            .find(|signer| !block_signers_canonical.contains(*signer))
         {
             return Err(QcValidationError::SignerMissingFromBlock { signer: *missing });
         }
@@ -1384,7 +1392,7 @@ pub(crate) fn validate_block_sync_qc(
     Ok((parsed_signers.voting, parsed_signers.present.len()))
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn derive_block_sync_qc_from_signers(
     block_hash: HashOf<BlockHeader>,
     block_height: u64,
@@ -1447,9 +1455,7 @@ fn derive_block_sync_qc_from_signers(
                 let Ok(idx) = usize::try_from(*signer) else {
                     return None;
                 };
-                let Some(peer) = commit_topology.get(idx) else {
-                    return None;
-                };
+                let peer = commit_topology.get(idx)?;
                 signer_peers.insert(peer.clone());
             }
             match stake_quorum_reached_for_snapshot(snapshot, commit_topology, &signer_peers) {
@@ -1507,6 +1513,7 @@ fn derive_block_sync_qc_from_signers(
 }
 
 #[cfg(test)]
+#[allow(clippy::too_many_arguments)]
 fn tally_qc_against_votes(
     vote_log: &BTreeMap<
         (
@@ -1550,6 +1557,7 @@ fn tally_qc_against_votes(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn tally_qc_against_block_signers(
     qc: &crate::sumeragi::consensus::Qc,
     topology: &super::network_topology::Topology,
@@ -1604,6 +1612,7 @@ fn validate_new_view_qc_highest(
     Ok(highest)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn validate_qc_against_votes(
     vote_log: &BTreeMap<
         (
@@ -2028,6 +2037,7 @@ fn phase_rank(phase: crate::sumeragi::consensus::Phase) -> u8 {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn touch_missing_block_request(
     requests: &mut BTreeMap<HashOf<BlockHeader>, MissingBlockRequest>,
     block_hash: HashOf<BlockHeader>,
@@ -2940,7 +2950,7 @@ fn rbc_chunk_payload_cap(origin: &PeerId, consensus_frame_cap: usize) -> usize {
     let mut low = 0usize;
     let mut high = consensus_frame_cap - base_len;
     while low < high {
-        let mid = (low + high + 1) / 2;
+        let mid = (low + high).div_ceil(2);
         chunk.bytes.resize(mid, 0);
         let encoded_len =
             consensus_block_wire_len_owned(origin, BlockMessage::RbcChunk(chunk.clone()));
@@ -3000,6 +3010,30 @@ impl Actor {
                     tip_hash,
                 )
         })
+    }
+
+    fn has_unresolved_rbc_backlog(&self) -> bool {
+        if !self.runtime_da_enabled() {
+            return false;
+        }
+        let unresolved_sessions =
+            self.subsystems
+                .da_rbc
+                .rbc
+                .sessions
+                .iter()
+                .any(|(key, session)| {
+                    !session.is_invalid() && !self.block_payload_available_locally(key.0)
+                });
+        if unresolved_sessions {
+            return true;
+        }
+        self.subsystems
+            .da_rbc
+            .rbc
+            .pending
+            .keys()
+            .any(|key| !self.block_payload_available_locally(key.0))
     }
 
     fn is_peer_admin_transaction(tx: &AcceptedTransaction<'_>) -> bool {
@@ -3241,6 +3275,7 @@ pub(super) struct Actor {
     tick_counter: u64,
     tick_timing: TickTimingMonitor,
     last_qc_rebuild: Instant,
+    relay_backpressure: RelayBackpressure,
     payload_rebroadcast_log: PayloadRebroadcastThrottle,
     block_sync_rebroadcast_log: PayloadRebroadcastThrottle,
     block_sync_fetch_log: PayloadRebroadcastThrottle,
@@ -3336,10 +3371,7 @@ fn scan_da_spool_stamp(spool_dir: &Path) -> Result<Option<SpoolDirStamp>, std::i
         Err(err) => return Err(err),
     };
     if !metadata.is_dir() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "DA spool path is not a directory",
-        ));
+        return Err(std::io::Error::other("DA spool path is not a directory"));
     }
 
     let mut entries = Vec::new();
@@ -3378,7 +3410,9 @@ fn scan_da_spool_stamp(spool_dir: &Path) -> Result<Option<SpoolDirStamp>, std::i
 #[derive(Debug, Default)]
 struct DaSpoolCache {
     dir_stamp: Option<SpoolDirStamp>,
+    #[allow(clippy::option_option)]
     commitment_bundle: Option<Option<DaCommitmentBundle>>,
+    #[allow(clippy::option_option)]
     pin_bundle: Option<Option<DaPinIntentBundle>>,
     receipt_entries: Option<Vec<crate::da::receipts::DaReceiptEntry>>,
 }
@@ -3392,14 +3426,13 @@ impl DaSpoolCache {
     }
 
     fn refresh_if_stale(&mut self, spool_dir: &Path) -> Result<bool, std::io::Error> {
-        let stamp = match scan_da_spool_stamp(spool_dir)? {
-            Some(stamp) => stamp,
-            None => {
-                if self.dir_stamp.is_some() {
-                    self.invalidate();
-                }
-                return Ok(false);
+        let stamp = if let Some(stamp) = scan_da_spool_stamp(spool_dir)? {
+            stamp
+        } else {
+            if self.dir_stamp.is_some() {
+                self.invalidate();
             }
+            return Ok(false);
         };
         if self.dir_stamp != Some(stamp) {
             self.dir_stamp = Some(stamp);
@@ -3571,10 +3604,20 @@ struct RbcState {
     status_handle: rbc_status::Handle,
     payload_rebroadcast_last_sent: BTreeMap<super::rbc_store::SessionKey, Instant>,
     ready_rebroadcast_last_sent: BTreeMap<super::rbc_store::SessionKey, Instant>,
+    deliver_deferral: BTreeMap<super::rbc_store::SessionKey, RbcDeliverDeferral>,
+    rebroadcast_cursor: Option<super::rbc_store::SessionKey>,
     persisted_full_sessions: BTreeSet<super::rbc_store::SessionKey>,
     persist_tx: Option<mpsc::SyncSender<rbc::RbcPersistWork>>,
     persist_rx: Option<mpsc::Receiver<rbc::RbcPersistResult>>,
     persist_inflight: BTreeSet<super::rbc_store::SessionKey>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RbcDeliverDeferral {
+    last_attempt: Instant,
+    ready_count: usize,
+    received_chunks: u32,
+    total_chunks: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -4021,7 +4064,7 @@ fn canonicalize_block_signatures_for_roster(
     mapped.into_iter().collect()
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn selection_from_roster_artifacts(
     commit_qc: Option<&Qc>,
     checkpoint: Option<&ValidatorSetCheckpoint>,
@@ -4076,7 +4119,7 @@ fn selection_from_roster_artifacts(
             super::status::precommit_signers_for(block_hash).and_then(|record| {
                 if record.height == block_height
                     && record.epoch == epoch
-                    && block_view.map_or(true, |view| view == record.view)
+                    && block_view.is_none_or(|view| view == record.view)
                 {
                     Some((record.parent_state_root, record.post_state_root))
                 } else {
@@ -4229,7 +4272,7 @@ fn block_sync_history_roster_for_block(
     if cert.is_none() {
         if let Some(record) = super::status::precommit_signers_for(block_hash) {
             let expected_epoch = roster_cache.expected_epoch(record.height, consensus_mode);
-            let view_matches = block_view.map_or(true, |view| view == record.view);
+            let view_matches = block_view.is_none_or(|view| view == record.view);
             if record.height <= block_height
                 && view_matches
                 && record.epoch == expected_epoch
@@ -4454,6 +4497,7 @@ fn block_sync_update_with_roster(
     update
 }
 
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn validate_commit_qc_roster(
     cert: &Qc,
     block_hash: HashOf<BlockHeader>,
@@ -4600,6 +4644,7 @@ fn validate_commit_qc_roster(
     Ok(cert.validator_set.clone())
 }
 
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn validate_checkpoint_roster(
     checkpoint: &ValidatorSetCheckpoint,
     block_hash: HashOf<BlockHeader>,
@@ -5141,6 +5186,7 @@ impl Actor {
         Some((roster, updated))
     }
 
+    #[allow(clippy::too_many_lines)]
     fn record_rbc_session_roster(
         &mut self,
         key: super::rbc_store::SessionKey,
@@ -5224,6 +5270,7 @@ impl Actor {
                         .rbc
                         .ready_rebroadcast_last_sent
                         .remove(&key);
+                    self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
                     if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
                         self.update_rbc_status_entry(key, &session, false);
                         self.persist_rbc_session(key, &session);
@@ -5266,6 +5313,7 @@ impl Actor {
                         .rbc
                         .ready_rebroadcast_last_sent
                         .remove(&key);
+                    self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
                     if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
                         self.update_rbc_status_entry(key, &session, false);
                         self.persist_rbc_session(key, &session);
@@ -6343,6 +6391,8 @@ impl Actor {
             status_handle: rbc_status_handle,
             payload_rebroadcast_last_sent: BTreeMap::new(),
             ready_rebroadcast_last_sent: BTreeMap::new(),
+            deliver_deferral: BTreeMap::new(),
+            rebroadcast_cursor: None,
             persisted_full_sessions: BTreeSet::new(),
             persist_tx: None,
             persist_rx: None,
@@ -6448,6 +6498,7 @@ impl Actor {
             tick_counter: 0,
             tick_timing: TickTimingMonitor::new(now),
             last_qc_rebuild: initial_qc_rebuild,
+            relay_backpressure: RelayBackpressure::default(),
             payload_rebroadcast_log: PayloadRebroadcastThrottle::default(),
             block_sync_rebroadcast_log: PayloadRebroadcastThrottle::default(),
             block_sync_fetch_log: PayloadRebroadcastThrottle::default(),
@@ -6875,10 +6926,7 @@ impl Actor {
                 if let Some(window) = stats.view_change_window {
                     if !window.is_zero() {
                         if let Some(deadline) = stats.first_seen.checked_add(window) {
-                            candidate = Some(match candidate {
-                                Some(prev) => prev.min(deadline),
-                                None => deadline,
-                            });
+                            candidate = Some(candidate.map_or(deadline, |prev| prev.min(deadline)));
                         }
                     }
                 }
@@ -6890,10 +6938,7 @@ impl Actor {
             if candidate == now {
                 return Some(now);
             }
-            next_due = Some(match next_due {
-                Some(prev) => prev.min(candidate),
-                None => candidate,
-            });
+            next_due = Some(next_due.map_or(candidate, |prev| prev.min(candidate)));
         }
         next_due
     }
@@ -6936,8 +6981,7 @@ impl Actor {
                 let expiry = pending
                     .inserted_at
                     .checked_add(aborted_retention)
-                    .map(|deadline| deadline.max(now))
-                    .unwrap_or(now);
+                    .map_or(now, |deadline| deadline.max(now));
                 next_due = Self::merge_deadline(next_due, Some(expiry));
                 continue;
             }
@@ -7950,15 +7994,16 @@ impl Actor {
                 let header = block.block.header();
                 Some((header.height().get(), header.view_change_index()))
             }
-            BlockMessage::BlockSyncUpdate(_) => None,
-            BlockMessage::ConsensusParams(_) => None,
-            BlockMessage::VrfCommit(_) | BlockMessage::VrfReveal(_) => None,
+            BlockMessage::BlockSyncUpdate(_)
+            | BlockMessage::ConsensusParams(_)
+            | BlockMessage::VrfCommit(_)
+            | BlockMessage::VrfReveal(_)
+            | BlockMessage::FetchPendingBlock(_) => None,
             BlockMessage::ExecWitness(witness) => Some((witness.height, witness.view)),
             BlockMessage::RbcInit(init) => Some((init.height, init.view)),
             BlockMessage::RbcChunk(chunk) => Some((chunk.height, chunk.view)),
             BlockMessage::RbcReady(ready) => Some((ready.height, ready.view)),
             BlockMessage::RbcDeliver(deliver) => Some((deliver.height, deliver.view)),
-            BlockMessage::FetchPendingBlock(_) => None,
             BlockMessage::ProposalHint(hint) => Some((hint.height, hint.view)),
             BlockMessage::Proposal(proposal) => {
                 Some((proposal.header.height, proposal.header.view))
@@ -8518,6 +8563,9 @@ impl Actor {
                 return;
             }
         }
+        if !self.should_rebroadcast_rbc_ready(&topology_peers, key) {
+            return;
+        }
         let now = Instant::now();
         let cooldown = self.rebroadcast_cooldown();
         if let Some(last) = self
@@ -8600,6 +8648,42 @@ impl Actor {
         Some((init, chunks))
     }
 
+    fn should_rebroadcast_rbc_payload(
+        &self,
+        roster: &[PeerId],
+        key: super::rbc_store::SessionKey,
+    ) -> bool {
+        if roster.is_empty() {
+            return false;
+        }
+        let seed = rbc::shuffle_seed(&key.0, key.1, key.2);
+        // Limit payload rebroadcasts to a deterministic f+1 subset to avoid message storms.
+        let rebroadcaster =
+            rbc::is_payload_rebroadcaster(roster, self.common_config.peer.id(), seed);
+        if !rebroadcaster {
+            #[cfg(feature = "telemetry")]
+            self.telemetry.inc_rbc_rebroadcast_skipped("payload");
+        }
+        rebroadcaster
+    }
+
+    fn should_rebroadcast_rbc_ready(
+        &self,
+        roster: &[PeerId],
+        key: super::rbc_store::SessionKey,
+    ) -> bool {
+        if roster.is_empty() {
+            return false;
+        }
+        let seed = rbc::shuffle_seed(&key.0, key.1, key.2);
+        let rebroadcaster = rbc::is_ready_rebroadcaster(roster, self.common_config.peer.id(), seed);
+        if !rebroadcaster {
+            #[cfg(feature = "telemetry")]
+            self.telemetry.inc_rbc_rebroadcast_skipped("ready");
+        }
+        rebroadcaster
+    }
+
     fn rebroadcast_rbc_payload_bundle(
         &mut self,
         key: super::rbc_store::SessionKey,
@@ -8676,6 +8760,9 @@ impl Actor {
             );
             return;
         }
+        if !self.should_rebroadcast_rbc_payload(&roster, key) {
+            return;
+        }
         let Some((init, chunks)) = Self::rbc_payload_bundle(key, session, &roster) else {
             debug!(
                 height = key.1,
@@ -8699,9 +8786,7 @@ impl Actor {
             .rbc
             .payload_rebroadcast_last_sent
             .get(key)
-            .map_or(true, |last| {
-                now.saturating_duration_since(*last) >= cooldown
-            })
+            .is_none_or(|last| now.saturating_duration_since(*last) >= cooldown)
     }
 
     fn rbc_ready_rebroadcast_due(
@@ -8715,9 +8800,7 @@ impl Actor {
             .rbc
             .ready_rebroadcast_last_sent
             .get(key)
-            .map_or(true, |last| {
-                now.saturating_duration_since(*last) >= cooldown
-            })
+            .is_none_or(|last| now.saturating_duration_since(*last) >= cooldown)
     }
 
     fn flush_pending_rbc_if_roster_ready(&mut self, key: super::rbc_store::SessionKey) -> bool {
@@ -8738,6 +8821,7 @@ impl Actor {
         true
     }
 
+    #[allow(clippy::too_many_lines)]
     fn rebroadcast_stalled_rbc_payloads(&mut self, now: Instant) -> bool {
         if self.is_observer() {
             return false;
@@ -8746,22 +8830,56 @@ impl Actor {
             return false;
         }
         if self.subsystems.da_rbc.rbc.sessions.is_empty() {
+            self.subsystems.da_rbc.rbc.rebroadcast_cursor = None;
             return false;
         }
 
         let payload_cooldown = self.payload_rebroadcast_cooldown();
+        if self.relay_backpressure_active(now, payload_cooldown) {
+            trace!("skipping RBC payload rebroadcast due to relay backpressure");
+            return false;
+        }
         let ready_cooldown = self.rebroadcast_cooldown();
-        let keys: Vec<_> = self
-            .subsystems
-            .da_rbc
-            .rbc
-            .sessions
-            .keys()
-            .cloned()
-            .collect();
+        // Rotate through sessions with a per-tick budget so large backlogs do not trigger storms.
+        let total_sessions = self.subsystems.da_rbc.rbc.sessions.len();
+        let session_budget = self.config.rbc_rebroadcast_sessions_per_tick.max(1);
+        let limit = session_budget.min(total_sessions);
+        let cursor = self.subsystems.da_rbc.rbc.rebroadcast_cursor;
+        let mut keys = Vec::with_capacity(limit);
+        if let Some(cursor_key) = cursor {
+            for (key, _) in self
+                .subsystems
+                .da_rbc
+                .rbc
+                .sessions
+                .range((Excluded(cursor_key), Unbounded))
+            {
+                keys.push(*key);
+                if keys.len() >= limit {
+                    break;
+                }
+            }
+            if keys.len() < limit {
+                for (key, _) in self.subsystems.da_rbc.rbc.sessions.range(..=cursor_key) {
+                    keys.push(*key);
+                    if keys.len() >= limit {
+                        break;
+                    }
+                }
+            }
+        } else {
+            for (key, _) in self.subsystems.da_rbc.rbc.sessions.iter() {
+                keys.push(*key);
+                if keys.len() >= limit {
+                    break;
+                }
+            }
+        }
         let mut progress = false;
+        let mut last_key = cursor;
 
         for key in keys {
+            last_key = Some(key);
             if self.flush_pending_rbc_if_roster_ready(key) {
                 progress = true;
             }
@@ -8781,8 +8899,7 @@ impl Actor {
                     .rbc
                     .sessions
                     .get(&key)
-                    .map(|session| session.sent_ready)
-                    .unwrap_or(true);
+                    .is_none_or(|session| session.sent_ready);
                 if let Err(err) = self.maybe_emit_rbc_ready(key) {
                     debug!(
                         height = key.1,
@@ -8797,8 +8914,7 @@ impl Actor {
                     .rbc
                     .sessions
                     .get(&key)
-                    .map(|session| session.sent_ready)
-                    .unwrap_or(was_sent);
+                    .map_or(was_sent, |session| session.sent_ready);
                 if !was_sent && now_sent {
                     progress = true;
                 }
@@ -8831,6 +8947,7 @@ impl Actor {
             }
             let should_rebroadcast_payload = missing_chunks || !ready_quorum;
             let payload_bundle = if should_rebroadcast_payload
+                && self.should_rebroadcast_rbc_payload(&roster, key)
                 && self.rbc_payload_rebroadcast_due(&key, now, payload_cooldown)
             {
                 Self::rbc_payload_bundle(key, session, &roster)
@@ -8856,15 +8973,59 @@ impl Actor {
             }
         }
 
+        self.subsystems.da_rbc.rbc.rebroadcast_cursor = last_key;
         progress
     }
 
+    fn should_emit_rbc_deliver_deferral(
+        &mut self,
+        key: super::rbc_store::SessionKey,
+        now: Instant,
+        ready_count: usize,
+        received_chunks: u32,
+        total_chunks: u32,
+        cooldown: Duration,
+    ) -> bool {
+        let entry = self.subsystems.da_rbc.rbc.deliver_deferral.entry(key);
+        match entry {
+            Entry::Vacant(slot) => {
+                slot.insert(RbcDeliverDeferral {
+                    last_attempt: now,
+                    ready_count,
+                    received_chunks,
+                    total_chunks,
+                });
+                true
+            }
+            Entry::Occupied(mut slot) => {
+                let last = *slot.get();
+                let progressed = ready_count > last.ready_count
+                    || received_chunks > last.received_chunks
+                    || total_chunks != last.total_chunks;
+                let elapsed = now.saturating_duration_since(last.last_attempt);
+                if progressed || elapsed >= cooldown {
+                    slot.insert(RbcDeliverDeferral {
+                        last_attempt: now,
+                        ready_count,
+                        received_chunks,
+                        total_chunks,
+                    });
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
     fn maybe_emit_rbc_deliver(&mut self, key: super::rbc_store::SessionKey) -> Result<()> {
         let Some(mut session) = self.subsystems.da_rbc.rbc.sessions.remove(&key) else {
             return Ok(());
         };
 
         if session.delivered || session.is_invalid() {
+            self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
             return Ok(());
         }
@@ -8876,12 +9037,32 @@ impl Actor {
         }
         let topology = super::network_topology::Topology::new(commit_topology.clone());
         let required = self.rbc_deliver_quorum(&topology);
-        if session.ready_signatures.len() < required {
+        let ready_count = session.ready_signatures.len();
+        let received_chunks = session.received_chunks();
+        let total_chunks = session.total_chunks();
+        let missing_chunks = total_chunks != 0 && received_chunks < total_chunks;
+        if ready_count < required {
+            let cooldown = if missing_chunks {
+                self.payload_rebroadcast_cooldown()
+            } else {
+                self.rebroadcast_cooldown()
+            };
+            if !self.should_emit_rbc_deliver_deferral(
+                key,
+                Instant::now(),
+                ready_count,
+                received_chunks,
+                total_chunks,
+                cooldown,
+            ) {
+                self.subsystems.da_rbc.rbc.sessions.insert(key, session);
+                return Ok(());
+            }
             iroha_logger::info!(
                 height = key.1,
                 view = key.2,
                 block = %key.0,
-                ready = session.ready_signatures.len(),
+                ready = ready_count,
                 required,
                 senders = ?session
                     .ready_signatures
@@ -8897,13 +9078,23 @@ impl Actor {
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
             return Ok(());
         }
-        let total_chunks = session.total_chunks();
-        if total_chunks != 0 && session.received_chunks() < total_chunks {
+        if missing_chunks {
+            if !self.should_emit_rbc_deliver_deferral(
+                key,
+                Instant::now(),
+                ready_count,
+                received_chunks,
+                total_chunks,
+                self.payload_rebroadcast_cooldown(),
+            ) {
+                self.subsystems.da_rbc.rbc.sessions.insert(key, session);
+                return Ok(());
+            }
             debug!(
                 height = key.1,
                 view = key.2,
                 block = %key.0,
-                received = session.received_chunks(),
+                received = received_chunks,
                 total = total_chunks,
                 "deferring RBC DELIVER: payload chunks not yet complete"
             );
@@ -8924,6 +9115,7 @@ impl Actor {
                         "RBC chunk-root mismatch detected; refusing to emit DELIVER"
                     );
                     self.subsystems.da_rbc.rbc.sessions.insert(key, session);
+                    self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
                     self.clear_pending_rbc(&key);
                     if let Some(updated) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
                         self.update_rbc_status_entry(key, &updated, false);
@@ -8943,7 +9135,7 @@ impl Actor {
             debug!(
                 height = key.1,
                 view = key.2,
-                ready = session.ready_signatures.len(),
+                ready = ready_count,
                 required,
                 "READY quorum met but local validator index unavailable; waiting for external RBC DELIVER"
             );
@@ -8970,6 +9162,7 @@ impl Actor {
             self.update_rbc_status_entry(key, &updated, false);
             self.persist_rbc_session(key, &updated);
         }
+        self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
         let telemetry_ref = self.telemetry_handle();
         self.publish_rbc_backlog_snapshot();
 
@@ -9038,6 +9231,10 @@ impl Actor {
         payload_rebroadcast_cooldown_from_block_time(block_time)
     }
 
+    fn relay_backpressure_active(&mut self, now: Instant, cooldown: Duration) -> bool {
+        self.relay_backpressure.active(now, cooldown)
+    }
+
     fn quorum_timeout(&self, da_enabled: bool) -> Duration {
         let view = self.state.view();
         let block_time = self.block_time_for_mode(&view, self.consensus_mode);
@@ -9071,6 +9268,14 @@ impl Actor {
         }
         if self.queue.tx_len() == 0 && self.empty_child_fallback(now).is_none() {
             // Skip idle view-change churn when no work is queued and no empty-child recovery is needed.
+            return false;
+        }
+        if self.has_unresolved_rbc_backlog() {
+            trace!("skipping idle view-change due to unresolved RBC backlog");
+            return false;
+        }
+        if self.relay_backpressure_active(now, self.rebroadcast_cooldown()) {
+            trace!("skipping idle view-change due to relay backpressure");
             return false;
         }
 
@@ -9142,15 +9347,13 @@ impl Actor {
         }
 
         let mut missing_removed = 0usize;
-        self.pending
-            .missing_block_requests
-            .retain(|_, request| {
-                let stale = request.height == height && request.view < min_view;
-                if stale {
-                    missing_removed = missing_removed.saturating_add(1);
-                }
-                !stale
-            });
+        self.pending.missing_block_requests.retain(|_, request| {
+            let stale = request.height == height && request.view < min_view;
+            if stale {
+                missing_removed = missing_removed.saturating_add(1);
+            }
+            !stale
+        });
 
         let stale_rbc: Vec<_> = self
             .subsystems
@@ -9159,7 +9362,7 @@ impl Actor {
             .sessions
             .keys()
             .filter(|key| key.1 == height && key.2 < min_view)
-            .cloned()
+            .copied()
             .collect();
         let mut rbc_removed = 0usize;
         for key in stale_rbc {
@@ -9327,6 +9530,7 @@ impl Actor {
             .rbc
             .ready_rebroadcast_last_sent
             .remove(&key);
+        self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
         self.subsystems
             .da_rbc
             .rbc
@@ -9726,6 +9930,49 @@ struct EmptyChildContext {
     target_view: u64,
     highest_qc: crate::sumeragi::consensus::QcHeaderRef,
     parent_payload_hash: Hash,
+}
+
+#[derive(Debug)]
+struct RelayBackpressure {
+    last_drop_count: u64,
+    last_drop_at: Option<Instant>,
+}
+
+impl RelayBackpressure {
+    fn new() -> Self {
+        Self {
+            last_drop_count: Self::drop_count(),
+            last_drop_at: None,
+        }
+    }
+
+    fn drop_count() -> u64 {
+        iroha_p2p::network::subscriber_queue_full_consensus_count()
+            .saturating_add(iroha_p2p::network::subscriber_queue_full_control_count())
+            .saturating_add(iroha_p2p::network::subscriber_queue_full_block_sync_count())
+    }
+
+    fn active(&mut self, now: Instant, cooldown: Duration) -> bool {
+        let current = Self::drop_count();
+        if current > self.last_drop_count {
+            self.last_drop_count = current;
+            self.last_drop_at = Some(now);
+        }
+        self.last_drop_at
+            .is_some_and(|last| now.saturating_duration_since(last) < cooldown)
+    }
+
+    #[cfg(test)]
+    fn reset_to_current(&mut self) {
+        self.last_drop_count = Self::drop_count();
+        self.last_drop_at = None;
+    }
+}
+
+impl Default for RelayBackpressure {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Decide whether another empty-child emission is allowed for the same parent payload.
@@ -10404,6 +10651,7 @@ impl RbcSession {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) fn from_persisted_unchecked(
         persisted: &super::rbc_store::PersistedSession,
     ) -> Result<Self, PersistedLoadError> {
@@ -10789,8 +11037,7 @@ fn scan_manifest_spool(spool_dir: &Path) -> Result<Option<ManifestSpoolScan>, st
         Err(err) => return Err(err),
     };
     if !metadata.is_dir() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        return Err(std::io::Error::other(
             "manifest spool path is not a directory",
         ));
     }

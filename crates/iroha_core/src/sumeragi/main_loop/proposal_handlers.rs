@@ -55,6 +55,7 @@ impl Actor {
         )
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     pub(super) fn handle_consensus_params(
         &self,
         advert: super::message::ConsensusParamsAdvert,
@@ -83,6 +84,7 @@ impl Actor {
     }
 
     #[allow(clippy::too_many_lines)]
+    #[allow(clippy::unnecessary_wraps)]
     pub(super) fn handle_proposal_hint(
         &mut self,
         hint: super::message::ProposalHint,
@@ -367,6 +369,8 @@ impl Actor {
         false
     }
 
+    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::unnecessary_wraps)]
     pub(super) fn handle_proposal(
         &mut self,
         proposal: crate::sumeragi::consensus::Proposal,
@@ -586,9 +590,8 @@ impl Actor {
         let highest_commit = self
             .highest_qc
             .filter(|qc| qc.phase == crate::sumeragi::consensus::Phase::Commit);
-        let anchor_height = highest_commit
-            .map(|qc| qc.height.max(committed_height))
-            .unwrap_or(committed_height);
+        let anchor_height =
+            highest_commit.map_or(committed_height, |qc| qc.height.max(committed_height));
         let active_height = anchor_height.saturating_add(1);
         let min_height = active_height.saturating_sub(super::PROPOSALS_SEEN_HEIGHT_WINDOW);
         let max_height = active_height.saturating_add(super::PROPOSALS_SEEN_HEIGHT_WINDOW);
@@ -779,7 +782,7 @@ impl Actor {
             let mut commit_topology =
                 self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
             if commit_topology.is_empty() {
-                commit_topology = active_commit_topology.clone();
+                commit_topology.clone_from(&active_commit_topology);
             }
             let expected_usize = usize::try_from(expected_height).ok();
             let actual_usize = usize::try_from(height).ok();
@@ -849,7 +852,7 @@ impl Actor {
             .propose
             .proposal_cache
             .get_proposal(height, view)
-            .cloned();
+            .copied();
         let mut payload_bytes = None;
         let mut payload_hash = None;
         let mut proposal_mismatch = None;
@@ -1292,7 +1295,7 @@ impl Actor {
                     height,
                     view,
                     epoch,
-                    topology.clone(),
+                    &topology,
                 );
             }
             let cached_qc = qc_cache_for_subject(&self.qc_cache, block_hash)

@@ -31,7 +31,7 @@ Consensus (Sumeragi)
   - Snapshot of on-chain Sumeragi parameters `{ block_time_ms, commit_time_ms, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`.
   - When `da_enabled` is true, availability evidence (availability votes or RBC `READY`) is tracked but commit does not wait on it; local RBC `DELIVER` is also not a requirement. Operators can confirm payload transport health via the RBC endpoints below.
 - GET `/v1/sumeragi/rbc`
-  - Aggregate Reliable Broadcast counters: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, deliver_broadcasts_total, payload_bytes_delivered_total }`.
+  - Aggregate Reliable Broadcast counters: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, ready_rebroadcasts_skipped_total, deliver_broadcasts_total, payload_bytes_delivered_total, payload_rebroadcasts_skipped_total }`.
 - GET `/v1/sumeragi/rbc/sessions`
   - Snapshot of per-session state (block hash, height/view, chunk counts, delivered flag, `invalid` marker, payload hash, recovered boolean) to troubleshoot stalled RBC deliveries and highlight recovered sessions after restart.
   - CLI shortcut: `iroha sumeragi rbc sessions --summary` prints `hash`, `height/view`, chunk progress, ready count, and invalid/delivered flags.

@@ -102,7 +102,6 @@ pub fn load_commitment_bundle(
                     path = %path.display(),
                     "failed to decode DA commitment file; skipping"
                 );
-                continue;
             }
         }
     }

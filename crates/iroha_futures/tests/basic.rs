@@ -21,7 +21,7 @@ async fn sleep(times: Vec<Duration>) -> i32 {
 }
 
 fn almost_equal(a: Duration, b: Duration) -> bool {
-    (a - b) < (b / 9)
+    a.abs_diff(b) < (b / 9)
 }
 
 #[tokio::test(flavor = "multi_thread")]

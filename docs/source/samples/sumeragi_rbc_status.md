@@ -9,8 +9,10 @@ Response (example)
   "sessions_active": 0,
   "sessions_pruned_total": 0,
   "ready_broadcasts_total": 0,
+  "ready_rebroadcasts_skipped_total": 0,
   "deliver_broadcasts_total": 0,
-  "payload_bytes_delivered_total": 0
+  "payload_bytes_delivered_total": 0,
+  "payload_rebroadcasts_skipped_total": 0
 }
 ```
 

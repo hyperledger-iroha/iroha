@@ -37,12 +37,14 @@ fn sessions<C: RunContext>(context: &mut C, args: RbcSessionsArgs) -> Result<()>
 fn summarize_rbc_status(v: &Value) -> String {
     let g = |k: &str| v.get(k).and_then(norito::json::Value::as_u64).unwrap_or(0);
     format!(
-        "active={} pruned={} ready={} deliver={} bytes={}",
+        "active={} pruned={} ready={} deliver={} bytes={} skip_payload={} skip_ready={}",
         g("sessions_active"),
         g("sessions_pruned_total"),
         g("ready_broadcasts_total"),
         g("deliver_broadcasts_total"),
-        g("payload_bytes_delivered_total")
+        g("payload_bytes_delivered_total"),
+        g("payload_rebroadcasts_skipped_total"),
+        g("ready_rebroadcasts_skipped_total")
     )
 }
 
@@ -106,11 +108,13 @@ mod tests {
             "sessions_pruned_total": 4,
             "ready_broadcasts_total": 5,
             "deliver_broadcasts_total": 6,
-            "payload_bytes_delivered_total": 7
+            "payload_bytes_delivered_total": 7,
+            "payload_rebroadcasts_skipped_total": 8,
+            "ready_rebroadcasts_skipped_total": 9
         });
         assert_eq!(
             summarize_rbc_status(&value),
-            "active=3 pruned=4 ready=5 deliver=6 bytes=7"
+            "active=3 pruned=4 ready=5 deliver=6 bytes=7 skip_payload=8 skip_ready=9"
         );
     }
 

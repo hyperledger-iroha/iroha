@@ -22,6 +22,7 @@ public final class NoritoTests {
     testEncodeDecodeUInt();
     testEncodeDecodeString();
     testEncodeDecodeSequence();
+    testByteVecAdapterRoundtrip();
     testSequenceAcceptsEmptyPackedTail();
     testSequenceAcceptsEmptyPackedTailWithFollowingData();
     testOption();
@@ -176,6 +177,23 @@ public final class NoritoTests {
     byte[] encoded = NoritoCodec.encode(values, "iroha.test.Sequence", adapter);
     List<Long> decoded = NoritoCodec.decode(encoded, adapter, "iroha.test.Sequence");
     assert decoded.equals(values);
+  }
+
+  private static void testByteVecAdapterRoundtrip() {
+    TypeAdapter<byte[]> adapter = NoritoAdapters.byteVecAdapter();
+    byte[] value = new byte[] {0x01, 0x02};
+    NoritoCodec.AdaptiveEncoding encoding = NoritoCodec.encodeAdaptive(value, adapter);
+    byte[] encoded = encoding.payload();
+    byte[] expected = new byte[] {
+        0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02
+    };
+    assert Arrays.equals(encoded, expected) : "byte vec encoding mismatch";
+    NoritoDecoder decoder = new NoritoDecoder(encoded, encoding.flags(), NoritoHeader.MINOR_VERSION);
+    byte[] decoded = adapter.decode(decoder);
+    assert Arrays.equals(decoded, value) : "byte vec roundtrip mismatch";
+    assert decoder.remaining() == 0 : "decoder should consume payload";
   }
 
   private static void testSequenceAcceptsEmptyPackedTail() {

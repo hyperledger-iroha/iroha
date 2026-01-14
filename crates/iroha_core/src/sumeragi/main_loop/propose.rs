@@ -396,7 +396,7 @@ impl Actor {
 
                 let receipt_plan = if nexus_enabled {
                     let cursor_snapshot = self.state.da_receipt_cursor_snapshot();
-                    let (receipts, _cache_outcome) = {
+                    let (receipts, cache_outcome) = {
                         let da_rbc = &mut self.subsystems.da_rbc;
                         crate::da::receipts::prune_spool(&da_rbc.spool_dir, &cursor_snapshot);
                         da_rbc
@@ -407,8 +407,10 @@ impl Actor {
                     #[cfg(feature = "telemetry")]
                     self.telemetry.note_da_spool_cache(
                         crate::telemetry::DaSpoolCacheKind::Receipts,
-                        _cache_outcome.as_telemetry(),
+                        cache_outcome.as_telemetry(),
                     );
+                    #[cfg(not(feature = "telemetry"))]
+                    let _ = cache_outcome;
                     crate::da::receipts::plan_committable_receipts(
                         &lane_config,
                         &cursor_snapshot,
@@ -423,12 +425,14 @@ impl Actor {
                 let mut bundle_opt = {
                     let da_rbc = &mut self.subsystems.da_rbc;
                     match da_rbc.spool_cache.load_commitment_bundle(&da_rbc.spool_dir) {
-                        Ok((value, _cache_outcome)) => {
+                        Ok((value, cache_outcome)) => {
                             #[cfg(feature = "telemetry")]
                             self.telemetry.note_da_spool_cache(
                                 crate::telemetry::DaSpoolCacheKind::Commitments,
-                                _cache_outcome.as_telemetry(),
+                                cache_outcome.as_telemetry(),
                             );
+                            #[cfg(not(feature = "telemetry"))]
+                            let _ = cache_outcome;
                             value
                         }
                         Err(err) => {
@@ -462,7 +466,7 @@ impl Actor {
                                 continue;
                             }
                             let policy = lane_config.manifest_policy(record.lane_id);
-                            let (available, _cache_outcome) =
+                            let (available, cache_outcome) =
                                 crate::sumeragi::main_loop::manifest_available_for_commitment(
                                     &mut da_rbc.manifest_cache,
                                     &da_rbc.spool_dir,
@@ -471,7 +475,9 @@ impl Actor {
                                 );
                             #[cfg(feature = "telemetry")]
                             self.telemetry
-                                .note_da_manifest_cache(_cache_outcome.as_telemetry());
+                                .note_da_manifest_cache(cache_outcome.as_telemetry());
+                            #[cfg(not(feature = "telemetry"))]
+                            let _ = cache_outcome;
                             if available {
                                 kept.push(record.clone());
                             }
@@ -553,12 +559,14 @@ impl Actor {
                 let pin_bundle_opt = {
                     let da_rbc = &mut self.subsystems.da_rbc;
                     match da_rbc.spool_cache.load_pin_bundle(&da_rbc.spool_dir) {
-                        Ok((value, _cache_outcome)) => {
+                        Ok((value, cache_outcome)) => {
                             #[cfg(feature = "telemetry")]
                             self.telemetry.note_da_spool_cache(
                                 crate::telemetry::DaSpoolCacheKind::PinIntents,
-                                _cache_outcome.as_telemetry(),
+                                cache_outcome.as_telemetry(),
                             );
+                            #[cfg(not(feature = "telemetry"))]
+                            let _ = cache_outcome;
                             value
                         }
                         Err(err) => {
@@ -719,7 +727,7 @@ impl Actor {
                 self.subsystems
                     .propose
                     .proposal_cache
-                    .insert_proposal(proposal.clone());
+                    .insert_proposal(proposal);
 
                 let proposal_hint = super::message::ProposalHint {
                     block_hash,
@@ -769,7 +777,7 @@ impl Actor {
 
             // Loop back consensus messages locally so the leader participates immediately.
             self.handle_proposal_hint(proposal_hint)?;
-            self.handle_proposal(proposal.clone())?;
+            self.handle_proposal(proposal)?;
 
             let topology_peers = topology.as_ref();
             let local_peer_id = self.common_config.peer.id().clone();
@@ -779,7 +787,7 @@ impl Actor {
                 }
                 self.schedule_background(BackgroundRequest::Post {
                     peer: peer.clone(),
-                    msg: BlockMessage::Proposal(proposal.clone()),
+                    msg: BlockMessage::Proposal(proposal),
                 });
             }
             for peer in topology_peers {
@@ -911,7 +919,7 @@ impl Actor {
 
         for record in &bundle.commitments {
             let policy = lane_config.manifest_policy(record.lane_id);
-            let (outcome, _cache_outcome) = {
+            let (outcome, cache_outcome) = {
                 let da_rbc = &mut self.subsystems.da_rbc;
                 manifest_guard_outcome(
                     &mut da_rbc.manifest_cache,
@@ -922,7 +930,9 @@ impl Actor {
             };
             #[cfg(feature = "telemetry")]
             self.telemetry
-                .note_da_manifest_cache(_cache_outcome.as_telemetry());
+                .note_da_manifest_cache(cache_outcome.as_telemetry());
+            #[cfg(not(feature = "telemetry"))]
+            let _ = cache_outcome;
             match outcome {
                 ManifestGuardOutcome::Pass => {}
                 ManifestGuardOutcome::Warn(err) => warn!(
@@ -997,7 +1007,9 @@ impl Actor {
     }
 
     pub(super) fn should_defer_proposal(&mut self) -> bool {
-        self.subsystems.propose.backpressure_gate.should_defer()
+        let queue_saturated = self.subsystems.propose.backpressure_gate.should_defer();
+        let rbc_backlog = self.has_unresolved_rbc_backlog();
+        queue_saturated || rbc_backlog
     }
 
     pub(super) fn on_pacemaker_backpressure_deferral(
@@ -1005,6 +1017,7 @@ impl Actor {
         now: Instant,
         state: BackpressureState,
     ) {
+        let rbc_backlog = self.has_unresolved_rbc_backlog();
         super::status::inc_pacemaker_backpressure_deferrals();
         #[cfg(feature = "telemetry")]
         {
@@ -1014,7 +1027,8 @@ impl Actor {
             ?now,
             tx_queue_depth = state.queued(),
             tx_queue_capacity = state.capacity().get(),
-            "Pacemaker deferred proposal assembly due to saturated transaction queue"
+            rbc_backlog,
+            "Pacemaker deferred proposal assembly due to backpressure"
         );
     }
 

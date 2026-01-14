@@ -2054,8 +2054,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                         map: m,
                         offset: 0,
                     });
-                    let out = lower_map_key_eq(ctx, &kexpr.ty, sk, key_tmp);
-                    out
+                    lower_map_key_eq(ctx, &kexpr.ty, sk, key_tmp)
                 }
                 "has" => {
                     // Alias to contains(map, key) -> bool
@@ -2097,8 +2096,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                         map: m,
                         offset: 0,
                     });
-                    let out = lower_map_key_eq(ctx, &kexpr.ty, sk, key_tmp);
-                    out
+                    lower_map_key_eq(ctx, &kexpr.ty, sk, key_tmp)
                 }
                 "get_or_default" => {
                     let mexpr = &args[0];

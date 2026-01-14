@@ -2267,6 +2267,7 @@ mod tests {
         (cert_pem, cert_der)
     }
 
+    #[allow(clippy::type_complexity)]
     fn spawn_frame_server_or_skip() -> Option<(
         Endpoint,
         SocketAddr,

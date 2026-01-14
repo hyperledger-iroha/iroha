@@ -2157,7 +2157,7 @@ mod run {
         Pong,
     }
 
-    pub(crate) fn data_message_wire_len<T: Encode>(payload: T) -> usize {
+    pub fn data_message_wire_len<T: Encode>(payload: T) -> usize {
         Message::Data(payload).encode().len()
     }
 

@@ -99,11 +99,7 @@ fn div_ceil_i64(num: i64, denom: i64) -> Result<i64, VMError> {
 }
 
 fn abs_i64_to_u64(value: i64) -> u64 {
-    if value == i64::MIN {
-        (i64::MAX as u64) + 1
-    } else {
-        value.abs() as u64
-    }
+    value.unsigned_abs()
 }
 
 fn gcd_i64(a: i64, b: i64) -> u64 {
@@ -1771,21 +1767,21 @@ impl IVM {
                         let sig_slice = self
                             .memory
                             .load_region(sig_addr, dilithium2::signature_bytes() as u64)?;
-                        let pk = match dilithium2::PublicKey::from_bytes(&pk_slice) {
+                        let pk = match dilithium2::PublicKey::from_bytes(pk_slice) {
                             Ok(p) => p,
                             Err(_) => {
                                 self.registers.set(result_reg as usize, 0);
                                 return Ok(());
                             }
                         };
-                        let sig = match dilithium2::DetachedSignature::from_bytes(&sig_slice) {
+                        let sig = match dilithium2::DetachedSignature::from_bytes(sig_slice) {
                             Ok(s) => s,
                             Err(_) => {
                                 self.registers.set(result_reg as usize, 0);
                                 return Ok(());
                             }
                         };
-                        dilithium2::verify_detached_signature(&sig, &msg, &pk).is_ok()
+                        dilithium2::verify_detached_signature(&sig, msg, &pk).is_ok()
                     }
                     3 => {
                         let pk_slice = self
@@ -1794,21 +1790,21 @@ impl IVM {
                         let sig_slice = self
                             .memory
                             .load_region(sig_addr, dilithium3::signature_bytes() as u64)?;
-                        let pk = match dilithium3::PublicKey::from_bytes(&pk_slice) {
+                        let pk = match dilithium3::PublicKey::from_bytes(pk_slice) {
                             Ok(p) => p,
                             Err(_) => {
                                 self.registers.set(result_reg as usize, 0);
                                 return Ok(());
                             }
                         };
-                        let sig = match dilithium3::DetachedSignature::from_bytes(&sig_slice) {
+                        let sig = match dilithium3::DetachedSignature::from_bytes(sig_slice) {
                             Ok(s) => s,
                             Err(_) => {
                                 self.registers.set(result_reg as usize, 0);
                                 return Ok(());
                             }
                         };
-                        dilithium3::verify_detached_signature(&sig, &msg, &pk).is_ok()
+                        dilithium3::verify_detached_signature(&sig, msg, &pk).is_ok()
                     }
                     5 => {
                         let pk_slice = self
@@ -1817,21 +1813,21 @@ impl IVM {
                         let sig_slice = self
                             .memory
                             .load_region(sig_addr, dilithium5::signature_bytes() as u64)?;
-                        let pk = match dilithium5::PublicKey::from_bytes(&pk_slice) {
+                        let pk = match dilithium5::PublicKey::from_bytes(pk_slice) {
                             Ok(p) => p,
                             Err(_) => {
                                 self.registers.set(result_reg as usize, 0);
                                 return Ok(());
                             }
                         };
-                        let sig = match dilithium5::DetachedSignature::from_bytes(&sig_slice) {
+                        let sig = match dilithium5::DetachedSignature::from_bytes(sig_slice) {
                             Ok(s) => s,
                             Err(_) => {
                                 self.registers.set(result_reg as usize, 0);
                                 return Ok(());
                             }
                         };
-                        dilithium5::verify_detached_signature(&sig, &msg, &pk).is_ok()
+                        dilithium5::verify_detached_signature(&sig, msg, &pk).is_ok()
                     }
                     _ => false,
                 };
@@ -4421,30 +4417,12 @@ impl IVM {
                                         }
                                         self.gas_remaining -= extra_cost;
 
-                                        let batch_result = match self
+                                        #[cfg(all(feature = "metal", target_os = "macos"))]
+                                        let batch_result = self
                                             .verify_ed25519_batch_cuda(&req)
-                                        {
-                                            Some(res) => Some(res),
-                                            None => {
-                                                #[cfg(all(feature = "metal", target_os = "macos"))]
-                                                {
-                                                    if let Some(res) =
-                                                        self.verify_ed25519_batch_metal(&req)
-                                                    {
-                                                        Some(res)
-                                                    } else {
-                                                        None
-                                                    }
-                                                }
-                                                #[cfg(not(all(
-                                                    feature = "metal",
-                                                    target_os = "macos"
-                                                )))]
-                                                {
-                                                    None
-                                                }
-                                            }
-                                        };
+                                            .or_else(|| self.verify_ed25519_batch_metal(&req));
+                                        #[cfg(not(all(feature = "metal", target_os = "macos")))]
+                                        let batch_result = self.verify_ed25519_batch_cuda(&req);
 
                                         match batch_result {
                                             Some(Ok(())) => true,
@@ -5498,7 +5476,7 @@ fn compute_instruction(
                         mem.load_region(pubkey_addr, dilithium2::public_key_bytes() as u64)?;
                     let sig_slice =
                         mem.load_region(sig_addr, dilithium2::signature_bytes() as u64)?;
-                    let pk = match dilithium2::PublicKey::from_bytes(&pk_slice) {
+                    let pk = match dilithium2::PublicKey::from_bytes(pk_slice) {
                         Ok(p) => p,
                         Err(_) => {
                             res.push(ResultUpdate::Reg {
@@ -5509,7 +5487,7 @@ fn compute_instruction(
                             return Ok(res);
                         }
                     };
-                    let sig = match dilithium2::DetachedSignature::from_bytes(&sig_slice) {
+                    let sig = match dilithium2::DetachedSignature::from_bytes(sig_slice) {
                         Ok(s) => s,
                         Err(_) => {
                             res.push(ResultUpdate::Reg {
@@ -5520,14 +5498,14 @@ fn compute_instruction(
                             return Ok(res);
                         }
                     };
-                    dilithium2::verify_detached_signature(&sig, &msg, &pk).is_ok()
+                    dilithium2::verify_detached_signature(&sig, msg, &pk).is_ok()
                 }
                 3 => {
                     let pk_slice =
                         mem.load_region(pubkey_addr, dilithium3::public_key_bytes() as u64)?;
                     let sig_slice =
                         mem.load_region(sig_addr, dilithium3::signature_bytes() as u64)?;
-                    let pk = match dilithium3::PublicKey::from_bytes(&pk_slice) {
+                    let pk = match dilithium3::PublicKey::from_bytes(pk_slice) {
                         Ok(p) => p,
                         Err(_) => {
                             res.push(ResultUpdate::Reg {
@@ -5538,7 +5516,7 @@ fn compute_instruction(
                             return Ok(res);
                         }
                     };
-                    let sig = match dilithium3::DetachedSignature::from_bytes(&sig_slice) {
+                    let sig = match dilithium3::DetachedSignature::from_bytes(sig_slice) {
                         Ok(s) => s,
                         Err(_) => {
                             res.push(ResultUpdate::Reg {
@@ -5549,14 +5527,14 @@ fn compute_instruction(
                             return Ok(res);
                         }
                     };
-                    dilithium3::verify_detached_signature(&sig, &msg, &pk).is_ok()
+                    dilithium3::verify_detached_signature(&sig, msg, &pk).is_ok()
                 }
                 5 => {
                     let pk_slice =
                         mem.load_region(pubkey_addr, dilithium5::public_key_bytes() as u64)?;
                     let sig_slice =
                         mem.load_region(sig_addr, dilithium5::signature_bytes() as u64)?;
-                    let pk = match dilithium5::PublicKey::from_bytes(&pk_slice) {
+                    let pk = match dilithium5::PublicKey::from_bytes(pk_slice) {
                         Ok(p) => p,
                         Err(_) => {
                             res.push(ResultUpdate::Reg {
@@ -5567,7 +5545,7 @@ fn compute_instruction(
                             return Ok(res);
                         }
                     };
-                    let sig = match dilithium5::DetachedSignature::from_bytes(&sig_slice) {
+                    let sig = match dilithium5::DetachedSignature::from_bytes(sig_slice) {
                         Ok(s) => s,
                         Err(_) => {
                             res.push(ResultUpdate::Reg {
@@ -5578,7 +5556,7 @@ fn compute_instruction(
                             return Ok(res);
                         }
                     };
-                    dilithium5::verify_detached_signature(&sig, &msg, &pk).is_ok()
+                    dilithium5::verify_detached_signature(&sig, msg, &pk).is_ok()
                 }
                 _ => {
                     res.push(ResultUpdate::Reg {
@@ -5722,10 +5700,7 @@ impl IVM {
                     return Err(VMError::OutOfGas);
                 }
                 self.gas_remaining -= cost;
-                let updates = match result {
-                    Ok(updates) => updates,
-                    Err(e) => return Err(e),
-                };
+                let updates = result?;
                 for upd in updates {
                     match upd {
                         ResultUpdate::Reg { index, value, tag } => {

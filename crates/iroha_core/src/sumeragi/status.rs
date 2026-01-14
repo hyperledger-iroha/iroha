@@ -415,6 +415,8 @@ static LANE_RELAY_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 #[cfg(test)]
 static MISSING_BLOCK_FETCH_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
+static BLOCK_SYNC_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
+#[cfg(test)]
 static PREVOTE_TIMEOUT_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 #[cfg(test)]
 static COMMIT_HISTORY_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
@@ -2037,7 +2039,7 @@ pub struct BlockSyncRosterSnapshot {
     pub commit_roster_journal_total: u64,
     /// Total block-sync drops due to missing/invalid roster proofs.
     pub drop_missing_total: u64,
-    /// Total block-sync ShareBlocks drops without a matching request.
+    /// Total block-sync `ShareBlocks` drops without a matching request.
     pub drop_unsolicited_share_blocks_total: u64,
 }
 
@@ -2714,7 +2716,7 @@ pub struct PrecommitSignerRecord {
     pub mode_tag: String,
     /// Ordered validator set used when forming the QC.
     pub validator_set: Vec<PeerId>,
-    /// Stake snapshot aligned to the validator set (NPoS only).
+    /// Stake snapshot aligned to the validator set (`NPoS` only).
     pub stake_snapshot: Option<CommitStakeSnapshot>,
 }
 
@@ -3476,16 +3478,22 @@ pub fn inc_block_created_proposal_mismatch() {
 
 /// Increment counter when block sync drops a batch due to invalid signatures.
 pub fn inc_block_sync_drop_invalid_signatures() {
+    #[cfg(test)]
+    let _guard = block_sync_test_guard();
     BLOCK_SYNC_DROP_INVALID_SIGNATURES_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Increment counter when block sync replaces an incoming QC with a locally derived one.
 pub fn inc_block_sync_qc_replaced() {
+    #[cfg(test)]
+    let _guard = block_sync_test_guard();
     BLOCK_SYNC_QC_REPLACED_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Increment counter when block sync cannot derive a QC for an incoming batch.
 pub fn inc_block_sync_qc_derive_failed() {
+    #[cfg(test)]
+    let _guard = block_sync_test_guard();
     BLOCK_SYNC_QC_DERIVE_FAILED_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -3610,6 +3618,8 @@ pub fn record_peer_key_policy_reject(reason: PeerKeyPolicyRejectReason) {
 
 /// Record which roster source was used during block sync.
 pub fn inc_block_sync_roster_source(source: &str) {
+    #[cfg(test)]
+    let _guard = block_sync_test_guard();
     match source {
         "commit_checkpoint_pair_hint" => {
             BLOCK_SYNC_ROSTER_COMMIT_CERT_HINT_TOTAL.fetch_add(1, Ordering::Relaxed);
@@ -3639,11 +3649,15 @@ pub fn inc_block_sync_roster_source(source: &str) {
 
 /// Increment counter when block sync drops an update with no verifiable roster.
 pub fn inc_block_sync_roster_drop_missing() {
+    #[cfg(test)]
+    let _guard = block_sync_test_guard();
     BLOCK_SYNC_ROSTER_DROP_MISSING_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Increment counter when block sync drops ShareBlocks without a matching request.
+/// Increment counter when block sync drops `ShareBlocks` without a matching request.
 pub fn inc_block_sync_roster_drop_unsolicited_share_blocks() {
+    #[cfg(test)]
+    let _guard = block_sync_test_guard();
     BLOCK_SYNC_ROSTER_DROP_UNSOLICITED_SHARE_BLOCKS_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -3802,6 +3816,7 @@ pub(crate) fn reset_missing_block_fetch_counters_for_tests() {
 
 #[cfg(test)]
 pub(crate) fn reset_block_sync_counters_for_tests() {
+    let _guard = block_sync_test_guard();
     BLOCK_SYNC_DROP_INVALID_SIGNATURES_TOTAL.store(0, Ordering::Relaxed);
     BLOCK_SYNC_QC_REPLACED_TOTAL.store(0, Ordering::Relaxed);
     BLOCK_SYNC_QC_DERIVE_FAILED_TOTAL.store(0, Ordering::Relaxed);
@@ -5218,9 +5233,7 @@ enum TestLockOwner {
 impl TestLockOwner {
     fn current() -> Self {
         // Use task IDs so the guard remains reentrant even when async tests hop threads.
-        tokio::task::try_id()
-            .map(Self::Task)
-            .unwrap_or_else(|| Self::Thread(std::thread::current().id()))
+        tokio::task::try_id().map_or_else(|| Self::Thread(std::thread::current().id()), Self::Task)
     }
 }
 
@@ -5328,6 +5341,12 @@ pub(crate) fn lane_relay_test_guard() -> std::sync::MutexGuard<'static, ()> {
 #[allow(private_interfaces)]
 pub(crate) fn missing_block_fetch_test_guard() -> TestLockGuard {
     reentrant_test_guard(&MISSING_BLOCK_FETCH_TEST_LOCK)
+}
+
+#[cfg(test)]
+#[allow(private_interfaces)]
+pub(crate) fn block_sync_test_guard() -> TestLockGuard {
+    reentrant_test_guard(&BLOCK_SYNC_TEST_LOCK)
 }
 
 #[cfg(test)]
@@ -6022,6 +6041,7 @@ mod tests {
 
     #[test]
     fn block_sync_counters_surface_in_snapshot() {
+        let _guard = super::block_sync_test_guard();
         super::reset_block_sync_counters_for_tests();
         super::inc_block_sync_drop_invalid_signatures();
         super::inc_block_sync_qc_replaced();
@@ -6040,7 +6060,9 @@ mod tests {
         assert_eq!(snapshot.block_sync_roster.commit_roster_journal_total, 1);
         assert_eq!(snapshot.block_sync_roster.drop_missing_total, 1);
         assert_eq!(
-            snapshot.block_sync_roster.drop_unsolicited_share_blocks_total,
+            snapshot
+                .block_sync_roster
+                .drop_unsolicited_share_blocks_total,
             1
         );
         super::reset_block_sync_counters_for_tests();

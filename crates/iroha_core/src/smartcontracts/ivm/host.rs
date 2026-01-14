@@ -386,7 +386,7 @@ pub trait QueryStateSource {
     where
         Self: 'a;
     /// Borrow the state as a query-state reference.
-    fn as_query_state_ref<'a>(&'a self) -> Self::Ref<'a>;
+    fn as_query_state_ref(&self) -> Self::Ref<'_>;
 }
 
 impl<'state> QueryStateSource for StateView<'state> {
@@ -395,7 +395,7 @@ impl<'state> QueryStateSource for StateView<'state> {
     where
         Self: 'a;
 
-    fn as_query_state_ref<'a>(&'a self) -> Self::Ref<'a> {
+    fn as_query_state_ref(&self) -> Self::Ref<'_> {
         QueryStateRef::View(self)
     }
 }
@@ -406,7 +406,7 @@ impl<'state> QueryStateSource for StateBlock<'state> {
     where
         Self: 'a;
 
-    fn as_query_state_ref<'a>(&'a self) -> Self::Ref<'a> {
+    fn as_query_state_ref(&self) -> Self::Ref<'_> {
         QueryStateRef::Block(self)
     }
 }
@@ -420,7 +420,7 @@ where
     where
         Self: 'a;
 
-    fn as_query_state_ref<'a>(&'a self) -> Self::Ref<'a> {
+    fn as_query_state_ref(&self) -> Self::Ref<'_> {
         QueryStateRef::Transaction(self)
     }
 }
@@ -430,6 +430,10 @@ pub trait QueryStateExecute {
     /// Execute a query request for the provided authority.
     ///
     /// Returns the query response and processed item count or a VM error.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ivm::VMError`] if the query cannot be executed or fails validation.
     fn execute_query(
         self,
         authority: &AccountId,
@@ -442,6 +446,10 @@ pub trait QueryStateExecute {
     ///
     /// Implementations may ignore the budget if they do not support early aborts.
     /// Returns the query response and processed item count or a VM error.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ivm::VMError`] if the query cannot be executed or fails validation.
     fn execute_query_with_budget(
         self,
         authority: &AccountId,
@@ -483,7 +491,7 @@ pub trait QueryStateAccess {
         Self: 'a;
 
     /// Fetch the configured query-state reference, if any.
-    fn get<'a>(&'a self) -> Option<Self::Ref<'a>>;
+    fn get(&self) -> Option<Self::Ref<'_>>;
 }
 
 impl QueryStateAccess for NoQueryState {
@@ -492,7 +500,7 @@ impl QueryStateAccess for NoQueryState {
     where
         Self: 'a;
 
-    fn get<'a>(&'a self) -> Option<Self::Ref<'a>> {
+    fn get(&self) -> Option<Self::Ref<'_>> {
         None
     }
 }
@@ -506,19 +514,19 @@ where
     where
         Self: 'a;
 
-    fn get<'a>(&'a self) -> Option<Self::Ref<'a>> {
+    fn get(&self) -> Option<Self::Ref<'_>> {
         self.state
     }
 }
 
-fn map_query_validation_error(error: ValidationFail) -> ivm::VMError {
+fn map_query_validation_error(error: &ValidationFail) -> ivm::VMError {
     match error {
         ValidationFail::NotPermitted(_) => ivm::VMError::PermissionDenied,
         _ => ivm::VMError::DecodeError,
     }
 }
 
-fn map_query_execution_error(error: QueryExecutionFail) -> ivm::VMError {
+fn map_query_execution_error(error: &QueryExecutionFail) -> ivm::VMError {
     match error {
         QueryExecutionFail::GasBudgetExceeded => ivm::VMError::OutOfGas,
         _ => ivm::VMError::DecodeError,
@@ -565,10 +573,10 @@ fn execute_query_on_state_with_budget<R: StateReadOnly>(
     let mut validator = Validator { authority, state };
     let limits = QueryLimits::from_pipeline(state.pipeline());
     let validated = ValidQueryRequest::validate_for_ivm(request, &mut validator, limits)
-        .map_err(map_query_validation_error)?;
+        .map_err(|err| map_query_validation_error(&err))?;
     let (response, processed_items) = validated
         .execute_ephemeral_with_stats(state.query_handle(), state, authority, budget_items)
-        .map_err(map_query_execution_error)?;
+        .map_err(|err| map_query_execution_error(&err))?;
     Ok(QueryExecutionResult {
         response,
         processed_items,
@@ -668,14 +676,26 @@ pub struct SubscriptionContext {
 /// Helpers for accessing subscription data through a query-state reference.
 pub trait QueryStateRefOps {
     /// Resolve subscription context for a trigger identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ivm::VMError`] if the trigger or subscription metadata cannot be resolved.
     fn subscription_context_for_trigger(
         &self,
         trigger_id: &TriggerId,
     ) -> Result<SubscriptionContext, ivm::VMError>;
     /// Load subscription state from a subscription NFT.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ivm::VMError`] if the subscription state is missing or invalid.
     fn subscription_state_for_nft(&self, nft_id: &NftId)
     -> Result<SubscriptionState, ivm::VMError>;
     /// Load a subscription plan from its asset definition metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ivm::VMError`] if the plan metadata cannot be decoded.
     fn subscription_plan(
         &self,
         plan_id: &AssetDefinitionId,
@@ -1620,6 +1640,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
 
     /// Provide public inputs retrievable via `SYSCALL_GET_PUBLIC_INPUT`.
+    #[must_use]
     pub fn with_public_inputs(mut self, inputs: BTreeMap<Name, Vec<u8>>) -> Self {
         self.set_public_inputs(inputs);
         self
@@ -2224,7 +2245,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Ok(())
     }
 
-    #[allow(clippy::unused_self)]
+    #[allow(clippy::unused_self, dead_code)]
     fn read_norito_payload<'a>(&self, vm: &'a IVM, ptr: u64) -> Result<&'a [u8], ivm::VMError> {
         // Try TLV envelope first: [type_id:u16][version:u8][len:be u32][payload][hash:32]
         // If TLV appears present but is invalid, do NOT silently fall back.
@@ -2249,6 +2270,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         vm.memory.load_region(ptr + 4, len)
     }
 
+    #[allow(dead_code)]
     fn decode_at<T: NoritoDecode>(&self, vm: &IVM, ptr: u64) -> Result<T, ivm::VMError> {
         let bytes = self.read_norito_payload(vm, ptr)?;
         T::decode(&mut &*bytes).map_err(|_| ivm::VMError::DecodeError)
@@ -2310,13 +2332,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         s.parse::<Json>().map_err(|_| ivm::VMError::DecodeError)
     }
 
-    fn permission_from_name(name: Name) -> Permission {
-        Permission::new(name.as_ref().to_string().into(), Json::new(()))
+    fn permission_from_name(name: &Name) -> Permission {
+        Permission::new(name.as_ref().to_string(), Json::new(()))
     }
 
     fn permission_from_value(value: &json::Value) -> Result<Permission, ivm::VMError> {
         if let Some(name) = value.as_str() {
-            return Ok(Permission::new(name.to_string().into(), Json::new(())));
+            return Ok(Permission::new(name.to_string(), Json::new(())));
         }
         if let Some(map) = value.as_object() {
             if let Ok(permission) = json::from_value::<Permission>(value.clone()) {
@@ -2327,10 +2349,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 .and_then(json::Value::as_str)
                 .ok_or(ivm::VMError::DecodeError)?;
             let payload = map.get("payload").cloned().unwrap_or(json::Value::Null);
-            return Ok(Permission::new(
-                name.to_string().into(),
-                Json::from(payload),
-            ));
+            return Ok(Permission::new(name.to_string(), Json::from(payload)));
         }
         Err(ivm::VMError::DecodeError)
     }
@@ -2346,16 +2365,17 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         if let Ok(perms) = json::from_value::<Permissions>(value.clone()) {
             return Ok(perms);
         }
-        let array = if let Some(array) = value.as_array() {
-            Some(array)
-        } else if let Some(map) = value.as_object() {
-            map.get("permissions")
-                .or_else(|| map.get("perms"))
-                .or_else(|| map.get("permission"))
-                .and_then(json::Value::as_array)
-        } else {
-            None
-        };
+        let array = value.as_array().map_or_else(
+            || {
+                value.as_object().and_then(|map| {
+                    map.get("permissions")
+                        .or_else(|| map.get("perms"))
+                        .or_else(|| map.get("permission"))
+                        .and_then(json::Value::as_array)
+                })
+            },
+            Some,
+        );
         if let Some(items) = array {
             let mut perms = Permissions::new();
             for item in items {
@@ -2426,7 +2446,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         match tlv.type_id {
             PointerType::Name => {
                 let name: Name = Self::decode_tlv_typed(vm, ptr, PointerType::Name)?;
-                Ok(Self::permission_from_name(name))
+                Ok(Self::permission_from_name(&name))
             }
             PointerType::Json => {
                 let payload = Self::decode_tlv_json(vm, ptr)?;
@@ -2855,6 +2875,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .saturating_add(Self::QUERY_GAS_PER_BYTE.saturating_mul(response_bytes))
     }
 
+    #[allow(clippy::too_many_lines)]
     fn subscription_bill(&mut self) -> Result<u64, ivm::VMError> {
         struct BillingWindow {
             start_ms: u64,
@@ -3296,11 +3317,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 charge_asset_def.id.clone(),
                 subscription_state.subscriber.clone(),
             );
-            state
-                .world()
-                .asset(&asset_id)
-                .map(|entry| entry.value().clone().into_inner())
-                .unwrap_or_else(|_| Numeric::zero())
+            state.world().asset(&asset_id).map_or_else(
+                |_| Numeric::zero(),
+                |entry| entry.value().clone().into_inner(),
+            )
         };
 
         Ok(SubscriptionContext {
@@ -3597,7 +3617,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 None,
             );
             return Err(ivm::VMError::PermissionDenied);
-        };
+        }
         let ds_ptr = vm.register(10);
         let dsid: DataSpaceId = Self::decode_tlv_typed(vm, ds_ptr, PointerType::DataSpaceId)
             .map_err(|err| {
@@ -4040,14 +4060,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         } else {
             let proof_tlv = Self::expect_tlv(vm, proof_ptr, PointerType::ProofBlob)?;
             let blob: ProofBlob =
-                Self::decode_header_or_bare(proof_tlv.payload).map_err(|err| {
+                Self::decode_header_or_bare(proof_tlv.payload).inspect_err(|_| {
                     self.record_axt_reject(
                         AxtRejectReason::Proof,
                         Some(intent.asset_dsid),
                         Some(handle.target_lane),
                         "proof payload failed to decode",
                     );
-                    err
                 })?;
             Some(blob)
         };
@@ -4581,25 +4600,25 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     let id_str = id_value.as_str().ok_or(ivm::VMError::DecodeError)?;
                     let id: TriggerId = id_str.parse().map_err(|_| ivm::VMError::DecodeError)?;
                     let action_value = map.remove("action").ok_or(ivm::VMError::DecodeError)?;
-                    let action = match json::from_value::<Action>(action_value.clone()) {
-                        Ok(action) => action,
-                        Err(_) => {
-                            let spec_action: SpecializedAction<EventFilterBox> =
-                                json::from_value(action_value)
-                                    .map_err(|_| ivm::VMError::DecodeError)?;
-                            let SpecializedAction {
-                                executable,
-                                repeats,
-                                authority,
-                                filter,
-                                metadata,
-                            } = spec_action;
-                            if matches!(filter, EventFilterBox::TriggerCompleted(_)) {
-                                return Err(ivm::VMError::DecodeError);
-                            }
-                            Action::new(executable, repeats, authority, filter)
-                                .with_metadata(metadata)
+                    let action = if let Ok(action) =
+                        json::from_value::<Action>(action_value.clone())
+                    {
+                        action
+                    } else {
+                        let spec_action: SpecializedAction<EventFilterBox> =
+                            json::from_value(action_value)
+                                .map_err(|_| ivm::VMError::DecodeError)?;
+                        let SpecializedAction {
+                            executable,
+                            repeats,
+                            authority,
+                            filter,
+                            metadata,
+                        } = spec_action;
+                        if matches!(filter, EventFilterBox::TriggerCompleted(_)) {
+                            return Err(ivm::VMError::DecodeError);
                         }
+                        Action::new(executable, repeats, authority, filter).with_metadata(metadata)
                     };
                     Trigger::new(id, action)
                 };
@@ -5035,15 +5054,16 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 }
                 let gas = Self::gas_for_zk_verify_payload(tlv.payload);
                 let envs: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
-                    match norito::decode_from_bytes(tlv.payload) {
-                        Ok(v) => v,
-                        Err(_) => {
-                            vm.set_register(10, 0);
-                            vm.set_register(11, ivm::host::ERR_DECODE);
-                            return Ok(gas);
-                        }
+                    if let Ok(v) = norito::decode_from_bytes(tlv.payload) {
+                        v
+                    } else {
+                        vm.set_register(10, 0);
+                        vm.set_register(11, ivm::host::ERR_DECODE);
+                        return Ok(gas);
                     };
-                if envs.len() as u32 > self.halo2_config.verifier_max_batch {
+                if u32::try_from(envs.len()).unwrap_or(u32::MAX)
+                    > self.halo2_config.verifier_max_batch
+                {
                     vm.set_register(10, 0);
                     vm.set_register(11, ivm::host::ERR_BATCH);
                     return Ok(gas);
@@ -5063,13 +5083,12 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let mut first_error: Option<u64> = None;
                 for env in &envs {
                     let mut status = 0u8;
-                    let payload = match norito::to_bytes(env) {
-                        Ok(bytes) => bytes,
-                        Err(_) => {
-                            first_error.get_or_insert(ivm::host::ERR_DECODE);
-                            statuses.push(status);
-                            continue;
-                        }
+                    let payload = if let Ok(bytes) = norito::to_bytes(env) {
+                        bytes
+                    } else {
+                        first_error.get_or_insert(ivm::host::ERR_DECODE);
+                        statuses.push(status);
+                        continue;
                     };
                     if let Err(code) =
                         self.validate_envelope_header(env, payload.len(), ivm::host::LABEL_BATCH)
@@ -5114,13 +5133,12 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                         statuses.push(status);
                         continue;
                     }
-                    let proof_len = match norito::to_bytes(&env.proof) {
-                        Ok(bytes) => bytes.len(),
-                        Err(_) => {
-                            first_error.get_or_insert(ivm::host::ERR_DECODE);
-                            statuses.push(status);
-                            continue;
-                        }
+                    let proof_len = if let Ok(bytes) = norito::to_bytes(&env.proof) {
+                        bytes.len()
+                    } else {
+                        first_error.get_or_insert(ivm::host::ERR_DECODE);
+                        statuses.push(status);
+                        continue;
                     };
                     if let Err(code) = self.validate_proof_len(&vk_rec, proof_len) {
                         first_error.get_or_insert(code);
@@ -5146,7 +5164,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                         .set_external_vk_bytes(vk_box.backend.clone(), vk_box.bytes.clone());
                     match ivm::zk_verify::verify_open_envelope(&payload) {
                         Ok(ok) => {
-                            status = if ok { 1 } else { 0 };
+                            status = u8::from(ok);
                             if !ok {
                                 first_error.get_or_insert(ivm::host::ERR_VERIFY);
                             }
@@ -5168,7 +5186,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
                 out.push(1);
-                out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+                out.extend_from_slice(&u32::try_from(body.len()).unwrap_or(u32::MAX).to_be_bytes());
                 out.extend_from_slice(&body);
                 let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
                 out.extend_from_slice(&h);
@@ -5424,7 +5442,7 @@ mod pointer_abi_tests {
 
     use iroha_crypto::{Hash as IrohaHash, KeyPair};
     use iroha_data_model::smart_contract::manifest::ContractManifest;
-    use iroha_primitives::{json::Json, numeric::Numeric};
+    use iroha_primitives::json::Json;
     use ivm::{
         axt::{GroupBinding, HandleBudget, HandleSubject, SpendOp},
         syscalls as ivm_sys,
@@ -5669,8 +5687,10 @@ mod pointer_abi_tests {
             touches: Vec::new(),
         };
         let snapshot = make_policy_snapshot(dsid, manifest_root, 12);
-        let mut timing = iroha_config::parameters::actual::NexusAxt::default();
-        timing.max_clock_skew_ms = 1;
+        let timing = iroha_config::parameters::actual::NexusAxt {
+            max_clock_skew_ms: 1,
+            ..Default::default()
+        };
         let authority: AccountId = "alice@wonderland".parse().unwrap();
         let mut host = CoreHost::new(authority)
             .with_axt_policy_snapshot(&snapshot)
@@ -7174,10 +7194,7 @@ mod pointer_abi_tests {
 
         let res = host.syscall(ivm::syscalls::SYSCALL_CREATE_ROLE, &mut vm);
         let mut role = Role::new(RoleId::new(role_name), authority);
-        role = role.add_permission(Permission::new(
-            "read_assets".to_string().into(),
-            Json::new(()),
-        ));
+        role = role.add_permission(Permission::new("read_assets".to_string(), Json::new(())));
         let expected = InstructionBox::from(Register::role(role));
         let expected_gas = crate::gas::meter_instruction(&expected);
         assert_eq!(res, Ok(expected_gas));
@@ -7256,7 +7273,7 @@ mod pointer_abi_tests {
 
         let res = host.syscall(ivm::syscalls::SYSCALL_GRANT_PERMISSION, &mut vm);
         let expected = InstructionBox::from(Grant::account_permission(
-            Permission::new(perm_name.as_ref().to_string().into(), Json::new(())),
+            Permission::new(perm_name.as_ref().to_string(), Json::new(())),
             account,
         ));
         let expected_gas = crate::gas::meter_instruction(&expected);
@@ -7271,7 +7288,7 @@ mod pointer_abi_tests {
         let mut host = CoreHost::new(authority);
 
         let account: AccountId = "bob@wonderland".parse().unwrap();
-        let permission = Permission::new("transfer_asset".to_string().into(), Json::new(()));
+        let permission = Permission::new("transfer_asset".to_string(), Json::new(()));
         let perm_json = Json::new(permission.clone());
         let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
         let perm_ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&perm_json));
@@ -7631,7 +7648,6 @@ mod tests {
     use std::{collections::BTreeMap, sync::Arc};
 
     use iroha_data_model::{
-        isi::register::RegisterPeerWithPop,
         parameter::{CustomParameter, Parameter},
         proof::{VerifyingKeyBox, VerifyingKeyId},
         query::{QueryRequest, QueryResponse, SingularQueryBox, prelude::FindParameters},
@@ -7650,6 +7666,7 @@ mod tests {
             parameters::{FetchSize, ForwardCursor, Pagination, QueryParams, Sorting},
         },
     };
+    use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
 
     use super::*;
@@ -8006,6 +8023,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn subscription_bill_fixed_plan_transfers_and_reschedules() {
         crate::test_alias::ensure();
         let provider: AccountId = "acme@commerce".parse().unwrap();
@@ -8210,6 +8228,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn subscription_record_usage_updates_metadata() {
         crate::test_alias::ensure();
         let provider: AccountId = "acme@commerce".parse().unwrap();
@@ -8324,6 +8343,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn subscription_bill_failed_reschedules_and_records_invoice() {
         crate::test_alias::ensure();
         let provider: AccountId = "acme@commerce".parse().unwrap();
@@ -8498,6 +8518,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn subscription_bill_suspends_after_max_failures() {
         crate::test_alias::ensure();
         let provider: AccountId = "acme@commerce".parse().unwrap();
@@ -8660,7 +8681,7 @@ mod tests {
 
     #[test]
     fn queue_instructions_accumulates_gas_and_enqueues() {
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority = (*ALICE_ID).clone();
         let mut host = CoreHost::new(authority);
         let instr_one =
             InstructionBox::from(Log::new(iroha_logger::Level::INFO, "one".to_string()));
@@ -8712,12 +8733,7 @@ mod tests {
         let expected = crate::gas::meter_instruction(&InstructionBox::from(TransferBox::from(isi)));
         assert_eq!(gas, expected);
         assert!(host.queued.is_empty());
-        assert_eq!(
-            host.fastpq_batch_entries
-                .as_ref()
-                .map(|entries| entries.len()),
-            Some(1)
-        );
+        assert_eq!(host.fastpq_batch_entries.as_ref().map(Vec::len), Some(1));
     }
 
     #[test]
