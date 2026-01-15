@@ -112,7 +112,7 @@ fn queue_rejects_explicitly_expired_transactions() {
         Ok(()) => panic!("expired transaction unexpectedly enqueued"),
     }
 
-    assert_eq!(queue.tx_len(), 0, "expired transaction must not linger");
+    assert_eq!(queue.queued_len(), 0, "expired transaction must not linger");
 }
 
 #[test]
@@ -144,7 +144,7 @@ fn queue_rejects_transactions_expiring_by_config_ttl() {
         Ok(()) => panic!("expired transaction unexpectedly enqueued"),
     }
 
-    assert_eq!(queue.tx_len(), 0, "expired transaction must not linger");
+    assert_eq!(queue.queued_len(), 0, "expired transaction must not linger");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -230,7 +230,7 @@ async fn concurrent_ready_and_pending_drains_stay_consistent() {
     tokio::join!(ready_task, pending_task, push_task);
 
     // The queue should stay internally consistent despite the concurrent drains.
-    let remaining = queue.tx_len();
+    let remaining = queue.queued_len();
     if remaining > 0 {
         // Verify that any residual transactions remain accessible via the ready drain.
         let view = state.view();

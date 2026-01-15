@@ -117,6 +117,50 @@ impl Actor {
         Ok(())
     }
 
+    pub(super) fn pull_transactions_for_proposal(
+        &self,
+        state_view: &StateView,
+        max_in_block: NonZeroUsize,
+        scan_budget: usize,
+        tx_guards: &mut Vec<crate::queue::TransactionGuard>,
+        height: u64,
+        view: u64,
+    ) -> Vec<AcceptedTransaction<'static>> {
+        let mut lane_consumption: BTreeMap<LaneId, u64> = BTreeMap::new();
+        let mut deferred_accumulator: Vec<AcceptedTransaction<'static>> = Vec::new();
+        let mut fetched_total = 0usize;
+        let scan_budget = scan_budget.max(1);
+
+        loop {
+            let remaining_budget = scan_budget.saturating_sub(fetched_total);
+            if remaining_budget == 0 {
+                debug!(
+                    height,
+                    view, scan_budget, fetched_total, "proposal queue scan budget reached"
+                );
+                break;
+            }
+            let fetch_cap = NonZeroUsize::new(remaining_budget.min(max_in_block.get()))
+                .expect("non-zero by construction");
+            let before_fetch = tx_guards.len();
+            self.queue
+                .get_transactions_for_block(state_view, fetch_cap, tx_guards);
+            let fetched = tx_guards.len().saturating_sub(before_fetch);
+            if fetched == 0 {
+                break;
+            }
+            fetched_total = fetched_total.saturating_add(fetched);
+            let deferred = self
+                .queue
+                .enforce_lane_teu_limits_with_consumption(tx_guards, &mut lane_consumption);
+            if !deferred.is_empty() {
+                deferred_accumulator.extend(deferred);
+            }
+        }
+
+        deferred_accumulator
+    }
+
     pub(super) fn drop_stale_pending_block(
         &mut self,
         pending_hash: HashOf<BlockHeader>,
@@ -226,24 +270,16 @@ impl Actor {
                 max_in_block = max_in_block.get(),
                 "proposal assembly budget"
             );
-            let mut lane_consumption: BTreeMap<LaneId, u64> = BTreeMap::new();
-            let mut deferred_accumulator: Vec<AcceptedTransaction<'static>> = Vec::new();
-            loop {
-                let before_fetch = tx_guards.len();
-                self.queue
-                    .get_transactions_for_block(&state_view, max_in_block, &mut tx_guards);
-                let fetched_new = tx_guards.len() > before_fetch;
-                if !fetched_new {
-                    break;
-                }
-                let deferred = self.queue.enforce_lane_teu_limits_with_consumption(
-                    &mut tx_guards,
-                    &mut lane_consumption,
-                );
-                if !deferred.is_empty() {
-                    deferred_accumulator.extend(deferred);
-                }
-            }
+            // Bound queue scanning to a snapshot so continuous admission cannot stall proposal assembly.
+            let scan_budget = queue_len.max(max_in_block.get());
+            let deferred_accumulator = self.pull_transactions_for_proposal(
+                &state_view,
+                max_in_block,
+                scan_budget,
+                &mut tx_guards,
+                height,
+                view,
+            );
             let committed_height =
                 u64::try_from(state_view.height()).expect("committed height exceeds u64::MAX");
             let next_height = committed_height
@@ -1152,7 +1188,14 @@ impl Actor {
         }
         let offline_grace = self.commit_quorum_timeout();
         let offline_grace_expired = view_age.is_some_and(|age| age >= offline_grace);
-        if online_total < required && !offline_grace_expired {
+        let should_defer_online = super::should_defer_for_online_peers(
+            online_total,
+            required,
+            offline_grace_expired,
+            online_peers,
+            self.subsystems.propose.last_successful_proposal,
+        );
+        if should_defer_online {
             if pending_queue_len > 0 {
                 iroha_logger::info!(
                     queue_len = pending_queue_len,

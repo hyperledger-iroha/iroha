@@ -1,6 +1,32 @@
 # Status
 
 ## Latest Updates
+- Sumeragi/queue: built `iroha_config` cleanly with `CARGO_TARGET_DIR=/tmp/iroha-target-quick cargo check -p iroha_config`; no `config(default)`/`Option` conflict observed.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-target-quick cargo test -p iroha_core proposal_queue_scan_budget_limits_fetch -- --nocapture` (timed out after 300s while compiling).
+- Docs: clarify BigInt encoding and how Numeric stores mantissa/scale to avoid confusion about where the mantissa lives.
+- Tests: not run (not requested).
+- Torii pre-auth: default global cap now 1024 and clamped to half of RLIMIT_NOFILE, per-ip caps clamped to global; added clamp unit tests and documented the default in `nrpc_spec`.
+- Localnet: raise RLIMIT_NOFILE before starting peers (default 4096, override via `IROHA_LOCALNET_NOFILE_MIN`) to prevent FD exhaustion under stress.
+- Tests: not run (per request).
+- Sumeragi/queue: avoid holding DashMap locks during queue pops, add bounded proposal queue scan to prevent consensus stalls under continuous admission, add scan-budget unit coverage, and document the bounded scan in Sumeragi docs.
+- Tests: `cargo test --workspace` (failed: `iroha_config` build errors in `crates/iroha_config/src/parameters/user.rs` about `Option<..>` with `config(default)`).
+- Format: `cargo fmt --all` (stable rustfmt warns about unstable formatting options).
+- Data model: extract signed payload bytes via length framing and compare against manifest payloads without decoding full signed transactions, avoiding stack overflows in the fixture roundtrip test.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-target cargo test -p iroha_data_model --lib norito_rpc_fixture_manifest_roundtrips -- --nocapture` (pass).
+- Data model: Norito RPC fixture roundtrip test now parses length-framed payload headers and validates executable framing + metadata without decoding full instruction payloads to avoid stack overflows on large fixtures; signed payloads still checked on a representative subset.
+- Tests: `cargo test -p iroha_data_model norito_rpc_fixture_manifest_roundtrips -- --nocapture` (pass).
+- Sumeragi: allow bootstrap proposals when no online peers have been observed yet to avoid early pacemaker stalls; add unit coverage for the deferral gate.
+- Tests: not run (not requested).
+- Queue/telemetry: derive queued depth from the hash queue minus stale markers, clear removed-hash markers on in-flight culls, expose `queued_len`/`active_len`, add queue_queued/queue_inflight gauges, and align Torii high-load gating + queue_size telemetry with active queue depth; added pacemaker/in-flight queue tests.
+- Tests: not run (per request).
+- Integration tests: remove empty-block dependencies in telemetry commit-time and unstable relay partition coverage by seeding non-empty blocks and waiting on non-empty heights.
+- Tests: not run (not requested).
+- Tests: `CARGO_TARGET_DIR=target-codex-torii-openapi cargo test -p iroha_torii pipeline_status_documents_not_found_response -- --nocapture` (pass).
+- Tests: `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.HttpClientTransportStatusTests ./java/iroha_android/gradlew -p java/iroha_android :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests` (pass).
+- Sumeragi: background post dispatch no longer blocks the consensus loop when the post queue is full; fall back to inline network posts and size the background worker queue from `control_msg_channel_cap`; updated background-queue tests and docs.
+- Tests: not run (not requested).
+- Torii/OpenAPI: document `404` response for `/v1/pipeline/transactions/status` and add spec coverage; Android: add 404 polling coverage; docs: note cache-miss polling semantics in the pipeline parity guide.
+- Tests: not run (per request).
 - Data model: add a Norito RPC fixture manifest roundtrip test that decodes signed fixtures, checks payload bytes/hashes, and validates chain/authority/creation_time/ttl/nonce.
 - Tests: `cargo test -p iroha_data_model norito_rpc_fixture_manifest_roundtrips -- --nocapture` (timed out after 120s; compilation still in progress).
 - JS fixture parity: decode canonical signed payload for burn-asset builder inputs (no `transaction_payloads.json` dependency), assert decoded payload metadata across all fixtures, and add alignment/Android fixture mismatch coverage for authority/TTL/nonce.

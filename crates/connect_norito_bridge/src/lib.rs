@@ -8344,6 +8344,7 @@ mod offline_fastpq_proof_tests {
 
     #[test]
     fn sum_proof_rejects_mismatched_scales() {
+        let _guard = super::test_support::chain_discriminant_guard();
         let mut request = sample_sum_request();
         request.receipt_amounts = vec![Numeric::new(10, 1), Numeric::new(15, 0)];
         let result = generate_offline_fastpq_sum_proof(&request);
@@ -8388,6 +8389,7 @@ mod offline_fastpq_proof_tests {
 
     #[test]
     fn offline_fastpq_sum_proof_matches_generator() {
+        let _guard = super::test_support::chain_discriminant_guard();
         let request = sample_sum_request();
         let sum_json = json::to_vec(&request).expect("sum json");
         let parsed: OfflineProofRequestSum = json::from_slice(&sum_json).expect("sum json parse");
@@ -8402,6 +8404,7 @@ mod offline_fastpq_proof_tests {
 
     #[test]
     fn offline_fastpq_counter_proof_matches_generator() {
+        let _guard = super::test_support::chain_discriminant_guard();
         let request = sample_counter_request();
         let counter_json = json::to_vec(&request).expect("counter json");
         let proof = call_proof_counter(&counter_json);
@@ -8412,6 +8415,7 @@ mod offline_fastpq_proof_tests {
 
     #[test]
     fn offline_fastpq_replay_proof_matches_generator() {
+        let _guard = super::test_support::chain_discriminant_guard();
         let request = sample_replay_request();
         let replay_json = json::to_vec(&request).expect("replay json");
         let proof = call_proof_replay(&replay_json);

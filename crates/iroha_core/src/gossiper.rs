@@ -2058,7 +2058,7 @@ mod tests {
             plane: GossipPlane::Public,
         });
 
-        assert_eq!(queue.tx_len(), 1);
+        assert_eq!(queue.queued_len(), 1);
         shutdown.send();
     }
 
@@ -2142,7 +2142,7 @@ mod tests {
             plane: GossipPlane::Public,
         });
 
-        assert_eq!(queue.tx_len(), 0);
+        assert_eq!(queue.queued_len(), 0);
         shutdown.send();
     }
 
@@ -2265,7 +2265,7 @@ mod tests {
             plane: GossipPlane::Restricted,
         });
 
-        assert_eq!(queue.tx_len(), 1);
+        assert_eq!(queue.queued_len(), 1);
         shutdown.send();
     }
 }

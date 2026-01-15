@@ -278,14 +278,14 @@ impl fmt::Debug for Queue {
 pub enum BackpressureState {
     /// Queue has room for new transactions.
     Healthy {
-        /// Number of transactions currently in the queue when the snapshot was taken.
+        /// Number of transactions tracked by the queue (queued + in-flight).
         queued: usize,
         /// Maximum queue capacity configured for the peer.
         capacity: NonZeroUsize,
     },
     /// Queue reached capacity; callers should defer submissions.
     Saturated {
-        /// Number of transactions observed when saturation triggered.
+        /// Number of transactions tracked by the queue when saturation triggered.
         queued: usize,
         /// Maximum queue capacity configured for the peer.
         capacity: NonZeroUsize,
@@ -300,7 +300,7 @@ impl BackpressureState {
     }
 
     #[must_use]
-    /// Number of transactions recorded in the snapshot.
+    /// Number of transactions tracked by the queue in the snapshot.
     pub const fn queued(self) -> usize {
         match self {
             Self::Healthy { queued, .. } | Self::Saturated { queued, .. } => queued,
@@ -1726,10 +1726,7 @@ impl Queue {
         }
         if !pushed {
             warn!("Queue is full");
-            let (_, err_tx) = self
-                .txs
-                .remove(&hash)
-                .expect("Inserted just before match");
+            let (_, err_tx) = self.txs.remove(&hash).expect("Inserted just before match");
             if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
                 routing_ledger::discard_if_matches(&hash, decision);
             }
@@ -1856,9 +1853,9 @@ impl Queue {
                 continue;
             }
 
-            let entry = match self.txs.entry(hash) {
-                Entry::Occupied(entry) => entry,
-                Entry::Vacant(_) => {
+            let tx_arc = match self.txs.get(&hash) {
+                Some(entry) => Arc::clone(entry.value()),
+                None => {
                     #[cfg(test)]
                     self.vacant_entry_warnings.fetch_add(1, Ordering::Relaxed);
                     warn!("Looks like we're experiencing a high load");
@@ -1866,18 +1863,16 @@ impl Queue {
                 }
             };
 
-            let tx_arc;
-            {
-                let tx_ref = entry.get();
-                if let Err(e) = self.check_tx(tx_ref.as_ref(), state_view) {
-                    iroha_logger::warn!(
-                        tx = %hash,
-                        ?e,
-                        "dropping transaction during queue pop (check_tx)"
-                    );
-                    let _ = tx_ref;
-                    iroha_logger::trace!(?hash, ?e, "dropping transaction during queue pop");
-                    let (_, removed_tx) = entry.remove_entry();
+            if let Err(e) = self.check_tx(tx_arc.as_ref(), state_view) {
+                iroha_logger::warn!(
+                    tx = %hash,
+                    ?e,
+                    "dropping transaction during queue pop (check_tx)"
+                );
+                iroha_logger::trace!(?hash, ?e, "dropping transaction during queue pop");
+                // Drop the cloned arc before removing to keep expiration recovery effective.
+                drop(tx_arc);
+                if let Some((_, removed_tx)) = self.txs.remove(&hash) {
                     self.decrease_per_user_tx_count(removed_tx.as_ref().as_ref().authority());
                     if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
                         routing_ledger::discard_if_matches(&hash, decision);
@@ -1892,9 +1887,8 @@ impl Queue {
                     {
                         expired_transactions.push(tx.into_accepted());
                     }
-                    continue;
                 }
-                tx_arc = Arc::clone(tx_ref);
+                continue;
             }
 
             let routing = self
@@ -1960,6 +1954,7 @@ impl Queue {
         }
 
         if inserted > 0 {
+            self.removed_hashes.clear();
             self.publish_backpressure_state(self.active_len(), backpressure_telemetry);
             warn!(
                 queued = self.tx_hashes.len(),
@@ -1971,20 +1966,15 @@ impl Queue {
         false
     }
 
-    /// Return the raw hash-queue length (may include stale entries before compaction).
-    pub fn tx_len(&self) -> usize {
-        self.tx_hashes.len()
-    }
-
     /// Return the number of transactions tracked by the queue (queued + in-flight).
-    pub(crate) fn active_len(&self) -> usize {
+    pub fn active_len(&self) -> usize {
         self.txs.len()
     }
 
     /// Return the number of transactions still awaiting selection from the queue.
-    pub(crate) fn queued_len(&self) -> usize {
-        let inflight = self.inflight_guards.load(Ordering::Relaxed);
-        self.txs.len().saturating_sub(inflight)
+    pub fn queued_len(&self) -> usize {
+        let queued = self.tx_hashes.len();
+        queued.saturating_sub(self.removed_hashes.len())
     }
 
     /// Remove expired transactions if the configured sweep interval has elapsed.
@@ -2232,9 +2222,7 @@ impl Queue {
                 break;
             }
         }
-        if self.txs.is_empty() {
-            self.removed_hashes.clear();
-        }
+        self.removed_hashes.clear();
         dropped
     }
 
@@ -2260,13 +2248,13 @@ impl Queue {
                 .remove(&hash)
                 .map(|(_, decision)| decision);
             self.decrease_per_user_tx_count(tx.as_ref().authority());
-            // Transaction has already been popped from `tx_hashes`, so no
-            // removal guard is required. Ensure no stale marker remains.
-            self.removed_hashes.remove(&hash);
             if let Some(decision) = decision {
                 routing_ledger::record(hash, decision);
             }
         }
+        // Transaction guards always represent popped hashes; clear any stale marker even if
+        // the entry was culled while the guard was in-flight.
+        self.removed_hashes.remove(&hash);
         #[cfg(feature = "telemetry")]
         self.record_teu_dequeue(&hash, telemetry);
         self.publish_backpressure_state(self.active_len(), telemetry);
@@ -5296,7 +5284,7 @@ pub mod tests {
         }
 
         while queue.tx_hashes.pop().is_some() {}
-        assert_eq!(queue.tx_len(), 0, "hash queue should be empty");
+        assert_eq!(queue.queued_len(), 0, "hash queue should be empty");
         assert_eq!(queue.txs.len(), 3, "tx map retains queued entries");
 
         let mut guards = Vec::new();
@@ -5304,7 +5292,11 @@ pub mod tests {
         assert_eq!(guards.len(), 2, "resync should repopulate hashes");
         drop(guards);
 
-        assert_eq!(queue.tx_len(), 1, "remaining queue size should be tracked");
+        assert_eq!(
+            queue.queued_len(),
+            1,
+            "remaining queue size should be tracked"
+        );
     }
 
     #[tokio::test]
@@ -5323,7 +5315,7 @@ pub mod tests {
         queue.get_transactions_for_block(&state.view(), nonzero!(1_usize), &mut guards);
         assert_eq!(guards.len(), 1, "expected one in-flight guard");
         assert_eq!(
-            queue.tx_len(),
+            queue.queued_len(),
             0,
             "hash queue should be empty while guard is held"
         );
@@ -5394,7 +5386,7 @@ pub mod tests {
 
         drop(guard);
 
-        assert_eq!(queue.tx_len(), 0);
+        assert_eq!(queue.queued_len(), 0);
         assert_eq!(cloned.as_ref().hash(), guard_hash);
     }
 
@@ -5716,17 +5708,17 @@ pub mod tests {
         queue
             .push(accepted_tx_by_someone(&time_source), state.view())
             .expect("push succeeds");
-        assert_eq!(queue.tx_len(), 2, "hash queue tracks queued txs");
+        assert_eq!(queue.queued_len(), 2, "hash queue tracks queued txs");
 
         time_handle.advance(Duration::from_secs(2));
         let culled = queue.cull_expired_entries_if_due(&state.view());
         assert_eq!(culled, 2, "expired transactions should be culled");
-        assert_eq!(queue.tx_len(), 0, "hash queue compacted after cull");
+        assert_eq!(queue.queued_len(), 0, "hash queue compacted after cull");
 
         queue
             .push(accepted_tx_by_someone(&time_source), state.view())
             .expect("push after compaction succeeds");
-        assert_eq!(queue.tx_len(), 1, "hash queue accepts new txs");
+        assert_eq!(queue.queued_len(), 1, "hash queue accepts new txs");
     }
 
     #[test]
@@ -5752,11 +5744,57 @@ pub mod tests {
             .pop_from_queue(&state.view(), &mut expired)
             .expect("pop should return a transaction guard");
         assert!(expired.is_empty());
-        assert_eq!(queue.tx_len(), 0, "hash queue empty after pop");
+        assert_eq!(queue.queued_len(), 0, "hash queue empty after pop");
         assert_eq!(queue.active_len(), 1, "active count includes in-flight");
         assert_eq!(queue.queued_len(), 0, "queued count excludes in-flight");
         drop(guard);
-        assert_eq!(queue.active_len(), 0, "active count clears after guard drop");
+        assert_eq!(
+            queue.active_len(),
+            0,
+            "active count clears after guard drop"
+        );
+    }
+
+    #[test]
+    fn inflight_cull_clears_removed_hash_marker_on_drop() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let mut cfg = config_factory();
+        cfg.transaction_time_to_live = Duration::from_millis(1);
+        cfg.expired_cull_interval = Duration::from_millis(1);
+
+        let queue = Arc::new(Queue::test(cfg, &time_source));
+        queue
+            .push(accepted_tx_by_someone(&time_source), state.view())
+            .expect("push succeeds");
+
+        let mut expired = Vec::new();
+        let guard = queue
+            .pop_from_queue(&state.view(), &mut expired)
+            .expect("pop should return a transaction guard");
+        assert!(expired.is_empty());
+
+        time_handle.advance(Duration::from_millis(2));
+        let culled = queue.cull_expired_entries_if_due(&state.view());
+        assert_eq!(culled, 1, "expired in-flight tx should be culled");
+        assert_eq!(
+            queue.active_len(),
+            0,
+            "active count reflects the culled in-flight entry"
+        );
+        assert!(
+            !queue.removed_hashes.is_empty(),
+            "removed hash marker should be set after cull"
+        );
+
+        drop(guard);
+        assert!(
+            queue.removed_hashes.is_empty(),
+            "removed hash marker should be cleared on guard drop"
+        );
     }
 
     #[tokio::test]

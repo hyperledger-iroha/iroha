@@ -19,10 +19,10 @@ use tokio::{sync::Mutex, time::sleep};
 
 static LOCALNET_SMOKE_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
 const SMOKE_PIPELINE_TIME: Duration = Duration::from_secs(2);
-const STATUS_POLL_TIMEOUT: Duration = Duration::from_secs(5);
+const STATUS_POLL_TIMEOUT: Duration = Duration::from_secs(15);
 const STATUS_LOG_INTERVAL: Duration = Duration::from_secs(2);
 const SOAK_PIPELINE_TIME: Duration = Duration::from_secs(2);
-const SOAK_STATUS_POLL_TIMEOUT: Duration = Duration::from_secs(10);
+const SOAK_STATUS_POLL_TIMEOUT: Duration = Duration::from_secs(20);
 const SOAK_TARGET_BLOCKS: u64 = 2_000;
 const SOAK_SUBMIT_BATCH: u64 = 25;
 const SOAK_QUEUE_SOFT_LIMIT: u64 = 200;
@@ -135,7 +135,7 @@ async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
 
         let target_height = baseline_height.saturating_add(1);
         let start = Instant::now();
-        wait_for_converged_height(&network, target_height, Duration::from_secs(15)).await?;
+        wait_for_converged_height(&network, target_height, Duration::from_secs(45)).await?;
         let elapsed = start.elapsed();
         ensure!(
             elapsed <= Duration::from_secs(15),

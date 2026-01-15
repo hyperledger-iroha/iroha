@@ -3,6 +3,10 @@
 //! This replaces the previous fixed-width, non-negative decimal. Mantissas are
 //! stored in [`crate::bigint::BigInt`] and allow negative values; scale counts
 //! fractional digits (e.g., `1.88` => mantissa `188`, scale `2`).
+//!
+//! Encoding note: `Numeric` serializes as a helper carrying `(mantissa, scale)`.
+//! The mantissa is a raw [`crate::bigint::BigInt`] integer (no decimal scale
+//! is embedded in the integer), and the scale is stored separately as a `u32`.
 
 use core::{cmp::Ordering, str::FromStr};
 use std::{
@@ -25,6 +29,8 @@ use crate::bigint::{BigInt, MAX_BITS as BIGINT_MAX_BITS};
 ///
 /// The finite set of values of type [`Numeric`] are of the form $m / 10^e$,
 /// where `m` is a signed integer with up to 512 bits and `e` is in `[0, 28]`.
+/// The mantissa `m` is stored as a [`crate::bigint::BigInt`], while the scale
+/// `e` is carried separately.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Numeric {
     mantissa: BigInt,
@@ -688,7 +694,7 @@ mod scale_ {
     #[allow(unexpected_cfgs)]
     #[derive(norito::Encode, norito::Decode)]
     #[norito(decode_from_slice)]
-    /// Internal helper used to validate SCALE-based decoding for numeric values.
+    /// Internal helper used to encode/decode Numeric as `(mantissa, scale)`.
     pub(super) struct NumericScaleHelper {
         /// Mantissa carried by the numeric helper.
         #[codec(compact)]

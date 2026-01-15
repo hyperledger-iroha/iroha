@@ -784,24 +784,6 @@ where
                     }
                 }
             }
-            if let Ok(value) = norito::codec::decode_adaptive::<ConstVec<T>>(decode_bytes) {
-                return Ok((value.into_vec(), decode_bytes.len()));
-            }
-            if decode_bytes.len() > ncore::Header::SIZE && decode_bytes.starts_with(&ncore::MAGIC) {
-                let align = core::mem::align_of::<ncore::Archived<ConstVec<T>>>();
-                let rem = ncore::Header::SIZE % align;
-                let padding = if align > 1 && rem != 0 {
-                    align - rem
-                } else {
-                    0
-                };
-                if ncore::Header::SIZE + padding <= decode_bytes.len() {
-                    let body = &decode_bytes[ncore::Header::SIZE + padding..];
-                    if let Ok(value) = norito::codec::decode_adaptive::<ConstVec<T>>(body) {
-                        return Ok((value.into_vec(), decode_bytes.len()));
-                    }
-                }
-            }
             if let Some(instr_vec) = decode_instruction_vec_ignore_lengths::<T>(decode_bytes) {
                 return Ok((instr_vec.into_vec(), decode_bytes.len()));
             }
@@ -1508,5 +1490,19 @@ mod tests {
             decoded.is_err(),
             "corrupted packed header should be rejected"
         );
+    }
+
+    #[test]
+    fn invalid_element_fails_without_recursing() {
+        use std::num::NonZeroU16;
+
+        let value = ConstVec::from(vec![NonZeroU16::new(1).expect("nonzero")]);
+        let mut bytes = value.encode();
+        let len = bytes.len();
+        bytes[len.saturating_sub(2)..].fill(0);
+
+        let err = norito::codec::decode_adaptive::<ConstVec<NonZeroU16>>(&bytes)
+            .expect_err("invalid element should be rejected");
+        assert!(matches!(err, norito::Error::InvalidNonZero));
     }
 }

@@ -3037,6 +3037,24 @@ async fn quorum_timeout_extends_when_da_enabled() {
     harness.shutdown.send();
 }
 
+#[test]
+fn online_peer_deferral_skips_bootstrap_without_observed_peers() {
+    let should_defer = super::should_defer_for_online_peers(1, 3, false, 0, None);
+    assert!(
+        !should_defer,
+        "bootstrap should not defer solely because online peers are unknown"
+    );
+}
+
+#[test]
+fn online_peer_deferral_applies_after_successful_proposal() {
+    let should_defer = super::should_defer_for_online_peers(1, 3, false, 0, Some(Instant::now()));
+    assert!(
+        should_defer,
+        "deferral should apply once online peer tracking has been established"
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn current_height_and_roster_matches_effective_topology() {
     let harness = test_actor_harness(4).await;
@@ -6077,7 +6095,7 @@ async fn quorum_reschedule_skips_requeue_when_precommit_votes_present() {
     let pending = PendingBlock::new(block, payload_hash, height, view);
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
 
-    assert_eq!(actor.queue.tx_len(), 0, "queue should start empty");
+    assert_eq!(actor.queue.queued_len(), 0, "queue should start empty");
     let epoch = actor.epoch_for_height(height);
     assert!(
         actor.emit_precommit_vote(
@@ -6103,7 +6121,7 @@ async fn quorum_reschedule_skips_requeue_when_precommit_votes_present() {
     );
 
     assert_eq!(
-        actor.queue.tx_len(),
+        actor.queue.queued_len(),
         0,
         "requeue should be skipped when precommit votes exist"
     );
@@ -6127,7 +6145,7 @@ async fn quorum_reschedule_skips_requeue_when_commit_votes_present() {
     let pending = PendingBlock::new(block, payload_hash, height, view);
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
 
-    assert_eq!(actor.queue.tx_len(), 0, "queue should start empty");
+    assert_eq!(actor.queue.queued_len(), 0, "queue should start empty");
     let epoch = actor.epoch_for_height(height);
     assert!(
         actor.emit_precommit_vote(
@@ -6155,7 +6173,7 @@ async fn quorum_reschedule_skips_requeue_when_commit_votes_present() {
     );
 
     assert_eq!(
-        actor.queue.tx_len(),
+        actor.queue.queued_len(),
         0,
         "requeue should be skipped when commit votes exist"
     );
@@ -7994,6 +8012,16 @@ async fn rbc_ready_rebroadcast_is_rate_limited_per_session() {
     let seed = super::rbc::shuffle_seed(&key.0, key.1, key.2);
     let local_peer_id = harness.actor.common_config.peer.id().clone();
     let should_rebroadcast = super::rbc::is_ready_rebroadcaster(&roster, &local_peer_id, seed);
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let (_, mode_tag, prf_seed) = harness.actor.consensus_context_for_height(key.1);
+    let signature_topology = super::topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
+    let local_idx = harness.actor.local_validator_index_for_topology(&signature_topology);
+    let local_ready = local_idx.is_some_and(|idx| {
+        session.ready_signatures.iter().any(|entry| entry.sender == idx)
+    });
+    let required = harness.actor.rbc_deliver_quorum(&topology);
+    let ready_quorum = required != 0 && session.ready_signatures.len() >= required;
+    let should_force = local_ready && !ready_quorum;
     harness
         .actor
         .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Network);
@@ -8019,9 +8047,10 @@ async fn rbc_ready_rebroadcast_is_rate_limited_per_session() {
             )
         })
         .count();
+    let should_send = should_rebroadcast || should_force;
     assert_eq!(
         ready_posts,
-        if should_rebroadcast {
+        if should_send {
             expected_targets.saturating_mul(2)
         } else {
             0
@@ -8030,12 +8059,91 @@ async fn rbc_ready_rebroadcast_is_rate_limited_per_session() {
 
     let readies = Actor::rbc_ready_bundle(key, &session, roster_hash).expect("readies");
     harness.actor.rebroadcast_rbc_ready_bundle(key, readies);
-    if should_rebroadcast {
+    if should_send {
         assert!(
             harness.background_rx.try_iter().next().is_none(),
             "expected READY rebroadcast to be rate-limited per session"
         );
     }
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rbc_ready_rebroadcast_forces_local_ready_when_not_rebroadcaster() {
+    let mut harness = test_actor_harness(4).await;
+    let local_peer_id = harness.actor.common_config.peer.id().clone();
+
+    let mut roster = harness.actor.effective_commit_topology();
+    assert!(roster.len() >= 4, "test requires four peers");
+    roster.retain(|peer| peer != &local_peer_id);
+    roster.insert(2.min(roster.len()), local_peer_id.clone());
+    let local_pos = roster
+        .iter()
+        .position(|peer| peer == &local_peer_id)
+        .expect("local peer in roster");
+    assert_ne!(local_pos, 0, "local peer should not be leader in test roster");
+
+    let height = 1;
+    let view = 0;
+    let mut seed = 0_u64;
+    let block_hash = loop {
+        let mut bytes = [0u8; Hash::LENGTH];
+        bytes[..8].copy_from_slice(&seed.to_le_bytes());
+        let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(bytes));
+        let shuffle = super::rbc::shuffle_seed(&hash, height, view);
+        if !super::rbc::is_ready_rebroadcaster(&roster, &local_peer_id, shuffle) {
+            break hash;
+        }
+        seed = seed.wrapping_add(1);
+        assert!(seed < 1024, "failed to find non-rebroadcaster seed");
+    };
+    let key = (block_hash, height, view);
+
+    let payload = b"payload".to_vec();
+    let payload_hash = Hash::new(&payload);
+    let mut session =
+        Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, 0).expect("session");
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let (_, mode_tag, prf_seed) = harness.actor.consensus_context_for_height(key.1);
+    let signature_topology = super::topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
+    let local_idx = harness
+        .actor
+        .local_validator_index_for_topology(&signature_topology)
+        .expect("local index");
+    assert!(session.record_ready(local_idx, vec![0xAA]));
+    let required = harness.actor.rbc_deliver_quorum(&topology);
+    assert!(session.ready_signatures.len() < required);
+
+    harness
+        .actor
+        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Network);
+    let roster_hash = roster_hash(&roster);
+    let readies = Actor::rbc_ready_bundle(key, &session, roster_hash).expect("readies");
+
+    let _ = harness.background_rx.try_iter().count();
+    harness.actor.rebroadcast_rbc_ready_bundle(key, readies);
+    let posts: Vec<_> = harness.background_rx.try_iter().collect();
+    let expected_targets = roster
+        .iter()
+        .filter(|peer| *peer != &local_peer_id)
+        .count();
+    let ready_posts = posts
+        .iter()
+        .filter(|post| {
+            matches!(
+                post,
+                BackgroundPost::Post {
+                    msg: BlockMessage::RbcReady(_),
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(
+        ready_posts, expected_targets,
+        "expected forced READY rebroadcast for local signer"
+    );
 
     harness.shutdown.send();
 }
@@ -16900,7 +17008,7 @@ async fn stale_pending_block_requeues_transactions() {
         actor.state.view().height(),
         Some(committed_hash)
     ));
-    assert_eq!(actor.queue.tx_len(), 0, "queue starts empty");
+    assert_eq!(actor.queue.queued_len(), 0, "queue starts empty");
 
     let (tx_count, requeued, failures, duplicate_failures) = actor
         .drop_stale_pending_block(pending_hash, 2, 0)
@@ -16909,7 +17017,11 @@ async fn stale_pending_block_requeues_transactions() {
     assert_eq!(requeued, 1, "requeue should succeed");
     assert_eq!(failures, 0, "requeue should not fail");
     assert_eq!(duplicate_failures, 0, "requeue should not hit duplicates");
-    assert_eq!(actor.queue.tx_len(), 1, "queue should contain requeued tx");
+    assert_eq!(
+        actor.queue.queued_len(),
+        1,
+        "queue should contain requeued tx"
+    );
     assert!(
         !actor.pending.pending_blocks.contains_key(&pending_hash),
         "pending entry should be cleared"
@@ -22259,6 +22371,7 @@ fn new_view_tracker_updates_highest_and_clears_after_timeout() {
         &mut tracker,
         5,
         0,
+        0,
         later,
     );
     assert_eq!(bumped, 1);
@@ -22280,6 +22393,37 @@ fn new_view_tracker_updates_highest_and_clears_after_timeout() {
     assert_eq!(next.key, (5, 1));
     assert_eq!(next.highest_qc.height, qc_next.height);
     assert_eq!(phase_tracker.current_view(5), Some(1));
+}
+
+#[test]
+fn bump_view_after_quorum_timeout_retains_recent_new_view_entries() {
+    let now = Instant::now();
+    let mut phase_tracker = PhaseTracker::new(now);
+    phase_tracker.start_new_round(5, now);
+    let mut pacemaker = super::Pacemaker::with_interval(Duration::from_millis(10), now);
+    let mut tracker = NewViewTracker::default();
+
+    let qc = sample_qc_ref(4, 0);
+    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+    assert_eq!(tracker.record(5, 0, peer_a, qc), 1);
+    assert_eq!(tracker.record(5, 1, peer_b, qc), 1);
+
+    let later = now + Duration::from_millis(20);
+    let next_view = super::bump_view_after_quorum_timeout(
+        &mut phase_tracker,
+        &mut pacemaker,
+        &mut tracker,
+        5,
+        1,
+        2,
+        later,
+    );
+
+    assert_eq!(next_view, 2);
+    assert_eq!(phase_tracker.current_view(5), Some(2));
+    assert_eq!(tracker.count(5, 1), 0);
+    assert_eq!(tracker.count(5, 0), 1);
 }
 
 #[test]
@@ -22381,6 +22525,7 @@ fn bump_view_after_quorum_timeout_resets_round_state() {
         &mut pacemaker,
         &mut new_view_tracker,
         3,
+        0,
         0,
         later,
     );
@@ -27801,6 +27946,48 @@ async fn assemble_proposal_schedules_rbc_after_proposal_messages() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn proposal_queue_scan_budget_limits_fetch() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da_enabled = false;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    for _ in 0..5 {
+        let tx = sample_transaction();
+        actor
+            .queue
+            .push(
+                AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+                actor.state.view(),
+            )
+            .expect("push tx");
+    }
+
+    let state_view = actor.state.view();
+    let mut tx_guards = Vec::new();
+    let deferred = actor.pull_transactions_for_proposal(
+        &state_view,
+        nonzero!(5_usize),
+        2,
+        &mut tx_guards,
+        1,
+        0,
+    );
+
+    assert!(deferred.is_empty(), "budgeted scan should not defer txs");
+    assert_eq!(tx_guards.len(), 2, "scan budget should cap selection");
+
+    drop(state_view);
+    drop(tx_guards);
+
+    assert_eq!(actor.queue.queued_len(), 3, "remaining txs stay queued");
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn da_proposal_rejects_single_tx_exceeding_consensus_frame_cap() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
@@ -28180,6 +28367,53 @@ async fn pacemaker_skips_proposal_when_queue_empty() {
         actor.subsystems.propose.proposal_cache.proposals.is_empty(),
         "proposal cache should remain empty when queue is idle"
     );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pacemaker_skips_proposal_when_only_inflight_transactions() {
+    use std::borrow::Cow;
+
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    actor.locked_qc = None;
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let mut guards = Vec::new();
+    let view = actor.state.view();
+    actor
+        .queue
+        .get_transactions_for_block(&view, nonzero!(1_usize), &mut guards);
+    drop(view);
+
+    assert_eq!(guards.len(), 1, "expected one in-flight guard");
+    assert_eq!(
+        actor.queue.queued_len(),
+        0,
+        "queued length should exclude in-flight transactions"
+    );
+
+    let proposed = actor.on_pacemaker_propose_ready(Instant::now());
+    assert!(
+        !proposed,
+        "pacemaker should not propose while only in-flight txs exist"
+    );
+    assert!(
+        actor.subsystems.propose.proposal_cache.proposals.is_empty(),
+        "proposal cache should remain empty with only in-flight txs"
+    );
+
+    drop(guards);
 
     harness.shutdown.send();
 }
@@ -36190,10 +36424,10 @@ fn dispatch_background_request_post_enqueues() {
 
 #[cfg(feature = "telemetry")]
 #[test]
-fn dispatch_background_request_full_blocks_until_space() {
+fn dispatch_background_request_full_returns_err() {
     use std::sync::{Arc, mpsc};
 
-    let (tx, rx) = mpsc::sync_channel(1);
+    let (tx, _rx) = mpsc::sync_channel(1);
     tx.send(BackgroundPost::Broadcast {
         msg: BlockMessage::ConsensusParams(super::message::ConsensusParamsAdvert {
             collectors_k: 1,
@@ -36215,23 +36449,8 @@ fn dispatch_background_request_full_blocks_until_space() {
         }),
     };
 
-    let (done_tx, done_rx) = mpsc::channel();
-    let handle = std::thread::spawn(move || {
-        let result = dispatch_background_request(Some(&tx), request, &telemetry);
-        let _ = done_tx.send(result);
-    });
-
-    assert!(
-        done_rx.recv_timeout(Duration::from_millis(200)).is_err(),
-        "background dispatch should block while the queue is full"
-    );
-    rx.recv_timeout(Duration::from_secs(1))
-        .expect("drain background queue");
-    let result = done_rx
-        .recv_timeout(Duration::from_secs(1))
-        .expect("background dispatch completes after drain");
-    assert!(result.is_ok());
-    handle.join().expect("thread joins");
+    let result = dispatch_background_request(Some(&tx), request, &telemetry);
+    assert!(result.is_err());
     assert_eq!(
         metrics
             .sumeragi_bg_post_overflow_total
@@ -36243,10 +36462,10 @@ fn dispatch_background_request_full_blocks_until_space() {
 
 #[cfg(feature = "telemetry")]
 #[test]
-fn dispatch_background_request_rbc_chunk_blocks_until_space() {
+fn dispatch_background_request_rbc_chunk_returns_err_when_full() {
     use std::sync::{Arc, mpsc};
 
-    let (tx, rx) = mpsc::sync_channel(1);
+    let (tx, _rx) = mpsc::sync_channel(1);
     tx.send(BackgroundPost::Broadcast {
         msg: BlockMessage::ConsensusParams(super::message::ConsensusParamsAdvert {
             collectors_k: 1,
@@ -36265,23 +36484,8 @@ fn dispatch_background_request_rbc_chunk_blocks_until_space() {
         msg: BlockMessage::RbcChunk(chunk),
     };
 
-    let (done_tx, done_rx) = mpsc::channel();
-    let handle = std::thread::spawn(move || {
-        let result = dispatch_background_request(Some(&tx), request, &telemetry);
-        let _ = done_tx.send(result);
-    });
-
-    assert!(
-        done_rx.recv_timeout(Duration::from_millis(200)).is_err(),
-        "RbcChunk dispatch should block while the queue is full"
-    );
-    rx.recv_timeout(Duration::from_secs(1))
-        .expect("drain background queue");
-    let result = done_rx
-        .recv_timeout(Duration::from_secs(1))
-        .expect("RbcChunk dispatch completes after drain");
-    assert!(result.is_ok());
-    handle.join().expect("thread joins");
+    let result = dispatch_background_request(Some(&tx), request, &telemetry);
+    assert!(result.is_err());
     assert_eq!(
         metrics
             .sumeragi_bg_post_drop_total
@@ -36322,13 +36526,11 @@ fn dispatch_background_request_post_enqueues() {
 }
 
 #[cfg(not(feature = "telemetry"))]
-#[cfg(not(feature = "telemetry"))]
-#[cfg(not(feature = "telemetry"))]
 #[test]
-fn dispatch_background_request_full_blocks_until_space() {
+fn dispatch_background_request_full_returns_err() {
     use std::sync::mpsc;
 
-    let (tx, rx) = mpsc::sync_channel(1);
+    let (tx, _rx) = mpsc::sync_channel(1);
     tx.send(BackgroundPost::Broadcast {
         msg: BlockMessage::ConsensusParams(super::message::ConsensusParamsAdvert {
             collectors_k: 1,
@@ -36348,31 +36550,16 @@ fn dispatch_background_request_full_blocks_until_space() {
         }),
     };
 
-    let (done_tx, done_rx) = mpsc::channel();
-    let handle = std::thread::spawn(move || {
-        let result = dispatch_background_request(Some(&tx), request);
-        let _ = done_tx.send(result);
-    });
-
-    assert!(
-        done_rx.recv_timeout(Duration::from_millis(200)).is_err(),
-        "background dispatch should block while the queue is full"
-    );
-    rx.recv_timeout(Duration::from_secs(1))
-        .expect("drain background queue");
-    let result = done_rx
-        .recv_timeout(Duration::from_secs(1))
-        .expect("background dispatch completes after drain");
-    assert!(result.is_ok());
-    handle.join().expect("thread joins");
+    let result = dispatch_background_request(Some(&tx), request);
+    assert!(result.is_err());
 }
 
 #[cfg(not(feature = "telemetry"))]
 #[test]
-fn dispatch_background_request_rbc_chunk_blocks_until_space() {
+fn dispatch_background_request_rbc_chunk_returns_err_when_full() {
     use std::sync::mpsc;
 
-    let (tx, rx) = mpsc::sync_channel(1);
+    let (tx, _rx) = mpsc::sync_channel(1);
     tx.send(BackgroundPost::Broadcast {
         msg: BlockMessage::ConsensusParams(super::message::ConsensusParamsAdvert {
             collectors_k: 1,
@@ -36389,23 +36576,8 @@ fn dispatch_background_request_rbc_chunk_blocks_until_space() {
         msg: BlockMessage::RbcChunk(chunk),
     };
 
-    let (done_tx, done_rx) = mpsc::channel();
-    let handle = std::thread::spawn(move || {
-        let result = dispatch_background_request(Some(&tx), request);
-        let _ = done_tx.send(result);
-    });
-
-    assert!(
-        done_rx.recv_timeout(Duration::from_millis(200)).is_err(),
-        "RbcChunk dispatch should block while the queue is full"
-    );
-    rx.recv_timeout(Duration::from_secs(1))
-        .expect("drain background queue");
-    let result = done_rx
-        .recv_timeout(Duration::from_secs(1))
-        .expect("RbcChunk dispatch completes after drain");
-    assert!(result.is_ok());
-    handle.join().expect("thread joins");
+    let result = dispatch_background_request(Some(&tx), request);
+    assert!(result.is_err());
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -36811,7 +36983,7 @@ async fn proposal_assembly_defers_without_draining_queue_and_preserves_view_when
             state.view(),
         )
         .expect("push tx");
-    assert_eq!(queue.tx_len(), 1);
+    assert_eq!(queue.queued_len(), 1);
 
     let rbc_status_handle = rbc_status::register_handle();
     let spool_dir = tempfile::tempdir().expect("tempdir");
@@ -36900,7 +37072,7 @@ async fn proposal_assembly_defers_without_draining_queue_and_preserves_view_when
         "missing parent block should prevent proposal assembly"
     );
     assert_eq!(
-        queue.tx_len(),
+        queue.queued_len(),
         1,
         "missing parent block should not drain the transaction queue"
     );
@@ -39818,7 +39990,11 @@ fn requeue_block_transactions_preserves_payloads_on_commit_failure() {
         duplicate_failures, 0,
         "no duplicates expected in empty queue"
     );
-    assert_eq!(queue.tx_len(), 2, "queue must hold requeued transactions");
+    assert_eq!(
+        queue.queued_len(),
+        2,
+        "queue must hold requeued transactions"
+    );
     assert_eq!(gossip_hashes.len(), 2);
     assert!(gossip_hashes.contains(&tx_a.hash()));
     assert!(gossip_hashes.contains(&tx_b.hash()));
@@ -39857,7 +40033,7 @@ fn drop_pending_block_and_requeue_restores_transactions() {
     assert_eq!(requeued, 1);
     assert_eq!(failures, 0);
     assert_eq!(duplicate_failures, 0);
-    assert_eq!(queue.tx_len(), 1);
+    assert_eq!(queue.queued_len(), 1);
 }
 
 #[test]
@@ -39877,7 +40053,7 @@ fn prev_block_mismatch_requeues_payload() {
     assert_eq!(outcome.requeued, 1, "payload should be requeued");
     assert_eq!(outcome.failures, 0, "requeue should succeed under capacity");
     assert_eq!(
-        queue.tx_len(),
+        queue.queued_len(),
         1,
         "queue must hold the requeued transaction"
     );
@@ -39969,7 +40145,7 @@ fn handle_kura_store_failure_requeues_and_cleans_on_abort() {
 
     assert!(failure.pending.is_none());
     assert!(failure.clean_block_hash);
-    assert_eq!(queue.tx_len(), 1);
+    assert_eq!(queue.queued_len(), 1);
 }
 
 #[test]

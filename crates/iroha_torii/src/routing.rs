@@ -36492,7 +36492,7 @@ mod subscription_api_tests {
         .expect("handler ok")
         .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(queue.tx_len(), 1);
+        assert_eq!(queue.queued_len(), 1);
 
         let json = response_json(resp).await;
         assert_eq!(json["ok"].as_bool(), Some(true));
@@ -36536,7 +36536,7 @@ mod subscription_api_tests {
         .expect("handler ok")
         .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(queue.tx_len(), 1);
+        assert_eq!(queue.queued_len(), 1);
 
         let json = response_json(resp).await;
         assert_eq!(json["ok"].as_bool(), Some(true));
@@ -36606,7 +36606,7 @@ mod subscription_api_tests {
         .await
         .expect("pause ok")
         .into_response();
-        assert_eq!(queue.tx_len(), 1);
+        assert_eq!(queue.queued_len(), 1);
         assert_action_ok(resp, &active_id).await;
 
         let resume_req = SubscriptionActionDto {
@@ -36626,7 +36626,7 @@ mod subscription_api_tests {
         .await
         .expect("resume ok")
         .into_response();
-        assert_eq!(queue.tx_len(), 2);
+        assert_eq!(queue.queued_len(), 2);
         assert_action_ok(resp, &paused_id).await;
 
         let cancel_req = SubscriptionActionDto {
@@ -36646,7 +36646,7 @@ mod subscription_api_tests {
         .await
         .expect("cancel ok")
         .into_response();
-        assert_eq!(queue.tx_len(), 3);
+        assert_eq!(queue.queued_len(), 3);
         assert_action_ok(resp, &active_id).await;
 
         let keep_req = SubscriptionActionDto {
@@ -36666,7 +36666,7 @@ mod subscription_api_tests {
         .await
         .expect("keep ok")
         .into_response();
-        assert_eq!(queue.tx_len(), 4);
+        assert_eq!(queue.queued_len(), 4);
         assert_action_ok(resp, &keep_id).await;
 
         let charge_req = SubscriptionActionDto {
@@ -36686,7 +36686,7 @@ mod subscription_api_tests {
         .await
         .expect("charge-now ok")
         .into_response();
-        assert_eq!(queue.tx_len(), 5);
+        assert_eq!(queue.queued_len(), 5);
         assert_action_ok(resp, &active_id).await;
 
         let usage_req = SubscriptionUsageRequestDto {
@@ -36707,7 +36707,7 @@ mod subscription_api_tests {
         .await
         .expect("usage ok")
         .into_response();
-        assert_eq!(queue.tx_len(), 5);
+        assert_eq!(queue.queued_len(), 5);
         assert_action_ok(resp, &active_id).await;
     }
 }
