@@ -264,6 +264,8 @@ const LOCALNET_DA_QUORUM_TIMEOUT_MULTIPLIER: u32 = 3;
 const LOCALNET_DA_AVAILABILITY_TIMEOUT_MULTIPLIER: u32 = 2;
 /// Default DA availability timeout floor (ms) for localnet configs.
 const LOCALNET_DA_AVAILABILITY_TIMEOUT_FLOOR_MS: u64 = 2_000;
+/// Default RBC chunk size for localnet payloads.
+const LOCALNET_RBC_CHUNK_MAX_BYTES: usize = 256 * 1024;
 /// Torii pre-auth allowlist to keep localnet CLI traffic from tripping bans.
 const LOCALNET_PREAUTH_ALLOW_CIDRS: [&str; 2] = ["127.0.0.0/8", "::1/128"];
 /// Multiplier applied to block+commit time for localnet commit inflight timeout.
@@ -287,6 +289,8 @@ const LOCALNET_STAKE_ASSET_ID: &str = "xor#nexus";
 const LOCALNET_CLIENT_TTL_MS: u64 = 600_000;
 /// Default localnet client status timeout (ms); must stay <= TTL.
 const LOCALNET_CLIENT_STATUS_TIMEOUT_MS: u64 = 300_000;
+/// Default Kura fsync mode for localnet (performance-oriented).
+const LOCALNET_KURA_FSYNC_MODE: &str = "off";
 const STREAM_ID_PUBLIC: &str =
     "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B";
 const STREAM_ID_PRIVATE: &str =
@@ -863,6 +867,10 @@ fn render_peer_config(
         "store_dir".into(),
         Value::String(kura_store_dir.to_string_lossy().into_owned()),
     );
+    kura.insert(
+        "fsync_mode".into(),
+        Value::String(LOCALNET_KURA_FSYNC_MODE.to_owned()),
+    );
     root.insert("kura".into(), Value::Table(kura));
 
     let consensus_mode_str = match consensus_mode {
@@ -892,6 +900,13 @@ fn render_peer_config(
         Value::Integer(
             i64::try_from(LOCALNET_DA_AVAILABILITY_TIMEOUT_FLOOR_MS)
                 .expect("LOCALNET_DA_AVAILABILITY_TIMEOUT_FLOOR_MS fits i64"),
+        ),
+    );
+    sumeragi.insert(
+        "rbc_chunk_max_bytes".into(),
+        Value::Integer(
+            i64::try_from(LOCALNET_RBC_CHUNK_MAX_BYTES)
+                .expect("LOCALNET_RBC_CHUNK_MAX_BYTES fits i64"),
         ),
     );
     sumeragi.insert("enable_bls".into(), Value::Boolean(true));
@@ -1621,7 +1636,7 @@ mod tests {
         time::Duration,
     };
 
-    use iroha_config::{base::toml::TomlSource, parameters::actual};
+    use iroha_config::{base::toml::TomlSource, kura::FsyncMode, parameters::actual};
     use iroha_data_model::{
         block::{consensus::PROTO_VERSION, decode_framed_signed_block},
         isi::SetParameter,
@@ -1982,6 +1997,10 @@ mod tests {
             "localnet should set DA availability timeout floor"
         );
         assert_eq!(
+            parsed.sumeragi.rbc_chunk_max_bytes, LOCALNET_RBC_CHUNK_MAX_BYTES,
+            "localnet should raise RBC chunk size for large payloads"
+        );
+        assert_eq!(
             parsed.network.p2p_subscriber_queue_cap.get(),
             LOCALNET_P2P_SUBSCRIBER_QUEUE_CAP,
             "localnet should raise P2P subscriber queue cap for fast pipelines"
@@ -1999,6 +2018,11 @@ mod tests {
             parsed.sumeragi.commit_inflight_timeout,
             Duration::from_millis(expected_timeout),
             "localnet should tune commit inflight timeout to the fast pipeline"
+        );
+        assert_eq!(
+            parsed.kura.fsync_mode,
+            FsyncMode::Off,
+            "localnet should disable Kura fsync for fast local runs"
         );
     }
 

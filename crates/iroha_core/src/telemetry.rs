@@ -8100,7 +8100,12 @@ impl Actor {
         }
         self.last_online_peers = current_online;
         self.metrics.connected_peers.set(peer_count);
-        self.metrics.queue_size.set(self.queue.queued_len() as u64);
+        let queued = self.queue.queued_len() as u64;
+        let active = self.queue.active_len() as u64;
+        let inflight = active.saturating_sub(queued);
+        self.metrics.queue_size.set(active);
+        self.metrics.queue_queued.set(queued);
+        self.metrics.queue_inflight.set(inflight);
         // P2P counters (gauges): sample from p2p module
         self.metrics
             .p2p_dropped_posts

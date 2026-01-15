@@ -1180,6 +1180,10 @@ pub mod torii {
     pub const PROOF_CACHE_MAX_AGE_SECS: u64 = 30;
     /// Retry hint advertised when proof endpoints are throttled (seconds).
     pub const PROOF_RETRY_AFTER_SECS: u64 = 1;
+    /// Default global pre-auth connection cap (pre-RLIMIT clamp).
+    pub const PREAUTH_MAX_CONNECTIONS: Option<NonZeroUsize> = Some(nonzero!(1024usize));
+    /// Default per-IP pre-auth connection cap (None disables per-IP caps).
+    pub const PREAUTH_MAX_CONNECTIONS_PER_IP: Option<NonZeroUsize> = None;
     /// SoraNet privacy ingestion defaults (disabled until explicitly configured).
     pub mod soranet_privacy_ingest {
         use super::*;

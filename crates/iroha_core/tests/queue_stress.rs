@@ -88,6 +88,6 @@ fn expired_transactions_drain_without_panic() {
         drop(view);
 
         assert!(guards.is_empty(), "expired tx should not remain available");
-        assert_eq!(queue.tx_len(), 0, "queue drained expired transaction");
+        assert_eq!(queue.queued_len(), 0, "queue drained expired transaction");
     }
 }

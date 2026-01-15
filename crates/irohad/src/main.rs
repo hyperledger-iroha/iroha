@@ -2775,12 +2775,13 @@ impl Iroha {
         );
         supervisor.monitor(child);
 
-        // Background poster worker for lower-priority Sumeragi frames; votes/proposals/block-created bypass inline.
+        // Background poster worker for Sumeragi frames; overflow falls back to inline posts.
         let background_post_tx = if config.sumeragi.debug_disable_background_worker {
             None
         } else {
+            let bg_cap = config.sumeragi.control_msg_channel_cap.max(1);
             let (bg_tx, bg_rx) =
-                std::sync::mpsc::sync_channel::<iroha_core::sumeragi::BackgroundPost>(256);
+                std::sync::mpsc::sync_channel::<iroha_core::sumeragi::BackgroundPost>(bg_cap);
             {
                 let network_for_worker = network.clone();
                 #[cfg(feature = "telemetry")]

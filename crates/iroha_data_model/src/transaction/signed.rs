@@ -1655,6 +1655,9 @@ impl TransactionResult {
 #[cfg(test)]
 mod norito_rpc_fixture_tests {
     use super::*;
+    use crate::account::address::{
+        AccountAddress, AccountAddressFormat, ChainDiscriminantGuard,
+    };
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
     use iroha_crypto::Hash;
     use norito::{
@@ -1699,11 +1702,27 @@ mod norito_rpc_fixture_tests {
     fn optional_u64(map: &json::Map, key: &str, context: &str) -> Option<u64> {
         match map.get(key) {
             Some(Value::Null) => None,
-            Some(Value::Number(number)) => number.as_u64().or_else(|| {
-                panic!("{context}: {key} must be an integer or null")
-            }),
+            Some(Value::Number(number)) => number
+                .as_u64()
+                .or_else(|| panic!("{context}: {key} must be an integer or null")),
             Some(_) => panic!("{context}: {key} must be an integer or null"),
             None => panic!("{context}: missing {key} field"),
+        }
+    }
+
+    fn authority_prefix(authority: &str) -> Option<u16> {
+        let (address_part, _) = authority
+            .split_once('@')
+            .unwrap_or_else(|| panic!("{authority}: missing @ separator"));
+        match AccountAddress::parse_any(address_part, None) {
+            Ok((_, AccountAddressFormat::IH58 { network_prefix })) => Some(network_prefix),
+            Ok(_) => None,
+            Err(_) => {
+                if address_part.parse::<iroha_crypto::PublicKey>().is_ok() {
+                    return None;
+                }
+                panic!("{authority}: unsupported authority address format");
+            }
         }
     }
 
@@ -1731,6 +1750,7 @@ mod norito_rpc_fixture_tests {
             let signed_len = require_u64(entry, "signed_len", name);
             let chain = require_str(entry, "chain", name);
             let authority = require_str(entry, "authority", name);
+            let _chain_guard = authority_prefix(authority).map(ChainDiscriminantGuard::enter);
             let creation_time_ms = require_u64(entry, "creation_time_ms", name);
             let time_to_live_ms = optional_u64(entry, "time_to_live_ms", name);
             let nonce = optional_u64(entry, "nonce", name);
@@ -1765,11 +1785,7 @@ mod norito_rpc_fixture_tests {
                 signed_bytes.len(),
                 "{name}: signed transaction has trailing bytes"
             );
-            assert_eq!(
-                signed_tx.chain().as_str(),
-                chain,
-                "{name}: chain mismatch"
-            );
+            assert_eq!(signed_tx.chain().as_str(), chain, "{name}: chain mismatch");
             assert_eq!(
                 signed_tx.authority().to_string(),
                 authority,
@@ -1786,18 +1802,20 @@ mod norito_rpc_fixture_tests {
                 "{name}: time_to_live_ms mismatch"
             );
             assert_eq!(
-                signed_tx
-                    .nonce()
-                    .map(NonZeroU32::get)
-                    .map(u64::from),
+                signed_tx.nonce().map(NonZeroU32::get).map(u64::from),
                 nonce,
                 "{name}: nonce mismatch"
             );
 
-            let signed_payload_bytes = signed_tx.payload().encode();
+            let signed_payload_bytes = norito::codec::encode_adaptive(signed_tx.payload());
             assert_eq!(
                 signed_payload_bytes, payload_bytes,
                 "{name}: payload_base64 mismatch vs signed payload"
+            );
+            let signed_reencoded = norito::codec::encode_adaptive(&signed_tx);
+            assert_eq!(
+                signed_reencoded, signed_bytes,
+                "{name}: signed bytes mismatch after re-encode"
             );
 
             let computed_signed_hash = HashOf::<SignedTransaction>::new(&signed_tx).to_string();

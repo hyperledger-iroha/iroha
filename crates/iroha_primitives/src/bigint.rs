@@ -4,6 +4,11 @@
 //! Norito and JSON codecs that use a length-prefixed two's-complement byte
 //! representation. Small values stay compact; larger values are allowed until
 //! the hard limit is reached.
+//!
+//! Norito encoding: a little-endian `u32` byte length (not compact) followed by
+//! that many little-endian two's-complement bytes. A length of `0` represents
+//! zero. When used by [`crate::numeric::Numeric`], this type stores the mantissa
+//! only; the decimal scale is carried separately in `Numeric`.
 
 use core::fmt;
 use std::io::Write;
@@ -31,6 +36,9 @@ pub enum BigIntError {
 }
 
 /// Bounded signed integer with adaptive width (up to 512 bits).
+///
+/// This is a raw integer. [`crate::numeric::Numeric`] uses it as a mantissa
+/// alongside a separate scale value.
 #[derive(Clone, PartialEq, Eq, Hash, Default)]
 pub struct BigInt {
     inner: InnerBigInt,

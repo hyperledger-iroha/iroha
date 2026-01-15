@@ -76,29 +76,14 @@ pub(super) fn dispatch_background_request(
         }
         Err(mpsc::TrySendError::Full(post)) => {
             telemetry.inc_bg_post_overflow(kind);
-            trace!(kind, "background post queue full; applying backpressure");
+            trace!(kind, "background post queue full; deferring to caller");
             if !allow_blocking {
                 trace!(kind, "dropping non-blocking background request");
                 super::status::record_bg_post_drop(kind);
                 telemetry.inc_bg_post_drop(kind);
                 return Err(Box::new(request_from_post(post)));
             }
-            match tx.send(post) {
-                Ok(()) => {
-                    telemetry.inc_bg_post_enqueued(kind);
-                    if let Some(peer) = peer_for_metrics.as_ref() {
-                        telemetry.inc_post_to_peer(peer);
-                        telemetry.inc_bg_post_queue_depth_for_peer(peer);
-                    }
-                    Ok(())
-                }
-                Err(mpsc::SendError(post)) => {
-                    iroha_logger::warn!(kind, "background post channel disconnected");
-                    super::status::record_bg_post_drop(kind);
-                    telemetry.inc_bg_post_drop(kind);
-                    Err(Box::new(request_from_post(post)))
-                }
-            }
+            Err(Box::new(request_from_post(post)))
         }
         Err(mpsc::TrySendError::Disconnected(post)) => {
             iroha_logger::warn!(kind, "background post channel disconnected");
@@ -167,20 +152,13 @@ pub(super) fn dispatch_background_request(
     match tx.try_send(post) {
         Ok(()) => Ok(()),
         Err(mpsc::TrySendError::Full(post)) => {
-            trace!(kind, "background post queue full; applying backpressure");
+            trace!(kind, "background post queue full; deferring to caller");
             if !allow_blocking {
                 trace!(kind, "dropping non-blocking background request");
                 super::status::record_bg_post_drop(kind);
                 return Err(Box::new(request_from_post(post)));
             }
-            match tx.send(post) {
-                Ok(()) => Ok(()),
-                Err(mpsc::SendError(post)) => {
-                    iroha_logger::warn!(kind, "background post channel disconnected");
-                    super::status::record_bg_post_drop(kind);
-                    Err(Box::new(request_from_post(post)))
-                }
-            }
+            Err(Box::new(request_from_post(post)))
         }
         Err(mpsc::TrySendError::Disconnected(post)) => {
             iroha_logger::warn!(kind, "background post channel disconnected");
@@ -191,7 +169,7 @@ pub(super) fn dispatch_background_request(
 }
 
 fn background_request_allows_blocking(request: &BackgroundRequest) -> bool {
-    // Always allow backpressure for consensus payloads, including RBC chunks.
+    // Treat consensus payloads as non-droppable; the caller may fall back to inline sends.
     match request {
         BackgroundRequest::Post { .. }
         | BackgroundRequest::Broadcast { .. }

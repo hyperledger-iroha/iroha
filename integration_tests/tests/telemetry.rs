@@ -104,12 +104,10 @@ fn commit_time() -> eyre::Result<()> {
         return Ok(());
     };
 
-    // empty block; must have non-zero commit time
-    rt.block_on(network.ensure_blocks_with(|x| x.total == 2))?;
-
     network
         .client()
         .submit_blocking(Log::new(Level::INFO, "mewo".to_owned()))?;
+    rt.block_on(network.ensure_blocks_with(|x| x.non_empty >= 2))?;
 
     for client in network
         .peers()

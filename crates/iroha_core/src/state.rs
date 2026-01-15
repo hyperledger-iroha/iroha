@@ -10742,7 +10742,9 @@ impl State {
                 }
             }
         };
-        let hashes = self.block_hashes.view();
+        // Clone the hash list up front so we do not hold the block-hash lock while
+        // loading blocks from Kura (avoids lock-order inversions with Kura writers).
+        let hashes: Vec<HashOf<BlockHeader>> = self.block_hashes.view().iter().copied().collect();
         let replay_len = target_height
             .map(|limit| usize::try_from(limit).unwrap_or(usize::MAX))
             .map_or(hashes.len(), |limit| hashes.len().min(limit));

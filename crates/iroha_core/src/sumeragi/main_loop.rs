@@ -222,12 +222,18 @@ fn bump_view_after_quorum_timeout(
     new_view_tracker: &mut NewViewTracker,
     height: u64,
     view: u64,
+    view_window: u64,
     now: Instant,
 ) -> u64 {
     let next_view = view.saturating_add(1);
     phase_tracker.on_view_change(height, next_view, now);
     new_view_tracker.remove(height, view);
-    new_view_tracker.drop_below_view(height, next_view);
+    let min_view = if view_window == 0 {
+        next_view
+    } else {
+        next_view.saturating_sub(view_window)
+    };
+    new_view_tracker.drop_below_view(height, min_view);
     pacemaker.next_deadline = now;
     next_view
 }
@@ -294,6 +300,23 @@ fn pending_extends_tip(
     u64::try_from(state_height.saturating_add(1))
         .map(|expected_height| pending_height == expected_height && pending_parent == tip_hash)
         .unwrap_or(false)
+}
+
+// Avoid bootstrap deadlocks by allowing initial proposals before any online peers are reported.
+fn should_defer_for_online_peers(
+    online_total: usize,
+    required: usize,
+    offline_grace_expired: bool,
+    online_peers: usize,
+    last_successful_proposal: Option<Instant>,
+) -> bool {
+    if online_total >= required || offline_grace_expired {
+        return false;
+    }
+    if online_peers == 0 && last_successful_proposal.is_none() {
+        return false;
+    }
+    true
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -7992,7 +8015,42 @@ impl Actor {
                 background::dispatch_background_request(self.background_post_tx.as_ref(), request)
             }
         };
-        let _ = dispatched;
+        if let Err(request) = dispatched {
+            if !self.config.debug_disable_background_worker {
+                self.dispatch_background_fallback(*request);
+            }
+        }
+    }
+
+    fn dispatch_background_fallback(&mut self, request: BackgroundRequest) {
+        match request {
+            BackgroundRequest::Post { peer, msg } => {
+                self.network.post(iroha_p2p::Post {
+                    data: NetworkMessage::SumeragiBlock(Box::new(msg)),
+                    peer_id: peer,
+                    priority: iroha_p2p::Priority::High,
+                });
+            }
+            BackgroundRequest::PostControlFlow { peer, frame } => {
+                self.network.post(iroha_p2p::Post {
+                    data: NetworkMessage::SumeragiControlFlow(Box::new(frame)),
+                    peer_id: peer,
+                    priority: iroha_p2p::Priority::High,
+                });
+            }
+            BackgroundRequest::Broadcast { msg } => {
+                self.network.broadcast(iroha_p2p::Broadcast {
+                    data: NetworkMessage::SumeragiBlock(Box::new(msg)),
+                    priority: iroha_p2p::Priority::High,
+                });
+            }
+            BackgroundRequest::BroadcastControlFlow { frame } => {
+                self.network.broadcast(iroha_p2p::Broadcast {
+                    data: NetworkMessage::SumeragiControlFlow(Box::new(frame)),
+                    priority: iroha_p2p::Priority::High,
+                });
+            }
+        }
     }
 
     fn block_message_height_view(msg: &BlockMessage) -> Option<(u64, u64)> {
@@ -8571,7 +8629,23 @@ impl Actor {
             }
         }
         if !self.should_rebroadcast_rbc_ready(&topology_peers, key) {
-            return;
+            let topology = super::network_topology::Topology::new(topology_peers.clone());
+            let required = self.rbc_deliver_quorum(&topology);
+            let ready_quorum = required != 0 && readies.len() >= required;
+            if ready_quorum {
+                return;
+            }
+            let (_, mode_tag, prf_seed) = self.consensus_context_for_height(key.1);
+            let signature_topology =
+                topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
+            let local_idx = self.local_validator_index_for_topology(&signature_topology);
+            let local_ready = local_idx.is_some_and(|idx| {
+                readies.iter().any(|ready| ready.sender == idx)
+            });
+            // Ensure local READY evidence eventually propagates even if initial sends were lost.
+            if !local_ready {
+                return;
+            }
         }
         let now = Instant::now();
         let cooldown = self.rebroadcast_cooldown();
@@ -9635,6 +9709,7 @@ impl Actor {
             &mut self.subsystems.propose.new_view_tracker,
             height,
             base_view,
+            self.config.consensus_future_view_window,
             now,
         );
         super::status::set_view_change_index(next_view);

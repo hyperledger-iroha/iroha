@@ -12027,8 +12027,12 @@ impl Torii {
             strict_addresses: self.strict_addresses,
             debug_match_filters: self.debug_match_filters,
             operator_auth: self.operator_auth.parse(),
-            preauth_max_connections: self.preauth_max_connections,
-            preauth_max_connections_per_ip: self.preauth_max_connections_per_ip,
+            preauth_max_connections: self
+                .preauth_max_connections
+                .or(super::defaults::torii::PREAUTH_MAX_CONNECTIONS),
+            preauth_max_connections_per_ip: self
+                .preauth_max_connections_per_ip
+                .or(super::defaults::torii::PREAUTH_MAX_CONNECTIONS_PER_IP),
             preauth_rate_per_ip_per_sec: self
                 .preauth_rate_per_ip_per_sec
                 .or(super::defaults::torii::PREAUTH_RATE_PER_IP_PER_SEC)

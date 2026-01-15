@@ -4830,7 +4830,7 @@ pub struct Status {
     pub uptime: Uptime,
     /// Number of view changes in the current round
     pub view_changes: u32,
-    /// Number of the transactions in the queue
+    /// Number of transactions tracked by the queue (queued + in-flight)
     pub queue_size: u64,
     /// Total number of DA deadline reschedules observed by this peer.
     #[norito(default)]
@@ -5729,8 +5729,12 @@ pub struct Metrics {
     pub isi_times: HistogramVec,
     /// Number of view changes in the current round
     pub view_changes: ViewChangesGauge,
-    /// Number of transactions in the queue
+    /// Number of transactions tracked by the queue (queued + in-flight)
     pub queue_size: GenericGauge<AtomicU64>,
+    /// Number of transactions still queued for selection.
+    pub queue_queued: GenericGauge<AtomicU64>,
+    /// Number of transactions in-flight after selection.
+    pub queue_inflight: GenericGauge<AtomicU64>,
     /// Kura fsync policy state (0=off, 1=on, 2=batched).
     pub kura_fsync_enabled: GenericGauge<AtomicU64>,
     /// Kura fsync failures grouped by target (data/index/hashes).
@@ -7862,8 +7866,17 @@ impl Default for Metrics {
             "Number of view changes in the current round",
         )
         .expect("Infallible");
-        let queue_size = GenericGauge::new("queue_size", "Number of the transactions in the queue")
-            .expect("Infallible");
+        let queue_size = GenericGauge::new(
+            "queue_size",
+            "Transactions tracked by the queue (queued + in-flight)",
+        )
+        .expect("Infallible");
+        let queue_queued =
+            GenericGauge::new("queue_queued", "Transactions still queued for selection")
+                .expect("Infallible");
+        let queue_inflight =
+            GenericGauge::new("queue_inflight", "Transactions in-flight after selection")
+                .expect("Infallible");
         let kura_fsync_enabled = GenericGauge::new(
             "kura_fsync_enabled",
             "Kura fsync policy state (0=off, 1=on, 2=batched).",
@@ -12443,6 +12456,8 @@ impl Default for Metrics {
             isi_times,
             view_changes,
             queue_size,
+            queue_queued,
+            queue_inflight,
             kura_fsync_enabled,
             kura_fsync_failures_total,
             kura_fsync_latency_ms,
@@ -12908,6 +12923,8 @@ impl Default for Metrics {
             isi_times,
             view_changes,
             queue_size,
+            queue_queued,
+            queue_inflight,
             kura_fsync_enabled,
             kura_fsync_failures_total,
             kura_fsync_latency_ms,

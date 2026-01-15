@@ -2386,18 +2386,30 @@ fn transaction_paths() -> Map {
             "#/components/schemas/JsonValue",
         )),
     );
+    let mut pipeline_status = json_get_operation(
+        "Transactions",
+        "Fetch pipeline transaction status.",
+        "Return the latest pipeline status for a signed transaction hash.",
+        "#/components/schemas/JsonValue",
+        vec![required_string_query_param(
+            "hash",
+            "Signed transaction hash (hex).",
+        )],
+    );
+    if let Some(Value::Object(get_op)) = pipeline_status.get_mut("get") {
+        if let Some(Value::Object(responses)) = get_op.get_mut("responses") {
+            responses.insert(
+                "404".to_owned(),
+                json_response(
+                    "Pipeline status not found; Torii has no cached entry for the hash yet.",
+                    error_schema_reference(),
+                ),
+            );
+        }
+    }
     paths.insert(
         "/v1/pipeline/transactions/status".to_owned(),
-        Value::Object(json_get_operation(
-            "Transactions",
-            "Fetch pipeline transaction status.",
-            "Return the latest pipeline status for a signed transaction hash.",
-            "#/components/schemas/JsonValue",
-            vec![required_string_query_param(
-                "hash",
-                "Signed transaction hash (hex).",
-            )],
-        )),
+        Value::Object(pipeline_status),
     );
     paths.insert(
         "/v1/iso20022/pacs008".to_owned(),
@@ -9668,6 +9680,31 @@ mod tests {
         assert!(paths.contains_key("/v1/soranet/privacy/event"));
         assert!(paths.contains_key("/v1/webhooks"));
         assert!(paths.contains_key("/v1/notify/devices"));
+    }
+
+    #[test]
+    fn pipeline_status_documents_not_found_response() {
+        let doc = generate_spec();
+        let paths = doc
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("paths section");
+        let status = paths
+            .get("/v1/pipeline/transactions/status")
+            .and_then(Value::as_object)
+            .expect("pipeline status path");
+        let get = status
+            .get("get")
+            .and_then(Value::as_object)
+            .expect("get op");
+        let responses = get
+            .get("responses")
+            .and_then(Value::as_object)
+            .expect("responses");
+        assert!(
+            responses.contains_key("404"),
+            "pipeline status should document 404 for missing cache entries"
+        );
     }
 
     #[test]

@@ -2342,7 +2342,8 @@ async fn handler_account_transactions_query(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     let cost = limits.rate_limit_cost(page_limit);
     check_access_enforced_with_cost(&app, &headers, None, &key_hint, enforce, cost).await?;
 
@@ -2380,7 +2381,8 @@ async fn handler_account_assets(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     let cost = limits.rate_limit_cost(page_limit);
     check_access_enforced_with_cost(&app, &headers, None, &key_hint, enforce, cost).await?;
 
@@ -2414,7 +2416,8 @@ async fn handler_account_permissions(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, &key_hint, enforce).await?;
 
     routing::handle_v1_account_permissions_with_policy(
@@ -2455,7 +2458,8 @@ async fn handler_account_assets_query(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     let cost = limits.rate_limit_cost(page_limit);
     check_access_enforced_with_cost(&app, &headers, None, &key_hint, enforce, cost).await?;
 
@@ -2499,7 +2503,8 @@ async fn handler_account_transactions_get(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     let cost = limits.rate_limit_cost(page_limit);
     check_access_enforced_with_cost(&app, &headers, None, &key_hint, enforce, cost).await?;
 
@@ -2541,7 +2546,8 @@ async fn handler_proofs_query(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/proofs/query", enforce).await?;
 
     let signed = crate::routing::signed_find_proof_by_id(&dto)?;
@@ -2653,7 +2659,8 @@ async fn handler_accounts_list(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/accounts", enforce).await?;
 
     routing::handle_v1_accounts(
@@ -2684,7 +2691,8 @@ async fn handler_accounts_query(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/accounts/query", enforce).await?;
 
     routing::handle_v1_accounts_query(
@@ -2708,7 +2716,8 @@ async fn handler_accounts_onboard(
             .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -2737,7 +2746,8 @@ async fn handler_accounts_portfolio(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -2822,7 +2832,8 @@ async fn handler_nexus_public_lane_validators(
         )
         .await;
     }
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -2861,7 +2872,8 @@ async fn handler_nexus_public_lane_stake(
         )
         .await;
     }
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -2901,7 +2913,8 @@ async fn handler_nexus_public_lane_rewards(
         )
         .await;
     }
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -2938,7 +2951,8 @@ async fn handler_space_directory_bindings(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -2975,7 +2989,8 @@ async fn handler_space_directory_manifests(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -3013,7 +3028,8 @@ async fn handler_space_directory_manifest_publish(
         .map(axum::response::IntoResponse::into_response);
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -3053,7 +3069,8 @@ async fn handler_space_directory_manifest_revoke(
         .map(axum::response::IntoResponse::into_response);
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -3091,7 +3108,8 @@ async fn handler_repo_agreements(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/repo/agreements", enforce).await?;
 
     routing::handle_v1_repo_agreements(
@@ -3122,7 +3140,8 @@ async fn handler_repo_agreements_query(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/repo/agreements/query", enforce).await?;
 
     routing::handle_v1_repo_agreements_query(
@@ -3151,7 +3170,8 @@ async fn handler_offline_allowances_list(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/allowances", enforce).await?;
 
     routing::handle_v1_offline_allowances(
@@ -3182,7 +3202,8 @@ async fn handler_offline_allowances_query(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/allowances/query", enforce).await?;
 
     routing::handle_v1_offline_allowances_query(
@@ -3213,7 +3234,8 @@ async fn handler_offline_certificates_query(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -3252,7 +3274,8 @@ async fn handler_offline_allowances_issue(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/allowances", enforce).await?;
 
     routing::handle_post_v1_offline_allowances_issue(
@@ -3283,7 +3306,8 @@ async fn handler_offline_certificates_issue(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -3317,7 +3341,8 @@ async fn handler_offline_allowance_get(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -3355,7 +3380,8 @@ async fn handler_offline_certificates_renew_issue(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -3396,7 +3422,8 @@ async fn handler_offline_allowances_renew(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -3437,7 +3464,8 @@ async fn handler_offline_certificates_revoke(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -3477,7 +3505,8 @@ async fn handler_offline_settlements_submit(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/settlements", enforce).await?;
 
     routing::handle_post_v1_offline_settlements_submit(
@@ -3508,7 +3537,8 @@ async fn handler_offline_spend_receipts_submit(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/spend-receipts", enforce).await?;
 
     routing::handle_post_v1_offline_spend_receipts(
@@ -3529,7 +3559,8 @@ async fn handler_offline_state(
         return routing::handle_v1_offline_state(app.state.clone(), app.telemetry.clone()).await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/state", enforce).await?;
 
     routing::handle_v1_offline_state(app.state.clone(), app.telemetry.clone()).await
@@ -3552,7 +3583,8 @@ async fn handler_offline_revocations_list(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/revocations", enforce).await?;
 
     routing::handle_v1_offline_revocations(
@@ -3583,7 +3615,8 @@ async fn handler_offline_revocations_query(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -3619,7 +3652,8 @@ async fn handler_offline_summaries_list(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/summaries", enforce).await?;
 
     routing::handle_v1_offline_summaries(
@@ -3650,7 +3684,8 @@ async fn handler_offline_summaries_query(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/summaries/query", enforce).await?;
 
     routing::handle_v1_offline_summaries_query(
@@ -3679,7 +3714,8 @@ async fn handler_offline_receipts_list(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/receipts", enforce).await?;
 
     routing::handle_v1_offline_receipts(
@@ -3710,7 +3746,8 @@ async fn handler_offline_receipts_query(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/receipts/query", enforce).await?;
 
     routing::handle_v1_offline_receipts_query(
@@ -3739,7 +3776,8 @@ async fn handler_offline_transfers_list(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/transfers", enforce).await?;
 
     routing::handle_v1_offline_transfers(
@@ -3770,7 +3808,8 @@ async fn handler_offline_transfer_get(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -3809,7 +3848,8 @@ async fn handler_offline_transfers_query(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/transfers/query", enforce).await?;
 
     routing::handle_v1_offline_transfers_query(
@@ -3841,7 +3881,8 @@ async fn handler_offline_transfer_proof(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_proof_access(
         &app,
         negotiated,
@@ -3878,7 +3919,8 @@ async fn handler_offline_bundle_proof_status(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -3908,7 +3950,8 @@ async fn handler_offline_rejections(
             .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/rejections", enforce).await?;
 
     routing::handle_v1_offline_rejections(app.state.clone(), app.telemetry.clone()).await
@@ -4537,7 +4580,8 @@ async fn handler_assets_definitions_list(
         return routing::handle_v1_assets_definitions(app.state.clone(), AxQuery(p)).await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/assets/definitions", enforce).await?;
 
     routing::handle_v1_assets_definitions(app.state.clone(), AxQuery(p)).await
@@ -4559,7 +4603,8 @@ async fn handler_assets_definitions_query(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/assets/definitions/query", enforce).await?;
 
     routing::handle_v1_assets_definitions_query(
@@ -4591,7 +4636,8 @@ async fn handler_asset_holders(
         )
         .await;
     }
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     let cost = limits.rate_limit_cost(page_limit);
     check_access_enforced_with_cost(&app, &headers, None, &def_id, enforce, cost).await?;
     routing::handle_v1_asset_holders(
@@ -4628,7 +4674,8 @@ async fn handler_asset_holders_query(
         )
         .await;
     }
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     let cost = limits.rate_limit_cost(page_limit);
     check_access_enforced_with_cost(&app, &headers, None, &def_id, enforce, cost).await?;
     routing::handle_v1_asset_holders_query(
@@ -4668,7 +4715,8 @@ async fn handler_domains_list(
         return routing::handle_v1_domains(app.state.clone(), AxQuery(p)).await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/domains", enforce).await?;
 
     routing::handle_v1_domains(app.state.clone(), AxQuery(p)).await
@@ -4687,7 +4735,8 @@ async fn handler_domains_query(
         return routing::handle_v1_domains_query(app.state.clone(), payload).await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/domains/query", enforce).await?;
 
     routing::handle_v1_domains_query(app.state.clone(), payload).await
@@ -4703,7 +4752,8 @@ async fn handler_nfts_list(
         return routing::handle_v1_nfts(app.state.clone(), AxQuery(p)).await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/nfts", enforce).await?;
 
     routing::handle_v1_nfts(app.state.clone(), AxQuery(p)).await
@@ -4723,7 +4773,7 @@ async fn handler_nfts_query(
         routing::handle_v1_nfts_query(app.state.clone(), payload).await?
     } else {
         let enforce =
-            app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(&app, &headers, None, "v1/nfts/query", enforce).await?;
         routing::handle_v1_nfts_query(app.state.clone(), payload).await?
     };
@@ -4741,7 +4791,8 @@ async fn handler_subscription_plans_list(
         return routing::handle_v1_subscription_plans(app.state.clone(), AxQuery(p)).await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/subscriptions/plans", enforce).await?;
 
     routing::handle_v1_subscription_plans(app.state.clone(), AxQuery(p)).await
@@ -4766,7 +4817,8 @@ async fn handler_subscription_plans_create(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/subscriptions/plans", enforce).await?;
 
     routing::handle_post_v1_subscription_plan(
@@ -4789,7 +4841,8 @@ async fn handler_subscriptions_list(
         return routing::handle_v1_subscriptions(app.state.clone(), AxQuery(p)).await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/subscriptions", enforce).await?;
 
     routing::handle_v1_subscriptions(app.state.clone(), AxQuery(p)).await
@@ -4814,7 +4867,8 @@ async fn handler_subscriptions_create(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/subscriptions", enforce).await?;
 
     routing::handle_post_v1_subscription_create(
@@ -4838,7 +4892,8 @@ async fn handler_subscription_get(
         return routing::handle_v1_subscription_get(app.state.clone(), subscription_id).await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -4873,7 +4928,8 @@ async fn handler_subscription_pause(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -4916,7 +4972,8 @@ async fn handler_subscription_resume(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -4959,7 +5016,8 @@ async fn handler_subscription_cancel(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -5002,7 +5060,8 @@ async fn handler_subscription_keep(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -5045,7 +5104,8 @@ async fn handler_subscription_usage(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -5088,7 +5148,8 @@ async fn handler_subscription_charge_now(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -5120,7 +5181,8 @@ async fn handler_parameters(
         return routing::handle_v1_parameters(app.state.clone()).await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, Some(remote_ip), "v1/parameters", enforce).await?;
 
     routing::handle_v1_parameters(app.state.clone()).await
@@ -5136,7 +5198,8 @@ async fn handler_webhooks_create(
         return Ok(webhook::handle_create_webhook(body).await);
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/webhooks", enforce).await?;
 
     Ok(webhook::handle_create_webhook(body).await)
@@ -5151,7 +5214,8 @@ async fn handler_webhooks_list(
         return Ok(webhook::handle_list_webhooks().await);
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/webhooks", enforce).await?;
 
     Ok(webhook::handle_list_webhooks().await)
@@ -5167,7 +5231,8 @@ async fn handler_webhooks_delete(
         return Ok(webhook::handle_delete_webhook(axum::extract::Path(id)).await);
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/webhooks", enforce).await?;
 
     Ok(webhook::handle_delete_webhook(axum::extract::Path(id)).await)
@@ -5857,7 +5922,8 @@ async fn handler_status_tail(
         "status",
         app.api_token_enforced(),
     );
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     if enforce && !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -5904,7 +5970,8 @@ async fn handler_status_root(
         "status",
         app.api_token_enforced(),
     );
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     if enforce && !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -5943,7 +6010,8 @@ async fn handler_metrics(
         "metrics",
         app.api_token_enforced(),
     );
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     if !limits::allow_conditionally(&app.rate_limiter, &key, enforce).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -6472,7 +6540,8 @@ async fn handler_subscription_ws(
         "subscription/stream",
         app.api_token_enforced(),
     );
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     if !limits::allow_conditionally(&app.rate_limiter, &key, enforce).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -6526,7 +6595,8 @@ async fn handler_blocks_stream_ws(
         }
     }
     let key = rate_limit_key(&headers, None, "blocks/stream", app.api_token_enforced());
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     if !limits::allow_conditionally(&app.rate_limiter, &key, enforce).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -6696,7 +6766,8 @@ async fn handler_get_contract_code(
         "v1/contracts/code:get",
         app.api_token_enforced(),
     );
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     if !limits::allow_conditionally(&app.rate_limiter, &key, enforce).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -7990,7 +8061,8 @@ async fn handler_post_contract_code(
         "v1/contracts/code",
         app.api_token_enforced(),
     );
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     if !limits::allow_conditionally(&app.deploy_rate_limiter, &key, enforce).await {
         app.telemetry
             .with_metrics(|tel| tel.inc_torii_contract_throttle("code"));
@@ -9649,7 +9721,8 @@ async fn handler_post_vk_register(
         "v1/zk/vk/register",
         app.api_token_enforced(),
     );
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     if !limits::allow_conditionally(&app.rate_limiter, &key, enforce).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -9698,7 +9771,8 @@ async fn handler_post_vk_update(
         }
     }
     let key = rate_limit_key(&headers, None, "v1/zk/vk/update", app.api_token_enforced());
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     if !limits::allow_conditionally(&app.rate_limiter, &key, enforce).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -9736,7 +9810,8 @@ async fn handler_post_transaction(
     }
     let auth_id = format!("{}", transaction.authority());
     let key = token_hdr.unwrap_or(auth_id);
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     if !limits::allow_conditionally(&app.tx_rate_limiter, &key, enforce).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -10160,7 +10235,7 @@ async fn handler_policy(
         resp
     }
 
-    let queue_len = app.queue.tx_len() as u64;
+    let queue_len = app.queue.active_len() as u64;
     let token_required = app.require_api_token && !app.api_tokens_set.is_empty();
 
     if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.allow_nets) {
@@ -10247,7 +10322,8 @@ async fn handler_signed_query(
         }
     }
     let key = token_hdr.unwrap_or_else(|| "query".to_string());
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     if !limits::allow_conditionally(&app.rate_limiter, &key, enforce).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -11397,7 +11473,8 @@ async fn handler_status_root_v2(
         }
     }
     let key = rate_limit_key(&headers, None, "status", app.api_token_enforced());
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     if enforce && !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -11419,7 +11496,8 @@ async fn handler_status_tail_v2(
 ) -> Result<impl IntoResponse, Error> {
     validate_api_token(&app, &headers)?;
     let key = rate_limit_key(&headers, None, "status", app.api_token_enforced());
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     if enforce && !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -13244,13 +13322,37 @@ impl Torii {
                 .burst
                 .map(std::num::NonZeroU32::get),
         );
+        let nofile_soft = limits::nofile_soft_limit();
+        let configured_max_total = config
+            .preauth_max_connections
+            .map(std::num::NonZeroUsize::get);
+        let max_total = limits::clamp_preauth_max_total(configured_max_total, nofile_soft);
+        if let (Some(configured), Some(clamped)) = (configured_max_total, max_total) {
+            if clamped < configured {
+                iroha_logger::warn!(
+                    configured,
+                    clamped,
+                    ?nofile_soft,
+                    "clamping torii pre-auth global connection cap to fit RLIMIT_NOFILE"
+                );
+            }
+        }
+        let configured_max_per_ip = config
+            .preauth_max_connections_per_ip
+            .map(std::num::NonZeroUsize::get);
+        let max_per_ip = limits::clamp_preauth_max_per_ip(configured_max_per_ip, max_total);
+        if let (Some(configured), Some(clamped)) = (configured_max_per_ip, max_per_ip) {
+            if clamped < configured {
+                iroha_logger::warn!(
+                    configured,
+                    clamped,
+                    "clamping torii pre-auth per-ip connection cap to global limit"
+                );
+            }
+        }
         let preauth_gate = Arc::new(limits::PreAuthGate::new(limits::PreAuthConfig {
-            max_total: config
-                .preauth_max_connections
-                .map(std::num::NonZeroUsize::get),
-            max_per_ip: config
-                .preauth_max_connections_per_ip
-                .map(std::num::NonZeroUsize::get),
+            max_total,
+            max_per_ip,
             rate_per_ip: config
                 .preauth_rate_per_ip_per_sec
                 .map(std::num::NonZeroU32::get),
