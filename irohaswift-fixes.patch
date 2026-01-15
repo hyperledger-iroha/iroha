@@ -1,0 +1,469 @@
+From d9c0712ed77d7a0920385d15e8ae56198298296a Mon Sep 17 00:00:00 2001
+From: Nikolai Zhukov <coderobjc@gmail.com>
+Date: Thu, 15 Jan 2026 10:11:06 +0400
+Subject: [PATCH 1/2] fix(tests): use node default TTL and handle 404 in P2P
+ transfer polling
+
+---
+ IrohaSwift/IrohaSwift.podspec                 | 27 ++++++++++++-------
+ IrohaSwift/NoritoBridge.xcframework           |  1 +
+ .../Sources/IrohaSwift/ToriiClient.swift      | 19 ++++++++-----
+ .../IrohaSwift/TransactionEncoder.swift       |  2 +-
+ issue_onboarding_status.txt                   |  1 +
+ 5 files changed, 33 insertions(+), 17 deletions(-)
+ create mode 120000 IrohaSwift/NoritoBridge.xcframework
+ create mode 100644 issue_onboarding_status.txt
+
+diff --git a/IrohaSwift/IrohaSwift.podspec b/IrohaSwift/IrohaSwift.podspec
+index c0e850182..1245ef80f 100644
+--- a/IrohaSwift/IrohaSwift.podspec
++++ b/IrohaSwift/IrohaSwift.podspec
+@@ -19,19 +19,26 @@ DESC
+   s.osx.deployment_target = '12.0'
+   s.swift_versions   = ['5.9']
+   s.source_files     = 'Sources/IrohaSwift/**/*.{swift}'
+-  s.vendored_frameworks = '../dist/NoritoBridge.xcframework'
++  # Symlink created by prepare_command points to ../dist/NoritoBridge.xcframework
++  s.vendored_frameworks = 'NoritoBridge.xcframework'
+   s.preserve_paths   = [
+-    '../dist/NoritoBridge.artifacts.json',
+-    '../dist/NoritoBridge.xcframework'
++    'NoritoBridge.xcframework'
+   ]
++  s.static_framework = true
++  s.pod_target_xcconfig = {
++    'OTHER_LDFLAGS' => '-all_load'
++  }
++  s.user_target_xcconfig = {
++    'OTHER_LDFLAGS' => '-all_load'
++  }
+   s.prepare_command  = <<-CMD
+-    if [ ! -d "../dist/NoritoBridge.xcframework" ]; then
+-      echo "error: missing dist/NoritoBridge.xcframework. Build via scripts/build_norito_xcframework.sh or place the release artifact under dist/ before linting/consuming the pod." >&2
+-      exit 1
+-    fi
+-    if [ ! -f "../dist/NoritoBridge.artifacts.json" ]; then
+-      echo "error: missing dist/NoritoBridge.artifacts.json. Keep the signed artifact manifest next to the xcframework for provenance checks." >&2
+-      exit 1
++    if [ ! -e "NoritoBridge.xcframework" ]; then
++      if [ -d "../dist/NoritoBridge.xcframework" ]; then
++        ln -s ../dist/NoritoBridge.xcframework NoritoBridge.xcframework
++      else
++        echo "error: missing NoritoBridge.xcframework. Build via scripts/build_norito_xcframework.sh first." >&2
++        exit 1
++      fi
+     fi
+   CMD
+ end
+diff --git a/IrohaSwift/NoritoBridge.xcframework b/IrohaSwift/NoritoBridge.xcframework
+new file mode 120000
+index 000000000..ad5f53811
+--- /dev/null
++++ b/IrohaSwift/NoritoBridge.xcframework
+@@ -0,0 +1 @@
++../dist/NoritoBridge.xcframework
+\ No newline at end of file
+diff --git a/IrohaSwift/Sources/IrohaSwift/ToriiClient.swift b/IrohaSwift/Sources/IrohaSwift/ToriiClient.swift
+index 3dd36309c..06c0533ca 100644
+--- a/IrohaSwift/Sources/IrohaSwift/ToriiClient.swift
++++ b/IrohaSwift/Sources/IrohaSwift/ToriiClient.swift
+@@ -8860,7 +8860,9 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable
+     // MARK: - Async helpers
+ 
+     private func pipelineEndpoints(for _: PipelineEndpointMode) -> (submit: String, status: String) {
+-        ("/v1/pipeline/transactions", "/v1/pipeline/transactions/status")
++        // Iroha 3 uses /transaction for Norito binary submission
++        // and /v1/pipeline/transactions/status for JSON status queries
++        ("/transaction", "/v1/pipeline/transactions/status")
+     }
+ 
+     private enum HTTPMethod: String {
+@@ -8942,11 +8944,16 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable
+                              queryItems: [URLQueryItem]? = nil,
+                              body: Data? = nil,
+                              headers: [String: String] = [:]) throws -> URLRequest {
+-        let components = URLComponents(
+-            url: baseURL.appendingPathComponent(normalizedPath(path)),
+-            resolvingAgainstBaseURL: false
+-        )
+-        guard var urlComponents = components else {
++        // Build URL by appending path string directly to preserve percent-encoding.
++        // Using appendingPathComponent would double-encode percent-encoded characters
++        // (e.g., %40 becomes %2540), breaking account IDs like "signatory%40domain".
++        let normalPath = normalizedPath(path)
++        let baseString = baseURL.absoluteString
++        let separator = baseString.hasSuffix("/") ? "" : "/"
++        guard let fullURL = URL(string: baseString + separator + normalPath) else {
++            throw ToriiClientError.invalidURL(path)
++        }
++        guard var urlComponents = URLComponents(url: fullURL, resolvingAgainstBaseURL: false) else {
+             throw ToriiClientError.invalidURL(path)
+         }
+         if let items = queryItems, !items.isEmpty {
+diff --git a/IrohaSwift/Sources/IrohaSwift/TransactionEncoder.swift b/IrohaSwift/Sources/IrohaSwift/TransactionEncoder.swift
+index 22c8f0643..0790fb8e7 100644
+--- a/IrohaSwift/Sources/IrohaSwift/TransactionEncoder.swift
++++ b/IrohaSwift/Sources/IrohaSwift/TransactionEncoder.swift
+@@ -208,7 +208,7 @@ enum SwiftTransactionEncoderError: Error, LocalizedError, Sendable {
+ }
+ 
+ struct SwiftTransactionEncoder {
+-    private static let signedTransactionType = "iroha_data_model::transaction::signed::SignedTransaction"
++    private static let signedTransactionType = "iroha_data_model::transaction::signed::model::SignedTransaction"
+ 
+     private static func bridgeOrThrow(_ body: () throws -> NativeSignedTransaction?) throws -> NativeSignedTransaction {
+         guard NoritoNativeBridge.shared.isAvailable else {
+diff --git a/issue_onboarding_status.txt b/issue_onboarding_status.txt
+new file mode 100644
+index 000000000..ced7bfd5c
+--- /dev/null
++++ b/issue_onboarding_status.txt
+@@ -0,0 +1 @@
++Issue: after POST /v1/accounts/onboard Torii returns tx_hash_hex, but GET /v1/pipeline/transactions/status?hash=<tx_hash_hex> always returns 404. This path is not present in the Torii OpenAPI, yet both mobile SDKs (Swift and Android) poll it, so onboarding never reaches a terminal status. We need either this endpoint restored or a documented status-check method (e.g., SSE /v1/events/sse) plus SDK updates.
+-- 
+2.50.1 (Apple Git-155)
+
+
+From 203dcf5eaf2ec8ef2ad98075b97580bd9d22cec2 Mon Sep 17 00:00:00 2001
+From: Nikolai Zhukov <coderobjc@gmail.com>
+Date: Thu, 15 Jan 2026 12:40:03 +0400
+Subject: [PATCH 2/2] fix(ToriiClient): use URL(string:relativeTo:) to prevent
+ double percent-encoding
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The previous implementation using appendingPathComponent caused double
+percent-encoding of special characters in path components (e.g., %40 → %2540).
+This broke requests with account IDs like "alice@wonderland".
+
+Changes:
+- Normalize baseURL to directory URL in init (required for RFC 3986 compliance)
+- Replace string concatenation with URL(string:relativeTo:) in makeRequest
+- Update tests to verify absoluteString (URL.path always returns decoded path)
+- Change transaction submit endpoint from /v1/pipeline/transactions to /transaction
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+---
+ .../Sources/IrohaSwift/ToriiClient.swift      | 34 ++++----
+ .../IrohaSwiftTests/ToriiClientTests.swift    | 81 +++++++++++++------
+ 2 files changed, 75 insertions(+), 40 deletions(-)
+
+diff --git a/IrohaSwift/Sources/IrohaSwift/ToriiClient.swift b/IrohaSwift/Sources/IrohaSwift/ToriiClient.swift
+index 06c0533ca..a9507c500 100644
+--- a/IrohaSwift/Sources/IrohaSwift/ToriiClient.swift
++++ b/IrohaSwift/Sources/IrohaSwift/ToriiClient.swift
+@@ -6728,13 +6728,18 @@ public extension ToriiTransactionSubmitting where Self: Sendable {
+ }
+ 
+ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable {
++    /// Base URL for all requests. Normalized to directory URL (ends with "/") to ensure
++    /// correct relative URL resolution per RFC 3986.
+     public let baseURL: URL
+     private let session: URLSession
+     private var statusState = ToriiStatusState()
+     private static let defaultListPageSize = 100
+ 
+     public init(baseURL: URL, session: URLSession = .shared) {
+-        self.baseURL = baseURL
++        // Normalize to directory URL for correct relative URL resolution.
++        // Without trailing slash, URL(string:relativeTo:) replaces the last path component
++        // instead of appending (per RFC 3986).
++        self.baseURL = baseURL.hasDirectoryPath ? baseURL : baseURL.appendingPathComponent("")
+         self.session = session
+     }
+ 
+@@ -8935,34 +8940,29 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable
+         return body.lowercased()
+     }
+ 
+-    private func normalizedPath(_ path: String) -> String {
+-        path.hasPrefix("/") ? String(path.dropFirst()) : path
+-    }
+-
+     private func makeRequest(path: String,
+                              method: HTTPMethod = .get,
+                              queryItems: [URLQueryItem]? = nil,
+                              body: Data? = nil,
+                              headers: [String: String] = [:]) throws -> URLRequest {
+-        // Build URL by appending path string directly to preserve percent-encoding.
+-        // Using appendingPathComponent would double-encode percent-encoded characters
+-        // (e.g., %40 becomes %2540), breaking account IDs like "signatory%40domain".
+-        let normalPath = normalizedPath(path)
+-        let baseString = baseURL.absoluteString
+-        let separator = baseString.hasSuffix("/") ? "" : "/"
+-        guard let fullURL = URL(string: baseString + separator + normalPath) else {
+-            throw ToriiClientError.invalidURL(path)
+-        }
+-        guard var urlComponents = URLComponents(url: fullURL, resolvingAgainstBaseURL: false) else {
++        // Remove leading slash to make path relative (required for URL(string:relativeTo:))
++        let relativePath = path.hasPrefix("/") ? String(path.dropFirst()) : path
++
++        // URL(string:relativeTo:) preserves percent-encoding without double-encoding.
++        // baseURL is normalized to directory URL in init, so relative resolution works correctly.
++        guard let url = URL(string: relativePath, relativeTo: baseURL),
++              var urlComponents = URLComponents(url: url, resolvingAgainstBaseURL: true) else {
+             throw ToriiClientError.invalidURL(path)
+         }
++
+         if let items = queryItems, !items.isEmpty {
+             urlComponents.queryItems = items
+         }
+-        guard let url = urlComponents.url else {
++        guard let finalURL = urlComponents.url else {
+             throw ToriiClientError.invalidURL(path)
+         }
+-        var request = URLRequest(url: url)
++
++        var request = URLRequest(url: finalURL)
+         request.httpMethod = method.rawValue
+         request.httpBody = body
+         headers.forEach { key, value in
+diff --git a/IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift b/IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift
+index 6316ffbff..2b684eabb 100644
+--- a/IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift
++++ b/IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift
+@@ -529,11 +529,11 @@ final class ToriiClientTests: XCTestCase {
+         return dictionary
+     }
+ 
+-    private func makeClient() -> ToriiClient {
++    private func makeClient(baseURL: URL = URL(string: "https://example.test")!) -> ToriiClient {
+         let configuration = URLSessionConfiguration.ephemeral
+         configuration.protocolClasses = [StubURLProtocol.self]
+         let session = URLSession(configuration: configuration)
+-        return ToriiClient(baseURL: URL(string: "https://example.test")!, session: session)
++        return ToriiClient(baseURL: baseURL, session: session)
+     }
+ 
+     private func canonicalOwnerLiteral(domain: String = "wonderland") throws -> String {
+@@ -553,7 +553,8 @@ final class ToriiClientTests: XCTestCase {
+     @available(iOS 15.0, macOS 12.0, *)
+     func testGetAssetsAsync() async throws {
+         StubURLProtocol.handler = { request in
+-            XCTAssertEqual(request.url?.path, "/v1/accounts/alice%40wonderland/assets")
++            // URL.path always returns decoded path. Check absoluteString to verify encoding.
++            XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/alice%40wonderland/assets"))
+             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+             let body = """
+             [{"asset_id":"rose#wonderland##alice@wonderland","quantity":"10"}]
+@@ -566,10 +567,27 @@ final class ToriiClientTests: XCTestCase {
+         XCTAssertEqual(balances.first?.asset_id, "rose#wonderland##alice@wonderland")
+     }
+ 
++    @available(iOS 15.0, macOS 12.0, *)
++    func testGetAssetsPreservesPercentEncodedPathWithBasePath() async throws {
++        let baseURL = URL(string: "https://example.test/api")!
++        let client = makeClient(baseURL: baseURL)
++        StubURLProtocol.handler = { request in
++            // Use absoluteString to verify percent-encoding is preserved.
++            // URL.path always returns decoded path (@ instead of %40) by design.
++            XCTAssertTrue(request.url!.absoluteString.contains("/api/v1/accounts/signatory%40wonderland/assets"))
++            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
++            let body = "[]".data(using: .utf8)!
++            return (response, body)
++        }
++
++        let balances = try await client.getAssets(accountId: "signatory@wonderland")
++        XCTAssertEqual(balances.count, 0)
++    }
++
+     @available(iOS 15.0, macOS 12.0, *)
+     func testSubmitTransactionAsync() async throws {
+         StubURLProtocol.handler = { request in
+-            XCTAssertEqual(request.url?.path, "/v1/pipeline/transactions")
++            XCTAssertEqual(request.url?.path, "/transaction")
+             XCTAssertEqual(request.httpMethod, "POST")
+             let response = HTTPURLResponse(url: request.url!, statusCode: 202, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+             let body = """
+@@ -586,7 +604,7 @@ final class ToriiClientTests: XCTestCase {
+     @available(iOS 15.0, macOS 12.0, *)
+     func testSubmitTransactionRejectCodeHeaderSurfaced() async throws {
+         StubURLProtocol.handler = { request in
+-            XCTAssertEqual(request.url?.path, "/v1/pipeline/transactions")
++            XCTAssertEqual(request.url?.path, "/transaction")
+             let headers = [
+                 "Content-Type": "application/json",
+                 "x-iroha-reject-code": "PRTRY:TX_SIGNATURE_MISSING"
+@@ -1091,7 +1109,8 @@ final class ToriiClientTests: XCTestCase {
+     @available(iOS 15.0, macOS 12.0, *)
+     func testIrohaSDKGetAssetsAsyncUsesREST() async throws {
+         StubURLProtocol.handler = { request in
+-            XCTAssertEqual(request.url?.path, "/v1/accounts/alice%40wonderland/assets")
++            // URL.path always returns decoded path. Check absoluteString to verify encoding.
++            XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/alice%40wonderland/assets"))
+             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+             let body = """
+             [{"asset_id":"rose#wonderland##alice@wonderland","quantity":"10"}]
+@@ -1112,7 +1131,8 @@ final class ToriiClientTests: XCTestCase {
+     @available(iOS 15.0, macOS 12.0, *)
+     func testGetAssetsTrimsAndEncodesAccountLiteral() async throws {
+         StubURLProtocol.handler = { request in
+-            XCTAssertEqual(request.url?.path, "/v1/accounts/alice%40wonderland/assets")
++            // URL.path always returns decoded path. Check absoluteString to verify encoding.
++            XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/alice%40wonderland/assets"))
+             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+             let body = """
+             [{"asset_id":"rose#wonderland##alice@wonderland","quantity":"10"}]
+@@ -1127,7 +1147,8 @@ final class ToriiClientTests: XCTestCase {
+     @available(iOS 15.0, macOS 12.0, *)
+     func testGetAssetsEncodesPercentInAccountLiteral() async throws {
+         StubURLProtocol.handler = { request in
+-            XCTAssertEqual(request.url?.path, "/v1/accounts/alice%252Fbob%40wonderland/assets")
++            // URL.path always returns decoded path. Check absoluteString to verify encoding.
++            XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/alice%252Fbob%40wonderland/assets"))
+             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+             let body = """
+             [{"asset_id":"rose#wonderland##alice@wonderland","quantity":"10"}]
+@@ -1142,7 +1163,8 @@ final class ToriiClientTests: XCTestCase {
+     @available(iOS 15.0, macOS 12.0, *)
+     func testGetTransactionsEncodesAccountLiteral() async throws {
+         StubURLProtocol.handler = { request in
+-            XCTAssertEqual(request.url?.path, "/v1/accounts/alice%40wonderland/transactions")
++            // URL.path always returns decoded path. Check absoluteString to verify encoding.
++            XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/alice%40wonderland/transactions"))
+             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+             let body = """
+             {"items":[{"entrypoint_hash":"hash","authority":"alice@wonderland","timestamp_ms":1,"result_ok":true}],"total":1}
+@@ -1157,7 +1179,8 @@ final class ToriiClientTests: XCTestCase {
+     @available(iOS 15.0, macOS 12.0, *)
+     func testGetExplorerAccountQrDecodesResponse() async throws {
+         StubURLProtocol.handler = { request in
+-            XCTAssertEqual(request.url?.path, "/v1/explorer/accounts/alice%40wonderland/qr")
++            // URL.path always returns decoded path. Check absoluteString to verify encoding.
++            XCTAssertTrue(request.url!.absoluteString.contains("/v1/explorer/accounts/alice%40wonderland/qr"))
+             let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+             XCTAssertNil(components?.queryItems)
+             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+@@ -1190,7 +1213,8 @@ final class ToriiClientTests: XCTestCase {
+     @available(iOS 15.0, macOS 12.0, *)
+     func testGetExplorerAccountQrSupportsAddressFormatPreference() async throws {
+         StubURLProtocol.handler = { request in
+-            XCTAssertEqual(request.url?.path, "/v1/explorer/accounts/alice%40wonderland/qr")
++            // URL.path always returns decoded path. Check absoluteString to verify encoding.
++            XCTAssertTrue(request.url!.absoluteString.contains("/v1/explorer/accounts/alice%40wonderland/qr"))
+             let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+             XCTAssertEqual(components?.queryItems?.first?.name, "address_format")
+             XCTAssertEqual(components?.queryItems?.first?.value, "compressed")
+@@ -1605,7 +1629,8 @@ final class ToriiClientTests: XCTestCase {
+         """.data(using: .utf8)!
+ 
+         StubURLProtocol.handler = { request in
+-            XCTAssertEqual(request.url?.path, "/v1/accounts/uaid%3A\(uaidHex)/portfolio")
++            // URL.path always returns decoded path. Check absoluteString to verify encoding.
++            XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/uaid%3A\(uaidHex)/portfolio"))
+             let response = HTTPURLResponse(url: request.url!,
+                                            statusCode: 200,
+                                            httpVersion: nil,
+@@ -1633,7 +1658,8 @@ final class ToriiClientTests: XCTestCase {
+         """.data(using: .utf8)!
+ 
+         StubURLProtocol.handler = { request in
+-            XCTAssertEqual(request.url?.path, "/v1/space-directory/uaids/uaid%3A\(uaidHex)")
++            // URL.path always returns decoded path. Check absoluteString to verify encoding.
++            XCTAssertTrue(request.url!.absoluteString.contains("/v1/space-directory/uaids/uaid%3A\(uaidHex)"))
+             XCTAssertEqual(request.url?.query, "address_format=compressed")
+             let response = HTTPURLResponse(url: request.url!,
+                                            statusCode: 200,
+@@ -1680,7 +1706,8 @@ final class ToriiClientTests: XCTestCase {
+         """.data(using: .utf8)!
+ 
+         StubURLProtocol.handler = { request in
+-            XCTAssertEqual(request.url?.path, "/v1/space-directory/uaids/uaid%3A\(uaidHex)/manifests")
++            // URL.path always returns decoded path. Check absoluteString to verify encoding.
++            XCTAssertTrue(request.url!.absoluteString.contains("/v1/space-directory/uaids/uaid%3A\(uaidHex)/manifests"))
+             let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+             let items = Dictionary(uniqueKeysWithValues: (components?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+             XCTAssertEqual(items["dataspace"], "11")
+@@ -2038,7 +2065,8 @@ final class ToriiClientTests: XCTestCase {
+         """.data(using: .utf8)!
+ 
+         StubURLProtocol.handler = { request in
+-            XCTAssertEqual(request.url?.path, "/v1/confidential/assets/rose%23wonderland/transitions")
++            // URL.path always returns decoded path. Check absoluteString to verify encoding.
++            XCTAssertTrue(request.url!.absoluteString.contains("/v1/confidential/assets/rose%23wonderland/transitions"))
+             let response = HTTPURLResponse(url: request.url!,
+                                            statusCode: 200,
+                                            httpVersion: nil,
+@@ -2078,7 +2106,8 @@ final class ToriiClientTests: XCTestCase {
+         """.data(using: .utf8)!
+ 
+         StubURLProtocol.handler = { request in
+-            XCTAssertEqual(request.url?.path, "/v1/confidential/assets/rose%23wonderland/transitions")
++            // URL.path always returns decoded path. Check absoluteString to verify encoding.
++            XCTAssertTrue(request.url!.absoluteString.contains("/v1/confidential/assets/rose%23wonderland/transitions"))
+             let response = HTTPURLResponse(url: request.url!,
+                                            statusCode: 200,
+                                            httpVersion: nil,
+@@ -2371,7 +2400,8 @@ final class ToriiClientHeaderTests: XCTestCase {
+         """.data(using: .utf8)!
+ 
+         StubURLProtocol.handler = { request in
+-            XCTAssertEqual(request.url?.path, "/v1/zk/vk/halo2%2Fipa/vk%20main")
++            // URL.path always returns decoded path. Check absoluteString to verify encoding.
++            XCTAssertTrue(request.url!.absoluteString.contains("/v1/zk/vk/halo2%2Fipa/vk%20main"))
+             let response = HTTPURLResponse(
+                 url: request.url!,
+                 statusCode: 200,
+@@ -2939,7 +2969,8 @@ data: {"VerifyingKey":{"Registered":{"id":{"backend":"halo2/ipa","name":"vk_main
+             .data(using: .utf8)!
+ 
+         StubURLProtocol.handler = { request in
+-            XCTAssertEqual(request.url?.path, "/v1/accounts/alice%40wonderland/assets")
++            // URL.path always returns decoded path. Check absoluteString to verify encoding.
++            XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/alice%40wonderland/assets"))
+             XCTAssertEqual(request.url?.query, "limit=2")
+             let response = HTTPURLResponse(url: request.url!,
+                                            statusCode: 200,
+@@ -3953,7 +3984,8 @@ id: 88
+         let expectation = expectation(description: "get prover report")
+         let reportId = "report/1"
+         StubURLProtocol.handler = { request in
+-            XCTAssertEqual(request.url?.path, "/v1/zk/prover/reports/report%2F1")
++            // URL.path always returns decoded path. Check absoluteString to verify encoding.
++            XCTAssertTrue(request.url!.absoluteString.contains("/v1/zk/prover/reports/report%2F1"))
+             let response = HTTPURLResponse(url: request.url!,
+                                            statusCode: 200,
+                                            httpVersion: nil,
+@@ -3980,7 +4012,8 @@ id: 88
+         let expectation = expectation(description: "delete prover report")
+         let reportId = "report/1"
+         StubURLProtocol.handler = { request in
+-            XCTAssertEqual(request.url?.path, "/v1/zk/prover/reports/report%2F1")
++            // URL.path always returns decoded path. Check absoluteString to verify encoding.
++            XCTAssertTrue(request.url!.absoluteString.contains("/v1/zk/prover/reports/report%2F1"))
+             XCTAssertEqual(request.httpMethod, "DELETE")
+             let response = HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!
+             return (response, Data())
+@@ -4041,7 +4074,8 @@ id: 88
+         let expectation = expectation(description: "get attachment")
+         let attachmentId = "abc/def"
+         StubURLProtocol.handler = { request in
+-            XCTAssertEqual(request.url?.path, "/v1/zk/attachments/abc%2Fdef")
++            // URL.path always returns decoded path. Check absoluteString to verify encoding.
++            XCTAssertTrue(request.url!.absoluteString.contains("/v1/zk/attachments/abc%2Fdef"))
+             let response = HTTPURLResponse(url: request.url!,
+                                            statusCode: 200,
+                                            httpVersion: nil,
+@@ -4066,7 +4100,8 @@ id: 88
+         let expectation = expectation(description: "delete attachment")
+         let attachmentId = "abc/def"
+         StubURLProtocol.handler = { request in
+-            XCTAssertEqual(request.url?.path, "/v1/zk/attachments/abc%2Fdef")
++            // URL.path always returns decoded path. Check absoluteString to verify encoding.
++            XCTAssertTrue(request.url!.absoluteString.contains("/v1/zk/attachments/abc%2Fdef"))
+             XCTAssertEqual(request.httpMethod, "DELETE")
+             let response = HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!
+             return (response, Data())
+@@ -4322,7 +4357,7 @@ id: 88
+     func testSubmitTransactionPostsNorito() {
+         let expectation = expectation(description: "submit transaction")
+         StubURLProtocol.handler = { request in
+-            XCTAssertEqual(request.url?.path, "/v1/pipeline/transactions")
++            XCTAssertEqual(request.url?.path, "/transaction")
+             XCTAssertEqual(request.httpMethod, "POST")
+             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
+             XCTAssertEqual(self.bodyData(from: request), Data([0x01, 0x02]))
+-- 
+2.50.1 (Apple Git-155)
+

@@ -13,7 +13,7 @@ use clap::{Args as ClapArgs, ValueEnum};
 use color_eyre::eyre::{Result, WrapErr as _, eyre};
 use iroha_crypto::{ExposedPrivateKey, KeyPair};
 use iroha_data_model::{
-    isi::staking::RegisterPublicLaneValidator,
+    isi::staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
     parameter::system::{
         SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter, SumeragiParameters,
     },
@@ -266,6 +266,18 @@ const LOCALNET_DA_AVAILABILITY_TIMEOUT_MULTIPLIER: u32 = 2;
 const LOCALNET_DA_AVAILABILITY_TIMEOUT_FLOOR_MS: u64 = 2_000;
 /// Default RBC chunk size for localnet payloads.
 const LOCALNET_RBC_CHUNK_MAX_BYTES: usize = 256 * 1024;
+/// Default queue capacity for localnet stress (keeps bursts in-memory).
+const LOCALNET_QUEUE_CAPACITY: usize = 262_144;
+/// Default lane TEU capacity for localnet scheduling (raises per-block budget).
+const LOCALNET_LANE_TEU_CAPACITY: u32 = 1_000_000;
+/// Default multiplier for proposal queue scan budgets on localnet.
+const LOCALNET_PROPOSAL_QUEUE_SCAN_MULTIPLIER: usize = 4;
+/// Default high-load threshold for enabling Torii rate limiting (localnet bypass).
+const LOCALNET_API_HIGH_LOAD_TX_THRESHOLD: usize = LOCALNET_QUEUE_CAPACITY;
+/// Default Torii tx rate limit (per authority) for localnet.
+const LOCALNET_TORII_TX_RATE_PER_AUTHORITY_PER_SEC: u32 = 1_000_000;
+/// Default Torii tx burst limit (per authority) for localnet.
+const LOCALNET_TORII_TX_BURST_PER_AUTHORITY: u32 = 2_000_000;
 /// Torii pre-auth allowlist to keep localnet CLI traffic from tripping bans.
 const LOCALNET_PREAUTH_ALLOW_CIDRS: [&str; 2] = ["127.0.0.0/8", "::1/128"];
 /// Multiplier applied to block+commit time for localnet commit inflight timeout.
@@ -920,6 +932,12 @@ fn render_peer_config(
 
     let mut nexus = Table::new();
     nexus.insert("enabled".into(), Value::Boolean(nexus_enabled));
+    let mut fusion = Table::new();
+    fusion.insert(
+        "exit_teu".into(),
+        Value::Integer(i64::from(LOCALNET_LANE_TEU_CAPACITY)),
+    );
+    nexus.insert("fusion".into(), Value::Table(fusion));
     if npos_bootstrap {
         let gas_account_id = gas_account_id.expect("localnet gas account id required");
         let mut staking = Table::new();
@@ -985,6 +1003,13 @@ fn render_peer_config(
             Value::Integer(i64::from(redundant_send_r)),
         );
     }
+    sumeragi.insert(
+        "proposal_queue_scan_multiplier".into(),
+        Value::Integer(
+            i64::try_from(LOCALNET_PROPOSAL_QUEUE_SCAN_MULTIPLIER)
+                .expect("LOCALNET_PROPOSAL_QUEUE_SCAN_MULTIPLIER fits i64"),
+        ),
+    );
     root.insert("sumeragi".into(), Value::Table(sumeragi));
 
     let mut pipeline = Table::new();
@@ -998,6 +1023,21 @@ fn render_peer_config(
         pipeline.insert("gas".into(), Value::Table(gas));
     }
     root.insert("pipeline".into(), Value::Table(pipeline));
+
+    let mut queue = Table::new();
+    queue.insert(
+        "capacity".into(),
+        Value::Integer(
+            i64::try_from(LOCALNET_QUEUE_CAPACITY).expect("LOCALNET_QUEUE_CAPACITY fits i64"),
+        ),
+    );
+    queue.insert(
+        "capacity_per_user".into(),
+        Value::Integer(
+            i64::try_from(LOCALNET_QUEUE_CAPACITY).expect("LOCALNET_QUEUE_CAPACITY fits i64"),
+        ),
+    );
+    root.insert("queue".into(), Value::Table(queue));
 
     if npos_bootstrap {
         let mut crypto = Table::new();
@@ -1105,6 +1145,30 @@ fn render_peer_config(
                 .iter()
                 .map(|cidr| Value::String((*cidr).to_string()))
                 .collect::<Vec<_>>(),
+        ),
+    );
+    torii.insert(
+        "api_allow_cidrs".into(),
+        Value::Array(
+            LOCALNET_PREAUTH_ALLOW_CIDRS
+                .iter()
+                .map(|cidr| Value::String((*cidr).to_string()))
+                .collect::<Vec<_>>(),
+        ),
+    );
+    torii.insert(
+        "tx_rate_per_authority_per_sec".into(),
+        Value::Integer(i64::from(LOCALNET_TORII_TX_RATE_PER_AUTHORITY_PER_SEC)),
+    );
+    torii.insert(
+        "tx_burst_per_authority".into(),
+        Value::Integer(i64::from(LOCALNET_TORII_TX_BURST_PER_AUTHORITY)),
+    );
+    torii.insert(
+        "api_high_load_tx_threshold".into(),
+        Value::Integer(
+            i64::try_from(LOCALNET_API_HIGH_LOAD_TX_THRESHOLD)
+                .expect("LOCALNET_API_HIGH_LOAD_TX_THRESHOLD fits i64"),
         ),
     );
     // torii.transport.norito_rpc
@@ -1336,9 +1400,13 @@ fn append_localnet_npos_bootstrap(
         builder = builder.append_instruction(RegisterPublicLaneValidator {
             lane_id: LaneId::SINGLE,
             validator: validator_id.clone(),
-            stake_account: validator_id,
+            stake_account: validator_id.clone(),
             initial_stake: Numeric::from(LOCALNET_STAKE_AMOUNT),
             metadata: Metadata::default(),
+        });
+        builder = builder.append_instruction(ActivatePublicLaneValidator {
+            lane_id: LaneId::SINGLE,
+            validator: validator_id,
         });
     }
 
@@ -1632,6 +1700,7 @@ mod tests {
     use std::{
         env, fs,
         io::BufWriter,
+        num::NonZeroU32,
         path::{Path, PathBuf},
         time::Duration,
     };
@@ -1927,6 +1996,18 @@ mod tests {
             .filter_map(toml::Value::as_str)
             .collect::<Vec<_>>();
         assert_eq!(allowlist, LOCALNET_PREAUTH_ALLOW_CIDRS);
+
+        let allowlist = peer_cfg
+            .get("torii")
+            .and_then(toml::Value::as_table)
+            .and_then(|torii| torii.get("api_allow_cidrs"))
+            .and_then(toml::Value::as_array)
+            .expect("api_allow_cidrs array");
+        let allowlist = allowlist
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(allowlist, LOCALNET_PREAUTH_ALLOW_CIDRS);
     }
 
     #[test]
@@ -1999,6 +2080,43 @@ mod tests {
         assert_eq!(
             parsed.sumeragi.rbc_chunk_max_bytes, LOCALNET_RBC_CHUNK_MAX_BYTES,
             "localnet should raise RBC chunk size for large payloads"
+        );
+        assert_eq!(
+            parsed.queue.capacity.get(),
+            LOCALNET_QUEUE_CAPACITY,
+            "localnet should raise queue capacity for bursts"
+        );
+        assert_eq!(
+            parsed.queue.capacity_per_user.get(),
+            LOCALNET_QUEUE_CAPACITY,
+            "localnet should raise per-user queue capacity for bursts"
+        );
+        assert_eq!(
+            parsed.sumeragi.proposal_queue_scan_multiplier.get(),
+            LOCALNET_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+            "localnet should cap proposal scan work to keep block cadence"
+        );
+        assert_eq!(
+            parsed.nexus.fusion.exit_teu, LOCALNET_LANE_TEU_CAPACITY,
+            "localnet should raise lane TEU capacity for high-throughput blocks"
+        );
+        assert_eq!(
+            parsed
+                .torii
+                .tx_rate_per_authority_per_sec
+                .map(NonZeroU32::get),
+            Some(LOCALNET_TORII_TX_RATE_PER_AUTHORITY_PER_SEC),
+            "localnet should raise Torii tx rate limits"
+        );
+        assert_eq!(
+            parsed.torii.tx_burst_per_authority.map(NonZeroU32::get),
+            Some(LOCALNET_TORII_TX_BURST_PER_AUTHORITY),
+            "localnet should raise Torii tx burst limits"
+        );
+        assert_eq!(
+            parsed.torii.api_high_load_tx_threshold,
+            Some(LOCALNET_API_HIGH_LOAD_TX_THRESHOLD),
+            "localnet should defer API rate limiting until high load"
         );
         assert_eq!(
             parsed.network.p2p_subscriber_queue_cap.get(),
@@ -2279,6 +2397,7 @@ mod tests {
         let manifest = RawGenesisTransaction::from_path(temp.path().join("genesis.json"))
             .expect("load genesis");
         let mut validators = Vec::new();
+        let mut activations = Vec::new();
         for instruction in manifest.instructions() {
             if let Some(register) = instruction
                 .as_any()
@@ -2286,16 +2405,30 @@ mod tests {
             {
                 validators.push(register);
             }
+            if let Some(activate) = instruction
+                .as_any()
+                .downcast_ref::<ActivatePublicLaneValidator>()
+            {
+                activations.push(activate);
+            }
         }
         assert_eq!(
             validators.len(),
             usize::from(opts.peers.get()),
             "expected one public-lane validator per peer"
         );
+        assert_eq!(
+            activations.len(),
+            validators.len(),
+            "expected one activation per public-lane validator"
+        );
         for register in &validators {
             assert_eq!(register.lane_id, LaneId::SINGLE);
             assert_eq!(register.validator, register.stake_account);
             assert_eq!(register.initial_stake, Numeric::from(LOCALNET_STAKE_AMOUNT));
+        }
+        for activate in &activations {
+            assert_eq!(activate.lane_id, LaneId::SINGLE);
         }
 
         let peers = build_peers(
@@ -2314,6 +2447,14 @@ mod tests {
             .map(|register| register.validator.clone())
             .collect();
         assert_eq!(actual, expected, "validator roster should match peers");
+        let actual_activations: BTreeSet<_> = activations
+            .iter()
+            .map(|activate| activate.validator.clone())
+            .collect();
+        assert_eq!(
+            actual_activations, expected,
+            "activation roster should match peers"
+        );
     }
 
     #[test]

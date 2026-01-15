@@ -12,7 +12,6 @@ use core::{cmp::Ordering, str::FromStr};
 use std::{
     io::Write,
     string::{String, ToString},
-    vec,
     vec::Vec,
 };
 
@@ -450,6 +449,10 @@ impl NoritoSerialize for Numeric {
         };
         helper.serialize(writer)
     }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        None
+    }
 }
 
 impl<'a> NoritoDeserialize<'a> for Numeric {
@@ -465,9 +468,10 @@ impl<'a> NoritoDeserialize<'a> for Numeric {
 
         if aligned {
             let helper_arch: &Archived<scale_::NumericScaleHelper> = archived.cast();
-            let helper = scale_::NumericScaleHelper::deserialize(helper_arch);
-            Numeric::try_new(helper.mantissa, helper.scale)
-                .map_err(|err| Error::Message(format!("invalid numeric: {err}")))
+            let helper = scale_::NumericScaleHelper::try_deserialize(helper_arch)?;
+            let value = Numeric::try_new(helper.mantissa, helper.scale)
+                .map_err(|err| Error::Message(format!("invalid numeric: {err}")))?;
+            Ok(value)
         } else {
             let slice = norito::core::payload_slice_from_ptr(ptr)?;
             let (value, _) = <Numeric as norito::core::DecodeFromSlice>::decode_from_slice(slice)?;
@@ -850,5 +854,15 @@ mod tests {
         let num2 = Numeric::decode(&mut s.as_slice()).expect("failed to decode numeric");
 
         assert_eq!(num1, num2);
+    }
+
+    #[test]
+    fn numeric_canonical_roundtrip() {
+        let value = Numeric::new(12345, 3);
+        let payload = norito::codec::Encode::encode(&value);
+        let (decoded, used) = norito::core::decode_field_canonical::<Numeric>(&payload)
+            .expect("decode canonical numeric");
+        assert_eq!(decoded, value);
+        assert_eq!(used, payload.len());
     }
 }

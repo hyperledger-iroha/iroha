@@ -914,6 +914,8 @@ fn test_sumeragi_config() -> SumeragiConfig {
         collectors_redundant_send_r: 1,
         block_max_transactions: None,
         block_max_payload_bytes: None,
+        proposal_queue_scan_multiplier:
+            iroha_config::parameters::defaults::sumeragi::PROPOSAL_QUEUE_SCAN_MULTIPLIER,
         empty_child_fallback_enabled: true,
         msg_channel_cap_votes: iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_VOTES,
         msg_channel_cap_block_payload:
@@ -7711,6 +7713,18 @@ async fn rbc_payload_rebroadcast_sends_single_init_and_respects_cooldown() {
             )
         })
         .count();
+    let chunk_posts = posts
+        .iter()
+        .filter(|post| {
+            matches!(
+                post,
+                BackgroundPost::Post {
+                    msg: BlockMessage::RbcChunk(_),
+                    ..
+                }
+            )
+        })
+        .count();
     assert_eq!(
         init_posts,
         if should_rebroadcast {
@@ -7719,6 +7733,15 @@ async fn rbc_payload_rebroadcast_sends_single_init_and_respects_cooldown() {
             0
         },
         "expected RBC INIT posts to commit topology"
+    );
+    assert_eq!(
+        chunk_posts,
+        if should_rebroadcast {
+            expected_targets
+        } else {
+            0
+        },
+        "expected RBC chunk posts to commit topology"
     );
 
     if should_rebroadcast {
@@ -8015,9 +8038,14 @@ async fn rbc_ready_rebroadcast_is_rate_limited_per_session() {
     let topology = super::network_topology::Topology::new(roster.clone());
     let (_, mode_tag, prf_seed) = harness.actor.consensus_context_for_height(key.1);
     let signature_topology = super::topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
-    let local_idx = harness.actor.local_validator_index_for_topology(&signature_topology);
+    let local_idx = harness
+        .actor
+        .local_validator_index_for_topology(&signature_topology);
     let local_ready = local_idx.is_some_and(|idx| {
-        session.ready_signatures.iter().any(|entry| entry.sender == idx)
+        session
+            .ready_signatures
+            .iter()
+            .any(|entry| entry.sender == idx)
     });
     let required = harness.actor.rbc_deliver_quorum(&topology);
     let ready_quorum = required != 0 && session.ready_signatures.len() >= required;
@@ -8082,7 +8110,10 @@ async fn rbc_ready_rebroadcast_forces_local_ready_when_not_rebroadcaster() {
         .iter()
         .position(|peer| peer == &local_peer_id)
         .expect("local peer in roster");
-    assert_ne!(local_pos, 0, "local peer should not be leader in test roster");
+    assert_ne!(
+        local_pos, 0,
+        "local peer should not be leader in test roster"
+    );
 
     let height = 1;
     let view = 0;
@@ -8124,10 +8155,7 @@ async fn rbc_ready_rebroadcast_forces_local_ready_when_not_rebroadcaster() {
     let _ = harness.background_rx.try_iter().count();
     harness.actor.rebroadcast_rbc_ready_bundle(key, readies);
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
-    let expected_targets = roster
-        .iter()
-        .filter(|peer| *peer != &local_peer_id)
-        .count();
+    let expected_targets = roster.iter().filter(|peer| *peer != &local_peer_id).count();
     let ready_posts = posts
         .iter()
         .filter(|post| {
@@ -9013,6 +9041,40 @@ async fn precommit_vote_block_sync_update_targets_snapshot_roster() {
     );
 
     harness.shutdown.send();
+}
+
+#[test]
+fn block_sync_update_targets_cover_full_roster_when_limit_allows() {
+    let peers: Vec<_> = (0..4)
+        .map(|_| {
+            PeerId::new(
+                KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                    .public_key()
+                    .clone(),
+            )
+        })
+        .collect();
+    let local_peer = peers[0].clone();
+    let registered_peers = peers.clone();
+    let online_peers = vec![peers[1].clone()];
+    let gossip_limit = peers.len().saturating_sub(1);
+    let seed = [7_u8; 32];
+
+    let targets = Actor::block_sync_update_targets_for_peers(
+        &local_peer,
+        gossip_limit,
+        &peers,
+        &registered_peers,
+        &online_peers,
+        &seed,
+    );
+
+    let expected: BTreeSet<_> = peers.iter().skip(1).cloned().collect();
+    let actual: BTreeSet<_> = targets.into_iter().collect();
+    assert_eq!(
+        actual, expected,
+        "gossip limit covering the roster should target all non-local peers"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -25978,6 +26040,10 @@ async fn new_view_votes_use_commit_qc_history_for_height() {
 
     actor.handle_vote(vote.clone());
 
+    assert!(
+        !actor.vote_roster_cache.contains_key(&block_hash),
+        "new-view votes should not populate the vote roster cache"
+    );
     let key = (
         Phase::NewView,
         vote.height,
@@ -27983,6 +28049,22 @@ async fn proposal_queue_scan_budget_limits_fetch() {
     drop(tx_guards);
 
     assert_eq!(actor.queue.queued_len(), 3, "remaining txs stay queued");
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_scan_budget_tracks_multiplier() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da_enabled = false;
+    consensus_cfg.proposal_queue_scan_multiplier = nonzero!(2_usize);
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let budget = actor.proposal_scan_budget(nonzero!(5_usize));
+    assert_eq!(budget, 10, "scan budget should scale with multiplier");
 
     harness.shutdown.send();
 }

@@ -694,6 +694,8 @@ mod tests {
             collectors_redundant_send_r: 1,
             block_max_transactions: None,
             block_max_payload_bytes: None,
+            proposal_queue_scan_multiplier:
+                iroha_config::parameters::defaults::sumeragi::PROPOSAL_QUEUE_SCAN_MULTIPLIER,
             empty_child_fallback_enabled: true,
             msg_channel_cap_votes:
                 iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_VOTES,

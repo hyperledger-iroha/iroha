@@ -647,6 +647,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             rbc_pending_ttl: Duration::from_millis(defaults::sumeragi::RBC_PENDING_TTL_MS),
             block_max_transactions: defaults::sumeragi::BLOCK_MAX_TRANSACTIONS,
             block_max_payload_bytes: defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES,
+            proposal_queue_scan_multiplier: defaults::sumeragi::PROPOSAL_QUEUE_SCAN_MULTIPLIER,
             empty_child_fallback_enabled: defaults::sumeragi::EMPTY_CHILD_FALLBACK_ENABLED,
             msg_channel_cap_votes: defaults::sumeragi::MSG_CHANNEL_CAP_VOTES,
             msg_channel_cap_block_payload: defaults::sumeragi::MSG_CHANNEL_CAP_BLOCK_PAYLOAD,

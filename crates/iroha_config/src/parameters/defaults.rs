@@ -2236,6 +2236,7 @@ pub mod sumeragi {
     use std::num::NonZeroUsize;
 
     use iroha_crypto::Algorithm;
+    use nonzero_ext::nonzero;
 
     /// Number of collectors to use (K). Default is 1 (single proxy tail).
     pub const COLLECTORS_K: usize = 1;
@@ -2246,6 +2247,8 @@ pub mod sumeragi {
     pub const BLOCK_MAX_TRANSACTIONS: Option<NonZeroUsize> = None;
     /// Optional cap on payload bytes per block when RBC is disabled (None = unlimited).
     pub const BLOCK_MAX_PAYLOAD_BYTES: Option<NonZeroUsize> = None;
+    /// Multiplier applied to the proposal queue scan budget (relative to max tx per block).
+    pub const PROPOSAL_QUEUE_SCAN_MULTIPLIER: NonZeroUsize = nonzero!(4_usize);
     /// Maximum DA commitments (blobs) permitted in a single block.
     pub const DA_MAX_COMMITMENTS_PER_BLOCK: usize = 16;
     /// Maximum DA proof openings permitted in a single block (aggregate cap).

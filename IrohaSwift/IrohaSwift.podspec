@@ -19,19 +19,26 @@ DESC
   s.osx.deployment_target = '12.0'
   s.swift_versions   = ['5.9']
   s.source_files     = 'Sources/IrohaSwift/**/*.{swift}'
-  s.vendored_frameworks = '../dist/NoritoBridge.xcframework'
+  # Symlink created by prepare_command points to ../dist/NoritoBridge.xcframework
+  s.vendored_frameworks = 'NoritoBridge.xcframework'
   s.preserve_paths   = [
-    '../dist/NoritoBridge.artifacts.json',
-    '../dist/NoritoBridge.xcframework'
+    'NoritoBridge.xcframework'
   ]
+  s.static_framework = true
+  s.pod_target_xcconfig = {
+    'OTHER_LDFLAGS' => '-all_load'
+  }
+  s.user_target_xcconfig = {
+    'OTHER_LDFLAGS' => '-all_load'
+  }
   s.prepare_command  = <<-CMD
-    if [ ! -d "../dist/NoritoBridge.xcframework" ]; then
-      echo "error: missing dist/NoritoBridge.xcframework. Build via scripts/build_norito_xcframework.sh or place the release artifact under dist/ before linting/consuming the pod." >&2
-      exit 1
-    fi
-    if [ ! -f "../dist/NoritoBridge.artifacts.json" ]; then
-      echo "error: missing dist/NoritoBridge.artifacts.json. Keep the signed artifact manifest next to the xcframework for provenance checks." >&2
-      exit 1
+    if [ ! -e "NoritoBridge.xcframework" ]; then
+      if [ -d "../dist/NoritoBridge.xcframework" ]; then
+        ln -s ../dist/NoritoBridge.xcframework NoritoBridge.xcframework
+      else
+        echo "error: missing NoritoBridge.xcframework. Build via scripts/build_norito_xcframework.sh first." >&2
+        exit 1
+      fi
     fi
   CMD
 end

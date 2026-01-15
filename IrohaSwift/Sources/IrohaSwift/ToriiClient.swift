@@ -6728,13 +6728,18 @@ public extension ToriiTransactionSubmitting where Self: Sendable {
 }
 
 public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable {
+    /// Base URL for all requests. Normalized to directory URL (ends with "/") to ensure
+    /// correct relative URL resolution per RFC 3986.
     public let baseURL: URL
     private let session: URLSession
     private var statusState = ToriiStatusState()
     private static let defaultListPageSize = 100
 
     public init(baseURL: URL, session: URLSession = .shared) {
-        self.baseURL = baseURL
+        // Normalize to directory URL for correct relative URL resolution.
+        // Without trailing slash, URL(string:relativeTo:) replaces the last path component
+        // instead of appending (per RFC 3986).
+        self.baseURL = baseURL.hasDirectoryPath ? baseURL : baseURL.appendingPathComponent("")
         self.session = session
     }
 
@@ -8860,7 +8865,9 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     // MARK: - Async helpers
 
     private func pipelineEndpoints(for _: PipelineEndpointMode) -> (submit: String, status: String) {
-        ("/v1/pipeline/transactions", "/v1/pipeline/transactions/status")
+        // Iroha 3 uses /transaction for Norito binary submission
+        // and /v1/pipeline/transactions/status for JSON status queries
+        ("/transaction", "/v1/pipeline/transactions/status")
     }
 
     private enum HTTPMethod: String {
@@ -8933,29 +8940,29 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return body.lowercased()
     }
 
-    private func normalizedPath(_ path: String) -> String {
-        path.hasPrefix("/") ? String(path.dropFirst()) : path
-    }
-
     private func makeRequest(path: String,
                              method: HTTPMethod = .get,
                              queryItems: [URLQueryItem]? = nil,
                              body: Data? = nil,
                              headers: [String: String] = [:]) throws -> URLRequest {
-        let components = URLComponents(
-            url: baseURL.appendingPathComponent(normalizedPath(path)),
-            resolvingAgainstBaseURL: false
-        )
-        guard var urlComponents = components else {
+        // Remove leading slash to make path relative (required for URL(string:relativeTo:))
+        let relativePath = path.hasPrefix("/") ? String(path.dropFirst()) : path
+
+        // URL(string:relativeTo:) preserves percent-encoding without double-encoding.
+        // baseURL is normalized to directory URL in init, so relative resolution works correctly.
+        guard let url = URL(string: relativePath, relativeTo: baseURL),
+              var urlComponents = URLComponents(url: url, resolvingAgainstBaseURL: true) else {
             throw ToriiClientError.invalidURL(path)
         }
+
         if let items = queryItems, !items.isEmpty {
             urlComponents.queryItems = items
         }
-        guard let url = urlComponents.url else {
+        guard let finalURL = urlComponents.url else {
             throw ToriiClientError.invalidURL(path)
         }
-        var request = URLRequest(url: url)
+
+        var request = URLRequest(url: finalURL)
         request.httpMethod = method.rawValue
         request.httpBody = body
         headers.forEach { key, value in

@@ -5056,6 +5056,12 @@ pub struct Sumeragi {
     /// Optional cap on payload bytes per block when RBC is disabled (`None` = unlimited).
     #[config(env = "SUMERAGI_BLOCK_MAX_PAYLOAD_BYTES")]
     pub block_max_payload_bytes: Option<NonZeroUsize>,
+    /// Multiplier applied to the proposal queue scan budget (relative to max tx per block).
+    #[config(
+        env = "SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER",
+        default = "defaults::sumeragi::PROPOSAL_QUEUE_SCAN_MULTIPLIER"
+    )]
+    pub proposal_queue_scan_multiplier: NonZeroUsize,
     /// Allow empty-child recovery proposals when no transactions are queued.
     #[config(
         env = "SUMERAGI_EMPTY_CHILD_FALLBACK_ENABLED",
@@ -5666,6 +5672,7 @@ impl Sumeragi {
             collectors_redundant_send_r,
             block_max_transactions,
             block_max_payload_bytes,
+            proposal_queue_scan_multiplier,
             empty_child_fallback_enabled,
             msg_channel_cap_votes,
             msg_channel_cap_block_payload,
@@ -5982,6 +5989,7 @@ impl Sumeragi {
             collectors_redundant_send_r,
             block_max_transactions,
             block_max_payload_bytes,
+            proposal_queue_scan_multiplier,
             empty_child_fallback_enabled,
             msg_channel_cap_votes,
             msg_channel_cap_block_payload,

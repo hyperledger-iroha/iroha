@@ -1,6 +1,23 @@
 # Status
 
 ## Latest Updates
+- Serialization guard: `scripts/check_no_scale.sh` (pass).
+- Format: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Norito fixtures: re-export fixtures to `fixtures/norito_rpc`, refresh Android payloads/manifests, and sync Swift/Python fixtures.
+- Tests: `cargo test -p iroha_primitives numeric_canonical_roundtrip -- --nocapture`; `cargo test -p iroha_data_model --lib norito_rpc_fixture_manifest_roundtrips -- --nocapture`.
+- Localnet/NPoS: activate public-lane validators in genesis so all peers start active; update localnet bootstrap coverage and docs.
+- Tests: not run (per request).
+- Sumeragi/relay: make `try_incoming_block_message` block for `BlockCreated`/`Proposal` payloads to avoid drops under block-payload queue saturation; add unit coverage and update Sumeragi docs.
+- Tests: not run (not requested).
+- Numeric/Norito: drop legacy Numeric encoding support (first release), simplify canonical decode, and keep fixtures in the `(mantissa, scale)` layout; exporter no longer uses legacy guards.
+- Sumeragi/RBC: rebroadcast cached RBC chunks to the full roster (INIT still goes to roster peers) to recover READY quorum when initial fanout misses peers; update unit coverage and Sumeragi docs.
+- Tests: `cargo test -p iroha_core --lib rbc_payload_rebroadcast_sends_single_init_and_respects_cooldown -- --nocapture` (pass).
+- Localnet/stress: 4-peer DEBUG 1s with RLIMIT_NOFILE=16384 and ping load (`--count 50000 --parallel 128`); no subscriber-queue drops, Torii accepted ~11.6k tx on peer0, blocks stuck at height 1 with NEW_VIEW quorum waits and `not enough stake collected for QC` (view_change_install_total: peer0=6, others=1); CLI timed out after 5m.
+- Sumeragi/queue: add `sumeragi.proposal_queue_scan_multiplier` to bound proposal scans under load, ensure queue limits honor `nexus.fusion.exit_teu` even when Nexus is disabled, and set higher localnet TEU caps with the scan multiplier default; docs and unit coverage updated.
+- Localnet: ran 7-peer permissioned release localnet via `scripts/deploy_localnet.sh --peers 7`, submitted 10k ping txs (`--parallel 128 --no-wait`, ~21s), height advanced beyond 1 with backlog observed; localnet stopped.
+- Tests: not run (beyond the localnet run).
+- Workspace fixes: guard FastPQ sum proof tests with chain-discriminant lock, default Torii pre-auth caps without `Option` defaults, allow RLIMIT_NOFILE probe under `-D unsafe-code`, expose proposal queue pull helper for tests, update ConstVec NonZero tests to use supported Norito types, and remove an unused base64 import in the Norito RPC fixture test.
+- Tests: `cargo test --workspace` (resolved config/torii/iroha_core/const_vec compile errors; integration tests ran until the suite timed out; final rerun aborted by user request).
 - Sumeragi/queue: built `iroha_config` cleanly with `CARGO_TARGET_DIR=/tmp/iroha-target-quick cargo check -p iroha_config`; no `config(default)`/`Option` conflict observed.
 - Tests: `CARGO_TARGET_DIR=/tmp/iroha-target-quick cargo test -p iroha_core proposal_queue_scan_budget_limits_fetch -- --nocapture` (timed out after 300s while compiling).
 - Docs: clarify BigInt encoding and how Numeric stores mantissa/scale to avoid confusion about where the mantissa lives.

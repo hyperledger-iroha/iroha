@@ -87,6 +87,23 @@ overflow or overlong encodings are rejected.
 apply nested-length heuristics or reinterpret string payloads based on their
 contents.
 
+## Numeric and BigInt
+
+`BigInt` encodes as:
+
+```
+[len_u32][twos_complement_le_bytes]
+```
+
+`len_u32` is a 4-byte little-endian length of the following payload. The bytes
+are little-endian two's complement and must fit within the 512-bit cap.
+
+`Numeric` encodes as a struct `(mantissa, scale)`:
+- `mantissa` is a `BigInt` containing the raw integer value (no decimal scale
+  is embedded in the integer).
+- `scale` is a `u32` count of fractional digits (e.g., `1.88` is mantissa `188`,
+  scale `2`).
+
 ## Map Encoding
 
 Maps encode deterministically with the same active layout flags:

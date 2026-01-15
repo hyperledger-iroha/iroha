@@ -113,12 +113,16 @@ impl Actor {
         if !self.validate_and_record_vote(&vote, &signature_topology, &evidence_context, mode_tag) {
             return;
         }
-        self.cache_vote_roster(
-            vote.block_hash,
-            vote.height,
-            vote.view,
-            topology.as_ref().to_vec(),
-        );
+        if !matches!(vote.phase, Phase::NewView) {
+            // NEW_VIEW votes reference the highest QC block hash; caching would poison rosters for
+            // subsequent PREPARE/COMMIT votes on that block.
+            self.cache_vote_roster(
+                vote.block_hash,
+                vote.height,
+                vote.view,
+                topology.as_ref().to_vec(),
+            );
+        }
         self.prune_vote_caches_horizon(committed_height);
         match vote.phase {
             Phase::Prepare | Phase::Commit => {
