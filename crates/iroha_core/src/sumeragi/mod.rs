@@ -2111,9 +2111,9 @@ mod tests {
     }
 
     #[test]
-    fn incoming_block_message_routes_block_sync_update_via_block_queue() {
+    fn incoming_block_message_routes_block_sync_update_via_block_payload_queue() {
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
-        let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, _block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -2160,14 +2160,10 @@ mod tests {
 
         handle.incoming_block_message(BlockMessage::BlockSyncUpdate(update));
 
-        let received = block_rx
+        let received = block_payload_rx
             .try_recv()
-            .expect("BlockSyncUpdate should be enqueued to block channel");
+            .expect("BlockSyncUpdate should be enqueued to block payload channel");
         assert!(matches!(received, BlockMessage::BlockSyncUpdate(_)));
-        assert!(matches!(
-            block_payload_rx.try_recv(),
-            Err(mpsc::TryRecvError::Empty)
-        ));
         assert!(matches!(
             rbc_chunk_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
@@ -2176,10 +2172,10 @@ mod tests {
     }
 
     #[test]
-    fn incoming_block_message_blocks_block_sync_update_when_block_queue_full() {
+    fn incoming_block_message_blocks_block_sync_update_when_block_payload_queue_full() {
         const CAP: usize = 1;
-        let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(CAP);
-        let (block_tx, block_rx) = mpsc::sync_channel(CAP);
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(CAP);
+        let (block_tx, _block_rx) = mpsc::sync_channel(CAP);
         let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(CAP);
         let (vote_tx, _vote_rx) = mpsc::sync_channel(CAP);
         let (consensus_tx, _consensus_rx) = mpsc::sync_channel(CAP);
@@ -2193,7 +2189,7 @@ mod tests {
                 BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
                 BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
             )));
-        let block_tx_fill = block_tx.clone();
+        let block_payload_tx_fill = block_payload_tx.clone();
         let handle = SumeragiHandle::new(
             block_payload_tx,
             block_tx,
@@ -2226,9 +2222,9 @@ mod tests {
         let update = message::BlockSyncUpdate::from(&block);
         let update_overflow = message::BlockSyncUpdate::from(&block);
 
-        block_tx_fill
+        block_payload_tx_fill
             .send(BlockMessage::BlockSyncUpdate(update))
-            .expect("fill block channel");
+            .expect("fill block payload channel");
         let (done_tx, done_rx) = mpsc::channel();
         let handle_clone = handle.clone();
         let join = std::thread::spawn(move || {
@@ -2238,15 +2234,15 @@ mod tests {
 
         done_rx
             .recv_timeout(Duration::from_millis(200))
-            .expect_err("BlockSyncUpdate should block when block queue is full");
-        let received = block_rx
+            .expect_err("BlockSyncUpdate should block when block payload queue is full");
+        let received = block_payload_rx
             .try_recv()
-            .expect("original BlockSyncUpdate should remain in the block queue");
+            .expect("original BlockSyncUpdate should remain in the block payload queue");
         assert!(matches!(received, BlockMessage::BlockSyncUpdate(_)));
         done_rx
             .recv_timeout(Duration::from_millis(200))
             .expect("BlockSyncUpdate should enqueue after capacity frees");
-        let received = block_rx
+        let received = block_payload_rx
             .try_recv()
             .expect("overflow BlockSyncUpdate should be enqueued after capacity frees");
         assert!(matches!(received, BlockMessage::BlockSyncUpdate(_)));
@@ -2254,10 +2250,10 @@ mod tests {
     }
 
     #[test]
-    fn try_incoming_block_message_blocks_block_sync_update_when_block_queue_full() {
+    fn try_incoming_block_message_blocks_block_sync_update_when_block_payload_queue_full() {
         const CAP: usize = 1;
-        let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(CAP);
-        let (block_tx, block_rx) = mpsc::sync_channel(CAP);
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(CAP);
+        let (block_tx, _block_rx) = mpsc::sync_channel(CAP);
         let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(CAP);
         let (vote_tx, _vote_rx) = mpsc::sync_channel(CAP);
         let (consensus_tx, _consensus_rx) = mpsc::sync_channel(CAP);
@@ -2271,7 +2267,7 @@ mod tests {
                 BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
                 BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
             )));
-        let block_tx_fill = block_tx.clone();
+        let block_payload_tx_fill = block_payload_tx.clone();
         let handle = SumeragiHandle::new(
             block_payload_tx,
             block_tx,
@@ -2304,9 +2300,9 @@ mod tests {
         let update = message::BlockSyncUpdate::from(&block);
         let update_overflow = message::BlockSyncUpdate::from(&block);
 
-        block_tx_fill
+        block_payload_tx_fill
             .send(BlockMessage::BlockSyncUpdate(update))
-            .expect("fill block channel");
+            .expect("fill block payload channel");
         let (done_tx, done_rx) = mpsc::channel();
         let handle_clone = handle.clone();
         let join = std::thread::spawn(move || {
@@ -2316,15 +2312,15 @@ mod tests {
 
         done_rx
             .recv_timeout(Duration::from_millis(200))
-            .expect_err("BlockSyncUpdate should block when block queue is full");
-        let received = block_rx
+            .expect_err("BlockSyncUpdate should block when block payload queue is full");
+        let received = block_payload_rx
             .try_recv()
-            .expect("original BlockSyncUpdate should remain in the block queue");
+            .expect("original BlockSyncUpdate should remain in the block payload queue");
         assert!(matches!(received, BlockMessage::BlockSyncUpdate(_)));
         done_rx
             .recv_timeout(Duration::from_millis(200))
             .expect("BlockSyncUpdate should enqueue after capacity frees");
-        let received = block_rx
+        let received = block_payload_rx
             .try_recv()
             .expect("overflow BlockSyncUpdate should be enqueued after capacity frees");
         assert!(matches!(received, BlockMessage::BlockSyncUpdate(_)));
@@ -5341,12 +5337,12 @@ impl SumeragiHandle {
                 )
             }
             BlockMessage::BlockSyncUpdate(update) => {
-                // Block sync updates carry commit/QC evidence; dropping them can stall recovery.
+                // Block sync updates carry commit/QC evidence; prioritize with payload traffic.
                 enqueue_blocking(
-                    &self.block,
+                    &self.block_payload,
                     BlockMessage::BlockSyncUpdate(update),
                     "BlockSyncUpdate",
-                    status::WorkerQueueKind::Blocks,
+                    status::WorkerQueueKind::BlockPayload,
                 )
             }
             BlockMessage::RbcInit(init) => enqueue_blocking(

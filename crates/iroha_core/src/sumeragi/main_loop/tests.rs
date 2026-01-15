@@ -8440,6 +8440,34 @@ async fn rebroadcast_highest_pending_block_skips_aborted() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn rebroadcast_highest_pending_block_skips_on_relay_backpressure() {
+    let mut harness = test_actor_harness(4).await;
+    let payload_hash = Hash::new(b"payload");
+    let parent = sample_block(1, 0, None);
+    let pending = sample_block(2, 0, Some(parent.hash()));
+
+    harness.actor.pending.pending_blocks.insert(
+        pending.hash(),
+        PendingBlock::new(pending.clone(), payload_hash, 2, 0),
+    );
+
+    let _ = harness.background_rx.try_iter().count();
+    harness.actor.relay_backpressure.reset_to_current();
+    iroha_p2p::network::inc_queue_drop_for_test(true, false, 1);
+    harness
+        .actor
+        .rebroadcast_highest_pending_block(Instant::now());
+
+    let posts: Vec<_> = harness.background_rx.try_iter().collect();
+    assert!(
+        posts.is_empty(),
+        "expected pending block rebroadcast to pause under relay backpressure"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn rebroadcast_cooldown_uses_npos_block_time() {
     let harness = test_actor_harness(4).await;
     let block_time = {

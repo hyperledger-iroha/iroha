@@ -307,7 +307,8 @@ fn rbc_chunk_target_count(roster_len: usize, fanout_cap: Option<NonZeroUsize>) -
     } else {
         roster_len
     };
-    let min_targets = commit_quorum.saturating_sub(1).min(peers);
+    // Ensure a commit quorum of peers receives chunks even if the leader is excluded.
+    let min_targets = commit_quorum.min(peers);
     let desired = fanout_cap.map_or(min_targets, |cap| cap.get().min(peers));
     desired.max(min_targets)
 }
@@ -468,7 +469,7 @@ mod tests {
         let roster_len: usize = 7;
         let peers = roster_len.saturating_sub(1);
         let commit_quorum = ((roster_len.saturating_sub(1)) / 3).saturating_mul(2) + 1;
-        let expected_min = commit_quorum.saturating_sub(1).min(peers);
+        let expected_min = commit_quorum.min(peers);
         assert_eq!(rbc_chunk_target_count(roster_len, None), expected_min);
         assert_eq!(
             rbc_chunk_target_count(roster_len, NonZeroUsize::new(1)),

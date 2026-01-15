@@ -191,6 +191,15 @@ impl Actor {
             return;
         };
         let cooldown = self.payload_rebroadcast_cooldown();
+        if self.relay_backpressure_active(now, cooldown) {
+            trace!(
+                height,
+                view,
+                block = %hash,
+                "skipping pending block rebroadcast due to relay backpressure"
+            );
+            return;
+        }
         if !self.payload_rebroadcast_log.allow(hash, now, cooldown) {
             trace!(
                 height,

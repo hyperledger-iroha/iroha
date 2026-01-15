@@ -1,6 +1,15 @@
 # Status
 
 ## Latest Updates
+- Sumeragi/propose: trim transaction batches in bulk when a BlockCreated frame exceeds the consensus cap to avoid long proposal-assembly stalls under load; add unit coverage for the trimming helper.
+- Tests: `cargo test -p iroha_core trim_batch_for_size_cap_ -- --nocapture` (timed out after 120s during compilation).
+- Format: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Sumeragi/RBC: send initial RBC chunks to a commit-quorum-sized target set (minimum targets now match commit quorum) to reduce READY stalls; update unit coverage.
+- Tests: `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` (failed: `permissioned_localnet_reaches_100_blocks` stalled at height 12/13; logs in `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_iTuCnw`).
+- Sumeragi/relay: extend relay backpressure to include P2P post/broadcast drops, per-peer post overflows, topic-cap violations, and total subscriber-queue drops; gate pending-block rebroadcasts on relay backpressure to avoid view-change storms.
+- Tests: not run (per request).
+- Sumeragi/block sync: ensure BlockSyncUpdate gossip targets cover the full commit roster when the gossip limit allows, even if `online_peers` is incomplete; add unit coverage for target selection.
+- Tests: `cargo test -p iroha_core block_sync_update_targets_cover_full_roster_when_limit_allows -- --nocapture` (pass).
 - Serialization guard: `scripts/check_no_scale.sh` (pass).
 - Format: `cargo fmt --all` (stable rustfmt warns about unstable options).
 - Norito fixtures: re-export fixtures to `fixtures/norito_rpc`, refresh Android payloads/manifests, and sync Swift/Python fixtures.
@@ -2430,6 +2439,7 @@
 - Tests: `cargo test -p integration_tests trigger_completion_failure_reports_error -- --nocapture` (timed out after 600s; compile finished; test `events::notification::trigger_completion_failure_reports_error` still running).
 - Sumeragi NEW_VIEW quorum selection now filters senders against the active roster (only counts local if it is in-roster), with coverage for non-roster senders.
 - Sumeragi now rejects NEW_VIEW votes with mismatched highest QC hashes/heights before recording, with regressions for invalid highest fields.
+- Routed `BlockSyncUpdate` ingress through the block-payload queue so catch-up traffic shares the higher-priority drain path under load, with doc/test updates.
 - Localnet NPoS bootstrap now registers the nexus/ivm domains, gas tech account, XOR stake asset, and validator stake so fresh localnets can form QC without manual minting; peer configs wire stake/fee sinks and pipeline gas tech account IDs.
 - Localnet defaults raise the block max transactions cap to 10,000 and add coverage for the cap plus NPoS stake seeding.
 - Sumeragi now exposes `sumeragi.empty_child_fallback_enabled`; localnet configs keep it off and docs cover the toggle.
