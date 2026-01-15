@@ -1146,11 +1146,6 @@ impl Actor {
             .new_view_tracker
             .prune(committed_height);
 
-        let empty_child_ctx = if pending_queue_len == 0 {
-            self.empty_child_fallback(now)
-        } else {
-            None
-        };
         let da_enabled = self.runtime_da_enabled();
         let committed_qc = self.latest_committed_qc();
         let precommit_qc = precommit_qc_for_view_change(self.highest_qc, committed_qc);
@@ -1191,7 +1186,7 @@ impl Actor {
         let local_idx = self.local_validator_index_for_topology(&topology);
         let local_peer = local_idx.map(|_| local_peer_id.clone());
 
-        let has_work = pending_queue_len > 0 || empty_child_ctx.is_some();
+        let has_work = pending_queue_len > 0;
         if da_enabled && !has_work {
             trace!(
                 da_enabled,
@@ -1332,7 +1327,7 @@ impl Actor {
         if !has_work {
             trace!(
                 height = view_height,
-                "deferring proposal: no queued transactions or empty-child fallback"
+                "deferring proposal: no queued transactions"
             );
             return false;
         }
@@ -1396,19 +1391,6 @@ impl Actor {
             }
         }
 
-        if let Some(ref ctx) = empty_child_ctx {
-            if candidate
-                .as_ref()
-                .is_none_or(|selection| selection.key.0 <= ctx.highest_qc.height)
-            {
-                candidate = Some(NewViewSelection {
-                    key: (ctx.target_height, ctx.target_view),
-                    quorum: required,
-                    highest_qc: ctx.highest_qc,
-                });
-            }
-        }
-
         let Some(selection) = candidate.or_else(|| {
             // Fallback: bootstrap the first view using the latest committed QC when no NEW_VIEW
             // quorum has been observed yet. This prevents the pacemaker from stalling indefinitely
@@ -1447,9 +1429,6 @@ impl Actor {
         let (height, view_idx) = selection.key;
         let quorum = selection.quorum;
         let mut highest_qc = selection.highest_qc;
-        let empty_child_selected = empty_child_ctx
-            .as_ref()
-            .is_some_and(|ctx| ctx.target_height == height && ctx.target_view == view_idx);
 
         debug!(
             height,
@@ -1461,18 +1440,6 @@ impl Actor {
             new_view_slots = ?new_view_summary,
             "selected NEW_VIEW candidate"
         );
-        if empty_child_selected {
-            if let Some(ctx) = empty_child_ctx.as_ref() {
-                iroha_logger::info!(
-                    height = ctx.target_height,
-                    view = ctx.target_view,
-                    parent = %ctx.highest_qc.subject_block_hash,
-                    payload = %ctx.parent_payload_hash,
-                    "selected empty-child fallback to finalize locked parent"
-                );
-            }
-        }
-
         let epoch = self.epoch_for_height(height);
         let precommit_votes_at_view = self
             .vote_log
@@ -1871,12 +1838,6 @@ impl Actor {
             highest_view = highest_qc.view,
             "starting proposal assembly"
         );
-
-        if empty_child_selected {
-            if let Some(ctx) = empty_child_ctx.as_ref() {
-                self.record_empty_child_attempt(ctx.parent_payload_hash, now);
-            }
-        }
 
         let assembled = match self.assemble_and_broadcast_proposal(
             height,

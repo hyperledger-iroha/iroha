@@ -150,7 +150,6 @@ impl Actor {
             &mut self.qc_signer_tally,
             &mut self.voting_block,
             &mut self.pending_roster_activation,
-            &mut self.subsystems.propose.last_empty_child_attempt,
             &self.subsystems.da_rbc.rbc.status_handle,
             &mut self.subsystems.vrf,
             base_pacemaker_interval,

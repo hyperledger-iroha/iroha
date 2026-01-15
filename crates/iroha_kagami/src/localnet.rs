@@ -928,7 +928,6 @@ fn render_peer_config(
             i64::try_from(commit_inflight_timeout_ms).expect("commit_inflight_timeout_ms fits i64"),
         ),
     );
-    sumeragi.insert("empty_child_fallback_enabled".into(), Value::Boolean(false));
 
     let mut nexus = Table::new();
     nexus.insert("enabled".into(), Value::Boolean(nexus_enabled));
@@ -2058,10 +2057,6 @@ mod tests {
         assert_eq!(
             parsed.sumeragi.control_msg_channel_cap, LOCALNET_CONTROL_MSG_CHANNEL_CAP,
             "localnet should raise control_msg_channel_cap alongside data channels"
-        );
-        assert!(
-            !parsed.sumeragi.empty_child_fallback_enabled,
-            "localnet should disable empty-child fallback to avoid idle chatter"
         );
         assert_eq!(
             parsed.sumeragi.da_quorum_timeout_multiplier, LOCALNET_DA_QUORUM_TIMEOUT_MULTIPLIER,

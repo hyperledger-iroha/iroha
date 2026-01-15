@@ -1335,7 +1335,14 @@ impl Actor {
                 }
             }
         }
-        let active = self.effective_commit_topology();
+        let view = self.state.view();
+        let active = super::roster::derive_active_topology_for_mode(
+            &view,
+            self.common_config.trusted_peers.value(),
+            self.common_config.peer.id(),
+            consensus_mode,
+        );
+        drop(view);
         if height <= committed_height.saturating_add(1) && !active.is_empty() {
             if let Some(selection) = roster_selection() {
                 if !selection.roster.is_empty() {

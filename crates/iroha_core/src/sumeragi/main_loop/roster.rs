@@ -5,8 +5,9 @@ use std::{
     sync::Arc,
 };
 
+use iroha_config::parameters::actual::ConsensusMode;
 use iroha_crypto::blake2::{Blake2b512, Digest as BlakeDigest, digest::Update as BlakeUpdate};
-use iroha_data_model::{ChainId, Encode as _, peer::PeerId};
+use iroha_data_model::{ChainId, Encode as _, nexus::PublicLaneValidatorStatus, peer::PeerId};
 use iroha_logger::prelude::*;
 
 use crate::{
@@ -248,6 +249,37 @@ pub(super) fn derive_active_topology(
     derive_active_topology_from_views(view.world(), view.commit_topology().as_slice(), trusted, me)
 }
 
+/// Mode-aware roster selection with NPoS staking bootstrap.
+pub(super) fn derive_active_topology_for_mode(
+    view: &StateView<'_>,
+    trusted: &iroha_config::parameters::actual::TrustedPeers,
+    me: &PeerId,
+    consensus_mode: ConsensusMode,
+) -> Vec<PeerId> {
+    let commit_topology = view.commit_topology();
+    if matches!(consensus_mode, ConsensusMode::Npos) && commit_topology.is_empty() {
+        let mut roster = active_validator_roster_from_world(view.world());
+        if !roster.is_empty() {
+            roster = if trusted.pops.is_empty() {
+                roster
+            } else {
+                let filtered = filter_roster_with_pops(roster.clone(), &trusted.pops);
+                if filtered.len() < roster.len() {
+                    iroha_logger::warn!(
+                        pops = trusted.pops.len(),
+                        baseline = roster.len(),
+                        filtered = filtered.len(),
+                        "PoP map incomplete for NPoS validator roster; excluding peers without PoP"
+                    );
+                }
+                guard_pop_quorum(filtered, &roster, trusted.pops.len())
+            };
+            return canonicalize_roster(roster);
+        }
+    }
+    derive_active_topology_from_views(view.world(), commit_topology.as_slice(), trusted, me)
+}
+
 pub(super) fn derive_local_validator_index(
     view: &StateView<'_>,
     trusted: &iroha_config::parameters::actual::TrustedPeers,
@@ -259,6 +291,38 @@ pub(super) fn derive_local_validator_index(
             .inspect_err(|err| warn!(?idx, ?err, "local validator index exceeds u32 range"))
             .ok()
     })
+}
+
+pub(super) fn derive_local_validator_index_for_mode(
+    view: &StateView<'_>,
+    trusted: &iroha_config::parameters::actual::TrustedPeers,
+    me: &PeerId,
+    consensus_mode: ConsensusMode,
+) -> Option<ValidatorIndex> {
+    let roster = derive_active_topology_for_mode(view, trusted, me, consensus_mode);
+    roster.iter().position(|peer| peer == me).and_then(|idx| {
+        u32::try_from(idx)
+            .inspect_err(|err| warn!(?idx, ?err, "local validator index exceeds u32 range"))
+            .ok()
+    })
+}
+
+fn active_validator_roster_from_world(world: &impl WorldReadOnly) -> Vec<PeerId> {
+    let mut roster = BTreeSet::new();
+    for ((_lane_id, validator_id), record) in world.public_lane_validators().iter() {
+        if !matches!(record.status, PublicLaneValidatorStatus::Active) {
+            continue;
+        }
+        let Some(pk) = validator_id.try_signatory() else {
+            continue;
+        };
+        let peer_id = PeerId::from(pk.clone());
+        if !roster_member_allowed_bls(&peer_id) {
+            continue;
+        }
+        roster.insert(peer_id);
+    }
+    roster.into_iter().collect()
 }
 
 pub(super) fn compute_membership_view_hash(
@@ -311,8 +375,16 @@ mod tests {
         query::store::LiveQueryStore,
         state::{State, World},
     };
+    use iroha_config::parameters::actual::ConsensusMode;
     use iroha_crypto::{Algorithm, KeyPair, bls_normal_pop_prove};
-    use iroha_data_model::peer::Peer;
+    use iroha_data_model::{
+        account::AccountId,
+        metadata::Metadata,
+        nexus::{LaneId, PublicLaneValidatorRecord, PublicLaneValidatorStatus},
+        peer::Peer,
+        prelude::DomainId,
+    };
+    use iroha_primitives::numeric::Numeric;
     use iroha_primitives::unique_vec::UniqueVec;
 
     use super::*;
@@ -422,6 +494,113 @@ mod tests {
         let roster = derive_active_topology(&view, &trusted, &peers[0]);
 
         assert_eq!(roster, peers);
+    }
+
+    #[test]
+    fn active_topology_for_npos_prefers_active_validators() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+
+        let domain: DomainId = "validators".parse().expect("domain id");
+        let keypair_active = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair_pending = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let account_active = AccountId::new(domain.clone(), keypair_active.public_key().clone());
+        let account_pending = AccountId::new(domain, keypair_pending.public_key().clone());
+        let peer_active = PeerId::new(keypair_active.public_key().clone());
+
+        {
+            let mut block = state.world.public_lane_validators.block();
+            block.insert(
+                (LaneId::new(1), account_active.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::new(1),
+                    validator: account_active.clone(),
+                    stake_account: account_active,
+                    total_stake: Numeric::new(10, 0),
+                    self_stake: Numeric::new(10, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+            block.insert(
+                (LaneId::new(2), account_pending.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::new(2),
+                    validator: account_pending.clone(),
+                    stake_account: account_pending,
+                    total_stake: Numeric::new(15, 0),
+                    self_stake: Numeric::new(15, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::PendingActivation(3),
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+            block.commit();
+        }
+
+        let trusted = iroha_config::parameters::actual::TrustedPeers {
+            myself: Peer::new("127.0.0.1:10000".parse().expect("addr"), peer_active.clone()),
+            others: UniqueVec::new(),
+            pops: BTreeMap::new(),
+        };
+        let view = state.view();
+        let roster =
+            derive_active_topology_for_mode(&view, &trusted, &peer_active, ConsensusMode::Npos);
+
+        assert_eq!(roster, vec![peer_active]);
+    }
+
+    #[test]
+    fn local_validator_index_for_mode_uses_active_validator_roster() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+
+        let domain: DomainId = "validators".parse().expect("domain id");
+        let keypair_active = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let account_active = AccountId::new(domain, keypair_active.public_key().clone());
+        let peer_active = PeerId::new(keypair_active.public_key().clone());
+
+        {
+            let mut block = state.world.public_lane_validators.block();
+            block.insert(
+                (LaneId::new(1), account_active.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::new(1),
+                    validator: account_active.clone(),
+                    stake_account: account_active,
+                    total_stake: Numeric::new(8, 0),
+                    self_stake: Numeric::new(8, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+            block.commit();
+        }
+
+        let trusted = iroha_config::parameters::actual::TrustedPeers {
+            myself: Peer::new("127.0.0.1:10000".parse().expect("addr"), peer_active.clone()),
+            others: UniqueVec::new(),
+            pops: BTreeMap::new(),
+        };
+        let view = state.view();
+        let idx = derive_local_validator_index_for_mode(
+            &view,
+            &trusted,
+            &peer_active,
+            ConsensusMode::Npos,
+        );
+
+        assert_eq!(idx, ValidatorIndex::try_from(0).ok());
     }
 
     #[test]

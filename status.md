@@ -1,6 +1,12 @@
 # Status
 
 ## Latest Updates
+- Consensus/NPoS: prefer active public-lane validators for NPoS rosters when commit topology is empty, use the mode-aware roster for local validator indices, and filter stake maps to active validators only; add unit coverage for NPoS roster selection and inactive-stake filtering.
+- Network ingress: auto-scale the consensus ingress RBC session limit from `rbc_session_ttl` and block time to avoid drops on fast pipelines; add unit coverage for the scaling helper.
+- Docs: note NPoS roster bootstrap from staking and clarify that RBC session limits auto-raise for fast pipelines.
+- Tests: not run (per request).
+- Tests: `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` (failed: `permissioned_localnet_reaches_100_blocks` stalled at height 18; logs in `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_GaMzlE`).
+- Sumeragi/RBC: height 18 READY quorum stalled; all peers logged local READY sends but leader only accepted senders `[3, 0]` and no drop/stash/invalid READY logs appeared, pointing to missing READY delivery from other peers.
 - Sumeragi/propose: trim transaction batches in bulk when a BlockCreated frame exceeds the consensus cap to avoid long proposal-assembly stalls under load; add unit coverage for the trimming helper.
 - Tests: `cargo test -p iroha_core trim_batch_for_size_cap_ -- --nocapture` (timed out after 120s during compilation).
 - Format: `cargo fmt --all` (stable rustfmt warns about unstable options).
@@ -2442,7 +2448,7 @@
 - Routed `BlockSyncUpdate` ingress through the block-payload queue so catch-up traffic shares the higher-priority drain path under load, with doc/test updates.
 - Localnet NPoS bootstrap now registers the nexus/ivm domains, gas tech account, XOR stake asset, and validator stake so fresh localnets can form QC without manual minting; peer configs wire stake/fee sinks and pipeline gas tech account IDs.
 - Localnet defaults raise the block max transactions cap to 10,000 and add coverage for the cap plus NPoS stake seeding.
-- Sumeragi now exposes `sumeragi.empty_child_fallback_enabled`; localnet configs keep it off and docs cover the toggle.
+- Removed empty-child fallback configuration/logic so pacemaker stays idle without queued work.
 - Tests: not run (per request).
 - Tests: `CARGO_TARGET_DIR=target-codex-queries-mod cargo test -p integration_tests --test mod queries::smart_contract::live_query_is_dropped_after_smart_contract_end -- --nocapture --test-threads=1` (passed).
 - Made `iroha_test_network` shutdown signalling sticky and cancellation-aware to prevent teardown timeouts (watch-based fatal signal + status poll cancellation on shutdown).

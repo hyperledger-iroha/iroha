@@ -916,7 +916,6 @@ fn test_sumeragi_config() -> SumeragiConfig {
         block_max_payload_bytes: None,
         proposal_queue_scan_multiplier:
             iroha_config::parameters::defaults::sumeragi::PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-        empty_child_fallback_enabled: true,
         msg_channel_cap_votes: iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_VOTES,
         msg_channel_cap_block_payload:
             iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_BLOCK_PAYLOAD,
@@ -2460,228 +2459,6 @@ async fn realigns_locked_qc_when_diverged_from_committed_tip() {
     let locked = actor.locked_qc.expect("locked qc updated");
     assert_eq!(locked.subject_block_hash, block2.hash());
     assert_eq!(locked.height, 2);
-
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn empty_child_fallback_uses_committed_parent_when_pending_missing() {
-    let _guard = super::status::qc_status_test_guard();
-    let mut harness = test_actor_harness(4).await;
-    let actor = &mut harness.actor;
-
-    let block1 = sample_block(1, 0, None);
-    let block2 = sample_block(2, 0, Some(block1.hash()));
-
-    actor.kura.store_block(block1.clone()).expect("store block");
-    actor.kura.store_block(block2.clone()).expect("store block");
-
-    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
-    state.push_block_hash_for_testing(block1.hash());
-    state.push_block_hash_for_testing(block2.hash());
-
-    actor.locked_qc = Some(QcHeaderRef {
-        phase: Phase::Commit,
-        subject_block_hash: block2.hash(),
-        height: 2,
-        view: 0,
-        epoch: 0,
-    });
-    super::status::set_locked_qc(2, 0, Some(block2.hash()));
-
-    let now = Instant::now();
-    let block_time = actor
-        .state
-        .view()
-        .world()
-        .parameters()
-        .sumeragi()
-        .block_time();
-    let backoff = block_time.max(Duration::from_millis(1));
-    let last_success = now
-        .checked_sub(backoff.saturating_add(Duration::from_millis(1)))
-        .unwrap_or(now);
-    actor.subsystems.propose.last_successful_proposal = Some(last_success);
-
-    let ctx = actor
-        .empty_child_fallback(now)
-        .expect("empty child fallback");
-    assert_eq!(ctx.target_height, 3);
-    assert_eq!(ctx.target_view, 0);
-    let expected_payload = Hash::new(super::block_payload_bytes(&block2));
-    assert_eq!(ctx.parent_payload_hash, expected_payload);
-
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn empty_child_fallback_respects_config_toggle() {
-    let _guard = super::status::qc_status_test_guard();
-    let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.empty_child_fallback_enabled = false;
-    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
-    let actor = &mut harness.actor;
-
-    let block1 = sample_block(1, 0, None);
-    let block2 = sample_block(2, 0, Some(block1.hash()));
-
-    actor.kura.store_block(block1.clone()).expect("store block");
-    actor.kura.store_block(block2.clone()).expect("store block");
-
-    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
-    state.push_block_hash_for_testing(block1.hash());
-    state.push_block_hash_for_testing(block2.hash());
-
-    actor.locked_qc = Some(QcHeaderRef {
-        phase: Phase::Commit,
-        subject_block_hash: block2.hash(),
-        height: 2,
-        view: 0,
-        epoch: 0,
-    });
-    super::status::set_locked_qc(2, 0, Some(block2.hash()));
-
-    let now = Instant::now();
-    let block_time = actor
-        .state
-        .view()
-        .world()
-        .parameters()
-        .sumeragi()
-        .block_time();
-    let backoff = block_time.max(Duration::from_millis(1));
-    let last_success = now
-        .checked_sub(backoff.saturating_add(Duration::from_millis(1)))
-        .unwrap_or(now);
-    actor.subsystems.propose.last_successful_proposal = Some(last_success);
-
-    assert!(
-        actor.empty_child_fallback(now).is_none(),
-        "empty-child fallback should be disabled when config opt-out is set"
-    );
-
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn empty_child_fallback_ignores_aborted_pending_child() {
-    let _guard = super::status::qc_status_test_guard();
-    let mut harness = test_actor_harness(4).await;
-    let actor = &mut harness.actor;
-
-    let block1 = sample_block(1, 0, None);
-    let block2 = sample_block(2, 0, Some(block1.hash()));
-
-    actor.kura.store_block(block1.clone()).expect("store block");
-    actor.kura.store_block(block2.clone()).expect("store block");
-
-    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
-    state.push_block_hash_for_testing(block1.hash());
-    state.push_block_hash_for_testing(block2.hash());
-
-    actor.locked_qc = Some(QcHeaderRef {
-        phase: Phase::Commit,
-        subject_block_hash: block2.hash(),
-        height: 2,
-        view: 0,
-        epoch: 0,
-    });
-    super::status::set_locked_qc(2, 0, Some(block2.hash()));
-
-    let pending_child = sample_block(3, 0, Some(block2.hash()));
-    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&pending_child));
-    let mut pending = PendingBlock::new(pending_child, payload_hash, 3, 0);
-    pending.mark_aborted();
-    actor
-        .pending
-        .pending_blocks
-        .insert(pending.block.hash(), pending);
-
-    let now = Instant::now();
-    let block_time = actor
-        .state
-        .view()
-        .world()
-        .parameters()
-        .sumeragi()
-        .block_time();
-    let backoff = block_time.max(Duration::from_millis(1));
-    let last_success = now
-        .checked_sub(backoff.saturating_add(Duration::from_millis(1)))
-        .unwrap_or(now);
-    actor.subsystems.propose.last_successful_proposal = Some(last_success);
-
-    assert!(
-        actor.empty_child_fallback(now).is_some(),
-        "aborted pending child should not block empty-child fallback"
-    );
-
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn empty_child_fallback_ignores_prevote_highest_qc() {
-    let _guard = super::status::qc_status_test_guard();
-    let mut harness = test_actor_harness(4).await;
-    let actor = &mut harness.actor;
-
-    let block1 = sample_block(1, 0, None);
-    let block2 = sample_block(2, 0, Some(block1.hash()));
-
-    actor.kura.store_block(block1.clone()).expect("store block");
-    actor.kura.store_block(block2.clone()).expect("store block");
-
-    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
-    state.push_block_hash_for_testing(block1.hash());
-    state.push_block_hash_for_testing(block2.hash());
-
-    let lock = QcHeaderRef {
-        phase: Phase::Commit,
-        subject_block_hash: block2.hash(),
-        height: 2,
-        view: 0,
-        epoch: 0,
-    };
-    actor.locked_qc = Some(lock);
-    super::status::set_locked_qc(2, 0, Some(block2.hash()));
-
-    let child_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB1; Hash::LENGTH]));
-    let prevote = QcHeaderRef {
-        phase: Phase::Prepare,
-        subject_block_hash: child_hash,
-        height: 3,
-        view: 1,
-        epoch: 0,
-    };
-    actor.highest_qc = Some(prevote);
-    actor.pending.pending_processing.set(Some(child_hash));
-    actor
-        .pending
-        .pending_processing_parent
-        .set(Some(block2.hash()));
-
-    let now = Instant::now();
-    let block_time = actor
-        .state
-        .view()
-        .world()
-        .parameters()
-        .sumeragi()
-        .block_time();
-    let backoff = block_time.max(Duration::from_millis(1));
-    let last_success = now
-        .checked_sub(backoff.saturating_add(Duration::from_millis(1)))
-        .unwrap_or(now);
-    actor.subsystems.propose.last_successful_proposal = Some(last_success);
-
-    let ctx = actor
-        .empty_child_fallback(now)
-        .expect("empty child fallback");
-
-    assert_eq!(ctx.highest_qc, lock);
-    assert_eq!(ctx.target_height, lock.height.saturating_add(1));
-    assert_eq!(ctx.highest_qc.height.saturating_add(1), ctx.target_height);
 
     harness.shutdown.send();
 }
@@ -16720,34 +16497,6 @@ async fn trim_block_sync_update_drops_commit_votes_to_fit() {
 }
 
 #[test]
-fn empty_child_backoff_respects_parent_and_deadline() {
-    let now = Instant::now();
-    let backoff = Duration::from_secs(5);
-    let parent_a = Hash::prehashed([0xAA; 32]);
-    let parent_b = Hash::prehashed([0xBB; 32]);
-    let past = now
-        .checked_sub(backoff.saturating_add(Duration::from_secs(1)))
-        .expect("subtraction within reasonable window");
-
-    assert!(
-        super::empty_child_backoff_allows(None, parent_a, now, backoff),
-        "first emission should be allowed"
-    );
-    assert!(
-        super::empty_child_backoff_allows(Some((parent_a, past)), parent_a, now, backoff),
-        "backoff window elapsed should allow retry"
-    );
-    assert!(
-        !super::empty_child_backoff_allows(Some((parent_a, now)), parent_a, now, backoff),
-        "same parent within window should be rate-limited"
-    );
-    assert!(
-        super::empty_child_backoff_allows(Some((parent_a, now)), parent_b, now, backoff),
-        "different parent payload should bypass rate-limit"
-    );
-}
-
-#[test]
 fn payload_rebroadcast_throttle_enforces_cooldown_per_block() {
     let mut throttle = super::PayloadRebroadcastThrottle::default();
     let hash_a = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAA; 32]));
@@ -23734,7 +23483,7 @@ async fn force_view_change_if_idle_skips_when_no_work() {
 
     assert!(
         !actor.force_view_change_if_idle(now),
-        "idle view change should not trigger without queued work or empty-child recovery"
+        "idle view change should not trigger without queued work"
     );
 
     let snapshot = super::status::snapshot().view_change_causes;

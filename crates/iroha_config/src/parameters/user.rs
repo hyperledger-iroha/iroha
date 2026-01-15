@@ -5062,12 +5062,6 @@ pub struct Sumeragi {
         default = "defaults::sumeragi::PROPOSAL_QUEUE_SCAN_MULTIPLIER"
     )]
     pub proposal_queue_scan_multiplier: NonZeroUsize,
-    /// Allow empty-child recovery proposals when no transactions are queued.
-    #[config(
-        env = "SUMERAGI_EMPTY_CHILD_FALLBACK_ENABLED",
-        default = "defaults::sumeragi::EMPTY_CHILD_FALLBACK_ENABLED"
-    )]
-    pub empty_child_fallback_enabled: bool,
     /// Capacity for the vote message channel.
     pub msg_channel_cap_votes: Option<NonZeroUsize>,
     /// Capacity for the block payload channel.
@@ -5673,7 +5667,6 @@ impl Sumeragi {
             block_max_transactions,
             block_max_payload_bytes,
             proposal_queue_scan_multiplier,
-            empty_child_fallback_enabled,
             msg_channel_cap_votes,
             msg_channel_cap_block_payload,
             msg_channel_cap_rbc_chunks,
@@ -5990,7 +5983,6 @@ impl Sumeragi {
             block_max_transactions,
             block_max_payload_bytes,
             proposal_queue_scan_multiplier,
-            empty_child_fallback_enabled,
             msg_channel_cap_votes,
             msg_channel_cap_block_payload,
             msg_channel_cap_rbc_chunks,
