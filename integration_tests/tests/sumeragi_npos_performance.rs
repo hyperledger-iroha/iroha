@@ -763,11 +763,18 @@ async fn npos_pacemaker_jitter_within_band() -> Result<()> {
         return Ok(());
     };
 
+    let client = network.client();
+    let status = client.get_status()?;
+    for idx in status.blocks..2 {
+        client.submit_blocking(Log::new(
+            Level::INFO,
+            format!("pacemaker jitter seed {idx}"),
+        ))?;
+    }
     network
         .ensure_blocks_with(|height| height.total >= 2)
         .await?;
 
-    let client = network.client();
     let metrics_url = client
         .torii_url
         .join("metrics")

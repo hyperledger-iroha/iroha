@@ -546,11 +546,19 @@ fn migration_should_cause_upgrade_event() {
     };
     let client = network.client();
 
+    let event_timeout = network.sync_timeout();
     let mut events = rt
         .block_on(async {
-            client
-                .listen_for_events_async([ExecutorEventFilter::new()])
-                .await
+            tokio::time::timeout(
+                event_timeout,
+                client.listen_for_events_async([ExecutorEventFilter::new()]),
+            )
+            .await
+            .map_err(|_| {
+                eyre!(
+                    "migration_should_cause_upgrade_event: timed out opening executor event stream"
+                )
+            })?
         })
         .expect("executor events stream should open");
 
@@ -579,6 +587,7 @@ fn migration_should_cause_upgrade_event() {
         .map_err(|_| eyre!("timed out waiting for upgrade event"))?
     });
     result.expect("should receive upgraded event immediately after upgrade");
+    rt.block_on(events.close());
 }
 
 #[test]

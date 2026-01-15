@@ -1869,6 +1869,8 @@ pub struct Queue {
     pub capacity_per_user: NonZeroUsize,
     /// Transaction time-to-live.
     pub transaction_time_to_live: Duration,
+    /// Minimum interval between expired-transaction sweeps.
+    pub expired_cull_interval: Duration,
 }
 
 /// Nexus staking configuration (public lanes).
@@ -3423,6 +3425,7 @@ impl Default for Queue {
             transaction_time_to_live: defaults::queue::TRANSACTION_TIME_TO_LIVE,
             capacity: defaults::queue::CAPACITY,
             capacity_per_user: defaults::queue::CAPACITY_PER_USER,
+            expired_cull_interval: defaults::queue::EXPIRED_CULL_INTERVAL,
         }
     }
 }
@@ -3552,6 +3555,8 @@ pub struct Sumeragi {
     pub block_max_transactions: Option<NonZeroUsize>,
     /// Optional cap on block payload bytes when RBC is disabled (None = unlimited).
     pub block_max_payload_bytes: Option<NonZeroUsize>,
+    /// Whether to allow empty-child recovery proposals when no transactions are queued.
+    pub empty_child_fallback_enabled: bool,
     /// Capacity for the vote message channel.
     pub msg_channel_cap_votes: usize,
     /// Capacity for the block payload channel.

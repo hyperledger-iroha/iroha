@@ -71,7 +71,7 @@ Estado actual:
 
 - Codificación/decodificación determinista con una cabecera fija (magic, versión,
   esquema de 16 bytes, compresión, longitud, CRC64 y flags).
-- Checksum CRC64‑ECMA con aceleración seleccionada en tiempo de ejecución:
+- Checksum CRC64-XZ con aceleración seleccionada en tiempo de ejecución:
   - PCLMULQDQ en x86_64 (multiplicación sin acarreo) + reducción Barrett sobre bloques de 32 bytes.
   - PMULL en aarch64 con el mismo plegado.
   - Implementaciones “slicing‑by‑8” y de operaciones bit a bit como rutas portables.

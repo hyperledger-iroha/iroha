@@ -944,8 +944,12 @@ mod tests {
                 collectors_k: iroha_config::parameters::defaults::sumeragi::COLLECTORS_K,
                 collectors_redundant_send_r:
                     iroha_config::parameters::defaults::sumeragi::COLLECTORS_REDUNDANT_SEND_R,
-                block_max_transactions: iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_TRANSACTIONS,
-                block_max_payload_bytes: iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES,
+                block_max_transactions:
+                    iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_TRANSACTIONS,
+                block_max_payload_bytes:
+                    iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES,
+                empty_child_fallback_enabled:
+                    iroha_config::parameters::defaults::sumeragi::EMPTY_CHILD_FALLBACK_ENABLED,
                 msg_channel_cap_votes:
                     iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_VOTES,
                 msg_channel_cap_block_payload:

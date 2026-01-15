@@ -2806,6 +2806,9 @@ export class ToriiClient {
       "/v1/pipeline/transactions/status",
       { params: { hash: normalizedHash }, retryProfile: "pipeline" },
     );
+    if (response.status === 404) {
+      return null;
+    }
     await this._expectStatus(response, [200, 202, 204]);
     const payload = await this._maybeJson(response);
     if (!payload) {

@@ -62,14 +62,32 @@ import org.hyperledger.iroha.android.tx.SignedTransactionHasher;
 import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
 import org.hyperledger.iroha.android.tx.TransactionBuilder;
 import org.hyperledger.iroha.android.SigningException;
+import org.hyperledger.iroha.norito.NoritoAdapters;
+import org.hyperledger.iroha.norito.NoritoCodec;
+import org.hyperledger.iroha.norito.NoritoDecoder;
+import org.hyperledger.iroha.norito.NoritoHeader;
+import org.hyperledger.iroha.norito.TypeAdapter;
+import org.junit.Test;
 
 public final class NoritoCodecAdapterTests {
 
   private NoritoCodecAdapterTests() {}
 
+  @Test
+  public void runCodecScenarios() throws NoritoException {
+    runAll();
+  }
+
   public static void main(final String[] args) throws NoritoException {
+    runAll();
+  }
+
+  private static void runAll() throws NoritoException {
     javaCodecRoundTripsPayload();
     javaCodecSupportsInstructionsVariant();
+    javaCodecSupportsWireInstructionPayloads();
+    javaCodecEncodesIvmBytecodeLayout();
+    javaCodecEncodesInstructionLayout();
     javaCodecHydratesTypedRegisterInstructions();
     javaCodecHydratesTransferAssetInstruction();
     javaCodecHydratesTransferNftInstruction();
@@ -147,6 +165,127 @@ public final class NoritoCodecAdapterTests {
       assert expected.kind() == actual.kind() : "Instruction kind mismatch";
       assert expected.arguments().equals(actual.arguments()) : "Instruction arguments mismatch";
     }
+  }
+
+  private static void javaCodecSupportsWireInstructionPayloads() throws NoritoException {
+    final byte[] wirePayload =
+        NoritoCodec.encode("wire-payload", "iroha.test.WirePayload", NoritoAdapters.stringAdapter());
+    final InstructionBox wireInstruction =
+        InstructionBox.fromWirePayload("iroha.custom", wirePayload);
+
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setChainId("00000011")
+            .setAuthority("wire@wonderland")
+            .setCreationTimeMs(1_735_111_111_123L)
+            .setExecutable(Executable.instructions(listOf(wireInstruction)))
+            .build();
+
+    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+    final byte[] encoded = adapter.encodeTransaction(payload);
+    final TransactionPayload decoded = adapter.decodeTransaction(encoded);
+
+    final InstructionBox decodedBox = decoded.executable().instructions().get(0);
+    assert decodedBox.payload() instanceof InstructionBox.WirePayload
+        : "Wire payload instructions must decode to wire payloads";
+    final InstructionBox.WirePayload decodedWire = (InstructionBox.WirePayload) decodedBox.payload();
+    assert "iroha.custom".equals(decodedWire.wireName()) : "Wire name must round-trip";
+    assert Arrays.equals(wirePayload, decodedWire.payloadBytes())
+        : "Wire payload bytes must round-trip";
+  }
+
+  private static void javaCodecEncodesIvmBytecodeLayout() throws NoritoException {
+    final byte[] ivmBytes = new byte[] {0x01, 0x02, 0x03, 0x04};
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setChainId("00000012")
+            .setAuthority("ivm@wonderland")
+            .setCreationTimeMs(1_735_222_222_123L)
+            .setExecutable(Executable.ivm(ivmBytes))
+            .build();
+
+    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+    final byte[] encoded = adapter.encodeTransaction(payload);
+
+    final NoritoDecoder decoder = new NoritoDecoder(encoded, NoritoHeader.MINOR_VERSION);
+    readField(decoder, "payload.chain_id");
+    readField(decoder, "payload.authority");
+    readField(decoder, "payload.creation_time_ms");
+    final byte[] executableField = readField(decoder, "payload.executable");
+    readField(decoder, "payload.time_to_live_ms");
+    readField(decoder, "payload.nonce");
+    readField(decoder, "payload.metadata");
+    assert decoder.remaining() == 0 : "Payload has trailing bytes";
+
+    final NoritoDecoder execDecoder = new NoritoDecoder(executableField, NoritoHeader.MINOR_VERSION);
+    final TypeAdapter<Long> uint32 = NoritoAdapters.uint(32);
+    final long tag = uint32.decode(execDecoder);
+    assert tag == 1L : "Executable should be Ivm";
+    final byte[] ivmField = readField(execDecoder, "payload.executable.ivm");
+    assert execDecoder.remaining() == 0 : "Executable has trailing bytes";
+
+    final NoritoDecoder ivmDecoder = new NoritoDecoder(ivmField, NoritoHeader.MINOR_VERSION);
+    final byte[] inner = readField(ivmDecoder, "payload.executable.ivm.bytes");
+    final byte[] decodedIvm =
+        decodeFieldPayload(inner, NoritoAdapters.byteVecAdapter(), "payload.executable.ivm.bytes");
+    assert Arrays.equals(ivmBytes, decodedIvm) : "IVM bytecode bytes should match";
+    assert ivmDecoder.remaining() == 0 : "IVM bytecode has trailing bytes";
+  }
+
+  private static void javaCodecEncodesInstructionLayout() throws NoritoException {
+    final byte[] wirePayload =
+        NoritoCodec.encode("layout", "iroha.test.Layout", NoritoAdapters.stringAdapter());
+    final InstructionBox wireInstruction =
+        InstructionBox.fromWirePayload("iroha.custom.layout", wirePayload);
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setChainId("00000013")
+            .setAuthority("layout@wonderland")
+            .setCreationTimeMs(1_735_222_333_123L)
+            .setExecutable(Executable.instructions(listOf(wireInstruction)))
+            .build();
+
+    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+    final byte[] encoded = adapter.encodeTransaction(payload);
+
+    final NoritoDecoder decoder = new NoritoDecoder(encoded, NoritoHeader.MINOR_VERSION);
+    readField(decoder, "payload.chain_id");
+    readField(decoder, "payload.authority");
+    readField(decoder, "payload.creation_time_ms");
+    final byte[] executableField = readField(decoder, "payload.executable");
+    readField(decoder, "payload.time_to_live_ms");
+    readField(decoder, "payload.nonce");
+    readField(decoder, "payload.metadata");
+    assert decoder.remaining() == 0 : "Payload has trailing bytes";
+
+    final NoritoDecoder execDecoder = new NoritoDecoder(executableField, NoritoHeader.MINOR_VERSION);
+    final TypeAdapter<Long> uint32 = NoritoAdapters.uint(32);
+    final long tag = uint32.decode(execDecoder);
+    assert tag == 0L : "Executable should be Instructions";
+    final byte[] instructionsField = readField(execDecoder, "payload.executable.instructions");
+    assert execDecoder.remaining() == 0 : "Executable has trailing bytes";
+
+    final NoritoDecoder listDecoder = new NoritoDecoder(instructionsField, NoritoHeader.MINOR_VERSION);
+    final long count = listDecoder.readLength(listDecoder.compactSeqLenActive());
+    assert count == 1L : "Instruction list should contain one element";
+    final long elementLength = listDecoder.readLength(listDecoder.compactLenActive());
+    assert elementLength > 0 : "Instruction element must not be empty";
+    if (elementLength > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException("Instruction element too large");
+    }
+    final byte[] elementPayload = listDecoder.readBytes((int) elementLength);
+    assert listDecoder.remaining() == 0 : "Instruction list has trailing bytes";
+
+    final NoritoDecoder elementDecoder = new NoritoDecoder(elementPayload, NoritoHeader.MINOR_VERSION);
+    final byte[] nameField = readField(elementDecoder, "instruction.name");
+    final byte[] payloadField = readField(elementDecoder, "instruction.payload");
+    assert elementDecoder.remaining() == 0 : "Instruction element has trailing bytes";
+    final String decodedName =
+        decodeFieldPayload(nameField, NoritoAdapters.stringAdapter(), "instruction.name");
+    final byte[] decodedPayload =
+        decodeFieldPayload(payloadField, NoritoAdapters.byteVecAdapter(), "instruction.payload");
+    assert "iroha.custom.layout".equals(decodedName) : "Instruction name must match wire payload";
+    assert Arrays.equals(wirePayload, decodedPayload) : "Instruction payload must match wire bytes";
   }
 
   private static void javaCodecHydratesTypedRegisterInstructions() throws NoritoException {
@@ -1171,6 +1310,24 @@ public final class NoritoCodecAdapterTests {
     assert updateInstruction.equals(decodedUpdate)
         : "UpdateVerifyingKey fields must round-trip";
 
+  }
+
+  private static byte[] readField(final NoritoDecoder decoder, final String field) {
+    final long length = decoder.readLength(decoder.compactLenActive());
+    if (length > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException(field + " length too large: " + length);
+    }
+    return decoder.readBytes((int) length);
+  }
+
+  private static <T> T decodeFieldPayload(
+      final byte[] payload, final TypeAdapter<T> adapter, final String field) {
+    final NoritoDecoder decoder = new NoritoDecoder(payload, NoritoHeader.MINOR_VERSION);
+    final T value = adapter.decode(decoder);
+    if (decoder.remaining() != 0) {
+      throw new IllegalArgumentException(field + ": trailing bytes after field payload");
+    }
+    return value;
   }
 
   private static byte[] emitFixtureMetadata(

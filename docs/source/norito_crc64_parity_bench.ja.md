@@ -12,7 +12,7 @@ translator: manual
 
 このガイドは、Norito の CRC64 がハードウェア・フォールバック間で一致することを確認し、CRC64 やエンコード／デコード性能を手元の環境で測定する手順をまとめたものです。
 
-Norito は `crc64fast` クレートを用いて CRC64-ECMA (`0x42F0E1EBA9EA3693`) を計算します。`hardware_crc64` と `crc64_fallback` は同一実装であり、プラットフォーム間で一貫した結果が得られます。
+Norito は `crc64fast` クレートを用いて CRC64-XZ (`0x42F0E1EBA9EA3693`) を計算します。`hardware_crc64` と `crc64_fallback` は同一実装であり、プラットフォーム間で一貫した結果が得られます。
 
 ## 1) クイックパリティチェック
 

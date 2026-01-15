@@ -33,7 +33,7 @@ Every Norito-RPC payload begins with the canonical header defined in `crates/nor
 | 6      | Schema hash | `[u8;16]` | Deterministic hash of the DTO (see Section 3). |
 | 22     | Compression | `u8`      | `0 = none`, `1 = zstd`. |
 | 23     | Length      | `u64`     | Uncompressed payload length in bytes. |
-| 31     | CRC64       | `u64`     | ECMA polynomial over the uncompressed bytes. |
+| 31     | CRC64       | `u64`     | CRC64-XZ (ECMA polynomial, reflected, init/xor all ones) over the uncompressed bytes. |
 | 39     | Flags       | `u8`      | Layout bits (packed sequences, compact lengths, varint offsets, field bitset). |
 
 Validation rules:

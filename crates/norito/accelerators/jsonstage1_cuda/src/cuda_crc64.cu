@@ -4,19 +4,20 @@
 #include <stddef.h>
 #include <stdlib.h>
 
-// CRC64-ECMA polynomial and helper constants.
-static constexpr uint64_t CRC64_POLY = 0x42F0E1EBA9EA3693ULL;
-static constexpr uint64_t CRC64_TOPBIT = 0x8000000000000000ULL;
+// CRC64-XZ polynomial (reflected ECMA) and helper constants.
+static constexpr uint64_t CRC64_POLY = 0xC96C5795D7870F42ULL;
+static constexpr uint64_t CRC64_INIT = 0xFFFFFFFFFFFFFFFFULL;
+static constexpr uint64_t CRC64_XOR_OUT = 0xFFFFFFFFFFFFFFFFULL;
 static constexpr uint64_t CRC64_CHUNK_SIZE = 16ULL * 1024ULL;
 
 __device__ __forceinline__ uint64_t crc64_update(uint64_t crc, uint8_t byte) {
-    crc ^= (uint64_t)byte << 56;
+    crc ^= (uint64_t)byte;
     #pragma unroll
     for (int i = 0; i < 8; ++i) {
-        uint64_t carry = crc & CRC64_TOPBIT;
-        crc <<= 1;
-        if (carry != 0) {
-            crc ^= CRC64_POLY;
+        if (crc & 1ULL) {
+            crc = (crc >> 1) ^ CRC64_POLY;
+        } else {
+            crc >>= 1;
         }
     }
     return crc;
@@ -57,37 +58,40 @@ static void gf2_matrix_square(uint64_t* square, const uint64_t* mat) {
     }
 }
 
+static uint64_t crc64_shift(uint64_t crc, size_t len2) {
+    if (len2 == 0) {
+        return crc;
+    }
+
+    uint64_t mat[64];
+    uint64_t square[64];
+    uint64_t row = 1ULL;
+    mat[0] = CRC64_POLY;
+    for (int n = 1; n < 64; ++n) {
+        mat[n] = row;
+        row <<= 1;
+    }
+
+    size_t len = len2 * 8ULL;
+    while (len != 0) {
+        if (len & 1ULL) {
+            crc = gf2_matrix_times(mat, crc);
+        }
+        gf2_matrix_square(square, mat);
+        for (int n = 0; n < 64; ++n) {
+            mat[n] = square[n];
+        }
+        len >>= 1;
+    }
+
+    return crc;
+}
+
 static uint64_t crc64_combine_host(uint64_t crc1, uint64_t crc2, size_t len2) {
     if (len2 == 0) {
         return crc1;
     }
-
-    uint64_t odd[64];
-    uint64_t even[64];
-
-    odd[0] = CRC64_POLY;
-    for (int n = 1; n < 64; ++n) {
-        odd[n] = 1ULL << (63 - n);
-    }
-
-    gf2_matrix_square(even, odd);
-    size_t len = len2 * 8ULL;
-    while (len != 0) {
-        gf2_matrix_square(odd, even);
-        if (len & 1ULL) {
-            crc1 = gf2_matrix_times(odd, crc1);
-        }
-        len >>= 1;
-        if (len == 0) {
-            break;
-        }
-        gf2_matrix_square(even, odd);
-        if (len & 1ULL) {
-            crc1 = gf2_matrix_times(even, crc1);
-        }
-        len >>= 1;
-    }
-
+    crc1 = crc64_shift(crc1, len2);
     return crc1 ^ crc2;
 }
 
@@ -155,7 +159,7 @@ extern "C" int norito_crc64_cuda_impl(const uint8_t* input_ptr,
         goto cleanup;
     }
 
-    uint64_t crc = 0;
+    uint64_t crc = CRC64_INIT;
     for (size_t idx = 0; idx < chunk_count; ++idx) {
         size_t offset = idx * CRC64_CHUNK_SIZE;
         size_t remaining = input_len > offset ? input_len - offset : 0;
@@ -163,7 +167,7 @@ extern "C" int norito_crc64_cuda_impl(const uint8_t* input_ptr,
         crc = crc64_combine_host(crc, host_chunks[idx], seg_len);
     }
 
-    *out_crc = crc;
+    *out_crc = crc ^ CRC64_XOR_OUT;
 
 cleanup:
     if (d_input) {

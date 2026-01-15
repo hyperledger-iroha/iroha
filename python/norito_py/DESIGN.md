@@ -8,7 +8,7 @@
 
 ## Scope in v0.1.0
 - Header handling: encode/decode `NoritoHeader` with magic `NRT0`, version (major=0, minor=0), schema hash (16 bytes), compression byte, payload length, CRC64, flag byte.
-- CRC64-ECMA implementation with table-driven fast path and portable fallback.
+- CRC64-XZ implementation with table-driven fast path and portable fallback.
 - Flag support: `PACKED_SEQ`, `COMPACT_LEN`, `VARINT_OFFSETS`, `COMPACT_SEQ_LEN`, `PACKED_STRUCT`, and `FIELD_BITSET` as documented in `norito.md`.
 - Compression: optional Zstandard backend via the `zstandard` Python module. When the dependency is missing, attempts to use compression raise `UnsupportedCompressionError`.
 - Encoding/decoding primitives:

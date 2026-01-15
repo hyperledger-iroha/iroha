@@ -6,7 +6,7 @@ implementations so tooling can construct and inspect deterministic payloads
 without native dependencies.
 
 ## Features
-- Header parsing/serialization (`NRT0`, major 0 with fixed v1 minor `0x00`) with CRC64-ECMA validation
+- Header parsing/serialization (`NRT0`, major 0 with fixed v1 minor `0x00`) with CRC64-XZ validation
 - Flag support: packed sequences, compact lengths, varint offsets, packed structs
 - Adapters for signed/unsigned integers, booleans, UTF-8 strings, byte arrays,
   options (`Optional`), results (`Result.Ok`/`Result.Err`), sequences, maps, and

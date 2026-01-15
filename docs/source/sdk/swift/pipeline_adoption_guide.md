@@ -69,6 +69,7 @@ let status = try await sdk.submitAndWait(
 - When a transaction never reaches a terminal state within the configured attempts, the SDK throws `PipelineStatusError.timeout(hash:attempts:)` so callers can surface the stalled hash and capture `/v1/pipeline/recovery` evidence.
 - Failures (e.g., `Rejected`) yield `PipelineStatusError.failure` with the final `ToriiPipelineTransactionStatus` payload for logging and telemetry.
 - Use `ToriiClient.getTransactionStatus(hashHex:mode:)` when monitoring a hash submitted by other SDKs or CLI automation.
+- A `404` from `/v1/pipeline/transactions/status` indicates Torii has no cached status yet (for example after a restart), so the Swift SDK treats it as "pending" and continues polling.
 
 # 5. Offline Queueing & Recovery Evidence
 

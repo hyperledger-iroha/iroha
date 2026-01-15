@@ -27,6 +27,7 @@ pub struct SerializedNetwork {
     network: Network,
     _guard: SerialGuard,
     shutdown_done: bool,
+    runtime_handle: Option<Handle>,
 }
 
 impl SerializedNetwork {
@@ -36,6 +37,17 @@ impl SerializedNetwork {
             network,
             _guard: guard,
             shutdown_done: false,
+            runtime_handle: Handle::try_current().ok(),
+        }
+    }
+
+    /// Wrap a network with an explicit runtime handle for shutdown coordination.
+    pub fn new_with_handle(network: Network, guard: SerialGuard, handle: Handle) -> Self {
+        Self {
+            network,
+            _guard: guard,
+            shutdown_done: false,
+            runtime_handle: Some(handle),
         }
     }
 
@@ -47,12 +59,22 @@ impl SerializedNetwork {
 
     fn shutdown_blocking_inner(&self) {
         if self.network.peers().iter().any(NetworkPeer::is_running) {
-            let shutdown = || match Runtime::new() {
-                Ok(rt) => {
-                    let _ = rt.block_on(self.network.shutdown());
-                }
-                Err(err) => {
-                    eprintln!("warning: failed to create runtime for shutdown: {err}");
+            let handle = self
+                .runtime_handle
+                .clone()
+                .or_else(|| Handle::try_current().ok());
+            let shutdown = move || {
+                if let Some(handle) = handle {
+                    let _ = handle.block_on(self.network.shutdown());
+                } else {
+                    match Runtime::new() {
+                        Ok(rt) => {
+                            let _ = rt.block_on(self.network.shutdown());
+                        }
+                        Err(err) => {
+                            eprintln!("warning: failed to create runtime for shutdown: {err}");
+                        }
+                    }
                 }
             };
             run_shutdown_blocking(shutdown);
@@ -325,7 +347,10 @@ pub fn start_network_blocking_or_skip(
         .map_err(|err| sandbox_error(err.wrap_err("reach block 1"), context))?;
     get_status_with_retry(&network.client())
         .map_err(|err| sandbox_error(err.wrap_err("wait for /status"), context))?;
-    Ok(Some((SerializedNetwork::new(network, guard), runtime)))
+    Ok(Some((
+        SerializedNetwork::new_with_handle(network, guard, runtime.handle().clone()),
+        runtime,
+    )))
 }
 
 /// Build a blocking test network without starting peers; skip when the sandbox forbids binding.
@@ -354,7 +379,10 @@ pub fn build_network_blocking_or_skip(
             panic::resume_unwind(panic);
         }
     };
-    Some((SerializedNetwork::new(network, guard), runtime))
+    Some((
+        SerializedNetwork::new_with_handle(network, guard, runtime.handle().clone()),
+        runtime,
+    ))
 }
 
 /// Attempt to start an async test network; fail when the sandbox forbids binding sockets.
@@ -669,6 +697,21 @@ mod tests {
         serialized.shutdown_blocking();
         let (_, in_use) = network_permit_snapshot();
         assert_eq!(in_use, 0);
+    }
+
+    #[test]
+    fn serialized_network_new_with_handle_stores_handle() {
+        if skip_if_sandboxed("serialized_network_new_with_handle_stores_handle") {
+            return;
+        }
+        let _env_guard = lock_env_guard();
+        let _override_guard = set_test_overrides(Some(true), None);
+        let guard = serial_guard();
+        let network = NetworkBuilder::new().build();
+        let rt = Runtime::new().expect("runtime");
+        let serialized = SerializedNetwork::new_with_handle(network, guard, rt.handle().clone());
+
+        assert!(serialized.runtime_handle.is_some());
     }
 
     #[test]

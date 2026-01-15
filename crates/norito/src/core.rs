@@ -285,7 +285,7 @@ pub fn schema_hash_structural_from_json_bytes(bytes: &[u8]) -> Result<[u8; 16], 
     schema_hash_structural_from_json_str(input)
 }
 
-/// Compute the CRC64 checksum over `data` using the ECMA polynomial.
+/// Compute the CRC64-XZ checksum over `data` using the ECMA polynomial.
 fn crc64(data: &[u8]) -> u64 {
     simd_crc64::hardware_crc64(data)
 }

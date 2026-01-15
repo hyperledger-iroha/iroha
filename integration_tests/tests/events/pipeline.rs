@@ -67,14 +67,17 @@ async fn test_with_instruction_and_status(
     // When
     let transaction = client.build_transaction(exec, Metadata::default());
     let hash = transaction.hash();
-    let mut events = client
-        .listen_for_events_async([TransactionEventFilter::default().for_hash(hash)])
-        .await?;
+    let mut events = tokio::time::timeout(
+        network.sync_timeout(),
+        client.listen_for_events_async([TransactionEventFilter::default().for_hash(hash)]),
+    )
+    .await
+    .wrap_err_with(|| format!("{context}: timed out opening pipeline event stream"))??;
     spawn_blocking(move || client.submit_transaction(&transaction)).await??;
 
     // Then
     let event_timeout = network.sync_timeout();
-    timeout(event_timeout, async move {
+    timeout(event_timeout, async {
         let mut saw_queued = false;
         loop {
             let Some(next) = events.next().await else {
@@ -103,6 +106,7 @@ async fn test_with_instruction_and_status(
     .await
     .wrap_err_with(|| format!("{context}: timed out waiting for pipeline events"))??;
 
+    events.close().await;
     Ok(())
 }
 
@@ -124,13 +128,18 @@ async fn applied_block_must_be_available_in_kura() -> Result<()> {
     let register = Register::domain(Domain::new("kura_test".parse()?));
     let tx = client.build_transaction([register], Metadata::default());
     let hash = tx.hash();
-    let mut events = client
-        .listen_for_events_async([TransactionEventFilter::default().for_hash(hash)])
-        .await?;
+    let mut events = tokio::time::timeout(
+        network.sync_timeout(),
+        client.listen_for_events_async([TransactionEventFilter::default().for_hash(hash)]),
+    )
+    .await
+    .wrap_err(
+        "applied_block_must_be_available_in_kura: timed out opening pipeline event stream",
+    )??;
     spawn_blocking(move || client.submit_transaction(&tx)).await??;
 
     // Wait for the transaction pipeline to advance to Approved (committed)
-    timeout(network.sync_timeout(), async move {
+    timeout(network.sync_timeout(), async {
         let mut saw_queued = false;
         loop {
             let EventBox::Pipeline(PipelineEventBox::Transaction(event)) =
@@ -156,6 +165,7 @@ async fn applied_block_must_be_available_in_kura() -> Result<()> {
         }
     })
     .await?;
+    events.close().await;
 
     // And wait until the peer reports at least 2 non-empty blocks (genesis + our tx)
     let peer = network.peer();

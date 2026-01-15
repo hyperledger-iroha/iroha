@@ -61,7 +61,7 @@ Norito הוא קודק הסריאליזציה הבינארי של Iroha. הוא 
 - 4 בייט Magic: `NRT0`.
 - גרסאות Major/M Minor.
 - דגלי Layout (בייט).
-- checksum CRC64-ECMA.
+- checksum CRC64-XZ.
 - אורכי Payload (לפני דחיסה).
 - hash סכמה (בייטים).
 

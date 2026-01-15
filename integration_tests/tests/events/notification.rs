@@ -47,13 +47,19 @@ async fn trigger_completion_success_should_produce_event() -> Result<()> {
     spawn_blocking(move || client.submit_transaction_blocking(&register_tx)).await??;
     network.ensure_blocks(2).await?;
 
-    let mut events = network
-        .client()
-        .listen_for_events_async([TriggerCompletedEventFilter::new()
-            .for_trigger(trigger_id.clone())
-            .for_outcome(TriggerCompletedOutcomeType::Success)])
-        .await?;
     let event_timeout = network.sync_timeout();
+    let mut events = tokio::time::timeout(
+        event_timeout,
+        network.client().listen_for_events_async([TriggerCompletedEventFilter::new()
+            .for_trigger(trigger_id.clone())
+            .for_outcome(TriggerCompletedOutcomeType::Success)]),
+    )
+    .await
+    .map_err(|_| {
+        eyre::eyre!(
+            "trigger_completion_success_should_produce_event: timed out opening trigger event stream"
+        )
+    })??;
 
     let call_trigger = ExecuteTrigger::new(trigger_id);
     let client = network.client();

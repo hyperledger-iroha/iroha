@@ -71,7 +71,7 @@ l’efficacité sur le réseau : c’est toujours Norito, pas SCALE.
 
 - Encodage/décodage déterministe avec un en‑tête fixe (magic, version, schéma
   16 octets, compression, longueur, CRC64, indicateurs).
-- Checksum CRC64‑ECMA avec accélération choisie à l’exécution :
+- Checksum CRC64-XZ avec accélération choisie à l’exécution :
   - PCLMULQDQ sur x86_64 (multiplication sans retenue) + réduction de Barrett sur des blocs de 32 octets.
   - PMULL sur aarch64 avec le même schéma de repli.
   - Variantes slicing‑by‑8 et bit‑à‑bit pour la portabilité.

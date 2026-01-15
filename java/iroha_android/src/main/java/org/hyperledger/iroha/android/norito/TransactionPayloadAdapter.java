@@ -18,9 +18,10 @@ import org.hyperledger.iroha.norito.TypeAdapter;
 
 /**
  * Norito adapter that mirrors the {@link TransactionPayload} structure used by the Android library.
- * The current implementation focuses on the IVM bytecode variant of `Executable`; instruction-list
- * support will be added alongside dedicated builders. Metadata values are encoded as JSON strings
- * to match the Rust `Json` wrapper.
+ * IVM bytecode payloads are encoded directly. Instruction payloads are preserved when provided as
+ * wire-framed Norito blobs (wire id + Norito header), while legacy argument-map encoding remains
+ * available for backwards-compatible decoding. Metadata values are encoded as JSON strings to match
+ * the Rust `Json` wrapper.
  */
 final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload> {
 
@@ -104,17 +105,31 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   private static final class InstructionAdapter implements TypeAdapter<InstructionBox> {
     @Override
     public void encode(final NoritoEncoder encoder, final InstructionBox value) {
+      final InstructionBox.InstructionPayload payload = value.payload();
+      if (payload instanceof InstructionBox.WirePayload wire) {
+        if (!isWirePayloadCandidate(wire.wireName(), wire.payloadBytes())) {
+          throw new IllegalArgumentException("Wire payload must include a valid Norito header");
+        }
+        encodeSizedField(encoder, STRING_ADAPTER, wire.wireName());
+        encodeSizedField(encoder, BYTE_VECTOR_ADAPTER, wire.payloadBytes());
+        return;
+      }
+      // TODO: Switch legacy instructions to canonical wire payloads once codegen encoders land.
       encodeSizedField(encoder, ENUM_TAG_ADAPTER, (long) value.kind().discriminant());
       encodeSizedField(encoder, STRING_MAP_ADAPTER, value.arguments());
     }
 
     @Override
     public InstructionBox decode(final NoritoDecoder decoder) {
-      final long discriminant = decodeSizedField(decoder, ENUM_TAG_ADAPTER);
-      final Map<String, String> arguments =
-          new LinkedHashMap<>(decodeSizedField(decoder, STRING_MAP_ADAPTER));
-      final InstructionKind kind = InstructionKind.fromDiscriminant(discriminant);
-      return InstructionBox.fromNorito(kind, arguments);
+      final byte[] payload = decoder.readBytes(decoder.remaining());
+      if (payload.length == 0) {
+        throw new IllegalArgumentException("Instruction payload must not be empty");
+      }
+      final InstructionBox wire = tryDecodeWireInstruction(payload, decoder.flags(), decoder.flagsHint());
+      if (wire != null) {
+        return wire;
+      }
+      return decodeLegacyInstruction(payload, decoder.flags(), decoder.flagsHint());
     }
   }
 
@@ -152,6 +167,56 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       throw new IllegalArgumentException("Trailing bytes after field payload");
     }
     return value;
+  }
+
+  private static InstructionBox tryDecodeWireInstruction(
+      final byte[] payload, final int flags, final int flagsHint) {
+    try {
+      final NoritoDecoder wireDecoder = new NoritoDecoder(payload, flags, flagsHint);
+      final String wireName = decodeSizedField(wireDecoder, STRING_ADAPTER);
+      final byte[] wirePayload = decodeSizedField(wireDecoder, BYTE_VECTOR_ADAPTER);
+      if (wireDecoder.remaining() != 0) {
+        return null;
+      }
+      if (!isWirePayloadCandidate(wireName, wirePayload)) {
+        return null;
+      }
+      return InstructionBox.fromWirePayload(wireName, wirePayload);
+    } catch (final IllegalArgumentException ex) {
+      return null;
+    }
+  }
+
+  private static InstructionBox decodeLegacyInstruction(
+      final byte[] payload, final int flags, final int flagsHint) {
+    final NoritoDecoder legacyDecoder = new NoritoDecoder(payload, flags, flagsHint);
+    final long discriminant = decodeSizedField(legacyDecoder, ENUM_TAG_ADAPTER);
+    final Map<String, String> arguments =
+        new LinkedHashMap<>(decodeSizedField(legacyDecoder, STRING_MAP_ADAPTER));
+    if (legacyDecoder.remaining() != 0) {
+      throw new IllegalArgumentException("Instruction payload has trailing bytes");
+    }
+    final InstructionKind kind = InstructionKind.fromDiscriminant(discriminant);
+    return InstructionBox.fromNorito(kind, arguments);
+  }
+
+  private static boolean isWirePayloadCandidate(final String wireName, final byte[] payload) {
+    if (wireName == null || wireName.isBlank()) {
+      return false;
+    }
+    if (payload == null || payload.length < NoritoHeader.HEADER_LENGTH) {
+      return false;
+    }
+    if (payload[0] != 'N' || payload[1] != 'R' || payload[2] != 'T' || payload[3] != '0') {
+      return false;
+    }
+    try {
+      final NoritoHeader.DecodeResult decoded = NoritoHeader.decode(payload, null);
+      decoded.header().validateChecksum(decoded.payload());
+      return true;
+    } catch (final IllegalArgumentException ex) {
+      return false;
+    }
   }
 
   private static final class ChainIdAdapter implements TypeAdapter<String> {

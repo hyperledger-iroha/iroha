@@ -5597,6 +5597,20 @@ test("getTransactionStatus returns null when Torii responds without a body", asy
   assert.equal(result, null);
 });
 
+test("getTransactionStatus returns null when Torii responds with 404", async () => {
+  const hashHex = "aa".repeat(32);
+  const fetchImpl = async (url) => {
+    assert.equal(
+      url,
+      `${BASE_URL}/v1/pipeline/transactions/status?hash=${hashHex}`,
+    );
+    return createResponse({ status: 404 });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.getTransactionStatus(hashHex);
+  assert.equal(result, null);
+});
+
 test("getTransactionStatus rejects invalid hashes", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200 }) });
   await assert.rejects(

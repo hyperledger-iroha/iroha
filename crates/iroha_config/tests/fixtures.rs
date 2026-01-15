@@ -847,6 +847,7 @@ fn minimal_config_snapshot() {
                 collectors_redundant_send_r: 1,
                 block_max_transactions: None,
                 block_max_payload_bytes: None,
+                empty_child_fallback_enabled: true,
                 msg_channel_cap_votes: 8192,
                 msg_channel_cap_block_payload: 128,
                 msg_channel_cap_rbc_chunks: 1024,
@@ -989,6 +990,7 @@ fn minimal_config_snapshot() {
                 capacity: 65536,
                 capacity_per_user: 65536,
                 transaction_time_to_live: 86400s,
+                expired_cull_interval: 1s,
             },
             nexus: Nexus {
                 enabled: true,

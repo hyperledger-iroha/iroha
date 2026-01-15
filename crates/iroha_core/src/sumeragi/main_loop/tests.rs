@@ -914,6 +914,7 @@ fn test_sumeragi_config() -> SumeragiConfig {
         collectors_redundant_send_r: 1,
         block_max_transactions: None,
         block_max_payload_bytes: None,
+        empty_child_fallback_enabled: true,
         msg_channel_cap_votes: iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_VOTES,
         msg_channel_cap_block_payload:
             iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_BLOCK_PAYLOAD,
@@ -2507,6 +2508,55 @@ async fn empty_child_fallback_uses_committed_parent_when_pending_missing() {
     assert_eq!(ctx.target_view, 0);
     let expected_payload = Hash::new(super::block_payload_bytes(&block2));
     assert_eq!(ctx.parent_payload_hash, expected_payload);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn empty_child_fallback_respects_config_toggle() {
+    let _guard = super::status::qc_status_test_guard();
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.empty_child_fallback_enabled = false;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let block1 = sample_block(1, 0, None);
+    let block2 = sample_block(2, 0, Some(block1.hash()));
+
+    actor.kura.store_block(block1.clone()).expect("store block");
+    actor.kura.store_block(block2.clone()).expect("store block");
+
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(block1.hash());
+    state.push_block_hash_for_testing(block2.hash());
+
+    actor.locked_qc = Some(QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: block2.hash(),
+        height: 2,
+        view: 0,
+        epoch: 0,
+    });
+    super::status::set_locked_qc(2, 0, Some(block2.hash()));
+
+    let now = Instant::now();
+    let block_time = actor
+        .state
+        .view()
+        .world()
+        .parameters()
+        .sumeragi()
+        .block_time();
+    let backoff = block_time.max(Duration::from_millis(1));
+    let last_success = now
+        .checked_sub(backoff.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    actor.subsystems.propose.last_successful_proposal = Some(last_success);
+
+    assert!(
+        actor.empty_child_fallback(now).is_none(),
+        "empty-child fallback should be disabled when config opt-out is set"
+    );
 
     harness.shutdown.send();
 }
@@ -37087,6 +37137,7 @@ fn qc_commit_failure_with_quorum_drops_pending_when_requeue_fails() {
         capacity: NonZeroUsize::new(1).expect("non-zero capacity"),
         capacity_per_user: NonZeroUsize::new(1).expect("non-zero per-user capacity"),
         transaction_time_to_live: Duration::from_secs(60),
+        ..QueueConfig::default()
     };
 
     let queue = Queue::test(queue_cfg, &TimeSource::new_system());
@@ -37155,6 +37206,7 @@ fn qc_commit_failure_with_quorum_drops_pending_when_requeue_fails_with_duplicate
         capacity: NonZeroUsize::new(1).expect("non-zero capacity"),
         capacity_per_user: NonZeroUsize::new(1).expect("non-zero per-user capacity"),
         transaction_time_to_live: Duration::from_secs(60),
+        ..QueueConfig::default()
     };
 
     let queue = Queue::test(queue_cfg, &TimeSource::new_system());

@@ -1,8 +1,63 @@
 # Status
 
 ## Latest Updates
+- Data model: add a Norito RPC fixture manifest roundtrip test that decodes signed fixtures, checks payload bytes/hashes, and validates chain/authority/creation_time/ttl/nonce.
+- Tests: `cargo test -p iroha_data_model norito_rpc_fixture_manifest_roundtrips -- --nocapture` (timed out after 120s; compilation still in progress).
+- JS fixture parity: decode canonical signed payload for burn-asset builder inputs (no `transaction_payloads.json` dependency), assert decoded payload metadata across all fixtures, and add alignment/Android fixture mismatch coverage for authority/TTL/nonce.
+- Tests: `python3 -m pytest scripts/tests/check_android_fixtures_test.py -q` (pass; 9 tests).
+- Tests: `python3 -m pytest scripts/tests/norito_fixture_alignment_test.py -q` (pass; 5 tests).
+- Tests: `node --test javascript/iroha_js/test/transactionFixturesParity.test.js` (pass; native fixture parity skipped).
+- Swift/JS fixture parity: Swift now verifies payload/signed hashes against the manifest, and JS adds a non-native hash/base64 consistency check for every fixture.
+- Android fixture checks: require time_to_live_ms/nonce fields in payload fixtures and manifest entries, and add regressions for missing TTL/nonce fields.
+- Tests: `python3 -m pytest scripts/tests/check_android_fixtures_test.py -q` (pass).
+- Tests: `python3 -m pytest scripts/tests/check_android_fixtures_ci_wrapper_test.py -q` (pass).
+- Tests: `python3 scripts/check_android_fixtures.py --quiet` (pass).
+- Tests: `node --test javascript/iroha_js/test/transactionFixturesParity.test.js` (pass; native fixture parity skipped).
+- Tests: `swift test` (failed: SwiftPM sandbox-exec `Operation not permitted` when compiling the manifest).
+- Tests: `CLANG_MODULE_CACHE_PATH=/Users/takemiyamakoto/dev/iroha/.swift-module-cache swift test --disable-sandbox` (pass; 588 tests, 10 skipped).
+- Fixture alignment + Android parity: extend drift checks to chain/authority/time_to_live_ms/nonce in the alignment helper, and require Android fixture payload metadata to match manifest (chain/authority/TTL/nonce + creation_time_ms); updated parity tests accordingly.
+- Tests: `python3 -m pytest scripts/tests/norito_fixture_alignment_test.py -q` (pass).
+- Tests: `python3 -m pytest scripts/tests/check_android_fixtures_test.py -q` (pass).
+- Tests: `python3 -m pytest scripts/tests/check_android_fixtures_ci_wrapper_test.py -q` (pass).
+- Tests: `python3 scripts/check_android_fixtures.py --quiet` (pass).
+- Tests: `python3 scripts/norito_fixture_alignment.py --json-out docs/source/sdk/android/norito_fixture_alignment.json --markdown-out docs/source/sdk/android/norito_fixture_alignment.md` (pass).
+- Tests: `node --test javascript/iroha_js/test/transactionFixturesParity.test.js` (skipped; native binding unavailable).
+- Android fixture checks: require `creation_time_ms` parity between manifest and payloads, add regression coverage, and tighten JS/Swift fixture parity assertions (authority/TTL/nonce/signed bytes+hashes).
+- Tests: `python3 -m pytest scripts/tests/check_android_fixtures_test.py -q` (pass).
+- Tests: `python3 -m pytest scripts/tests/check_android_fixtures_ci_wrapper_test.py -q` (pass).
+- Tests: `python3 scripts/check_android_fixtures.py --quiet` (pass).
+- Norito fixture alignment: include `creation_time_ms` in drift checks, add alignment coverage, refresh the alignment report, and assert `creation_time_ms` in Swift/JS fixture decode parity.
+- Tests: `python3 scripts/norito_fixture_alignment.py --json-out docs/source/sdk/android/norito_fixture_alignment.json --markdown-out docs/source/sdk/android/norito_fixture_alignment.md` (pass).
+- Tests: `python3 -m pytest scripts/tests/norito_fixture_alignment_test.py -q` (pass).
+- Tests: `cargo test --workspace` (timed out after 1200s while running tests; compilation completed and unit tests running).
+- Android/Norito fixtures: add `creation_time_ms` to payload/manifest fixtures, align canonical SDK manifest copies, validate fixture hints in the exporter, and verify signatures against the manifest signing key; JUnit hooks added for payload/codec fixtures.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options in the config).
+- Tests: `cargo test` in `scripts/export_norito_fixtures` (pass; warnings about unused import/dead code).
+- Tests: `cargo test --workspace` (timed out after 1200s while running integration tests).
+- Tests: `cargo test -p xtask` (failed: unrelated missing fields `role`, `max_operation_ms`, `consensus_mode` in xtask fixtures).
+- Tests: `GRADLE_USER_HOME=/Users/takemiyamakoto/dev/iroha/.gradle ./java/iroha_android/gradlew -p java/iroha_android :core:test --tests org.hyperledger.iroha.android.tx.TransactionPayloadFixtureTests --tests org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests --tests org.hyperledger.iroha.android.norito.NoritoCodecAdapterTests` (failed: Gradle could not query system info; `errno 1: Operation not permitted`).
+- Tests: `python3 scripts/check_android_fixtures.py --quiet` (pass).
+- Queue/Sumeragi: sweep expired transactions on a configurable interval, compact hash queues to drop stale entries, use queued length for proposal gating/pacemaker logs, and base backpressure/telemetry on active queue counts; add unit coverage for compaction and queued-vs-inflight tracking.
+- JS/Python SDKs: treat `404` from `/v1/pipeline/transactions/status` as pending (return `null`/`None`), add coverage, and re-export offline allowance types in `iroha_python` to fix package imports.
+- Tests: `IROHA_JS_DISABLE_NATIVE=1 node --test test/toriiClient.test.js` (pass); `python3 -m pytest python/iroha_python/tests/test_pipeline_status.py -q` (pass; warns about LibreSSL/OpenSSL mismatch).
+- Sumeragi/relay: make `try_incoming_block_message` block on `BlockSyncUpdate` to avoid dropping commit/QC evidence under block-queue saturation; add unit coverage and update Sumeragi docs on relay backpressure behavior.
+- Localnet/NPoS: apply crypto + Nexus config before genesis validation, include BLS in localnet crypto manifests/configs, and emit canonical escrow account IDs; add coverage for BLS controller genesis validation and localnet crypto/escrow config rendering.
+- Swift tests: created `~/.cache/clang/ModuleCache` to unblock module cache writes; `swift test --skip-build` now passes (588 tests, 1 skipped).
+- Integration tests: seed non-empty blocks explicitly before height waits in Sumeragi/NPoS consensus coverage to avoid hangs after empty-block production removal (randomness, PRF collectors, lock convergence, telemetry, cutover, rotation, negative paths, stake activation, happy path, and pacemaker jitter).
+- Irohad/tests: fix genesis validation helper to use InstructionBox conversions and avoid shadowing `genesis_account` (BLS controller acceptance test now builds).
+- Torii/tests: disambiguate `State` imports in runtime handler tests and avoid `expect_err` on non-Debug responses.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options in the config).
+- Tests: `cargo test --workspace` (timed out after 600s during compilation).
+- Android/Norito: align fixture authorities with canonical payloads, ensure signed fixtures include the multisig option field (4-field layout), refresh signed hashes/lengths, and validate payload fixture metadata against decoded payloads.
+- Tests: `javac --release 21 -d java/iroha_android/build/tmp-test-classes -cp <junit/hamcrest/bcprov> @/tmp/iroha-java-sources.txt` (pass; unchecked warning in `NoritoCodecAdapterTests`).
+- Tests: `java -ea -cp <classes:junit:hamcrest:bcprov> org.hyperledger.iroha.android.tx.TransactionPayloadFixtureTests`, `org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests`, `org.hyperledger.iroha.android.norito.NoritoCodecAdapterTests` (pass).
+- Integration-test shutdowns: switch fatal shutdown signaling to `watch`, make startup/status probes cancelable, and reuse the original Tokio runtime for `Network::shutdown` to avoid teardown timeouts; add event-stream connection timeouts + explicit closes in events/trigger/upgrade tests to prevent hang-on-drop shutdown delays.
+- Tests: `cargo test -p integration_tests --test mod queries::account::find_accounts_with_asset -- --nocapture --test-threads=1` (pass).
+- Swift SDK: treat `404` from `/v1/pipeline/transactions/status` as pending (return `nil` and keep polling), add unit coverage, and document the restart/cache-miss behavior in Swift/Android docs plus the iOS demo README.
+- Tests: `swift test` (failed: SwiftPM module cache not writable, unable to load stdlib); `cargo test --workspace` (aborted by user; do not run full workspace tests).
 - Torii: add tx-specific rate limiter knobs (default 10k TPS), route `/v1/transaction` through the tx limiter, and derive the high-load threshold from half the queue capacity; add unit tests for tx rate handling and high-load defaults.
 - Tests: not run (per request).
+- Localnet/run20: 4-peer DEBUG 1s localnet, 2-hour 2-lane per-peer stress (`--count 15000 --parallel 48`); 0 subscriber-queue drops, 0 view-change warnings, 0 RBC DELIVER deferrals, 0 Torii 429s; localnet stopped.
 - Tests: `CARGO_TARGET_DIR=target-codex-itest IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=target/debug/irohad TEST_NETWORK_BIN_IROHA=target/debug/iroha cargo test -p integration_tests --test mod queries -- --nocapture` (timed out after 600s; suite still in progress when timeout hit).
 - Tests: `CARGO_TARGET_DIR=target-codex-itest IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=target/debug/irohad TEST_NETWORK_BIN_IROHA=target/debug/iroha cargo test -p integration_tests --test mod queries -- --nocapture` (completed in sandbox but skipped network startups due to loopback bind denial; tests reported ok).
 - Android/Norito: tighten fixture manifest validation (instruction header checksum + metadata ordering), decode instruction payloads with Vec<u8> adapter, and add packed ByteVec encoding coverage; instruction payload roundtrip still pending.
@@ -2332,13 +2387,22 @@
 - Tests: `cargo test -p integration_tests trigger_completion_failure_reports_error -- --nocapture` (timed out after 600s; compile finished; test `events::notification::trigger_completion_failure_reports_error` still running).
 - Sumeragi NEW_VIEW quorum selection now filters senders against the active roster (only counts local if it is in-roster), with coverage for non-roster senders.
 - Sumeragi now rejects NEW_VIEW votes with mismatched highest QC hashes/heights before recording, with regressions for invalid highest fields.
+- Localnet NPoS bootstrap now registers the nexus/ivm domains, gas tech account, XOR stake asset, and validator stake so fresh localnets can form QC without manual minting; peer configs wire stake/fee sinks and pipeline gas tech account IDs.
+- Localnet defaults raise the block max transactions cap to 10,000 and add coverage for the cap plus NPoS stake seeding.
+- Sumeragi now exposes `sumeragi.empty_child_fallback_enabled`; localnet configs keep it off and docs cover the toggle.
+- Tests: not run (per request).
 - Tests: `CARGO_TARGET_DIR=target-codex-queries-mod cargo test -p integration_tests --test mod queries::smart_contract::live_query_is_dropped_after_smart_contract_end -- --nocapture --test-threads=1` (passed).
+- Made `iroha_test_network` shutdown signalling sticky and cancellation-aware to prevent teardown timeouts (watch-based fatal signal + status poll cancellation on shutdown).
+- Tests: `cargo test -p iroha_test_network log_drain_exits_on_shutdown_notify -- --nocapture` (passed).
+- Serialized integration-test shutdown now reuses the originating runtime handle to avoid teardown hangs when dropping networks outside the runtime.
+- Tests: `cargo test -p integration_tests --test mod queries::too_big_fetch_size_is_not_allowed -- --nocapture --test-threads=1` (passed).
 - Added smart-contract query test metadata helper to include `gas_limit` derived from IVM program metadata so admissions accept the transactions.
 - Tests: `CARGO_TARGET_DIR=target/codex-queries-mod cargo test -p integration_tests --test mod queries::smart_contract::live_query_is_dropped_after_smart_contract_end -- --nocapture --test-threads=1`.
 - Tests: `CARGO_TARGET_DIR=target/codex-queries-mod cargo test -p integration_tests --test mod queries::smart_contract::smart_contract_can_filter_queries -- --nocapture --test-threads=1`.
 - Tests: `CARGO_TARGET_DIR=target/codex-queries-mod cargo test -p integration_tests --test mod queries::too_big_fetch_size_is_not_allowed -- --nocapture --test-threads=1`.
 - Tests: `CARGO_TARGET_DIR=target/codex-queries-mod cargo test -p integration_tests --test mod queries::find_blocks_reversed -- --nocapture --test-threads=1`.
 - Tests: `CARGO_TARGET_DIR=target/codex-queries-mod cargo test -p integration_tests --test mod queries::find_transactions_reversed -- --nocapture --test-threads=1`.
+- Tests: `CARGO_TARGET_DIR=target/codex-queries-mod cargo test -p integration_tests --test mod queries -- --nocapture --test-threads=1` (passed; 17 tests, ~1132s).
 - Fixed Kotodama `encode_schema`/`decode_schema` lowering to publish schema/data TLVs into INPUT before invoking CoreHost schema syscalls, added a roundtrip schema-encode test, and confirmed SMARTCONTRACT_EXECUTE_QUERY smoke (stored query response metadata on the local swarm).
 - Tests: `cargo test -p ivm --test kotodama_schema_encode` (passes; warnings about unused fields in `crates/ivm/src/iso20022.rs` and unused import in `crates/ivm/tests/crypto.rs`).
 - Cleaned up Norito Python ruff issues (benchmark import order, __all__ exports, adapter fixed-size check) and excluded build artifacts from linting.

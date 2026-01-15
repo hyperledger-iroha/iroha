@@ -83,6 +83,28 @@ const VERIFYING_KEY_STATUS_VALUES = new Set([
 const VERIFYING_KEY_STATUS_ALIASES = new Map(
   [...VERIFYING_KEY_STATUS_VALUES].map((value) => [value.toLowerCase(), value]),
 );
+const SUBSCRIPTION_STATUS_VALUES = new Set([
+  "active",
+  "paused",
+  "past_due",
+  "canceled",
+  "suspended",
+]);
+const SUBSCRIPTION_PLAN_LIST_OPTION_KEYS = new Set([
+  "provider",
+  "limit",
+  "offset",
+  "signal",
+]);
+const SUBSCRIPTION_LIST_OPTION_KEYS = new Set([
+  "owned_by",
+  "ownedBy",
+  "provider",
+  "status",
+  "limit",
+  "offset",
+  "signal",
+]);
 
 function isSecureProtocol(protocol) {
   return protocol === "https:" || protocol === "wss:";
@@ -2784,6 +2806,9 @@ export class ToriiClient {
       "/v1/pipeline/transactions/status",
       { params: { hash: normalizedHash }, retryProfile: "pipeline" },
     );
+    if (response.status === 404) {
+      return null;
+    }
     await this._expectStatus(response, [200, 202, 204]);
     const payload = await this._maybeJson(response);
     if (!payload) {
@@ -5678,6 +5703,325 @@ export class ToriiClient {
    */
   iterateTriggersQuery(options = {}) {
     return this._iterateIterable(this.queryTriggers, options);
+  }
+
+  /**
+   * List subscription plans (`GET /v1/subscriptions/plans`).
+   * @param {SubscriptionPlanListOptions} [options]
+   * @returns {Promise<SubscriptionPlanListResponse>}
+   */
+  async listSubscriptionPlans(options = {}) {
+    const { signal, params } = buildSubscriptionPlanListQuery(options);
+    const response = await this._request("GET", "/v1/subscriptions/plans", {
+      headers: { Accept: "application/json" },
+      params,
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    return normalizeSubscriptionPlanListResponse(payload);
+  }
+
+  /**
+   * Iterate subscription plans using the list endpoint.
+   * @param {SubscriptionPlanIteratorOptions} [options]
+   * @returns {AsyncGenerator<SubscriptionPlanListItem, void, unknown>}
+   */
+  iterateSubscriptionPlans(options = {}) {
+    return this._iterateIterable(this.listSubscriptionPlans, options);
+  }
+
+  /**
+   * Create a subscription plan (`POST /v1/subscriptions/plans`).
+   * @param {SubscriptionPlanCreateRequest} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<SubscriptionPlanCreateResponse>}
+   */
+  async createSubscriptionPlan(request, options = {}) {
+    const payload = normalizeSubscriptionPlanCreateRequest(request);
+    const { signal } = normalizeSignalOnlyOption(options, "createSubscriptionPlan");
+    const response = await this._request("POST", "/v1/subscriptions/plans", {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal,
+    });
+    await this._expectStatus(response, [200, 202]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("subscription plan create endpoint returned no payload");
+    }
+    return normalizeSubscriptionPlanCreateResponse(body);
+  }
+
+  /**
+   * List subscriptions (`GET /v1/subscriptions`).
+   * @param {SubscriptionListOptions} [options]
+   * @returns {Promise<SubscriptionListResponse>}
+   */
+  async listSubscriptions(options = {}) {
+    const { signal, params } = buildSubscriptionListQuery(options);
+    const response = await this._request("GET", "/v1/subscriptions", {
+      headers: { Accept: "application/json" },
+      params,
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    return normalizeSubscriptionListResponse(payload);
+  }
+
+  /**
+   * Iterate subscriptions using the list endpoint.
+   * @param {SubscriptionIteratorOptions} [options]
+   * @returns {AsyncGenerator<SubscriptionListItem, void, unknown>}
+   */
+  iterateSubscriptions(options = {}) {
+    return this._iterateIterable(this.listSubscriptions, options);
+  }
+
+  /**
+   * Create a subscription (`POST /v1/subscriptions`).
+   * @param {SubscriptionCreateRequest} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<SubscriptionCreateResponse>}
+   */
+  async createSubscription(request, options = {}) {
+    const payload = normalizeSubscriptionCreateRequest(request);
+    const { signal } = normalizeSignalOnlyOption(options, "createSubscription");
+    const response = await this._request("POST", "/v1/subscriptions", {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal,
+    });
+    await this._expectStatus(response, [200, 202]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("subscription create endpoint returned no payload");
+    }
+    return normalizeSubscriptionCreateResponse(body);
+  }
+
+  /**
+   * Fetch a subscription (`GET /v1/subscriptions/{subscription_id}`).
+   * @param {string} subscriptionId
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<SubscriptionGetResponse | null>}
+   */
+  async getSubscription(subscriptionId, options = {}) {
+    const normalizedId = requireNonEmptyString(subscriptionId, "subscriptionId");
+    const { signal } = normalizeSignalOnlyOption(options, "getSubscription");
+    const response = await this._request(
+      "GET",
+      `/v1/subscriptions/${encodeURIComponent(normalizedId)}`,
+      {
+        headers: { Accept: "application/json" },
+        signal,
+      },
+    );
+    if (response.status === 404) {
+      return null;
+    }
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      return null;
+    }
+    return normalizeSubscriptionGetResponse(payload);
+  }
+
+  /**
+   * Pause a subscription (`POST /v1/subscriptions/{subscription_id}/pause`).
+   * @param {string} subscriptionId
+   * @param {SubscriptionActionRequest} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<SubscriptionActionResponse>}
+   */
+  async pauseSubscription(subscriptionId, request, options = {}) {
+    const normalizedId = requireNonEmptyString(subscriptionId, "subscriptionId");
+    const payload = normalizeSubscriptionActionRequest(request, "pauseSubscription");
+    const { signal } = normalizeSignalOnlyOption(options, "pauseSubscription");
+    const response = await this._request(
+      "POST",
+      `/v1/subscriptions/${encodeURIComponent(normalizedId)}/pause`,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify(payload),
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200, 202]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("subscription pause endpoint returned no payload");
+    }
+    return normalizeSubscriptionActionResponse(body, "pauseSubscription response");
+  }
+
+  /**
+   * Resume a subscription (`POST /v1/subscriptions/{subscription_id}/resume`).
+   * @param {string} subscriptionId
+   * @param {SubscriptionActionRequest} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<SubscriptionActionResponse>}
+   */
+  async resumeSubscription(subscriptionId, request, options = {}) {
+    const normalizedId = requireNonEmptyString(subscriptionId, "subscriptionId");
+    const payload = normalizeSubscriptionActionRequest(request, "resumeSubscription");
+    const { signal } = normalizeSignalOnlyOption(options, "resumeSubscription");
+    const response = await this._request(
+      "POST",
+      `/v1/subscriptions/${encodeURIComponent(normalizedId)}/resume`,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify(payload),
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200, 202]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("subscription resume endpoint returned no payload");
+    }
+    return normalizeSubscriptionActionResponse(body, "resumeSubscription response");
+  }
+
+  /**
+   * Cancel a subscription (`POST /v1/subscriptions/{subscription_id}/cancel`).
+   * @param {string} subscriptionId
+   * @param {SubscriptionActionRequest} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<SubscriptionActionResponse>}
+   */
+  async cancelSubscription(subscriptionId, request, options = {}) {
+    const normalizedId = requireNonEmptyString(subscriptionId, "subscriptionId");
+    const payload = normalizeSubscriptionActionRequest(request, "cancelSubscription");
+    const { signal } = normalizeSignalOnlyOption(options, "cancelSubscription");
+    const response = await this._request(
+      "POST",
+      `/v1/subscriptions/${encodeURIComponent(normalizedId)}/cancel`,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify(payload),
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200, 202]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("subscription cancel endpoint returned no payload");
+    }
+    return normalizeSubscriptionActionResponse(body, "cancelSubscription response");
+  }
+
+  /**
+   * Keep a subscription (`POST /v1/subscriptions/{subscription_id}/keep`).
+   * @param {string} subscriptionId
+   * @param {SubscriptionActionRequest} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<SubscriptionActionResponse>}
+   */
+  async keepSubscription(subscriptionId, request, options = {}) {
+    const normalizedId = requireNonEmptyString(subscriptionId, "subscriptionId");
+    const payload = normalizeSubscriptionActionRequest(request, "keepSubscription");
+    const { signal } = normalizeSignalOnlyOption(options, "keepSubscription");
+    const response = await this._request(
+      "POST",
+      `/v1/subscriptions/${encodeURIComponent(normalizedId)}/keep`,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify(payload),
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200, 202]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("subscription keep endpoint returned no payload");
+    }
+    return normalizeSubscriptionActionResponse(body, "keepSubscription response");
+  }
+
+  /**
+   * Charge a subscription immediately (`POST /v1/subscriptions/{subscription_id}/charge-now`).
+   * @param {string} subscriptionId
+   * @param {SubscriptionActionRequest} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<SubscriptionActionResponse>}
+   */
+  async chargeSubscriptionNow(subscriptionId, request, options = {}) {
+    const normalizedId = requireNonEmptyString(subscriptionId, "subscriptionId");
+    const payload = normalizeSubscriptionActionRequest(
+      request,
+      "chargeSubscriptionNow",
+    );
+    const { signal } = normalizeSignalOnlyOption(options, "chargeSubscriptionNow");
+    const response = await this._request(
+      "POST",
+      `/v1/subscriptions/${encodeURIComponent(normalizedId)}/charge-now`,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify(payload),
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200, 202]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("subscription charge-now endpoint returned no payload");
+    }
+    return normalizeSubscriptionActionResponse(body, "chargeSubscriptionNow response");
+  }
+
+  /**
+   * Record subscription usage (`POST /v1/subscriptions/{subscription_id}/usage`).
+   * @param {string} subscriptionId
+   * @param {SubscriptionUsageRequest} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<SubscriptionActionResponse>}
+   */
+  async recordSubscriptionUsage(subscriptionId, request, options = {}) {
+    const normalizedId = requireNonEmptyString(subscriptionId, "subscriptionId");
+    const payload = normalizeSubscriptionUsageRequest(request, "recordSubscriptionUsage");
+    const { signal } = normalizeSignalOnlyOption(options, "recordSubscriptionUsage");
+    const response = await this._request(
+      "POST",
+      `/v1/subscriptions/${encodeURIComponent(normalizedId)}/usage`,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify(payload),
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200, 202]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("subscription usage endpoint returned no payload");
+    }
+    return normalizeSubscriptionActionResponse(body, "recordSubscriptionUsage response");
   }
 
   /**
@@ -17918,6 +18262,105 @@ function buildTriggerListQuery(options = {}) {
   return { signal, params: Object.keys(params).length === 0 ? undefined : params };
 }
 
+function buildSubscriptionPlanListQuery(options = {}) {
+  const normalizedOptions =
+    options === undefined || options === null
+      ? undefined
+      : ensureRecord(options, "subscription plan list options");
+  if (normalizedOptions) {
+    assertSupportedOptionKeys(
+      normalizedOptions,
+      SUBSCRIPTION_PLAN_LIST_OPTION_KEYS,
+      "subscription plan list options",
+    );
+  }
+  const { signal } = normalizeSignalOption(
+    normalizedOptions ?? undefined,
+    "subscription plans",
+  );
+  const params = {};
+  const source = normalizedOptions ?? {};
+  if (source.provider !== undefined && source.provider !== null) {
+    params.provider = normalizeAccountId(
+      source.provider,
+      "subscriptionPlans.provider",
+    );
+  }
+  if (source.limit !== undefined && source.limit !== null) {
+    params.limit = ToriiClient._normalizeUnsignedInteger(
+      source.limit,
+      "subscriptionPlans.limit",
+      { allowZero: false },
+    );
+  }
+  if (source.offset !== undefined && source.offset !== null) {
+    params.offset = ToriiClient._normalizeUnsignedInteger(
+      source.offset,
+      "subscriptionPlans.offset",
+      { allowZero: true },
+    );
+  }
+  return { signal, params: Object.keys(params).length === 0 ? undefined : params };
+}
+
+function normalizeSubscriptionStatusFilter(value, context) {
+  const normalized = requireNonEmptyString(value, context).toLowerCase();
+  if (!SUBSCRIPTION_STATUS_VALUES.has(normalized)) {
+    throw new TypeError(
+      `${context} must be one of ${Array.from(SUBSCRIPTION_STATUS_VALUES).join(", ")}`,
+    );
+  }
+  return normalized;
+}
+
+function buildSubscriptionListQuery(options = {}) {
+  const normalizedOptions =
+    options === undefined || options === null
+      ? undefined
+      : ensureRecord(options, "subscription list options");
+  if (normalizedOptions) {
+    assertSupportedOptionKeys(
+      normalizedOptions,
+      SUBSCRIPTION_LIST_OPTION_KEYS,
+      "subscription list options",
+    );
+  }
+  const { signal } = normalizeSignalOption(
+    normalizedOptions ?? undefined,
+    "subscriptions",
+  );
+  const params = {};
+  const source = normalizedOptions ?? {};
+  const ownedBy = pickOverride(source, "owned_by", "ownedBy");
+  if (ownedBy !== undefined && ownedBy !== null) {
+    params.owned_by = normalizeAccountId(ownedBy, "subscriptions.ownedBy");
+  }
+  if (source.provider !== undefined && source.provider !== null) {
+    params.provider = normalizeAccountId(source.provider, "subscriptions.provider");
+  }
+  if (source.status !== undefined && source.status !== null) {
+    params.status = normalizeSubscriptionStatusFilter(
+      source.status,
+      "subscriptions.status",
+    );
+  }
+  if (source.limit !== undefined && source.limit !== null) {
+    params.limit = ToriiClient._normalizeUnsignedInteger(
+      source.limit,
+      "subscriptions.limit",
+      { allowZero: false },
+    );
+  }
+  if (source.offset !== undefined && source.offset !== null) {
+    params.offset = ToriiClient._normalizeUnsignedInteger(
+      source.offset,
+      "subscriptions.offset",
+      { allowZero: true },
+    );
+  }
+  return { signal, params: Object.keys(params).length === 0 ? undefined : params };
+}
+
 function normalizeAccountListResponse(payload) {
   return normalizeIdListResponse(payload, "account list response");
 }
@@ -19107,6 +19550,126 @@ function normalizeTriggerUpsertPayload(input) {
   return payload;
 }
 
+function normalizeSubscriptionPlanCreateRequest(input) {
+  const record = ensureRecord(input, "createSubscriptionPlan request");
+  const credentials = normalizeAuthorityCredentials(record, "createSubscriptionPlan");
+  const planId = pickOverride(record, "plan_id", "planId");
+  if (planId === undefined || planId === null) {
+    throw new TypeError("createSubscriptionPlan.planId is required");
+  }
+  const planValue = record.plan;
+  if (planValue === undefined || planValue === null) {
+    throw new TypeError("createSubscriptionPlan.plan is required");
+  }
+  if (!isPlainObject(planValue)) {
+    throw new TypeError("createSubscriptionPlan.plan must be an object");
+  }
+  return {
+    ...credentials,
+    plan_id: ToriiClient._requireAssetDefinitionId(planId),
+    plan: cloneJsonValue(planValue, "createSubscriptionPlan.plan"),
+  };
+}
+
+function normalizeSubscriptionCreateRequest(input) {
+  const record = ensureRecord(input, "createSubscription request");
+  const credentials = normalizeAuthorityCredentials(record, "createSubscription");
+  const subscriptionId = pickOverride(record, "subscription_id", "subscriptionId");
+  if (subscriptionId === undefined || subscriptionId === null) {
+    throw new TypeError("createSubscription.subscriptionId is required");
+  }
+  const planId = pickOverride(record, "plan_id", "planId");
+  if (planId === undefined || planId === null) {
+    throw new TypeError("createSubscription.planId is required");
+  }
+  const payload = {
+    ...credentials,
+    subscription_id: requireNonEmptyString(subscriptionId, "createSubscription.subscriptionId"),
+    plan_id: ToriiClient._requireAssetDefinitionId(planId),
+  };
+  const billingTriggerId = pickOverride(record, "billing_trigger_id", "billingTriggerId");
+  if (billingTriggerId !== undefined && billingTriggerId !== null) {
+    payload.billing_trigger_id = requireNonEmptyString(
+      billingTriggerId,
+      "createSubscription.billingTriggerId",
+    );
+  }
+  const usageTriggerId = pickOverride(record, "usage_trigger_id", "usageTriggerId");
+  if (usageTriggerId !== undefined && usageTriggerId !== null) {
+    payload.usage_trigger_id = requireNonEmptyString(
+      usageTriggerId,
+      "createSubscription.usageTriggerId",
+    );
+  }
+  const firstChargeMs = pickOverride(record, "first_charge_ms", "firstChargeMs");
+  if (firstChargeMs !== undefined && firstChargeMs !== null) {
+    payload.first_charge_ms = ToriiClient._normalizeUnsignedInteger(
+      firstChargeMs,
+      "createSubscription.firstChargeMs",
+      { allowZero: true },
+    );
+  }
+  const grantUsage = pickOverride(record, "grant_usage_to_provider", "grantUsageToProvider");
+  if (grantUsage !== undefined && grantUsage !== null) {
+    payload.grant_usage_to_provider = requireBooleanLike(
+      grantUsage,
+      "createSubscription.grantUsageToProvider",
+    );
+  }
+  return payload;
+}
+
+function normalizeSubscriptionActionRequest(input, context) {
+  const record = ensureRecord(input, `${context} request`);
+  const credentials = normalizeAuthorityCredentials(record, context);
+  const payload = {
+    ...credentials,
+  };
+  const chargeAt = pickOverride(record, "charge_at_ms", "chargeAtMs");
+  if (chargeAt !== undefined && chargeAt !== null) {
+    payload.charge_at_ms = ToriiClient._normalizeUnsignedInteger(
+      chargeAt,
+      `${context}.chargeAtMs`,
+      { allowZero: true },
+    );
+  }
+  const cancelMode = pickOverride(record, "cancel_mode", "cancelMode");
+  if (cancelMode !== undefined && cancelMode !== null) {
+    const normalized = requireNonEmptyString(cancelMode, `${context}.cancelMode`).toLowerCase();
+    if (normalized !== "immediate" && normalized !== "period_end") {
+      throw new TypeError(`${context}.cancelMode must be immediate or period_end`);
+    }
+    payload.cancel_mode = normalized;
+  }
+  return payload;
+}
+
+function normalizeSubscriptionUsageRequest(input, context) {
+  const record = ensureRecord(input, `${context} request`);
+  const credentials = normalizeAuthorityCredentials(record, context);
+  const unitKey = pickOverride(record, "unit_key", "unitKey");
+  if (unitKey === undefined || unitKey === null) {
+    throw new TypeError(`${context}.unitKey is required`);
+  }
+  const delta = record.delta;
+  if (delta === undefined || delta === null) {
+    throw new TypeError(`${context}.delta is required`);
+  }
+  const payload = {
+    ...credentials,
+    unit_key: requireNonEmptyString(unitKey, `${context}.unitKey`),
+    delta: normalizeNumericLiteral(delta, `${context}.delta`),
+  };
+  const usageTriggerId = pickOverride(record, "usage_trigger_id", "usageTriggerId");
+  if (usageTriggerId !== undefined && usageTriggerId !== null) {
+    payload.usage_trigger_id = requireNonEmptyString(
+      usageTriggerId,
+      `${context}.usageTriggerId`,
+    );
+  }
+  return payload;
+}
+
 function normalizeTriggerRecord(payload, context) {
   const record = ensureRecord(payload, context);
   const id = requireNonEmptyString(record.id, `${context}.id`);
@@ -19142,6 +19705,171 @@ function normalizeTriggerListResponse(payload, context) {
     items,
     total: totalValue,
   };
+}
+
+function normalizeSubscriptionPlanCreateResponse(payload) {
+  const record = ensureRecord(payload, "subscription plan create response");
+  return {
+    ok: Boolean(record.ok),
+    plan_id: requireNonEmptyString(record.plan_id, "subscriptionPlanCreate.plan_id"),
+    tx_hash_hex: requireNonEmptyString(
+      record.tx_hash_hex,
+      "subscriptionPlanCreate.tx_hash_hex",
+    ),
+  };
+}
+
+function normalizeSubscriptionCreateResponse(payload) {
+  const record = ensureRecord(payload, "subscription create response");
+  const normalized = {
+    ok: Boolean(record.ok),
+    subscription_id: requireNonEmptyString(
+      record.subscription_id,
+      "subscriptionCreate.subscription_id",
+    ),
+    billing_trigger_id: requireNonEmptyString(
+      record.billing_trigger_id,
+      "subscriptionCreate.billing_trigger_id",
+    ),
+    first_charge_ms: ToriiClient._normalizeUnsignedInteger(
+      record.first_charge_ms,
+      "subscriptionCreate.first_charge_ms",
+      { allowZero: true },
+    ),
+    tx_hash_hex: requireNonEmptyString(
+      record.tx_hash_hex,
+      "subscriptionCreate.tx_hash_hex",
+    ),
+  };
+  if (record.usage_trigger_id !== undefined && record.usage_trigger_id !== null) {
+    normalized.usage_trigger_id = requireNonEmptyString(
+      record.usage_trigger_id,
+      "subscriptionCreate.usage_trigger_id",
+    );
+  }
+  return normalized;
+}
+
+function normalizeSubscriptionActionResponse(payload, context) {
+  const record = ensureRecord(payload, context);
+  return {
+    ok: Boolean(record.ok),
+    subscription_id: requireNonEmptyString(
+      record.subscription_id,
+      `${context}.subscription_id`,
+    ),
+    tx_hash_hex: requireNonEmptyString(
+      record.tx_hash_hex,
+      `${context}.tx_hash_hex`,
+    ),
+  };
+}
+
+function normalizeSubscriptionPlanListResponse(payload) {
+  const record = ensureRecord(payload ?? {}, "subscription plan list response");
+  const rawItems = record.items ?? [];
+  if (!Array.isArray(rawItems)) {
+    throw new TypeError("subscription plan list response.items must be an array");
+  }
+  const items = rawItems.map((entry, index) => {
+    const item = ensureRecord(entry, `subscription plan list response.items[${index}]`);
+    const planValue = item.plan;
+    if (planValue === undefined || planValue === null) {
+      throw new TypeError(
+        `subscription plan list response.items[${index}].plan is required`,
+      );
+    }
+    if (!isPlainObject(planValue)) {
+      throw new TypeError(
+        `subscription plan list response.items[${index}].plan must be an object`,
+      );
+    }
+    return {
+      plan_id: requireNonEmptyString(
+        item.plan_id,
+        `subscription plan list response.items[${index}].plan_id`,
+      ),
+      plan: cloneJsonValue(
+        planValue,
+        `subscription plan list response.items[${index}].plan`,
+      ),
+    };
+  });
+  const totalValue =
+    record.total === undefined || record.total === null
+      ? items.length
+      : ToriiClient._normalizeUnsignedInteger(
+          record.total,
+          "subscription plan list response.total",
+          { allowZero: true },
+        );
+  return {
+    items,
+    total: totalValue,
+  };
+}
+
+function normalizeSubscriptionListResponse(payload) {
+  const record = ensureRecord(payload ?? {}, "subscription list response");
+  const rawItems = record.items ?? [];
+  if (!Array.isArray(rawItems)) {
+    throw new TypeError("subscription list response.items must be an array");
+  }
+  const items = rawItems.map((entry, index) =>
+    normalizeSubscriptionListItem(entry, `subscription list response.items[${index}]`),
+  );
+  const totalValue =
+    record.total === undefined || record.total === null
+      ? items.length
+      : ToriiClient._normalizeUnsignedInteger(
+          record.total,
+          "subscription list response.total",
+          { allowZero: true },
+        );
+  return {
+    items,
+    total: totalValue,
+  };
+}
+
+function normalizeSubscriptionListItem(value, context) {
+  const record = ensureRecord(value, context);
+  const subscriptionValue = record.subscription;
+  if (subscriptionValue === undefined || subscriptionValue === null) {
+    throw new TypeError(`${context}.subscription is required`);
+  }
+  if (!isPlainObject(subscriptionValue)) {
+    throw new TypeError(`${context}.subscription must be an object`);
+  }
+  let invoiceValue = record.invoice;
+  if (invoiceValue !== undefined && invoiceValue !== null && !isPlainObject(invoiceValue)) {
+    throw new TypeError(`${context}.invoice must be an object`);
+  }
+  let planValue = record.plan;
+  if (planValue !== undefined && planValue !== null && !isPlainObject(planValue)) {
+    throw new TypeError(`${context}.plan must be an object`);
+  }
+  const normalized = {
+    subscription_id: requireNonEmptyString(
+      record.subscription_id,
+      `${context}.subscription_id`,
+    ),
+    subscription: cloneJsonValue(subscriptionValue, `${context}.subscription`),
+  };
+  if (invoiceValue !== undefined) {
+    normalized.invoice =
+      invoiceValue === null ? null : cloneJsonValue(invoiceValue, `${context}.invoice`);
+  }
+  if (planValue !== undefined) {
+    normalized.plan =
+      planValue === null ? null : cloneJsonValue(planValue, `${context}.plan`);
+  }
+  return normalized;
+}
+
+function normalizeSubscriptionGetResponse(payload) {
+  const record = ensureRecord(payload, "subscription get response");
+  return normalizeSubscriptionListItem(record, "subscription get response");
 }
 
 function normalizeOfflineAllowanceListResponse(payload, context) {

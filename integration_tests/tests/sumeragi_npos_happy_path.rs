@@ -73,11 +73,15 @@ async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
         return Ok(());
     };
 
+    let client = network.client();
+    let status = client.get_status()?;
+    for idx in status.blocks..BLOCK_TARGET {
+        client.submit_blocking(Log::new(Level::INFO, format!("npos happy seed {idx}")))?;
+    }
     network
         .ensure_blocks_with(|height| height.total >= BLOCK_TARGET)
         .await?;
 
-    let client = network.client();
     let status = client.get_status()?;
     ensure!(
         status.blocks >= BLOCK_TARGET,

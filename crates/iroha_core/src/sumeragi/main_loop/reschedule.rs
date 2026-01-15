@@ -355,7 +355,7 @@ impl Actor {
             expected_epoch,
         )
         .is_some();
-        let _queue_depth = self.queue.tx_len();
+        let _queue_depth = self.queue.queued_len();
         let (state_height, tip_hash) = {
             let state_view = self.state.view();
             (state_view.height(), state_view.latest_block_hash())

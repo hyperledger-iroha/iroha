@@ -8692,6 +8692,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
             queryItems: [URLQueryItem(name: "hash", value: hashHex)]
         )
         let (data, response) = try await send(request)
+        if response.statusCode == 404 { return nil }
         try ensureStatus(response, in: 200..<300)
         guard !data.isEmpty else { return nil }
         return try decodeJSON(ToriiPipelineTransactionStatus.self, from: data)

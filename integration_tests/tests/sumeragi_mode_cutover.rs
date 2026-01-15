@@ -10,8 +10,8 @@ use iroha_core::sumeragi::consensus::{
     compute_consensus_fingerprint_from_params,
 };
 use iroha_data_model::{
-    ChainId,
-    isi::SetParameter,
+    ChainId, Level,
+    isi::{Log, SetParameter},
     parameter::{
         Parameter, Parameters,
         system::{
@@ -261,6 +261,11 @@ async fn permissioned_to_npos_cutover_switches_mode_at_activation_height() -> Re
         "epoch_length_blocks should reflect permissioned mode before activation, got {pre_status:?}"
     );
 
+    let target_height = ACTIVATION_HEIGHT.saturating_add(1);
+    let status = client.get_status()?;
+    for idx in status.blocks..target_height {
+        client.submit_blocking(Log::new(Level::INFO, format!("cutover seed {idx}")))?;
+    }
     network
         .ensure_blocks_with(|height| height.total > ACTIVATION_HEIGHT)
         .await?;
@@ -374,6 +379,15 @@ async fn staged_cutover_recomputes_consensus_fingerprint() -> Result<()> {
         pre_activation
     );
 
+    let client = network.client();
+    let target_height = ACTIVATION_HEIGHT.saturating_add(1);
+    let status = client.get_status()?;
+    for idx in status.blocks..target_height {
+        client.submit_blocking(Log::new(
+            Level::INFO,
+            format!("cutover fingerprint seed {idx}"),
+        ))?;
+    }
     network
         .ensure_blocks_with(|height| height.total > ACTIVATION_HEIGHT)
         .await?;

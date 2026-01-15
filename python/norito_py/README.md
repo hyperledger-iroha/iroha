@@ -6,7 +6,7 @@ The library mirrors the key features of the production Rust implementation so
 Python tooling and tests can produce deterministic, interoperable payloads.
 
 ## Features
-- Header parsing/serialization (`NRT0`, major 0 with default layout-bit minor) with CRC64-ECMA validation
+- Header parsing/serialization (`NRT0`, major 0 with default layout-bit minor) with CRC64-XZ validation
 - Encoding/decoding primitives (bool, signed/unsigned 8–64 bit integers, IEEE-754 floats)
 - Strings, bytes, options (`None`), results (`Ok`/`Err` wrappers)
 - Packed and compat sequences with compact lengths and varint offsets

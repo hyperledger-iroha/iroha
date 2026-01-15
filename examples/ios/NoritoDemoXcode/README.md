@@ -81,6 +81,8 @@ signed payload to `/v1/pipeline/transactions` and then polls
 `/v1/pipeline/transactions/status` until the transaction reaches a terminal state. The
 UI reflects intermediate states (`Queued`, `Approved`, etc.) so QA runs can confirm the
 pipeline path end-to-end.
+If the status endpoint returns `404` (Torii restart or cache miss), the SDK treats the
+response as "pending" and keeps polling until a terminal status arrives.
 
 ## CI verification
 

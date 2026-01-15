@@ -13181,9 +13181,7 @@ impl Torii {
             config
                 .tx_rate_per_authority_per_sec
                 .map(std::num::NonZeroU32::get),
-            config
-                .tx_burst_per_authority
-                .map(std::num::NonZeroU32::get),
+            config.tx_burst_per_authority.map(std::num::NonZeroU32::get),
         );
         let deploy_rl = limits::RateLimiter::new(
             config
@@ -13285,10 +13283,8 @@ impl Torii {
             _ => FeePolicy::Disabled,
         };
         // Default threshold if not provided
-        let default_high_load_tx_threshold = std::cmp::max(
-            1,
-            queue.current_backpressure().capacity().get() / 2,
-        );
+        let default_high_load_tx_threshold =
+            std::cmp::max(1, queue.current_backpressure().capacity().get() / 2);
         let high_load_tx_threshold = config
             .api_high_load_tx_threshold
             .unwrap_or(default_high_load_tx_threshold);
@@ -15182,19 +15178,18 @@ pub(crate) mod tests_runtime_handlers {
     use iroha_core::{
         kiso::KisoHandle,
         kura::Kura,
-        queue::Queue,
         query::store::LiveQueryStore,
+        queue::Queue,
+        state::{State as IrohaState, World},
         sumeragi::{
             consensus::{PERMISSIONED_TAG, Phase, Vote, vote_preimage},
             status::record_commit_qc,
         },
-        state::{State, World},
         tx::AcceptedTransaction,
     };
     use iroha_crypto::{Algorithm, KeyPair, Signature, SignatureOf};
     use iroha_data_model::{
-        ChainId,
-        ValidationFail,
+        ChainId, ValidationFail,
         account::AccountId,
         block::{BlockSignature, SignedBlock},
         consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
@@ -15555,18 +15550,22 @@ pub(crate) mod tests_runtime_handlers {
         let mut cfg = crate::test_utils::mk_minimal_root_cfg();
         cfg.torii.tx_rate_per_authority_per_sec =
             Some(NonZeroU32::new(123).expect("nonzero tx rate"));
-        cfg.torii.tx_burst_per_authority =
-            Some(NonZeroU32::new(456).expect("nonzero tx burst"));
+        cfg.torii.tx_burst_per_authority = Some(NonZeroU32::new(456).expect("nonzero tx burst"));
         cfg.torii.api_high_load_tx_threshold = None;
 
         let (kiso, _child) = KisoHandle::start(cfg.clone());
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let state = Arc::new(State::new_for_testing(World::default(), kura.clone(), query));
+        let state = Arc::new(IrohaState::new_for_testing(
+            World::default(),
+            kura.clone(),
+            query,
+        ));
         let queue_cfg = iroha_config::parameters::actual::Queue {
             capacity: NonZeroUsize::new(100).expect("queue capacity non-zero"),
             capacity_per_user: NonZeroUsize::new(100).expect("queue per-user capacity non-zero"),
             transaction_time_to_live: Duration::from_secs(60),
+            ..Default::default()
         };
         let queue_events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
         let queue = Arc::new(Queue::from_config(queue_cfg, queue_events));
@@ -15587,10 +15586,7 @@ pub(crate) mod tests_runtime_handlers {
             routing::MaybeTelemetry::disabled(),
         );
 
-        assert_eq!(
-            torii.tx_rate_per_authority_per_sec.unwrap().get(),
-            123
-        );
+        assert_eq!(torii.tx_rate_per_authority_per_sec.unwrap().get(), 123);
         assert_eq!(torii.tx_burst_per_authority.unwrap().get(), 456);
         assert_eq!(torii.high_load_tx_threshold, 50);
     }
@@ -15610,8 +15606,8 @@ pub(crate) mod tests_runtime_handlers {
             keypair.public_key().clone(),
         );
         let chain = (*app.chain_id).clone();
-        let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
-            .sign(keypair.private_key());
+        let tx1 =
+            TransactionBuilder::new(chain.clone(), authority.clone()).sign(keypair.private_key());
         let tx2 = TransactionBuilder::new(chain, authority).sign(keypair.private_key());
         let headers = HeaderMap::new();
 
@@ -15624,13 +15620,12 @@ pub(crate) mod tests_runtime_handlers {
         .expect("accepted");
         assert_eq!(ok.into_response().status(), StatusCode::ACCEPTED);
 
-        let err = super::handler_post_transaction(
-            State(app),
-            headers,
-            NoritoVersioned(tx2),
-        )
-        .await
-        .expect_err("rate limited");
+        let err = match super::handler_post_transaction(State(app), headers, NoritoVersioned(tx2))
+            .await
+        {
+            Ok(_) => panic!("expected rate limit"),
+            Err(err) => err,
+        };
         assert_eq!(err.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
     }
 

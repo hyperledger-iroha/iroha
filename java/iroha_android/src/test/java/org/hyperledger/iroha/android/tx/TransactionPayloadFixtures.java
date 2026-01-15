@@ -58,12 +58,30 @@ final class TransactionPayloadFixtures {
 
   static final class Fixture {
     private final String name;
+    private final String chain;
+    private final String authority;
+    private final long creationTimeMs;
+    private final Optional<Long> timeToLiveMs;
+    private final Optional<Integer> nonce;
     private final Map<String, Object> payload;
     private final String encoded;
     private final TransactionPayload decodedPayload;
 
-    private Fixture(final String name, final Map<String, Object> payload, final String encoded) {
+    private Fixture(
+        final String name,
+        final String chain,
+        final String authority,
+        final long creationTimeMs,
+        final Optional<Long> timeToLiveMs,
+        final Optional<Integer> nonce,
+        final Map<String, Object> payload,
+        final String encoded) {
       this.name = name;
+      this.chain = chain;
+      this.authority = authority;
+      this.creationTimeMs = creationTimeMs;
+      this.timeToLiveMs = timeToLiveMs;
+      this.nonce = nonce;
       this.payload = payload;
       this.encoded = encoded;
       this.decodedPayload = payload == null && encoded != null ? decodePayload(name, encoded) : null;
@@ -76,6 +94,13 @@ final class TransactionPayloadFixtures {
       @SuppressWarnings("unchecked")
       final Map<Object, Object> map = (Map<Object, Object>) value;
       final String name = Objects.toString(map.get("name"), "<unnamed>");
+      final String chain = asString(map.get("chain"), "chain");
+      final String authority = asString(map.get("authority"), "authority");
+      final long creationTimeMs =
+          asNumber(map.get("creation_time_ms"), "creation_time_ms").longValue();
+      final Optional<Long> timeToLiveMs =
+          optionalLong(map.get("time_to_live_ms"), "time_to_live_ms");
+      final Optional<Integer> nonce = optionalInt(map.get("nonce"), "nonce");
       final Map<String, Object> payload =
           map.containsKey("payload") ? asMap(map.get("payload"), "payload", name) : null;
       final Object encoded = map.get("encoded");
@@ -84,11 +109,32 @@ final class TransactionPayloadFixtures {
           encoded != null
               ? Objects.toString(encoded)
               : payloadBase64 == null ? null : Objects.toString(payloadBase64);
-      return new Fixture(name, payload, resolvedEncoded);
+      return new Fixture(
+          name, chain, authority, creationTimeMs, timeToLiveMs, nonce, payload, resolvedEncoded);
     }
 
     String name() {
       return name;
+    }
+
+    String chain() {
+      return chain;
+    }
+
+    String authority() {
+      return authority;
+    }
+
+    long creationTimeMs() {
+      return creationTimeMs;
+    }
+
+    Optional<Long> timeToLiveMs() {
+      return timeToLiveMs;
+    }
+
+    Optional<Integer> nonce() {
+      return nonce;
     }
 
     boolean isDecodable() {
@@ -205,6 +251,21 @@ final class TransactionPayloadFixtures {
       throw new IllegalStateException("Expected number for " + field);
     }
     return (Number) value;
+  }
+
+  private static Optional<Long> optionalLong(final Object value, final String field) {
+    if (value == null) {
+      return Optional.empty();
+    }
+    return Optional.of(asNumber(value, field).longValue());
+  }
+
+  private static Optional<Integer> optionalInt(final Object value, final String field) {
+    if (value == null) {
+      return Optional.empty();
+    }
+    final long raw = asNumber(value, field).longValue();
+    return Optional.of(Math.toIntExact(raw));
   }
 
 }
