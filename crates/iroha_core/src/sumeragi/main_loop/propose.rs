@@ -54,6 +54,30 @@ fn precommit_qc_for_view_change(
     }
 }
 
+fn trim_batch_for_size_cap<T, U>(
+    tx_batch: &mut Vec<T>,
+    routing_batch: &mut Vec<U>,
+    sizes: &mut Vec<usize>,
+    removed: &mut Vec<T>,
+    mut excess_bytes: usize,
+) -> usize {
+    debug_assert_eq!(tx_batch.len(), routing_batch.len());
+    debug_assert_eq!(tx_batch.len(), sizes.len());
+    let mut removed_count = 0usize;
+    while excess_bytes > 0 && tx_batch.len() > 1 {
+        let tx = match tx_batch.pop() {
+            Some(tx) => tx,
+            None => break,
+        };
+        let _ = routing_batch.pop();
+        let size = sizes.pop().unwrap_or(1).max(1);
+        excess_bytes = excess_bytes.saturating_sub(size);
+        removed.push(tx);
+        removed_count = removed_count.saturating_add(1);
+    }
+    removed_count
+}
+
 impl Actor {
     pub(super) fn max_tx_budget(
         queue_len: usize,
@@ -355,6 +379,7 @@ impl Actor {
         let mut overflow_transactions = Vec::new();
         let mut tx_batch;
         let mut routing_batch;
+        let mut tx_sizes;
         if da_enabled {
             let mut remaining_budget = self
                 .config
@@ -363,6 +388,7 @@ impl Actor {
                 .saturating_mul(usize::try_from(RBC_MAX_TOTAL_CHUNKS).expect("fits in usize"));
             tx_batch = Vec::with_capacity(transactions.len());
             routing_batch = Vec::with_capacity(routing_decisions.len());
+            tx_sizes = Vec::with_capacity(transactions.len());
             for (tx, routing) in transactions.into_iter().zip(routing_decisions.into_iter()) {
                 let encoded_len = tx.as_ref().encode().len();
                 if encoded_len > remaining_budget {
@@ -370,6 +396,7 @@ impl Actor {
                     continue;
                 }
                 remaining_budget = remaining_budget.saturating_sub(encoded_len);
+                tx_sizes.push(encoded_len);
                 tx_batch.push(tx);
                 routing_batch.push(routing);
             }
@@ -380,6 +407,7 @@ impl Actor {
             ));
             tx_batch = Vec::with_capacity(transactions.len());
             routing_batch = Vec::with_capacity(routing_decisions.len());
+            tx_sizes = Vec::with_capacity(transactions.len());
             for (tx, routing) in transactions.into_iter().zip(routing_decisions.into_iter()) {
                 if let Some(budget) = payload_budget {
                     let encoded_len = tx.as_ref().encode().len();
@@ -388,6 +416,7 @@ impl Actor {
                         continue;
                     }
                     payload_budget = Some(budget.saturating_sub(encoded_len));
+                    tx_sizes.push(encoded_len);
                 }
                 tx_batch.push(tx);
                 routing_batch.push(routing);
@@ -398,9 +427,13 @@ impl Actor {
             if let Some(admin_idx) = tx_batch.iter().position(Self::is_peer_admin_transaction) {
                 let admin_tx = tx_batch.remove(admin_idx);
                 let admin_route = routing_batch.remove(admin_idx);
+                let admin_size = tx_sizes.remove(admin_idx);
                 overflow_transactions.append(&mut tx_batch);
+                routing_batch.clear();
+                tx_sizes.clear();
                 tx_batch.push(admin_tx);
                 routing_batch.push(admin_route);
+                tx_sizes.push(admin_size);
             }
         }
 
@@ -416,6 +449,11 @@ impl Actor {
                 &mut tx_batch,
                 &mut routing_batch,
             )?;
+            if tx_sizes.len() < tx_batch.len() {
+                for tx in tx_batch.iter().skip(tx_sizes.len()) {
+                    tx_sizes.push(tx.as_ref().encode().len());
+                }
+            }
             let (
                 signed_block,
                 block_created_msg,
@@ -722,6 +760,7 @@ impl Actor {
                         }
                         if let Some(removed_tx) = tx_batch.pop() {
                             let _ = routing_batch.pop();
+                            let _ = tx_sizes.pop();
                             removed_for_chunk_cap.push(removed_tx);
                             continue;
                         }
@@ -747,11 +786,23 @@ impl Actor {
                             self.consensus_frame_cap
                         ));
                     }
-                    if let Some(removed_tx) = tx_batch.pop() {
-                        let _ = routing_batch.pop();
-                        removed_for_frame_cap.push(removed_tx);
-                        continue;
+                    let excess = frame_len.saturating_sub(self.consensus_frame_cap);
+                    let removed = trim_batch_for_size_cap(
+                        &mut tx_batch,
+                        &mut routing_batch,
+                        &mut tx_sizes,
+                        &mut removed_for_frame_cap,
+                        excess,
+                    );
+                    if removed == 0 {
+                        if let Some(removed_tx) = tx_batch.pop() {
+                            let _ = routing_batch.pop();
+                            let _ = tx_sizes.pop();
+                            removed_for_frame_cap.push(removed_tx);
+                            continue;
+                        }
                     }
+                    continue;
                 }
                 let payload_hash = Hash::new(&payload_bytes);
                 let proposal = Self::build_consensus_proposal(
@@ -1865,5 +1916,43 @@ impl Actor {
             .remove(height, view_idx);
         self.subsystems.propose.last_successful_proposal = Some(now);
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::trim_batch_for_size_cap;
+
+    #[test]
+    fn trim_batch_for_size_cap_removes_multiple_entries() {
+        let mut txs = vec![1, 2, 3, 4];
+        let mut routes = vec![10, 11, 12, 13];
+        let mut sizes = vec![10, 10, 10, 10];
+        let mut removed = Vec::new();
+
+        let removed_count =
+            trim_batch_for_size_cap(&mut txs, &mut routes, &mut sizes, &mut removed, 15);
+
+        assert_eq!(removed_count, 2);
+        assert_eq!(txs, vec![1, 2]);
+        assert_eq!(routes, vec![10, 11]);
+        assert_eq!(sizes, vec![10, 10]);
+        assert_eq!(removed.len(), 2);
+    }
+
+    #[test]
+    fn trim_batch_for_size_cap_keeps_single_entry() {
+        let mut txs = vec![1, 2, 3];
+        let mut routes = vec![10, 11, 12];
+        let mut sizes = vec![5, 5, 5];
+        let mut removed = Vec::new();
+
+        let removed_count =
+            trim_batch_for_size_cap(&mut txs, &mut routes, &mut sizes, &mut removed, 100);
+
+        assert_eq!(removed_count, 2);
+        assert_eq!(txs.len(), 1);
+        assert_eq!(routes.len(), 1);
+        assert_eq!(sizes.len(), 1);
     }
 }

@@ -39,7 +39,7 @@ use crate::{
 
 const BLOCK_SYNC_QUEUE_CAP_MULTIPLIER: usize = 4;
 const BLOCK_SYNC_QUEUE_CAP_FLOOR: usize = 4;
-const BLOCK_SYNC_REQUEST_MAX_PENDING: u8 = 2;
+const BLOCK_SYNC_REQUEST_MAX_PENDING: u8 = 8;
 const BLOCK_SYNC_REQUEST_TTL_FLOOR_MS: u64 = 1_000;
 
 fn block_sync_channel_cap(gossip_size: NonZeroU32) -> usize {
@@ -2481,6 +2481,7 @@ pub mod message {
         context: &BlockSyncValidationContext,
         signature_check: Result<(), crate::block::SignatureVerificationError>,
         sanitized_qc: Option<&Qc>,
+        allow_without_quorum: bool,
     ) -> bool {
         if let Err(err) = signature_check {
             if sanitized_qc.is_none() {
@@ -2510,6 +2511,9 @@ pub mod message {
         let has_commit_signatures =
             crate::block::ValidBlock::is_commit(block, &context.signature_topology).is_ok();
         if !has_commit_signatures && sanitized_qc.is_none() {
+            if allow_without_quorum {
+                return false;
+            }
             status::inc_block_sync_drop_invalid_signatures();
             warn!(
                 height = context.block_height,
@@ -2566,69 +2570,81 @@ pub mod message {
         ) -> (Vec<(SignedBlock, Option<Qc>)>, usize) {
             let mut dropped = 0usize;
             let fallback_topology = fallback_topology.cloned();
-            let filtered = entries
-                .into_iter()
-                .filter_map(|(block, qc)| {
-                    let block_hash = block.hash();
-                    let block_height = block.header().height().get();
-                    let roster_topology = rosters
-                        .get(&block_hash)
-                        .and_then(RosterMetadata::validator_set)
-                        .filter(|roster| !roster.is_empty())
-                        .map(|roster| Topology::new(roster.iter().cloned()));
-                    let topology = roster_topology.or_else(|| fallback_topology.clone());
-                    let Some(topology) = topology else {
-                        return Some((block, qc));
-                    };
-                    let stake_snapshot = rosters
-                        .get(&block_hash)
-                        .and_then(|meta| meta.stake_snapshot.as_ref());
-                    let context = {
-                        // Keep the state view short-lived to reduce lock contention under load.
-                        let state_view = state.view();
-                        let mode_tag = mode_tag_for_block_sync(
-                            &state_view,
-                            block_height,
-                            fallback_consensus_mode,
-                        );
-                        BlockSyncValidationContext::new(&block, &topology, &state_view, mode_tag)
-                    };
-                    let signature_check = BlockSynchronizer::block_signatures_valid(
+            let (mut expected_height, mut expected_hash) = {
+                let view = state.view();
+                let tip_height = u64::try_from(view.height()).unwrap_or(u64::MAX);
+                (tip_height.saturating_add(1), view.latest_block_hash())
+            };
+            let mut filtered = Vec::new();
+            for (block, qc) in entries {
+                let block_hash = block.hash();
+                let block_height = block.header().height().get();
+                let extends_tip = match (expected_hash, block.header().prev_block_hash()) {
+                    (Some(expected), Some(parent)) => expected == parent,
+                    (None, None) => true,
+                    _ => false,
+                };
+                let roster_topology = rosters
+                    .get(&block_hash)
+                    .and_then(RosterMetadata::validator_set)
+                    .filter(|roster| !roster.is_empty())
+                    .map(|roster| Topology::new(roster.iter().cloned()));
+                let topology = roster_topology.or_else(|| fallback_topology.clone());
+                let Some(topology) = topology else {
+                    expected_height = block_height.saturating_add(1);
+                    expected_hash = Some(block_hash);
+                    filtered.push((block, qc));
+                    continue;
+                };
+                let stake_snapshot = rosters
+                    .get(&block_hash)
+                    .and_then(|meta| meta.stake_snapshot.as_ref());
+                let context = {
+                    // Keep the state view short-lived to reduce lock contention under load.
+                    let state_view = state.view();
+                    let mode_tag =
+                        mode_tag_for_block_sync(&state_view, block_height, fallback_consensus_mode);
+                    BlockSyncValidationContext::new(&block, &topology, &state_view, mode_tag)
+                };
+                let signature_check = BlockSynchronizer::block_signatures_valid(
+                    &block,
+                    &context.signature_topology,
+                    state,
+                );
+                let allow_without_quorum =
+                    extends_tip && block_height == expected_height && signature_check.is_ok();
+                let block_signers = if signature_check.is_ok() {
+                    Self::commit_role_signers_all(&block, &context.signature_topology)
+                } else {
+                    BTreeSet::new()
+                };
+                let sanitized_qc = {
+                    let state_view = state.view();
+                    sanitize_block_sync_qc(
+                        &state_view,
+                        fallback_consensus_mode,
                         &block,
-                        &context.signature_topology,
-                        state,
-                    );
-                    let block_signers = if signature_check.is_ok() {
-                        Self::commit_role_signers_all(&block, &context.signature_topology)
-                    } else {
-                        BTreeSet::new()
-                    };
-                    let sanitized_qc = {
-                        let state_view = state.view();
-                        sanitize_block_sync_qc(
-                            &state_view,
-                            fallback_consensus_mode,
-                            &block,
-                            qc,
-                            &context,
-                            &topology,
-                            &block_signers,
-                            stake_snapshot,
-                        )
-                    };
-                    if should_drop_block_sync_entry(
-                        &block,
+                        qc,
                         &context,
-                        signature_check,
-                        sanitized_qc.as_ref(),
-                    ) {
-                        dropped += 1;
-                        return None;
-                    }
-
-                    Some((block, sanitized_qc))
-                })
-                .collect();
+                        &topology,
+                        &block_signers,
+                        stake_snapshot,
+                    )
+                };
+                if should_drop_block_sync_entry(
+                    &block,
+                    &context,
+                    signature_check,
+                    sanitized_qc.as_ref(),
+                    allow_without_quorum,
+                ) {
+                    dropped += 1;
+                    continue;
+                }
+                expected_height = block_height.saturating_add(1);
+                expected_hash = Some(block_hash);
+                filtered.push((block, sanitized_qc));
+            }
             (filtered, dropped)
         }
 
@@ -4190,6 +4206,7 @@ pub mod message {
                     &context,
                     signature_check,
                     Some(&qc),
+                    false,
                 ),
                 "QC should keep the block sync update despite invalid signatures"
             );
@@ -4241,10 +4258,18 @@ pub mod message {
             valid_block.sign(&kp_validator, &topology);
             let valid_block: SignedBlock = valid_block.into();
 
-            let insufficient_block: SignedBlock =
-                unique_dummy_block(kp_leader.private_key(), |_| {}).into();
-
             let state = state_with_consensus_key_pops(&[&kp_leader, &kp_validator]);
+            let tip_height = u64::try_from(state.view().height()).unwrap_or(0);
+            let wrong_parent =
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([9u8; 32]));
+            let insufficient_block: SignedBlock =
+                unique_dummy_block(kp_leader.private_key(), |header| {
+                    let height =
+                        NonZeroU64::new(tip_height.saturating_add(2)).expect("non-zero height");
+                    header.set_height(height);
+                    header.set_prev_block_hash(Some(wrong_parent));
+                })
+                .into();
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(insufficient_block, None), (valid_block.clone(), None)],
                 &BTreeMap::new(),
@@ -4255,6 +4280,41 @@ pub mod message {
 
             assert_eq!(dropped, 1);
             assert_eq!(filtered, vec![(valid_block, None)]);
+        }
+
+        #[test]
+        fn filter_blocks_accepts_next_height_without_quorum_when_extends_tip() {
+            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![
+                PeerId::new(kp_leader.public_key().clone()),
+                PeerId::new(kp_validator.public_key().clone()),
+            ]);
+            let state = state_with_consensus_key_pops(&[&kp_leader, &kp_validator]);
+            let tip_height = u64::try_from(state.view().height()).unwrap_or(0);
+            let tip_hash = state.view().latest_block_hash();
+            let (next_height, prev_hash) = match tip_hash {
+                Some(hash) => (tip_height.saturating_add(1), Some(hash)),
+                None => (1, None),
+            };
+
+            let next_block: SignedBlock = unique_dummy_block(kp_leader.private_key(), |header| {
+                let height = NonZeroU64::new(next_height).expect("non-zero height");
+                header.set_height(height);
+                header.set_prev_block_hash(prev_hash);
+            })
+            .into();
+
+            let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
+                vec![(next_block.clone(), None)],
+                &BTreeMap::new(),
+                Some(&topology),
+                &state,
+                ConsensusMode::Permissioned,
+            );
+
+            assert_eq!(dropped, 0);
+            assert_eq!(filtered, vec![(next_block, None)]);
         }
 
         #[test]

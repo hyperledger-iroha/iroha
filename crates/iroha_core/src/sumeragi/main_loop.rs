@@ -10015,6 +10015,59 @@ struct EmptyChildContext {
     parent_payload_hash: Hash,
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+struct RelayDropCounters {
+    subscriber_queue_full: u64,
+    dropped_post: u64,
+    dropped_broadcast: u64,
+    post_overflow: u64,
+    cap_violations: u64,
+}
+
+impl RelayDropCounters {
+    fn collect() -> Self {
+        let cap_violations = iroha_p2p::network::cap_violations_consensus()
+            .saturating_add(iroha_p2p::network::cap_violations_control())
+            .saturating_add(iroha_p2p::network::cap_violations_block_sync())
+            .saturating_add(iroha_p2p::network::cap_violations_tx_gossip())
+            .saturating_add(iroha_p2p::network::cap_violations_peer_gossip())
+            .saturating_add(iroha_p2p::network::cap_violations_health())
+            .saturating_add(iroha_p2p::network::cap_violations_other());
+        Self {
+            subscriber_queue_full: iroha_p2p::network::subscriber_queue_full_count(),
+            dropped_post: iroha_p2p::network::dropped_post_count(),
+            dropped_broadcast: iroha_p2p::network::dropped_broadcast_count(),
+            post_overflow: iroha_p2p::network::post_overflow_count(),
+            cap_violations,
+        }
+    }
+
+    fn total(self) -> u64 {
+        self.subscriber_queue_full
+            .saturating_add(self.dropped_post)
+            .saturating_add(self.dropped_broadcast)
+            .saturating_add(self.post_overflow)
+            .saturating_add(self.cap_violations)
+    }
+}
+
+#[cfg(test)]
+mod relay_drop_counters_tests {
+    use super::RelayDropCounters;
+
+    #[test]
+    fn relay_drop_counters_total_sums_fields() {
+        let counters = RelayDropCounters {
+            subscriber_queue_full: 3,
+            dropped_post: 5,
+            dropped_broadcast: 7,
+            post_overflow: 11,
+            cap_violations: 13,
+        };
+        assert_eq!(counters.total(), 39);
+    }
+}
+
 #[derive(Debug)]
 struct RelayBackpressure {
     last_drop_count: u64,
@@ -10030,9 +10083,7 @@ impl RelayBackpressure {
     }
 
     fn drop_count() -> u64 {
-        iroha_p2p::network::subscriber_queue_full_consensus_count()
-            .saturating_add(iroha_p2p::network::subscriber_queue_full_control_count())
-            .saturating_add(iroha_p2p::network::subscriber_queue_full_block_sync_count())
+        RelayDropCounters::collect().total()
     }
 
     fn active(&mut self, now: Instant, cooldown: Duration) -> bool {
