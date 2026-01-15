@@ -112,17 +112,16 @@ impl QueueLimits {
     /// Build limits using values from the runtime Nexus configuration.
     #[must_use]
     pub fn from_nexus(nexus: &Nexus) -> Self {
-        if !nexus.enabled {
-            return Self::default();
-        }
         let fallback = LaneSchedulingLimits::new(
             u64::from(nexus.fusion.exit_teu),
             u64::from(nexus.da.rotation.window_slots.get()),
         );
         let mut per_lane = BTreeMap::new();
-        for lane in nexus.lane_catalog.lanes() {
-            let limits = Self::lane_limits_from_metadata(lane, fallback);
-            per_lane.insert(lane.id, limits);
+        if nexus.enabled {
+            for lane in nexus.lane_catalog.lanes() {
+                let limits = Self::lane_limits_from_metadata(lane, fallback);
+                per_lane.insert(lane.id, limits);
+            }
         }
         Self { fallback, per_lane }
     }
@@ -2797,6 +2796,21 @@ pub mod tests {
         assert!(
             defaults.fallback.teu_capacity > 0,
             "fallback TEU capacity should remain non-zero without telemetry"
+        );
+    }
+
+    #[test]
+    fn queue_limits_use_configured_fusion_teu_when_nexus_disabled() {
+        let mut nexus = Nexus::default();
+        nexus.enabled = false;
+        nexus.fusion.exit_teu = 120_000;
+
+        let limits = QueueLimits::from_nexus(&nexus);
+
+        assert_eq!(limits.fallback.teu_capacity, 120_000);
+        assert!(
+            limits.per_lane.is_empty(),
+            "disabled nexus should not apply lane overrides"
         );
     }
 

@@ -261,6 +261,7 @@ impl Actor {
                 block_max_param.get(),
                 self.config.block_max_transactions,
             );
+            let scan_budget = self.proposal_scan_budget(max_in_block);
             debug!(
                 height,
                 view,
@@ -268,10 +269,11 @@ impl Actor {
                 max_tx_param = block_max_param.get(),
                 max_tx_target,
                 max_in_block = max_in_block.get(),
+                scan_budget,
+                scan_multiplier = self.config.proposal_queue_scan_multiplier.get(),
                 "proposal assembly budget"
             );
-            // Bound queue scanning to a snapshot so continuous admission cannot stall proposal assembly.
-            let scan_budget = queue_len.max(max_in_block.get());
+            // Bound queue scanning to keep proposal assembly from stalling under sustained load.
             let deferred_accumulator = self.pull_transactions_for_proposal(
                 &state_view,
                 max_in_block,
@@ -1046,6 +1048,12 @@ impl Actor {
         let queue_saturated = self.subsystems.propose.backpressure_gate.should_defer();
         let rbc_backlog = self.has_unresolved_rbc_backlog();
         queue_saturated || rbc_backlog
+    }
+
+    pub(super) fn proposal_scan_budget(&self, max_in_block: NonZeroUsize) -> usize {
+        max_in_block
+            .get()
+            .saturating_mul(self.config.proposal_queue_scan_multiplier.get())
     }
 
     pub(super) fn on_pacemaker_backpressure_deferral(

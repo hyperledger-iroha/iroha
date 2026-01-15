@@ -3555,6 +3555,8 @@ pub struct Sumeragi {
     pub block_max_transactions: Option<NonZeroUsize>,
     /// Optional cap on block payload bytes when RBC is disabled (None = unlimited).
     pub block_max_payload_bytes: Option<NonZeroUsize>,
+    /// Multiplier applied to the proposal queue scan budget (relative to max tx per block).
+    pub proposal_queue_scan_multiplier: NonZeroUsize,
     /// Whether to allow empty-child recovery proposals when no transactions are queued.
     pub empty_child_fallback_enabled: bool,
     /// Capacity for the vote message channel.

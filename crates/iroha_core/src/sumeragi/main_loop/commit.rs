@@ -3196,12 +3196,18 @@ impl Actor {
         if remaining == 0 {
             return targets;
         }
+        let world_candidates_all = peers
+            .iter()
+            .filter(|peer| *peer != local_peer)
+            .cloned()
+            .collect::<Vec<_>>();
+        if remaining >= world_candidates_all.len() {
+            let ordered = Self::order_gossip_targets(world_candidates_all, seed, local_peer);
+            targets.extend(ordered);
+            return targets;
+        }
         let world_candidates = if world_online.is_empty() {
-            peers
-                .iter()
-                .filter(|peer| *peer != local_peer)
-                .cloned()
-                .collect::<Vec<_>>()
+            world_candidates_all
         } else {
             world_online
         };

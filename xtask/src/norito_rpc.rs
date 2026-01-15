@@ -441,6 +441,7 @@ fn run_fixture_exporter(
         .arg("--")
         .arg("--fixtures")
         .arg(&resolved.fixtures_json)
+        .arg("--write-fixtures")
         .arg("--out-dir")
         .arg(out_dir)
         .arg("--manifest")

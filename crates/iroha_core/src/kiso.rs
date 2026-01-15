@@ -948,6 +948,8 @@ mod tests {
                     iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_TRANSACTIONS,
                 block_max_payload_bytes:
                     iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES,
+                proposal_queue_scan_multiplier:
+                    iroha_config::parameters::defaults::sumeragi::PROPOSAL_QUEUE_SCAN_MULTIPLIER,
                 empty_child_fallback_enabled:
                     iroha_config::parameters::defaults::sumeragi::EMPTY_CHILD_FALLBACK_ENABLED,
                 msg_channel_cap_votes:

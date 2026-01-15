@@ -1045,25 +1045,19 @@ impl Actor {
         ready
     }
 
-    pub(super) fn schedule_rbc_chunk_broadcast(
+    fn schedule_rbc_chunk_posts(
         &mut self,
-        chunk: crate::sumeragi::consensus::RbcChunk,
+        chunk: &crate::sumeragi::consensus::RbcChunk,
+        targets: Vec<(usize, PeerId)>,
     ) {
-        let key = Self::session_key(&chunk.block_hash, chunk.height, chunk.view);
-        let roster = self.rbc_session_roster(key);
-        if roster.is_empty() {
-            return;
-        }
-        let local_peer_id = self.common_config.peer.id().clone();
-        let target_count = rbc_chunk_target_count(roster.len(), self.config.rbc_chunk_fanout);
-        let seed = shuffle_seed(&chunk.block_hash, chunk.height, chunk.view);
-        // Keep a stable target set per session so a quorum can reconstruct the full payload.
-        let targets = select_rbc_chunk_targets(&roster, &local_peer_id, seed, target_count);
         if targets.is_empty() {
             return;
         }
-
+        let local_peer_id = self.common_config.peer.id().clone();
         for (idx, peer_id) in targets {
+            if peer_id == local_peer_id {
+                continue;
+            }
             let Ok(validator_idx) = u32::try_from(idx) else {
                 continue;
             };
@@ -1092,10 +1086,43 @@ impl Actor {
             }
 
             self.schedule_background(BackgroundRequest::Post {
-                peer: peer_id.clone(),
+                peer: peer_id,
                 msg: BlockMessage::RbcChunk(message_chunk),
             });
         }
+    }
+
+    pub(super) fn schedule_rbc_chunk_broadcast(
+        &mut self,
+        chunk: crate::sumeragi::consensus::RbcChunk,
+    ) {
+        let key = Self::session_key(&chunk.block_hash, chunk.height, chunk.view);
+        let roster = self.rbc_session_roster(key);
+        if roster.is_empty() {
+            return;
+        }
+        let target_count = rbc_chunk_target_count(roster.len(), self.config.rbc_chunk_fanout);
+        let seed = shuffle_seed(&chunk.block_hash, chunk.height, chunk.view);
+        // Keep a stable target set per session so a quorum can reconstruct the full payload.
+        let local_peer_id = self.common_config.peer.id().clone();
+        let targets = select_rbc_chunk_targets(&roster, &local_peer_id, seed, target_count);
+        self.schedule_rbc_chunk_posts(&chunk, targets);
+    }
+
+    pub(super) fn schedule_rbc_chunk_broadcast_to_roster(
+        &mut self,
+        chunk: crate::sumeragi::consensus::RbcChunk,
+        roster: &[PeerId],
+    ) {
+        if roster.is_empty() {
+            return;
+        }
+        let targets: Vec<_> = roster
+            .iter()
+            .enumerate()
+            .map(|(idx, peer)| (idx, peer.clone()))
+            .collect();
+        self.schedule_rbc_chunk_posts(&chunk, targets);
     }
 
     pub(super) fn install_rbc_session_plan(&mut self, plan: &RbcSessionPlan) -> Result<()> {

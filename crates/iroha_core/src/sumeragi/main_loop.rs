@@ -8636,12 +8636,10 @@ impl Actor {
                 return;
             }
             let (_, mode_tag, prf_seed) = self.consensus_context_for_height(key.1);
-            let signature_topology =
-                topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
+            let signature_topology = topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
             let local_idx = self.local_validator_index_for_topology(&signature_topology);
-            let local_ready = local_idx.is_some_and(|idx| {
-                readies.iter().any(|ready| ready.sender == idx)
-            });
+            let local_ready =
+                local_idx.is_some_and(|idx| readies.iter().any(|ready| ready.sender == idx));
             // Ensure local READY evidence eventually propagates even if initial sends were lost.
             if !local_ready {
                 return;
@@ -8785,9 +8783,13 @@ impl Actor {
                 return;
             }
         }
+        let topology_peers = self.ensure_rbc_session_roster(key);
+        if topology_peers.is_empty() {
+            return;
+        }
         let chunk_count = chunks.len();
         for chunk in &chunks {
-            self.schedule_rbc_chunk_broadcast(chunk.clone());
+            self.schedule_rbc_chunk_broadcast_to_roster(chunk.clone(), &topology_peers);
         }
         info!(
             height = key.1,
@@ -8797,10 +8799,6 @@ impl Actor {
             chunk_count,
             "rebroadcasting RBC INIT and cached chunks while awaiting READY quorum"
         );
-        let topology_peers = self.ensure_rbc_session_roster(key);
-        if topology_peers.is_empty() {
-            return;
-        }
         let local_peer_id = self.common_config.peer.id().clone();
         for peer in &topology_peers {
             if peer == &local_peer_id {

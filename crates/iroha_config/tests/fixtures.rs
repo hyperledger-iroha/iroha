@@ -420,7 +420,7 @@ fn minimal_config_snapshot() {
                     },
                     webauthn: None,
                 },
-                preauth_max_connections: None,
+                preauth_max_connections: Some(std::num::NonZeroUsize::new(1024).expect("nonzero")),
                 preauth_max_connections_per_ip: None,
                 preauth_rate_per_ip_per_sec: Some(
                     20,
@@ -847,6 +847,7 @@ fn minimal_config_snapshot() {
                 collectors_redundant_send_r: 1,
                 block_max_transactions: None,
                 block_max_payload_bytes: None,
+                proposal_queue_scan_multiplier: 4,
                 empty_child_fallback_enabled: true,
                 msg_channel_cap_votes: 8192,
                 msg_channel_cap_block_payload: 128,
