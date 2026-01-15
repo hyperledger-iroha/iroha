@@ -2020,6 +2020,14 @@ impl Iroha {
         }
         // Thread chain id into state for VRF prehash binding.
         state.chain_id = config.common.chain.clone();
+        // Apply crypto config before replay/genesis validation so allowed_signing is respected.
+        state.set_crypto(config.crypto.clone());
+        state
+            .set_nexus(config.nexus.clone())
+            .map_err(|err| Report::new(err).change_context(StartError::InitKura))
+            .map_err(|report| {
+                report.attach("failed to apply Nexus lane catalog/lifecycle at startup")
+            })?;
 
         let state_height = state.view().height();
         if block_count.0 > state_height {
@@ -2575,7 +2583,6 @@ impl Iroha {
         let tiered_state_cfg = config.tiered_state.clone();
         let pipeline_cfg = config.pipeline.clone();
         let sumeragi_cfg = config.sumeragi.clone();
-        let nexus_cfg = config.nexus.clone();
         let fraud_cfg = config.fraud_monitoring.clone();
         let zk_cfg = config.zk.clone();
         let settlement_cfg = config.settlement.clone();
@@ -2585,13 +2592,6 @@ impl Iroha {
         state.set_pipeline(pipeline_cfg);
         state.set_sumeragi_parameters(&sumeragi_cfg);
         state.set_oracle(oracle_cfg);
-        state.set_crypto(config.crypto.clone());
-        state
-            .set_nexus(nexus_cfg)
-            .map_err(|err| Report::new(err).change_context(StartError::InitKura))
-            .map_err(|report| {
-                report.attach("failed to apply Nexus lane catalog/lifecycle at startup")
-            })?;
         state.set_fraud_monitoring(fraud_cfg);
         state.set_zk(zk_cfg.clone());
         state.set_settlement(settlement_cfg);
@@ -6016,6 +6016,87 @@ mod tests {
             );
 
             Ok(())
+        }
+
+        #[test]
+        fn genesis_validation_accepts_bls_controllers_when_crypto_config_applied() {
+            use std::sync::Arc;
+
+            use iroha_core::{block::ValidBlock, kura::Kura, query::store::LiveQueryStore};
+            use iroha_data_model::{
+                account::curve::CurveId,
+                prelude::*,
+            };
+            use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
+
+            let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
+            let genesis_account_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
+            let domain_id: DomainId = "wonderland".parse().expect("valid domain id");
+            let bls_keypair =
+                iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let bls_account_id =
+                AccountId::new(domain_id.clone(), bls_keypair.public_key().clone());
+
+            let tx = TransactionBuilder::new(chain_id.clone(), genesis_account_id.clone())
+                .with_instructions([
+                    InstructionBox::from(Register::domain(Domain::new(domain_id))),
+                    InstructionBox::from(Register::account(Account::new(bls_account_id))),
+                ])
+                .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+            let block = SignedBlock::genesis(
+                vec![tx],
+                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+                None,
+                None,
+            );
+
+            let world = World::with(
+                [genesis_domain(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone())],
+                [genesis_account(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone())],
+                [],
+            );
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+
+            let mut crypto = iroha_config::parameters::actual::Crypto::default();
+            if !crypto.allowed_signing.contains(&Algorithm::BlsNormal) {
+                crypto.allowed_signing.push(Algorithm::BlsNormal);
+            }
+            crypto.allowed_signing.sort();
+            crypto.allowed_signing.dedup();
+            let mut curve_ids = crypto
+                .allowed_signing
+                .iter()
+                .filter_map(|algo| CurveId::try_from_algorithm(*algo).ok())
+                .map(|curve| curve.as_u8())
+                .collect::<Vec<_>>();
+            curve_ids.sort_unstable();
+            curve_ids.dedup();
+            crypto.allowed_curve_ids = curve_ids;
+            state.set_crypto(crypto);
+
+            let topology = Topology::new(vec![PeerId::new(
+                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
+            )]);
+            let time_source = TimeSource::new_system();
+            let mut voting_block = None;
+            let result = ValidBlock::validate_keep_voting_block(
+                block,
+                &topology,
+                &chain_id,
+                &genesis_account_id,
+                &time_source,
+                &state,
+                &mut voting_block,
+                false,
+            )
+            .unpack(|_| {});
+
+            assert!(
+                result.is_ok(),
+                "genesis validation should accept BLS controllers when crypto config allows it"
+            );
         }
 
         #[test]

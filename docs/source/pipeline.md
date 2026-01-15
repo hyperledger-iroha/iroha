@@ -250,7 +250,7 @@ Iroha can group signatures by scheme during block validation and verify them in 
   - PoP requirement: batching expects a proof of possession in transaction metadata (`bls_pop` for BLS-normal, `bls_pop_small` for BLS-small). Missing or invalid PoPs fall back to individual verification while still enforcing the signature.
   - Validators register with BLS-Normal keys only; `trusted_peers_bls` no longer exists and peer admission filters drop non-BLS entries unless they carry a valid PoP in `trusted_peers_pop` or the genesis topology entries (`pop_hex` bundled with each peer).
   - Validator peers MUST set `signature_batch_max_bls > 0`; peer registration is rejected otherwise to ensure validators can batch BLS signatures (votes/commit certificates) by configuration.
-- Key scope reminder: `allowed_signing`/`allowed_curve_ids` apply to transaction admission (account/controller signatures). Consensus votes always use the validator BLS key + PoP from `trusted_peers` and do not depend on `allowed_signing`. Transport identity (P2P/Torii) continues to use `common.public_key`/`private_key`, typically Ed25519 or secp256k1.
+- Key scope reminder: `allowed_signing`/`allowed_curve_ids` gate transaction admission and non-consensus account controllers. Consensus votes always use the validator BLS key + PoP from `trusted_peers` and do not depend on `allowed_signing`. The node’s `public_key`/`private_key` must be BLS‑Normal for validator nodes.
 
 - Scheme specifics:
   - Ed25519 and ML‑DSA: use deterministic batch verification (not cryptographic aggregation). Security and outputs remain identical to per‑signature checks.

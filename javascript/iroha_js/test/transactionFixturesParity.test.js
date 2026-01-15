@@ -5,10 +5,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildBurnAssetTransaction } from "../src/transaction.js";
 import { AccountAddress } from "../src/address.js";
+import { blake2b256 } from "../src/blake2b.js";
 import { makeNativeTest } from "./helpers/native.js";
 import { getNativeBinding } from "../src/native.js";
 
-const test = makeNativeTest(baseTest);
+const test = makeNativeTest(baseTest, {
+  require: (binding) => typeof binding?.decodeSignedTransactionJson === "function",
+});
 const __filename = fileURLToPath(import.meta.url);
 const repoRoot = path.resolve(path.dirname(__filename), "..", "..", "..");
 
@@ -20,8 +23,6 @@ function loadJsonRelative(relativePath) {
 const canonicalManifest = loadJsonRelative(
   "fixtures/norito_rpc/transaction_fixtures.manifest.json",
 );
-const swiftPayloads = loadJsonRelative("IrohaSwift/Fixtures/transaction_payloads.json");
-
 function selectFixture(fixtures, name) {
   const match = fixtures.find((fixture) => fixture?.name === name);
   if (!match) {
@@ -31,8 +32,6 @@ function selectFixture(fixtures, name) {
 }
 
 const burnFixture = selectFixture(canonicalManifest.fixtures, "burn_asset");
-const burnPayload = selectFixture(swiftPayloads, "burn_asset").payload;
-
 const signingSeedHex = canonicalManifest.signing_key?.seed_hex;
 if (!signingSeedHex) {
   throw new Error("Canonical manifest is missing signing_key.seed_hex");
@@ -78,14 +77,117 @@ const canonicalAuthority =
     throw new Error("Failed to extract canonical authority from fixture payload");
   })();
 
+function irohaHashHex(bytes) {
+  const digest = Buffer.from(blake2b256(bytes));
+  if (digest.length > 0) {
+    digest[digest.length - 1] |= 1;
+  }
+  return digest.toString("hex");
+}
+
+function decodeSignedPayload(bytes) {
+  const binding = getNativeBinding();
+  if (!binding || typeof binding.decodeSignedTransactionJson !== "function") {
+    throw new Error("native binding decodeSignedTransactionJson is unavailable");
+  }
+  const json = binding.decodeSignedTransactionJson(bytes);
+  if (!json) {
+    throw new Error("native decoder returned null for signed transaction");
+  }
+  const decoded = JSON.parse(json);
+  if (!decoded?.payload) {
+    throw new Error("decoded signed transaction missing payload");
+  }
+  return decoded.payload;
+}
+
+baseTest("fixture base64 hashes match manifest", () => {
+  for (const fixture of canonicalManifest.fixtures) {
+    const payloadBytes = Buffer.from(fixture.payload_base64, "base64");
+    assert.equal(
+      payloadBytes.length,
+      fixture.encoded_len,
+      `${fixture.name}: payload length mismatch`,
+    );
+    assert.equal(
+      irohaHashHex(payloadBytes),
+      fixture.payload_hash,
+      `${fixture.name}: payload hash mismatch`,
+    );
+
+    const signedBytes = Buffer.from(fixture.signed_base64, "base64");
+    assert.equal(
+      signedBytes.length,
+      fixture.signed_len,
+      `${fixture.name}: signed length mismatch`,
+    );
+    assert.equal(
+      irohaHashHex(signedBytes),
+      fixture.signed_hash,
+      `${fixture.name}: signed hash mismatch`,
+    );
+  }
+});
+
+test("decoded fixture payloads match manifest metadata", () => {
+  for (const fixture of canonicalManifest.fixtures) {
+    const signedBytes = Buffer.from(fixture.signed_base64, "base64");
+    const payload = decodeSignedPayload(signedBytes);
+    assert.equal(
+      payload.chain,
+      fixture.chain,
+      `${fixture.name}: chain mismatch in decoded payload`,
+    );
+    assert.equal(
+      payload.authority,
+      fixture.authority,
+      `${fixture.name}: authority mismatch in decoded payload`,
+    );
+    assert.equal(
+      payload.creation_time_ms,
+      fixture.creation_time_ms,
+      `${fixture.name}: creation_time_ms mismatch in decoded payload`,
+    );
+    assert.equal(
+      payload.time_to_live_ms ?? null,
+      fixture.time_to_live_ms ?? null,
+      `${fixture.name}: time_to_live_ms mismatch in decoded payload`,
+    );
+    assert.equal(
+      payload.nonce ?? null,
+      fixture.nonce ?? null,
+      `${fixture.name}: nonce mismatch in decoded payload`,
+    );
+  }
+});
+
 test("buildBurnAssetTransaction matches canonical Norito fixture", () => {
   const payloadBytes = Buffer.from(burnFixture.payload_base64, "base64");
   assert.equal(payloadBytes.length, burnFixture.encoded_len, "payload length mismatch");
   const signedBytes = Buffer.from(burnFixture.signed_base64, "base64");
   assert.equal(signedBytes.length, burnFixture.signed_len, "signed length mismatch");
 
+  const fixturePayload = decodeSignedPayload(signedBytes);
+  assert.equal(fixturePayload.chain, burnFixture.chain, "fixture chain mismatch");
+  assert.equal(fixturePayload.authority, burnFixture.authority, "fixture authority mismatch");
+  assert.equal(
+    fixturePayload.creation_time_ms,
+    burnFixture.creation_time_ms,
+    "fixture creation_time_ms mismatch",
+  );
+  assert.equal(
+    fixturePayload.time_to_live_ms ?? null,
+    burnFixture.time_to_live_ms ?? null,
+    "fixture time_to_live_ms mismatch",
+  );
+  assert.equal(
+    fixturePayload.nonce ?? null,
+    burnFixture.nonce ?? null,
+    "fixture nonce mismatch",
+  );
+
   const burnInstruction =
-    burnPayload.executable?.Instructions?.find((entry) => {
+    fixturePayload.executable?.Instructions?.find((entry) => {
       const action = entry?.arguments?.action;
       return entry?.kind === "Burn" || action === "BurnAsset";
     }) ?? null;
@@ -102,20 +204,38 @@ test("buildBurnAssetTransaction matches canonical Norito fixture", () => {
   assert.ok(quantity !== undefined, "quantity must be provided in burn fixture");
 
   const { signedTransaction, hash } = buildBurnAssetTransaction({
-    chainId: burnPayload.chain,
+    chainId: fixturePayload.chain,
     authority: canonicalAuthority,
     assetId: canonicalAssetId,
     quantity,
-    metadata: burnPayload.metadata ?? null,
-    creationTimeMs: burnPayload.creation_time_ms,
-    ttlMs: burnPayload.time_to_live_ms,
-    nonce: burnPayload.nonce ?? null,
+    metadata: fixturePayload.metadata ?? null,
+    creationTimeMs: fixturePayload.creation_time_ms,
+    ttlMs: fixturePayload.time_to_live_ms,
+    nonce: fixturePayload.nonce ?? null,
     privateKey: signingKeySeed,
   });
 
   assert.equal(hash.length, 32, "hashSignedTransaction must return a 32-byte digest");
+  assert.equal(
+    signedTransaction.toString("base64"),
+    burnFixture.signed_base64,
+    "signed transaction mismatch",
+  );
+  assert.equal(hash.toString("hex"), burnFixture.signed_hash, "signed hash mismatch");
 
   const decoded = JSON.parse(getNativeBinding().decodeSignedTransactionJson(signedTransaction));
-  assert.equal(decoded.payload.chain, burnPayload.chain, "decoded chain id mismatch");
-  assert.equal(decoded.payload.metadata?.memo, burnPayload.metadata?.memo, "memo mismatch");
+  assert.equal(decoded.payload.chain, fixturePayload.chain, "decoded chain id mismatch");
+  assert.equal(decoded.payload.authority, canonicalAuthority, "decoded authority mismatch");
+  assert.equal(
+    decoded.payload.creation_time_ms,
+    fixturePayload.creation_time_ms,
+    "creation_time_ms mismatch",
+  );
+  assert.equal(
+    decoded.payload.time_to_live_ms,
+    fixturePayload.time_to_live_ms,
+    "time_to_live_ms mismatch",
+  );
+  assert.equal(decoded.payload.nonce ?? null, fixturePayload.nonce ?? null, "nonce mismatch");
+  assert.equal(decoded.payload.metadata?.memo, fixturePayload.metadata?.memo, "memo mismatch");
 });

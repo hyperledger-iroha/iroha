@@ -1,29 +1,50 @@
 package org.hyperledger.iroha.android.tx;
 
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Arrays;
 import java.util.Base64;
 import java.util.Objects;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
+import org.junit.Test;
 
 public final class TransactionPayloadFixtureTests {
 
   private TransactionPayloadFixtureTests() {}
 
+  @Test
+  public void validatePayloadFixtures() throws Exception {
+    runFixtures();
+  }
+
   public static void main(final String[] args) throws Exception {
+    runFixtures();
+  }
+
+  private static void runFixtures() throws Exception {
     final Path path = TransactionPayloadFixtures.resolveFixturePath();
     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
     for (TransactionPayloadFixtures.Fixture fixture : TransactionPayloadFixtures.load(path)) {
       final String name = fixture.name();
       if (!fixture.isDecodable()) {
-        System.out.println("[fixture] " + name + " skipped (encoded payload not decodable)");
-        continue;
+        throw new IllegalStateException(name + ": encoded payload not decodable");
       }
       final TransactionPayload payload = fixture.toPayload();
+      assert Objects.equals(fixture.chain(), payload.chainId())
+          : name + ": chain mismatch vs fixture metadata";
+      assert Objects.equals(fixture.authority(), payload.authority())
+          : name + ": authority mismatch vs fixture metadata";
+      assert fixture.creationTimeMs() == payload.creationTimeMs()
+          : name + ": creation_time_ms mismatch vs fixture metadata";
+      assert Objects.equals(fixture.timeToLiveMs(), payload.timeToLiveMs())
+          : name + ": TTL mismatch vs fixture metadata";
+      assert Objects.equals(fixture.nonce(), payload.nonce())
+          : name + ": nonce mismatch vs fixture metadata";
       final byte[] encoded = adapter.encodeTransaction(payload);
+      fixture.encoded().ifPresent(expected -> {
+        final String actual = Base64.getEncoder().encodeToString(encoded);
+        assert expected.equals(actual) : name + ": encoded payload mismatch";
+      });
       if (fixture.encoded().isEmpty()) {
         final String base64 = Base64.getEncoder().encodeToString(encoded);
         System.out.println("[fixture] " + name + "=" + base64);

@@ -508,7 +508,7 @@ pub mod isi {
     }
 
     fn algorithm_if_disallowed(algo: Algorithm, allowed: &[Algorithm]) -> Option<Algorithm> {
-        if allowed.contains(&algo) {
+        if allowed.contains(&algo) || is_bls_algorithm(algo) {
             None
         } else {
             Some(algo)
@@ -542,11 +542,27 @@ pub mod isi {
         algo: Algorithm,
         allowed_curve_ids: &[u8],
     ) -> Result<Option<CurveId>, CurveRegistryError> {
+        if is_bls_algorithm(algo) {
+            // Consensus validators rely on BLS controller keys even when admission is restricted.
+            return Ok(None);
+        }
         let curve = CurveId::try_from_algorithm(algo)?;
         if allowed_curve_ids.contains(&curve.as_u8()) {
             Ok(None)
         } else {
             Ok(Some(curve))
+        }
+    }
+
+    fn is_bls_algorithm(algo: Algorithm) -> bool {
+        #[cfg(feature = "bls")]
+        {
+            matches!(algo, Algorithm::BlsNormal | Algorithm::BlsSmall)
+        }
+        #[cfg(not(feature = "bls"))]
+        {
+            let _ = algo;
+            false
         }
     }
 }
@@ -733,6 +749,37 @@ mod tests {
             err_string.contains("crypto.allowed_signing"),
             "error should reference allowed_signing gating: {err_string}"
         );
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn register_account_allows_bls_even_when_not_in_allowed_signing() {
+        let mut state = test_state();
+        let domain_id: DomainId = "bls.allowed".parse().expect("domain id");
+        let authority = (*ALICE_ID).clone();
+        seed_domain(&mut state, &domain_id, &authority);
+
+        {
+            let mut guard = state.crypto.write();
+            let mut cfg = (**guard).clone();
+            cfg.allowed_signing = vec![Algorithm::Ed25519];
+            cfg.allowed_curve_ids =
+                iroha_config::parameters::defaults::crypto::derive_curve_ids_from_algorithms(
+                    &cfg.allowed_signing,
+                );
+            *guard = Arc::new(cfg);
+        }
+
+        let bls_pair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let account_id = AccountId::new(domain_id, bls_pair.public_key().clone());
+        let new_account = Account::new(account_id);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Register::account(new_account)
+            .execute(&authority, &mut tx)
+            .expect("BLS controllers should be allowed for consensus accounts");
     }
 
     #[test]

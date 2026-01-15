@@ -13,7 +13,7 @@
 
 ## Scope for v0.1.0
 - Header support: encode/decode `NoritoHeader` with validation of magic, version
-  (major 0, minor 0x00), payload length, checksum (CRC64-ECMA), flags, and
+  (major 0, minor 0x00), payload length, checksum (CRC64-XZ), flags, and
   compression byte.
 - Compression: support `COMPRESSION_NONE` and Zstandard. The codec reflects against
   `com.github.luben.zstd.Zstd` at runtime; when present (e.g., via `zstd-jni`) the encoder can emit
@@ -23,7 +23,7 @@
   `COMPACT_SEQ_LEN`, `FIELD_BITSET` mirroring the Rust flag byte values. The Java
   defaults now mirror Rust by keeping all optional flags disabled (`DEFAULT_FLAGS = 0`)
   so sequential layouts are emitted unless a caller opts in explicitly.
-- CRC64 implementation: table-driven ECMA polynomial identical to Rust/Python.
+- CRC64 implementation: table-driven CRC64-XZ (reflected ECMA polynomial) matching Rust/Python.
 - Varint helpers: 7-bit LEB128 encoding/decoding for lengths and offsets.
 - Type adapters: generic interface `TypeAdapter<T>` with concrete adapters for
   unsigned/signed integers (8–64 bit), booleans, UTF-8 strings, byte arrays

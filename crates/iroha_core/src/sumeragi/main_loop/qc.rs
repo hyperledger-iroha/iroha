@@ -1300,7 +1300,7 @@ impl Actor {
         block_known: bool,
     ) -> bool {
         if block_known && qc.phase == crate::sumeragi::consensus::Phase::Commit {
-            let queue_len = self.queue.tx_len();
+            let queue_len = self.queue.queued_len();
             let pending_nonempty = self.has_nonempty_pending_at_height(qc.height);
             if let Some(tx_count) = self.block_tx_count(qc.subject_block_hash) {
                 if empty_block_disfavored(tx_count, queue_len, pending_nonempty) {

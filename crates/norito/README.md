@@ -1,7 +1,7 @@
 # Norito
 
 This crate bundles the Norito serialization core along with optional
-procedural macros. Norito includes a CRC64-ECMA integrity checksum with
+procedural macros. Norito includes a CRC64-XZ integrity checksum with
 portable and hardware-accelerated implementations (x86_64 CLMUL, aarch64 PMULL).
 
 ## Derive macros
@@ -122,7 +122,7 @@ Every Norito payload begins with a compact header followed by the archived paylo
 - schema_hash: 16 bytes (type-name based by default; structural with `schema-structural`)
 - compression: 1 byte (`0 = None`, `1 = Zstd`)
 - length: 8 bytes little-endian (uncompressed payload length in bytes)
-- checksum: 8 bytes little-endian (CRC64-ECMA of the uncompressed payload)
+- checksum: 8 bytes little-endian (CRC64-XZ of the uncompressed payload)
 - flags: 1 byte (feature/layout flags)
 
 Header size is 40 bytes. After header validation, decoders verify the checksum and reconstruct the value.
@@ -168,18 +168,19 @@ Decode helpers return structured errors instead of panicking in common malformed
 
 Top-level helpers (`decode_from_bytes`, `decode_from_reader`) validate the header and checksum and scope decode flags before reconstructing the value.
 
-## CRC64 (ECMA-182)
+## CRC64-XZ (ECMA-182)
 
-Norito computes a CRC64 checksum of each payload using the ECMA-182 polynomial
-`0x42F0_E1EB_A9EA_3693` via the [`crc64fast`](https://crates.io/crates/crc64fast)
-crate. The `norito::hardware_crc64` and `norito::crc64_fallback` APIs are
-aliases that provide the same optimized implementation on all platforms.
+Norito computes a CRC64-XZ checksum of each payload using the ECMA-182
+polynomial `0x42F0_E1EB_A9EA_3693` in reflected form with init/xor all ones via
+the [`crc64fast`](https://crates.io/crates/crc64fast) crate. The
+`norito::hardware_crc64` and `norito::crc64_fallback` APIs are aliases that
+provide the same optimized implementation on all platforms.
 
 Parity tests in `crates/norito/tests` ensure the checksum is stable across
 platforms.
 `0x42F0_E1EB_A9EA_3693`.
 
-- Portable paths: bitwise fallback and slicing-by-8 table updates (MSB-first).
+- Portable paths: bitwise fallback and slicing-by-8 table updates (reflected).
 - x86_64: uses PCLMULQDQ (carry‑less multiply) with Barrett reduction when
   available, processing 8 bytes per step with a 128→64 reduction. Selected at
   runtime via `std::arch::is_x86_feature_detected!("pclmulqdq")` and compiled

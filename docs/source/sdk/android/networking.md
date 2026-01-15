@@ -159,7 +159,9 @@ GatewayFetchSummary summary =
 ```
 
 - `waitForTransactionStatus` polls `/v1/pipeline/transactions/status` using the
-`PipelineStatusExtractor` so callers receive the structured Torii payload.
+  `PipelineStatusExtractor` so callers receive the structured Torii payload. A
+  `404` response means Torii has no cached status yet (for example after a
+  restart), so the client keeps polling until a terminal state arrives.
 - `newSorafsGatewayClient()` reuses the same executor, timeout, headers, and
 observers while targeting the `sorafsGatewayUri`. See
 `docs/source/sorafs/developer/sdk/index.md` for gateway request details.

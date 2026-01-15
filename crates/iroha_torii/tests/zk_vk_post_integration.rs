@@ -37,6 +37,7 @@ async fn vk_register_update_return_202() {
         capacity: nonzero!(8usize),
         capacity_per_user: nonzero!(8usize),
         transaction_time_to_live: core::time::Duration::from_mins(1),
+        ..Default::default()
     };
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(4).0;
     let queue = Arc::new(Queue::from_config(queue_cfg, events_sender));

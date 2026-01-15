@@ -154,6 +154,7 @@ struct RawFixture {
     signed_base64: Option<String>,
     chain_hint: Option<String>,
     authority_hint: Option<String>,
+    creation_time_ms_hint: Option<u64>,
     ttl_ms_hint: Option<u64>,
     nonce_hint: Option<u32>,
     payload_hash_hint: Option<String>,
@@ -194,6 +195,7 @@ struct Fixture {
 struct PayloadSummary {
     chain: String,
     authority: String,
+    creation_time_ms: u64,
     ttl_ms: Option<u64>,
     nonce: Option<u32>,
     payload_base64: String,
@@ -205,6 +207,56 @@ struct PayloadSummary {
 impl RawFixture {
     fn into_fixture(self, keypair: &KeyPair, check_encoded: bool) -> Result<Fixture> {
         if let Some(payload) = self.payload {
+            if let Some(chain_hint) = &self.chain_hint {
+                if chain_hint != &payload.chain {
+                    bail!(
+                        "fixture '{}' chain mismatch: expected {}, got {}",
+                        self.name,
+                        chain_hint,
+                        payload.chain
+                    );
+                }
+            }
+            if let Some(authority_hint) = &self.authority_hint {
+                if authority_hint != &payload.authority {
+                    bail!(
+                        "fixture '{}' authority mismatch: expected {}, got {}",
+                        self.name,
+                        authority_hint,
+                        payload.authority
+                    );
+                }
+            }
+            if let Some(creation_hint) = self.creation_time_ms_hint {
+                if creation_hint != payload.creation_time_ms {
+                    bail!(
+                        "fixture '{}' creation_time_ms mismatch: expected {}, got {}",
+                        self.name,
+                        creation_hint,
+                        payload.creation_time_ms
+                    );
+                }
+            }
+            if let Some(ttl_hint) = self.ttl_ms_hint {
+                if Some(ttl_hint) != payload.ttl_ms {
+                    bail!(
+                        "fixture '{}' time_to_live_ms mismatch: expected {}, got {:?}",
+                        self.name,
+                        ttl_hint,
+                        payload.ttl_ms
+                    );
+                }
+            }
+            if let Some(nonce_hint) = self.nonce_hint {
+                if Some(nonce_hint) != payload.nonce {
+                    bail!(
+                        "fixture '{}' nonce mismatch: expected {}, got {:?}",
+                        self.name,
+                        nonce_hint,
+                        payload.nonce
+                    );
+                }
+            }
             let builder = payload.to_builder()?;
             let signed = builder.sign(keypair.private_key());
             let payload_value = signed.payload().clone();
@@ -230,6 +282,7 @@ impl RawFixture {
             let summary = PayloadSummary {
                 chain: payload.chain,
                 authority: payload.authority,
+                creation_time_ms: payload.creation_time_ms,
                 ttl_ms: payload.ttl_ms,
                 nonce: payload.nonce,
                 payload_base64,
@@ -271,42 +324,102 @@ impl RawFixture {
             .transpose()
             .context("failed to decode signed_base64")?;
 
-        let chain = match &self.chain_hint {
-            Some(chain) => chain.clone(),
-            None => {
-                let mut cursor = encoded.as_slice();
-                let payload =
-                    TransactionPayload::decode(&mut cursor).context("failed to decode payload")?;
-                payload.chain.to_string()
-            }
-        };
-        let authority = match &self.authority_hint {
-            Some(auth) => auth.clone(),
-            None => {
-                let mut cursor = encoded.as_slice();
-                let payload =
-                    TransactionPayload::decode(&mut cursor).context("failed to decode payload")?;
-                payload.authority.to_string()
-            }
-        };
-        let ttl_ms = self.ttl_ms_hint;
-        let nonce = self.nonce_hint;
+        let mut cursor = encoded.as_slice();
+        let payload =
+            TransactionPayload::decode(&mut cursor).context("failed to decode payload")?;
+        if !cursor.is_empty() {
+            bail!("fixture '{}' payload has trailing bytes", self.name);
+        }
+        let chain = payload.chain.to_string();
+        let authority = payload.authority.to_string();
+        let creation_time_ms = payload.creation_time_ms;
+        let ttl_ms = payload.time_to_live_ms.map(NonZeroU64::get);
+        let nonce = payload.nonce.map(NonZeroU32::get);
 
-        let payload_hash_hex = if let Some(hash) = &self.payload_hash_hint {
-            hash.clone()
-        } else {
-            let mut cursor = encoded.as_slice();
-            let payload =
-                TransactionPayload::decode(&mut cursor).context("failed to decode payload")?;
-            format!("{}", HashOf::<TransactionPayload>::new(&payload))
-        };
-        let signed_hash_hex = if let Some(hash) = &self.signed_hash_hint {
-            hash.clone()
-        } else if let Some(bytes) = &signed_bytes {
+        if let Some(chain_hint) = &self.chain_hint {
+            if chain_hint != &chain {
+                bail!(
+                    "fixture '{}' chain mismatch: expected {}, got {}",
+                    self.name,
+                    chain_hint,
+                    chain
+                );
+            }
+        }
+        if let Some(authority_hint) = &self.authority_hint {
+            if authority_hint != &authority {
+                bail!(
+                    "fixture '{}' authority mismatch: expected {}, got {}",
+                    self.name,
+                    authority_hint,
+                    authority
+                );
+            }
+        }
+        if let Some(creation_hint) = self.creation_time_ms_hint {
+            if creation_hint != creation_time_ms {
+                bail!(
+                    "fixture '{}' creation_time_ms mismatch: expected {}, got {}",
+                    self.name,
+                    creation_hint,
+                    creation_time_ms
+                );
+            }
+        }
+        if let Some(ttl_hint) = self.ttl_ms_hint {
+            if Some(ttl_hint) != ttl_ms {
+                bail!(
+                    "fixture '{}' time_to_live_ms mismatch: expected {}, got {:?}",
+                    self.name,
+                    ttl_hint,
+                    ttl_ms
+                );
+            }
+        }
+        if let Some(nonce_hint) = self.nonce_hint {
+            if Some(nonce_hint) != nonce {
+                bail!(
+                    "fixture '{}' nonce mismatch: expected {}, got {:?}",
+                    self.name,
+                    nonce_hint,
+                    nonce
+                );
+            }
+        }
+
+        let payload_hash_hex = format!("{}", HashOf::<TransactionPayload>::new(&payload));
+        if let Some(hash_hint) = &self.payload_hash_hint {
+            if hash_hint != &payload_hash_hex {
+                bail!(
+                    "fixture '{}' payload_hash mismatch: expected {}, got {}",
+                    self.name,
+                    hash_hint,
+                    payload_hash_hex
+                );
+            }
+        }
+
+        let signed_hash_hex = if let Some(bytes) = &signed_bytes {
             let mut cursor = bytes.as_slice();
             let signed = SignedTransaction::decode(&mut cursor)
                 .context("failed to decode signed transaction")?;
-            format!("{}", HashOf::<SignedTransaction>::new(&signed))
+            if !cursor.is_empty() {
+                bail!("fixture '{}' signed payload has trailing bytes", self.name);
+            }
+            let computed = format!("{}", HashOf::<SignedTransaction>::new(&signed));
+            if let Some(hash_hint) = &self.signed_hash_hint {
+                if hash_hint != &computed {
+                    bail!(
+                        "fixture '{}' signed_hash mismatch: expected {}, got {}",
+                        self.name,
+                        hash_hint,
+                        computed
+                    );
+                }
+            }
+            computed
+        } else if let Some(hash) = &self.signed_hash_hint {
+            hash.clone()
         } else {
             bail!(
                 "fixture '{}' missing signed_base64 and signed hash hints for pre-encoded payload",
@@ -317,6 +430,7 @@ impl RawFixture {
         let summary = PayloadSummary {
             chain,
             authority,
+            creation_time_ms,
             ttl_ms,
             nonce,
             payload_base64,
@@ -412,6 +526,7 @@ fn parse_fixture(value: &Value) -> Result<RawFixture> {
         .get("authority")
         .and_then(|v| v.as_str())
         .map(str::to_owned);
+    let creation_time_ms_hint = obj.get("creation_time_ms").and_then(|v| v.as_u64());
     let ttl_ms_hint = obj.get("time_to_live_ms").and_then(|v| v.as_u64());
     let nonce_hint = obj.get("nonce").and_then(|v| v.as_u64()).map(|n| n as u32);
     let payload_hash_hint = obj
@@ -436,6 +551,7 @@ fn parse_fixture(value: &Value) -> Result<RawFixture> {
         signed_base64,
         chain_hint,
         authority_hint,
+        creation_time_ms_hint,
         ttl_ms_hint,
         nonce_hint,
         payload_hash_hint,
@@ -1914,6 +2030,10 @@ fn manifest_entry(fixture: &Fixture) -> Value {
         Value::String(fixture.summary.authority.clone()),
     );
     map.insert(
+        "creation_time_ms".into(),
+        Value::Number(Number::U64(fixture.summary.creation_time_ms)),
+    );
+    map.insert(
         "time_to_live_ms".into(),
         optional_u64_value(fixture.summary.ttl_ms),
     );
@@ -1985,6 +2105,74 @@ mod tests {
                 .into_fixture(&keypair, false)
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn encoded_fixture_validates_hints() {
+        let keypair = signing_keypair().expect("test keypair");
+        let generated = sample_fixture(None)
+            .into_fixture(&keypair, true)
+            .expect("fixture from payload");
+        let payload_bytes = BASE64
+            .decode(generated.summary.payload_base64.as_bytes())
+            .expect("payload base64 decodes");
+        let mut cursor = payload_bytes.as_slice();
+        let decoded = TransactionPayload::decode(&mut cursor).expect("payload decodes");
+        let normalized_authority = decoded.authority.to_string();
+
+        let mut raw = RawFixture {
+            name: generated.name.clone(),
+            payload: None,
+            payload_base64: Some(generated.summary.payload_base64.clone()),
+            signed_base64: Some(generated.summary.signed_base64.clone()),
+            chain_hint: Some(generated.summary.chain.clone()),
+            authority_hint: Some(normalized_authority),
+            creation_time_ms_hint: Some(generated.summary.creation_time_ms),
+            ttl_ms_hint: generated.summary.ttl_ms,
+            nonce_hint: generated.summary.nonce,
+            payload_hash_hint: Some(generated.summary.payload_hash_hex.clone()),
+            signed_hash_hint: Some(generated.summary.signed_hash_hex.clone()),
+            encoded: None,
+        };
+
+        raw.clone()
+            .into_fixture(&keypair, true)
+            .expect("encoded fixture should validate");
+
+        raw.chain_hint = Some("00000003".to_string());
+        assert!(
+            raw.clone().into_fixture(&keypair, true).is_err(),
+            "chain hint mismatch should fail"
+        );
+
+        raw.chain_hint = Some(generated.summary.chain.clone());
+        raw.creation_time_ms_hint = Some(generated.summary.creation_time_ms + 1);
+        assert!(
+            raw.clone().into_fixture(&keypair, true).is_err(),
+            "creation_time_ms mismatch should fail"
+        );
+
+        raw.creation_time_ms_hint = Some(generated.summary.creation_time_ms);
+        raw.payload_hash_hint = Some("bad-hash".to_string());
+        assert!(
+            raw.into_fixture(&keypair, true).is_err(),
+            "payload_hash mismatch should fail"
+        );
+    }
+
+    #[test]
+    fn manifest_entry_includes_creation_time_ms() {
+        let keypair = signing_keypair().expect("test keypair");
+        let generated = sample_fixture(None)
+            .into_fixture(&keypair, true)
+            .expect("fixture from payload");
+        let entry = manifest_entry(&generated);
+        let obj = entry.as_object().expect("manifest entry must be object");
+        let creation_time_ms = obj
+            .get("creation_time_ms")
+            .and_then(|value| value.as_u64())
+            .expect("creation_time_ms must be present");
+        assert_eq!(creation_time_ms, generated.summary.creation_time_ms);
     }
 
     #[test]
@@ -2088,6 +2276,13 @@ mod tests {
             }),
             payload_base64: None,
             signed_base64: None,
+            chain_hint: None,
+            authority_hint: None,
+            creation_time_ms_hint: None,
+            ttl_ms_hint: None,
+            nonce_hint: None,
+            payload_hash_hint: None,
+            signed_hash_hint: None,
             encoded,
         }
     }

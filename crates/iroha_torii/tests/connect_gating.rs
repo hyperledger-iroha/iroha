@@ -384,6 +384,8 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_TRANSACTIONS,
             block_max_payload_bytes:
                 iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES,
+            empty_child_fallback_enabled:
+                iroha_config::parameters::defaults::sumeragi::EMPTY_CHILD_FALLBACK_ENABLED,
             msg_channel_cap_votes:
                 iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_VOTES,
             msg_channel_cap_block_payload:
@@ -1069,6 +1071,7 @@ fn build_torii(cfg: &iroha_config::parameters::actual::Root) -> iroha_torii::Tor
         capacity: nonzero!(1usize),
         capacity_per_user: nonzero!(1usize),
         transaction_time_to_live: core::time::Duration::from_secs(1),
+        ..Default::default()
     };
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(Queue::from_config(queue_cfg, events_sender));

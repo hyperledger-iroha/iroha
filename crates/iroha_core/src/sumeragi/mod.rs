@@ -2254,6 +2254,84 @@ mod tests {
     }
 
     #[test]
+    fn try_incoming_block_message_blocks_block_sync_update_when_block_queue_full() {
+        const CAP: usize = 1;
+        let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(CAP);
+        let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(CAP);
+        let (vote_tx, _vote_rx) = mpsc::sync_channel(CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(CAP);
+        let vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>> = Arc::new(Mutex::new(
+            DedupCache::new(VOTE_DEDUP_CACHE_CAP, VOTE_DEDUP_CACHE_TTL),
+        ));
+        let block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>> =
+            Arc::new(Mutex::new(BlockPayloadDedupCache::new(
+                BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
+                BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
+            )));
+        let block_tx_fill = block_tx.clone();
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        let header = BlockHeader {
+            height: NonZeroU64::new(1).expect("non-zero"),
+            prev_block_hash: None,
+            merkle_root: None,
+            result_merkle_root: None,
+            da_proof_policies_hash: None,
+            da_commitments_hash: None,
+            da_pin_intents_hash: None,
+            creation_time_ms: 0,
+            view_change_index: 0,
+            confidential_features: None,
+        };
+        let key_pair = KeyPair::random();
+        let (_, private_key) = key_pair.into_parts();
+        let signature = SignatureOf::from_hash(&private_key, header.hash());
+        let block_signature = BlockSignature::new(0, signature);
+        let block = SignedBlock::presigned_with_da(block_signature, header, Vec::new(), None);
+        let update = message::BlockSyncUpdate::from(&block);
+        let update_overflow = message::BlockSyncUpdate::from(&block);
+
+        block_tx_fill
+            .send(BlockMessage::BlockSyncUpdate(update))
+            .expect("fill block channel");
+        let (done_tx, done_rx) = mpsc::channel();
+        let handle_clone = handle.clone();
+        let join = std::thread::spawn(move || {
+            handle_clone.try_incoming_block_message(BlockMessage::BlockSyncUpdate(update_overflow));
+            let _ = done_tx.send(());
+        });
+
+        done_rx
+            .recv_timeout(Duration::from_millis(200))
+            .expect_err("BlockSyncUpdate should block when block queue is full");
+        let received = block_rx
+            .try_recv()
+            .expect("original BlockSyncUpdate should remain in the block queue");
+        assert!(matches!(received, BlockMessage::BlockSyncUpdate(_)));
+        done_rx
+            .recv_timeout(Duration::from_millis(200))
+            .expect("BlockSyncUpdate should enqueue after capacity frees");
+        let received = block_rx
+            .try_recv()
+            .expect("overflow BlockSyncUpdate should be enqueued after capacity frees");
+        assert!(matches!(received, BlockMessage::BlockSyncUpdate(_)));
+        join.join().expect("join BlockSyncUpdate sender");
+    }
+
+    #[test]
     fn incoming_block_message_waits_when_block_payload_queue_full() {
         const CAP: usize = 1;
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(CAP);
@@ -4864,8 +4942,12 @@ impl SumeragiHandle {
     /// Returns `true` if the message was accepted by the queue.
     ///
     /// Note: this is a best-effort enqueue that drops messages when queues are saturated
-    /// to avoid stalling upstream relays.
+    /// to avoid stalling upstream relays. Block-sync updates always use blocking semantics
+    /// because dropping them can stall consensus recovery.
     pub fn try_incoming_block_message(&self, msg: BlockMessage) -> bool {
+        if matches!(msg, BlockMessage::BlockSyncUpdate(_)) {
+            return self.incoming_block_message_with_mode(msg, IngressMode::Blocking);
+        }
         self.incoming_block_message_with_mode(msg, IngressMode::NonBlocking)
     }
 

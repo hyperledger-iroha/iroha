@@ -201,7 +201,7 @@ impl Actor {
             return Ok(false);
         }
 
-        let queue_len = self.queue.tx_len();
+        let queue_len = self.queue.queued_len();
         let mut tx_guards = Vec::new();
         let (
             _block_digest,
@@ -298,7 +298,7 @@ impl Actor {
             }
         }
 
-        let queue_len_after_pop = self.queue.tx_len();
+        let queue_len_after_pop = self.queue.queued_len();
         if empty_block_disfavored(
             transactions.len(),
             queue_len_after_pop,
@@ -1038,7 +1038,7 @@ impl Actor {
         let prev_attempt = self.subsystems.propose.last_pacemaker_attempt.replace(now);
         let view_snapshot = self.state.view();
         let mut topology_peers = self.effective_commit_topology_from_view(&view_snapshot);
-        let pending_queue_len = self.queue.tx_len();
+        let pending_queue_len = self.queue.queued_len();
         let active_pending = self.active_pending_blocks_len();
         let view_height = view_snapshot.height();
         let committed_height = view_height as u64;

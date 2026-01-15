@@ -2,7 +2,7 @@
 use std::time::Duration;
 
 use assert_matches::assert_matches;
-use eyre::Result;
+use eyre::{Result, eyre};
 use futures_util::StreamExt;
 use integration_tests::sandbox;
 use iroha::client::Client;
@@ -70,9 +70,14 @@ async fn verify_proof_emits_verified_event() -> Result<()> {
     let result: Result<()> = async {
         network.ensure_blocks(1).await?;
         let client = client_with_timeout(&network);
-        let mut events = client
-            .listen_for_events_async([DataEventFilter::Proof(ProofEventFilter::new())])
-            .await?;
+        let mut events = tokio::time::timeout(
+            proof_event_timeout(&network),
+            client.listen_for_events_async([DataEventFilter::Proof(ProofEventFilter::new())]),
+        )
+        .await
+        .map_err(|_| {
+            eyre!("verify_proof_emits_verified_event: timed out opening proof event stream")
+        })??;
 
         // Build a VerifyProof ISI with inline VK on an accepted backend
         let attachment = halo2_attachment();
@@ -95,24 +100,30 @@ async fn verify_proof_emits_verified_event() -> Result<()> {
         }
         network.ensure_blocks(2).await?;
 
-        // Wait for the proof event and assert it is Verified
-        let proof_event = timeout(proof_event_timeout(&network), async {
-            loop {
-                let ev = events.next().await.expect("event stream open")?;
-                if let EventBox::Data(event) = ev
-                    && let DataEvent::Proof(pe) = event.as_ref()
-                {
-                    break Ok::<_, eyre::Report>(pe.clone());
+        let result = async {
+            // Wait for the proof event and assert it is Verified
+            let proof_event = timeout(proof_event_timeout(&network), async {
+                loop {
+                    let ev = events.next().await.expect("event stream open")?;
+                    if let EventBox::Data(event) = ev
+                        && let DataEvent::Proof(pe) = event.as_ref()
+                    {
+                        break Ok::<_, eyre::Report>(pe.clone());
+                    }
                 }
-            }
-        })
-        .await??;
-        assert_matches!(
-            proof_event,
-            iroha::data_model::events::data::proof::ProofEvent::Verified(_)
-        );
+            })
+            .await??;
+            assert_matches!(
+                proof_event,
+                iroha::data_model::events::data::proof::ProofEvent::Verified(_)
+            );
 
-        Ok(())
+            Ok(())
+        }
+        .await;
+
+        events.close().await;
+        result
     }
     .await;
     if sandbox::handle_result(result, stringify!(verify_proof_emits_verified_event))?.is_none() {
@@ -135,9 +146,14 @@ async fn verify_proof_emits_rejected_event() -> Result<()> {
     let result: Result<()> = async {
         network.ensure_blocks(1).await?;
         let client = client_with_timeout(&network);
-        let mut events = client
-            .listen_for_events_async([DataEventFilter::Proof(ProofEventFilter::new())])
-            .await?;
+        let mut events = tokio::time::timeout(
+            proof_event_timeout(&network),
+            client.listen_for_events_async([DataEventFilter::Proof(ProofEventFilter::new())]),
+        )
+        .await
+        .map_err(|_| {
+            eyre!("verify_proof_emits_rejected_event: timed out opening proof event stream")
+        })??;
 
         // Build a VerifyProof ISI that deterministically rejects
         let attachment = iroha::data_model::proof::ProofAttachment::new_inline(
@@ -164,23 +180,29 @@ async fn verify_proof_emits_rejected_event() -> Result<()> {
         }
         network.ensure_blocks(2).await?;
 
-        let proof_event = timeout(proof_event_timeout(&network), async {
-            loop {
-                let ev = events.next().await.expect("event stream open")?;
-                if let EventBox::Data(event) = ev
-                    && let DataEvent::Proof(pe) = event.as_ref()
-                {
-                    break Ok::<_, eyre::Report>(pe.clone());
+        let result = async {
+            let proof_event = timeout(proof_event_timeout(&network), async {
+                loop {
+                    let ev = events.next().await.expect("event stream open")?;
+                    if let EventBox::Data(event) = ev
+                        && let DataEvent::Proof(pe) = event.as_ref()
+                    {
+                        break Ok::<_, eyre::Report>(pe.clone());
+                    }
                 }
-            }
-        })
-        .await??;
-        assert_matches!(
-            proof_event,
-            iroha::data_model::events::data::proof::ProofEvent::Rejected(_)
-        );
+            })
+            .await??;
+            assert_matches!(
+                proof_event,
+                iroha::data_model::events::data::proof::ProofEvent::Rejected(_)
+            );
 
-        Ok(())
+            Ok(())
+        }
+        .await;
+
+        events.close().await;
+        result
     }
     .await;
     if sandbox::handle_result(result, stringify!(verify_proof_emits_rejected_event))?.is_none() {

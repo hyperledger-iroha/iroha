@@ -8100,7 +8100,7 @@ impl Actor {
         }
         self.last_online_peers = current_online;
         self.metrics.connected_peers.set(peer_count);
-        self.metrics.queue_size.set(self.queue.tx_len() as u64);
+        self.metrics.queue_size.set(self.queue.queued_len() as u64);
         // P2P counters (gauges): sample from p2p module
         self.metrics
             .p2p_dropped_posts
@@ -11678,6 +11678,7 @@ mod tests {
                     capacity: nonzero!(10usize),
                     capacity_per_user: nonzero!(10usize),
                     transaction_time_to_live: Duration::from_secs(100),
+                    ..Default::default()
                 },
                 &time_source,
             ));
@@ -11826,6 +11827,7 @@ mod tests {
                 capacity: nonzero_ext::nonzero!(10usize),
                 capacity_per_user: nonzero_ext::nonzero!(10usize),
                 transaction_time_to_live: Duration::from_secs(100),
+                ..Default::default()
             },
             &time_source,
         ));

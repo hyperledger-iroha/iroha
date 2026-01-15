@@ -5,12 +5,15 @@ from __future__ import annotations
 import base64
 import importlib.util
 import json
+import sys
+from typing import Optional
 from pathlib import Path
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "check_android_fixtures.py"
 SPEC = importlib.util.spec_from_file_location("check_android_fixtures", MODULE_PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader  # pragma: no cover - defensive
+sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 
@@ -24,7 +27,17 @@ def _write_manifest(path: Path, fixtures: list[dict]) -> Path:
     return path
 
 
-def _fixture_entry(name: str, encoded_file: str, payload: bytes, signed: bytes) -> dict:
+def _fixture_entry(
+    name: str,
+    encoded_file: str,
+    payload: bytes,
+    signed: bytes,
+    creation_time_ms: int,
+    chain: str,
+    authority: str,
+    time_to_live_ms: Optional[int],
+    nonce: Optional[int],
+) -> dict:
     payload_b64 = base64.b64encode(payload).decode()
     signed_b64 = base64.b64encode(signed).decode()
     return {
@@ -36,6 +49,11 @@ def _fixture_entry(name: str, encoded_file: str, payload: bytes, signed: bytes) 
         "signed_base64": signed_b64,
         "signed_hash": MODULE.iroha_hash(signed),  # type: ignore[attr-defined]
         "signed_len": len(signed),
+        "creation_time_ms": creation_time_ms,
+        "chain": chain,
+        "authority": authority,
+        "time_to_live_ms": time_to_live_ms,
+        "nonce": nonce,
     }
 
 
@@ -47,13 +65,40 @@ def test_summary_includes_artifact_metadata(tmp_path: Path) -> None:
     signed_bytes = b"alpha-signed"
     (resources / "alpha.norito").write_bytes(payload_bytes)
 
+    creation_time_ms = 1_735_000_000_123
+    chain = "00000002"
+    authority = "alice@wonderland"
+    time_to_live_ms = 5000
+    nonce = 42
     payloads_path = _write_payloads(
         tmp_path / "transaction_payloads.json",
-        [{"name": "alpha", "encoded": base64.b64encode(payload_bytes).decode()}],
+        [
+            {
+                "name": "alpha",
+                "encoded": base64.b64encode(payload_bytes).decode(),
+                "creation_time_ms": creation_time_ms,
+                "chain": chain,
+                "authority": authority,
+                "time_to_live_ms": time_to_live_ms,
+                "nonce": nonce,
+            }
+        ],
     )
     manifest_path = _write_manifest(
         tmp_path / "transaction_fixtures.manifest.json",
-        [_fixture_entry("alpha", "alpha.norito", payload_bytes, signed_bytes)],
+        [
+            _fixture_entry(
+                "alpha",
+                "alpha.norito",
+                payload_bytes,
+                signed_bytes,
+                creation_time_ms,
+                chain=chain,
+                authority=authority,
+                time_to_live_ms=time_to_live_ms,
+                nonce=nonce,
+            )
+        ],
     )
     summary_path = tmp_path / "summary.json"
 
@@ -91,11 +136,36 @@ def test_errors_propagate_into_summary(tmp_path: Path) -> None:
     signed_bytes = b"bravo-signed"
     (resources / "bravo.norito").write_bytes(payload_bytes)
 
+    creation_time_ms = 1_735_000_000_222
+    chain = "00000003"
+    authority = "bob@wonderland"
+    time_to_live_ms = None
+    nonce = None
     payloads_path = _write_payloads(
         tmp_path / "transaction_payloads.json",
-        [{"name": "bravo", "encoded": base64.b64encode(payload_bytes).decode()}],
+        [
+            {
+                "name": "bravo",
+                "encoded": base64.b64encode(payload_bytes).decode(),
+                "creation_time_ms": creation_time_ms,
+                "chain": chain,
+                "authority": authority,
+                "time_to_live_ms": time_to_live_ms,
+                "nonce": nonce,
+            }
+        ],
     )
-    bad_manifest = _fixture_entry("bravo", "bravo.norito", payload_bytes, signed_bytes)
+    bad_manifest = _fixture_entry(
+        "bravo",
+        "bravo.norito",
+        payload_bytes,
+        signed_bytes,
+        creation_time_ms,
+        chain=chain,
+        authority=authority,
+        time_to_live_ms=time_to_live_ms,
+        nonce=nonce,
+    )
     bad_manifest["payload_hash"] = "deadbeef"
     manifest_path = _write_manifest(
         tmp_path / "transaction_fixtures.manifest.json",
@@ -121,3 +191,374 @@ def test_errors_propagate_into_summary(tmp_path: Path) -> None:
     assert summary["result"]["status"] == "error"
     assert summary["result"]["error_count"] >= 1
     assert summary["artifacts"]["manifest"]["fixture_count"] == 1
+
+
+def test_creation_time_mismatch_triggers_error(tmp_path: Path) -> None:
+    resources = tmp_path / "resources"
+    resources.mkdir()
+
+    payload_bytes = b"charlie-payload"
+    signed_bytes = b"charlie-signed"
+    (resources / "charlie.norito").write_bytes(payload_bytes)
+
+    chain = "00000004"
+    authority = "charlie@wonderland"
+    payloads_path = _write_payloads(
+        tmp_path / "transaction_payloads.json",
+        [
+            {
+                "name": "charlie",
+                "encoded": base64.b64encode(payload_bytes).decode(),
+                "creation_time_ms": 1_735_000_000_333,
+                "chain": chain,
+                "authority": authority,
+                "time_to_live_ms": None,
+                "nonce": None,
+            }
+        ],
+    )
+    manifest_path = _write_manifest(
+        tmp_path / "transaction_fixtures.manifest.json",
+        [
+            _fixture_entry(
+                "charlie",
+                "charlie.norito",
+                payload_bytes,
+                signed_bytes,
+                creation_time_ms=1_735_000_000_999,
+                chain=chain,
+                authority=authority,
+                time_to_live_ms=None,
+                nonce=None,
+            )
+        ],
+    )
+
+    exit_code = MODULE.main(
+        [
+            "--resources",
+            str(resources),
+            "--fixtures",
+            str(payloads_path),
+            "--manifest",
+            str(manifest_path),
+            "--quiet",
+        ]
+    )
+    assert exit_code == 1
+
+
+def test_chain_mismatch_triggers_error(tmp_path: Path) -> None:
+    resources = tmp_path / "resources"
+    resources.mkdir()
+
+    payload_bytes = b"delta-payload"
+    signed_bytes = b"delta-signed"
+    (resources / "delta.norito").write_bytes(payload_bytes)
+
+    payloads_path = _write_payloads(
+        tmp_path / "transaction_payloads.json",
+        [
+            {
+                "name": "delta",
+                "encoded": base64.b64encode(payload_bytes).decode(),
+                "creation_time_ms": 1_735_000_000_444,
+                "chain": "00000004",
+                "authority": "delta@wonderland",
+                "time_to_live_ms": None,
+                "nonce": None,
+            }
+        ],
+    )
+    manifest_path = _write_manifest(
+        tmp_path / "transaction_fixtures.manifest.json",
+        [
+            _fixture_entry(
+                "delta",
+                "delta.norito",
+                payload_bytes,
+                signed_bytes,
+                creation_time_ms=1_735_000_000_444,
+                chain="00000005",
+                authority="delta@wonderland",
+                time_to_live_ms=None,
+                nonce=None,
+            )
+        ],
+    )
+
+    exit_code = MODULE.main(
+        [
+            "--resources",
+            str(resources),
+            "--fixtures",
+            str(payloads_path),
+            "--manifest",
+            str(manifest_path),
+            "--quiet",
+        ]
+    )
+    assert exit_code == 1
+
+
+def test_authority_mismatch_triggers_error(tmp_path: Path) -> None:
+    resources = tmp_path / "resources"
+    resources.mkdir()
+
+    payload_bytes = b"golf-payload"
+    signed_bytes = b"golf-signed"
+    (resources / "golf.norito").write_bytes(payload_bytes)
+
+    payloads_path = _write_payloads(
+        tmp_path / "transaction_payloads.json",
+        [
+            {
+                "name": "golf",
+                "encoded": base64.b64encode(payload_bytes).decode(),
+                "creation_time_ms": 1_735_000_000_777,
+                "chain": "00000008",
+                "authority": "golf@wonderland",
+                "time_to_live_ms": None,
+                "nonce": None,
+            }
+        ],
+    )
+    manifest_path = _write_manifest(
+        tmp_path / "transaction_fixtures.manifest.json",
+        [
+            _fixture_entry(
+                "golf",
+                "golf.norito",
+                payload_bytes,
+                signed_bytes,
+                creation_time_ms=1_735_000_000_777,
+                chain="00000008",
+                authority="hotel@wonderland",
+                time_to_live_ms=None,
+                nonce=None,
+            )
+        ],
+    )
+
+    exit_code = MODULE.main(
+        [
+            "--resources",
+            str(resources),
+            "--fixtures",
+            str(payloads_path),
+            "--manifest",
+            str(manifest_path),
+            "--quiet",
+        ]
+    )
+    assert exit_code == 1
+
+
+def test_time_to_live_mismatch_triggers_error(tmp_path: Path) -> None:
+    resources = tmp_path / "resources"
+    resources.mkdir()
+
+    payload_bytes = b"hotel-payload"
+    signed_bytes = b"hotel-signed"
+    (resources / "hotel.norito").write_bytes(payload_bytes)
+
+    payloads_path = _write_payloads(
+        tmp_path / "transaction_payloads.json",
+        [
+            {
+                "name": "hotel",
+                "encoded": base64.b64encode(payload_bytes).decode(),
+                "creation_time_ms": 1_735_000_000_888,
+                "chain": "00000009",
+                "authority": "hotel@wonderland",
+                "time_to_live_ms": 5000,
+                "nonce": 7,
+            }
+        ],
+    )
+    manifest_path = _write_manifest(
+        tmp_path / "transaction_fixtures.manifest.json",
+        [
+            _fixture_entry(
+                "hotel",
+                "hotel.norito",
+                payload_bytes,
+                signed_bytes,
+                creation_time_ms=1_735_000_000_888,
+                chain="00000009",
+                authority="hotel@wonderland",
+                time_to_live_ms=6000,
+                nonce=7,
+            )
+        ],
+    )
+
+    exit_code = MODULE.main(
+        [
+            "--resources",
+            str(resources),
+            "--fixtures",
+            str(payloads_path),
+            "--manifest",
+            str(manifest_path),
+            "--quiet",
+        ]
+    )
+    assert exit_code == 1
+
+
+def test_nonce_mismatch_triggers_error(tmp_path: Path) -> None:
+    resources = tmp_path / "resources"
+    resources.mkdir()
+
+    payload_bytes = b"india-payload"
+    signed_bytes = b"india-signed"
+    (resources / "india.norito").write_bytes(payload_bytes)
+
+    payloads_path = _write_payloads(
+        tmp_path / "transaction_payloads.json",
+        [
+            {
+                "name": "india",
+                "encoded": base64.b64encode(payload_bytes).decode(),
+                "creation_time_ms": 1_735_000_000_999,
+                "chain": "00000010",
+                "authority": "india@wonderland",
+                "time_to_live_ms": None,
+                "nonce": 9,
+            }
+        ],
+    )
+    manifest_path = _write_manifest(
+        tmp_path / "transaction_fixtures.manifest.json",
+        [
+            _fixture_entry(
+                "india",
+                "india.norito",
+                payload_bytes,
+                signed_bytes,
+                creation_time_ms=1_735_000_000_999,
+                chain="00000010",
+                authority="india@wonderland",
+                time_to_live_ms=None,
+                nonce=11,
+            )
+        ],
+    )
+
+    exit_code = MODULE.main(
+        [
+            "--resources",
+            str(resources),
+            "--fixtures",
+            str(payloads_path),
+            "--manifest",
+            str(manifest_path),
+            "--quiet",
+        ]
+    )
+    assert exit_code == 1
+
+
+def test_missing_nonce_field_fails(tmp_path: Path) -> None:
+    resources = tmp_path / "resources"
+    resources.mkdir()
+
+    payload_bytes = b"echo-payload"
+    signed_bytes = b"echo-signed"
+    (resources / "echo.norito").write_bytes(payload_bytes)
+
+    payloads_path = _write_payloads(
+        tmp_path / "transaction_payloads.json",
+        [
+            {
+                "name": "echo",
+                "encoded": base64.b64encode(payload_bytes).decode(),
+                "creation_time_ms": 1_735_000_000_555,
+                "chain": "00000006",
+                "authority": "echo@wonderland",
+                "time_to_live_ms": None,
+            }
+        ],
+    )
+    manifest_path = _write_manifest(
+        tmp_path / "transaction_fixtures.manifest.json",
+        [
+            _fixture_entry(
+                "echo",
+                "echo.norito",
+                payload_bytes,
+                signed_bytes,
+                creation_time_ms=1_735_000_000_555,
+                chain="00000006",
+                authority="echo@wonderland",
+                time_to_live_ms=None,
+                nonce=None,
+            )
+        ],
+    )
+
+    exit_code = MODULE.main(
+        [
+            "--resources",
+            str(resources),
+            "--fixtures",
+            str(payloads_path),
+            "--manifest",
+            str(manifest_path),
+            "--quiet",
+        ]
+    )
+    assert exit_code == 1
+
+
+def test_missing_time_to_live_field_fails(tmp_path: Path) -> None:
+    resources = tmp_path / "resources"
+    resources.mkdir()
+
+    payload_bytes = b"foxtrot-payload"
+    signed_bytes = b"foxtrot-signed"
+    (resources / "foxtrot.norito").write_bytes(payload_bytes)
+
+    payloads_path = _write_payloads(
+        tmp_path / "transaction_payloads.json",
+        [
+            {
+                "name": "foxtrot",
+                "encoded": base64.b64encode(payload_bytes).decode(),
+                "creation_time_ms": 1_735_000_000_666,
+                "chain": "00000007",
+                "authority": "foxtrot@wonderland",
+                "nonce": None,
+            }
+        ],
+    )
+    manifest_path = _write_manifest(
+        tmp_path / "transaction_fixtures.manifest.json",
+        [
+            _fixture_entry(
+                "foxtrot",
+                "foxtrot.norito",
+                payload_bytes,
+                signed_bytes,
+                creation_time_ms=1_735_000_000_666,
+                chain="00000007",
+                authority="foxtrot@wonderland",
+                time_to_live_ms=None,
+                nonce=None,
+            )
+        ],
+    )
+
+    exit_code = MODULE.main(
+        [
+            "--resources",
+            str(resources),
+            "--fixtures",
+            str(payloads_path),
+            "--manifest",
+            str(manifest_path),
+            "--quiet",
+        ]
+    )
+    assert exit_code == 1

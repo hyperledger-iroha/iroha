@@ -135,13 +135,17 @@ async fn npos_telemetry_soak_matches_metrics_under_adversarial_collectors() -> R
         return Ok(());
     };
 
+    let client = network.client();
+    let status = client.get_status()?;
+    for idx in status.blocks..2 {
+        client.submit_blocking(Log::new(Level::INFO, format!("telemetry seed {idx}")))?;
+    }
     network
         .ensure_blocks_with(|height| height.total >= 2)
         .await?;
 
     inject_large_rbc_payloads(&network).await?;
 
-    let client = network.client();
     let http = HttpClient::new();
     let telemetry_url = client
         .torii_url

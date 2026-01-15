@@ -69,13 +69,14 @@ def _try_setup_numba() -> Optional[Callable[[bytes], int]]:
     def _crc64_numba(view: np.ndarray, initial: int) -> int:
         crc = np.uint64(initial) & mask
         for byte in view:
-            idx = ((crc >> np.uint64(56)) ^ np.uint64(byte)) & np.uint64(0xFF)
-            crc = table[int(idx)] ^ ((crc << np.uint64(8)) & mask)
-        return int(crc)
+            idx = (crc ^ np.uint64(byte)) & np.uint64(0xFF)
+            crc = table[int(idx)] ^ (crc >> np.uint64(8))
+        return int(crc & mask)
 
-    def crc64_numba(payload: bytes, initial: int = 0) -> int:
+    def crc64_numba(payload: bytes, initial: int = int(mask)) -> int:
         view = np.frombuffer(payload, dtype=np.uint8)
-        return _crc64_numba(view, initial)
+        crc = _crc64_numba(view, initial)
+        return int(crc ^ mask)
 
     return crc64_numba
 

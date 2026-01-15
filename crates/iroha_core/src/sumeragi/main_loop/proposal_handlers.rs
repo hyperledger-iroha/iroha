@@ -1078,7 +1078,7 @@ impl Actor {
         let payload_bytes = payload_bytes.unwrap_or_else(|| block_payload_bytes(&block));
         let payload_hash = payload_hash.unwrap_or_else(|| Hash::new(&payload_bytes));
         let tx_count = block.transactions_vec().len();
-        let queue_len = self.queue.tx_len();
+        let queue_len = self.queue.queued_len();
         if empty_block_disfavored(
             tx_count,
             queue_len,

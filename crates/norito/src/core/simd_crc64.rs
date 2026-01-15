@@ -12,10 +12,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crc64fast::Digest;
 
-/// CRC64-ECMA polynomial.
+/// CRC64-XZ polynomial (ECMA-182, normal form).
 const POLY: u64 = 0x42F0_E1EB_A9EA_3693;
 
-/// Portable CRC64-ECMA implementation using the `crc64fast` crate.
+/// Portable CRC64-XZ implementation using the `crc64fast` crate.
 /// Serves as the canonical reference and fallback path.
 pub fn crc64_fallback(data: &[u8]) -> u64 {
     let mut digest = Digest::new_table();
@@ -799,7 +799,7 @@ fn crc64_slicing_by_8(mut crc: u64, mut data: &[u8]) -> u64 {
     crc
 }
 
-/// Update a running CRC64-ECMA value with `data`.
+/// Update a running CRC64-XZ value with `data`.
 #[inline(always)]
 pub fn crc64_update(crc: u64, data: &[u8]) -> u64 {
     crc64_slicing_by_8(crc, data)

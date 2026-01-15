@@ -116,7 +116,7 @@ public final class NoritoTests {
 
   private static void testCrc64() {
     long crc = CRC64.compute("123456789".getBytes());
-    assert crc == 0x6C40DF5F0B497347L : "CRC64 mismatch";
+    assert crc == 0x995DC9BBDF1939FAL : "CRC64 mismatch";
   }
 
   private static void testSchemaHashCanonicalPath() {

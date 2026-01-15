@@ -4650,6 +4650,29 @@ id: 88
         waitForExpectations(timeout: 1)
     }
 
+    func testGetTransactionStatusReturnsNilFor404() {
+        let expectation = expectation(description: "status")
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/pipeline/transactions/status")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 404,
+                                           httpVersion: nil,
+                                           headerFields: nil)!
+            return (response, nil)
+        }
+
+        makeClient().getTransactionStatus(hashHex: "deadbeef") { result in
+            switch result {
+            case .success(let status):
+                XCTAssertNil(status)
+            case .failure(let error):
+                XCTFail("unexpected error: \(error)")
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 1)
+    }
+
     func testPipelineStatusStateMapping() throws {
         let json = """
         {"kind":"Transaction","content":{"hash":"deadbeef","status":{"kind":"Committed","content":null}}}

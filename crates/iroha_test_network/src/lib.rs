@@ -2628,7 +2628,7 @@ fn sanitize_preview_for_display(value: &str) -> String {
 async fn drain_log_lines<R, F>(
     output: R,
     mut file: File,
-    fatal_notify: Arc<Notify>,
+    mut fatal_rx: watch::Receiver<bool>,
     is_running: Arc<AtomicBool>,
     mut on_line: F,
     ready_notify: Option<Arc<Notify>>,
@@ -2639,6 +2639,9 @@ async fn drain_log_lines<R, F>(
 {
     let mut lines = BufReader::new(output).lines();
     loop {
+        if *fatal_rx.borrow() || !is_running.load(Ordering::Relaxed) {
+            break;
+        }
         tokio::select! {
             line = lines.next_line() => match line {
                 Ok(Some(line)) => {
@@ -2662,10 +2665,14 @@ async fn drain_log_lines<R, F>(
                     break;
                 }
             },
-            _ = fatal_notify.notified() => break,
-        }
-        if !is_running.load(Ordering::Relaxed) {
-            break;
+            changed = fatal_rx.changed() => {
+                if changed.is_err() {
+                    break;
+                }
+                if *fatal_rx.borrow() {
+                    break;
+                }
+            },
         }
     }
     if let Err(err) = file.flush().await {
@@ -3672,7 +3679,7 @@ impl Signatory {
 struct PeerRun {
     tasks: JoinSet<()>,
     shutdown: oneshot::Sender<()>,
-    fatal_notify: Arc<Notify>,
+    fatal_tx: watch::Sender<bool>,
     pid: Option<u32>,
 }
 
@@ -3834,7 +3841,7 @@ impl NetworkPeer {
         let mut child = cmd.spawn().wrap_err("failed to spawn `irohad`")?;
         let pid = child.id();
         let stderr_log_ready = Arc::new(Notify::new());
-        let fatal_notify = Arc::new(Notify::new());
+        let (fatal_tx, fatal_rx) = watch::channel(false);
         self.is_running.store(true, Ordering::Relaxed);
         let _ = self.events.send(PeerLifecycleEvent::Spawned);
 
@@ -3842,7 +3849,7 @@ impl NetworkPeer {
 
         {
             let tasks = &mut tasks;
-            let fatal_notify = fatal_notify.clone();
+            let fatal_rx = fatal_rx.clone();
             let is_running = self.is_running.clone();
             let output = child
                 .stdout
@@ -3853,23 +3860,14 @@ impl NetworkPeer {
                 .await
                 .wrap_err("failed to create stdout log file")?;
             tasks.spawn(async move {
-                drain_log_lines(
-                    output,
-                    file,
-                    fatal_notify,
-                    is_running,
-                    |_| {},
-                    None,
-                    "stdout",
-                )
-                .await;
+                drain_log_lines(output, file, fatal_rx, is_running, |_| {}, None, "stdout").await;
                 // stdout logs are best-effort; no synchronization needed.
             });
         }
         {
             let tasks = &mut tasks;
             let span = span.clone();
-            let fatal_notify = fatal_notify.clone();
+            let fatal_rx = fatal_rx.clone();
             let is_running = self.is_running.clone();
             let output = child
                 .stderr
@@ -3893,7 +3891,7 @@ impl NetworkPeer {
                 drain_log_lines(
                     output,
                     file,
-                    fatal_notify,
+                    fatal_rx,
                     is_running,
                     |line| buffer.push_line(line),
                     Some(stderr_log_ready),
@@ -3912,7 +3910,7 @@ impl NetworkPeer {
             is_normal_shutdown_started: is_normal_shutdown_started.clone(),
             events: self.events.clone(),
             block_height: self.block_height.clone(),
-            fatal_notify: fatal_notify.clone(),
+            fatal_rx: fatal_rx.clone(),
             stderr_log_ready,
             stderr_live: self.stderr_live.clone(),
         };
@@ -3935,7 +3933,8 @@ impl NetworkPeer {
             let events_tx = self.events.clone();
             let block_height_tx = self.block_height.clone();
             let is_running = self.is_running.clone();
-            let fatal_notify = fatal_notify.clone();
+            let fatal_tx = fatal_tx.clone();
+            let mut fatal_rx = fatal_rx.clone();
             let torii_addr = self.api_address().to_literal();
             let startup_probe = Arc::clone(&self.startup_probe);
             let startup_warn_gate = StartupWarnGate::new(STARTUP_STATUS_WARN_GRACE);
@@ -3950,7 +3949,18 @@ impl NetworkPeer {
                     let mut http_gate = HttpStartGate::default();
                     let http_seen = Arc::new(AtomicBool::new(false));
                     if STARTUP_STATUS_WARN_GRACE > Duration::ZERO {
-                        tokio::time::sleep(STARTUP_STATUS_WARN_GRACE).await;
+                        tokio::select! {
+                            _ = tokio::time::sleep(STARTUP_STATUS_WARN_GRACE) => {}
+                            changed = fatal_rx.changed() => {
+                                if changed.is_ok() && *fatal_rx.borrow() {
+                                    debug!("fatal notify received during startup grace");
+                                }
+                                return;
+                            }
+                        }
+                    }
+                    if *fatal_rx.borrow() {
+                        return;
                     }
                     let warn_gate = startup_warn_gate.clone();
                     // Retry get_status with exponential backoff (50ms ..= 1s); abort if it takes
@@ -4041,9 +4051,26 @@ impl NetworkPeer {
                         }
                     };
                     let (status, source) = if status_timeout == Duration::ZERO {
-                        retry_with_backoff(status_backoff).await
+                        tokio::select! {
+                            status = retry_with_backoff(status_backoff) => status,
+                            changed = fatal_rx.changed() => {
+                                if changed.is_ok() && *fatal_rx.borrow() {
+                                    debug!("fatal notify received while waiting for initial status");
+                                }
+                                return;
+                            }
+                        }
                     } else {
-                        match retry_with_backoff_for(status_timeout, status_backoff).await {
+                        let status = tokio::select! {
+                            status = retry_with_backoff_for(status_timeout, status_backoff) => status,
+                            changed = fatal_rx.changed() => {
+                                if changed.is_ok() && *fatal_rx.borrow() {
+                                    debug!("fatal notify received while waiting for initial status");
+                                }
+                                return;
+                            }
+                        };
+                        match status {
                             Ok(status) => status,
                             Err(_) => {
                                 warn!(
@@ -4124,11 +4151,18 @@ impl NetworkPeer {
                                     if !is_running.load(Ordering::Relaxed) {
                                         break;
                                     }
-                                    let poll_result = spawn_blocking({
-                                        let client = poll_client.clone();
-                                        move || client.get_status()
-                                    })
-                                    .await;
+                                    let poll_result = tokio::select! {
+                                        result = spawn_blocking({
+                                            let client = poll_client.clone();
+                                            move || client.get_status()
+                                        }) => result,
+                                        changed = fatal_rx.changed() => {
+                                            if changed.is_ok() && *fatal_rx.borrow() {
+                                                debug!("fatal notify received during status poll");
+                                            }
+                                            return;
+                                        }
+                                    };
                                     let status = match poll_result {
                                         Ok(result) => result,
                                         Err(err) => {
@@ -4219,14 +4253,14 @@ impl NetworkPeer {
                                                 ?status_timeout,
                                                 "Torii HTTP never became reachable; requesting shutdown"
                                             );
-                                            fatal_notify.notify_waiters();
+                                            let _ = fatal_tx.send(true);
                                             return;
                                         }
                                         if status_timeout != Duration::ZERO
                                             && last_progress.elapsed() >= status_timeout
                                         {
                                             warn!(?status_timeout, "status watchdog expired; requesting shutdown");
-                                            fatal_notify.notify_waiters();
+                                            let _ = fatal_tx.send(true);
                                             return;
                                         }
                                         continue;
@@ -4247,8 +4281,10 @@ impl NetworkPeer {
                                         });
                                     }
                                 }
-                                _ = fatal_notify.notified() => {
-                                    debug!("fatal notify received in blocks watchdog");
+                                changed = fatal_rx.changed() => {
+                                    if changed.is_ok() && *fatal_rx.borrow() {
+                                        debug!("fatal notify received in blocks watchdog");
+                                    }
                                     return;
                                 }
                             }
@@ -4270,7 +4306,7 @@ impl NetworkPeer {
         *run_guard = Some(PeerRun {
             tasks,
             shutdown: shutdown_tx,
-            fatal_notify: fatal_notify.clone(),
+            fatal_tx: fatal_tx.clone(),
             pid,
         });
         Ok(())
@@ -4288,7 +4324,7 @@ impl NetworkPeer {
         // Immediately drop the running flag so watchdog loops and status polls exit promptly.
         self.is_running.store(false, Ordering::Relaxed);
         // Wake any background watchers so they stop promptly during shutdown.
-        run.fatal_notify.notify_waiters();
+        let _ = run.fatal_tx.send(true);
         let _ = run.shutdown.send(());
         let join_all = async {
             while let Some(res) = run.tasks.join_next().await {
@@ -5314,6 +5350,7 @@ mod shutdown_tests {
 
         let (events, _rx) = broadcast::channel(4);
         let (block_height, _rx) = watch::channel(None);
+        let (_fatal_tx, fatal_rx) = watch::channel(false);
         let mut peer_exit = PeerExit {
             child,
             span: tracing::Span::none(),
@@ -5321,7 +5358,7 @@ mod shutdown_tests {
             is_normal_shutdown_started: Arc::new(AtomicBool::new(false)),
             events,
             block_height,
-            fatal_notify: Arc::new(Notify::new()),
+            fatal_rx,
             stderr_log_ready: Arc::new(Notify::new()),
             stderr_live: Arc::new(StdMutex::new(LiveStderrState::default())),
         };
@@ -5349,12 +5386,12 @@ mod shutdown_tests {
         let log_path = dir.path().join("stdout.log");
         let file = File::create(&log_path).await.expect("create log file");
         let (mut writer, reader) = duplex(64);
-        let fatal_notify = Arc::new(Notify::new());
+        let (fatal_tx, fatal_rx) = watch::channel(false);
         let is_running = Arc::new(AtomicBool::new(true));
         let handle = tokio::spawn(drain_log_lines(
             reader,
             file,
-            fatal_notify.clone(),
+            fatal_rx,
             is_running.clone(),
             |_| {},
             None,
@@ -5364,7 +5401,7 @@ mod shutdown_tests {
         writer.write_all(b"hello\n").await.expect("write line");
         writer.flush().await.expect("flush");
         is_running.store(false, Ordering::Relaxed);
-        fatal_notify.notify_waiters();
+        let _ = fatal_tx.send(true);
 
         tokio::time::timeout(Duration::from_secs(1), handle)
             .await
@@ -5540,19 +5577,27 @@ struct PeerExit {
     is_normal_shutdown_started: Arc<AtomicBool>,
     events: broadcast::Sender<PeerLifecycleEvent>,
     block_height: watch::Sender<Option<BlockHeight>>,
-    fatal_notify: Arc<Notify>,
+    fatal_rx: watch::Receiver<bool>,
     stderr_log_ready: Arc<Notify>,
     stderr_live: Arc<StdMutex<LiveStderrState>>,
 }
 
 impl PeerExit {
     async fn monitor(mut self, shutdown: oneshot::Receiver<()>) -> Result<()> {
-        let status = tokio::select! {
-            status = self.child.wait() => status?,
-            _ = shutdown => self.shutdown_or_kill().await?,
-            _ = self.fatal_notify.notified() => {
-                self.span.in_scope(|| warn!("forcing peer shutdown after fatal signal"));
-                self.shutdown_or_kill().await?
+        let status = if *self.fatal_rx.borrow() {
+            self.span
+                .in_scope(|| warn!("forcing peer shutdown after fatal signal"));
+            self.shutdown_or_kill().await?
+        } else {
+            tokio::select! {
+                status = self.child.wait() => status?,
+                _ = shutdown => self.shutdown_or_kill().await?,
+                changed = self.fatal_rx.changed() => {
+                    if changed.is_ok() && *self.fatal_rx.borrow() {
+                        self.span.in_scope(|| warn!("forcing peer shutdown after fatal signal"));
+                    }
+                    self.shutdown_or_kill().await?
+                }
             }
         };
 
@@ -6265,19 +6310,19 @@ mod tests {
 
         let (shutdown_tx, _shutdown_rx) = tokio::sync::oneshot::channel();
         let tasks = tokio::task::JoinSet::new();
-        let fatal_notify = Arc::new(Notify::new());
+        let (fatal_tx, mut fatal_rx) = watch::channel(false);
         {
             let mut guard = peer.run.lock().await;
             *guard = Some(PeerRun {
                 tasks,
                 shutdown: shutdown_tx,
-                fatal_notify: fatal_notify.clone(),
+                fatal_tx: fatal_tx.clone(),
                 pid: None,
             });
         }
         peer.is_running.store(true, Ordering::Relaxed);
 
-        let notify_wait = fatal_notify.notified();
+        let notify_wait = fatal_rx.changed();
         tokio::pin!(notify_wait);
         peer.shutdown().await;
 
@@ -6285,7 +6330,8 @@ mod tests {
         assert!(peer.run.lock().await.is_none());
         tokio::time::timeout(Duration::from_secs(1), &mut notify_wait)
             .await
-            .expect("shutdown should notify fatal listeners");
+            .expect("shutdown should notify fatal listeners")
+            .expect("fatal signal should be delivered");
     }
 
     impl Drop for EnvVarGuard {

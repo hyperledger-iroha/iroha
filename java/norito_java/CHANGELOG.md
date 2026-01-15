@@ -76,7 +76,7 @@
 - Added compression profiles (`FAST`, `BALANCED`, `COMPACT`) via `CompressionConfig.zstdProfile`,
   matching the Python heuristics and surfacing runtime validation for the `zstd-jni` backend.
 - Initial Java Norito codec (JDK 25-ready)
-- Header encode/decode, CRC64-ECMA, type adapters, packed sequences/structs
+- Header encode/decode, CRC64-XZ, type adapters, packed sequences/structs
 - CLI inspector (`NoritoDump`) and assertion-based test harness
 - Adds optional Zstandard compression (when `com.github.luben:zstd-jni` is on the classpath)
 - Implements structural schema hashing matching Rust's canonical JSON FNV-1a derivation

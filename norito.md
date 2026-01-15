@@ -17,7 +17,7 @@ and supplies the schema hash and checksum needed for deterministic decoding.
 | Schema hash | 16 | FNV-1a hash of fully qualified type name (v1) |
 | Compression | 1 | `0 = None`, `1 = Zstd` |
 | Payload length | 8 | Uncompressed payload length (u64, little-endian) |
-| CRC64 | 8 | CRC64-ECMA over the payload |
+| CRC64 | 8 | CRC64-XZ (ECMA polynomial, reflected, init/xor all ones) over the payload |
 | Flags | 1 | Layout flags (see below) |
 
 Total header size: 40 bytes.

@@ -78,6 +78,8 @@ print("Pipeline status:", status)
 
 - `submit_pipeline_transaction` posts directly to `/v1/pipeline/transactions`
   and returns the canonical envelope plus the latest status.
+- A `404` from `/v1/pipeline/transactions/status` means Torii has no cached status yet
+  (for example after a restart), so the client treats it as pending and continues polling.
 - Stream the resulting events with `client.stream_pipeline_transactions` or
   fetch the recovery sidecar via `client.get_pipeline_recovery(height)` to
   validate retries, as required by PY6-P0.

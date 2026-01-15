@@ -6,7 +6,7 @@ use eyre::{WrapErr, ensure};
 use integration_tests::sandbox;
 use iroha_config::parameters::actual::ConsensusMode;
 use iroha_core::sumeragi::{collectors::deterministic_collectors, network_topology::Topology};
-use iroha_data_model::peer::PeerId;
+use iroha_data_model::{Level, isi::Log, peer::PeerId};
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use norito::json::{self, Value};
 use tokio::time::sleep;
@@ -38,19 +38,23 @@ async fn npos_prf_collectors_track_endpoint() -> eyre::Result<()> {
     };
 
     // Produce a handful of blocks so VRF commit/reveal data is available.
+    let client = network.client();
+    let status = client.get_status()?;
+    for idx in status.blocks..6 {
+        client.submit_blocking(Log::new(Level::INFO, format!("prf seed {idx}")))?;
+    }
     network
         .ensure_blocks_with(|height| height.total >= 6)
         .await?;
 
     let topology = topology_from_peers(network.peers());
-    let client = network
-        .client()
+    let collectors_url = client
         .torii_url
         .join("v1/sumeragi/collectors")
         .wrap_err("compose collectors URL")?;
     let http = reqwest::Client::new();
 
-    let snapshot_initial = fetch_collectors_snapshot(&http, &client).await?;
+    let snapshot_initial = fetch_collectors_snapshot(&http, &collectors_url).await?;
     ensure!(
         snapshot_initial.mode == ConsensusMode::Npos,
         "collector snapshot should report NPoS mode"
@@ -59,13 +63,18 @@ async fn npos_prf_collectors_track_endpoint() -> eyre::Result<()> {
     verify_snapshot(&topology, &snapshot_initial)?;
 
     // Wait for at least one additional block to ensure collector rotation is observable.
+    let status = client.get_status()?;
+    let target_height = snapshot_initial.plan_height.saturating_add(1);
+    for idx in status.blocks..target_height {
+        client.submit_blocking(Log::new(Level::INFO, format!("prf rotation tick {idx}")))?;
+    }
     network
         .ensure_blocks_with(|height| height.total > snapshot_initial.plan_height)
         .await?;
 
     let snapshot_next = retry_collectors_until_height(
         &http,
-        &client,
+        &collectors_url,
         snapshot_initial.plan_height,
         Duration::from_millis(250),
         20,

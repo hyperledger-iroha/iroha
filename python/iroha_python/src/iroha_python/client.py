@@ -37,8 +37,13 @@ from iroha_torii_client.client import (
     NetworkTimeSample,
     NetworkTimeSnapshot,
     NetworkTimeStatus,
+    OfflineAllowanceDeadline,
+    OfflineAllowanceListItem,
     OfflineAllowanceListPage,
+    OfflineSummaryListItem,
     OfflineSummaryListPage,
+    OfflineTransferHistoryEntry,
+    OfflineTransferListItem,
     OfflineTransferListPage,
     SubscriptionActionResult,
     SubscriptionCreateResult,
@@ -6510,6 +6515,14 @@ __all__ = [
     "AssetHolderListPage",
     "AccountPermissionRecord",
     "AccountPermissionListPage",
+    "OfflineAllowanceDeadline",
+    "OfflineAllowanceListItem",
+    "OfflineAllowanceListPage",
+    "OfflineTransferHistoryEntry",
+    "OfflineTransferListItem",
+    "OfflineTransferListPage",
+    "OfflineSummaryListItem",
+    "OfflineSummaryListPage",
     "SubscriptionPlanCreateResult",
     "SubscriptionPlanListItem",
     "SubscriptionPlanListPage",
@@ -8544,6 +8557,8 @@ class ToriiClient(_BaseToriiClient):
             "/v1/pipeline/transactions/status",
             params={"hash": hash_hex},
         )
+        if response.status_code == 404:
+            return None
         self._expect_status(response, {200, 202, 204})
         return self._maybe_json(response)
 

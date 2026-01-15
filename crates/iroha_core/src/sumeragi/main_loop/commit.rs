@@ -1301,7 +1301,7 @@ impl Actor {
             }
 
             let _ = kickstart_pacemaker_after_commit(
-                self.queue.tx_len(),
+                self.queue.queued_len(),
                 self.subsystems.propose.backpressure_gate.should_defer(),
                 |now| self.on_pacemaker_propose_ready(now),
             );

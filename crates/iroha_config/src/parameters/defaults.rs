@@ -160,6 +160,8 @@ pub mod queue {
     pub const CAPACITY_PER_USER: NonZeroUsize = nonzero!(2_usize.pow(16));
     /// Time-to-live for queued transactions before automatic eviction.
     pub const TRANSACTION_TIME_TO_LIVE: Duration = Duration::from_hours(24);
+    /// Minimum interval between expired-transaction sweeps.
+    pub const EXPIRED_CULL_INTERVAL: Duration = Duration::from_secs(1);
 }
 
 /// Transaction admission defaults enforced at pipeline ingress.
@@ -2258,6 +2260,8 @@ pub mod sumeragi {
     pub const CONSENSUS_MODE: &str = "permissioned";
     /// Default: allow runtime consensus mode flips driven by on-chain parameters.
     pub const MODE_FLIP_ENABLED: bool = true;
+    /// Default: allow empty-child recovery proposals when no transactions are queued.
+    pub const EMPTY_CHILD_FALLBACK_ENABLED: bool = true;
     /// Default: data availability (RBC + availability QC gating) disabled.
     pub const DA_ENABLED: bool = true;
     /// Multiplier for DA commit-quorum timeout (applied to block_time + 4 * commit_time).

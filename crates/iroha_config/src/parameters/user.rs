@@ -5056,6 +5056,12 @@ pub struct Sumeragi {
     /// Optional cap on payload bytes per block when RBC is disabled (`None` = unlimited).
     #[config(env = "SUMERAGI_BLOCK_MAX_PAYLOAD_BYTES")]
     pub block_max_payload_bytes: Option<NonZeroUsize>,
+    /// Allow empty-child recovery proposals when no transactions are queued.
+    #[config(
+        env = "SUMERAGI_EMPTY_CHILD_FALLBACK_ENABLED",
+        default = "defaults::sumeragi::EMPTY_CHILD_FALLBACK_ENABLED"
+    )]
+    pub empty_child_fallback_enabled: bool,
     /// Capacity for the vote message channel.
     pub msg_channel_cap_votes: Option<NonZeroUsize>,
     /// Capacity for the block payload channel.
@@ -5660,6 +5666,7 @@ impl Sumeragi {
             collectors_redundant_send_r,
             block_max_transactions,
             block_max_payload_bytes,
+            empty_child_fallback_enabled,
             msg_channel_cap_votes,
             msg_channel_cap_block_payload,
             msg_channel_cap_rbc_chunks,
@@ -5975,6 +5982,7 @@ impl Sumeragi {
             collectors_redundant_send_r,
             block_max_transactions,
             block_max_payload_bytes,
+            empty_child_fallback_enabled,
             msg_channel_cap_votes,
             msg_channel_cap_block_payload,
             msg_channel_cap_rbc_chunks,
@@ -7638,6 +7646,9 @@ pub struct Queue {
     /// The transaction will be dropped after this time if it is still in the queue.
     #[config(default = "defaults::queue::TRANSACTION_TIME_TO_LIVE.into()")]
     pub transaction_time_to_live_ms: DurationMs,
+    /// Minimum interval between expired-transaction sweeps.
+    #[config(default = "defaults::queue::EXPIRED_CULL_INTERVAL.into()")]
+    pub expired_cull_interval_ms: DurationMs,
 }
 
 impl Queue {
@@ -7647,11 +7658,13 @@ impl Queue {
             capacity,
             capacity_per_user,
             transaction_time_to_live_ms: transaction_time_to_live,
+            expired_cull_interval_ms: expired_cull_interval,
         } = self;
         actual::Queue {
             capacity,
             capacity_per_user,
             transaction_time_to_live: transaction_time_to_live.0,
+            expired_cull_interval: expired_cull_interval.0,
         }
     }
 }

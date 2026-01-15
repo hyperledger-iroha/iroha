@@ -38,6 +38,7 @@ fn queue_config(capacity: usize, ttl: Duration) -> QueueConfig {
         capacity: NonZeroUsize::new(capacity).expect("non-zero capacity"),
         capacity_per_user: NonZeroUsize::new(capacity).expect("non-zero per-user capacity"),
         transaction_time_to_live: ttl,
+        ..QueueConfig::default()
     }
 }
 

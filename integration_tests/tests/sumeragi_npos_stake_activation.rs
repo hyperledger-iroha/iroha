@@ -8,7 +8,8 @@ use std::{
 use eyre::{Context as _, ensure};
 use integration_tests::sandbox;
 use iroha::data_model::{
-    isi::{Mint, Register, staking::RegisterPublicLaneValidator},
+    Level,
+    isi::{Log, Mint, Register, staking::RegisterPublicLaneValidator},
     metadata::Metadata,
     name::Name,
     prelude::*,
@@ -130,6 +131,13 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
     client.submit_all_blocking(instructions)?;
 
     let pre_margin_height = (FINALITY_MARGIN / 2).max(1);
+    let status = client.get_status()?;
+    for idx in status.blocks..pre_margin_height {
+        client.submit_blocking(Log::new(
+            Level::INFO,
+            format!("stake activation seed {idx}"),
+        ))?;
+    }
     network.ensure_blocks(pre_margin_height).await?;
     let collectors_url = client
         .torii_url
@@ -142,6 +150,13 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
     )
     .await?;
 
+    let status = client.get_status()?;
+    for idx in status.blocks..WAIT_HEIGHT {
+        client.submit_blocking(Log::new(
+            Level::INFO,
+            format!("stake activation tick {idx}"),
+        ))?;
+    }
     network.ensure_blocks(WAIT_HEIGHT).await?;
 
     let expected_peer = eligible_peer.id().to_string();
@@ -302,6 +317,13 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
     ));
     client.submit_all_blocking(instructions)?;
 
+    let status = client.get_status()?;
+    for idx in status.blocks..WAIT_HEIGHT {
+        client.submit_blocking(Log::new(
+            Level::INFO,
+            format!("stake activation entity tick {idx}"),
+        ))?;
+    }
     network
         .ensure_blocks_with(|height| height.total >= WAIT_HEIGHT)
         .await?;

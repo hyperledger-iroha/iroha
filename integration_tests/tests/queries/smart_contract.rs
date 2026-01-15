@@ -8,8 +8,8 @@ use iroha_test_network::*;
 use iroha_test_samples::load_sample_ivm;
 
 fn metadata_with_gas_limit(bytecode: &IvmBytecode) -> Result<Metadata> {
-    let parsed = ivm::ProgramMetadata::parse(bytecode.as_ref())
-        .wrap_err("parse IVM program metadata")?;
+    let parsed =
+        ivm::ProgramMetadata::parse(bytecode.as_ref()).wrap_err("parse IVM program metadata")?;
     let mut metadata = Metadata::default();
     metadata.insert(
         "gas_limit".parse().expect("static gas_limit key"),

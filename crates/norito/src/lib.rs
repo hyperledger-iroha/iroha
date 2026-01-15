@@ -12,8 +12,9 @@
 //!   helpers use compact, ad-hoc AoS formats that honor runtime decode flags
 //!   (`COMPACT_LEN` varints when enabled; u64 otherwise).
 //!
-//! Checksum: payloads carry a CRC64-ECMA checksum (poly `0x42F0E1EBA9EA3693`)
-//! computed using the `crc64fast` crate. [`hardware_crc64`] enables the
+//! Checksum: payloads carry a CRC64-XZ checksum (ECMA polynomial `0x42F0E1EBA9EA3693`,
+//! reflected with init/xor all ones) computed using the `crc64fast` crate.
+//! [`hardware_crc64`] enables the
 //! SIMD-accelerated path when available, while [`crc64_fallback`] forces the
 //! portable table implementation.
 //!

@@ -7,7 +7,10 @@ use std::{
 
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::sandbox;
-use iroha::client::{Client, Status};
+use iroha::{
+    client::{Client, Status},
+    data_model::{Level, isi::Log},
+};
 use iroha_test_network::{NetworkBuilder, NetworkPeer, init_instruction_registry};
 use norito::json::Value;
 use tokio::{task, time::sleep};
@@ -38,6 +41,14 @@ async fn sumeragi_view_change_lock_convergence() -> Result<()> {
         return Ok(());
     };
 
+    let client = network.client();
+    let status = client.get_status()?;
+    for idx in status.blocks..3 {
+        client.submit_blocking(Log::new(
+            Level::INFO,
+            format!("lock convergence seed {idx}"),
+        ))?;
+    }
     network
         .ensure_blocks_with(|height| height.total >= 3)
         .await?;
@@ -130,6 +141,14 @@ async fn sumeragi_restart_retains_lock_convergence() -> Result<()> {
         return Ok(());
     };
 
+    let client = network.client();
+    let status = client.get_status()?;
+    for idx in status.blocks..3 {
+        client.submit_blocking(Log::new(
+            Level::INFO,
+            format!("lock convergence restart seed {idx}"),
+        ))?;
+    }
     network
         .ensure_blocks_with(|height| height.total >= 3)
         .await?;

@@ -5,7 +5,7 @@ Swift SDK targeting Hyperledger Iroha v2 and Sora Nexus (Iroha v3) nodes on Appl
 Features:
 - Torii HTTP client (balances, transactions, subscriptions, pipeline recovery, time service, ZK attachments, prover reports, contracts)
 - Health & metrics helpers (fetch `/v1/health` text probe and `/v1/metrics` Prometheus/JSON payloads)
-- Norito envelope encoder (header + CRC64-ECMA)
+- Norito envelope encoder (header + CRC64-XZ)
 - Native NoritoBridge integration (required by default; set `IROHASWIFT_USE_BRIDGE=optional` for the Swift-only fallback) powering transfer/mint/burn builders and JSON inspection helpers
 - Norito RPC HTTP helper (`NoritoRpcClient`) with binary header/query/timeout handling
 - Pipeline submission helpers (POST `/v1/pipeline/transactions` with configurable retries + status polling)
@@ -222,6 +222,8 @@ secp256k1 requires 33 bytes when enabled), and reject empty keys.
 helpers in `TxBuilder` (for example `submitAndWait(transfer:keypair:)`) wrap the same
 flow. No additional configuration is required when targeting Torii builds that ship the
 pipeline surface.
+If `/v1/pipeline/transactions/status` responds with `404`, Torii likely restarted or
+evicted the in-memory status cache; the SDK treats this as "pending" and continues polling.
 Pipeline submissions include an `Idempotency-Key` header derived from the transaction
 hash so retries stay safe; override `sdk.pipelineSubmitOptions.idempotencyKeyFactory` or
 set it to `nil` to disable the header when integrating with custom gateways.
@@ -533,7 +535,7 @@ let payload = try ConfidentialEncryptedPayload(
 )
 
 let noritoBytes = try payload.serializedPayload()      // bare Norito struct bytes
-let envelope = try payload.noritoEnvelope()            // header + CRC64-ECMA
+let envelope = try payload.noritoEnvelope()            // header + CRC64-XZ
 ```
 
 Each initializer validates the X25519 public key (32 bytes) and XChaCha20-Poly1305 nonce

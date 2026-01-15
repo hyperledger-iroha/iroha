@@ -6526,7 +6526,7 @@ impl Actor {
         );
         iroha_logger::info!(
             height = actor.state.view().height(),
-            queue_len = actor.queue.tx_len(),
+            queue_len = actor.queue.active_len(),
             "sumeragi actor initialized"
         );
         if let Some(pressure) = initial_rbc_store_pressure {
@@ -7161,7 +7161,7 @@ impl Actor {
     }
 
     pub(super) fn next_tick_deadline(&self, now: Instant) -> Option<Instant> {
-        let queue_len = self.queue.tx_len();
+        let queue_len = self.queue.active_len();
         let has_active_pending = self.has_active_pending_blocks();
         if queue_len > 0 && !has_active_pending {
             return Some(now);
@@ -7201,7 +7201,7 @@ impl Actor {
             let backpressure = self.queue_backpressure_state();
             iroha_logger::info!(
                 height = view.height(),
-                queue_len = self.queue.tx_len(),
+                queue_len = self.queue.active_len(),
                 queue_cap = backpressure.capacity().get(),
                 queue_saturated = backpressure.is_saturated(),
                 tick = self.tick_counter,
@@ -7209,9 +7209,16 @@ impl Actor {
             );
         }
         let mut progress = self.tick_mode_management();
+        let expired_culled = {
+            let view = self.state.view();
+            self.queue.cull_expired_entries_if_due(&view)
+        };
+        if expired_culled > 0 {
+            progress = true;
+        }
         let rbc_persist_progress = self.poll_rbc_persist_results_inner();
         let now = tick_start;
-        let queue_len = self.queue.tx_len();
+        let queue_len = self.queue.active_len();
         let queue_ready = queue_len > 0 && self.active_pending_blocks_len() == 0;
         if queue_ready {
             self.subsystems.propose.pacemaker.next_deadline = now;
@@ -9266,7 +9273,7 @@ impl Actor {
         if self.has_active_pending_blocks() {
             return false;
         }
-        if self.queue.tx_len() == 0 && self.empty_child_fallback(now).is_none() {
+        if self.queue.active_len() == 0 && self.empty_child_fallback(now).is_none() {
             // Skip idle view-change churn when no work is queued and no empty-child recovery is needed.
             return false;
         }
@@ -9384,6 +9391,9 @@ impl Actor {
 
     #[allow(clippy::too_many_lines)]
     fn empty_child_fallback(&self, now: Instant) -> Option<EmptyChildContext> {
+        if !self.config.empty_child_fallback_enabled {
+            return None;
+        }
         let lock = self.locked_qc?;
         if lock.phase != crate::sumeragi::consensus::Phase::Commit {
             return None;
@@ -9445,7 +9455,7 @@ impl Actor {
                 .unwrap_or(backoff);
             (parent_payload_hash, pending_age, backoff)
         };
-        if child_height == 2 && self.queue.tx_len() == 0 {
+        if child_height == 2 && self.queue.active_len() == 0 {
             // Avoid immediately emitting an empty post-genesis block; give clients time to
             // submit their first transactions before falling back to an empty child.
             const EMPTY_CHILD_STARTUP_GRACE: Duration = Duration::from_secs(10);
