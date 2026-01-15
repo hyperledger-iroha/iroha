@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use iroha_crypto::HashOf;
-use iroha_data_model::peer::PeerId;
+use iroha_data_model::{nexus::PublicLaneValidatorStatus, peer::PeerId};
 use iroha_logger::prelude::*;
 use iroha_primitives::numeric::{Numeric, NumericSpec};
 use mv::storage::StorageReadOnly;
@@ -185,6 +185,9 @@ pub fn stake_quorum_reached_for_snapshot(
 pub(super) fn stake_map_from_world(world: &impl WorldReadOnly) -> BTreeMap<PeerId, Numeric> {
     let mut stake_map: BTreeMap<PeerId, Numeric> = BTreeMap::new();
     for ((_lane_id, validator_id), record) in world.public_lane_validators().iter() {
+        if !matches!(record.status, PublicLaneValidatorStatus::Active) {
+            continue;
+        }
         let Some(pk) = validator_id.try_signatory() else {
             continue;
         };
@@ -350,6 +353,61 @@ mod tests {
         assert_eq!(snapshot.entries[0].peer_id, peer_b);
         assert_eq!(snapshot.entries[1].peer_id, peer_a);
         assert_eq!(snapshot.entries[1].stake, Numeric::new(25, 0));
+    }
+
+    #[test]
+    fn stake_map_ignores_inactive_validators() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
+
+        let domain: DomainId = "validators".parse().expect("domain id");
+        let keypair_active = KeyPair::random();
+        let keypair_pending = KeyPair::random();
+        let account_active = AccountId::new(domain.clone(), keypair_active.public_key().clone());
+        let account_pending = AccountId::new(domain, keypair_pending.public_key().clone());
+        let peer_active = PeerId::new(keypair_active.public_key().clone());
+        let peer_pending = PeerId::new(keypair_pending.public_key().clone());
+
+        {
+            let mut block = state.world.public_lane_validators.block();
+            block.insert(
+                (LaneId::new(1), account_active.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::new(1),
+                    validator: account_active.clone(),
+                    stake_account: account_active,
+                    total_stake: Numeric::new(5, 0),
+                    self_stake: Numeric::new(5, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+            block.insert(
+                (LaneId::new(2), account_pending.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::new(2),
+                    validator: account_pending.clone(),
+                    stake_account: account_pending,
+                    total_stake: Numeric::new(9, 0),
+                    self_stake: Numeric::new(9, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::PendingActivation(0),
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+            block.commit();
+        }
+
+        let view = state.view();
+        let stake_map = stake_map_from_world(view.world());
+        assert_eq!(stake_map.get(&peer_active), Some(&Numeric::new(5, 0)));
+        assert!(!stake_map.contains_key(&peer_pending));
     }
 
     #[test]

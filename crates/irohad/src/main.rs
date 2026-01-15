@@ -772,13 +772,54 @@ impl ConsensusIngressLimiter {
             window: network.consensus_ingress_penalty_window,
             cooldown: network.consensus_ingress_penalty_cooldown,
         };
+        let rbc_session_limit = Self::resolve_rbc_session_limit(
+            network.consensus_ingress_rbc_session_limit,
+            sumeragi,
+        );
         Self::new(
             msg_rate,
             bytes_rate,
-            network.consensus_ingress_rbc_session_limit,
+            rbc_session_limit,
             sumeragi.rbc_session_ttl,
             penalty,
         )
+    }
+
+    fn resolve_rbc_session_limit(
+        configured: usize,
+        sumeragi: &iroha_config::parameters::actual::Sumeragi,
+    ) -> usize {
+        if configured == 0 || sumeragi.rbc_session_ttl.is_zero() {
+            return configured;
+        }
+        let block_time = match sumeragi.consensus_mode {
+            iroha_config::parameters::actual::ConsensusMode::Npos => sumeragi.npos.block_time,
+            iroha_config::parameters::actual::ConsensusMode::Permissioned => {
+                std::time::Duration::from_millis(
+                    iroha_config::parameters::defaults::sumeragi::BLOCK_TIME_MS,
+                )
+            }
+        };
+        Self::rbc_session_limit_from_ttl(configured, sumeragi.rbc_session_ttl, block_time)
+    }
+
+    fn rbc_session_limit_from_ttl(
+        configured: usize,
+        ttl: Duration,
+        block_time: Duration,
+    ) -> usize {
+        // Scale the cap to cover fast pipelines without dropping in-flight RBC sessions.
+        if configured == 0 || ttl.is_zero() {
+            return configured;
+        }
+        let block_ms = block_time.as_millis().max(1);
+        let ttl_ms = ttl.as_millis().max(1);
+        let expected = usize::try_from(ttl_ms / block_ms).unwrap_or(usize::MAX);
+        let padded = expected
+            .saturating_add(1)
+            .saturating_mul(2)
+            .max(1);
+        configured.max(padded)
     }
 
     fn new(
@@ -5733,6 +5774,40 @@ mod tests {
             assert!(overrides.dispatch_trace);
             assert!(overrides.debug_enum);
             assert!(!overrides.debug_fused);
+        }
+    }
+
+    mod consensus_ingress_limits {
+        use super::*;
+
+        #[test]
+        fn rbc_session_limit_scales_with_ttl_and_block_time() {
+            let limit = ConsensusIngressLimiter::rbc_session_limit_from_ttl(
+                64,
+                Duration::from_secs(120),
+                Duration::from_secs(1),
+            );
+            assert_eq!(limit, 242);
+        }
+
+        #[test]
+        fn rbc_session_limit_respects_explicit_upper_bound() {
+            let limit = ConsensusIngressLimiter::rbc_session_limit_from_ttl(
+                512,
+                Duration::from_secs(120),
+                Duration::from_secs(1),
+            );
+            assert_eq!(limit, 512);
+        }
+
+        #[test]
+        fn rbc_session_limit_disables_when_configured_zero() {
+            let limit = ConsensusIngressLimiter::rbc_session_limit_from_ttl(
+                0,
+                Duration::from_secs(120),
+                Duration::from_secs(1),
+            );
+            assert_eq!(limit, 0);
         }
     }
 

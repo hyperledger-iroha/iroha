@@ -848,7 +848,6 @@ fn minimal_config_snapshot() {
                 block_max_transactions: None,
                 block_max_payload_bytes: None,
                 proposal_queue_scan_multiplier: 4,
-                empty_child_fallback_enabled: true,
                 msg_channel_cap_votes: 8192,
                 msg_channel_cap_block_payload: 128,
                 msg_channel_cap_rbc_chunks: 1024,

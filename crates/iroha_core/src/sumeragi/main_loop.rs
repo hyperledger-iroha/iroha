@@ -123,7 +123,7 @@ mod vrf;
 
 use locked_qc::{
     LockedQcRejection, ensure_locked_qc_allows, qc_extends_locked_if_present,
-    qc_extends_locked_with_lookup, realign_locked_to_committed_if_extends,
+    realign_locked_to_committed_if_extends,
 };
 use pacing::{
     AdaptiveAction, AdaptiveObservabilityMetrics, AdaptiveObservabilityState, BackpressureGate,
@@ -139,14 +139,15 @@ use pending_rbc::{PendingChunkOutcome, PendingRbcDropReason};
 use proposal_handlers::invalid_proposal_evidence;
 #[cfg(test)]
 use proposals::ProposalMismatch;
-use proposals::{
-    ProposalCache, block_payload_bytes, detect_proposal_mismatch, evidence_within_horizon,
-};
+use proposals::{ProposalCache, detect_proposal_mismatch, evidence_within_horizon};
 use roster::{
     apply_roster_indices_to_manager, canonicalize_roster, compute_membership_view_hash,
-    compute_roster_indices_from_topology, derive_active_topology,
-    derive_active_topology_from_views, derive_local_validator_index, roster_member_allowed_bls,
+    compute_roster_indices_from_topology, derive_active_topology_for_mode,
+    derive_active_topology_from_views, derive_local_validator_index_for_mode,
+    roster_member_allowed_bls,
 };
+#[cfg(test)]
+use roster::{derive_active_topology, derive_local_validator_index};
 use vrf::VrfActor;
 #[cfg(test)]
 use vrf::derive_vrf_material_from_key;
@@ -2462,10 +2463,11 @@ impl Actor {
             (commit_topology.to_vec(), "commit_topology")
         } else {
             let view = self.state.view();
-            let roster = derive_active_topology(
+            let roster = derive_active_topology_for_mode(
                 &view,
                 self.common_config.trusted_peers.value(),
                 self.common_config.peer.id(),
+                consensus_mode,
             );
             drop(view);
             (roster, "trusted_peers")
@@ -3734,9 +3736,6 @@ struct ProposeState {
     last_pacemaker_attempt: Option<Instant>,
     last_successful_proposal: Option<Instant>,
     propose_attempt_monitor: ProposeAttemptMonitor,
-    /// Tracks the last payload hash used to emit an empty-child fallback along with the emission
-    /// time so idle-slot retries can be rate-limited per parent block.
-    last_empty_child_attempt: Option<(Hash, Instant)>,
 }
 
 #[allow(
@@ -3788,7 +3787,6 @@ fn reset_runtime_state_for_mode_flip(
     qc_signer_tally: &mut BTreeMap<QcVoteKey, QcSignerTally>,
     voting_block: &mut Option<VotingBlock>,
     pending_roster_activation: &mut Option<(u64, Vec<PeerId>)>,
-    last_empty_child_attempt: &mut Option<(Hash, Instant)>,
     rbc_status_handle: &rbc_status::Handle,
     vrf: &mut VrfActor,
     base_pacemaker_interval: Duration,
@@ -3806,7 +3804,6 @@ fn reset_runtime_state_for_mode_flip(
     qc_signer_tally.clear();
     *voting_block = None;
     *pending_roster_activation = None;
-    *last_empty_child_attempt = None;
     rbc_status_handle.clear();
     vrf.reset();
 }
@@ -4947,7 +4944,7 @@ fn select_block_sync_roster(
 
     if allow_uncertified {
         let view = state.view();
-        let roster = derive_active_topology(&view, trusted, me);
+        let roster = derive_active_topology_for_mode(&view, trusted, me, consensus_mode);
         let source = if view.commit_topology().is_empty() {
             BlockSyncRosterSource::TrustedPeersFallback
         } else {
@@ -5132,10 +5129,11 @@ impl Actor {
     }
 
     fn effective_commit_topology_from_view(&self, view: &StateView<'_>) -> Vec<PeerId> {
-        derive_active_topology(
+        derive_active_topology_for_mode(
             view,
             self.common_config.trusted_peers.value(),
             self.common_config.peer.id(),
+            self.consensus_mode,
         )
     }
 
@@ -6094,12 +6092,13 @@ impl Actor {
             pacemaker_block_time,
         ) = {
             let view = state.view();
-            let commit_topology = derive_active_topology(
+            let mode = super::effective_consensus_mode(&view, config.consensus_mode);
+            let commit_topology = derive_active_topology_for_mode(
                 &view,
                 common_config.trusted_peers.value(),
                 common_config.peer.id(),
+                mode,
             );
-            let mode = super::effective_consensus_mode(&view, config.consensus_mode);
             let pacemaker_timeouts = if matches!(mode, ConsensusMode::Npos) {
                 super::resolve_npos_timeouts(&view, &config.npos)
             } else {
@@ -6440,7 +6439,6 @@ impl Actor {
             last_pacemaker_attempt: None,
             last_successful_proposal: None,
             propose_attempt_monitor: ProposeAttemptMonitor::new(),
-            last_empty_child_attempt: None,
         };
         let subsystems = ActorSubsystems {
             commit: CommitState::new(),
@@ -8147,10 +8145,11 @@ impl Actor {
         if self.is_observer() {
             return None;
         }
-        derive_local_validator_index(
+        derive_local_validator_index_for_mode(
             view,
             self.common_config.trusted_peers.value(),
             self.common_config.peer.id(),
+            self.consensus_mode,
         )
     }
 
@@ -9345,8 +9344,8 @@ impl Actor {
         if self.has_active_pending_blocks() {
             return false;
         }
-        if self.queue.active_len() == 0 && self.empty_child_fallback(now).is_none() {
-            // Skip idle view-change churn when no work is queued and no empty-child recovery is needed.
+        if self.queue.active_len() == 0 {
+            // Skip idle view-change churn when no work is queued.
             return false;
         }
         if self.has_unresolved_rbc_backlog() {
@@ -9459,136 +9458,6 @@ impl Actor {
                 "pruned stale view state after view change"
             );
         }
-    }
-
-    #[allow(clippy::too_many_lines)]
-    fn empty_child_fallback(&self, now: Instant) -> Option<EmptyChildContext> {
-        if !self.config.empty_child_fallback_enabled {
-            return None;
-        }
-        let lock = self.locked_qc?;
-        if lock.phase != crate::sumeragi::consensus::Phase::Commit {
-            return None;
-        }
-        if self.find_child_qc_extending_lock(lock).is_some() {
-            return None;
-        }
-        let (committed_height, block_time) = {
-            let view = self.state.view();
-            (
-                view.height() as u64,
-                self.block_time_for_mode(&view, self.consensus_mode),
-            )
-        };
-        let child_height = lock.height.saturating_add(1);
-        if child_height <= committed_height {
-            return None;
-        }
-        if self
-            .pending
-            .pending_blocks
-            .values()
-            .any(|candidate| !candidate.aborted && candidate.height == child_height)
-        {
-            return None;
-        }
-        let pending = self.pending.pending_blocks.get(&lock.subject_block_hash);
-        let (parent_payload_hash, pending_age, backoff) = if let Some(pending) = pending {
-            let pending_age = now.saturating_duration_since(pending.inserted_at);
-            (
-                pending.payload_hash,
-                pending_age,
-                self.commit_quorum_timeout(),
-            )
-        } else {
-            // Fall back to the committed parent payload when the pending entry was already pruned.
-            let parent_payload_hash = {
-                let height_usize = usize::try_from(lock.height).ok()?;
-                let nz_height = NonZeroUsize::new(height_usize)?;
-                let block = self.kura.get_block(nz_height)?;
-                if block.hash() != lock.subject_block_hash {
-                    warn!(
-                        expected = %lock.subject_block_hash,
-                        observed = %block.hash(),
-                        height = lock.height,
-                        "locked QC does not match committed block hash"
-                    );
-                    return None;
-                }
-                Hash::new(block_payload_bytes(&block))
-            };
-            let backoff = block_time.max(Duration::from_millis(1));
-            let pending_age = self
-                .subsystems
-                .propose
-                .last_successful_proposal
-                .map(|ts| now.saturating_duration_since(ts))
-                .or_else(|| self.phase_tracker.view_age(child_height, now))
-                .unwrap_or(backoff);
-            (parent_payload_hash, pending_age, backoff)
-        };
-        if child_height == 2 && self.queue.active_len() == 0 {
-            // Avoid immediately emitting an empty post-genesis block; give clients time to
-            // submit their first transactions before falling back to an empty child.
-            const EMPTY_CHILD_STARTUP_GRACE: Duration = Duration::from_secs(10);
-            if pending_age < EMPTY_CHILD_STARTUP_GRACE {
-                return None;
-            }
-        }
-        if self
-            .subsystems
-            .propose
-            .proposal_cache
-            .proposals
-            .keys()
-            .any(|(height, _)| *height == child_height)
-        {
-            return None;
-        }
-        if self
-            .subsystems
-            .propose
-            .proposal_cache
-            .hints
-            .keys()
-            .any(|(height, _)| *height == child_height)
-        {
-            return None;
-        }
-
-        if backoff != Duration::ZERO && pending_age < backoff {
-            return None;
-        }
-        if !empty_child_backoff_allows(
-            self.subsystems.propose.last_empty_child_attempt,
-            parent_payload_hash,
-            now,
-            backoff,
-        ) {
-            return None;
-        }
-
-        let highest_qc = self
-            .highest_qc
-            .filter(|candidate| {
-                candidate.phase == crate::sumeragi::consensus::Phase::Commit
-                    && qc_extends_locked_with_lookup(lock, *candidate, |hash, height| {
-                        self.parent_hash_for(hash, height)
-                    })
-            })
-            .unwrap_or(lock);
-        let (target_height, target_view) = new_view_target(highest_qc, Some(child_height), None);
-
-        Some(EmptyChildContext {
-            target_height,
-            target_view,
-            highest_qc,
-            parent_payload_hash,
-        })
-    }
-
-    fn record_empty_child_attempt(&mut self, parent_payload_hash: Hash, now: Instant) {
-        self.subsystems.propose.last_empty_child_attempt = Some((parent_payload_hash, now));
     }
 
     fn purge_rbc_state(
@@ -10006,15 +9875,6 @@ fn precommit_vote_count(qc: &crate::sumeragi::consensus::Qc, roster_len: usize) 
     }
 }
 
-/// Inputs used when assembling an empty-child fallback proposal.
-#[derive(Debug, Clone, Copy)]
-struct EmptyChildContext {
-    target_height: u64,
-    target_view: u64,
-    highest_qc: crate::sumeragi::consensus::QcHeaderRef,
-    parent_payload_hash: Hash,
-}
-
 #[derive(Debug, Default, Clone, Copy)]
 struct RelayDropCounters {
     subscriber_queue_full: u64,
@@ -10107,22 +9967,6 @@ impl Default for RelayBackpressure {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Decide whether another empty-child emission is allowed for the same parent payload.
-fn empty_child_backoff_allows(
-    last_attempt: Option<(Hash, Instant)>,
-    parent_payload_hash: Hash,
-    now: Instant,
-    backoff: Duration,
-) -> bool {
-    let Some((last_hash, last_instant)) = last_attempt else {
-        return true;
-    };
-    if backoff == Duration::ZERO {
-        return true;
-    }
-    last_hash != parent_payload_hash || now.saturating_duration_since(last_instant) >= backoff
 }
 
 #[derive(Debug, Default)]

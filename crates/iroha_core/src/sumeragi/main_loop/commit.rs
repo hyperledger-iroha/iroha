@@ -4419,7 +4419,6 @@ impl Actor {
         }
         self.subsystems.propose.proposal_cache = ProposalCache::new(PROPOSAL_CACHE_LIMIT);
         self.reset_collector_state();
-        self.subsystems.propose.last_empty_child_attempt = None;
         self.subsystems.da_rbc.rbc.pending.clear();
         self.subsystems.da_rbc.rbc.sessions.clear();
         self.subsystems.da_rbc.rbc.session_rosters.clear();
