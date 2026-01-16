@@ -4928,9 +4928,61 @@ impl StakeSnapshot for StateView<'_> {
         let present_peers: std::collections::BTreeSet<PeerId> =
             self.world.peers().iter().cloned().collect();
         let block_height = u64::try_from(self.block_hashes.len()).unwrap_or(u64::MAX);
-        let topology_peers: std::collections::BTreeSet<PeerId> =
+        let mut topology_peers: std::collections::BTreeSet<PeerId> =
             self.commit_topology.iter().cloned().collect();
         let enforce_topology_membership = !topology_peers.is_empty();
+        if enforce_topology_membership {
+            let mut active_candidates: std::collections::BTreeSet<PeerId> =
+                std::collections::BTreeSet::new();
+            for ((_lane_id, _validator_id), record) in self.world.public_lane_validators().iter() {
+                if !matches!(record.status, PublicLaneValidatorStatus::Active) {
+                    continue;
+                }
+                if !matches!(
+                    self.lane_validator_mode(record.lane_id),
+                    iroha_config::parameters::actual::LaneValidatorMode::StakeElected
+                ) {
+                    continue;
+                }
+                let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
+                    &record.self_stake,
+                    self.nexus.staking.min_validator_stake,
+                ) else {
+                    continue;
+                };
+                if !meets_min {
+                    continue;
+                }
+                let Some(pk) = record.validator.try_signatory() else {
+                    continue;
+                };
+                let pid = PeerId::from(pk.clone());
+                if !present_peers.contains(&pid) {
+                    continue;
+                }
+                if !peer_has_live_consensus_key(self.world(), &pid, block_height) {
+                    continue;
+                }
+                active_candidates.insert(pid);
+            }
+
+            if !active_candidates.is_empty() {
+                let missing: Vec<_> = active_candidates
+                    .iter()
+                    .filter(|pid| !topology_peers.contains(*pid))
+                    .cloned()
+                    .collect();
+                if !missing.is_empty() {
+                    warn!(
+                        commit_topology_len = topology_peers.len(),
+                        active_candidates_len = active_candidates.len(),
+                        missing_len = missing.len(),
+                        "commit topology missing active validators; widening epoch roster filter"
+                    );
+                    topology_peers.extend(missing);
+                }
+            }
+        }
         // Preferred path: council-derived roster for the epoch
         if let Some(c) = self.world.council().get(&epoch).cloned() {
             // Build PeerIds from council members' signatories
@@ -5281,6 +5333,65 @@ mod stake_snapshot_tests {
             <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
         assert_eq!(roster.len(), 1);
         assert_eq!(roster[0], PeerId::from(present_kp.public_key().clone()));
+    }
+
+    #[test]
+    fn public_lane_snapshot_widens_missing_commit_topology_membership() {
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.staking.min_validator_stake = 100;
+        }
+
+        let domain: DomainId = "wonderland".parse().unwrap();
+        let keypairs: Vec<KeyPair> = (0..3).map(|_| KeyPair::random()).collect();
+
+        let mut wb = state.world.block();
+        {
+            let peers = wb.peers.get_mut();
+            for kp in &keypairs {
+                let _ = peers.push(PeerId::from(kp.public_key().clone()));
+            }
+        }
+        let peers: Vec<_> = wb.peers.clone().into_iter().collect();
+        for peer in &peers {
+            seed_consensus_key(&mut wb, peer, ConsensusKeyStatus::Active, 0);
+        }
+        for kp in &keypairs {
+            let validator = DMAccountId::of(domain.clone(), kp.public_key().clone());
+            wb.public_lane_validators.insert(
+                (LaneId::SINGLE, validator.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::SINGLE,
+                    validator: validator.clone(),
+                    stake_account: validator.clone(),
+                    total_stake: Numeric::new(1_000, 0),
+                    self_stake: Numeric::new(1_000, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+        }
+        wb.commit();
+
+        {
+            let mut topo_block = state.commit_topology.block();
+            topo_block.mutate_vec(|vec| *vec = vec![peers[0].clone(), peers[1].clone()]);
+            topo_block.commit();
+        }
+
+        let sv = state.view();
+        let roster =
+            <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
+        assert_eq!(roster.len(), peers.len());
+        for peer in peers {
+            assert!(roster.contains(&peer));
+        }
     }
 
     #[test]

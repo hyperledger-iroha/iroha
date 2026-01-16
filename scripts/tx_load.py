@@ -1,15 +1,23 @@
 #!/usr/bin/env python3
-"""Submit transaction pings in parallel and estimate TPS from /status + /metrics."""
+"""Submit transaction pings in parallel (optionally sharded) and estimate TPS from /status + /metrics."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import subprocess
+import tempfile
 import threading
 import time
+import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
+
+DEFAULT_STATUS_URL = "http://127.0.0.1:8080/status"
+DEFAULT_METRICS_URL = "http://127.0.0.1:8080/metrics"
 
 
 def parse_metric_value(metrics_text: str, metric: str) -> Optional[float]:
@@ -50,6 +58,74 @@ def extract_status_snapshot(payload: dict) -> dict:
     }
 
 
+@dataclass(frozen=True)
+class LoadShard:
+    torii_url: str
+    count: int
+    parallel: int
+    client_config: Path
+
+
+@dataclass(frozen=True)
+class LoadShardResult:
+    shard: LoadShard
+    returncode: int
+    stdout: str
+    stderr: str
+    elapsed: float
+    rate_limit_hits: int
+
+
+def normalize_torii_url(url: str) -> str:
+    stripped = url.rstrip("/")
+    return f"{stripped}/"
+
+
+def split_even(total: int, parts: int) -> list[int]:
+    if parts <= 0:
+        return []
+    base = total // parts
+    extra = total % parts
+    return [base + (1 if idx < extra else 0) for idx in range(parts)]
+
+
+def torii_url_from_status(status_url: str) -> str:
+    parsed = urllib.parse.urlparse(status_url)
+    if not parsed.scheme or not parsed.netloc:
+        raise ValueError(f"status url must include scheme and host: {status_url}")
+    return normalize_torii_url(f"{parsed.scheme}://{parsed.netloc}")
+
+
+def render_client_config(base_text: str, torii_url: str) -> str:
+    lines = base_text.splitlines()
+    rendered = []
+    replaced = False
+    for line in lines:
+        if line.strip().startswith("torii_url"):
+            rendered.append(f'torii_url = "{torii_url}"')
+            replaced = True
+        else:
+            rendered.append(line)
+    if not replaced:
+        inserted = False
+        for idx, line in enumerate(rendered):
+            if line.strip().startswith("chain"):
+                rendered.insert(idx + 1, f'torii_url = "{torii_url}"')
+                inserted = True
+                break
+        if not inserted:
+            rendered.insert(0, f'torii_url = "{torii_url}"')
+    return "\n".join(rendered) + "\n"
+
+
+def count_rate_limit_hits(output: str) -> int:
+    if not output:
+        return 0
+    hits = output.count("status: 429")
+    hits += output.lower().count("too many requests")
+    return hits
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -59,8 +135,25 @@ def main() -> int:
     )
     parser.add_argument("--iroha-bin", default="target/release/iroha")
     parser.add_argument("--client-config", required=True, help="Path to client.toml")
-    parser.add_argument("--status-url", default="http://127.0.0.1:8080/status")
-    parser.add_argument("--metrics-url", default="http://127.0.0.1:8080/metrics")
+    parser.add_argument("--status-url", default=DEFAULT_STATUS_URL)
+    parser.add_argument("--metrics-url", default=DEFAULT_METRICS_URL)
+    parser.add_argument(
+        "--peer-urls",
+        help="Comma-separated Torii URLs to shard load across (overrides --peer-count).",
+    )
+    parser.add_argument(
+        "--peer-count",
+        type=int,
+        help="Number of peers to shard across (derived from --base-api-port).",
+    )
+    parser.add_argument("--base-api-port", type=int, default=8080)
+    parser.add_argument("--peer-host", default="127.0.0.1")
+    parser.add_argument(
+        "--per-peer",
+        action="store_true",
+        default=False,
+        help="Treat --count/--parallel as per-peer values when sharding.",
+    )
     parser.add_argument("--count", type=int, default=10_000)
     parser.add_argument("--parallel", type=int, default=64)
     parser.add_argument("--msg", default="load-ping")
@@ -72,12 +165,74 @@ def main() -> int:
     parser.add_argument("--drain-timeout", type=float, default=120.0)
     parser.add_argument("--block-max", type=int, default=10_000)
     parser.add_argument("--log-level", default="INFO")
+    parser.add_argument(
+        "--continue-on-failure",
+        action="store_true",
+        default=False,
+        help="Continue to stats collection even if ping submissions fail.",
+    )
     args = parser.parse_args()
 
     if args.count <= 0:
         parser.error("--count must be greater than zero")
     if args.parallel <= 0:
         parser.error("--parallel must be greater than zero")
+    if args.peer_urls and args.peer_count:
+        parser.error("--peer-urls and --peer-count are mutually exclusive")
+    if args.peer_count is not None and args.peer_count <= 0:
+        parser.error("--peer-count must be greater than zero")
+
+    peer_urls = []
+    if args.peer_urls:
+        peer_urls = [
+            normalize_torii_url(url.strip())
+            for url in args.peer_urls.split(",")
+            if url.strip()
+        ]
+        if not peer_urls:
+            parser.error("--peer-urls did not contain any valid entries")
+    elif args.peer_count:
+        base_host = args.peer_host.rstrip("/")
+        if "://" in base_host:
+            base_prefix = base_host
+        else:
+            base_prefix = f"http://{base_host}"
+        for idx in range(args.peer_count):
+            port = args.base_api_port + idx
+            peer_urls.append(normalize_torii_url(f"{base_prefix}:{port}"))
+    else:
+        peer_urls = [torii_url_from_status(args.status_url)]
+
+    if (args.peer_urls or args.peer_count) and args.status_url == DEFAULT_STATUS_URL:
+        args.status_url = urllib.parse.urljoin(peer_urls[0], "status")
+    if (args.peer_urls or args.peer_count) and args.metrics_url == DEFAULT_METRICS_URL:
+        args.metrics_url = urllib.parse.urljoin(peer_urls[0], "metrics")
+
+    if args.per_peer:
+        count_shards = [args.count for _ in peer_urls]
+        parallel_shards = [args.parallel for _ in peer_urls]
+    else:
+        count_shards = split_even(args.count, len(peer_urls))
+        parallel_shards = split_even(args.parallel, len(peer_urls))
+
+    shard_specs: list[tuple[str, int, int]] = []
+    for idx, torii_url in enumerate(peer_urls):
+        count = count_shards[idx]
+        if count == 0:
+            continue
+        parallel = parallel_shards[idx]
+        if parallel <= 0:
+            parallel = 1
+        shard_specs.append((torii_url, count, parallel))
+
+    if not shard_specs:
+        parser.error("no load shards configured; check --count and peer settings")
+
+    if len(shard_specs) > 1:
+        shard_counts = ", ".join(str(spec[1]) for spec in shard_specs)
+        shard_parallel = ", ".join(str(spec[2]) for spec in shard_specs)
+        print(f"Sharding load across {len(shard_specs)} peers (counts: {shard_counts})")
+        print(f"Parallel per shard: {shard_parallel}")
 
     snapshots = []
     lock = threading.Lock()
@@ -123,34 +278,80 @@ def main() -> int:
         thread.join(timeout=2)
         return 1
 
-    ping_cmd = [
-        args.iroha_bin,
-        "--config",
-        args.client_config,
-        "transaction",
-        "ping",
-        "--msg",
-        args.msg,
-        "--log-level",
-        args.log_level,
-        "--count",
-        str(args.count),
-        "--parallel",
-        str(args.parallel),
-    ]
-    if args.no_wait:
-        ping_cmd.append("--no-wait")
-    if args.no_index:
-        ping_cmd.append("--no-index")
+    base_config_text = Path(args.client_config).read_text(encoding="utf-8")
+    temp_configs: list[Path] = []
+    shards: list[LoadShard] = []
+    for torii_url, count, parallel in shard_specs:
+        rendered = render_client_config(base_config_text, torii_url)
+        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".toml") as handle:
+            handle.write(rendered)
+            temp_path = Path(handle.name)
+        temp_configs.append(temp_path)
+        shards.append(
+            LoadShard(
+                torii_url=torii_url,
+                count=count,
+                parallel=parallel,
+                client_config=temp_path,
+            )
+        )
+
+    def run_ping_shard(shard: LoadShard) -> LoadShardResult:
+        ping_cmd = [
+            args.iroha_bin,
+            "--config",
+            str(shard.client_config),
+            "transaction",
+            "ping",
+            "--msg",
+            args.msg,
+            "--log-level",
+            args.log_level,
+            "--count",
+            str(shard.count),
+            "--parallel",
+            str(shard.parallel),
+        ]
+        if args.no_wait:
+            ping_cmd.append("--no-wait")
+        if args.no_index:
+            ping_cmd.append("--no-index")
+        start = time.monotonic()
+        result = subprocess.run(ping_cmd, check=False, capture_output=True, text=True)
+        elapsed = time.monotonic() - start
+        combined = (result.stdout or "") + (result.stderr or "")
+        return LoadShardResult(
+            shard=shard,
+            returncode=result.returncode,
+            stdout=result.stdout or "",
+            stderr=result.stderr or "",
+            elapsed=elapsed,
+            rate_limit_hits=count_rate_limit_hits(combined),
+        )
 
     submit_start = time.monotonic()
-    result = subprocess.run(ping_cmd, check=False)
-    submit_elapsed = time.monotonic() - submit_start
-    if result.returncode != 0:
+    results = []
+    submit_failed = False
+    try:
+        with ThreadPoolExecutor(max_workers=len(shards)) as executor:
+            for result in executor.map(run_ping_shard, shards):
+                results.append(result)
+                if result.stdout:
+                    print(result.stdout, end="")
+                if result.stderr:
+                    print(result.stderr, end="")
+                if result.returncode != 0:
+                    submit_failed = True
+        submit_elapsed = time.monotonic() - submit_start
+    finally:
+        for path in temp_configs:
+            path.unlink(missing_ok=True)
+
+    if submit_failed and not args.continue_on_failure:
         stop_event.set()
         thread.join(timeout=2)
         print("load submission failed")
-        return result.returncode
+        return 1
 
     drain_deadline = time.monotonic() + args.drain_timeout
     while time.monotonic() < drain_deadline:
@@ -179,7 +380,8 @@ def main() -> int:
     admitted = final_status["txs_approved"] - baseline_status["txs_approved"]
     rejected = final_status["txs_rejected"] - baseline_status["txs_rejected"]
     admit_tps = admitted / elapsed
-    submit_tps = args.count / max(submit_elapsed, 1e-6)
+    submitted_total = sum(result.shard.count for result in results)
+    submit_tps = submitted_total / max(submit_elapsed, 1e-6)
 
     committed = 0
     last_block = baseline_status["blocks_non_empty"]
@@ -208,8 +410,10 @@ def main() -> int:
         commit_window = last_block_ts - first_block_ts
     commit_tps = committed / max(commit_window, 1e-6)
 
+    total_rate_limits = sum(result.rate_limit_hits for result in results)
+
     print("Load summary")
-    print(f"- submitted: {args.count} tx in {submit_elapsed:.2f}s ({submit_tps:.1f} tps)")
+    print(f"- submitted: {submitted_total} tx in {submit_elapsed:.2f}s ({submit_tps:.1f} tps)")
     print(f"- admitted: {admitted} tx (rejected: {rejected}) in {elapsed:.2f}s ({admit_tps:.1f} tps)")
     print(
         f"- committed estimate: {committed} tx in {commit_window:.2f}s ({commit_tps:.1f} tps)"
@@ -218,7 +422,8 @@ def main() -> int:
         f"- blocks_non_empty delta: {final_status['blocks_non_empty'] - baseline_status['blocks_non_empty']}"
     )
     print(f"- queue_size: baseline {baseline_status['queue_size']} -> final {final_status['queue_size']}")
-    return 0
+    print(f"- rate_limit_hits (status 429): {total_rate_limits}")
+    return 1 if submit_failed else 0
 
 
 if __name__ == "__main__":

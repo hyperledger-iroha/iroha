@@ -1767,7 +1767,7 @@ async fn actor_should_tick_tracks_missing_block_requests() {
             view_change_window: None,
             first_seen: now,
             last_requested: now,
-            view_change_triggered: false,
+            view_change_triggered_view: None,
             attempts: 0,
         },
     );
@@ -1809,7 +1809,7 @@ async fn actor_next_tick_deadline_tracks_missing_block_windows() {
             view_change_window: Some(Duration::from_millis(500)),
             first_seen: now,
             last_requested: now,
-            view_change_triggered: false,
+            view_change_triggered_view: None,
             attempts: 0,
         },
     );
@@ -2862,7 +2862,7 @@ async fn block_sync_update_skips_known_block_without_roster_counters() {
 
     harness
         .actor
-        .handle_block_sync_update(update)
+        .handle_block_sync_update(update, None)
         .expect("block sync update");
 
     let after = super::status::snapshot().block_sync_roster;
@@ -2892,7 +2892,7 @@ async fn block_sync_update_drops_conflicting_committed_block_without_roster_coun
 
     harness
         .actor
-        .handle_block_sync_update(update)
+        .handle_block_sync_update(update, None)
         .expect("block sync update");
 
     let after = super::status::snapshot().block_sync_roster;
@@ -2995,13 +2995,13 @@ async fn block_sync_update_accepts_uncertified_next_height_in_permissioned_mode(
             view_change_window: Some(retry_window),
             first_seen: now,
             last_requested: now,
-            view_change_triggered: false,
+            view_change_triggered_view: None,
             attempts: 0,
         },
     );
 
     actor
-        .handle_block_sync_update(update)
+        .handle_block_sync_update(update, None)
         .expect("block sync update");
 
     assert!(
@@ -3138,13 +3138,13 @@ async fn block_sync_update_accepts_uncertified_missing_block_when_behind() {
             view_change_window: Some(retry_window),
             first_seen: now,
             last_requested: now,
-            view_change_triggered: false,
+            view_change_triggered_view: None,
             attempts: 0,
         },
     );
 
     actor
-        .handle_block_sync_update(update)
+        .handle_block_sync_update(update, None)
         .expect("block sync update");
 
     assert!(
@@ -3257,13 +3257,13 @@ async fn block_sync_update_accepts_uncertified_missing_block_in_npos() {
             view_change_window: Some(retry_window),
             first_seen: now,
             last_requested: now,
-            view_change_triggered: false,
+            view_change_triggered_view: None,
             attempts: 0,
         },
     );
 
     actor
-        .handle_block_sync_update(update)
+        .handle_block_sync_update(update, None)
         .expect("block sync update");
 
     assert!(
@@ -3312,14 +3312,14 @@ async fn block_sync_update_defers_signature_mismatch_when_parent_missing() {
             view_change_window: Some(retry_window),
             first_seen: now,
             last_requested: now,
-            view_change_triggered: false,
+            view_change_triggered_view: None,
             attempts: 0,
         },
     );
 
     let update = super::message::BlockSyncUpdate::from(&block);
     actor
-        .handle_block_sync_update(update)
+        .handle_block_sync_update(update, None)
         .expect("block sync update");
 
     assert!(
@@ -3417,13 +3417,13 @@ async fn block_sync_update_accepts_pre_activation_signature_after_mode_flip() {
             view_change_window: Some(retry_window),
             first_seen: now,
             last_requested: now,
-            view_change_triggered: false,
+            view_change_triggered_view: None,
             attempts: 0,
         },
     );
 
     actor
-        .handle_block_sync_update(update)
+        .handle_block_sync_update(update, None)
         .expect("block sync update");
 
     assert!(
@@ -3554,7 +3554,7 @@ async fn block_sync_update_accepts_pre_activation_qc_epoch_after_mode_flip() {
     update.commit_qc = Some(qc);
 
     actor
-        .handle_block_sync_update(update)
+        .handle_block_sync_update(update, None)
         .expect("block sync update");
 
     assert!(actor.block_known_locally(block.hash()));
@@ -3661,7 +3661,7 @@ async fn block_sync_update_rejects_conflicting_precommit_qc_against_lock() {
     update.commit_qc = Some(qc);
 
     actor
-        .handle_block_sync_update(update)
+        .handle_block_sync_update(update, None)
         .expect("block sync update");
 
     assert!(
@@ -3801,7 +3801,7 @@ async fn block_sync_update_drops_qc_height_mismatch() {
     update.commit_qc = Some(qc);
 
     actor
-        .handle_block_sync_update(update)
+        .handle_block_sync_update(update, None)
         .expect("block sync update");
 
     assert!(actor.block_known_locally(block.hash()));
@@ -3890,7 +3890,7 @@ async fn block_sync_update_rejects_invalid_qc_below_quorum() {
     update.commit_qc = Some(qc);
 
     actor
-        .handle_block_sync_update(update)
+        .handle_block_sync_update(update, None)
         .expect("block sync update");
 
     assert!(
@@ -4025,7 +4025,7 @@ async fn block_sync_update_drops_qc_epoch_mismatch() {
     update.commit_qc = Some(qc);
 
     actor
-        .handle_block_sync_update(update)
+        .handle_block_sync_update(update, None)
         .expect("block sync update");
 
     assert!(actor.block_known_locally(block.hash()));
@@ -4182,7 +4182,7 @@ async fn block_sync_update_records_commit_qc_from_cached_qc() {
     update.commit_votes.clear();
 
     actor
-        .handle_block_sync_update(update)
+        .handle_block_sync_update(update, None)
         .expect("block sync update");
 
     let history = status::commit_qc_history();
@@ -4270,7 +4270,7 @@ async fn block_sync_update_known_block_records_commit_qc() {
     update.commit_votes.clear();
 
     actor
-        .handle_block_sync_update(update)
+        .handle_block_sync_update(update, None)
         .expect("block sync update");
 
     let view = actor.state.view();
@@ -4320,7 +4320,7 @@ async fn block_sync_update_known_block_prunes_commit_votes_without_roster_hint()
     update.commit_votes = vec![vote.clone()];
 
     actor
-        .handle_block_sync_update(update)
+        .handle_block_sync_update(update, None)
         .expect("block sync update");
 
     let key = (Phase::Commit, height, view, epoch, vote.signer);
@@ -4620,7 +4620,7 @@ async fn block_sync_update_allows_nonextending_qc_without_commit_qc() {
     update.validator_checkpoint = Some(checkpoint);
     update.commit_qc = Some(qc);
     actor
-        .handle_block_sync_update(update)
+        .handle_block_sync_update(update, None)
         .expect("block sync update");
     assert!(
         actor
@@ -4995,7 +4995,7 @@ async fn block_sync_update_skips_fetch_when_checkpoint_present() {
 
     let _ = harness.background_rx.try_iter().count();
     actor
-        .handle_block_sync_update(update)
+        .handle_block_sync_update(update, None)
         .expect("block sync update");
 
     assert!(
@@ -5128,7 +5128,7 @@ async fn block_sync_update_skips_fetch_when_qc_salvaged_by_aggregate_signature()
 
     let _ = harness.background_rx.try_iter().count();
     actor
-        .handle_block_sync_update(update)
+        .handle_block_sync_update(update, None)
         .expect("block sync update");
 
     assert!(
@@ -5238,7 +5238,7 @@ async fn block_sync_update_drops_mismatched_commit_votes() {
             view_change_window: Some(retry_window),
             first_seen: now,
             last_requested: now,
-            view_change_triggered: false,
+            view_change_triggered_view: None,
             attempts: 0,
         },
     );
@@ -5278,7 +5278,7 @@ async fn block_sync_update_drops_mismatched_commit_votes() {
     update.commit_votes = vec![vote.clone()];
 
     actor
-        .handle_block_sync_update(update)
+        .handle_block_sync_update(update, None)
         .expect("block sync update");
 
     let key = (
@@ -7903,7 +7903,7 @@ async fn rebroadcast_stalled_rbc_payloads_flushes_pending_with_roster() {
     };
     harness
         .actor
-        .handle_rbc_chunk(chunk)
+        .handle_rbc_chunk(chunk, None)
         .expect("chunk stashed");
     assert!(
         harness
@@ -7976,7 +7976,7 @@ async fn rebroadcast_stalled_rbc_payloads_derives_roster_before_flush() {
     };
     harness
         .actor
-        .handle_rbc_chunk(chunk)
+        .handle_rbc_chunk(chunk, None)
         .expect("chunk stashed");
     assert!(
         harness
@@ -11831,7 +11831,7 @@ async fn block_created_applies_cached_precommit_qc() {
     );
 
     actor
-        .handle_block_created(super::message::BlockCreated { block })
+        .handle_block_created(super::message::BlockCreated { block }, None)
         .expect("block created");
 
     let locked = actor.locked_qc.expect("locked QC should be updated");
@@ -12087,7 +12087,10 @@ async fn rbc_chunk_commit_pipeline_runs_on_completion() {
         idx: 0,
         bytes: chunks[0].clone(),
     };
-    harness.actor.handle_rbc_chunk(chunk).expect("first chunk");
+    harness
+        .actor
+        .handle_rbc_chunk(chunk, None)
+        .expect("first chunk");
     assert_eq!(harness.actor.last_qc_rebuild, last_qc_rebuild);
 
     let chunk = crate::sumeragi::consensus::RbcChunk {
@@ -12098,7 +12101,10 @@ async fn rbc_chunk_commit_pipeline_runs_on_completion() {
         idx: 1,
         bytes: chunks[1].clone(),
     };
-    harness.actor.handle_rbc_chunk(chunk).expect("second chunk");
+    harness
+        .actor
+        .handle_rbc_chunk(chunk, None)
+        .expect("second chunk");
     assert!(harness.actor.last_qc_rebuild > last_qc_rebuild);
 
     harness.shutdown.send();
@@ -12164,7 +12170,7 @@ async fn rbc_pending_caps_respect_minimum_chunk_size() {
     };
     harness
         .actor
-        .handle_rbc_chunk(chunk)
+        .handle_rbc_chunk(chunk, None)
         .expect("chunk handled");
 
     let session = harness
@@ -13163,6 +13169,7 @@ async fn maybe_emit_rbc_ready_marks_invalid_and_clears_pending_on_chunk_root_mis
             idx: 0,
             bytes: vec![0xAB],
         },
+        None,
         usize::MAX,
         usize::MAX,
         std::time::Instant::now(),
@@ -13853,6 +13860,7 @@ async fn recover_block_from_rbc_session_marks_invalid_on_payload_hash_mismatch()
             idx: 0,
             bytes: vec![0xCD],
         },
+        None,
         usize::MAX,
         usize::MAX,
         std::time::Instant::now(),
@@ -13998,6 +14006,7 @@ async fn record_rbc_session_roster_rejects_unverified_override() {
             idx: 0,
             bytes: vec![0xCD],
         },
+        None,
         usize::MAX,
         usize::MAX,
         std::time::Instant::now(),
@@ -14245,7 +14254,9 @@ async fn handle_rbc_init_drops_mismatched_cached_chunks() {
         idx: 0,
         bytes: vec![0xBE, 0xEF],
     };
-    actor.handle_rbc_chunk(bad_chunk).expect("chunk handled");
+    actor
+        .handle_rbc_chunk(bad_chunk, None)
+        .expect("chunk handled");
     let session = actor
         .subsystems
         .da_rbc
@@ -14303,7 +14314,9 @@ async fn handle_rbc_init_drops_mismatched_cached_chunks() {
         idx: 0,
         bytes: good_bytes,
     };
-    actor.handle_rbc_chunk(good_chunk).expect("chunk handled");
+    actor
+        .handle_rbc_chunk(good_chunk, None)
+        .expect("chunk handled");
     let session = actor
         .subsystems
         .da_rbc
@@ -14670,7 +14683,7 @@ async fn handle_rbc_chunk_rejects_epoch_mismatch() {
         bytes: vec![0xAB],
     };
 
-    actor.handle_rbc_chunk(chunk).expect("chunk handled");
+    actor.handle_rbc_chunk(chunk, None).expect("chunk handled");
 
     let stored = actor
         .subsystems
@@ -14692,6 +14705,8 @@ async fn handle_rbc_chunk_rejects_epoch_mismatch() {
 async fn handle_rbc_chunk_rejects_digest_mismatch() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+
+    crate::sumeragi::status::reset_rbc_mismatch_for_tests();
 
     let height = 4u64;
     let view = 0u64;
@@ -14730,7 +14745,10 @@ async fn handle_rbc_chunk_rejects_digest_mismatch() {
         idx: 0,
         bytes: vec![0xBB; 16],
     };
-    actor.handle_rbc_chunk(bad_chunk).expect("chunk handled");
+    let sender = PeerId::new(KeyPair::random().public_key().clone());
+    actor
+        .handle_rbc_chunk(bad_chunk, Some(sender.clone()))
+        .expect("chunk handled");
 
     let stored = actor
         .subsystems
@@ -14749,6 +14767,16 @@ async fn handle_rbc_chunk_rejects_digest_mismatch() {
         "digest mismatch should not invalidate the session"
     );
 
+    let mismatch_snapshot = crate::sumeragi::status::rbc_mismatch_snapshot();
+    let entry = mismatch_snapshot
+        .entries
+        .iter()
+        .find(|entry| entry.peer_id == sender)
+        .expect("mismatch entry");
+    assert_eq!(entry.chunk_digest_mismatch_total, 1);
+    assert_eq!(entry.payload_hash_mismatch_total, 0);
+    assert_eq!(entry.chunk_root_mismatch_total, 0);
+
     let good_chunk = crate::sumeragi::consensus::RbcChunk {
         block_hash,
         height,
@@ -14757,7 +14785,9 @@ async fn handle_rbc_chunk_rejects_digest_mismatch() {
         idx: 0,
         bytes: payload,
     };
-    actor.handle_rbc_chunk(good_chunk).expect("chunk handled");
+    actor
+        .handle_rbc_chunk(good_chunk, None)
+        .expect("chunk handled");
     let stored = actor
         .subsystems
         .da_rbc
@@ -21607,10 +21637,125 @@ fn missing_block_view_change_triggers_once_after_dwell() {
         stats.mark_view_change_if_due(now),
         "dwell beyond retry window should trigger view change"
     );
+    assert_eq!(stats.view_change_triggered_view, Some(0));
     assert!(
         !stats.mark_view_change_if_due(now + Duration::from_millis(5)),
         "view change trigger should fire only once"
     );
+}
+
+#[test]
+fn missing_block_view_change_rearms_after_view_update() {
+    let mut requests = BTreeMap::new();
+    let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xED; 32]));
+    let height = 6;
+    let window = Duration::from_millis(10);
+    let start = Instant::now();
+
+    assert!(super::touch_missing_block_request(
+        &mut requests,
+        hash,
+        height,
+        0,
+        Phase::Commit,
+        super::MissingBlockPriority::Consensus,
+        start,
+        window,
+        Some(window)
+    ));
+
+    let dwell_start = start
+        .checked_sub(window + Duration::from_millis(1))
+        .unwrap_or(start);
+    let first_due = start + window + Duration::from_millis(1);
+    let stats = requests.get_mut(&hash).expect("entry exists");
+    stats.first_seen = dwell_start;
+    assert!(stats.mark_view_change_if_due(first_due));
+    assert_eq!(stats.view_change_triggered_view, Some(0));
+
+    let update_time = first_due + Duration::from_millis(1);
+    assert!(super::touch_missing_block_request(
+        &mut requests,
+        hash,
+        height,
+        1,
+        Phase::Commit,
+        super::MissingBlockPriority::Consensus,
+        update_time,
+        window,
+        Some(window)
+    ));
+    let stats = requests.get_mut(&hash).expect("entry exists");
+    assert_eq!(stats.view, 1);
+    assert_eq!(stats.first_seen, update_time);
+    assert_eq!(stats.view_change_triggered_view, None);
+
+    stats.first_seen = update_time
+        .checked_sub(window + Duration::from_millis(1))
+        .unwrap_or(update_time);
+    let second_due = update_time + window + Duration::from_millis(1);
+    assert!(
+        stats.mark_view_change_if_due(second_due),
+        "view change should rearm after a new view is observed"
+    );
+    assert_eq!(stats.view_change_triggered_view, Some(1));
+}
+
+#[test]
+fn missing_block_view_change_single_shot_within_view_on_height_update() {
+    let mut requests = BTreeMap::new();
+    let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xEC; 32]));
+    let height = 6;
+    let window = Duration::from_millis(10);
+    let start = Instant::now();
+
+    assert!(super::touch_missing_block_request(
+        &mut requests,
+        hash,
+        height,
+        0,
+        Phase::Commit,
+        super::MissingBlockPriority::Consensus,
+        start,
+        window,
+        Some(window)
+    ));
+
+    let dwell_start = start
+        .checked_sub(window + Duration::from_millis(1))
+        .unwrap_or(start);
+    let first_due = start + window + Duration::from_millis(1);
+    let stats = requests.get_mut(&hash).expect("entry exists");
+    stats.first_seen = dwell_start;
+    assert!(stats.mark_view_change_if_due(first_due));
+    assert_eq!(stats.view_change_triggered_view, Some(0));
+
+    let update_time = first_due + Duration::from_millis(1);
+    assert!(super::touch_missing_block_request(
+        &mut requests,
+        hash,
+        height + 1,
+        0,
+        Phase::Commit,
+        super::MissingBlockPriority::Consensus,
+        update_time,
+        window,
+        Some(window)
+    ));
+    let stats = requests.get_mut(&hash).expect("entry exists");
+    assert_eq!(stats.height, height + 1);
+    assert_eq!(stats.first_seen, update_time);
+    assert_eq!(stats.view_change_triggered_view, Some(0));
+
+    stats.first_seen = update_time
+        .checked_sub(window + Duration::from_millis(1))
+        .unwrap_or(update_time);
+    let second_due = update_time + window + Duration::from_millis(1);
+    assert!(
+        !stats.mark_view_change_if_due(second_due),
+        "view change should not retrigger within the same view"
+    );
+    assert_eq!(stats.view_change_triggered_view, Some(0));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -21645,7 +21790,7 @@ async fn retry_missing_block_requests_triggers_view_change_after_dwell() {
             view_change_window: Some(retry_window),
             first_seen: dwell_start,
             last_requested: dwell_start,
-            view_change_triggered: false,
+            view_change_triggered_view: None,
             attempts: 0,
         },
     );
@@ -21660,7 +21805,7 @@ async fn retry_missing_block_requests_triggers_view_change_after_dwell() {
         .get(&block_hash)
         .expect("request entry retained");
     assert!(
-        stats.view_change_triggered,
+        stats.view_change_triggered_view == Some(view),
         "dwell beyond window should trigger view change"
     );
     let snapshot = super::status::snapshot().view_change_causes;
@@ -21705,7 +21850,7 @@ async fn retry_missing_block_requests_uses_active_roster_when_commit_topology_em
             view_change_window: Some(retry_window),
             first_seen: last_requested,
             last_requested,
-            view_change_triggered: false,
+            view_change_triggered_view: None,
             attempts: 0,
         },
     );
@@ -21856,7 +22001,7 @@ fn plan_missing_block_fetch_falls_back_after_signer_attempts() {
             view_change_window: Some(window),
             first_seen: now - window,
             last_requested: now - window,
-            view_change_triggered: false,
+            view_change_triggered_view: None,
             attempts: fallback_after,
         },
     );
@@ -22232,7 +22377,7 @@ fn defer_qc_for_missing_block_records_backoff_metrics() {
             view_change_window: Some(window),
             first_seen,
             last_requested,
-            view_change_triggered: false,
+            view_change_triggered_view: None,
             attempts: 0,
         },
     );
@@ -23410,7 +23555,7 @@ async fn trigger_view_change_prunes_pending_blocks_and_retains_missing_state_wit
         view_change_window: Some(retry_window),
         first_seen: now,
         last_requested: now,
-        view_change_triggered: false,
+        view_change_triggered_view: None,
         attempts: 0,
     };
     actor
@@ -23526,7 +23671,7 @@ async fn prune_stale_view_state_prunes_rbc_and_missing_requests_when_payload_ava
             view_change_window: Some(retry_window),
             first_seen: now,
             last_requested: now,
-            view_change_triggered: false,
+            view_change_triggered_view: None,
             attempts: 0,
         },
     );
@@ -24179,14 +24324,18 @@ fn active_round_height_falls_back_to_committed_and_state_height() {
 }
 
 #[test]
-fn idle_view_timeout_waits_for_first_proposal() {
+fn idle_view_timeout_caps_no_proposal_grace() {
     let commit = Duration::from_millis(1_000);
     let propose = Duration::from_millis(750);
+    assert_eq!(super::idle_view_timeout(false, commit, propose), commit);
+    assert_eq!(super::idle_view_timeout(true, commit, propose), commit);
+
+    let commit = Duration::from_millis(5_000);
+    let propose = Duration::from_millis(1_000);
     assert_eq!(
         super::idle_view_timeout(false, commit, propose),
-        commit + propose.saturating_mul(4)
+        propose.saturating_mul(4)
     );
-    assert_eq!(super::idle_view_timeout(true, commit, propose), commit);
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -24609,6 +24758,67 @@ async fn should_override_relay_backpressure_after_liveness_timeout() {
     assert!(
         !actor.should_defer_proposal(),
         "proposal assembly should override relay backpressure after quorum timeout"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn should_override_backpressure_after_idle_timeout_without_proposal() {
+    use std::borrow::Cow;
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_height = actor.state.view().height() as u64;
+    let highest_qc = sample_qc_ref(committed_height, 0);
+    actor.highest_qc = Some(highest_qc);
+    let height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    let current_view = 0u64;
+    let now = Instant::now();
+    let idle_timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+    );
+
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, now);
+    actor.relay_backpressure.reset_to_current();
+    iroha_p2p::network::inc_subscriber_queue_full_for_test(
+        iroha_p2p::network::message::Topic::Consensus,
+        1,
+    );
+
+    assert!(
+        actor.should_defer_proposal(),
+        "proposal assembly should still defer before idle timeout"
+    );
+
+    let start = now
+        .checked_sub(idle_timeout + Duration::from_millis(1))
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, start);
+
+    assert!(
+        !actor.should_defer_proposal(),
+        "proposal assembly should override backpressure after idle timeout"
     );
 
     harness.shutdown.send();
@@ -31112,7 +31322,7 @@ async fn stale_block_created_keeps_committed_qcs() {
 
     let stale_block = sample_block(2, 1, Some(block1.hash()));
     actor
-        .handle_block_created(super::message::BlockCreated { block: stale_block })
+        .handle_block_created(super::message::BlockCreated { block: stale_block }, None)
         .expect("handle stale BlockCreated");
 
     assert!(
@@ -31141,7 +31351,7 @@ async fn stale_block_created_accepted_under_da() {
     );
 
     actor
-        .handle_block_created(super::message::BlockCreated { block })
+        .handle_block_created(super::message::BlockCreated { block }, None)
         .expect("handle stale BlockCreated under DA");
 
     assert!(
@@ -31205,7 +31415,7 @@ async fn block_created_updates_locked_status_when_lock_missing() {
         });
 
     actor
-        .handle_block_created(super::message::BlockCreated { block })
+        .handle_block_created(super::message::BlockCreated { block }, None)
         .expect("handle BlockCreated");
 
     let locked = actor.locked_qc.expect("locked qc updated");
@@ -31272,7 +31482,7 @@ async fn block_created_uses_cached_proposal_when_lock_missing() {
         .insert_proposal(proposal);
 
     actor
-        .handle_block_created(super::message::BlockCreated { block })
+        .handle_block_created(super::message::BlockCreated { block }, None)
         .expect("handle BlockCreated");
 
     let locked = actor.locked_qc.expect("locked qc updated");
@@ -31325,17 +31535,16 @@ async fn block_created_accepts_when_hint_highest_missing() {
     });
     super::status::set_locked_qc(1, 0, Some(locked_hash));
 
-    let height = 2u64;
-    let view = 0u64;
-    let block = sample_block(height, view, Some(locked_hash));
-    let block_hash = block.hash();
-
     let missing_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x33; Hash::LENGTH]));
     assert!(
         !actor.block_known_for_lock(missing_hash),
         "missing highest QC must be absent locally"
     );
+    let height = 2u64;
+    let view = 0u64;
+    let block = sample_block(height, view, Some(missing_hash));
+    let block_hash = block.hash();
     let hint_highest = QcHeaderRef {
         height: 1,
         view: 0,
@@ -31355,7 +31564,7 @@ async fn block_created_accepts_when_hint_highest_missing() {
         });
 
     actor
-        .handle_block_created(super::message::BlockCreated { block })
+        .handle_block_created(super::message::BlockCreated { block }, None)
         .expect("handle BlockCreated");
 
     assert!(
@@ -31407,7 +31616,7 @@ async fn block_created_without_hint_rejects_conflicting_lock() {
     let block_hash = block.hash();
 
     actor
-        .handle_block_created(super::message::BlockCreated { block })
+        .handle_block_created(super::message::BlockCreated { block }, None)
         .expect("handle BlockCreated");
 
     assert!(
@@ -31471,7 +31680,7 @@ async fn block_created_without_hint_accepts_extending_lock() {
     let block_hash = block.hash();
 
     actor
-        .handle_block_created(super::message::BlockCreated { block })
+        .handle_block_created(super::message::BlockCreated { block }, None)
         .expect("handle BlockCreated");
 
     assert!(
@@ -31511,7 +31720,7 @@ async fn block_created_without_hint_accepts_unknown_locked_ancestry() {
     let block_hash = block.hash();
 
     actor
-        .handle_block_created(super::message::BlockCreated { block })
+        .handle_block_created(super::message::BlockCreated { block }, None)
         .expect("handle BlockCreated");
 
     assert!(
@@ -31638,7 +31847,7 @@ async fn block_created_rebuilds_qc_with_snapshot_roster() {
     }
 
     actor
-        .handle_block_created(super::message::BlockCreated { block })
+        .handle_block_created(super::message::BlockCreated { block }, None)
         .expect("handle BlockCreated");
 
     let key = (Phase::Commit, block_hash, height, view, epoch);
@@ -31746,7 +31955,7 @@ async fn duplicate_block_created_hydrates_existing_rbc_session() {
     assert_eq!(before, 0, "session should start without payload chunks");
 
     actor
-        .handle_block_created(super::message::BlockCreated { block })
+        .handle_block_created(super::message::BlockCreated { block }, None)
         .expect("handle duplicate BlockCreated");
 
     if let Some(session) = actor.subsystems.da_rbc.rbc.sessions.get(&session_key) {
@@ -31838,9 +32047,12 @@ async fn block_created_accepts_payload_after_proposal_mismatch() {
         .insert_proposal(proposal);
 
     actor
-        .handle_block_created(super::message::BlockCreated {
-            block: block.clone(),
-        })
+        .handle_block_created(
+            super::message::BlockCreated {
+                block: block.clone(),
+            },
+            None,
+        )
         .expect("handle BlockCreated with mismatched proposal");
 
     assert!(
@@ -32433,9 +32645,12 @@ async fn block_created_drops_hint_when_highest_qc_view_mismatches_parent() {
 
     let before = super::status::snapshot().block_created_hint_mismatch_total;
     actor
-        .handle_block_created(super::message::BlockCreated {
-            block: block.clone(),
-        })
+        .handle_block_created(
+            super::message::BlockCreated {
+                block: block.clone(),
+            },
+            None,
+        )
         .expect("handle BlockCreated");
     let after = super::status::snapshot().block_created_hint_mismatch_total;
 
@@ -32465,7 +32680,7 @@ async fn block_created_skips_pending_insert_while_processing() {
         .set(block.header().prev_block_hash());
 
     actor
-        .handle_block_created(super::message::BlockCreated { block })
+        .handle_block_created(super::message::BlockCreated { block }, None)
         .expect("handle BlockCreated");
 
     assert!(
@@ -32495,7 +32710,7 @@ async fn block_created_requests_missing_parent_on_height_gap() {
     let block_hash = block.hash();
 
     actor
-        .handle_block_created(super::message::BlockCreated { block })
+        .handle_block_created(super::message::BlockCreated { block }, None)
         .expect("handle BlockCreated");
 
     assert!(
@@ -32613,7 +32828,7 @@ async fn block_created_uses_snapshot_roster_for_missing_parent_when_active_empty
     }
 
     actor
-        .handle_block_created(super::message::BlockCreated { block })
+        .handle_block_created(super::message::BlockCreated { block }, None)
         .expect("handle BlockCreated");
 
     assert!(
@@ -37124,6 +37339,49 @@ fn invalid_signature_throttle_suppresses_within_window() {
 }
 
 #[test]
+fn rbc_mismatch_throttle_logs_on_height_or_window() {
+    let mut throttle = RbcMismatchThrottle::default();
+    let now = Instant::now();
+    let peer = PeerId::new(KeyPair::random().public_key().clone());
+
+    let first = throttle.record(
+        &peer,
+        super::status::RbcMismatchKind::ChunkDigest,
+        1,
+        0,
+        now,
+    );
+    assert_eq!(first, RbcMismatchLogOutcome::Logged);
+
+    let suppressed = throttle.record(
+        &peer,
+        super::status::RbcMismatchKind::ChunkDigest,
+        1,
+        0,
+        now + Duration::from_millis(10),
+    );
+    assert_eq!(suppressed, RbcMismatchLogOutcome::Throttled);
+
+    let advanced_height = throttle.record(
+        &peer,
+        super::status::RbcMismatchKind::ChunkDigest,
+        2,
+        0,
+        now + Duration::from_millis(10),
+    );
+    assert_eq!(advanced_height, RbcMismatchLogOutcome::Logged);
+
+    let after_window = throttle.record(
+        &peer,
+        super::status::RbcMismatchKind::ChunkDigest,
+        2,
+        0,
+        now + RBC_MISMATCH_LOG_THROTTLE + Duration::from_millis(1),
+    );
+    assert_eq!(after_window, RbcMismatchLogOutcome::Logged);
+}
+
+#[test]
 fn invalid_signature_throttle_logs_on_height_advance() {
     let mut throttle = InvalidSigThrottle::default();
     let now = Instant::now();
@@ -37136,6 +37394,61 @@ fn invalid_signature_throttle_logs_on_height_advance() {
         now + Duration::from_millis(1),
     );
     assert_eq!(advanced_height, InvalidSigOutcome::Logged);
+}
+
+#[test]
+fn rbc_mismatch_throttle_suppresses_within_window() {
+    let mut throttle = RbcMismatchThrottle::default();
+    let peer = PeerId::new(KeyPair::random().public_key().clone());
+    let now = Instant::now();
+    let first = throttle.record(
+        &peer,
+        super::status::RbcMismatchKind::ChunkDigest,
+        1,
+        0,
+        now,
+    );
+    assert_eq!(first, RbcMismatchLogOutcome::Logged);
+
+    let suppressed = throttle.record(
+        &peer,
+        super::status::RbcMismatchKind::ChunkDigest,
+        1,
+        0,
+        now + Duration::from_millis(10),
+    );
+    assert_eq!(suppressed, RbcMismatchLogOutcome::Throttled);
+
+    let after_window = throttle.record(
+        &peer,
+        super::status::RbcMismatchKind::ChunkDigest,
+        1,
+        0,
+        now + RBC_MISMATCH_LOG_THROTTLE + Duration::from_millis(1),
+    );
+    assert_eq!(after_window, RbcMismatchLogOutcome::Logged);
+}
+
+#[test]
+fn rbc_mismatch_throttle_logs_on_view_advance() {
+    let mut throttle = RbcMismatchThrottle::default();
+    let peer = PeerId::new(KeyPair::random().public_key().clone());
+    let now = Instant::now();
+    let _ = throttle.record(
+        &peer,
+        super::status::RbcMismatchKind::PayloadHash,
+        1,
+        0,
+        now,
+    );
+    let advanced_view = throttle.record(
+        &peer,
+        super::status::RbcMismatchKind::PayloadHash,
+        1,
+        1,
+        now + Duration::from_millis(1),
+    );
+    assert_eq!(advanced_view, RbcMismatchLogOutcome::Logged);
 }
 
 #[test]
@@ -39089,6 +39402,82 @@ async fn da_gate_context_does_not_block_quorum_reschedule() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn reschedule_defers_missing_local_data_until_availability_timeout() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let view = actor.state.view();
+    let height = view.height() as u64 + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let block = sample_block(height, 0, parent);
+    let block_hash = block.hash();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let view_idx = block.header().view_change_index();
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view_idx),
+    );
+    let quorum_timeout = actor.quorum_timeout(true);
+    let availability_timeout = actor.availability_timeout(quorum_timeout, true);
+    {
+        let pending = actor
+            .pending
+            .pending_blocks
+            .get_mut(&block_hash)
+            .expect("pending block");
+        pending.validation_status = ValidationStatus::Valid;
+        pending.last_gate = Some(GateReason::MissingLocalData);
+        pending.inserted_at = Instant::now() - quorum_timeout - Duration::from_millis(1);
+    }
+
+    assert!(actor.runtime_da_enabled(), "test requires DA to be enabled");
+    assert!(
+        quorum_timeout < availability_timeout,
+        "availability timeout should exceed quorum timeout in DA mode"
+    );
+    assert!(
+        !actor.reschedule_stale_pending_blocks(),
+        "missing local data should defer quorum reschedule before availability timeout"
+    );
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert!(
+        pending_after.last_quorum_reschedule.is_none(),
+        "pending should not be quorum-rescheduled while payload is missing"
+    );
+
+    {
+        let pending = actor
+            .pending
+            .pending_blocks
+            .get_mut(&block_hash)
+            .expect("pending block");
+        pending.inserted_at = Instant::now() - availability_timeout - Duration::from_millis(1);
+    }
+
+    assert!(
+        actor.reschedule_stale_pending_blocks(),
+        "missing local data should allow reschedule after availability timeout"
+    );
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert!(
+        pending_after.last_quorum_reschedule.is_some(),
+        "pending should be quorum-rescheduled once availability timeout expires"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn reschedule_stale_pending_blocks_skips_empty_roster() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
@@ -39545,7 +39934,7 @@ async fn reschedule_stale_pending_blocks_skips_when_commit_qc_cached() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn commit_pipeline_reschedules_without_da_gate_blocking() {
+async fn commit_pipeline_defers_reschedule_until_availability_timeout() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let view = actor.state.view();
@@ -39611,11 +40000,32 @@ async fn commit_pipeline_reschedules_without_da_gate_blocking() {
     assert_eq!(
         pending_after.last_gate,
         Some(GateReason::MissingLocalData),
-        "availability gate should record missing local data while rescheduling"
+        "availability gate should record missing local data during commit processing"
     );
     assert!(
+        pending_after.last_quorum_reschedule.is_none(),
+        "commit pipeline should defer reschedule while availability is missing"
+    );
+
+    {
+        let pending = actor
+            .pending
+            .pending_blocks
+            .get_mut(&block_hash)
+            .expect("pending retained");
+        pending.inserted_at = Instant::now() - availability_timeout - Duration::from_millis(1);
+    }
+
+    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Event);
+
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert!(
         pending_after.last_quorum_reschedule.is_some(),
-        "commit pipeline should reschedule even while availability is missing"
+        "commit pipeline should reschedule after availability timeout"
     );
 
     harness.shutdown.send();
@@ -40740,7 +41150,7 @@ async fn stale_view_accepts_precommit_vote_when_missing_block_requested() {
             view_change_window: None,
             first_seen: now,
             last_requested: now,
-            view_change_triggered: false,
+            view_change_triggered_view: None,
             attempts: 0,
         },
     );
@@ -40820,14 +41230,14 @@ async fn block_sync_update_accepts_stale_view_when_missing_block_requested() {
             view_change_window: None,
             first_seen: now,
             last_requested: now,
-            view_change_triggered: false,
+            view_change_triggered_view: None,
             attempts: 0,
         },
     );
 
     let update = super::message::BlockSyncUpdate::from(&block);
     actor
-        .handle_block_sync_update(update)
+        .handle_block_sync_update(update, None)
         .expect("block sync update");
     assert!(actor.block_known_locally(block_hash));
     assert!(
@@ -40902,7 +41312,7 @@ async fn stale_view_accepts_rbc_messages_with_da() {
         idx: 0,
         bytes: vec![0x01],
     };
-    actor.handle_rbc_chunk(chunk).expect("rbc chunk");
+    actor.handle_rbc_chunk(chunk, None).expect("rbc chunk");
     assert!(actor.subsystems.da_rbc.rbc.pending.is_empty());
 
     let session = RbcSession::test_new(1, Some(payload_hash), Some(chunk_root), 0);
@@ -40968,6 +41378,41 @@ fn rbc_session_computes_chunk_root() {
     let tree = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(digests);
     let expected = tree.root().map(Hash::from);
     assert_eq!(session.chunk_root(), expected);
+}
+
+#[test]
+fn rbc_session_ingest_chunk_with_outcome_reports_mismatch() {
+    let payload = vec![0xAB; 10];
+    let chunks = super::rbc::chunk_payload_bytes(&payload, 4);
+    let total_chunks = u32::try_from(chunks.len()).expect("chunk count fits");
+    let payload_hash = Hash::new(&payload);
+    let mut expected_digests = Vec::with_capacity(chunks.len());
+    for chunk in &chunks {
+        let digest = Sha256::digest(chunk);
+        let mut digest_arr = [0u8; 32];
+        digest_arr.copy_from_slice(&digest);
+        expected_digests.push(digest_arr);
+    }
+
+    let mut session = RbcSession::new(
+        total_chunks,
+        Some(payload_hash),
+        None,
+        Some(expected_digests),
+        0,
+    )
+    .expect("session");
+    let accepted = session.ingest_chunk_with_outcome(0, chunks[0].clone(), None);
+    assert_eq!(accepted, ChunkIngestOutcome::Accepted);
+
+    let duplicate = session.ingest_chunk_with_outcome(0, chunks[0].clone(), None);
+    assert_eq!(duplicate, ChunkIngestOutcome::Duplicate);
+
+    let mut mismatched = chunks[1].clone();
+    mismatched.push(0xFF);
+    let mismatch = session.ingest_chunk_with_outcome(1, mismatched, None);
+    assert_eq!(mismatch, ChunkIngestOutcome::DigestMismatch);
+    assert_eq!(session.received_chunks(), 1);
 }
 
 #[test]
@@ -42271,9 +42716,9 @@ fn pending_rbc_messages_enforces_caps() {
         ..chunk_a.clone()
     };
 
-    let outcome_a = pending.push_chunk_capped(chunk_a, 2, 8, now);
-    let outcome_b = pending.push_chunk_capped(chunk_b, 2, 8, now);
-    let outcome_c = pending.push_chunk_capped(chunk_c, 2, 8, now);
+    let outcome_a = pending.push_chunk_capped(chunk_a, None, 2, 8, now);
+    let outcome_b = pending.push_chunk_capped(chunk_b, None, 2, 8, now);
+    let outcome_c = pending.push_chunk_capped(chunk_c, None, 2, 8, now);
 
     assert!(matches!(
         outcome_a,
@@ -42325,7 +42770,7 @@ fn pending_rbc_messages_report_drops_and_evictions() {
         ..chunk_small.clone()
     };
 
-    let inserted = pending.push_chunk_capped(chunk_small, 1, 8, now);
+    let inserted = pending.push_chunk_capped(chunk_small, None, 1, 8, now);
     assert!(matches!(
         inserted,
         PendingChunkOutcome::Inserted {
@@ -42336,7 +42781,8 @@ fn pending_rbc_messages_report_drops_and_evictions() {
         }
     ));
 
-    let dropped = pending.push_chunk_capped(chunk_large, 1, 4, now + Duration::from_millis(1));
+    let dropped =
+        pending.push_chunk_capped(chunk_large, None, 1, 4, now + Duration::from_millis(1));
     match dropped {
         PendingChunkOutcome::Dropped {
             dropped_bytes,
@@ -42460,7 +42906,7 @@ fn pending_rbc_stash_flushes_after_init_within_caps() {
     let chunk1 = sample_chunk_with_len(1, 4);
     let chunk2 = sample_chunk_with_len(2, 4);
 
-    match pending.push_chunk_capped(chunk0.clone(), max_chunks, max_bytes, now) {
+    match pending.push_chunk_capped(chunk0.clone(), None, max_chunks, max_bytes, now) {
         PendingChunkOutcome::Inserted {
             pending_chunks,
             pending_bytes,
@@ -42472,7 +42918,7 @@ fn pending_rbc_stash_flushes_after_init_within_caps() {
         other => panic!("unexpected outcome: {other:?}"),
     }
 
-    match pending.push_chunk_capped(chunk1.clone(), max_chunks, max_bytes, now) {
+    match pending.push_chunk_capped(chunk1.clone(), None, max_chunks, max_bytes, now) {
         PendingChunkOutcome::Inserted {
             pending_chunks,
             pending_bytes,
@@ -42484,7 +42930,7 @@ fn pending_rbc_stash_flushes_after_init_within_caps() {
         other => panic!("unexpected outcome: {other:?}"),
     }
 
-    match pending.push_chunk_capped(chunk2.clone(), max_chunks, max_bytes, now) {
+    match pending.push_chunk_capped(chunk2.clone(), None, max_chunks, max_bytes, now) {
         PendingChunkOutcome::Inserted {
             pending_chunks,
             pending_bytes,
@@ -42513,8 +42959,8 @@ fn pending_rbc_stash_flushes_after_init_within_caps() {
     let mut session = RbcSession::test_new(3, None, None, 0);
     let stashed: Vec<_> = pending.chunks.drain(..).collect();
     assert_eq!(stashed.len(), 2);
-    for chunk in stashed {
-        session.ingest_chunk(chunk.idx, chunk.bytes.clone(), Some(0));
+    for entry in stashed {
+        session.ingest_chunk(entry.chunk.idx, entry.chunk.bytes.clone(), Some(0));
     }
 
     assert_eq!(session.received_chunks(), 2);
@@ -43604,7 +44050,7 @@ fn pending_rbc_chunk_eviction_records_drop_counts() {
     let chunk_a = sample_chunk_with_len(0, 4);
     let chunk_b = sample_chunk_with_len(1, 6);
 
-    match pending.push_chunk_capped(chunk_a, 1, 8, now) {
+    match pending.push_chunk_capped(chunk_a, None, 1, 8, now) {
         PendingChunkOutcome::Inserted {
             pending_chunks,
             evicted_chunks,
@@ -43616,7 +44062,7 @@ fn pending_rbc_chunk_eviction_records_drop_counts() {
         other => panic!("unexpected outcome: {other:?}"),
     }
 
-    match pending.push_chunk_capped(chunk_b, 1, 8, now) {
+    match pending.push_chunk_capped(chunk_b, None, 1, 8, now) {
         PendingChunkOutcome::Inserted {
             pending_chunks,
             pending_bytes,
@@ -43652,7 +44098,7 @@ fn pending_rbc_snapshot_includes_entry_drop_counts() {
     };
 
     let mut pending_entry = PendingRbcMessages::new(now);
-    let _ = pending_entry.push_chunk_capped(chunk, 0, 0, now);
+    let _ = pending_entry.push_chunk_capped(chunk, None, 0, 0, now);
     let mut pending = BTreeMap::new();
     pending.insert(key, pending_entry);
 

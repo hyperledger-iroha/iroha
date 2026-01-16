@@ -3701,6 +3701,9 @@ mod transaction {
         /// Number of parallel workers to use when sending multiple pings
         #[arg(long, default_value_t = 1)]
         pub parallel: usize,
+        /// Maximum number of parallel workers (0 disables the cap)
+        #[arg(long, default_value_t = DEFAULT_PING_PARALLEL_CAP)]
+        pub parallel_cap: usize,
         /// Submit without waiting for confirmation
         #[arg(long)]
         pub no_wait: bool,
@@ -3715,11 +3718,24 @@ mod transaction {
         first_error: Option<eyre::Report>,
     }
 
+    const DEFAULT_PING_PARALLEL_CAP: usize = 1024;
+
     fn ping_message(base: &str, index: usize, count: usize, no_index: bool) -> String {
         if count <= 1 || no_index {
             return base.to_owned();
         }
         format!("{base}-{}", index + 1)
+    }
+
+    fn resolve_ping_parallel(count: usize, parallel: usize, parallel_cap: usize) -> (usize, bool) {
+        let cap = if parallel_cap == 0 {
+            usize::MAX
+        } else {
+            parallel_cap
+        };
+        let baseline = parallel.min(count);
+        let resolved = baseline.min(cap);
+        (resolved, resolved < baseline)
     }
 
     fn dispatch_ping_work<F, G>(count: usize, parallel: usize, make_worker: F) -> PingBatchResult
@@ -3771,6 +3787,7 @@ mod transaction {
                 msg,
                 count,
                 parallel,
+                parallel_cap,
                 no_wait,
                 no_index,
             } = self;
@@ -3780,18 +3797,24 @@ mod transaction {
             if parallel == 0 {
                 eyre::bail!("`--parallel` must be greater than zero");
             }
+            let (parallel, clamped) = resolve_ping_parallel(count, parallel, parallel_cap);
+            if clamped {
+                context.println(format!(
+                    "Clamped --parallel to {parallel} (cap {parallel_cap})"
+                ))?;
+            }
             if count > 1 || parallel > 1 {
                 if context.input_instructions() || context.output_instructions() {
                     eyre::bail!(
                         "Incompatible `--input` `--output` flags with batch `iroha transaction ping`"
                     );
                 }
-                let config = context.config().clone();
+                let client = Client::new(context.config().clone());
                 let metadata = context.transaction_metadata().cloned().unwrap_or_default();
                 let i18n = context.i18n().clone();
                 let base_msg = msg;
                 let result = dispatch_ping_work(count, parallel, move || {
-                    let client = Client::new(config.clone());
+                    let client = client.clone();
                     let metadata = metadata.clone();
                     let i18n = i18n.clone();
                     let base_msg = base_msg.clone();
@@ -3880,6 +3903,20 @@ mod transaction {
             assert_eq!(result.attempted, 5);
             assert!(result.failed >= 2);
             assert!(result.first_error.is_some());
+        }
+
+        #[test]
+        fn resolve_ping_parallel_caps_workers() {
+            let (parallel, clamped) = resolve_ping_parallel(10, 8, 4);
+            assert_eq!(parallel, 4);
+            assert!(clamped);
+        }
+
+        #[test]
+        fn resolve_ping_parallel_allows_cap_disable() {
+            let (parallel, clamped) = resolve_ping_parallel(10, 8, 0);
+            assert_eq!(parallel, 8);
+            assert!(!clamped);
         }
     }
 

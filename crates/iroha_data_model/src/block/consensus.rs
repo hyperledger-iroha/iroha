@@ -830,6 +830,37 @@ pub struct SumeragiRbcStoreStatus {
     pub recent_evictions: Vec<SumeragiRbcEvictedSession>,
 }
 
+/// Per-peer RBC payload mismatch counters.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiRbcMismatchEntry {
+    /// Peer associated with the mismatch counts.
+    pub peer_id: PeerId,
+    /// Count of RBC chunk digest mismatches attributed to the peer.
+    pub chunk_digest_mismatch_total: u64,
+    /// Count of payload-hash mismatches attributed to the peer.
+    pub payload_hash_mismatch_total: u64,
+    /// Count of chunk-root mismatches attributed to the peer.
+    pub chunk_root_mismatch_total: u64,
+    /// Timestamp (ms since UNIX epoch) when the last mismatch was recorded.
+    pub last_timestamp_ms: u64,
+}
+
+/// Snapshot of RBC mismatch counters.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiRbcMismatchStatus {
+    /// Per-peer mismatch counters.
+    #[norito(default)]
+    pub entries: Vec<SumeragiRbcMismatchEntry>,
+}
+
 /// Snapshot of pending (pre-INIT) RBC stashes.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(
@@ -1546,6 +1577,9 @@ pub struct SumeragiStatusWire {
     /// RBC store snapshot.
     #[norito(default)]
     pub rbc_store: SumeragiRbcStoreStatus,
+    /// Per-peer RBC payload mismatch counters.
+    #[norito(default)]
+    pub rbc_mismatch: SumeragiRbcMismatchStatus,
     /// Pending RBC stash snapshot.
     #[norito(default)]
     pub pending_rbc: SumeragiPendingRbcStatus,

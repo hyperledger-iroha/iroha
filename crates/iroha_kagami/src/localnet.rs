@@ -291,7 +291,8 @@ const LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MAX_MS: u64 = 15_000;
 /// Minimum peer count for Sora profile localnets (multi-lane/dataspace defaults).
 const LOCALNET_SORA_MIN_PEERS: u16 = 4;
 /// Divisor applied to derive the localnet NPoS aggregator fallback timeout.
-const LOCALNET_NPOS_AGGREGATOR_DIVISOR: u64 = 4;
+/// Keep this at 1 so aggregators do not time out before quorum on fast pipelines.
+const LOCALNET_NPOS_AGGREGATOR_DIVISOR: u64 = 1;
 /// Default max transactions per block for localnet (targets 10k TPS).
 const LOCALNET_BLOCK_MAX_TRANSACTIONS: u64 = 10_000;
 /// Default stake bonded per localnet validator (must exceed min_self_bond).
@@ -313,6 +314,12 @@ const RANS_SEED0_TABLE: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../codec/rans/tables/rans_seed0.toml"
 ));
+
+fn localnet_dataspace_fault_tolerance(peers: NonZeroU16) -> u32 {
+    let peers = u32::from(peers.get());
+    let fault_tolerance = peers.saturating_sub(1) / 3;
+    fault_tolerance.max(1)
+}
 
 /// Generate a bare-metal local network (no Docker): genesis, per-peer configs, start/stop scripts.
 #[derive(ClapArgs, Debug, Clone)]
@@ -588,6 +595,8 @@ fn generate_localnet_with_line<T: Write>(
     let npos_bootstrap = localnet_uses_npos(opts.consensus_mode, opts.next_consensus_mode);
     // Nexus stays enabled for Sora profiles and active NPoS (staged cutovers keep it off).
     let nexus_enabled = localnet_should_enable_nexus(opts.sora_profile, opts.consensus_mode);
+    let dataspace_fault_tolerance =
+        nexus_enabled.then(|| localnet_dataspace_fault_tolerance(opts.peers));
     let (block_time_ms, commit_time_ms) =
         resolve_localnet_pipeline_times(opts.block_time_ms, opts.commit_time_ms);
     let redundant_send_r = resolve_localnet_redundant_send_r(opts.redundant_send_r, da_rbc_enabled);
@@ -672,6 +681,7 @@ fn generate_localnet_with_line<T: Write>(
             opts.consensus_mode,
             nexus_enabled,
             npos_bootstrap,
+            dataspace_fault_tolerance,
             gas_account_id.as_deref(),
             da_rbc_enabled,
             redundant_send_r,
@@ -822,6 +832,27 @@ fn validate_port_ranges(peers: NonZeroU16, base_api_port: u16, base_p2p_port: u1
     Ok(())
 }
 
+fn localnet_dataspace_catalog(fault_tolerance: u32) -> Vec<toml::Value> {
+    use toml::{Table, Value};
+
+    let fault_tolerance = i64::from(fault_tolerance);
+    let mut catalog = Vec::new();
+    for (alias, id, description) in [
+        ("universal", 0_i64, "Single-lane data space"),
+        ("governance", 1_i64, "Governance proposals & manifests"),
+        ("zk", 2_i64, "Zero-knowledge proofs and attachments"),
+    ] {
+        let mut entry = Table::new();
+        entry.insert("alias".into(), Value::String(alias.to_owned()));
+        entry.insert("id".into(), Value::Integer(id));
+        entry.insert("description".into(), Value::String(description.to_owned()));
+        entry.insert("fault_tolerance".into(), Value::Integer(fault_tolerance));
+        catalog.push(Value::Table(entry));
+    }
+
+    catalog
+}
+
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn render_peer_config(
     peer: &Peer,
@@ -835,6 +866,7 @@ fn render_peer_config(
     consensus_mode: SumeragiConsensusMode,
     nexus_enabled: bool,
     npos_bootstrap: bool,
+    dataspace_fault_tolerance: Option<u32>,
     gas_account_id: Option<&str>,
     da_rbc_enabled: bool,
     redundant_send_r: Option<u8>,
@@ -973,6 +1005,10 @@ fn render_peer_config(
             Value::String(gas_account_id.to_owned()),
         );
         nexus.insert("fees".into(), Value::Table(fees));
+    }
+    if let Some(fault_tolerance) = dataspace_fault_tolerance {
+        let catalog = localnet_dataspace_catalog(fault_tolerance);
+        nexus.insert("dataspace_catalog".into(), Value::Array(catalog));
     }
     root.insert("nexus".into(), Value::Table(nexus));
     let msg_channel_cap_votes = i64::try_from(LOCALNET_MSG_CHANNEL_CAP_VOTES)
@@ -1729,6 +1765,49 @@ mod tests {
 
     use super::*;
 
+    fn localnet_genesis_for_opts(opts: &LocalnetOptions) -> RawGenesisTransaction {
+        let seed_bytes = opts.seed.as_ref().map(String::as_bytes);
+        let peers = build_peers(
+            opts.peers.get(),
+            seed_bytes,
+            opts.base_api_port,
+            opts.base_p2p_port,
+        );
+        let da_rbc_enabled = opts.build_line.is_iroha3();
+        let npos_bootstrap = localnet_uses_npos(opts.consensus_mode, opts.next_consensus_mode);
+        let redundant_send_r =
+            resolve_localnet_redundant_send_r(opts.redundant_send_r, da_rbc_enabled);
+        let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
+        let mut genesis = generate_raw_genesis(
+            genesis_public_key.clone(),
+            opts.consensus_mode,
+            opts.next_consensus_mode,
+            opts.mode_activation_height,
+            opts.build_line,
+        )
+        .expect("generate raw genesis");
+        if opts.extra_accounts > 0 || !opts.assets.is_empty() {
+            genesis = extend_genesis(genesis, seed_bytes, opts.extra_accounts, &opts.assets)
+                .expect("extend genesis");
+        }
+        genesis = apply_parameter_overrides(
+            genesis,
+            opts.block_time_ms,
+            opts.commit_time_ms,
+            redundant_send_r,
+            opts.consensus_mode,
+            opts.next_consensus_mode,
+        );
+        genesis = append_peer_pop(genesis, &peers);
+        if npos_bootstrap {
+            let gas_account_id = localnet_gas_account_id(&genesis_public_key)
+                .expect("gas account id required for NPoS bootstrap");
+            genesis = append_localnet_npos_bootstrap(genesis, &peers, &gas_account_id)
+                .expect("append localnet NPoS bootstrap");
+        }
+        apply_localnet_crypto_overrides(genesis, npos_bootstrap)
+    }
+
     #[test]
     fn generated_configs_parse_with_current_schema() {
         let temp = tempfile::tempdir().expect("make temp dir");
@@ -1928,8 +2007,7 @@ mod tests {
 
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
 
-        let manifest = RawGenesisTransaction::from_path(temp.path().join("genesis.json"))
-            .expect("load genesis");
+        let manifest = localnet_genesis_for_opts(&opts);
         let crypto = manifest.crypto();
         assert!(
             crypto
@@ -2290,8 +2368,7 @@ mod tests {
 
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
 
-        let manifest = RawGenesisTransaction::from_path(temp.path().join("genesis.json"))
-            .expect("load genesis");
+        let manifest = localnet_genesis_for_opts(&opts);
         let params = manifest.effective_parameters();
         assert!(
             params.sumeragi().da_enabled(),
@@ -2365,8 +2442,7 @@ mod tests {
 
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
 
-        let manifest = RawGenesisTransaction::from_path(temp.path().join("genesis.json"))
-            .expect("load genesis");
+        let manifest = localnet_genesis_for_opts(&opts);
         let params = manifest.effective_parameters();
         assert_eq!(
             params.block().max_transactions().get(),
@@ -2402,8 +2478,7 @@ mod tests {
 
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
 
-        let manifest = RawGenesisTransaction::from_path(temp.path().join("genesis.json"))
-            .expect("load genesis");
+        let manifest = localnet_genesis_for_opts(&opts);
         let mut validators = Vec::new();
         let mut activations = Vec::new();
         for instruction in manifest.instructions() {
@@ -2463,6 +2538,100 @@ mod tests {
             actual_activations, expected,
             "activation roster should match peers"
         );
+    }
+
+    #[test]
+    fn localnet_npos_validator_roster_and_quorum_match_peer_count() {
+        use std::collections::BTreeSet;
+
+        let temp = tempfile::tempdir().expect("tmp dir");
+        let peer_count = NonZeroU16::new(7).expect("non-zero");
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
+            peers: peer_count,
+            seed: Some("localnet-npos-quorum".to_owned()),
+            bind_host: DEFAULT_BIND_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 31080,
+            base_p2p_port: 31337,
+            out_dir: temp.path().to_path_buf(),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Npos,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
+
+        let manifest = localnet_genesis_for_opts(&opts);
+        let validators: Vec<_> = manifest
+            .instructions()
+            .filter_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<RegisterPublicLaneValidator>()
+            })
+            .collect();
+        assert_eq!(
+            validators.len(),
+            usize::from(peer_count.get()),
+            "expected one public-lane validator per peer"
+        );
+
+        let peers = build_peers(
+            peer_count.get(),
+            opts.seed.as_ref().map(String::as_bytes),
+            opts.base_api_port,
+            opts.base_p2p_port,
+        );
+        let nexus_domain: DomainId = LOCALNET_NEXUS_DOMAIN.parse().expect("nexus domain");
+        let expected: BTreeSet<_> = peers
+            .iter()
+            .map(|peer| AccountId::new(nexus_domain.clone(), peer.public_key.clone()))
+            .collect();
+        let actual: BTreeSet<_> = validators
+            .iter()
+            .map(|register| register.validator.clone())
+            .collect();
+        assert_eq!(actual, expected, "validator roster should match peers");
+
+        let peer_cfg: toml::Value = toml::from_str(
+            &fs::read_to_string(temp.path().join("peer0.toml"))
+                .expect("read generated peer config"),
+        )
+        .expect("parse peer config");
+        let catalog = peer_cfg
+            .get("nexus")
+            .and_then(toml::Value::as_table)
+            .and_then(|nexus| nexus.get("dataspace_catalog"))
+            .and_then(toml::Value::as_array)
+            .expect("nexus dataspace catalog");
+
+        let fault_tolerance = localnet_dataspace_fault_tolerance(peer_count);
+        let committee_size = fault_tolerance
+            .checked_mul(3)
+            .and_then(|value| value.checked_add(1))
+            .expect("committee size");
+        assert_eq!(
+            committee_size,
+            u32::from(peer_count.get()),
+            "committee size should match peer count"
+        );
+        for entry in catalog {
+            let entry = entry.as_table().expect("dataspace entry");
+            assert_eq!(
+                entry
+                    .get("fault_tolerance")
+                    .and_then(toml::Value::as_integer),
+                Some(i64::from(fault_tolerance)),
+                "fault tolerance should scale with peers"
+            );
+        }
     }
 
     #[test]

@@ -36,16 +36,16 @@ fn write_len_varint_roundtrip() {
 }
 
 #[test]
-fn decode_packed_offsets_varint() {
+fn decode_packed_offsets_fixed() {
     core::reset_decode_state();
     let mut buf = Vec::new();
-    push_varint(&mut buf, 2);
-    push_varint(&mut buf, 3);
-    push_varint(&mut buf, 5);
+    buf.extend_from_slice(&0u64.to_le_bytes());
+    buf.extend_from_slice(&2u64.to_le_bytes());
+    buf.extend_from_slice(&5u64.to_le_bytes());
+    buf.extend_from_slice(&10u64.to_le_bytes());
 
     {
-        let _guard =
-            DecodeFlagsGuard::enter(header_flags::PACKED_SEQ | header_flags::VARINT_OFFSETS);
+        let _guard = DecodeFlagsGuard::enter(header_flags::PACKED_SEQ);
         let (offsets, used, data_len, tail_len) =
             core::decode_packed_offsets_slice(&buf, 3).expect("decode packed offsets");
         assert_eq!(offsets, vec![0, 2, 5, 10]);
@@ -62,14 +62,14 @@ fn stream_vec_collect_accepts_compact_lengths() {
     let values = vec![10u32, 20, 30];
 
     let mut body = Vec::new();
-    push_varint(&mut body, values.len() as u64);
+    body.extend_from_slice(&(values.len() as u64).to_le_bytes());
     for &value in &values {
         let bytes = value.to_le_bytes();
         push_varint(&mut body, bytes.len() as u64);
         body.extend_from_slice(&bytes);
     }
 
-    let flags = header_flags::COMPACT_SEQ_LEN | header_flags::COMPACT_LEN;
+    let flags = header_flags::COMPACT_LEN;
     let framed =
         core::frame_bare_with_header_flags::<Vec<u32>>(&body, flags).expect("frame payload");
 

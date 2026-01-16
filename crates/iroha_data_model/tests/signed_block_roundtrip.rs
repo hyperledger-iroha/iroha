@@ -127,7 +127,7 @@ fn canonical_signed_block_wire_roundtrip_is_sequential() {
     assert_eq!(
         header_flags & dynamic_mask,
         0,
-        "canonical header must not advertise packed or varint layouts"
+        "canonical header must not advertise packed or reserved varint layouts"
     );
     let decoded = decode_framed_signed_block(framed).expect("decode framed block");
     assert_eq!(

@@ -1900,6 +1900,35 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
         Value::Array(recent_rbc_evictions),
     );
 
+    let rbc_mismatch_entries: Vec<Value> = wire
+        .rbc_mismatch
+        .entries
+        .iter()
+        .map(|entry| {
+            let mut map = Map::new();
+            map.insert("peer_id".into(), Value::from(entry.peer_id.to_string()));
+            map.insert(
+                "chunk_digest_mismatch_total".into(),
+                Value::from(entry.chunk_digest_mismatch_total),
+            );
+            map.insert(
+                "payload_hash_mismatch_total".into(),
+                Value::from(entry.payload_hash_mismatch_total),
+            );
+            map.insert(
+                "chunk_root_mismatch_total".into(),
+                Value::from(entry.chunk_root_mismatch_total),
+            );
+            map.insert(
+                "last_timestamp_ms".into(),
+                Value::from(entry.last_timestamp_ms),
+            );
+            Value::Object(map)
+        })
+        .collect();
+    let mut rbc_mismatch = Map::new();
+    rbc_mismatch.insert("entries".into(), Value::Array(rbc_mismatch_entries));
+
     let mut prf = Map::new();
     prf.insert("height".into(), Value::from(wire.prf_height));
     prf.insert("view".into(), Value::from(wire.prf_view));
@@ -2213,6 +2242,7 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
         Value::from(wire.da_reschedule_total),
     );
     root.insert("rbc_store".into(), Value::Object(rbc_store));
+    root.insert("rbc_mismatch".into(), Value::Object(rbc_mismatch));
     root.insert("prf".into(), Value::Object(prf));
     root.insert("membership".into(), Value::Object(membership));
     root.insert(
@@ -10079,8 +10109,8 @@ mod tests {
                 SumeragiDaGateStatus, SumeragiKuraStoreStatus, SumeragiMembershipMismatchStatus,
                 SumeragiMembershipStatus, SumeragiMissingBlockFetchStatus,
                 SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcStatus, SumeragiQcEntry,
-                SumeragiQcSnapshot, SumeragiRbcStoreStatus, SumeragiStatusWire,
-                SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
+                SumeragiQcSnapshot, SumeragiRbcMismatchStatus, SumeragiRbcStoreStatus,
+                SumeragiStatusWire, SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
             },
         },
         consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
@@ -10273,6 +10303,7 @@ mod tests {
                 evictions_total: 0,
                 recent_evictions: Vec::new(),
             },
+            rbc_mismatch: SumeragiRbcMismatchStatus::default(),
             pending_rbc: SumeragiPendingRbcStatus::default(),
             tx_queue_depth: 7,
             tx_queue_capacity: 20,
@@ -12136,6 +12167,7 @@ mod tests {
                 evictions_total: 0,
                 recent_evictions: Vec::new(),
             },
+            rbc_mismatch: SumeragiRbcMismatchStatus::default(),
             pending_rbc: SumeragiPendingRbcStatus::default(),
             tx_queue_depth: 0,
             tx_queue_capacity: 0,
@@ -12405,6 +12437,7 @@ mod tests {
                 evictions_total: 0,
                 recent_evictions: Vec::new(),
             },
+            rbc_mismatch: SumeragiRbcMismatchStatus::default(),
             pending_rbc: SumeragiPendingRbcStatus::default(),
             tx_queue_depth: 7,
             tx_queue_capacity: 20,

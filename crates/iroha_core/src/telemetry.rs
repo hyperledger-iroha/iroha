@@ -6509,6 +6509,22 @@ impl Telemetry {
         }
     }
 
+    /// Increment RBC mismatch counter for the given peer and mismatch kind.
+    pub fn inc_rbc_mismatch(
+        &self,
+        peer: &iroha_data_model::peer::PeerId,
+        kind: status::RbcMismatchKind,
+    ) {
+        if self.enabled.load(Ordering::Relaxed) {
+            let peer_label = peer.to_string();
+            let kind_label = kind.label();
+            self.metrics
+                .sumeragi_rbc_mismatch_total
+                .with_label_values(&[peer_label.as_str(), kind_label])
+                .inc();
+        }
+    }
+
     /// Increment DA deadline reschedule counter when transactions are re-queued.
     pub fn inc_da_reschedule(&self, mode_tag: &str) {
         if self.enabled.load(Ordering::Relaxed) {
@@ -12641,6 +12657,23 @@ mod tests {
 
         telemetry.clear_membership_mismatch(&peer_id);
         assert_eq!(gauge.get(), 0);
+    }
+
+    #[test]
+    fn rbc_mismatch_metrics_toggle() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = Telemetry::new(Arc::clone(&metrics), true);
+        let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_label = peer_id.to_string();
+        let kind = status::RbcMismatchKind::PayloadHash;
+
+        let counter = metrics
+            .sumeragi_rbc_mismatch_total
+            .with_label_values(&[peer_label.as_str(), kind.label()]);
+        assert_eq!(counter.get(), 0);
+
+        telemetry.inc_rbc_mismatch(&peer_id, kind);
+        assert_eq!(counter.get(), 1);
     }
 
     #[test]

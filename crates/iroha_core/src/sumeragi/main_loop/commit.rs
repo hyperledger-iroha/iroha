@@ -1037,6 +1037,9 @@ impl Actor {
                 let pending_age = pending.age();
                 let vote_count = sig_indices.len();
                 let quorum_timeout = self.quorum_timeout(da_enabled);
+                let availability_timeout = self.availability_timeout(quorum_timeout, da_enabled);
+                let missing_local_data =
+                    matches!(pending.last_gate, Some(GateReason::MissingLocalData));
                 let quorum_reached = has_quorum_signers || vote_count >= min_votes_for_commit;
 
                 if commit_signatures_missing
@@ -1045,7 +1048,18 @@ impl Actor {
                 {
                     let reschedule_backoff = quorum_timeout.max(QUORUM_RESCHEDULE_COOLDOWN);
                     let now = Instant::now();
-                    if pending.reschedule_due(now, reschedule_backoff) {
+                    if missing_local_data && pending_age < availability_timeout {
+                        debug!(
+                            height = pending_height,
+                            view = pending_view,
+                            block = ?block_hash,
+                            pending_age_ms = pending_age.as_millis(),
+                            availability_timeout_ms = availability_timeout.as_millis(),
+                            "deferring quorum reschedule while awaiting local payload"
+                        );
+                        pending.block = failed_block;
+                        self.pending.pending_blocks.insert(block_hash, pending);
+                    } else if pending.reschedule_due(now, reschedule_backoff) {
                         reschedule_quorum = Some((
                             pending,
                             pending_age,

@@ -6862,10 +6862,6 @@ pub struct Norito {
     pub zstd_level_gpu: i32,
     /// Size threshold that separates small and large CPU payloads for level selection.
     pub large_threshold: usize,
-    /// Enable varint-coded top-level sequence lengths for payloads up to this size.
-    pub enable_compact_seq_len_up_to: usize,
-    /// Enable varint-coded per-element sizes in packed sequences for payloads up to this size.
-    pub enable_varint_offsets_up_to: usize,
     /// Allow GPU compression offload when compiled and available.
     pub allow_gpu_compression: bool,
     /// Maximum allowed Norito archive length in bytes (0 = unlimited).

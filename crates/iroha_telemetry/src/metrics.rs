@@ -6366,6 +6366,8 @@ pub struct Metrics {
     pub sumeragi_rbc_da_reschedule_by_mode_total: IntCounterVec,
     /// Sumeragi RBC: pending blocks aborted due to missing/mismatched/invalid RBC payload (labeled by consensus mode)
     pub sumeragi_rbc_abort_total: IntCounterVec,
+    /// Sumeragi RBC: payload mismatches attributed to peers (labels: peer, kind)
+    pub sumeragi_rbc_mismatch_total: IntCounterVec,
     /// Sumeragi: kura persistence failures grouped by outcome (retry|abort)
     pub sumeragi_kura_store_failures_total: IntCounterVec,
     /// Sumeragi: last recorded kura persistence retry attempt (gauge)
@@ -9447,6 +9449,14 @@ impl Default for Metrics {
                 "Sumeragi pending blocks aborted due to missing/mismatched/invalid RBC payload (labeled by consensus mode)",
             ),
             &["mode"],
+        )
+        .expect("Infallible");
+        let sumeragi_rbc_mismatch_total = IntCounterVec::new(
+            Opts::new(
+                "sumeragi_rbc_mismatch_total",
+                "Sumeragi RBC payload mismatches attributed to peers (labeled by peer, kind)",
+            ),
+            &["peer", "kind"],
         )
         .expect("Infallible");
         let sumeragi_kura_store_failures_total = IntCounterVec::new(
@@ -12827,6 +12837,7 @@ impl Default for Metrics {
             sumeragi_rbc_da_reschedule_total,
             sumeragi_rbc_da_reschedule_by_mode_total,
             sumeragi_rbc_abort_total,
+            sumeragi_rbc_mismatch_total,
             sumeragi_kura_store_failures_total,
             sumeragi_kura_store_last_retry_attempt,
             sumeragi_kura_store_last_retry_backoff_ms,
@@ -13276,6 +13287,7 @@ impl Default for Metrics {
             sumeragi_rbc_da_reschedule_total,
             sumeragi_rbc_da_reschedule_by_mode_total,
             sumeragi_rbc_abort_total,
+            sumeragi_rbc_mismatch_total,
             sumeragi_kura_store_failures_total,
             sumeragi_kura_store_last_retry_attempt,
             sumeragi_kura_store_last_retry_backoff_ms,

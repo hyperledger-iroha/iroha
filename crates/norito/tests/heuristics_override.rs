@@ -4,16 +4,23 @@ use norito::core::heuristics;
 
 #[test]
 fn select_layout_flags_with_custom_heuristics() {
-    // Force small thresholds to toggle bits for small sizes
+    // Tweaking compression heuristics must not affect layout flags.
     let h = heuristics::Heuristics {
-        enable_compact_seq_len_up_to: 64,
-        enable_varint_offsets_up_to: 64,
+        min_compress_bytes_cpu: 1,
         ..Default::default()
     };
 
     let small = heuristics::select_layout_flags_for_size_with(&h, 16);
-    assert_eq!(small, 0, "sequential layout must not enable adaptive flags");
+    assert_eq!(
+        small,
+        norito::core::default_encode_flags(),
+        "heuristics must not alter layout flags"
+    );
 
     let big = heuristics::select_layout_flags_for_size_with(&h, 128);
-    assert_eq!(big, 0, "sequential layout must not enable adaptive flags");
+    assert_eq!(
+        big,
+        norito::core::default_encode_flags(),
+        "heuristics must not alter layout flags"
+    );
 }

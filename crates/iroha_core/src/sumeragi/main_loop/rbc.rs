@@ -1093,39 +1093,6 @@ impl Actor {
         }
     }
 
-    pub(super) fn schedule_rbc_chunk_broadcast(
-        &mut self,
-        chunk: crate::sumeragi::consensus::RbcChunk,
-    ) {
-        let key = Self::session_key(&chunk.block_hash, chunk.height, chunk.view);
-        let roster = self.rbc_session_roster(key);
-        if roster.is_empty() {
-            return;
-        }
-        let target_count = rbc_chunk_target_count(roster.len(), self.config.rbc_chunk_fanout);
-        let seed = shuffle_seed(&chunk.block_hash, chunk.height, chunk.view);
-        // Keep a stable target set per session so a quorum can reconstruct the full payload.
-        let local_peer_id = self.common_config.peer.id().clone();
-        let targets = select_rbc_chunk_targets(&roster, &local_peer_id, seed, target_count);
-        self.schedule_rbc_chunk_posts(&chunk, &targets);
-    }
-
-    pub(super) fn schedule_rbc_chunk_broadcast_to_roster(
-        &mut self,
-        chunk: crate::sumeragi::consensus::RbcChunk,
-        roster: &[PeerId],
-    ) {
-        if roster.is_empty() {
-            return;
-        }
-        let targets: Vec<_> = roster
-            .iter()
-            .enumerate()
-            .map(|(idx, peer)| (idx, peer.clone()))
-            .collect();
-        self.schedule_rbc_chunk_posts(&chunk, &targets);
-    }
-
     pub(super) fn install_rbc_session_plan(&mut self, plan: &RbcSessionPlan) -> Result<()> {
         let key = plan.key;
         if self
@@ -1273,6 +1240,7 @@ impl Actor {
         key: SessionKey,
         payload_bytes: &[u8],
         payload_hash: Hash,
+        sender: Option<&PeerId>,
     ) -> Result<()> {
         let Some(mut session) = self.subsystems.da_rbc.rbc.sessions.remove(&key) else {
             return Ok(());
@@ -1291,31 +1259,68 @@ impl Actor {
         );
 
         if outcome.payload_hash_mismatch {
-            warn!(
-                height = key.1,
-                view = key.2,
-                expected = ?session.payload_hash(),
-                observed = ?payload_hash,
-                "hydrated payload hash mismatches RBC session; marking invalid"
-            );
+            let log_outcome = sender.map(|peer| {
+                self.record_rbc_mismatch(peer, status::RbcMismatchKind::PayloadHash, key.1, key.2)
+            });
+            if log_outcome.map_or(true, |outcome| outcome.should_log()) {
+                warn!(
+                    height = key.1,
+                    view = key.2,
+                    expected = ?session.payload_hash(),
+                    observed = ?payload_hash,
+                    "hydrated payload hash mismatches RBC session; marking invalid"
+                );
+            } else {
+                debug!(
+                    height = key.1,
+                    view = key.2,
+                    expected = ?session.payload_hash(),
+                    observed = ?payload_hash,
+                    "suppressing repeated hydrated payload hash mismatch log"
+                );
+            }
         }
         if outcome.chunk_digest_mismatch {
-            warn!(
-                height = key.1,
-                view = key.2,
-                "hydrated payload chunk-digest list mismatches INIT; marking invalid"
-            );
+            let log_outcome = sender.map(|peer| {
+                self.record_rbc_mismatch(peer, status::RbcMismatchKind::ChunkDigest, key.1, key.2)
+            });
+            if log_outcome.map_or(true, |outcome| outcome.should_log()) {
+                warn!(
+                    height = key.1,
+                    view = key.2,
+                    "hydrated payload chunk-digest list mismatches INIT; marking invalid"
+                );
+            } else {
+                debug!(
+                    height = key.1,
+                    view = key.2,
+                    "suppressing repeated hydrated chunk-digest mismatch log"
+                );
+            }
         }
         if outcome.chunk_root_mismatch {
+            let log_outcome = sender.map(|peer| {
+                self.record_rbc_mismatch(peer, status::RbcMismatchKind::ChunkRoot, key.1, key.2)
+            });
             let expected_root = session.expected_chunk_root;
             let computed_root = session.chunk_root();
-            warn!(
-                height = key.1,
-                view = key.2,
-                ?expected_root,
-                ?computed_root,
-                "hydrated payload chunk-root mismatches INIT; marking invalid"
-            );
+            if log_outcome.map_or(true, |outcome| outcome.should_log()) {
+                warn!(
+                    height = key.1,
+                    view = key.2,
+                    ?expected_root,
+                    ?computed_root,
+                    "hydrated payload chunk-root mismatches INIT; marking invalid"
+                );
+            } else {
+                debug!(
+                    height = key.1,
+                    view = key.2,
+                    ?expected_root,
+                    ?computed_root,
+                    "suppressing repeated hydrated chunk-root mismatch log"
+                );
+            }
         }
         if outcome.layout_mismatch {
             warn!(
@@ -1976,7 +1981,11 @@ impl Actor {
     }
 
     #[allow(clippy::too_many_lines)]
-    pub(super) fn handle_rbc_chunk(&mut self, chunk: RbcChunk) -> Result<()> {
+    pub(super) fn handle_rbc_chunk(
+        &mut self,
+        chunk: RbcChunk,
+        sender: Option<PeerId>,
+    ) -> Result<()> {
         if self.should_drop_stale_rbc_message(
             chunk.height,
             chunk.view,
@@ -2019,13 +2028,17 @@ impl Actor {
             return Ok(());
         }
         let key = Self::session_key(&chunk.block_hash, chunk.height, chunk.view);
+        let mut chunk_digest_mismatch = false;
         let (ready_sent_before, became_complete) = if let Some(session) =
             self.subsystems.da_rbc.rbc.sessions.get_mut(&key)
         {
             let ready_sent_before = session.sent_ready;
             let was_complete =
                 session.total_chunks() != 0 && session.received_chunks() == session.total_chunks();
-            session.ingest_chunk(chunk.idx, chunk.bytes, None);
+            let outcome = session.ingest_chunk_with_outcome(chunk.idx, chunk.bytes, None);
+            if matches!(outcome, super::ChunkIngestOutcome::DigestMismatch) {
+                chunk_digest_mismatch = true;
+            }
             let is_complete =
                 session.total_chunks() != 0 && session.received_chunks() == session.total_chunks();
             (ready_sent_before, !was_complete && is_complete)
@@ -2052,7 +2065,8 @@ impl Actor {
                 );
                 return Ok(());
             };
-            let outcome = pending.push_chunk_capped(chunk, max_chunks, max_bytes, Instant::now());
+            let outcome =
+                pending.push_chunk_capped(chunk, sender, max_chunks, max_bytes, Instant::now());
             match outcome {
                 PendingChunkOutcome::Inserted {
                     pending_chunks,
@@ -2118,6 +2132,35 @@ impl Actor {
             self.publish_rbc_backlog_snapshot();
             return Ok(());
         };
+        if chunk_digest_mismatch {
+            let log_outcome = sender.as_ref().map(|peer| {
+                self.record_rbc_mismatch(
+                    peer,
+                    status::RbcMismatchKind::ChunkDigest,
+                    chunk.height,
+                    chunk.view,
+                )
+            });
+            if log_outcome.map_or(true, |outcome| outcome.should_log()) {
+                warn!(
+                    height = chunk.height,
+                    view = chunk.view,
+                    idx = chunk.idx,
+                    block = %chunk.block_hash,
+                    sender = ?sender,
+                    "dropping RBC chunk with mismatched digest"
+                );
+            } else {
+                debug!(
+                    height = chunk.height,
+                    view = chunk.view,
+                    idx = chunk.idx,
+                    block = %chunk.block_hash,
+                    sender = ?sender,
+                    "suppressing repeated RBC chunk digest mismatch log"
+                );
+            }
+        }
         self.maybe_emit_rbc_ready(key)?;
         if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
             self.update_rbc_status_entry(key, &session, false);
@@ -2607,11 +2650,12 @@ impl Actor {
         session: &mut RbcSession,
         key: SessionKey,
         deliver: &crate::sumeragi::consensus::RbcDeliver,
-    ) -> (bool, bool, Option<u64>, bool, Option<String>) {
+    ) -> (bool, bool, Option<u64>, bool, bool, Option<String>) {
         let mut ignored = false;
         let mut first_deliver = false;
         let mut delivered_bytes: Option<u64> = None;
         let mut invalidate = false;
+        let mut chunk_root_mismatch = false;
         let mut defer_reason: Option<String> = None;
         if session.is_invalid() {
             ignored = true;
@@ -2626,6 +2670,7 @@ impl Actor {
                 first_deliver,
                 delivered_bytes,
                 invalidate,
+                chunk_root_mismatch,
                 defer_reason,
             );
         }
@@ -2651,6 +2696,7 @@ impl Actor {
                 first_deliver,
                 delivered_bytes,
                 invalidate,
+                chunk_root_mismatch,
                 defer_reason,
             );
         }
@@ -2675,12 +2721,7 @@ impl Actor {
                     session.invalid = true;
                     invalidate = true;
                     ignored = true;
-                    warn!(
-                        height = key.1,
-                        view = key.2,
-                        sender = deliver.sender,
-                        "ignoring RBC DELIVER: chunk root mismatch detected"
-                    );
+                    chunk_root_mismatch = true;
                 }
                 DeliverAcceptance::Accept => {
                     first_deliver =
@@ -2699,6 +2740,7 @@ impl Actor {
             first_deliver,
             delivered_bytes,
             invalidate,
+            chunk_root_mismatch,
             defer_reason,
         )
     }
@@ -3086,7 +3128,14 @@ impl Actor {
             }
         }
         let deliver_quorum = self.rbc_deliver_quorum(&topology);
-        let (ignored, first_deliver, delivered_bytes, invalidate, defer_reason) = {
+        let (
+            ignored,
+            first_deliver,
+            delivered_bytes,
+            invalidate,
+            chunk_root_mismatch,
+            defer_reason,
+        ) = {
             let session = self
                 .subsystems
                 .da_rbc
@@ -3104,6 +3153,41 @@ impl Actor {
             }
             Self::evaluate_rbc_deliver_outcome(deliver_quorum, session, key, &deliver)
         };
+        if chunk_root_mismatch {
+            let peer = usize::try_from(deliver.sender)
+                .ok()
+                .and_then(|idx| signature_topology.as_ref().get(idx));
+            if let Some(peer) = peer {
+                let log_outcome = self.record_rbc_mismatch(
+                    peer,
+                    status::RbcMismatchKind::ChunkRoot,
+                    deliver.height,
+                    deliver.view,
+                );
+                if log_outcome.should_log() {
+                    warn!(
+                        height = deliver.height,
+                        view = deliver.view,
+                        sender = deliver.sender,
+                        "ignoring RBC DELIVER: chunk root mismatch detected"
+                    );
+                } else {
+                    debug!(
+                        height = deliver.height,
+                        view = deliver.view,
+                        sender = deliver.sender,
+                        "suppressing repeated RBC DELIVER chunk-root mismatch log"
+                    );
+                }
+            } else {
+                warn!(
+                    height = deliver.height,
+                    view = deliver.view,
+                    sender = deliver.sender,
+                    "ignoring RBC DELIVER: chunk root mismatch from unknown sender"
+                );
+            }
+        }
         if !invalid_ready_senders.is_empty() {
             for sender in invalid_ready_senders {
                 let outcome = self.record_invalid_signature(

@@ -571,6 +571,10 @@ impl QcSignerTally {
 const INVALID_SIG_LOG_THROTTLE: Duration = Duration::from_secs(5);
 /// Retain invalid-signature log entries for this long before pruning.
 const INVALID_SIG_LOG_RETENTION: Duration = Duration::from_secs(30);
+/// Duration to suppress repeated RBC mismatch logs for the same peer/kind.
+const RBC_MISMATCH_LOG_THROTTLE: Duration = Duration::from_secs(5);
+/// Retain RBC mismatch log entries for this long before pruning.
+const RBC_MISMATCH_LOG_RETENTION: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum InvalidSigKind {
@@ -607,6 +611,18 @@ impl InvalidSigOutcome {
             Self::Logged => "logged",
             Self::Throttled => "throttled",
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RbcMismatchLogOutcome {
+    Logged,
+    Throttled,
+}
+
+impl RbcMismatchLogOutcome {
+    fn should_log(self) -> bool {
+        matches!(self, Self::Logged)
     }
 }
 
@@ -666,6 +682,70 @@ impl InvalidSigThrottle {
                     InvalidSigOutcome::Logged
                 } else {
                     InvalidSigOutcome::Throttled
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct RbcMismatchLogKey {
+    kind: super::status::RbcMismatchKind,
+    peer: PeerId,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RbcMismatchLogState {
+    last_logged_at: Instant,
+    last_height: u64,
+    last_view: u64,
+}
+
+#[derive(Default)]
+struct RbcMismatchThrottle {
+    entries: BTreeMap<RbcMismatchLogKey, RbcMismatchLogState>,
+}
+
+impl RbcMismatchThrottle {
+    fn record(
+        &mut self,
+        peer: &PeerId,
+        kind: super::status::RbcMismatchKind,
+        height: u64,
+        view: u64,
+        now: Instant,
+    ) -> RbcMismatchLogOutcome {
+        self.entries.retain(|_, entry| {
+            now.saturating_duration_since(entry.last_logged_at) <= RBC_MISMATCH_LOG_RETENTION
+        });
+
+        let key = RbcMismatchLogKey {
+            kind,
+            peer: peer.clone(),
+        };
+        match self.entries.entry(key) {
+            Entry::Vacant(entry) => {
+                entry.insert(RbcMismatchLogState {
+                    last_logged_at: now,
+                    last_height: height,
+                    last_view: view,
+                });
+                RbcMismatchLogOutcome::Logged
+            }
+            Entry::Occupied(mut entry) => {
+                let state = entry.get_mut();
+                let elapsed = now.saturating_duration_since(state.last_logged_at);
+                let advanced_height = height > state.last_height
+                    || (height == state.last_height && view > state.last_view);
+                if elapsed >= RBC_MISMATCH_LOG_THROTTLE || advanced_height {
+                    *state = RbcMismatchLogState {
+                        last_logged_at: now,
+                        last_height: height,
+                        last_view: view,
+                    };
+                    RbcMismatchLogOutcome::Logged
+                } else {
+                    RbcMismatchLogOutcome::Throttled
                 }
             }
         }
@@ -2025,23 +2105,28 @@ struct MissingBlockRequest {
     view_change_window: Option<Duration>,
     first_seen: Instant,
     last_requested: Instant,
-    view_change_triggered: bool,
+    view_change_triggered_view: Option<u64>,
     attempts: u32,
 }
 
 impl MissingBlockRequest {
-    /// Return true once the missing-block dwell time exceeds the view-change window. Subsequent
-    /// calls after triggering return false to avoid repeated view changes.
+    fn view_change_triggered_in_view(&self) -> bool {
+        self.view_change_triggered_view == Some(self.view)
+    }
+
+    /// Return true once the missing-block dwell time exceeds the view-change window for the
+    /// current view. Subsequent calls within the same view return false to avoid repeated
+    /// view changes.
     fn mark_view_change_if_due(&mut self, now: Instant) -> bool {
         let Some(window) = self.view_change_window else {
             return false;
         };
-        if self.view_change_triggered || window == Duration::ZERO {
+        if self.view_change_triggered_in_view() || window == Duration::ZERO {
             return false;
         }
         let dwell = now.saturating_duration_since(self.first_seen);
         if dwell >= window {
-            self.view_change_triggered = true;
+            self.view_change_triggered_view = Some(self.view);
             return true;
         }
         false
@@ -2085,7 +2170,7 @@ fn touch_missing_block_request(
                 view_change_window,
                 first_seen: now,
                 last_requested: now,
-                view_change_triggered: false,
+                view_change_triggered_view: None,
                 attempts: 0,
             });
             true
@@ -2093,16 +2178,38 @@ fn touch_missing_block_request(
         Entry::Occupied(mut occupied) => {
             let stats = occupied.get_mut();
             let priority_upgrade = priority > stats.priority;
-            stats.height = stats.height.max(height);
+            let view_advanced = view > stats.view;
+            let height_advanced = height > stats.height;
             if stats.view != view {
-                warn!(
-                    height,
-                    view,
-                    stored_view = stats.view,
-                    block = ?block_hash,
-                    "updating missing-block request view after mismatch"
-                );
-                stats.view = view;
+                if view_advanced {
+                    warn!(
+                        height,
+                        view,
+                        stored_view = stats.view,
+                        block = ?block_hash,
+                        "updating missing-block request view after mismatch"
+                    );
+                    stats.view = view;
+                } else {
+                    debug!(
+                        height,
+                        view,
+                        stored_view = stats.view,
+                        block = ?block_hash,
+                        "ignoring stale missing-block request view"
+                    );
+                }
+            }
+            if height_advanced {
+                stats.height = height;
+            }
+            if view_advanced || height_advanced {
+                stats.first_seen = now;
+                stats.last_requested = now;
+                stats.attempts = 0;
+                if view_advanced {
+                    stats.view_change_triggered_view = None;
+                }
             }
             if phase_rank(phase) > phase_rank(stats.phase) {
                 stats.phase = phase;
@@ -2129,7 +2236,9 @@ fn touch_missing_block_request(
                 }
                 std::cmp::Ordering::Less => {}
             }
-            let retry_due = priority_upgrade
+            let retry_due = view_advanced
+                || height_advanced
+                || priority_upgrade
                 || now.saturating_duration_since(stats.last_requested) >= stats.retry_window;
             if retry_due {
                 stats.last_requested = now;
@@ -3333,6 +3442,7 @@ pub(super) struct Actor {
     phase_ema: PhaseEma,
     evidence_store: EvidenceStore,
     invalid_sig_log: InvalidSigThrottle,
+    rbc_mismatch_log: RbcMismatchThrottle,
     invalid_sig_penalty: InvalidSigPenalty,
     genesis_account: AccountId,
     vote_log: BTreeMap<
@@ -5481,6 +5591,22 @@ impl Actor {
         let _ = (kind, outcome);
     }
 
+    fn record_rbc_mismatch(
+        &mut self,
+        peer: &PeerId,
+        kind: super::status::RbcMismatchKind,
+        height: u64,
+        view: u64,
+    ) -> RbcMismatchLogOutcome {
+        super::status::record_rbc_mismatch(peer, kind);
+        #[cfg(feature = "telemetry")]
+        if let Some(telemetry) = self.telemetry_handle() {
+            telemetry.inc_rbc_mismatch(peer, kind);
+        }
+        self.rbc_mismatch_log
+            .record(peer, kind, height, view, Instant::now())
+    }
+
     fn qc_tally_key(qc: &crate::sumeragi::consensus::Qc) -> QcVoteKey {
         (
             qc.phase,
@@ -6632,6 +6758,7 @@ impl Actor {
             phase_ema: PhaseEma::new(&pacemaker_timeouts),
             evidence_store: EvidenceStore::new(),
             invalid_sig_log: InvalidSigThrottle::default(),
+            rbc_mismatch_log: RbcMismatchThrottle::default(),
             invalid_sig_penalty,
             genesis_account,
             vote_log: BTreeMap::new(),
@@ -7081,7 +7208,7 @@ impl Actor {
             } else {
                 stats.last_requested.checked_add(stats.retry_window)
             };
-            if !stats.view_change_triggered {
+            if !stats.view_change_triggered_in_view() {
                 if let Some(window) = stats.view_change_window {
                     if !window.is_zero() {
                         if let Some(deadline) = stats.first_seen.checked_add(window) {
@@ -7650,7 +7777,11 @@ impl Actor {
     #[cfg(not(feature = "telemetry"))]
     fn note_message_received(&self, _msg: &BlockMessage) {}
 
-    pub(super) fn on_block_message(&mut self, msg: BlockMessage) -> Result<()> {
+    pub(super) fn on_block_message(&mut self, msg: super::InboundBlockMessage) -> Result<()> {
+        let super::InboundBlockMessage {
+            message: msg,
+            sender,
+        } = msg;
         debug!(message=%Self::block_message_kind(&msg), "received consensus block message");
         self.note_message_received(&msg);
         if let Some((height, view)) = Self::block_message_height_view(&msg) {
@@ -7664,8 +7795,8 @@ impl Actor {
         }
         match msg {
             BlockMessage::ConsensusParams(advert) => self.handle_consensus_params(advert),
-            BlockMessage::BlockCreated(block) => self.handle_block_created(block),
-            BlockMessage::BlockSyncUpdate(update) => self.handle_block_sync_update(update),
+            BlockMessage::BlockCreated(block) => self.handle_block_created(block, sender),
+            BlockMessage::BlockSyncUpdate(update) => self.handle_block_sync_update(update, sender),
             BlockMessage::ProposalHint(hint) => self.handle_proposal_hint(hint),
             BlockMessage::QcVote(vote) => {
                 info!(
@@ -7688,7 +7819,7 @@ impl Actor {
                 Ok(())
             }
             BlockMessage::RbcInit(init) => self.handle_rbc_init(init),
-            BlockMessage::RbcChunk(chunk) => self.handle_rbc_chunk(chunk),
+            BlockMessage::RbcChunk(chunk) => self.handle_rbc_chunk(chunk, sender),
             BlockMessage::RbcReady(ready) => self.handle_rbc_ready(ready),
             BlockMessage::RbcDeliver(deliver) => self.handle_rbc_deliver(deliver),
             BlockMessage::FetchPendingBlock(request) => self.handle_fetch_pending_block(request),
@@ -9672,9 +9803,21 @@ impl Actor {
             |qc| qc.height,
         );
         let height = active_round_height(self.highest_qc, committed_qc, committed_height);
-        self.phase_tracker
-            .view_age(height, now)
-            .is_some_and(|age| age >= self.commit_quorum_timeout())
+        let Some(age) = self.phase_tracker.view_age(height, now) else {
+            return false;
+        };
+        let current_view = self.phase_tracker.current_view(height).unwrap_or(0);
+        let proposal_seen = self
+            .subsystems
+            .propose
+            .proposals_seen
+            .contains(&(height, current_view));
+        let timeout = idle_view_timeout(
+            proposal_seen,
+            self.commit_quorum_timeout(),
+            self.subsystems.propose.pacemaker.propose_interval,
+        );
+        age >= timeout
     }
 
     fn force_view_change_if_idle(&mut self, now: Instant) -> bool {
@@ -10019,11 +10162,12 @@ fn idle_view_timeout(
     propose_interval: Duration,
 ) -> Duration {
     if proposal_seen {
-        commit_timeout
-    } else {
-        let grace = propose_interval.saturating_mul(4);
-        commit_timeout.saturating_add(grace)
+        return commit_timeout;
     }
+    // No proposal observed: rotate sooner to recover from a missing leader, but cap
+    // the timeout so we don't exceed the normal commit window.
+    let grace = propose_interval.saturating_mul(4);
+    grace.min(commit_timeout).max(Duration::from_millis(1))
 }
 
 fn saturating_mul_duration(duration: Duration, mul: u32) -> Duration {
@@ -10662,6 +10806,15 @@ struct RbcChunkEntry {
     digest: [u8; 32],
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ChunkIngestOutcome {
+    Accepted,
+    Duplicate,
+    OutOfBounds,
+    DigestMismatch,
+    ExpectedDigestMissing,
+}
+
 #[derive(Clone, Debug, Default)]
 struct ReadySignature {
     sender: u32,
@@ -11131,7 +11284,16 @@ impl RbcSession {
     }
 
     pub(crate) fn ingest_chunk(&mut self, idx: u32, bytes: Vec<u8>, sender: Option<u32>) {
-        self.note_chunk(idx, bytes, sender);
+        let _ = self.note_chunk(idx, bytes, sender);
+    }
+
+    pub(super) fn ingest_chunk_with_outcome(
+        &mut self,
+        idx: u32,
+        bytes: Vec<u8>,
+        sender: Option<u32>,
+    ) -> ChunkIngestOutcome {
+        self.note_chunk(idx, bytes, sender)
     }
 
     pub(crate) fn record_ready(&mut self, sender: u32, signature: Vec<u8>) -> bool {
@@ -11177,7 +11339,7 @@ impl RbcSession {
 
     #[cfg(test)]
     pub(crate) fn test_note_chunk(&mut self, idx: u32, bytes: Vec<u8>, sender: u32) {
-        self.note_chunk(idx, bytes, Some(sender));
+        let _ = self.note_chunk(idx, bytes, Some(sender));
     }
 
     fn drop_mismatched_chunks(&mut self) -> usize {
@@ -11213,9 +11375,9 @@ impl RbcSession {
         dropped
     }
 
-    fn note_chunk(&mut self, idx: u32, bytes: Vec<u8>, _sender: Option<u32>) {
+    fn note_chunk(&mut self, idx: u32, bytes: Vec<u8>, _sender: Option<u32>) -> ChunkIngestOutcome {
         if idx >= self.total_chunks {
-            return;
+            return ChunkIngestOutcome::OutOfBounds;
         }
         let mut hasher = Sha256::new();
         sha2::digest::Update::update(&mut hasher, &bytes);
@@ -11225,10 +11387,10 @@ impl RbcSession {
         if let Some(expected) = self.expected_chunk_digests.as_ref() {
             let Some(expected_digest) = expected.get(idx as usize) else {
                 self.invalid = true;
-                return;
+                return ChunkIngestOutcome::ExpectedDigestMissing;
             };
             if expected_digest != &digest {
-                return;
+                return ChunkIngestOutcome::DigestMismatch;
             }
         }
 
@@ -11236,7 +11398,9 @@ impl RbcSession {
         if slot.is_none() {
             *slot = Some(RbcChunkEntry { bytes, digest });
             self.received_chunks = self.received_chunks.saturating_add(1);
+            return ChunkIngestOutcome::Accepted;
         }
+        ChunkIngestOutcome::Duplicate
     }
 
     #[cfg(test)]

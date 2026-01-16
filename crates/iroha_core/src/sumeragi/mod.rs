@@ -494,6 +494,10 @@ mod tests {
 
     const TEST_CHANNEL_CAP: usize = 16;
 
+    fn inbound(msg: BlockMessage) -> InboundBlockMessage {
+        InboundBlockMessage::new(msg, None)
+    }
+
     fn backdate(now: Instant, duration: Duration) -> Instant {
         now.checked_sub(duration).unwrap_or(now)
     }
@@ -702,7 +706,7 @@ mod tests {
             bls_sig: Vec::new(),
         };
         vote_tx
-            .send(BlockMessage::QcVote(vote))
+            .send(inbound(BlockMessage::QcVote(vote)))
             .expect("send prevote");
 
         let proposal = Proposal {
@@ -725,7 +729,7 @@ mod tests {
             payload_hash: Hash::new(b"payload"),
         };
         block_payload_tx
-            .send(BlockMessage::Proposal(proposal))
+            .send(inbound(BlockMessage::Proposal(proposal)))
             .expect("send proposal");
 
         let cfg = WorkerLoopConfig {
@@ -793,7 +797,7 @@ mod tests {
             bls_sig: Vec::new(),
         };
         vote_tx
-            .send(BlockMessage::QcVote(vote))
+            .send(inbound(BlockMessage::QcVote(vote)))
             .expect("send prevote");
 
         let proposal = Proposal {
@@ -816,7 +820,7 @@ mod tests {
             payload_hash: Hash::new(b"payload"),
         };
         block_payload_tx
-            .send(BlockMessage::Proposal(proposal))
+            .send(inbound(BlockMessage::Proposal(proposal)))
             .expect("send proposal");
 
         let cfg = WorkerLoopConfig {
@@ -1658,7 +1662,7 @@ mod tests {
         let received: Vec<_> = vote_rx.try_iter().collect();
         assert_eq!(received.len(), 1);
         let only = received.into_iter().next().expect("one message");
-        assert!(matches!(only, BlockMessage::QcVote(_)));
+        assert!(matches!(only.message, BlockMessage::QcVote(_)));
     }
 
     #[test]
@@ -1850,11 +1854,15 @@ mod tests {
 
         let received: Vec<_> = vote_rx.try_iter().collect();
         assert_eq!(received.len(), 1);
-        assert!(
-            received
-                .iter()
-                .all(|msg| matches!(msg, BlockMessage::RbcReady(_)))
-        );
+        assert!(received.iter().all(|msg| {
+            matches!(
+                msg,
+                InboundBlockMessage {
+                    message: BlockMessage::RbcReady(_),
+                    ..
+                }
+            )
+        }));
         assert!(matches!(
             block_payload_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
@@ -1916,11 +1924,15 @@ mod tests {
 
         let received: Vec<_> = vote_rx.try_iter().collect();
         assert_eq!(received.len(), 2);
-        assert!(
-            received
-                .iter()
-                .all(|msg| matches!(msg, BlockMessage::RbcReady(_)))
-        );
+        assert!(received.iter().all(|msg| {
+            matches!(
+                msg,
+                InboundBlockMessage {
+                    message: BlockMessage::RbcReady(_),
+                    ..
+                }
+            )
+        }));
         assert!(matches!(
             block_payload_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
@@ -1981,11 +1993,15 @@ mod tests {
 
         let received: Vec<_> = vote_rx.try_iter().collect();
         assert_eq!(received.len(), 1);
-        assert!(
-            received
-                .iter()
-                .all(|msg| matches!(msg, BlockMessage::RbcDeliver(_)))
-        );
+        assert!(received.iter().all(|msg| {
+            matches!(
+                msg,
+                InboundBlockMessage {
+                    message: BlockMessage::RbcDeliver(_),
+                    ..
+                }
+            )
+        }));
         assert!(matches!(
             block_payload_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
@@ -2052,7 +2068,13 @@ mod tests {
         let received = block_payload_rx
             .try_recv()
             .expect("BlockCreated should be enqueued to block-payload channel");
-        assert!(matches!(received, BlockMessage::BlockCreated(_)));
+        assert!(matches!(
+            received,
+            InboundBlockMessage {
+                message: BlockMessage::BlockCreated(_),
+                ..
+            }
+        ));
         assert!(matches!(
             block_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
@@ -2115,7 +2137,10 @@ mod tests {
         assert_eq!(received.len(), 1);
         assert!(matches!(
             received.first(),
-            Some(BlockMessage::BlockCreated(_))
+            Some(InboundBlockMessage {
+                message: BlockMessage::BlockCreated(_),
+                ..
+            })
         ));
     }
 
@@ -2172,7 +2197,13 @@ mod tests {
         let received = block_payload_rx
             .try_recv()
             .expect("BlockSyncUpdate should be enqueued to block payload channel");
-        assert!(matches!(received, BlockMessage::BlockSyncUpdate(_)));
+        assert!(matches!(
+            received,
+            InboundBlockMessage {
+                message: BlockMessage::BlockSyncUpdate(_),
+                ..
+            }
+        ));
         assert!(matches!(
             rbc_chunk_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
@@ -2232,7 +2263,7 @@ mod tests {
         let update_overflow = message::BlockSyncUpdate::from(&block);
 
         block_payload_tx_fill
-            .send(BlockMessage::BlockSyncUpdate(update))
+            .send(inbound(BlockMessage::BlockSyncUpdate(update)))
             .expect("fill block payload channel");
         let (done_tx, done_rx) = mpsc::channel();
         let handle_clone = handle.clone();
@@ -2247,14 +2278,26 @@ mod tests {
         let received = block_payload_rx
             .try_recv()
             .expect("original BlockSyncUpdate should remain in the block payload queue");
-        assert!(matches!(received, BlockMessage::BlockSyncUpdate(_)));
+        assert!(matches!(
+            received,
+            InboundBlockMessage {
+                message: BlockMessage::BlockSyncUpdate(_),
+                ..
+            }
+        ));
         done_rx
             .recv_timeout(Duration::from_millis(200))
             .expect("BlockSyncUpdate should enqueue after capacity frees");
         let received = block_payload_rx
             .try_recv()
             .expect("overflow BlockSyncUpdate should be enqueued after capacity frees");
-        assert!(matches!(received, BlockMessage::BlockSyncUpdate(_)));
+        assert!(matches!(
+            received,
+            InboundBlockMessage {
+                message: BlockMessage::BlockSyncUpdate(_),
+                ..
+            }
+        ));
         join.join().expect("join BlockSyncUpdate sender");
     }
 
@@ -2310,7 +2353,7 @@ mod tests {
         let update_overflow = message::BlockSyncUpdate::from(&block);
 
         block_payload_tx_fill
-            .send(BlockMessage::BlockSyncUpdate(update))
+            .send(inbound(BlockMessage::BlockSyncUpdate(update)))
             .expect("fill block payload channel");
         let (done_tx, done_rx) = mpsc::channel();
         let handle_clone = handle.clone();
@@ -2325,14 +2368,26 @@ mod tests {
         let received = block_payload_rx
             .try_recv()
             .expect("original BlockSyncUpdate should remain in the block payload queue");
-        assert!(matches!(received, BlockMessage::BlockSyncUpdate(_)));
+        assert!(matches!(
+            received,
+            InboundBlockMessage {
+                message: BlockMessage::BlockSyncUpdate(_),
+                ..
+            }
+        ));
         done_rx
             .recv_timeout(Duration::from_millis(200))
             .expect("BlockSyncUpdate should enqueue after capacity frees");
         let received = block_payload_rx
             .try_recv()
             .expect("overflow BlockSyncUpdate should be enqueued after capacity frees");
-        assert!(matches!(received, BlockMessage::BlockSyncUpdate(_)));
+        assert!(matches!(
+            received,
+            InboundBlockMessage {
+                message: BlockMessage::BlockSyncUpdate(_),
+                ..
+            }
+        ));
         join.join().expect("join BlockSyncUpdate sender");
     }
 
@@ -2409,9 +2464,9 @@ mod tests {
         );
 
         block_payload_tx_fill
-            .send(BlockMessage::BlockCreated(message::BlockCreated {
+            .send(inbound(BlockMessage::BlockCreated(message::BlockCreated {
                 block: block_one,
-            }))
+            })))
             .expect("fill block payload channel");
         let (done_tx, done_rx) = mpsc::channel();
         let handle_clone = handle.clone();
@@ -2437,7 +2492,13 @@ mod tests {
         let received = block_payload_rx
             .try_recv()
             .expect("BlockCreated should be enqueued after space is freed");
-        assert!(matches!(received, BlockMessage::BlockCreated(_)));
+        assert!(matches!(
+            received,
+            InboundBlockMessage {
+                message: BlockMessage::BlockCreated(_),
+                ..
+            }
+        ));
         assert!(matches!(
             block_payload_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
@@ -2517,9 +2578,9 @@ mod tests {
         );
 
         block_payload_tx_fill
-            .send(BlockMessage::BlockCreated(message::BlockCreated {
+            .send(inbound(BlockMessage::BlockCreated(message::BlockCreated {
                 block: block_one,
-            }))
+            })))
             .expect("fill block payload channel");
         let (done_tx, done_rx) = mpsc::channel();
         let handle_clone = handle.clone();
@@ -2545,7 +2606,13 @@ mod tests {
         let received = block_payload_rx
             .try_recv()
             .expect("BlockCreated should be enqueued after space is freed");
-        assert!(matches!(received, BlockMessage::BlockCreated(_)));
+        assert!(matches!(
+            received,
+            InboundBlockMessage {
+                message: BlockMessage::BlockCreated(_),
+                ..
+            }
+        ));
         assert!(matches!(
             block_payload_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
@@ -2594,7 +2661,9 @@ mod tests {
             signature: vec![0x10],
         });
 
-        vote_tx_fill.send(filler_ready).expect("fill vote channel");
+        vote_tx_fill
+            .send(inbound(filler_ready))
+            .expect("fill vote channel");
 
         let ready = BlockMessage::RbcReady(crate::sumeragi::consensus::RbcReady {
             block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([7u8; 32])),
@@ -2631,7 +2700,13 @@ mod tests {
         let received = vote_rx
             .try_recv()
             .expect("RbcReady should be enqueued after space is freed");
-        assert!(matches!(received, BlockMessage::RbcReady(_)));
+        assert!(matches!(
+            received,
+            InboundBlockMessage {
+                message: BlockMessage::RbcReady(_),
+                ..
+            }
+        ));
         assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
         assert!(matches!(
             block_payload_rx.try_recv(),
@@ -2683,7 +2758,7 @@ mod tests {
         });
 
         vote_tx_fill
-            .send(filler_deliver)
+            .send(inbound(filler_deliver))
             .expect("fill vote channel");
 
         let deliver = BlockMessage::RbcDeliver(crate::sumeragi::consensus::RbcDeliver {
@@ -2722,7 +2797,13 @@ mod tests {
         let received = vote_rx
             .try_recv()
             .expect("RbcDeliver should be enqueued after space is freed");
-        assert!(matches!(received, BlockMessage::RbcDeliver(_)));
+        assert!(matches!(
+            received,
+            InboundBlockMessage {
+                message: BlockMessage::RbcDeliver(_),
+                ..
+            }
+        ));
         assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
         assert!(matches!(
             block_payload_rx.try_recv(),
@@ -2775,7 +2856,7 @@ mod tests {
         };
 
         vote_tx_fill
-            .send(BlockMessage::QcVote(filler_vote))
+            .send(inbound(BlockMessage::QcVote(filler_vote)))
             .expect("fill vote channel");
 
         let vote = Vote {
@@ -2815,7 +2896,13 @@ mod tests {
         let received = vote_rx
             .try_recv()
             .expect("QcVote should be enqueued after space is freed");
-        assert!(matches!(received, BlockMessage::QcVote(_)));
+        assert!(matches!(
+            received,
+            InboundBlockMessage {
+                message: BlockMessage::QcVote(_),
+                ..
+            }
+        ));
         assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
         assert!(matches!(
             block_payload_rx.try_recv(),
@@ -2873,7 +2960,7 @@ mod tests {
         };
 
         rbc_chunk_tx_fill
-            .send(BlockMessage::RbcChunk(chunk_one))
+            .send(inbound(BlockMessage::RbcChunk(chunk_one)))
             .expect("fill RBC chunk channel");
         let (done_tx, done_rx) = mpsc::channel();
         let handle_clone = handle.clone();
@@ -2897,7 +2984,13 @@ mod tests {
         let received = rbc_chunk_rx
             .try_recv()
             .expect("RBC chunk should be enqueued after space is freed");
-        assert!(matches!(received, BlockMessage::RbcChunk(_)));
+        assert!(matches!(
+            received,
+            InboundBlockMessage {
+                message: BlockMessage::RbcChunk(_),
+                ..
+            }
+        ));
         assert!(matches!(
             rbc_chunk_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
@@ -2949,7 +3042,13 @@ mod tests {
         let received = vote_rx
             .try_recv()
             .expect("RbcReady should be enqueued to vote channel");
-        assert!(matches!(received, BlockMessage::RbcReady(_)));
+        assert!(matches!(
+            received,
+            InboundBlockMessage {
+                message: BlockMessage::RbcReady(_),
+                ..
+            }
+        ));
         assert!(matches!(
             block_payload_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
@@ -3014,7 +3113,13 @@ mod tests {
         let received = vote_rx
             .try_recv()
             .expect("ProposalHint should be enqueued to vote channel");
-        assert!(matches!(received, BlockMessage::ProposalHint(_)));
+        assert!(matches!(
+            received,
+            InboundBlockMessage {
+                message: BlockMessage::ProposalHint(_),
+                ..
+            }
+        ));
         assert!(matches!(
             block_payload_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
@@ -3072,7 +3177,13 @@ mod tests {
         let received = rbc_chunk_rx
             .try_recv()
             .expect("RbcChunk should be enqueued to RBC chunk channel");
-        assert!(matches!(received, BlockMessage::RbcChunk(_)));
+        assert!(matches!(
+            received,
+            InboundBlockMessage {
+                message: BlockMessage::RbcChunk(_),
+                ..
+            }
+        ));
         assert!(matches!(
             block_payload_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
@@ -3131,7 +3242,13 @@ mod tests {
         let received = rbc_chunk_rx
             .try_recv()
             .expect("RbcInit should be enqueued to RBC chunk channel");
-        assert!(matches!(received, BlockMessage::RbcInit(_)));
+        assert!(matches!(
+            received,
+            InboundBlockMessage {
+                message: BlockMessage::RbcInit(_),
+                ..
+            }
+        ));
         assert!(matches!(
             block_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
@@ -3146,8 +3263,8 @@ mod tests {
     }
 
     impl WorkerActor for RecordingActor {
-        fn on_block_message(&mut self, msg: BlockMessage) -> Result<()> {
-            let label = match msg {
+        fn on_block_message(&mut self, msg: InboundBlockMessage) -> Result<()> {
+            let label = match msg.message {
                 BlockMessage::QcVote(_) => "vote",
                 BlockMessage::RbcChunk(_) => "rbc",
                 BlockMessage::Proposal(_) => "payload",
@@ -3185,7 +3302,7 @@ mod tests {
     }
 
     impl WorkerActor for CommitPollingActor {
-        fn on_block_message(&mut self, _msg: BlockMessage) -> Result<()> {
+        fn on_block_message(&mut self, _msg: InboundBlockMessage) -> Result<()> {
             Ok(())
         }
 
@@ -3217,7 +3334,7 @@ mod tests {
     }
 
     impl WorkerActor for RbcPollingActor {
-        fn on_block_message(&mut self, _msg: BlockMessage) -> Result<()> {
+        fn on_block_message(&mut self, _msg: InboundBlockMessage) -> Result<()> {
             Ok(())
         }
 
@@ -3249,7 +3366,7 @@ mod tests {
     }
 
     impl WorkerActor for NoTickActor {
-        fn on_block_message(&mut self, _msg: BlockMessage) -> Result<()> {
+        fn on_block_message(&mut self, _msg: InboundBlockMessage) -> Result<()> {
             Ok(())
         }
 
@@ -3282,7 +3399,7 @@ mod tests {
     }
 
     impl WorkerActor for FutureTickActor {
-        fn on_block_message(&mut self, _msg: BlockMessage) -> Result<()> {
+        fn on_block_message(&mut self, _msg: InboundBlockMessage) -> Result<()> {
             Ok(())
         }
 
@@ -3315,8 +3432,8 @@ mod tests {
     }
 
     impl WorkerActor for RecordingActorWithTick {
-        fn on_block_message(&mut self, msg: BlockMessage) -> Result<()> {
-            let label = match msg {
+        fn on_block_message(&mut self, msg: InboundBlockMessage) -> Result<()> {
+            let label = match msg.message {
                 BlockMessage::QcVote(_) => "vote",
                 BlockMessage::RbcChunk(_) => "rbc",
                 BlockMessage::Proposal(_) => "payload",
@@ -3355,8 +3472,8 @@ mod tests {
     }
 
     impl WorkerActor for SlowVoteActor {
-        fn on_block_message(&mut self, msg: BlockMessage) -> Result<()> {
-            match msg {
+        fn on_block_message(&mut self, msg: InboundBlockMessage) -> Result<()> {
+            match msg.message {
                 BlockMessage::QcVote(_) => {
                     std::thread::sleep(self.vote_sleep);
                     self.events.push("vote");
@@ -3386,12 +3503,12 @@ mod tests {
 
     struct TickEnqueueActor {
         events: Vec<&'static str>,
-        block_payload_tx: mpsc::SyncSender<BlockMessage>,
+        block_payload_tx: mpsc::SyncSender<InboundBlockMessage>,
     }
 
     impl WorkerActor for TickEnqueueActor {
-        fn on_block_message(&mut self, msg: BlockMessage) -> Result<()> {
-            if matches!(msg, BlockMessage::Proposal(_)) {
+        fn on_block_message(&mut self, msg: InboundBlockMessage) -> Result<()> {
+            if matches!(msg.message, BlockMessage::Proposal(_)) {
                 self.events.push("payload");
             }
             Ok(())
@@ -3432,7 +3549,10 @@ mod tests {
                 payload_hash: Hash::new(b"payload"),
             };
             self.block_payload_tx
-                .send(BlockMessage::Proposal(proposal))
+                .send(InboundBlockMessage::new(
+                    BlockMessage::Proposal(proposal),
+                    None,
+                ))
                 .expect("send proposal");
             status::record_worker_queue_enqueue(status::WorkerQueueKind::BlockPayload);
             true
@@ -3466,7 +3586,7 @@ mod tests {
             bls_sig: Vec::new(),
         };
         vote_tx
-            .send(BlockMessage::QcVote(vote))
+            .send(inbound(BlockMessage::QcVote(vote)))
             .expect("send prevote");
         status::record_worker_queue_enqueue(status::WorkerQueueKind::Votes);
 
@@ -3479,7 +3599,7 @@ mod tests {
             bytes: vec![1, 2, 3],
         };
         rbc_chunk_tx
-            .send(BlockMessage::RbcChunk(rbc_chunk))
+            .send(inbound(BlockMessage::RbcChunk(rbc_chunk)))
             .expect("send rbc chunk");
         status::record_worker_queue_enqueue(status::WorkerQueueKind::RbcChunks);
 
@@ -3503,18 +3623,18 @@ mod tests {
             payload_hash: Hash::new(b"payload"),
         };
         block_payload_tx
-            .send(BlockMessage::Proposal(proposal))
+            .send(inbound(BlockMessage::Proposal(proposal)))
             .expect("send proposal");
         status::record_worker_queue_enqueue(status::WorkerQueueKind::BlockPayload);
 
         block_tx
-            .send(BlockMessage::ConsensusParams(
+            .send(inbound(BlockMessage::ConsensusParams(
                 message::ConsensusParamsAdvert {
                     collectors_k: 1,
                     redundant_send_r: 1,
                     membership: None,
                 },
-            ))
+            )))
             .expect("send consensus params");
         status::record_worker_queue_enqueue(status::WorkerQueueKind::Blocks);
 
@@ -3596,7 +3716,7 @@ mod tests {
             bls_sig: Vec::new(),
         };
         vote_tx
-            .send(BlockMessage::QcVote(vote))
+            .send(inbound(BlockMessage::QcVote(vote)))
             .expect("send prevote");
         status::record_worker_queue_enqueue(status::WorkerQueueKind::Votes);
 
@@ -3609,7 +3729,7 @@ mod tests {
             bytes: vec![1, 2, 3],
         };
         rbc_chunk_tx
-            .send(BlockMessage::RbcChunk(rbc_chunk))
+            .send(inbound(BlockMessage::RbcChunk(rbc_chunk)))
             .expect("send rbc chunk");
         status::record_worker_queue_enqueue(status::WorkerQueueKind::RbcChunks);
 
@@ -3633,18 +3753,18 @@ mod tests {
             payload_hash: Hash::new(b"payload"),
         };
         block_payload_tx
-            .send(BlockMessage::Proposal(proposal))
+            .send(inbound(BlockMessage::Proposal(proposal)))
             .expect("send proposal");
         status::record_worker_queue_enqueue(status::WorkerQueueKind::BlockPayload);
 
         block_tx
-            .send(BlockMessage::ConsensusParams(
+            .send(inbound(BlockMessage::ConsensusParams(
                 message::ConsensusParamsAdvert {
                     collectors_k: 1,
                     redundant_send_r: 1,
                     membership: None,
                 },
-            ))
+            )))
             .expect("send consensus params");
         status::record_worker_queue_enqueue(status::WorkerQueueKind::Blocks);
 
@@ -3967,7 +4087,7 @@ mod tests {
             bls_sig: Vec::new(),
         };
         vote_tx
-            .send(BlockMessage::QcVote(vote))
+            .send(inbound(BlockMessage::QcVote(vote)))
             .expect("send prevote");
         status::record_worker_queue_enqueue(status::WorkerQueueKind::Votes);
 
@@ -3991,7 +4111,7 @@ mod tests {
             payload_hash: Hash::new(b"payload"),
         };
         block_payload_tx
-            .send(BlockMessage::Proposal(proposal))
+            .send(inbound(BlockMessage::Proposal(proposal)))
             .expect("send proposal");
         status::record_worker_queue_enqueue(status::WorkerQueueKind::BlockPayload);
 
@@ -4076,7 +4196,7 @@ mod tests {
                 bls_sig: Vec::new(),
             };
             vote_tx
-                .send(BlockMessage::QcVote(vote))
+                .send(inbound(BlockMessage::QcVote(vote)))
                 .expect("send prevote");
             status::record_worker_queue_enqueue(status::WorkerQueueKind::Votes);
         }
@@ -4090,7 +4210,7 @@ mod tests {
             bytes: vec![1, 2, 3],
         };
         rbc_chunk_tx
-            .send(BlockMessage::RbcChunk(rbc_chunk))
+            .send(inbound(BlockMessage::RbcChunk(rbc_chunk)))
             .expect("send rbc chunk");
         status::record_worker_queue_enqueue(status::WorkerQueueKind::RbcChunks);
 
@@ -4319,7 +4439,7 @@ mod tests {
                 bls_sig: Vec::new(),
             };
             vote_tx
-                .send(BlockMessage::QcVote(vote))
+                .send(inbound(BlockMessage::QcVote(vote)))
                 .expect("send prevote");
             status::record_worker_queue_enqueue(status::WorkerQueueKind::Votes);
 
@@ -4332,7 +4452,7 @@ mod tests {
                 bytes: vec![1, 2, 3],
             };
             rbc_chunk_tx
-                .send(BlockMessage::RbcChunk(rbc_chunk))
+                .send(inbound(BlockMessage::RbcChunk(rbc_chunk)))
                 .expect("send rbc chunk");
             status::record_worker_queue_enqueue(status::WorkerQueueKind::RbcChunks);
 
@@ -4356,18 +4476,18 @@ mod tests {
                 payload_hash: Hash::new(b"payload"),
             };
             block_payload_tx
-                .send(BlockMessage::Proposal(proposal))
+                .send(inbound(BlockMessage::Proposal(proposal)))
                 .expect("send proposal");
             status::record_worker_queue_enqueue(status::WorkerQueueKind::BlockPayload);
 
             block_tx
-                .send(BlockMessage::ConsensusParams(
+                .send(inbound(BlockMessage::ConsensusParams(
                     message::ConsensusParamsAdvert {
                         collectors_k: 1,
                         redundant_send_r: 1,
                         membership: None,
                     },
-                ))
+                )))
                 .expect("send consensus params");
             status::record_worker_queue_enqueue(status::WorkerQueueKind::Blocks);
 
@@ -5146,13 +5266,25 @@ enum IngressMode {
     NonBlocking,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct InboundBlockMessage {
+    message: BlockMessage,
+    sender: Option<PeerId>,
+}
+
+impl InboundBlockMessage {
+    fn new(message: BlockMessage, sender: Option<PeerId>) -> Self {
+        Self { message, sender }
+    }
+}
+
 /// Minimal handle for the Sumeragi actor.
 #[derive(Clone)]
 pub struct SumeragiHandle {
-    block_payload: mpsc::SyncSender<BlockMessage>,
-    block: mpsc::SyncSender<BlockMessage>,
-    rbc_chunks: mpsc::SyncSender<BlockMessage>,
-    votes: mpsc::SyncSender<BlockMessage>,
+    block_payload: mpsc::SyncSender<InboundBlockMessage>,
+    block: mpsc::SyncSender<InboundBlockMessage>,
+    rbc_chunks: mpsc::SyncSender<InboundBlockMessage>,
+    votes: mpsc::SyncSender<InboundBlockMessage>,
     consensus_control: mpsc::SyncSender<ControlFlow>,
     background: mpsc::SyncSender<BackgroundRequest>,
     lane_relay: mpsc::SyncSender<LaneRelayMessage>,
@@ -5172,10 +5304,10 @@ impl SumeragiHandle {
 
     #[allow(clippy::too_many_arguments)]
     fn new(
-        block_payload_tx: mpsc::SyncSender<BlockMessage>,
-        block_tx: mpsc::SyncSender<BlockMessage>,
-        rbc_chunk_tx: mpsc::SyncSender<BlockMessage>,
-        vote_tx: mpsc::SyncSender<BlockMessage>,
+        block_payload_tx: mpsc::SyncSender<InboundBlockMessage>,
+        block_tx: mpsc::SyncSender<InboundBlockMessage>,
+        rbc_chunk_tx: mpsc::SyncSender<InboundBlockMessage>,
+        vote_tx: mpsc::SyncSender<InboundBlockMessage>,
         consensus_control_tx: mpsc::SyncSender<ControlFlow>,
         background_tx: mpsc::SyncSender<BackgroundRequest>,
         lane_relay_tx: mpsc::SyncSender<LaneRelayMessage>,
@@ -5241,7 +5373,12 @@ impl SumeragiHandle {
     /// Enqueue an incoming block-synchronization or consensus message.
     #[allow(clippy::too_many_lines)]
     pub fn incoming_block_message(&self, msg: BlockMessage) {
-        let _ = self.incoming_block_message_with_mode(msg, IngressMode::Blocking);
+        let _ = self.incoming_block_message_with_sender(msg, None, IngressMode::Blocking);
+    }
+
+    /// Enqueue an incoming block-synchronization or consensus message from a known peer.
+    pub fn incoming_block_message_from(&self, sender: PeerId, msg: BlockMessage) {
+        let _ = self.incoming_block_message_with_sender(msg, Some(sender), IngressMode::Blocking);
     }
 
     /// Enqueue an incoming block message without blocking the caller.
@@ -5267,16 +5404,43 @@ impl SumeragiHandle {
         } else {
             IngressMode::NonBlocking
         };
-        self.incoming_block_message_with_mode(msg, mode)
+        self.incoming_block_message_with_sender(msg, None, mode)
+    }
+
+    /// Enqueue an incoming block message from a known peer without blocking the caller.
+    /// Returns `true` if the message was accepted by the queue.
+    pub fn try_incoming_block_message_from(&self, sender: PeerId, msg: BlockMessage) -> bool {
+        let blocking = matches!(
+            &msg,
+            BlockMessage::BlockSyncUpdate(_)
+                | BlockMessage::BlockCreated(_)
+                | BlockMessage::Proposal(_)
+                | BlockMessage::QcVote(_)
+                | BlockMessage::Qc(_)
+                | BlockMessage::RbcReady(_)
+                | BlockMessage::RbcDeliver(_)
+        );
+        let mode = if blocking {
+            IngressMode::Blocking
+        } else {
+            IngressMode::NonBlocking
+        };
+        self.incoming_block_message_with_sender(msg, Some(sender), mode)
     }
 
     #[allow(clippy::too_many_lines)]
-    fn incoming_block_message_with_mode(&self, msg: BlockMessage, mode: IngressMode) -> bool {
+    fn incoming_block_message_with_sender(
+        &self,
+        msg: BlockMessage,
+        sender: Option<PeerId>,
+        mode: IngressMode,
+    ) -> bool {
+        let inbound = InboundBlockMessage::new(msg, sender);
         let log_drop = |kind: &'static str,
                         queue: status::WorkerQueueKind,
-                        msg: &BlockMessage,
+                        msg: &InboundBlockMessage,
                         reason: &'static str| {
-            match msg {
+            match &msg.message {
                 BlockMessage::RbcChunk(chunk) => {
                     iroha_logger::warn!(
                         height = chunk.height,
@@ -5343,8 +5507,8 @@ impl SumeragiHandle {
         };
         let wake = || self.wake();
         let enqueue_blocking =
-            |tx: &mpsc::SyncSender<BlockMessage>,
-             msg: BlockMessage,
+            |tx: &mpsc::SyncSender<InboundBlockMessage>,
+             msg: InboundBlockMessage,
              kind: &'static str,
              queue: status::WorkerQueueKind| match mode {
                 IngressMode::Blocking => {
@@ -5381,6 +5545,10 @@ impl SumeragiHandle {
                     }
                 },
             };
+        let InboundBlockMessage {
+            message: msg,
+            sender,
+        } = inbound;
         match msg {
             BlockMessage::QcVote(vote) => {
                 let duplicate = !self.dedup_vote((
@@ -5414,20 +5582,20 @@ impl SumeragiHandle {
                 );
                 enqueue_blocking(
                     &self.votes,
-                    BlockMessage::QcVote(vote),
+                    InboundBlockMessage::new(BlockMessage::QcVote(vote), sender),
                     "QcVote",
                     status::WorkerQueueKind::Votes,
                 )
             }
             BlockMessage::Qc(cert) => enqueue_blocking(
                 &self.votes,
-                BlockMessage::Qc(cert),
+                InboundBlockMessage::new(BlockMessage::Qc(cert), sender),
                 "Qc",
                 status::WorkerQueueKind::Votes,
             ),
             BlockMessage::ProposalHint(hint) => enqueue_blocking(
                 &self.votes,
-                BlockMessage::ProposalHint(hint),
+                InboundBlockMessage::new(BlockMessage::ProposalHint(hint), sender),
                 "ProposalHint",
                 status::WorkerQueueKind::Votes,
             ),
@@ -5435,13 +5603,13 @@ impl SumeragiHandle {
                 let height = message.height;
                 let view = message.view;
                 let block_hash = message.block_hash;
-                let sender = message.sender;
+                let validator_idx = message.sender;
                 let signature_hash = CryptoHash::new(&message.signature);
                 let duplicate = !self.dedup_block_payload(BlockPayloadDedupKey::RbcReady {
                     height,
                     view,
                     block_hash,
-                    sender,
+                    sender: validator_idx,
                     signature_hash,
                 });
                 if duplicate {
@@ -5449,14 +5617,14 @@ impl SumeragiHandle {
                         height,
                         view,
                         block = %block_hash,
-                        sender,
+                        sender = validator_idx,
                         "dropping duplicate RBC READY from network"
                     );
                     return false;
                 }
                 enqueue_blocking(
                     &self.votes,
-                    BlockMessage::RbcReady(message),
+                    InboundBlockMessage::new(BlockMessage::RbcReady(message), sender),
                     "RbcReady",
                     status::WorkerQueueKind::Votes,
                 )
@@ -5465,13 +5633,13 @@ impl SumeragiHandle {
                 let height = message.height;
                 let view = message.view;
                 let block_hash = message.block_hash;
-                let sender = message.sender;
+                let validator_idx = message.sender;
                 let signature_hash = CryptoHash::new(&message.signature);
                 let duplicate = !self.dedup_block_payload(BlockPayloadDedupKey::RbcDeliver {
                     height,
                     view,
                     block_hash,
-                    sender,
+                    sender: validator_idx,
                     signature_hash,
                 });
                 if duplicate {
@@ -5479,14 +5647,14 @@ impl SumeragiHandle {
                         height,
                         view,
                         block = %block_hash,
-                        sender,
+                        sender = validator_idx,
                         "dropping duplicate RBC DELIVER from network"
                     );
                     return false;
                 }
                 enqueue_blocking(
                     &self.votes,
-                    BlockMessage::RbcDeliver(message),
+                    InboundBlockMessage::new(BlockMessage::RbcDeliver(message), sender),
                     "RbcDeliver",
                     status::WorkerQueueKind::Votes,
                 )
@@ -5512,7 +5680,7 @@ impl SumeragiHandle {
                 }
                 enqueue_blocking(
                     &self.block_payload,
-                    BlockMessage::BlockCreated(created),
+                    InboundBlockMessage::new(BlockMessage::BlockCreated(created), sender),
                     "BlockPayload",
                     status::WorkerQueueKind::BlockPayload,
                 )
@@ -5537,7 +5705,7 @@ impl SumeragiHandle {
                 }
                 enqueue_blocking(
                     &self.block_payload,
-                    BlockMessage::Proposal(proposal),
+                    InboundBlockMessage::new(BlockMessage::Proposal(proposal), sender),
                     "BlockPayload",
                     status::WorkerQueueKind::BlockPayload,
                 )
@@ -5546,26 +5714,26 @@ impl SumeragiHandle {
                 // Block sync updates carry commit/QC evidence; prioritize with payload traffic.
                 enqueue_blocking(
                     &self.block_payload,
-                    BlockMessage::BlockSyncUpdate(update),
+                    InboundBlockMessage::new(BlockMessage::BlockSyncUpdate(update), sender),
                     "BlockSyncUpdate",
                     status::WorkerQueueKind::BlockPayload,
                 )
             }
             BlockMessage::RbcInit(init) => enqueue_blocking(
                 &self.rbc_chunks,
-                BlockMessage::RbcInit(init),
+                InboundBlockMessage::new(BlockMessage::RbcInit(init), sender),
                 "RbcChunk",
                 status::WorkerQueueKind::RbcChunks,
             ),
             BlockMessage::RbcChunk(chunk) => enqueue_blocking(
                 &self.rbc_chunks,
-                BlockMessage::RbcChunk(chunk),
+                InboundBlockMessage::new(BlockMessage::RbcChunk(chunk), sender),
                 "RbcChunk",
                 status::WorkerQueueKind::RbcChunks,
             ),
             other => enqueue_blocking(
                 &self.block,
-                other,
+                InboundBlockMessage::new(other, sender),
                 "BlockMessage",
                 status::WorkerQueueKind::Blocks,
             ),
@@ -5817,7 +5985,7 @@ impl SumeragiHandle {
 #[cfg(test)]
 pub(crate) fn test_sumeragi_handle(
     block_channel_cap: usize,
-) -> (SumeragiHandle, mpsc::Receiver<BlockMessage>) {
+) -> (SumeragiHandle, mpsc::Receiver<InboundBlockMessage>) {
     let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(1);
     let (block_tx, block_rx) = mpsc::sync_channel(block_channel_cap);
     let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(1);
@@ -6054,10 +6222,10 @@ struct SumeragiWorker {
     background_post_tx: Option<mpsc::SyncSender<BackgroundPost>>,
     da_spool_dir: PathBuf,
     vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>>,
-    vote_rx: mpsc::Receiver<BlockMessage>,
-    block_payload_rx: mpsc::Receiver<BlockMessage>,
-    block_rx: mpsc::Receiver<BlockMessage>,
-    rbc_chunk_rx: mpsc::Receiver<BlockMessage>,
+    vote_rx: mpsc::Receiver<InboundBlockMessage>,
+    block_payload_rx: mpsc::Receiver<InboundBlockMessage>,
+    block_rx: mpsc::Receiver<InboundBlockMessage>,
+    rbc_chunk_rx: mpsc::Receiver<InboundBlockMessage>,
     consensus_rx: mpsc::Receiver<ControlFlow>,
     background_rx: mpsc::Receiver<BackgroundRequest>,
     wake_tx: mpsc::SyncSender<()>,
@@ -6201,7 +6369,7 @@ fn cap_rbc_drain_budget(raw: Duration, floor: Duration) -> Duration {
 }
 
 trait WorkerActor {
-    fn on_block_message(&mut self, msg: BlockMessage) -> Result<()>;
+    fn on_block_message(&mut self, msg: InboundBlockMessage) -> Result<()>;
     fn on_consensus_control(&mut self, msg: ControlFlow) -> Result<()>;
     fn on_lane_relay(&mut self, message: LaneRelayMessage) -> Result<()>;
     fn on_background_request(&mut self, request: BackgroundRequest) -> Result<()>;
@@ -6221,7 +6389,7 @@ trait WorkerActor {
 }
 
 impl WorkerActor for crate::sumeragi::main_loop::Actor {
-    fn on_block_message(&mut self, msg: BlockMessage) -> Result<()> {
+    fn on_block_message(&mut self, msg: InboundBlockMessage) -> Result<()> {
         crate::sumeragi::main_loop::Actor::on_block_message(self, msg)
     }
 
@@ -6321,7 +6489,7 @@ impl PriorityTier {
 
 #[derive(Debug)]
 enum WorkerMessage {
-    Block(BlockMessage),
+    Block(InboundBlockMessage),
     Control(ControlFlow),
     LaneRelay(LaneRelayMessage),
     Background(BackgroundRequest),
@@ -6353,10 +6521,10 @@ impl WorkerMailboxState {
 
 struct WorkerMailbox<'a> {
     state: &'a mut WorkerMailboxState,
-    vote_rx: &'a mpsc::Receiver<BlockMessage>,
-    block_payload_rx: &'a mpsc::Receiver<BlockMessage>,
-    rbc_chunk_rx: &'a mpsc::Receiver<BlockMessage>,
-    block_rx: &'a mpsc::Receiver<BlockMessage>,
+    vote_rx: &'a mpsc::Receiver<InboundBlockMessage>,
+    block_payload_rx: &'a mpsc::Receiver<InboundBlockMessage>,
+    rbc_chunk_rx: &'a mpsc::Receiver<InboundBlockMessage>,
+    block_rx: &'a mpsc::Receiver<InboundBlockMessage>,
     consensus_rx: &'a mpsc::Receiver<ControlFlow>,
     lane_relay_rx: &'a mpsc::Receiver<LaneRelayMessage>,
     background_rx: &'a mpsc::Receiver<BackgroundRequest>,
@@ -6366,10 +6534,10 @@ impl<'a> WorkerMailbox<'a> {
     #[allow(clippy::too_many_arguments)]
     fn new(
         state: &'a mut WorkerMailboxState,
-        vote_rx: &'a mpsc::Receiver<BlockMessage>,
-        block_payload_rx: &'a mpsc::Receiver<BlockMessage>,
-        rbc_chunk_rx: &'a mpsc::Receiver<BlockMessage>,
-        block_rx: &'a mpsc::Receiver<BlockMessage>,
+        vote_rx: &'a mpsc::Receiver<InboundBlockMessage>,
+        block_payload_rx: &'a mpsc::Receiver<InboundBlockMessage>,
+        rbc_chunk_rx: &'a mpsc::Receiver<InboundBlockMessage>,
+        block_rx: &'a mpsc::Receiver<InboundBlockMessage>,
         consensus_rx: &'a mpsc::Receiver<ControlFlow>,
         lane_relay_rx: &'a mpsc::Receiver<LaneRelayMessage>,
         background_rx: &'a mpsc::Receiver<BackgroundRequest>,
@@ -6556,7 +6724,7 @@ fn drain_mailbox<A: WorkerActor>(
         status::set_worker_stage(tier.stage());
         match envelope.message {
             WorkerMessage::Block(msg) => {
-                if let BlockMessage::QcVote(vote) = &msg {
+                if let BlockMessage::QcVote(vote) = &msg.message {
                     stats.precommit_votes_handled = stats.precommit_votes_handled.saturating_add(1);
                     stats.last_precommit_vote =
                         Some((vote.height, vote.view, vote.epoch, vote.block_hash));
@@ -6628,10 +6796,10 @@ fn run_worker_iteration<A: WorkerActor>(
     actor: &mut A,
     cfg: &WorkerLoopConfig,
     loop_state: &mut WorkerLoopState,
-    vote_rx: &mpsc::Receiver<BlockMessage>,
-    block_payload_rx: &mpsc::Receiver<BlockMessage>,
-    rbc_chunk_rx: &mpsc::Receiver<BlockMessage>,
-    block_rx: &mpsc::Receiver<BlockMessage>,
+    vote_rx: &mpsc::Receiver<InboundBlockMessage>,
+    block_payload_rx: &mpsc::Receiver<InboundBlockMessage>,
+    rbc_chunk_rx: &mpsc::Receiver<InboundBlockMessage>,
+    block_rx: &mpsc::Receiver<InboundBlockMessage>,
     consensus_rx: &mpsc::Receiver<ControlFlow>,
     lane_relay_rx: &mpsc::Receiver<LaneRelayMessage>,
     background_rx: &mpsc::Receiver<BackgroundRequest>,
@@ -6821,10 +6989,10 @@ fn run_worker_loop<A: WorkerActor>(
     actor: &mut A,
     cfg: WorkerLoopConfig,
     mut loop_state: WorkerLoopState,
-    vote_rx: mpsc::Receiver<BlockMessage>,
-    block_payload_rx: mpsc::Receiver<BlockMessage>,
-    rbc_chunk_rx: mpsc::Receiver<BlockMessage>,
-    block_rx: mpsc::Receiver<BlockMessage>,
+    vote_rx: mpsc::Receiver<InboundBlockMessage>,
+    block_payload_rx: mpsc::Receiver<InboundBlockMessage>,
+    rbc_chunk_rx: mpsc::Receiver<InboundBlockMessage>,
+    block_rx: mpsc::Receiver<InboundBlockMessage>,
     consensus_rx: mpsc::Receiver<ControlFlow>,
     lane_relay_rx: mpsc::Receiver<LaneRelayMessage>,
     background_rx: mpsc::Receiver<BackgroundRequest>,

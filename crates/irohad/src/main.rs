@@ -1575,9 +1575,10 @@ impl NetworkRelayShared {
                     kind,
                     "relay received sumeragi block message"
                 );
+                let sender = peer.id().clone();
                 let sumeragi = self.sumeragi.clone();
                 enqueue_sumeragi_block_message(*data, move |msg| {
-                    let _ = sumeragi.try_incoming_block_message(msg);
+                    let _ = sumeragi.try_incoming_block_message_from(sender, msg);
                 });
             }
             SumeragiControlFlow(data) => {
@@ -5344,8 +5345,6 @@ fn apply_norito_config(cfg: &Config) {
         zstd_level_large: cfg.norito.zstd_level_large,
         zstd_level_gpu: cfg.norito.zstd_level_gpu,
         large_threshold: cfg.norito.large_threshold,
-        enable_compact_seq_len_up_to: cfg.norito.enable_compact_seq_len_up_to,
-        enable_varint_offsets_up_to: cfg.norito.enable_varint_offsets_up_to,
         aos_ncb_small_n: cfg.norito.aos_ncb_small_n,
         ..norito::core::heuristics::Heuristics::canonical()
     };
@@ -6118,7 +6117,7 @@ fn compute_consensus_handshake_caps(
 }
 
 fn npos_validator_status_counts<'a>(
-    validators: impl IntoIterator<Item = &'a PublicLaneValidatorRecord>,
+    validators: impl IntoIterator<Item = &'a PublicLaneValidatorRecord> + 'a,
 ) -> (usize, usize, usize, usize) {
     let mut active_bls = 0usize;
     let mut active_total = 0usize;
@@ -6541,7 +6540,7 @@ fn log_norito_banner(cfg: &Config) {
 
     // Compose settings block
     let msg = format!(
-        "\n{}\nNorito settings:\n  - min_compress_bytes_cpu: {}\n  - min_compress_bytes_gpu: {}\n  - zstd_level_small: {}\n  - zstd_level_large: {}\n  - zstd_level_gpu: {}\n  - large_threshold: {}\n  - enable_compact_seq_len_up_to: {}\n  - enable_varint_offsets_up_to: {}\n  - gpu_offload_allowed: {}\n  - gpu_backend_available: {}\n",
+        "\n{}\nNorito settings:\n  - min_compress_bytes_cpu: {}\n  - min_compress_bytes_gpu: {}\n  - zstd_level_small: {}\n  - zstd_level_large: {}\n  - zstd_level_gpu: {}\n  - large_threshold: {}\n  - gpu_offload_allowed: {}\n  - gpu_backend_available: {}\n",
         art,
         n.min_compress_bytes_cpu,
         n.min_compress_bytes_gpu,
@@ -6549,8 +6548,6 @@ fn log_norito_banner(cfg: &Config) {
         n.zstd_level_large,
         n.zstd_level_gpu,
         n.large_threshold,
-        n.enable_compact_seq_len_up_to,
-        n.enable_varint_offsets_up_to,
         gpu_allowed,
         gpu_available,
     );

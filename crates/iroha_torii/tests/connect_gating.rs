@@ -431,6 +431,8 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             ),
             rbc_rebroadcast_sessions_per_tick:
                 iroha_config::parameters::defaults::sumeragi::RBC_REBROADCAST_SESSIONS_PER_TICK,
+            rbc_payload_chunks_per_tick:
+                iroha_config::parameters::defaults::sumeragi::RBC_PAYLOAD_CHUNKS_PER_TICK,
             rbc_store_max_sessions:
                 iroha_config::parameters::defaults::sumeragi::RBC_STORE_MAX_SESSIONS,
             rbc_store_soft_sessions:
@@ -827,10 +829,6 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             zstd_level_large: iroha_config::parameters::defaults::norito::ZSTD_LEVEL_LARGE,
             zstd_level_gpu: iroha_config::parameters::defaults::norito::ZSTD_LEVEL_GPU,
             large_threshold: iroha_config::parameters::defaults::norito::LARGE_THRESHOLD,
-            enable_compact_seq_len_up_to:
-                iroha_config::parameters::defaults::norito::ENABLE_COMPACT_SEQ_LEN_UP_TO,
-            enable_varint_offsets_up_to:
-                iroha_config::parameters::defaults::norito::ENABLE_VARINT_OFFSETS_UP_TO,
             allow_gpu_compression:
                 iroha_config::parameters::defaults::norito::ALLOW_GPU_COMPRESSION,
             aos_ncb_small_n: iroha_config::parameters::defaults::norito::AOS_NCB_SMALL_N,

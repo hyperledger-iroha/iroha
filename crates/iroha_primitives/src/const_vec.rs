@@ -219,12 +219,10 @@ impl<T: NoritoSerialize> NoritoSerialize for ConstVec<T> {
         #[cfg(debug_assertions)]
         if trace_enabled {
             eprintln!(
-                "ConstVec::<{}>::serialize len={} use_packed_seq={} use_varint_offsets={} use_compact_seq_len={}",
+                "ConstVec::<{}>::serialize len={} use_packed_seq={}",
                 core::any::type_name::<T>(),
                 slice.len(),
                 ncore::use_packed_seq(),
-                ncore::use_varint_offsets(),
-                ncore::use_compact_seq_len(),
             );
         }
 
@@ -257,20 +255,11 @@ impl<T: NoritoSerialize> NoritoSerialize for ConstVec<T> {
         }
 
         let mut total = seq_hdr;
-        let use_varint_offsets = ncore::use_varint_offsets();
         let entries = len.saturating_add(1);
-        if !use_varint_offsets {
-            total = total.saturating_add(8usize.saturating_mul(entries));
-        }
+        total = total.saturating_add(8usize.saturating_mul(entries));
         for item in slice {
             let elem_hint = item.encoded_len_hint()?;
-            if use_varint_offsets {
-                total = total.saturating_add(ncore::varint_len_prefix_len(elem_hint));
-            }
             total = total.saturating_add(elem_hint);
-        }
-        if use_varint_offsets && ncore::should_emit_varint_tail(len) {
-            total = total.saturating_add(8usize.saturating_mul(entries));
         }
         Some(total)
     }
@@ -296,25 +285,15 @@ impl<T: NoritoSerialize> NoritoSerialize for ConstVec<T> {
         }
 
         let mut total = seq_hdr;
-        let use_varint_offsets = ncore::use_varint_offsets();
         let entries = len.checked_add(1)?;
-        if !use_varint_offsets {
-            let offsets_bytes = entries.checked_mul(8)?;
-            total = total.checked_add(offsets_bytes)?;
-        }
+        let offsets_bytes = entries.checked_mul(8)?;
+        total = total.checked_add(offsets_bytes)?;
         let mut data_total = 0usize;
         for item in slice {
             let elem_exact = item.encoded_len_exact()?;
-            if use_varint_offsets {
-                total = total.checked_add(ncore::varint_len_prefix_len(elem_exact))?;
-            }
             data_total = data_total.checked_add(elem_exact)?;
         }
         total = total.checked_add(data_total)?;
-        if use_varint_offsets && ncore::should_emit_varint_tail(len) {
-            let tail_bytes = entries.checked_mul(8)?;
-            total = total.checked_add(tail_bytes)?;
-        }
         Some(total)
     }
 }
@@ -350,13 +329,6 @@ impl<T: NoritoSerialize> ConstVec<T> {
         trace_enabled: bool,
     ) -> Result<(), ncore::Error> {
         let (offsets, data) = Self::collect_offsets(slice, trace_enabled)?;
-
-        #[cfg(feature = "compact-len")]
-        if ncore::use_varint_offsets() {
-            Self::write_varint_offsets(writer, slice.len(), &offsets, &data)?;
-            return Ok(());
-        }
-
         Self::write_fixed_offsets(writer, &offsets, &data, trace_enabled)
     }
 
@@ -401,31 +373,6 @@ impl<T: NoritoSerialize> ConstVec<T> {
         }
         offsets.push(total);
         Ok((offsets, data))
-    }
-
-    #[cfg(feature = "compact-len")]
-    fn write_varint_offsets<W: Write>(
-        writer: &mut W,
-        entry_count: usize,
-        offsets: &[u64],
-        data: &[u8],
-    ) -> Result<(), ncore::Error> {
-        ncore::note_varint_offsets_emitted();
-        let mut hdr = Vec::with_capacity(entry_count.saturating_mul(2));
-        for span in offsets.windows(2) {
-            let sz = span[1].wrapping_sub(span[0]);
-            ncore::write_varint_len_to_vec(&mut hdr, sz);
-        }
-        writer.write_all(&hdr)?;
-        writer.write_all(data)?;
-        if ncore::should_emit_varint_tail(entry_count) {
-            let mut tail = Vec::with_capacity(offsets.len().saturating_mul(8));
-            for &off in offsets {
-                tail.extend_from_slice(&off.to_le_bytes());
-            }
-            writer.write_all(&tail)?;
-        }
-        Ok(())
     }
 
     #[cfg(feature = "compact-len")]
@@ -937,9 +884,7 @@ where
     let vec = match decode_adaptive_with_streaming_fallback::<T>(bytes) {
         Ok(vec) => vec,
         Err(err) => {
-            let packed_flags = ncore::header_flags::PACKED_SEQ
-                | ncore::header_flags::COMPACT_SEQ_LEN
-                | ncore::header_flags::VARINT_OFFSETS;
+            let packed_flags = ncore::header_flags::PACKED_SEQ;
             let vec_packed = {
                 let _guard = ncore::DecodeFlagsGuard::enter_with_hint(packed_flags, packed_flags);
                 decode_adaptive_with_streaming_fallback::<T>(bytes)
@@ -1330,11 +1275,8 @@ mod tests {
 
     #[cfg(feature = "compact-len")]
     #[test]
-    fn varint_offsets_match_vec_layout() {
-        let flags = ncore::header_flags::PACKED_SEQ
-            | ncore::header_flags::COMPACT_LEN
-            | ncore::header_flags::COMPACT_SEQ_LEN
-            | ncore::header_flags::VARINT_OFFSETS;
+    fn packed_seq_matches_vec_layout() {
+        let flags = ncore::header_flags::PACKED_SEQ | ncore::header_flags::COMPACT_LEN;
         let _guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
 
         let items = vec![vec![1u8, 2, 3], vec![4u8, 5]];
@@ -1346,7 +1288,7 @@ mod tests {
 
         assert_eq!(
             const_bytes, vec_bytes,
-            "ConstVec encoding diverges from Vec when varint offsets are enabled"
+            "ConstVec encoding diverges from Vec under packed-seq layout"
         );
     }
 
@@ -1397,33 +1339,31 @@ mod tests {
     }
 
     #[test]
-    fn encoded_len_exact_matches_packed_varint_offsets() {
+    fn encoded_len_exact_matches_packed_seq() {
         let value = ConstVec::from(vec![vec![1_u8, 2, 3], vec![4_u8, 5, 6, 7]]);
         let mut bytes = Vec::new();
         {
-            let flags = ncore::header_flags::PACKED_SEQ
-                | ncore::header_flags::COMPACT_LEN
-                | ncore::header_flags::COMPACT_SEQ_LEN
-                | ncore::header_flags::VARINT_OFFSETS;
+            let flags = ncore::header_flags::PACKED_SEQ | ncore::header_flags::COMPACT_LEN;
             let _guard = ncore::DecodeFlagsGuard::enter(flags);
             NoritoSerialize::serialize(&value, &mut bytes).expect("serialize const vec");
-            assert!(
-                value.encoded_len_exact().is_none(),
-                "ConstVec no longer reports exact lengths under dynamic packed layouts"
+            assert_eq!(
+                value.encoded_len_exact(),
+                Some(bytes.len()),
+                "ConstVec exact length should match packed layout payload"
             );
         }
     }
 
     #[test]
-    fn compact_seq_len_updates_encoded_lengths() {
-        let flags = ncore::header_flags::COMPACT_LEN | ncore::header_flags::COMPACT_SEQ_LEN;
+    fn compact_len_updates_encoded_lengths() {
+        let flags = ncore::header_flags::COMPACT_LEN;
         let _guard = ncore::DecodeFlagsGuard::enter(flags);
         let value = ConstVec::from(vec![1_u8, 2_u8]);
         let mut bytes = Vec::new();
         NoritoSerialize::serialize(&value, &mut bytes).expect("serialize const vec");
         assert_eq!(value.encoded_len_exact(), Some(bytes.len()));
         assert_eq!(value.encoded_len_hint(), Some(bytes.len()));
-        assert_eq!(bytes.len(), 5);
+        assert_eq!(bytes.len(), 12);
     }
 
     #[test]
@@ -1457,8 +1397,8 @@ mod tests {
     }
 
     #[test]
-    fn reencode_and_verify_respects_compact_seq_len() {
-        let flags = ncore::header_flags::COMPACT_LEN | ncore::header_flags::COMPACT_SEQ_LEN;
+    fn reencode_and_verify_respects_compact_len() {
+        let flags = ncore::header_flags::COMPACT_LEN;
         let _guard = ncore::DecodeFlagsGuard::enter(flags);
         let value = ConstVec::from(vec![1_u8, 2_u8, 3_u8]);
         let mut bytes = Vec::new();

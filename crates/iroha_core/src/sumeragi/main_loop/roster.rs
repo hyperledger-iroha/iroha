@@ -276,6 +276,23 @@ pub(super) fn derive_active_topology_for_mode(
             if roster.is_empty() {
                 roster = active_roster.clone();
             }
+            if use_commit && roster.len() < active_roster.len() {
+                let commit_set: BTreeSet<_> = commit_topology.iter().cloned().collect();
+                let missing: Vec<_> = active_roster
+                    .iter()
+                    .filter(|peer| !commit_set.contains(*peer))
+                    .cloned()
+                    .collect();
+                if !missing.is_empty() {
+                    iroha_logger::warn!(
+                        commit_topology_len = commit_topology.len(),
+                        active_roster_len = active_roster.len(),
+                        missing_len = missing.len(),
+                        "commit topology missing active validators; appending from active roster"
+                    );
+                    roster.extend(missing);
+                }
+            }
             roster = if trusted.pops.is_empty() {
                 roster
             } else {
@@ -652,6 +669,70 @@ mod tests {
             derive_active_topology_for_mode(&view, &trusted, &peer_active, ConsensusMode::Npos);
 
         assert_eq!(roster, vec![peer_active]);
+    }
+
+    #[test]
+    fn active_topology_for_npos_appends_missing_commit_topology_peers() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+
+        let domain: DomainId = "validators".parse().expect("domain id");
+        let keypair_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair_c = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let account_a = AccountId::new(domain.clone(), keypair_a.public_key().clone());
+        let account_b = AccountId::new(domain.clone(), keypair_b.public_key().clone());
+        let account_c = AccountId::new(domain, keypair_c.public_key().clone());
+        let peer_a = PeerId::new(keypair_a.public_key().clone());
+        let peer_b = PeerId::new(keypair_b.public_key().clone());
+        let peer_c = PeerId::new(keypair_c.public_key().clone());
+
+        {
+            let mut block = state.world.public_lane_validators.block();
+            for (account, stake) in [
+                (account_a.clone(), Numeric::new(10, 0)),
+                (account_b.clone(), Numeric::new(12, 0)),
+                (account_c.clone(), Numeric::new(14, 0)),
+            ] {
+                block.insert(
+                    (LaneId::new(1), account.clone()),
+                    PublicLaneValidatorRecord {
+                        lane_id: LaneId::new(1),
+                        validator: account.clone(),
+                        stake_account: account,
+                        total_stake: stake.clone(),
+                        self_stake: stake,
+                        metadata: Metadata::default(),
+                        status: PublicLaneValidatorStatus::Active,
+                        activation_epoch: None,
+                        activation_height: None,
+                        last_reward_epoch: None,
+                    },
+                );
+            }
+            block.commit();
+        }
+        {
+            let mut block = state.commit_topology.block();
+            let mut tx = block.transaction();
+            *tx = vec![peer_b.clone(), peer_a.clone()];
+            tx.apply();
+            block.commit();
+        }
+
+        let trusted = iroha_config::parameters::actual::TrustedPeers {
+            myself: Peer::new("127.0.0.1:10000".parse().expect("addr"), peer_a.clone()),
+            others: UniqueVec::new(),
+            pops: BTreeMap::new(),
+        };
+        let view = state.view();
+        let roster = derive_active_topology_for_mode(&view, &trusted, &peer_a, ConsensusMode::Npos);
+
+        assert_eq!(roster.len(), 3);
+        assert_eq!(roster[0], peer_b);
+        assert_eq!(roster[1], peer_a);
+        assert!(roster.contains(&peer_c));
     }
 
     #[test]

@@ -1083,8 +1083,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             zstd_level_large: defaults::norito::ZSTD_LEVEL_LARGE,
             zstd_level_gpu: defaults::norito::ZSTD_LEVEL_GPU,
             large_threshold: defaults::norito::LARGE_THRESHOLD,
-            enable_compact_seq_len_up_to: defaults::norito::ENABLE_COMPACT_SEQ_LEN_UP_TO,
-            enable_varint_offsets_up_to: defaults::norito::ENABLE_VARINT_OFFSETS_UP_TO,
             allow_gpu_compression: defaults::norito::ALLOW_GPU_COMPRESSION,
             max_archive_len: defaults::norito::MAX_ARCHIVE_LEN,
             aos_ncb_small_n: defaults::norito::AOS_NCB_SMALL_N,

@@ -23,8 +23,9 @@ use iroha_data_model::{
             SumeragiLaneGovernance, SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
             SumeragiMissingBlockFetchStatus, SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcEntry,
             SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcSnapshot, SumeragiQcStatus,
-            SumeragiRbcEvictedSession, SumeragiRbcStoreStatus, SumeragiRuntimeUpgradeHook,
-            SumeragiStatusWire, SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
+            SumeragiRbcEvictedSession, SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus,
+            SumeragiRbcStoreStatus, SumeragiRuntimeUpgradeHook, SumeragiStatusWire,
+            SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
             SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths, SumeragiWorkerQueueDiagnostics,
             SumeragiWorkerQueueTotals, VrfCommit, VrfReveal,
         },
@@ -656,6 +657,7 @@ fn rng_sumeragi_status(rng: &mut DeterministicRng) -> SumeragiStatusWire {
         da_gate: rng_da_gate(rng),
         kura_store: rng_kura_store(rng),
         rbc_store: rng_rbc_store(rng),
+        rbc_mismatch: rng_rbc_mismatch_status(rng),
         pending_rbc: SumeragiPendingRbcStatus::default(),
         tx_queue_depth: rng.next_u64(),
         tx_queue_capacity: rng.next_u64(),
@@ -979,6 +981,24 @@ fn rng_rbc_store(rng: &mut DeterministicRng) -> SumeragiRbcStoreStatus {
     }
 }
 
+fn rng_rbc_mismatch_entry(rng: &mut DeterministicRng) -> SumeragiRbcMismatchEntry {
+    SumeragiRbcMismatchEntry {
+        peer_id: PeerId::from(KeyPair::random().public_key().clone()),
+        chunk_digest_mismatch_total: rng.next_u64(),
+        payload_hash_mismatch_total: rng.next_u64(),
+        chunk_root_mismatch_total: rng.next_u64(),
+        last_timestamp_ms: rng.next_u64(),
+    }
+}
+
+fn rng_rbc_mismatch_status(rng: &mut DeterministicRng) -> SumeragiRbcMismatchStatus {
+    let entry_len = rng.up_to(3);
+    let entries = (0..entry_len)
+        .map(|_| rng_rbc_mismatch_entry(rng))
+        .collect();
+    SumeragiRbcMismatchStatus { entries }
+}
+
 fn rng_worker_queue_depths(rng: &mut DeterministicRng) -> SumeragiWorkerQueueDepths {
     SumeragiWorkerQueueDepths {
         vote_rx: rng.next_u64(),
@@ -1238,6 +1258,15 @@ fn sumeragi_wire_status_roundtrip() {
                 block_hash: sample_block_hash(0x77),
                 height: 10,
                 view: 2,
+            }],
+        },
+        rbc_mismatch: SumeragiRbcMismatchStatus {
+            entries: vec![SumeragiRbcMismatchEntry {
+                peer_id: PeerId::from(KeyPair::random().public_key().clone()),
+                chunk_digest_mismatch_total: 2,
+                payload_hash_mismatch_total: 1,
+                chunk_root_mismatch_total: 3,
+                last_timestamp_ms: 42,
             }],
         },
         pending_rbc: SumeragiPendingRbcStatus {

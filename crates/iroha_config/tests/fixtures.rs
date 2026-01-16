@@ -1480,8 +1480,6 @@ fn minimal_config_snapshot() {
                 zstd_level_large: 3,
                 zstd_level_gpu: 1,
                 large_threshold: 32768,
-                enable_compact_seq_len_up_to: 18446744073709551615,
-                enable_varint_offsets_up_to: 18446744073709551615,
                 allow_gpu_compression: true,
                 max_archive_len: 536870912,
                 aos_ncb_small_n: 64,
