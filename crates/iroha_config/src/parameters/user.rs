@@ -5221,6 +5221,12 @@ pub struct Sumeragi {
         default = "defaults::sumeragi::RBC_REBROADCAST_SESSIONS_PER_TICK"
     )]
     pub rbc_rebroadcast_sessions_per_tick: usize,
+    /// Maximum RBC payload chunks broadcast per tick (limits burst fanout).
+    #[config(
+        env = "SUMERAGI_RBC_PAYLOAD_CHUNKS_PER_TICK",
+        default = "defaults::sumeragi::RBC_PAYLOAD_CHUNKS_PER_TICK"
+    )]
+    pub rbc_payload_chunks_per_tick: usize,
     /// Maximum number of RBC session summaries persisted to disk.
     #[config(
         env = "SUMERAGI_RBC_STORE_MAX_SESSIONS",
@@ -5698,6 +5704,7 @@ impl Sumeragi {
             rbc_pending_ttl_ms,
             rbc_session_ttl_secs,
             rbc_rebroadcast_sessions_per_tick,
+            rbc_payload_chunks_per_tick,
             rbc_store_max_sessions,
             rbc_store_soft_sessions,
             rbc_store_max_bytes,
@@ -5890,6 +5897,15 @@ impl Sumeragi {
         } else {
             true
         };
+        let rbc_payload_budget_ok = if rbc_payload_chunks_per_tick == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig)
+                    .attach("sumeragi.rbc_payload_chunks_per_tick must be greater than zero"),
+            );
+            false
+        } else {
+            true
+        };
 
         let adaptive_observability = adaptive_observability.parse(emitter)?;
         let npos = npos.parse(
@@ -5916,6 +5932,7 @@ impl Sumeragi {
             && rbc_chunk_max_ok
             && pending_caps_ok
             && rbc_rebroadcast_budget_ok
+            && rbc_payload_budget_ok
             && da_caps_ok
             && da_openings_ok
             && kura_retry_ok
@@ -6026,6 +6043,7 @@ impl Sumeragi {
             rbc_pending_ttl: std::time::Duration::from_millis(rbc_pending_ttl_ms),
             rbc_session_ttl: std::time::Duration::from_secs(rbc_session_ttl_secs),
             rbc_rebroadcast_sessions_per_tick,
+            rbc_payload_chunks_per_tick,
             rbc_store_max_sessions,
             rbc_store_soft_sessions,
             rbc_store_max_bytes,

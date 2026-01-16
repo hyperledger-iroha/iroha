@@ -929,7 +929,9 @@ impl Actor {
             }
         }
         if let Some(hint) = cached_hint {
-            if let Err(reason) = ensure_locked_qc_allows(self.locked_qc, hint.highest_qc) {
+            let mut hint_highest = hint.highest_qc;
+            let hint_highest_missing = !self.block_known_for_lock(hint_highest.subject_block_hash);
+            if let Err(reason) = ensure_locked_qc_allows(self.locked_qc, hint_highest) {
                 let locked_hash = self.locked_qc.map(|qc| qc.subject_block_hash);
                 let locked_missing =
                     locked_hash.is_some_and(|hash| !self.block_known_for_lock(hash));
@@ -952,6 +954,22 @@ impl Actor {
                         hint.highest_qc.view,
                         Some(hint.highest_qc.subject_block_hash),
                     );
+                } else if hint_highest_missing {
+                    if let Some(lock) = self.locked_qc {
+                        info!(
+                            ?reason,
+                            locked_qc_height = lock.height,
+                            locked_qc_view = lock.view,
+                            locked_qc_hash = %lock.subject_block_hash,
+                            hint_highest_qc_height = hint.highest_qc.height,
+                            hint_highest_qc_view = hint.highest_qc.view,
+                            hint_highest_qc_hash = %hint.highest_qc.subject_block_hash,
+                            height,
+                            view,
+                            "highest QC missing locally; accepting BlockCreated on locked chain"
+                        );
+                        hint_highest = lock;
+                    }
                 } else {
                     super::status::inc_block_created_dropped_by_lock();
                     #[cfg(feature = "telemetry")]
@@ -971,19 +989,19 @@ impl Actor {
                     return Ok(());
                 }
             }
-            if !self.highest_qc_extends_locked(hint.highest_qc) {
+            if !self.highest_qc_extends_locked(hint_highest) {
                 if let Some(new_lock) = realign_locked_to_committed_if_extends(
                     self.locked_qc,
                     self.latest_committed_qc(),
-                    hint.highest_qc,
+                    hint_highest,
                     |hash, height| self.parent_hash_for(hash, height),
                 ) {
                     if self.locked_qc != Some(new_lock) {
                         info!(
                             locked_qc_height = self.locked_qc.map(|qc| qc.height),
                             locked_qc_hash = ?self.locked_qc.map(|qc| qc.subject_block_hash),
-                            highest_qc_height = hint.highest_qc.height,
-                            highest_qc_hash = ?hint.highest_qc.subject_block_hash,
+                            highest_qc_height = hint_highest.height,
+                            highest_qc_hash = ?hint_highest.subject_block_hash,
                             height,
                             view,
                             "resetting locked QC to committed chain before accepting BlockCreated"
@@ -997,15 +1015,15 @@ impl Actor {
                     }
                 }
             }
-            if !self.highest_qc_extends_locked(hint.highest_qc) {
+            if !self.highest_qc_extends_locked(hint_highest) {
                 super::status::inc_block_created_dropped_by_lock();
                 #[cfg(feature = "telemetry")]
                 self.telemetry.inc_block_created_dropped_by_lock();
                 warn!(
                     locked_qc_height = self.locked_qc.map(|qc| qc.height),
                     locked_qc_hash = ?self.locked_qc.map(|qc| qc.subject_block_hash),
-                    highest_qc_height = hint.highest_qc.height,
-                    highest_qc_hash = ?hint.highest_qc.subject_block_hash,
+                    highest_qc_height = hint_highest.height,
+                    highest_qc_hash = ?hint_highest.subject_block_hash,
                     height,
                     view,
                     "BlockCreated rejected: highest QC does not extend locked chain"

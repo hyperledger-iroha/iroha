@@ -266,6 +266,8 @@ const LOCALNET_DA_AVAILABILITY_TIMEOUT_MULTIPLIER: u32 = 2;
 const LOCALNET_DA_AVAILABILITY_TIMEOUT_FLOOR_MS: u64 = 2_000;
 /// Default RBC chunk size for localnet payloads.
 const LOCALNET_RBC_CHUNK_MAX_BYTES: usize = 256 * 1024;
+/// Maximum RBC payload chunks broadcast per tick for localnet.
+const LOCALNET_RBC_PAYLOAD_CHUNKS_PER_TICK: usize = 128;
 /// Default queue capacity for localnet stress (keeps bursts in-memory).
 const LOCALNET_QUEUE_CAPACITY: usize = 262_144;
 /// Default lane TEU capacity for localnet scheduling (raises per-block budget).
@@ -919,6 +921,13 @@ fn render_peer_config(
         Value::Integer(
             i64::try_from(LOCALNET_RBC_CHUNK_MAX_BYTES)
                 .expect("LOCALNET_RBC_CHUNK_MAX_BYTES fits i64"),
+        ),
+    );
+    sumeragi.insert(
+        "rbc_payload_chunks_per_tick".into(),
+        Value::Integer(
+            i64::try_from(LOCALNET_RBC_PAYLOAD_CHUNKS_PER_TICK)
+                .expect("LOCALNET_RBC_PAYLOAD_CHUNKS_PER_TICK fits i64"),
         ),
     );
     sumeragi.insert("enable_bls".into(), Value::Boolean(true));
@@ -2075,6 +2084,10 @@ mod tests {
         assert_eq!(
             parsed.sumeragi.rbc_chunk_max_bytes, LOCALNET_RBC_CHUNK_MAX_BYTES,
             "localnet should raise RBC chunk size for large payloads"
+        );
+        assert_eq!(
+            parsed.sumeragi.rbc_payload_chunks_per_tick, LOCALNET_RBC_PAYLOAD_CHUNKS_PER_TICK,
+            "localnet should pace RBC payload chunk fanout"
         );
         assert_eq!(
             parsed.queue.capacity.get(),

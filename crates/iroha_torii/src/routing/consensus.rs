@@ -2335,6 +2335,92 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("evictions_total", snap.rbc_store_evictions_total),
         json_entry("recent_evictions", recent_evictions),
     ]);
+    let pending_rbc_entries = Value::Array(
+        snap.pending_rbc
+            .entries
+            .iter()
+            .map(|entry| {
+                json_object(vec![
+                    json_entry("block_hash", Value::from(format!("{}", entry.block_hash))),
+                    json_entry("height", entry.height),
+                    json_entry("view", entry.view),
+                    json_entry("chunks", entry.chunks),
+                    json_entry("bytes", entry.bytes),
+                    json_entry("ready", entry.ready),
+                    json_entry("deliver", entry.deliver),
+                    json_entry("dropped_chunks", entry.dropped_chunks),
+                    json_entry("dropped_bytes", entry.dropped_bytes),
+                    json_entry("dropped_ready", entry.dropped_ready),
+                    json_entry("dropped_deliver", entry.dropped_deliver),
+                    json_entry("age_ms", entry.age_ms),
+                ])
+            })
+            .collect(),
+    );
+    let pending_rbc = json_object(vec![
+        json_entry("sessions", snap.pending_rbc.sessions),
+        json_entry("session_cap", snap.pending_rbc.session_cap),
+        json_entry("chunks", snap.pending_rbc.chunks),
+        json_entry("bytes", snap.pending_rbc.bytes),
+        json_entry(
+            "max_chunks_per_session",
+            snap.pending_rbc.max_chunks_per_session,
+        ),
+        json_entry(
+            "max_bytes_per_session",
+            snap.pending_rbc.max_bytes_per_session,
+        ),
+        json_entry("ttl_ms", snap.pending_rbc.ttl_ms),
+        json_entry("drops_total", snap.pending_rbc.drops_total),
+        json_entry("drops_cap_total", snap.pending_rbc.drops_cap_total),
+        json_entry(
+            "drops_cap_bytes_total",
+            snap.pending_rbc.drops_cap_bytes_total,
+        ),
+        json_entry("drops_ttl_total", snap.pending_rbc.drops_ttl_total),
+        json_entry(
+            "drops_ttl_bytes_total",
+            snap.pending_rbc.drops_ttl_bytes_total,
+        ),
+        json_entry("drops_bytes_total", snap.pending_rbc.drops_bytes_total),
+        json_entry("evicted_total", snap.pending_rbc.evicted_total),
+        json_entry("stash_ready_total", snap.pending_rbc.stash_ready_total),
+        json_entry(
+            "stash_ready_init_missing_total",
+            snap.pending_rbc.stash_ready_init_missing_total,
+        ),
+        json_entry(
+            "stash_ready_roster_missing_total",
+            snap.pending_rbc.stash_ready_roster_missing_total,
+        ),
+        json_entry(
+            "stash_ready_roster_hash_mismatch_total",
+            snap.pending_rbc.stash_ready_roster_hash_mismatch_total,
+        ),
+        json_entry(
+            "stash_ready_roster_unverified_total",
+            snap.pending_rbc.stash_ready_roster_unverified_total,
+        ),
+        json_entry("stash_deliver_total", snap.pending_rbc.stash_deliver_total),
+        json_entry(
+            "stash_deliver_init_missing_total",
+            snap.pending_rbc.stash_deliver_init_missing_total,
+        ),
+        json_entry(
+            "stash_deliver_roster_missing_total",
+            snap.pending_rbc.stash_deliver_roster_missing_total,
+        ),
+        json_entry(
+            "stash_deliver_roster_hash_mismatch_total",
+            snap.pending_rbc.stash_deliver_roster_hash_mismatch_total,
+        ),
+        json_entry(
+            "stash_deliver_roster_unverified_total",
+            snap.pending_rbc.stash_deliver_roster_unverified_total,
+        ),
+        json_entry("stash_chunk_total", snap.pending_rbc.stash_chunk_total),
+        json_entry("entries", pending_rbc_entries),
+    ]);
     let npos_election = snap
         .npos_election
         .as_ref()
@@ -2507,6 +2593,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             snap.commit_pipeline_tick_total,
         ),
         json_entry("rbc_store", rbc_store),
+        json_entry("pending_rbc", pending_rbc),
         json_entry("qc_rebuild_attempts_total", snap.qc_rebuild_attempts_total),
         json_entry(
             "qc_rebuild_successes_total",
@@ -2948,6 +3035,98 @@ mod status_tests {
             entry.get("view").and_then(Value::as_u64).unwrap(),
             evicted.view
         );
+    }
+
+    #[test]
+    fn status_snapshot_json_includes_pending_rbc_stash_counters() {
+        let hash = Hash::prehashed([0x11; Hash::LENGTH]);
+        let hash_typed = HashOf::from_untyped_unchecked(hash);
+        let hash_str = format!("{hash_typed}");
+        let mut entry = status::PendingRbcEntrySnapshot::default();
+        entry.block_hash = hash_typed;
+        entry.height = 9;
+        entry.view = 1;
+        entry.ready = 2;
+        entry.deliver = 1;
+        entry.age_ms = 42;
+
+        let pending_rbc = status::PendingRbcSnapshot {
+            sessions: 1,
+            session_cap: 8,
+            chunks: 3,
+            bytes: 1024,
+            max_chunks_per_session: 10,
+            max_bytes_per_session: 2048,
+            ttl_ms: 1000,
+            drops_total: 1,
+            drops_cap_total: 1,
+            drops_cap_bytes_total: 12,
+            drops_ttl_total: 0,
+            drops_ttl_bytes_total: 0,
+            drops_bytes_total: 12,
+            evicted_total: 0,
+            stash_ready_total: 2,
+            stash_ready_init_missing_total: 1,
+            stash_ready_roster_missing_total: 0,
+            stash_ready_roster_hash_mismatch_total: 0,
+            stash_ready_roster_unverified_total: 1,
+            stash_deliver_total: 1,
+            stash_deliver_init_missing_total: 1,
+            stash_deliver_roster_missing_total: 0,
+            stash_deliver_roster_hash_mismatch_total: 0,
+            stash_deliver_roster_unverified_total: 0,
+            stash_chunk_total: 3,
+            entries: vec![entry],
+        };
+        let snap = sumeragi::StatusSnapshot {
+            pending_rbc,
+            ..Default::default()
+        };
+        let payload = status_snapshot_json(&snap);
+        let pending = payload
+            .get("pending_rbc")
+            .and_then(Value::as_object)
+            .expect("pending_rbc object");
+        assert_eq!(
+            pending.get("stash_ready_total").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            pending
+                .get("stash_ready_init_missing_total")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            pending
+                .get("stash_ready_roster_unverified_total")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            pending.get("stash_deliver_total").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            pending.get("stash_chunk_total").and_then(Value::as_u64),
+            Some(3)
+        );
+
+        let entries = pending
+            .get("entries")
+            .and_then(Value::as_array)
+            .expect("pending entries array");
+        assert_eq!(entries.len(), 1);
+        let entry = entries[0].as_object().expect("pending entry object");
+        assert_eq!(
+            entry.get("block_hash").and_then(Value::as_str),
+            Some(hash_str.as_str())
+        );
+        assert_eq!(entry.get("height").and_then(Value::as_u64), Some(9));
+        assert_eq!(entry.get("view").and_then(Value::as_u64), Some(1));
+        assert_eq!(entry.get("ready").and_then(Value::as_u64), Some(2));
+        assert_eq!(entry.get("deliver").and_then(Value::as_u64), Some(1));
+        assert_eq!(entry.get("age_ms").and_then(Value::as_u64), Some(42));
     }
 
     #[test]

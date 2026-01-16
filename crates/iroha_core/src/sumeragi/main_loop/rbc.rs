@@ -297,7 +297,7 @@ pub(super) fn compute_chunk_broadcast_order(
     (order, dropped)
 }
 
-fn rbc_chunk_target_count(roster_len: usize, fanout_cap: Option<NonZeroUsize>) -> usize {
+pub(super) fn rbc_chunk_target_count(roster_len: usize, fanout_cap: Option<NonZeroUsize>) -> usize {
     let peers = roster_len.saturating_sub(1);
     if peers == 0 {
         return 0;
@@ -313,7 +313,7 @@ fn rbc_chunk_target_count(roster_len: usize, fanout_cap: Option<NonZeroUsize>) -
     desired.max(min_targets)
 }
 
-fn select_rbc_chunk_targets(
+pub(super) fn select_rbc_chunk_targets(
     roster: &[PeerId],
     local_peer_id: &PeerId,
     seed: u64,
@@ -1046,20 +1046,20 @@ impl Actor {
         ready
     }
 
-    fn schedule_rbc_chunk_posts(
+    pub(super) fn schedule_rbc_chunk_posts(
         &mut self,
         chunk: &crate::sumeragi::consensus::RbcChunk,
-        targets: Vec<(usize, PeerId)>,
+        targets: &[(usize, PeerId)],
     ) {
         if targets.is_empty() {
             return;
         }
         let local_peer_id = self.common_config.peer.id().clone();
-        for (idx, peer_id) in targets {
-            if peer_id == local_peer_id {
+        for (idx, peer_id) in targets.iter() {
+            if peer_id == &local_peer_id {
                 continue;
             }
-            let Ok(validator_idx) = u32::try_from(idx) else {
+            let Ok(validator_idx) = u32::try_from(*idx) else {
                 continue;
             };
 
@@ -1087,7 +1087,7 @@ impl Actor {
             }
 
             self.schedule_background(BackgroundRequest::Post {
-                peer: peer_id,
+                peer: peer_id.clone(),
                 msg: BlockMessage::RbcChunk(message_chunk),
             });
         }
@@ -1107,7 +1107,7 @@ impl Actor {
         // Keep a stable target set per session so a quorum can reconstruct the full payload.
         let local_peer_id = self.common_config.peer.id().clone();
         let targets = select_rbc_chunk_targets(&roster, &local_peer_id, seed, target_count);
-        self.schedule_rbc_chunk_posts(&chunk, targets);
+        self.schedule_rbc_chunk_posts(&chunk, &targets);
     }
 
     pub(super) fn schedule_rbc_chunk_broadcast_to_roster(
@@ -1123,7 +1123,7 @@ impl Actor {
             .enumerate()
             .map(|(idx, peer)| (idx, peer.clone()))
             .collect();
-        self.schedule_rbc_chunk_posts(&chunk, targets);
+        self.schedule_rbc_chunk_posts(&chunk, &targets);
     }
 
     pub(super) fn install_rbc_session_plan(&mut self, plan: &RbcSessionPlan) -> Result<()> {
@@ -1164,8 +1164,14 @@ impl Actor {
                 msg: BlockMessage::RbcInit(plan.init.clone()),
             });
         }
-        for chunk in plan.chunks {
-            self.schedule_rbc_chunk_broadcast(chunk);
+        let queued = self.enqueue_rbc_payload_chunks(key, plan.chunks, &topology_peers);
+        if queued {
+            self.subsystems
+                .da_rbc
+                .rbc
+                .payload_rebroadcast_last_sent
+                .insert(key, Instant::now());
+            let _ = self.flush_rbc_outbound_chunks(Instant::now());
         }
         self.maybe_emit_rbc_ready(key)?;
         Ok(())

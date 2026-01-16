@@ -3697,11 +3697,20 @@ struct RbcState {
     payload_rebroadcast_last_sent: BTreeMap<super::rbc_store::SessionKey, Instant>,
     ready_rebroadcast_last_sent: BTreeMap<super::rbc_store::SessionKey, Instant>,
     deliver_deferral: BTreeMap<super::rbc_store::SessionKey, RbcDeliverDeferral>,
+    outbound_chunks: BTreeMap<super::rbc_store::SessionKey, RbcOutboundChunks>,
+    outbound_cursor: Option<super::rbc_store::SessionKey>,
     rebroadcast_cursor: Option<super::rbc_store::SessionKey>,
     persisted_full_sessions: BTreeSet<super::rbc_store::SessionKey>,
     persist_tx: Option<mpsc::SyncSender<rbc::RbcPersistWork>>,
     persist_rx: Option<mpsc::Receiver<rbc::RbcPersistResult>>,
     persist_inflight: BTreeSet<super::rbc_store::SessionKey>,
+}
+
+#[derive(Debug)]
+struct RbcOutboundChunks {
+    chunks: Vec<crate::sumeragi::consensus::RbcChunk>,
+    cursor: usize,
+    targets: Vec<(usize, PeerId)>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -5947,6 +5956,9 @@ impl Actor {
     }
 
     fn highest_qc_extends_locked(&self, highest: crate::sumeragi::consensus::QcHeaderRef) -> bool {
+        if !self.block_known_for_lock(highest.subject_block_hash) {
+            return true;
+        }
         qc_extends_locked_if_present(
             self.locked_qc,
             highest,
@@ -6537,6 +6549,8 @@ impl Actor {
             payload_rebroadcast_last_sent: BTreeMap::new(),
             ready_rebroadcast_last_sent: BTreeMap::new(),
             deliver_deferral: BTreeMap::new(),
+            outbound_chunks: BTreeMap::new(),
+            outbound_cursor: None,
             rebroadcast_cursor: None,
             persisted_full_sessions: BTreeSet::new(),
             persist_tx: None,
@@ -7234,7 +7248,11 @@ impl Actor {
 
     fn rbc_next_due(&self, now: Instant) -> Option<Instant> {
         let rbc = &self.subsystems.da_rbc.rbc;
-        if rbc.sessions.is_empty() && rbc.pending.is_empty() && rbc.persist_inflight.is_empty() {
+        if rbc.sessions.is_empty()
+            && rbc.pending.is_empty()
+            && rbc.persist_inflight.is_empty()
+            && rbc.outbound_chunks.is_empty()
+        {
             return None;
         }
 
@@ -7291,6 +7309,10 @@ impl Actor {
                     .max(now);
                 next_due = Self::merge_deadline(next_due, Some(deadline));
             }
+        }
+
+        if !rbc.outbound_chunks.is_empty() {
+            next_due = Self::merge_deadline(next_due, Some(now));
         }
 
         let ttl = self.config.rbc_session_ttl;
@@ -7397,6 +7419,7 @@ impl Actor {
             (progress, step_start.elapsed())
         };
         let rbc_rebroadcast_progress = self.rebroadcast_stalled_rbc_payloads(now);
+        let rbc_outbound_progress = self.flush_rbc_outbound_chunks(now);
         let rbc_session_ttl_progress = self.prune_stale_rbc_sessions(SystemTime::now());
         let mut commit_pipeline_cost = Duration::ZERO;
         let mut propose_cost = Duration::ZERO;
@@ -7410,6 +7433,7 @@ impl Actor {
             || reschedule_progress
             || idle_view_progress
             || rbc_rebroadcast_progress
+            || rbc_outbound_progress
             || rbc_session_ttl_progress;
         if should_run_commit_pipeline_on_tick(self.active_pending_blocks_len())
             || self.subsystems.commit.inflight.is_some()
@@ -8912,6 +8936,46 @@ impl Actor {
         rebroadcaster
     }
 
+    fn enqueue_rbc_payload_chunks(
+        &mut self,
+        key: super::rbc_store::SessionKey,
+        chunks: Vec<crate::sumeragi::consensus::RbcChunk>,
+        roster: &[PeerId],
+    ) -> bool {
+        if chunks.is_empty() || roster.is_empty() {
+            return false;
+        }
+        let target_count = rbc::rbc_chunk_target_count(roster.len(), self.config.rbc_chunk_fanout);
+        if target_count == 0 {
+            return false;
+        }
+        let seed = rbc::shuffle_seed(&key.0, key.1, key.2);
+        let local_peer_id = self.common_config.peer.id().clone();
+        let targets = rbc::select_rbc_chunk_targets(roster, &local_peer_id, seed, target_count);
+        if targets.is_empty() {
+            return false;
+        }
+        if let Some(existing) = self.subsystems.da_rbc.rbc.outbound_chunks.get(&key) {
+            if existing.cursor < existing.chunks.len() {
+                trace!(
+                    height = key.1,
+                    view = key.2,
+                    "skipping RBC chunk queue: broadcast already in progress"
+                );
+                return false;
+            }
+        }
+        self.subsystems.da_rbc.rbc.outbound_chunks.insert(
+            key,
+            RbcOutboundChunks {
+                chunks,
+                cursor: 0,
+                targets,
+            },
+        );
+        true
+    }
+
     fn rebroadcast_rbc_payload_bundle(
         &mut self,
         key: super::rbc_store::SessionKey,
@@ -8937,16 +9001,15 @@ impl Actor {
             return;
         }
         let chunk_count = chunks.len();
-        for chunk in &chunks {
-            self.schedule_rbc_chunk_broadcast_to_roster(chunk.clone(), &topology_peers);
-        }
+        let queued = self.enqueue_rbc_payload_chunks(key, chunks, &topology_peers);
         info!(
             height = key.1,
             view = key.2,
             block = %key.0,
             ready = ready_count,
             chunk_count,
-            "rebroadcasting RBC INIT and cached chunks while awaiting READY quorum"
+            queued,
+            "queued RBC INIT and chunk rebroadcast while awaiting READY quorum"
         );
         let local_peer_id = self.common_config.peer.id().clone();
         for peer in &topology_peers {
@@ -9206,6 +9269,97 @@ impl Actor {
 
         self.subsystems.da_rbc.rbc.rebroadcast_cursor = last_key;
         progress
+    }
+
+    fn flush_rbc_outbound_chunks(&mut self, now: Instant) -> bool {
+        if self.is_observer() {
+            return false;
+        }
+        if !self.runtime_da_enabled() {
+            return false;
+        }
+        if self.subsystems.da_rbc.rbc.outbound_chunks.is_empty() {
+            self.subsystems.da_rbc.rbc.outbound_cursor = None;
+            return false;
+        }
+
+        let cooldown = self.payload_rebroadcast_cooldown();
+        if self.relay_backpressure_active(now, cooldown) {
+            trace!("skipping RBC outbound chunk flush due to relay backpressure");
+            return false;
+        }
+
+        let mut remaining = self.config.rbc_payload_chunks_per_tick.max(1);
+        let total_sessions = self.subsystems.da_rbc.rbc.outbound_chunks.len();
+        let cursor = self.subsystems.da_rbc.rbc.outbound_cursor;
+        let mut keys = Vec::with_capacity(total_sessions);
+        if let Some(cursor_key) = cursor {
+            for (key, _) in self
+                .subsystems
+                .da_rbc
+                .rbc
+                .outbound_chunks
+                .range((Excluded(cursor_key), Unbounded))
+            {
+                keys.push(*key);
+            }
+            if keys.len() < total_sessions {
+                for (key, _) in self
+                    .subsystems
+                    .da_rbc
+                    .rbc
+                    .outbound_chunks
+                    .range(..=cursor_key)
+                {
+                    keys.push(*key);
+                }
+            }
+        } else {
+            keys.extend(self.subsystems.da_rbc.rbc.outbound_chunks.keys().copied());
+        }
+
+        let mut last_key = cursor;
+        let mut to_remove = Vec::new();
+        let mut sent_any = false;
+
+        for key in keys {
+            if remaining == 0 {
+                break;
+            }
+            let (targets, chunks_to_send, exhausted, to_send) = {
+                let Some(entry) = self.subsystems.da_rbc.rbc.outbound_chunks.get_mut(&key) else {
+                    continue;
+                };
+                let available = entry.chunks.len().saturating_sub(entry.cursor);
+                if available == 0 {
+                    to_remove.push(key);
+                    continue;
+                }
+                let to_send = available.min(remaining);
+                let end = entry.cursor.saturating_add(to_send);
+                let targets = entry.targets.clone();
+                let chunks_to_send: Vec<_> = entry.chunks[entry.cursor..end].to_vec();
+                entry.cursor = end;
+                let exhausted = entry.cursor >= entry.chunks.len();
+                (targets, chunks_to_send, exhausted, to_send)
+            };
+            remaining = remaining.saturating_sub(to_send);
+            last_key = Some(key);
+            sent_any = true;
+            if exhausted {
+                to_remove.push(key);
+            }
+            for chunk in &chunks_to_send {
+                self.schedule_rbc_chunk_posts(chunk, &targets);
+            }
+        }
+
+        for key in to_remove {
+            self.subsystems.da_rbc.rbc.outbound_chunks.remove(&key);
+        }
+
+        self.subsystems.da_rbc.rbc.outbound_cursor = last_key;
+        sent_any
     }
 
     fn should_emit_rbc_deliver_deferral(
@@ -9505,6 +9659,24 @@ impl Actor {
         )
     }
 
+    fn backpressure_override_due(&self, now: Instant) -> bool {
+        if self.queue.active_len() == 0 {
+            return false;
+        }
+        let committed_qc = self.latest_committed_qc();
+        let committed_height = committed_qc.as_ref().map_or_else(
+            || {
+                let view_snapshot = self.state.view();
+                view_snapshot.height() as u64
+            },
+            |qc| qc.height,
+        );
+        let height = active_round_height(self.highest_qc, committed_qc, committed_height);
+        self.phase_tracker
+            .view_age(height, now)
+            .is_some_and(|age| age >= self.commit_quorum_timeout())
+    }
+
     fn force_view_change_if_idle(&mut self, now: Instant) -> bool {
         if self.has_active_pending_blocks() {
             return false;
@@ -9513,14 +9685,8 @@ impl Actor {
             // Skip idle view-change churn when no work is queued.
             return false;
         }
-        if self.has_unresolved_rbc_backlog() {
-            trace!("skipping idle view-change due to unresolved RBC backlog");
-            return false;
-        }
-        if self.relay_backpressure_active(now, self.rebroadcast_cooldown()) {
-            trace!("skipping idle view-change due to relay backpressure");
-            return false;
-        }
+        let rbc_backlog = self.has_unresolved_rbc_backlog();
+        let relay_backpressure = self.relay_backpressure_active(now, self.rebroadcast_cooldown());
 
         let committed_qc = self.latest_committed_qc();
         let committed_height = committed_qc.as_ref().map_or_else(
@@ -9556,6 +9722,12 @@ impl Actor {
             self.subsystems.propose.pacemaker.propose_interval,
         );
         if !idle_round_timed_out(true, age, timeout) {
+            if rbc_backlog {
+                trace!("skipping idle view-change due to unresolved RBC backlog");
+            }
+            if relay_backpressure {
+                trace!("skipping idle view-change due to relay backpressure");
+            }
             return false;
         }
 
@@ -9567,6 +9739,8 @@ impl Actor {
             age_ms = age.as_millis(),
             timeout_ms = timeout.as_millis(),
             proposal_seen,
+            rbc_backlog,
+            relay_backpressure,
             "no proposal observed before cutoff; rotating leader via view change"
         );
         self.trigger_view_change_with_cause(height, current_view, ViewChangeCause::MissingQc);
@@ -9661,6 +9835,10 @@ impl Actor {
             .ready_rebroadcast_last_sent
             .remove(&key);
         self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
+        self.subsystems.da_rbc.rbc.outbound_chunks.remove(&key);
+        if self.subsystems.da_rbc.rbc.outbound_cursor == Some(key) {
+            self.subsystems.da_rbc.rbc.outbound_cursor = None;
+        }
         self.subsystems
             .da_rbc
             .rbc
