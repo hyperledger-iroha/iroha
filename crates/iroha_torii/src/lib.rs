@@ -1106,56 +1106,16 @@ fn telemetry_unavailable_response(
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 fn collect_peer_urls(
-    online_peers: &OnlinePeersProvider,
+    _online_peers: &OnlinePeersProvider,
     configured: &[telemetry::peers::ToriiUrl],
 ) -> Vec<telemetry::peers::ToriiUrl> {
-    use std::net::ToSocketAddrs;
-
-    if !configured.is_empty() {
-        let mut urls = configured.to_vec();
-        urls.sort();
-        urls.dedup();
-        return urls;
+    if configured.is_empty() {
+        // Avoid probing P2P ports; peer telemetry requires explicit Torii URLs.
+        iroha_logger::debug!("peer telemetry disabled: no peer_telemetry_urls configured");
+        return Vec::new();
     }
 
-    let snapshot = online_peers.get();
-    let mut urls = Vec::with_capacity(snapshot.len());
-    for peer in snapshot {
-        let native_addr = match peer.address().to_socket_addrs() {
-            Ok(mut addrs) => {
-                if let Some(addr) = addrs.next() {
-                    addr
-                } else {
-                    iroha_logger::warn!(
-                        peer = %peer,
-                        address = %peer.address(),
-                        "peer address resolved to an empty set; skipping telemetry bootstrap entry"
-                    );
-                    continue;
-                }
-            }
-            Err(error) => {
-                iroha_logger::warn!(
-                    peer = %peer,
-                    address = %peer.address(),
-                    ?error,
-                    "failed to resolve peer address into socket addresses for telemetry bootstrap"
-                );
-                continue;
-            }
-        };
-        match telemetry::peers::ToriiUrl::try_from(native_addr) {
-            Ok(url) => urls.push(url),
-            Err(error) => {
-                iroha_logger::warn!(
-                    peer = %peer,
-                    address = %peer.address(),
-                    ?error,
-                    "failed to convert peer address into Torii URL for telemetry bootstrap"
-                );
-            }
-        }
-    }
+    let mut urls = configured.to_vec();
     urls.sort();
     urls.dedup();
     urls
@@ -16376,7 +16336,8 @@ pub(crate) mod tests_runtime_handlers {
         let app = mk_app_state_for_tests();
         let (block, _) = make_signed_block(1, None);
         let header = block.header();
-        let tx_hash = block.external_transactions().next().expect("tx").hash();
+        let tx = block.external_transactions().next().expect("tx");
+        let tx_hash = tx.hash();
         store_block(&app, block);
         let event = BlockEvent {
             header,
@@ -16510,6 +16471,29 @@ pub(crate) mod tests_runtime_handlers {
             .and_then(|status| status.get("kind"))
             .and_then(norito::json::Value::as_str);
         assert_eq!(status_kind, Some("Queued"));
+
+        let resp_entry = super::handler_pipeline_transaction_status(
+            State(app.clone()),
+            HeaderMap::new(),
+            None,
+            crate::NoritoQuery(PipelineStatusQuery {
+                hash: Some(tx.hash_as_entrypoint().to_string()),
+            }),
+        )
+        .await
+        .expect("ok");
+        assert_eq!(resp_entry.status(), StatusCode::OK);
+        let bytes_entry = axum::body::to_bytes(resp_entry.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload_entry: norito::json::Value =
+            norito::json::from_slice(&bytes_entry).expect("json");
+        let status_kind_entry = payload_entry
+            .get("content")
+            .and_then(|content| content.get("status"))
+            .and_then(|status| status.get("kind"))
+            .and_then(norito::json::Value::as_str);
+        assert_eq!(status_kind_entry, Some("Queued"));
     }
 
     #[tokio::test]
@@ -16517,7 +16501,9 @@ pub(crate) mod tests_runtime_handlers {
         let app = mk_app_state_for_tests();
         let (block, _) = make_signed_block(1, None);
         let header = block.header();
-        let tx_hash = block.external_transactions().next().expect("tx").hash();
+        let tx = block.external_transactions().next().expect("tx");
+        let tx_hash = tx.hash();
+        let tx_entry_hash = tx.hash_as_entrypoint();
         store_block(&app, block);
 
         let height = header.height();
@@ -16549,6 +16535,29 @@ pub(crate) mod tests_runtime_handlers {
             .and_then(|status| status.get("kind"))
             .and_then(norito::json::Value::as_str);
         assert_eq!(status_kind, Some("Applied"));
+
+        let resp_entry = super::handler_pipeline_transaction_status(
+            State(app.clone()),
+            HeaderMap::new(),
+            None,
+            crate::NoritoQuery(PipelineStatusQuery {
+                hash: Some(tx_entry_hash.to_string()),
+            }),
+        )
+        .await
+        .expect("ok");
+        assert_eq!(resp_entry.status(), StatusCode::OK);
+        let bytes_entry = axum::body::to_bytes(resp_entry.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload_entry: norito::json::Value =
+            norito::json::from_slice(&bytes_entry).expect("json");
+        let status_kind_entry = payload_entry
+            .get("content")
+            .and_then(|content| content.get("status"))
+            .and_then(|status| status.get("kind"))
+            .and_then(norito::json::Value::as_str);
+        assert_eq!(status_kind_entry, Some("Applied"));
     }
 
     #[tokio::test]
@@ -19386,7 +19395,7 @@ fn conn_scheme_flags_websocket_upgrade() {
 
 #[cfg(all(test, feature = "app_api", feature = "telemetry"))]
 mod peer_telemetry_tests {
-    use std::{collections::HashSet, net::ToSocketAddrs, str::FromStr};
+    use std::{collections::HashSet, str::FromStr};
 
     use iroha_crypto::KeyPair;
     use iroha_data_model::peer::Peer;
@@ -19396,7 +19405,7 @@ mod peer_telemetry_tests {
     use crate::telemetry::peers::ToriiUrl;
 
     #[test]
-    fn collect_peer_urls_reflects_online_peers_snapshot() {
+    fn collect_peer_urls_requires_configured_urls() {
         let (tx, rx) = watch::channel(HashSet::new());
         let provider = OnlinePeersProvider::new(rx);
 
@@ -19414,22 +19423,9 @@ mod peer_telemetry_tests {
 
         let urls = collect_peer_urls(&provider, &[]);
 
-        let to_url = |peer: &Peer| {
-            peer.address()
-                .to_socket_addrs()
-                .expect("peer address resolves")
-                .next()
-                .expect("peer socket resolution yields endpoint")
-                .try_into()
-                .expect("peer address must convert to Torii URL")
-        };
-        let mut expected = vec![to_url(&peer_a), to_url(&peer_b)];
-        expected.sort();
-        expected.dedup();
-
-        assert_eq!(
-            urls, expected,
-            "telemetry seed should reflect current peers"
+        assert!(
+            urls.is_empty(),
+            "no configured URLs means no peer telemetry"
         );
     }
 

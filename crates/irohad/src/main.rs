@@ -68,6 +68,7 @@ use iroha_core::{
     },
 };
 use iroha_crypto::Algorithm;
+use iroha_data_model::nexus::{PublicLaneValidatorRecord, PublicLaneValidatorStatus};
 use iroha_data_model::query::{self as dm_query, ErasedIterQuery};
 use iroha_data_model::{block::decode_framed_signed_block, prelude::*, transaction::Executable};
 use iroha_data_model::{
@@ -86,6 +87,7 @@ use iroha_p2p::ClassifyTopic;
 use iroha_primitives::addr::SocketAddr;
 use iroha_primitives::json::Json;
 use iroha_primitives::time::TimeSource;
+use mv::storage::StorageReadOnly;
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::set_duplicate_metrics_panic;
 use iroha_torii::Torii;
@@ -1075,7 +1077,7 @@ impl TokenBucket {
     }
 }
 
-fn try_recv_low_after_burst<T>(
+fn try_recv_after_burst<T>(
     receiver: &mut mpsc::Receiver<T>,
     high_budget: &mut usize,
     high_burst: usize,
@@ -1111,10 +1113,14 @@ impl NetworkRelay {
         let shared = Arc::new(self.into_shared());
         let cap = shared.network.subscriber_queue_cap().get();
         let (high_sender, mut high_receiver) = mpsc::channel(cap);
+        let (payload_sender, mut payload_receiver) = mpsc::channel(cap);
         let (low_sender, mut low_receiver) = mpsc::channel(cap);
         let work_high_cap = cap.saturating_mul(2);
+        let work_payload_cap = cap.saturating_mul(2);
         let work_low_cap = cap;
         let (work_high_tx, mut work_high_rx) = mpsc::channel::<RelayWorkItem>(work_high_cap);
+        let (work_payload_tx, mut work_payload_rx) =
+            mpsc::channel::<RelayWorkItem>(work_payload_cap);
         let (work_low_tx, mut work_low_rx) = mpsc::channel::<RelayWorkItem>(work_low_cap);
         let worker_limit = std::thread::available_parallelism()
             .map(std::num::NonZeroUsize::get)
@@ -1128,6 +1134,7 @@ impl NetworkRelay {
                 let msg = tokio::select! {
                     biased;
                     Some(msg) = work_high_rx.recv() => Some(msg),
+                    Some(msg) = work_payload_rx.recv() => Some(msg),
                     Some(msg) = work_low_rx.recv() => Some(msg),
                     else => None,
                 };
@@ -1148,11 +1155,8 @@ impl NetworkRelay {
             }
         });
 
-        let high_filter = SubscriberFilter::topics([
-            Topic::Consensus,
-            Topic::Control,
-            Topic::BlockSync,
-        ]);
+        let high_filter = SubscriberFilter::topics([Topic::Consensus, Topic::Control]);
+        let payload_filter = SubscriberFilter::topics([Topic::ConsensusPayload, Topic::BlockSync]);
         let low_filter = SubscriberFilter::topics([
             Topic::TxGossip,
             Topic::TxGossipRestricted,
@@ -1163,6 +1167,7 @@ impl NetworkRelay {
         ]);
 
         let mut high_sender = Some(high_sender);
+        let mut payload_sender = Some(payload_sender);
         let mut low_sender = Some(low_sender);
         loop {
             if let Some(sender) = high_sender.take() {
@@ -1176,6 +1181,21 @@ impl NetworkRelay {
                     Err(returned) => {
                         iroha_logger::warn!("retrying high-priority P2P subscriber registration");
                         high_sender = Some(returned);
+                    }
+                }
+            }
+
+            if let Some(sender) = payload_sender.take() {
+                match shared
+                    .network
+                    .subscribe_to_peers_messages_with_filter(sender, payload_filter.clone())
+                {
+                    Ok(()) => {
+                        iroha_logger::info!("registered payload relay subscriber");
+                    }
+                    Err(returned) => {
+                        iroha_logger::warn!("retrying payload P2P subscriber registration");
+                        payload_sender = Some(returned);
                     }
                 }
             }
@@ -1195,19 +1215,40 @@ impl NetworkRelay {
                 }
             }
 
-            if high_sender.is_none() && low_sender.is_none() {
+            if high_sender.is_none() && payload_sender.is_none() && low_sender.is_none() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
 
-        // Ensure low-priority queues make progress without stalling consensus traffic.
+        // Ensure payload and low-priority queues make progress without stalling consensus traffic.
         let mut high_budget = RELAY_HIGH_BURST;
         let mut high_drops: u64 = 0;
+        let mut payload_drops: u64 = 0;
         let mut low_drops: u64 = 0;
         loop {
             if let Some(msg) =
-                try_recv_low_after_burst(&mut low_receiver, &mut high_budget, RELAY_HIGH_BURST)
+                try_recv_after_burst(&mut payload_receiver, &mut high_budget, RELAY_HIGH_BURST)
+            {
+                match work_payload_tx.try_send(msg) {
+                    Ok(()) => {}
+                    Err(mpsc::error::TrySendError::Full(msg)) => {
+                        payload_drops = payload_drops.saturating_add(1);
+                        if payload_drops == 1 || payload_drops.is_multiple_of(1024) {
+                            iroha_logger::warn!(
+                                peer = %msg.peer,
+                                topic = ?msg.payload.topic(),
+                                drops = payload_drops,
+                                "relay work queue full; dropping payload message"
+                            );
+                        }
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => break,
+                }
+                continue;
+            }
+            if let Some(msg) =
+                try_recv_after_burst(&mut low_receiver, &mut high_budget, RELAY_HIGH_BURST)
             {
                 match work_low_tx.try_send(msg) {
                     Ok(()) => {}
@@ -1240,6 +1281,24 @@ impl NetworkRelay {
                                     topic = ?msg.payload.topic(),
                                     drops = high_drops,
                                     "relay work queue full; dropping high-priority message"
+                                );
+                            }
+                        }
+                        Err(mpsc::error::TrySendError::Closed(_)) => break,
+                    }
+                }
+                Some(msg) = payload_receiver.recv() => {
+                    high_budget = RELAY_HIGH_BURST;
+                    match work_payload_tx.try_send(msg) {
+                        Ok(()) => {}
+                        Err(mpsc::error::TrySendError::Full(msg)) => {
+                            payload_drops = payload_drops.saturating_add(1);
+                            if payload_drops == 1 || payload_drops.is_multiple_of(1024) {
+                                iroha_logger::warn!(
+                                    peer = %msg.peer,
+                                    topic = ?msg.payload.topic(),
+                                    drops = payload_drops,
+                                    "relay work queue full; dropping payload message"
                                 );
                             }
                         }
@@ -2533,6 +2592,35 @@ impl Iroha {
                             exec_depth = params_snapshot.2,
                             "genesis parameters after commit"
                         );
+                        if matches!(
+                            config.sumeragi.consensus_mode,
+                            iroha_config::parameters::actual::ConsensusMode::Npos
+                        ) {
+                            let (active_bls, active_total, pending, total) = {
+                                let view = state.view();
+                                npos_validator_status_counts(
+                                    view.world()
+                                        .public_lane_validators()
+                                        .iter()
+                                        .map(|(_, record)| record),
+                                )
+                            };
+                            if active_bls == 0 {
+                                let stake_asset_id = config.nexus.staking.stake_asset_id.as_str();
+                                iroha_logger::error!(
+                                    active_bls,
+                                    active_total,
+                                    pending,
+                                    total,
+                                    stake_asset_id,
+                                    "NPoS genesis did not activate any BLS validators"
+                                );
+                                let err_msg = format!(
+                                    "NPoS genesis did not activate any BLS validators (active_total={active_total}, pending={pending}, total={total}). Ensure genesis registers validators with PoPs and stakes {stake_asset_id} for each topology peer (for example via `kagami localnet` or `kagami genesis sign --topology ... --peer-pop ...`)."
+                                );
+                                return Err(Report::new(StartError::InitKura).attach(err_msg));
+                            }
+                        }
                         for event in events {
                             if let Err(err) = events_sender.send(event) {
                                 iroha_logger::debug!(
@@ -2944,6 +3032,7 @@ impl Iroha {
             config: sumeragi_cfg.clone(),
             common_config: config.common.clone(),
             consensus_frame_cap: config.network.max_frame_bytes_consensus,
+            consensus_payload_frame_cap: config.network.max_frame_bytes_block_sync,
             events_sender: events_sender.clone(),
             state: state.clone(),
             queue: queue.clone(),
@@ -4528,6 +4617,26 @@ fn read_genesis(path: &Path) -> ReportResult<GenesisBlock, ConfigError> {
     }
 }
 
+fn resolve_norito_max_archive_len(cfg: &Config) -> u64 {
+    let requested = cfg.norito.max_archive_len;
+    let rbc_store_max = u64::try_from(cfg.sumeragi.rbc_store_max_bytes).unwrap_or(u64::MAX);
+    let max_frame_bytes = u64::try_from(cfg.network.max_frame_bytes).unwrap_or(u64::MAX);
+    let resolved = requested.max(rbc_store_max).max(max_frame_bytes);
+
+    if resolved != requested {
+        iroha_logger::warn!(
+            target: "config",
+            requested,
+            rbc_store_max,
+            max_frame_bytes,
+            resolved,
+            "Norito max_archive_len too small for configured RBC store or network frame; increasing to keep consensus payloads decodable"
+        );
+    }
+
+    resolved
+}
+
 /// Apply Norito codec configuration (heuristics + GPU offload gate) from config.
 fn apply_norito_config(cfg: &Config) {
     // Capture requested heuristics to detect configuration drift. The codec uses
@@ -4553,7 +4662,8 @@ fn apply_norito_config(cfg: &Config) {
             "Norito heuristics overrides detected in config; ignoring overrides and using canonical codec profile"
         );
     }
-    norito::core::set_max_archive_len(cfg.norito.max_archive_len);
+    let max_archive_len = resolve_norito_max_archive_len(cfg);
+    norito::core::set_max_archive_len(max_archive_len);
     // Gate GPU compression offload for deterministic profiles if desired.
     norito::core::hw::set_gpu_compression_allowed(cfg.norito.allow_gpu_compression);
 }
@@ -5311,6 +5421,33 @@ fn compute_consensus_handshake_caps(
     )
 }
 
+fn npos_validator_status_counts<'a>(
+    validators: impl IntoIterator<Item = &'a PublicLaneValidatorRecord>,
+) -> (usize, usize, usize, usize) {
+    let mut active_bls = 0usize;
+    let mut active_total = 0usize;
+    let mut pending = 0usize;
+    let mut total = 0usize;
+    for record in validators {
+        total = total.saturating_add(1);
+        match record.status {
+            PublicLaneValidatorStatus::Active => {
+                active_total = active_total.saturating_add(1);
+                if let Some(pk) = record.validator.try_signatory() {
+                    if pk.algorithm() == Algorithm::BlsNormal {
+                        active_bls = active_bls.saturating_add(1);
+                    }
+                }
+            }
+            PublicLaneValidatorStatus::PendingActivation(_) => {
+                pending = pending.saturating_add(1);
+            }
+            _ => {}
+        }
+    }
+    (active_bls, active_total, pending, total)
+}
+
 #[allow(clippy::too_many_lines)]
 fn verify_genesis_metadata(
     genesis: &GenesisBlock,
@@ -5777,6 +5914,54 @@ mod tests {
         }
     }
 
+    mod norito_archive_len {
+        use super::*;
+
+        fn base_config() -> Config {
+            let table = toml::toml! {
+                chain = "00000000-0000-0000-0000-000000000000"
+                public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+                private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+
+                [network]
+                address = "addr:127.0.0.1:1337#8F78"
+                public_address = "addr:127.0.0.1:1337#8F78"
+
+                [torii]
+                address = "addr:127.0.0.1:8080#8942"
+
+                [genesis]
+                public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+            };
+
+            Config::from_toml_source(TomlSource::inline(table)).expect("base config")
+        }
+
+        #[test]
+        fn resolves_to_rbc_store_max_when_larger() {
+            let mut config = base_config();
+            config.norito.max_archive_len = 32 * 1024 * 1024;
+            config.sumeragi.rbc_store_max_bytes = 128 * 1024 * 1024;
+            config.network.max_frame_bytes = 64 * 1024 * 1024;
+
+            let resolved = resolve_norito_max_archive_len(&config);
+
+            assert_eq!(resolved, 128 * 1024 * 1024);
+        }
+
+        #[test]
+        fn preserves_requested_when_already_largest() {
+            let mut config = base_config();
+            config.norito.max_archive_len = 256 * 1024 * 1024;
+            config.sumeragi.rbc_store_max_bytes = 128 * 1024 * 1024;
+            config.network.max_frame_bytes = 64 * 1024 * 1024;
+
+            let resolved = resolve_norito_max_archive_len(&config);
+
+            assert_eq!(resolved, 256 * 1024 * 1024);
+        }
+    }
+
     mod consensus_ingress_limits {
         use super::*;
 
@@ -5811,18 +5996,70 @@ mod tests {
         }
     }
 
+    mod npos_validator_counts {
+        use super::*;
+        use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_data_model::{
+            account::AccountId,
+            domain::DomainId,
+            metadata::Metadata,
+            nexus::{LaneId, PublicLaneValidatorRecord, PublicLaneValidatorStatus},
+        };
+        use iroha_primitives::numeric::Numeric;
+
+        fn record_with_status(
+            status: PublicLaneValidatorStatus,
+            algorithm: Algorithm,
+        ) -> PublicLaneValidatorRecord {
+            let domain: DomainId = "nexus".parse().expect("domain id");
+            let keypair = KeyPair::random_with_algorithm(algorithm);
+            let account_id = AccountId::new(domain, keypair.public_key().clone());
+            let stake = Numeric::from(10_u64);
+            PublicLaneValidatorRecord {
+                lane_id: LaneId::SINGLE,
+                validator: account_id.clone(),
+                stake_account: account_id,
+                total_stake: stake.clone(),
+                self_stake: stake,
+                metadata: Metadata::default(),
+                status,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            }
+        }
+
+        #[test]
+        fn tracks_active_bls_validators() {
+            let active_bls = record_with_status(PublicLaneValidatorStatus::Active, Algorithm::BlsNormal);
+            let active_ed = record_with_status(PublicLaneValidatorStatus::Active, Algorithm::Ed25519);
+            let pending = record_with_status(
+                PublicLaneValidatorStatus::PendingActivation(0),
+                Algorithm::BlsNormal,
+            );
+
+            let (active_bls_count, active_total, pending_count, total) =
+                npos_validator_status_counts([&active_bls, &active_ed, &pending]);
+
+            assert_eq!(active_bls_count, 1);
+            assert_eq!(active_total, 2);
+            assert_eq!(pending_count, 1);
+            assert_eq!(total, 3);
+        }
+    }
+
     mod relay_fairness {
         use super::*;
         use tokio::sync::mpsc;
         use tokio::sync::mpsc::error::TryRecvError;
 
         #[test]
-        fn try_recv_low_after_burst_skips_when_budget_remaining() {
+        fn try_recv_after_burst_skips_when_budget_remaining() {
             let (tx, mut rx) = mpsc::channel(1);
             tx.try_send(7).expect("send low message");
             let mut budget = 1;
 
-            let msg = try_recv_low_after_burst(&mut rx, &mut budget, 4);
+            let msg = try_recv_after_burst(&mut rx, &mut budget, 4);
 
             assert!(msg.is_none());
             assert_eq!(budget, 1);
@@ -5830,12 +6067,12 @@ mod tests {
         }
 
         #[test]
-        fn try_recv_low_after_burst_consumes_when_due() {
+        fn try_recv_after_burst_consumes_when_due() {
             let (tx, mut rx) = mpsc::channel(1);
             tx.try_send(9).expect("send low message");
             let mut budget = 0;
 
-            let msg = try_recv_low_after_burst(&mut rx, &mut budget, 4);
+            let msg = try_recv_after_burst(&mut rx, &mut budget, 4);
 
             assert!(matches!(msg, Some(9)));
             assert_eq!(budget, 4);
@@ -5843,11 +6080,11 @@ mod tests {
         }
 
         #[test]
-        fn try_recv_low_after_burst_resets_budget_when_empty() {
+        fn try_recv_after_burst_resets_budget_when_empty() {
             let (_tx, mut rx) = mpsc::channel::<u8>(1);
             let mut budget = 0;
 
-            let msg = try_recv_low_after_burst(&mut rx, &mut budget, 4);
+            let msg = try_recv_after_burst(&mut rx, &mut budget, 4);
 
             assert!(msg.is_none());
             assert_eq!(budget, 4);

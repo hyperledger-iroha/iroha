@@ -86,6 +86,7 @@ iroha_genesis = { workspace = true }
 iroha_version = { workspace = true }
 ivm = { workspace = true }
 iroha_p2p = { workspace = true }
+mv = { workspace = true }
 fastpq_prover = { path = "../fastpq_prover" }
 parking_lot = { workspace = true }
 

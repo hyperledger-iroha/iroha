@@ -1,6 +1,46 @@
 # Status
 
 ## Latest Updates
+- Docs/OpenAPI: regenerate Torii OpenAPI snapshots and re-sign manifests; rotate allowed signer to the drill ed25519 key used for docs fixtures.
+- Sumeragi/P2P: route consensus payloads through the block-sync frame cap (default 16 MiB) while keeping control messages on the 1 MiB consensus cap; raise default RBC chunk size to 256 KiB; preserve NPoS stake snapshots when trimming BlockSyncUpdate payloads to avoid QC stalls; update docs/tests accordingly.
+- Tests: not run (per request).
+- Norito/RBC: raise `norito.max_archive_len` default to 512 MiB and clamp startup to at least `sumeragi.rbc_store_max_bytes` and `network.max_frame_bytes`; add `resolve_norito_max_archive_len` unit coverage and update config docs.
+- Localnet: 7-peer release localnet (`scripts/deploy_localnet.sh --peers 7 --release --block-time-ms 1000 --commit-time-ms 1000`) ran; load with `ulimit -n 16384` + `scripts/tx_load.py --count 100000 --parallel 128 --with-index` admitted 6,330 tx in 309.97s (~20.4 tps), committed estimate 5,191 tx in 168.99s (~30.7 tps), blocks_non_empty +22 (height 32), queue depth grew, and missing-payload view-change warnings persisted.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Sumeragi/RBC: allow rebroadcasts with derived rosters (still roster-hash checked) and request missing BlockCreated payloads when pending RBC stashes drop; adjust derived-roster rebroadcast tests and add stash-drop missing-block coverage.
+- Docs: update RBC roster/rebroadcast and pending-stash drop notes in `docs/source/sumeragi.md`.
+- Tests: `cargo test -p iroha_core handle_rbc_ready_requests_missing_block_on_stash_cap_drop -- --nocapture` (pass).
+- Torii/data-model: make transaction hashes canonical by aligning `SignedTransaction::hash` with entrypoint hashing; pipeline status/docs/tests updated.
+- Tests: `cargo test -p iroha_torii pipeline_status_handler_returns -- --nocapture` (failed: `iroha_core` compile error; `crates/iroha_core/src/sumeragi/main_loop/pending_rbc.rs` calls private `request_missing_block_after_rbc_drop` in `crates/iroha_core/src/sumeragi/main_loop/rbc.rs`).
+- Tests: `cargo test -p iroha_core handle_rbc_ready_emits_local_ready_after_quorum -- --nocapture` (pass).
+- Sumeragi/RBC: keep locally derived RBC roster snapshots non-authoritative so INIT can override and READY emissions retry after roster reconciliation; add unit coverage (`ensure_rbc_session_roster_falls_back_to_prev_commit_topology_without_snapshot`).
+- Tests: `cargo test -p iroha_core ensure_rbc_session_roster_falls_back_to_prev_commit_topology_without_snapshot -- --nocapture` (pass).
+- Transaction gossip: add resend deferral with `network.transaction_gossip_resend_ticks`, requeue gossip hashes on a tick ring to reduce duplicate bursts, and pause gossip after relay subscriber-queue drops; add unit coverage.
+- Docs: add `transaction_gossip_resend_ticks` to config/p2p references and templates.
+- Tests: not run (per request).
+- Sumeragi/RBC: emit local READY once READY quorum is observed from incoming READYs (avoids quorum stalls under missing chunks); add unit coverage (`handle_rbc_ready_emits_local_ready_after_quorum`).
+- Tests: not run (not requested).
+- Sumeragi/RBC: drop stale-view RBC traffic unless it matches an active pending/inflight block, limit rebroadcast/backlog checks to active sessions, and add unit coverage.
+- Docs: refine stale-view guard note in `docs/source/sumeragi.md`.
+- Tests: not run (per request).
+- Sumeragi/DA: retain stale-view RBC sessions and missing-block requests while payloads are unavailable, pruning them once payloads are present; add unit coverage and update docs.
+- Tests: not run (not requested).
+- Sumeragi/propose: defer proposals when relay backpressure is active, active pending blocks extend the tip, or unresolved RBC sessions exist for the active tip; add unit coverage for pending RBC sessions and relay backpressure deferral.
+- Kagami/genesis sign: auto-bootstrap NPoS validator stake from topology when no public-lane validators are present (register `nexus`/`ivm`, mint `xor#nexus`, stake/activate validators); add unit coverage.
+- Docs: update Sumeragi message-flow notes and Kagami NPoS genesis signing guidance; refresh ja/he message-flow note.
+- Tests: not run (per request).
+- Sumeragi/block sync: accept NPoS BlockSyncUpdate for explicitly requested missing blocks by allowing uncertified roster selection and carrying stake snapshots; add unit coverage (`block_sync_update_accepts_uncertified_missing_block_in_npos`).
+- Format: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Tests: `cargo test -p iroha_core --lib block_sync_update_accepts_uncertified_missing_block_in_npos -- --nocapture` (pass).
+- Tests: `cargo test --workspace` (timed out after 20m during compilation; warning: unused import `Engine` in `crates/iroha_data_model/src/transaction/signed.rs`).
+- Sumeragi/relay: route RBC READY/DELIVER over the high-priority consensus topic to avoid payload-queue drops; extend topic classification coverage.
+- Tests: `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` (failed: `permissioned_localnet_reaches_100_blocks` stalled at height 15; logs in `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_KKBHHS`).
+- Tests: not run (not requested).
+- Tests: `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` (failed to compile: missing imports for `qc_extends_locked_with_lookup` and `block_payload_bytes`, plus missing `StorageReadOnly` in roster; fixes applied, rerun pending).
+- Sumeragi/propose: defer proposal assembly when all queued transactions exceed payload budget to avoid heartbeat-only blocks; add unit coverage (`proposal_defers_when_all_txs_exceed_payload_budget`).
+- Sumeragi/relay: block `try_incoming_block_message` for RBC READY/DELIVER to avoid dropping quorum messages under block-payload queue saturation; add unit coverage.
+- Docs: note RBC READY/DELIVER blocking behavior in Sumeragi relay backpressure guidance.
+- Tests: not run (not requested).
 - Consensus/NPoS: prefer active public-lane validators for NPoS rosters when commit topology is empty, use the mode-aware roster for local validator indices, and filter stake maps to active validators only; add unit coverage for NPoS roster selection and inactive-stake filtering.
 - Network ingress: auto-scale the consensus ingress RBC session limit from `rbc_session_ttl` and block time to avoid drops on fast pipelines; add unit coverage for the scaling helper.
 - Docs: note NPoS roster bootstrap from staking and clarify that RBC session limits auto-raise for fast pipelines.

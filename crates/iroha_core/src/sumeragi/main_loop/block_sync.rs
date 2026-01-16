@@ -27,7 +27,7 @@ impl Actor {
                     height,
                     view,
                     block = %block_hash,
-                    cap = self.consensus_frame_cap,
+                    cap = self.consensus_payload_frame_cap,
                     "dropping oversized block sync response"
                 );
                 return;
@@ -193,8 +193,11 @@ impl Actor {
         );
         let cert_hint = incoming_qc.as_ref();
         let checkpoint_hint = validator_checkpoint.as_ref();
-        let allow_uncertified = matches!(consensus_mode, ConsensusMode::Permissioned)
-            && (block_height == local_height.saturating_add(1) || requested_missing_block);
+        let allow_uncertified = if matches!(consensus_mode, ConsensusMode::Permissioned) {
+            block_height == local_height.saturating_add(1) || requested_missing_block
+        } else {
+            requested_missing_block
+        };
         let Some(selection) = select_block_sync_roster(
             &block,
             block_hash,
@@ -828,7 +831,7 @@ impl Actor {
                     self.locked_qc,
                     qc_ref,
                     |hash, height| self.parent_hash_for(hash, height),
-                    |hash| self.block_known_locally(hash),
+                    |hash| self.block_known_for_lock(hash),
                 );
                 let tally_result = {
                     let state_view = self.state.view();
@@ -868,7 +871,12 @@ impl Actor {
                             },
                         );
                         self.note_validated_qc_tally(&qc, tally.clone());
-                        if !self.process_precommit_qc(&qc, true, allow_nonextending_qc) {
+                        let block_known_for_lock = self.block_known_for_lock(block_hash);
+                        if !self.process_precommit_qc(
+                            &qc,
+                            block_known_for_lock,
+                            allow_nonextending_qc,
+                        ) {
                             info!(
                                 incoming_hash = %block_hash,
                                 height = block_height,
@@ -903,14 +911,23 @@ impl Actor {
                             "applied block sync QC after validation"
                         );
                         if extends_locked {
-                            self.apply_commit_qc(
-                                &qc,
-                                topology.as_ref(),
-                                block_hash,
-                                block_height,
-                                block_view,
-                            );
-                            self.process_commit_candidates();
+                            if block_known_for_lock {
+                                self.apply_commit_qc(
+                                    &qc,
+                                    topology.as_ref(),
+                                    block_hash,
+                                    block_height,
+                                    block_view,
+                                );
+                                self.process_commit_candidates();
+                            } else {
+                                debug!(
+                                    incoming_hash = %block_hash,
+                                    height = block_height,
+                                    view = block_view,
+                                    "deferring commit apply for block sync QC until block is validated"
+                                );
+                            }
                         } else {
                             debug!(
                                 incoming_hash = %block_hash,

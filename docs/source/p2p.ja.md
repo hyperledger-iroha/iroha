@@ -146,9 +146,12 @@ block_gossip_max_period_ms = 30000
 peer_gossip_period_ms = 1000
 peer_gossip_max_period_ms = 30000
 transaction_gossip_size = 500
+transaction_gossip_resend_ticks = 3
 ```
 
 - Gossip/idle の間隔は 100ms 未満なら 100ms にクランプされます。
 - ピアアドレス gossip は変更検知で送信され、アイドル時は `peer_gossip_max_period_ms`
   まで指数バックオフします。ブロック同期のサンプリングも同様に
   `block_gossip_max_period_ms` までバックオフします。
+- トランザクション gossip は relay バックプレッシャ（subscriber queue の drop）発生時に一時停止し、
+  `transaction_gossip_period_ms * transaction_gossip_resend_ticks` 経過後に再開します。

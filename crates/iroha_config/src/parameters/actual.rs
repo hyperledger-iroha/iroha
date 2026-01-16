@@ -3966,6 +3966,8 @@ pub struct TransactionGossiper {
     pub gossip_period: Duration,
     /// Number of transactions per gossip message.
     pub gossip_size: NonZeroU32,
+    /// Number of gossip periods to wait before re-sending the same transactions.
+    pub gossip_resend_ticks: NonZeroU32,
     /// Dataspace-aware targeting options.
     pub dataspace: DataspaceGossip,
 }

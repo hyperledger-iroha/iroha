@@ -10,6 +10,7 @@ use iroha_crypto::blake2::{Blake2b512, Digest as BlakeDigest};
 use iroha_data_model::Encode as _;
 use iroha_logger::prelude::*;
 
+use super::locked_qc::qc_extends_locked_with_lookup;
 use super::pacing::{Pacemaker, PacemakerBackpressure, PacemakerBackpressureAction};
 use super::*;
 
@@ -409,20 +410,6 @@ impl Actor {
             validator_set: commit_topology.to_vec(),
             stake_snapshot,
         })
-    }
-
-    pub(super) fn find_child_qc_extending_lock(
-        &self,
-        lock: crate::sumeragi::consensus::QcHeaderRef,
-    ) -> Option<crate::sumeragi::consensus::QcHeaderRef> {
-        child_qc_extending_lock(
-            lock,
-            self.qc_cache
-                .values()
-                .filter(|qc| qc.phase == crate::sumeragi::consensus::Phase::Commit)
-                .map(Self::qc_to_header_ref),
-            |hash, height| self.parent_hash_for(hash, height),
-        )
     }
 
     fn drain_commit_results(&mut self) -> bool {
@@ -2373,7 +2360,7 @@ impl Actor {
             return false;
         }
         if let Some(lock) = self.locked_qc {
-            if !self.block_known_locally(lock.subject_block_hash) {
+            if !self.block_known_for_lock(lock.subject_block_hash) {
                 warn!(
                     height,
                     view,

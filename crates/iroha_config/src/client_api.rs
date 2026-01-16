@@ -195,6 +195,9 @@ impl FastJsonWrite for Network {
         out.push_str("\"transaction_gossip_period_ms\":");
         let _ = write!(out, "{}", self.transaction_gossip_period_ms);
         out.push(',');
+        out.push_str("\"transaction_gossip_resend_ticks\":");
+        let _ = write!(out, "{}", self.transaction_gossip_resend_ticks.get());
+        out.push(',');
         out.push_str("\"soranet_handshake\":");
         self.soranet_handshake.write_json(out);
         out.push(',');
@@ -1410,6 +1413,7 @@ fn finalize_network(
     relay_ttl: Option<u8>,
     tx_gossip_size: Option<NonZero<u32>>,
     tx_gossip_period_ms: Option<u32>,
+    tx_gossip_resend_ticks: Option<NonZero<u32>>,
     soranet_handshake: Option<SoranetHandshakeSummary>,
     soranet_privacy_summary: Option<SoranetPrivacySummary>,
     soranet_vpn_summary: Option<SoranetVpnSummary>,
@@ -1441,6 +1445,9 @@ fn finalize_network(
             .ok_or_else(|| NoritoError::Message("missing transaction_gossip_size".into()))?,
         transaction_gossip_period_ms: tx_gossip_period_ms
             .ok_or_else(|| NoritoError::Message("missing transaction_gossip_period_ms".into()))?,
+        transaction_gossip_resend_ticks: tx_gossip_resend_ticks.ok_or_else(|| {
+            NoritoError::Message("missing transaction_gossip_resend_ticks".into())
+        })?,
         soranet_handshake: soranet_handshake.unwrap_or_default(),
         soranet_privacy: soranet_privacy_summary.unwrap_or_default(),
         soranet_vpn: soranet_vpn_summary.unwrap_or_default(),
@@ -1466,6 +1473,7 @@ impl<'a> FastFromJson<'a> for Network {
         let mut relay_ttl: Option<u8> = None;
         let mut tx_gossip_size: Option<NonZero<u32>> = None;
         let mut tx_gossip_period_ms: Option<u32> = None;
+        let mut tx_gossip_resend_ticks: Option<NonZero<u32>> = None;
         let mut soranet_handshake: Option<SoranetHandshakeSummary> = None;
         let mut soranet_privacy_summary: Option<SoranetPrivacySummary> = None;
         let mut soranet_vpn_summary: Option<SoranetVpnSummary> = None;
@@ -1483,6 +1491,8 @@ impl<'a> FastFromJson<'a> for Network {
         let kh_relay_ttl = norito::json::key_hash_const("relay_ttl");
         let kh_tx_gossip_size = norito::json::key_hash_const("transaction_gossip_size");
         let kh_tx_gossip_period = norito::json::key_hash_const("transaction_gossip_period_ms");
+        let kh_tx_gossip_resend_ticks =
+            norito::json::key_hash_const("transaction_gossip_resend_ticks");
         let kh_handshake = norito::json::key_hash_const("soranet_handshake");
         let kh_privacy = norito::json::key_hash_const("soranet_privacy");
         let kh_vpn = norito::json::key_hash_const("soranet_vpn");
@@ -1561,6 +1571,14 @@ impl<'a> FastFromJson<'a> for Network {
                             .map_err(|_| NoritoError::Message("u32 overflow".into()))?,
                     );
                 }
+                x if x == kh_tx_gossip_resend_ticks
+                    && w.last_key() == "transaction_gossip_resend_ticks" =>
+                {
+                    tx_gossip_resend_ticks = NonZeroU32::new(
+                        u32::try_from(w.parse_u64_inline()?)
+                            .map_err(|_| NoritoError::Message("u32 overflow".into()))?,
+                    );
+                }
                 x if x == kh_handshake && w.last_key() == "soranet_handshake" => {
                     soranet_handshake = Some(SoranetHandshakeSummary::parse(w, arena)?);
                 }
@@ -1599,6 +1617,7 @@ impl<'a> FastFromJson<'a> for Network {
             relay_ttl,
             tx_gossip_size,
             tx_gossip_period_ms,
+            tx_gossip_resend_ticks,
             soranet_handshake,
             soranet_privacy_summary,
             soranet_vpn_summary,
@@ -2490,6 +2509,8 @@ pub struct Network {
     pub transaction_gossip_size: NonZero<u32>,
     /// Transaction gossip interval in milliseconds.
     pub transaction_gossip_period_ms: u32,
+    /// Number of gossip periods to wait before re-sending the same transactions.
+    pub transaction_gossip_resend_ticks: NonZero<u32>,
     /// `SoraNet` handshake configuration summary.
     pub soranet_handshake: SoranetHandshakeSummary,
     /// `SoraNet` privacy telemetry configuration summary.
@@ -2529,6 +2550,7 @@ impl From<&'_ base::Root> for Network {
                 value.transaction_gossiper.gossip_period.as_millis(),
             )
             .expect("transaction gossip period should fit into a u32"),
+            transaction_gossip_resend_ticks: value.transaction_gossiper.gossip_resend_ticks,
             soranet_handshake: handshake,
             soranet_privacy: privacy,
             soranet_vpn: vpn,
@@ -3287,6 +3309,7 @@ mod test {
                 relay_ttl: 8,
                 transaction_gossip_size: nonzero!(512u32),
                 transaction_gossip_period_ms: 1000,
+                transaction_gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
                 soranet_handshake: SoranetHandshakeSummary {
                     descriptor_commit_hex: hex::encode(DEFAULT_DESCRIPTOR_COMMIT),
                     client_capabilities_hex: hex::encode(DEFAULT_CLIENT_CAPABILITIES),
@@ -3380,6 +3403,7 @@ mod test {
                 "relay_ttl": 8,
                 "transaction_gossip_size": 512,
                 "transaction_gossip_period_ms": 1000,
+                "transaction_gossip_resend_ticks": 3,
                 "soranet_handshake": {
                   "descriptor_commit_hex": "76d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f",
                   "client_capabilities_hex": "010100020101010200020101010400030203010202000200047f100004deadbeef7f110004cafebabe",

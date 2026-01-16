@@ -179,6 +179,16 @@ pub struct TransactionGossiper {
     /// Maximum size of a batch that is being gossiped. Smaller size leads
     /// to longer time to synchronise, useful if you have high packet loss.
     gossip_size: NonZeroU32,
+    /// Number of gossip periods to wait before re-sending the same transactions.
+    gossip_resend_ticks: NonZeroU32,
+    /// Monotonic tick counter for gossip resend pacing.
+    gossip_tick: u64,
+    /// Deferred gossip hashes bucketed by resend tick.
+    gossip_deferred: Vec<Vec<HashOf<SignedTransaction>>>,
+    /// Subscriber-queue drop counter at the last backpressure observation.
+    last_drop_count: u64,
+    /// Timestamp of the last observed subscriber-queue drop.
+    last_drop_at: Option<Instant>,
     network: IrohaNetwork,
     queue: Arc<Queue>,
     state: Arc<State>,
@@ -207,6 +217,7 @@ impl TransactionGossiper {
         Config {
             gossip_period,
             gossip_size,
+            gossip_resend_ticks,
             dataspace,
         }: Config,
         network_cfg: &NetworkConfig,
@@ -226,13 +237,19 @@ impl TransactionGossiper {
         // Keep gossip batches below the encrypted per-topic cap by reserving AEAD + envelope overhead.
         let tx_frame_cap = iroha_p2p::frame_plaintext_cap(network_cfg.max_frame_bytes_tx_gossip)
             .saturating_sub(TX_GOSSIP_FRAME_HEADROOM_BYTES);
+        let gossip_deferred = vec![Vec::new(); gossip_resend_ticks.get() as usize];
         Self {
             chain_id,
             gossip_period,
             gossip_size,
+            gossip_resend_ticks,
+            gossip_tick: 0,
+            gossip_deferred,
+            last_drop_count: 0,
+            last_drop_at: None,
             network,
             queue,
-            state,
+            state: Arc::clone(&state),
             tx_frame_cap,
             dataspace_cfg,
             public_seed,
@@ -261,19 +278,83 @@ impl TransactionGossiper {
         }
     }
 
-    fn gossip_transactions(&mut self) {
-        let state_view = self.state.view();
-        let lane_config = state_view.nexus.lane_config.clone();
-        let lane_catalog = state_view.nexus.lane_catalog.clone();
-        let entries = self.queue.gossip_batch(self.gossip_size.get(), &state_view);
+    fn deferred_index(&self) -> usize {
+        let len = u64::from(self.gossip_resend_ticks.get());
+        debug_assert!(len > 0, "gossip_resend_ticks must be non-zero");
+        debug_assert_eq!(
+            self.gossip_deferred.len(),
+            len as usize,
+            "gossip_deferred must match gossip_resend_ticks"
+        );
+        (self.gossip_tick % len) as usize
+    }
 
-        if entries.is_empty() {
+    fn backpressure_cooldown(&self) -> Duration {
+        self.gossip_period
+            .checked_mul(self.gossip_resend_ticks.get())
+            .unwrap_or(self.gossip_period)
+    }
+
+    fn gossip_backpressure_active(&mut self, now: Instant) -> bool {
+        let current = iroha_p2p::network::subscriber_queue_full_count();
+        if current > self.last_drop_count {
+            self.last_drop_count = current;
+            self.last_drop_at = Some(now);
+        }
+        let cooldown = self.backpressure_cooldown();
+        self.last_drop_at
+            .is_some_and(|last| now.saturating_duration_since(last) < cooldown)
+    }
+
+    fn release_deferred_gossip(&mut self) {
+        if self.gossip_deferred.is_empty() {
             return;
         }
+        let index = self.deferred_index();
+        let hashes = std::mem::take(&mut self.gossip_deferred[index]);
+        if hashes.is_empty() {
+            return;
+        }
+        self.queue.requeue_gossip_hashes(hashes);
+    }
 
-        let commit_topology: Vec<PeerId> = state_view.commit_topology().iter().cloned().collect();
-        drop(state_view);
+    fn defer_gossip_hashes(&mut self, hashes: impl IntoIterator<Item = HashOf<SignedTransaction>>) {
+        if self.gossip_deferred.is_empty() {
+            return;
+        }
+        let index = self.deferred_index();
+        self.gossip_deferred[index].extend(hashes);
+    }
+
+    fn advance_gossip_tick(&mut self) {
+        self.gossip_tick = self.gossip_tick.wrapping_add(1);
+    }
+
+    fn gossip_transactions(&mut self) {
         let now = Instant::now();
+        if self.gossip_backpressure_active(now) {
+            iroha_logger::trace!(
+                drops = self.last_drop_count,
+                cooldown_ms = self.backpressure_cooldown().as_millis(),
+                "transaction gossiper skipping gossip due to relay backpressure"
+            );
+            return;
+        }
+        self.release_deferred_gossip();
+        let (entries, lane_config, lane_catalog, commit_topology) = {
+            let state_view = self.state.view();
+            let lane_config = state_view.nexus.lane_config.clone();
+            let lane_catalog = state_view.nexus.lane_catalog.clone();
+            let entries = self.queue.gossip_batch(self.gossip_size.get(), &state_view);
+            let commit_topology: Vec<PeerId> =
+                state_view.commit_topology().iter().cloned().collect();
+            (entries, lane_config, lane_catalog, commit_topology)
+        };
+
+        if entries.is_empty() {
+            self.advance_gossip_tick();
+            return;
+        }
         let public_seed = self.public_seed.current(now);
         let restricted_seed = self.restricted_seed.current(now);
 
@@ -333,8 +414,7 @@ impl TransactionGossiper {
                     dataspace = %dataspace_id,
                     "dataspace missing from lane catalog; requeueing gossip batch"
                 );
-                self.queue
-                    .requeue_gossip_hashes(entries.iter().map(|entry| entry.tx.as_ref().hash()));
+                self.defer_gossip_hashes(entries.iter().map(|entry| entry.tx.as_ref().hash()));
                 self.record_drop_metric(
                     GossipPlane::Restricted,
                     dataspace_id,
@@ -363,11 +443,12 @@ impl TransactionGossiper {
                 ),
             }
         }
+        self.advance_gossip_tick();
     }
 
     #[allow(clippy::too_many_lines)]
     fn gossip_public(
-        &self,
+        &mut self,
         dataspace_id: DataSpaceId,
         lane_ids: &[LaneId],
         entries: Vec<GossipBatchEntry>,
@@ -388,7 +469,7 @@ impl TransactionGossiper {
         );
 
         if !requeue.is_empty() {
-            self.queue.requeue_gossip_hashes(requeue);
+            self.defer_gossip_hashes(requeue);
         }
 
         if message.txs.is_empty() {
@@ -429,7 +510,7 @@ impl TransactionGossiper {
                 dataspace = %dataspace_id,
                 "no online peers available for public gossip"
             );
-            self.queue.requeue_gossip_hashes(sent_hashes);
+            self.defer_gossip_hashes(sent_hashes);
             self.record_drop_metric(
                 GossipPlane::Public,
                 dataspace_id,
@@ -506,11 +587,11 @@ impl TransactionGossiper {
             );
         }
         // Re-enqueue sent hashes so gossip keeps circulating until the transaction is committed.
-        self.queue.requeue_gossip_hashes(sent_hashes);
+        self.defer_gossip_hashes(sent_hashes);
     }
 
     fn gossip_restricted(
-        &self,
+        &mut self,
         dataspace_id: DataSpaceId,
         lane_ids: &[LaneId],
         entries: Vec<GossipBatchEntry>,
@@ -533,7 +614,7 @@ impl TransactionGossiper {
         );
 
         if !requeue.is_empty() {
-            self.queue.requeue_gossip_hashes(requeue);
+            self.defer_gossip_hashes(requeue);
         }
 
         if message.txs.is_empty() {
@@ -577,7 +658,7 @@ impl TransactionGossiper {
                 fallback_surface,
                 targets,
             } => {
-                self.queue.requeue_gossip_hashes(sent_hashes);
+                self.defer_gossip_hashes(sent_hashes);
                 self.record_drop_metric(
                     GossipPlane::Restricted,
                     dataspace_id,
@@ -622,7 +703,7 @@ impl TransactionGossiper {
             fallback_surface,
             reason,
         );
-        self.queue.requeue_gossip_hashes(sent_hashes);
+        self.defer_gossip_hashes(sent_hashes);
     }
 
     #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
@@ -1473,16 +1554,135 @@ mod tests {
             Config {
                 gossip_period: Duration::from_millis(1000),
                 gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+                gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
                 dataspace: DataspaceGossip::default(),
             },
             &network_cfg,
             network,
             queue,
-            state,
+            Arc::clone(&state),
         );
 
         assert_eq!(gossiper.tx_frame_cap, expected);
         shutdown.send();
+    }
+
+    #[test]
+    fn gossip_defers_requeue_until_resend_tick() {
+        let temp_dir = tempdir().expect("temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
+            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: FsyncMode::Batched,
+            fsync_interval: defaults::kura::FSYNC_INTERVAL,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
+        let live_query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        let queue = Arc::new(Queue::test(
+            QueueConfig::default(),
+            &TimeSource::new_system(),
+        ));
+
+        let (_signed, accepted) = build_transaction("defer");
+        queue
+            .push(accepted, state.view())
+            .expect("queue accepts tx");
+        let batch = queue.gossip_batch(1, &state.view());
+        assert_eq!(batch.len(), 1);
+        let hash = batch[0].tx.as_ref().hash();
+
+        let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
+        let now = Instant::now();
+        let mut gossiper = TransactionGossiper {
+            chain_id: "test-chain".parse().expect("chain id"),
+            gossip_period: Duration::from_millis(50),
+            gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+            gossip_resend_ticks: resend_ticks,
+            gossip_tick: 0,
+            gossip_deferred: vec![Vec::new(); resend_ticks.get() as usize],
+            last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
+            last_drop_at: None,
+            network: IrohaNetwork::closed_for_tests(),
+            queue: Arc::clone(&queue),
+            state: Arc::clone(&state),
+            tx_frame_cap: 1024,
+            dataspace_cfg: DataspaceGossip::default(),
+            public_seed: GossipTargetSeed::new(0xBEEF_0001, Duration::from_secs(1), now),
+            restricted_seed: GossipTargetSeed::new(0xBEEF_0002, Duration::from_secs(1), now),
+        };
+
+        gossiper.release_deferred_gossip();
+        gossiper.defer_gossip_hashes(vec![hash]);
+        gossiper.advance_gossip_tick();
+        assert!(queue.gossip_batch(1, &state.view()).is_empty());
+
+        gossiper.release_deferred_gossip();
+        gossiper.advance_gossip_tick();
+        assert!(queue.gossip_batch(1, &state.view()).is_empty());
+
+        gossiper.release_deferred_gossip();
+        let batch = queue.gossip_batch(1, &state.view());
+        assert_eq!(batch.len(), 1);
+    }
+
+    #[test]
+    fn gossip_backpressure_cooldown_respects_last_drop() {
+        let temp_dir = tempdir().expect("temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
+            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: FsyncMode::Batched,
+            fsync_interval: defaults::kura::FSYNC_INTERVAL,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
+        let live_query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        let queue = Arc::new(Queue::test(
+            QueueConfig::default(),
+            &TimeSource::new_system(),
+        ));
+
+        let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
+        let now = Instant::now();
+        let mut gossiper = TransactionGossiper {
+            chain_id: "test-chain".parse().expect("chain id"),
+            gossip_period: Duration::from_millis(50),
+            gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+            gossip_resend_ticks: resend_ticks,
+            gossip_tick: 0,
+            gossip_deferred: vec![Vec::new(); resend_ticks.get() as usize],
+            last_drop_count: u64::MAX,
+            last_drop_at: Some(now),
+            network: IrohaNetwork::closed_for_tests(),
+            queue,
+            state,
+            tx_frame_cap: 1024,
+            dataspace_cfg: DataspaceGossip::default(),
+            public_seed: GossipTargetSeed::new(0xBEEF_0001, Duration::from_secs(1), now),
+            restricted_seed: GossipTargetSeed::new(0xBEEF_0002, Duration::from_secs(1), now),
+        };
+
+        assert!(gossiper.gossip_backpressure_active(now));
+
+        let cooldown = gossiper.backpressure_cooldown();
+        let past = now
+            .checked_sub(cooldown.saturating_add(Duration::from_millis(1)))
+            .unwrap_or(now);
+        gossiper.last_drop_at = Some(past);
+        assert!(!gossiper.gossip_backpressure_active(now));
     }
 
     #[test]
@@ -2033,6 +2233,14 @@ mod tests {
             chain_id: "test-chain".parse().expect("chain id"),
             gossip_period: Duration::from_millis(50),
             gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+            gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
+            gossip_tick: 0,
+            gossip_deferred: vec![
+                Vec::new();
+                defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS.get() as usize
+            ],
+            last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
+            last_drop_at: None,
             network,
             queue: Arc::clone(&queue),
             state,
@@ -2122,6 +2330,14 @@ mod tests {
             chain_id: "test-chain".parse().expect("chain id"),
             gossip_period: Duration::from_millis(50),
             gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+            gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
+            gossip_tick: 0,
+            gossip_deferred: vec![
+                Vec::new();
+                defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS.get() as usize
+            ],
+            last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
+            last_drop_at: None,
             network,
             queue: Arc::clone(&queue),
             state,
@@ -2245,6 +2461,14 @@ mod tests {
             chain_id: "test-chain".parse().expect("chain id"),
             gossip_period: Duration::from_millis(50),
             gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+            gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
+            gossip_tick: 0,
+            gossip_deferred: vec![
+                Vec::new();
+                defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS.get() as usize
+            ],
+            last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
+            last_drop_at: None,
             network,
             queue: Arc::clone(&queue),
             state,

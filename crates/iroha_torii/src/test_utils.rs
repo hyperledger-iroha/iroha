@@ -711,6 +711,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
         transaction_gossiper: A::TransactionGossiper {
             gossip_period: core::time::Duration::from_millis(200),
             gossip_size: nonzero!(32u32),
+            gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
             dataspace: Default::default(),
         },
         live_query_store: A::LiveQueryStore::default(),

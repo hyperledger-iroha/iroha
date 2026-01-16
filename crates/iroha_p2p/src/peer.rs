@@ -1491,7 +1491,8 @@ pub mod handles {
 
             let topic = msg.topic();
             let sender = match topic {
-                crate::network::message::Topic::Consensus => &self.senders.hi_consensus,
+                crate::network::message::Topic::Consensus
+                | crate::network::message::Topic::ConsensusPayload => &self.senders.hi_consensus,
                 crate::network::message::Topic::Control => &self.senders.hi_control,
                 crate::network::message::Topic::BlockSync => &self.senders.lo_block_sync,
                 crate::network::message::Topic::TxGossip

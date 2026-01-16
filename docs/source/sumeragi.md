@@ -152,12 +152,13 @@ Node Roles (config)
   - Note: Set B validators remain in the topology and are full validators; they are not the `observer` role.
 
 Validator Key Requirements
-- Validators must use BLS-Normal public keys and present a proof-of-possession (PoP). On startup (height 0), NPoS prefers the active public-lane validator roster from staking; when no active validators are present it falls back to `trusted_peers` after filtering out peers without BLS-Normal keys or with missing/invalid PoP (the legacy `trusted_peers_bls` mapping no longer exists). Non-BLS or missing-PoP peers are excluded from the consensus set. The node’s `public_key`/`private_key` must be BLS-Normal and is used for both transport and consensus.
+- Validators must use BLS-Normal public keys and present a proof-of-possession (PoP). In NPoS, the consensus roster is filtered to the active public-lane validator set whenever stake records are available (including after commit-topology updates); when no active validators are present it falls back to `trusted_peers` after filtering out peers without BLS-Normal keys or with missing/invalid PoP (the legacy `trusted_peers_bls` mapping no longer exists). Non-BLS or missing-PoP peers are excluded from the consensus set. The node’s `public_key`/`private_key` must be BLS-Normal and is used for both transport and consensus.
 - Commit certificates carry a mandatory BLS aggregate signature over same-message signatures, along with a compact signer bitmap. Receivers verify the aggregate signature against the signer set and reject certificates with mismatched aggregates or out-of-range bitmap bits. Explicit votes remain the source of truth for quorum accounting and evidence, but aggregates are no longer advisory.
 - Transaction admission uses `crypto.allowed_signing`/`allowed_curve_ids`; consensus vote signatures do not. Leaving `allowed_signing` at the Ed25519/secp defaults is fine for BLS validators—add `bls_normal` only if you intend to accept BLS-signed transactions. The BLS feature must be compiled in (`--features bls`) and `signature_batch_max_bls` kept > 0 for validator nodes.
 
 Message Flow (steady state)
 - Leader: when a block is expected (transactions queued) and the deadline elapses, the leader sends `BlockCreated` to the commit topology (validators); when there is no queued work the pacemaker stays idle (no heartbeat proposals).
+- Proposal assembly defers when relay backpressure is active, when unresolved RBC sessions exist for the active tip, or when pending blocks extend the tip; the pacemaker waits for the backlog to clear before proposing again.
 - Validators: validate, emit Availability votes, and send `CommitVote` (block header signature) to the deterministic collector set; if collector fan-out is below quorum, votes fall back to the full commit topology. Prepare/NewView certificates remain for pacemaker/telemetry but do not gate commit. On local timeout in view 0, the node may fan out to additional collectors up to `r`.
 - Proxy tail / collectors: collectors aggregate `CommitVote` signatures and gossip a `CommitCertificate` once quorum is reached; the proxy tail is the primary collector but not the only one. Collectors may still aggregate availability evidence and prepare/new-view certificates for view-change hints.
 - Set B validators: vote/sign under the same rules as Set A; routing/collection still prioritizes Set A for throughput, but any quorum of validators is accepted.
@@ -208,6 +209,7 @@ Genesis manifests now seed `Sumeragi::NextMode` and the `sumeragi_npos_parameter
 - Localnet soak (permissioned, thousands of blocks/tx): `cargo test -p integration_tests --test sumeragi_localnet_smoke permissioned_localnet_soak_thousands -- --ignored --nocapture` (long-running).
 - Docker Compose: point `--config-dir` at the same localnet output and run `kagami swarm --peers 4 --config-dir ./npos-local --image hyperledger/iroha:dev --out-file docker-compose.npos.yml --consensus-mode npos --no-banner --print` to emit a Compose file that re-signs genesis in-container with `GENESIS_CONSENSUS_MODE` overrides (add the `GENESIS_NEXT_CONSENSUS_MODE`/`GENESIS_MODE_ACTIVATION_HEIGHT` pair only on Iroha2 staged networks).
 - Rosters/PoPs: re-sign custom topologies with `kagami genesis sign --topology '<peers_json>' --peer-pop <public_key=pop_hex>...` (swarm’s inline signer accepts the same flags). Reuse the same `--seed` when regenerating localnet output so BLS/Ed25519 keys and PoPs stay deterministic for VRF sampling.
+- Genesis signing (NPoS): when no public-lane validators are present in the manifest, `kagami genesis sign` injects a bootstrap transaction that registers the default `nexus`/`ivm` domains, mints `xor#nexus`, and stakes/activates each topology peer in the public lane.
 - Guardrails: `--mode-activation-height` requires `--next-consensus-mode` (height > 0) and `--consensus-mode` continues to advertise the pre‑activation mode for fingerprints; omit both flags to stay in the configured mode, or pair them to stage a permissioned→NPoS cutover on Iroha2 only.
 
 Deterministic Collector Selection (helpers)
@@ -226,7 +228,7 @@ Actor Model
 
 Backpressure & Telemetry
 - Scheduler: the worker loop drains a priority mailbox (Votes → RBC chunks → block payloads → blocks → consensus control → lane relay → background) with starvation guards (`non_vote_starve_max`, `block_rx_starve_max`). The mailbox holds one pending item per tier and refills deterministically, so a fixed inbound trace yields the same processing order across runs.
-- Drops: relay ingress uses non-blocking enqueues for block/control messages, so full queues drop and increment `sumeragi_dropped_block_messages_total`/`sumeragi_dropped_control_messages_total`; `BlockSyncUpdate` plus critical payload messages (`BlockCreated`/`Proposal`/`RBC READY`/`RBC DELIVER`) bypass the non-blocking path and block until space is available in the block-payload queue to preserve commit/QC evidence and payload delivery. Blocking backpressure remains for explicit `incoming_*` calls (internal producers). When relay drops spike (subscriber queues full, network post/broadcast drops, per-peer post overflows, or topic-cap violations), consensus rebroadcasts (votes/block sync/RBC payloads) and idle view-change triggers pause for one rebroadcast cooldown to avoid message storms. Unresolved RBC payloads also pause idle view changes and proposal assembly until the backlog clears.
+- Drops: relay ingress uses non-blocking enqueues for block/control messages, so full queues drop and increment `sumeragi_dropped_block_messages_total`/`sumeragi_dropped_control_messages_total`; `BlockSyncUpdate` plus critical payload messages (`BlockCreated`/`Proposal`) bypass the non-blocking path and block until space is available in the block-payload queue to preserve commit/QC evidence and payload delivery. RBC READY/DELIVER also bypass the non-blocking path but are queued with votes to avoid payload backlog; they still travel on the high-priority consensus topic in the relay. Blocking backpressure remains for explicit `incoming_*` calls (internal producers). When relay drops spike (subscriber queues full, network post/broadcast drops, per-peer post overflows, or topic-cap violations), consensus rebroadcasts (votes/block sync/RBC payloads) and idle view-change triggers pause for one rebroadcast cooldown to avoid message storms. Unresolved RBC payloads also pause idle view changes and proposal assembly until the backlog clears.
 - Dedup caches: vote + block-payload deduplication uses bounded LRU+TTL caches partitioned by message kind; `/v1/sumeragi/status.dedup_evictions` exposes capacity vs TTL evictions for votes, proposals, block-created, and RBC READY/DELIVER payloads.
 - Collector metrics: gauges for `collectors_k`/`redundant_send_r`, counters for redundant sends (with per‑collector/per‑peer breakdowns), a gauge for collectors targeted in the current round, and a histogram for collectors targeted per committed block. Certificate size is tracked via `sumeragi_cert_size`.
 - Transaction queue backpressure: `sumeragi_tx_queue_depth`/`sumeragi_tx_queue_capacity` gauge the mempool, while `sumeragi_tx_queue_saturated` flips to 1 when Torii reports saturation. When saturated, validators skip redundant collector fan-out (behaving as `redundant_send_r = 1`) to shed load and expedite commit of queued transactions.
@@ -247,8 +249,8 @@ role = "validator"                 # or "observer" (sync‑only)
 allow_view0_slack = false          # legacy/testing knob; Set B votes are accepted in all views
 collectors_k = 2                   # two collectors per height (tail + next)
 collectors_redundant_send_r = 2    # on timeout, target up to 2 collectors total
-msg_channel_cap_votes = 8192       # vote channel capacity
-msg_channel_cap_block_payload = 128 # block payload capacity (BlockCreated/Proposal)
+msg_channel_cap_votes = 8192       # vote channel capacity (commit votes + RBC READY/DELIVER)
+msg_channel_cap_block_payload = 128 # block payload capacity (BlockCreated/Proposal/BlockSyncUpdate)
 msg_channel_cap_rbc_chunks = 1024  # RBC chunk capacity
 rbc_chunk_fanout = null            # RBC chunk fanout cap (null = commit quorum minus local)
 msg_channel_cap_blocks = 256       # block message capacity (params, etc.)
@@ -268,10 +270,11 @@ Notes
 - RBC INIT carries the session roster snapshot and its `roster_hash`; READY/DELIVER include the same `roster_hash` so signatures are bound to a single roster.
 - RBC INIT also carries the per‑chunk SHA‑256 digest list; receivers validate each chunk against the digest at its index and drop mismatches without invalidating the session.
 - RBC INIT that conflicts with an existing session’s payload hash, chunk count, digest list, or chunk root is dropped to avoid poisoning an in‑flight session.
-- RBC sessions cache the roster from INIT (or a derived commit topology) and reuse it for READY/DELIVER validation so roster changes do not invalidate in-flight availability evidence. READY/DELIVER received before a roster is available are stashed and replayed once a roster is known; mismatched `roster_hash` values are dropped once an authoritative roster is cached, while derived roster mismatches trigger a fresh derived-roster lookup and are re-stashed until INIT arrives when the roster still mismatches, resetting cached READY/DELIVER state. Local READY/DELIVER emission uses the cached roster (derived or authoritative) once a chunk root is known; READY/INIT rebroadcasts still require an authoritative roster snapshot.
+- RBC sessions cache the roster from INIT (or a derived commit topology) and reuse it for READY/DELIVER validation so roster changes do not invalidate in-flight availability evidence. READY/DELIVER received before a roster is available are stashed and replayed once a roster is known; mismatched `roster_hash` values are dropped once an authoritative roster is cached, while derived roster mismatches trigger a fresh derived-roster lookup and are re-stashed until INIT arrives when the roster still mismatches, resetting cached READY/DELIVER state. Local READY/DELIVER emission uses the cached roster (derived or authoritative) once a chunk root is known; READY/INIT rebroadcasts use the cached roster when the roster hash matches, including derived fallbacks, to avoid liveness stalls.
+- When READY/DELIVER or chunks arrive before INIT, the node stashes them and immediately requests the missing `BlockCreated` payload (subject to the missing-block backoff) to avoid long payload stalls.
 - Empty payloads are represented as a single empty RBC chunk so sessions never advertise a zero chunk count.
 - RBC chunk broadcasts pick a deterministic, per-session target set sized to at least the commit quorum (local + capped peers) so enough peers can reconstruct the payload without flooding the network; payload rebroadcasts send cached chunks to the full roster to recover missed fanout.
-- RBC payload rebroadcasts always include INIT even when no chunks are cached once an authoritative roster snapshot is known, so peers can learn the roster snapshot and request missing chunks; derived rosters do not trigger INIT rebroadcasts to avoid spreading mismatched snapshots, the background rebroadcast loop does not synthesize roster snapshots on its own, cached chunks continue to rebroadcast while any chunks are still missing even after READY quorum is reached, and only a deterministic f+1 subset of the roster performs payload rebroadcasts per session to limit message storms.
+- RBC payload rebroadcasts always include INIT even when no chunks are cached once a roster snapshot is cached, so peers can learn the roster snapshot and request missing chunks; derived rosters may rebroadcast but remain guarded by roster-hash checks, the background rebroadcast loop does not synthesize roster snapshots on its own, cached chunks continue to rebroadcast while any chunks are still missing even after READY quorum is reached, and only a deterministic f+1 subset of the roster performs payload rebroadcasts per session to limit message storms.
 - RBC READY rebroadcasts use the same deterministic f+1 sender subset (leader always included) to cap message volume; skipped rebroadcasts increment `sumeragi_rbc_rebroadcast_skipped_total{kind="payload|ready"}`.
 - RBC payloads carry canonical block payload bytes only; if delivery completes before `BlockCreated` arrives, the node requests the signed block header/body from peers so validation and voting can proceed.
 - RBC INIT/READY/DELIVER must carry the epoch derived from the advertised height; mismatched epochs are rejected to prevent cross-epoch availability drift.
@@ -281,11 +284,12 @@ Notes
 - Vote/certificate signature checks use the roster snapshot tied to the block when available, falling back to the live commit topology so roster changes do not invalidate late votes or certificates; when the parent hash is known, history-derived rosters must match the known chain or the vote is dropped.
 - When the commit topology changes at block commit, the node clears pending consensus caches (pending blocks, vote logs, RBC sessions, DA bundles) so stale votes from the old roster cannot stall the pipeline.
 - Vote/QC/deferred/roster caches are pruned to a bounded height/view window around the active round to prevent unbounded growth during view-change storms.
+- In DA mode, view changes still prune stale pending blocks but retain RBC sessions and missing-block requests while the payload is unavailable so availability can finish after a view change.
 - NEW_VIEW tracker entries are retained within the configured future-view window so late quorum receipts can still unblock proposal assembly after a timeout.
 - Permissioned timing uses on‑chain `SumeragiParameters` (`BlockTimeMs`/`CommitTimeMs`); NPoS timing uses on‑chain `sumeragi_npos_parameters` (`block_time_ms` + `timeouts.timeout_commit_ms`). Both affect pacing but not semantics.
 - DA-enabled runs derive the quorum timeout as `3 * (block_time + 4 * commit_time)` to leave headroom for RBC/availability-evidence propagation on slower hosts.
 - Availability timeouts use `2 * max(quorum_timeout, 2s)` in DA mode to tolerate payload hydration before logging/rebroadcast; consensus does not reschedule on DA evidence.
-- Stale-view guards drop old-view consensus traffic, but RBC payload messages and BlockCreated payloads are still accepted while DA is enabled (even across view changes) so availability can clear without waiting for perfectly synchronized views.
+- Stale-view guards drop old-view consensus traffic; with DA enabled, RBC payload and BlockCreated traffic is still accepted when it matches an active pending/inflight block so availability can finish without perfectly synchronized views while stale floods are suppressed.
 - Future-window guards drop consensus messages that arrive far ahead of the active round (height/view). View gating applies only to the active round and relaxes after the local commit-quorum timeout so lagging nodes can catch up; `BlockSyncUpdate` respects the same window unless the block is already tracked (pending/explicit missing-block request) or its parent payload is known locally, keeping catch-up traffic bounded without stalling sync.
 - Repeated invalid Vote/READY/DELIVER signatures from the same signer trigger a temporary suppression window so verification storms do not saturate the worker.
 
@@ -598,6 +602,11 @@ evictions skip active sessions; if the cap is reached by active sessions, new
 pending frames are dropped and recorded as `session_cap` drops. The worst-case
 buffered payload before INIT is:
 
+When pending frames are dropped (cap, TTL, or session-cap), the node
+deterministically requests the missing `BlockCreated` from the cached roster
+to preserve liveness; retries respect the standard backoff and roster-hash
+checks.
+
 ```
 session_cap * min(rbc_pending_max_bytes, rbc_chunk_max_bytes * RBC_MAX_TOTAL_CHUNKS)
 ```
@@ -613,8 +622,8 @@ availability still requires availability evidence (RBC `READY` quorum or availab
 pending stash frames are discarded.
 
 At runtime, `rbc_chunk_max_bytes` is clamped so a serialized `RbcChunk` (including
-headers and length prefix) fits within the consensus frame plaintext cap derived
-from `network.max_frame_bytes_consensus`.
+headers and length prefix) fits within the consensus payload plaintext cap derived
+from `network.max_frame_bytes_block_sync`.
 
 #### Adaptive observability
 

@@ -82,13 +82,16 @@ static HEARTBEAT_METADATA_NAME: LazyLock<iroha_data_model::name::Name> = LazyLoc
     iroha_data_model::name::Name::from_str("sumeragi_heartbeat")
         .expect("static heartbeat metadata key")
 });
+#[cfg(test)]
 static HEARTBEAT_DOMAIN_ID: LazyLock<DomainId> =
     LazyLock::new(|| DomainId::from_str("sumeragi_heartbeat").expect("static heartbeat domain"));
+#[cfg(test)]
 static HEARTBEAT_EXPIRES_AT_HEIGHT_NAME: LazyLock<iroha_data_model::name::Name> =
     LazyLock::new(|| {
         iroha_data_model::name::Name::from_str("expires_at_height")
             .expect("static heartbeat expires_at_height metadata key")
     });
+#[cfg(test)]
 static HEARTBEAT_TX_SEQUENCE_NAME: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
     iroha_data_model::name::Name::from_str("tx_sequence")
         .expect("static heartbeat tx_sequence metadata key")
@@ -493,6 +496,7 @@ pub(crate) fn is_heartbeat_transaction(tx: &SignedTransaction) -> bool {
 }
 
 /// Build a Sumeragi heartbeat transaction using the provided time source.
+#[cfg(test)]
 pub(crate) fn build_heartbeat_transaction_with_time_source(
     chain_id: ChainId,
     signer: &KeyPair,

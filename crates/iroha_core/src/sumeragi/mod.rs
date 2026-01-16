@@ -1848,14 +1848,17 @@ mod tests {
         handle.incoming_block_message(msg.clone());
         handle.incoming_block_message(msg);
 
-        let received: Vec<_> = block_payload_rx.try_iter().collect();
+        let received: Vec<_> = vote_rx.try_iter().collect();
         assert_eq!(received.len(), 1);
         assert!(
             received
                 .iter()
                 .all(|msg| matches!(msg, BlockMessage::RbcReady(_)))
         );
-        assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        assert!(matches!(
+            block_payload_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
         assert!(matches!(
             rbc_chunk_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
@@ -1911,14 +1914,17 @@ mod tests {
         handle.incoming_block_message(BlockMessage::RbcReady(base_ready));
         handle.incoming_block_message(BlockMessage::RbcReady(alt_ready));
 
-        let received: Vec<_> = block_payload_rx.try_iter().collect();
+        let received: Vec<_> = vote_rx.try_iter().collect();
         assert_eq!(received.len(), 2);
         assert!(
             received
                 .iter()
                 .all(|msg| matches!(msg, BlockMessage::RbcReady(_)))
         );
-        assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        assert!(matches!(
+            block_payload_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
         assert!(matches!(
             rbc_chunk_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
@@ -1973,14 +1979,17 @@ mod tests {
         handle.incoming_block_message(msg.clone());
         handle.incoming_block_message(msg);
 
-        let received: Vec<_> = block_payload_rx.try_iter().collect();
+        let received: Vec<_> = vote_rx.try_iter().collect();
         assert_eq!(received.len(), 1);
         assert!(
             received
                 .iter()
                 .all(|msg| matches!(msg, BlockMessage::RbcDeliver(_)))
         );
-        assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        assert!(matches!(
+            block_payload_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
         assert!(matches!(
             rbc_chunk_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
@@ -2549,7 +2558,7 @@ mod tests {
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(CAP);
         let (block_tx, _block_rx) = mpsc::sync_channel(CAP);
         let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(CAP);
-        let (vote_tx, _vote_rx) = mpsc::sync_channel(CAP);
+        let (vote_tx, vote_rx) = mpsc::sync_channel(CAP);
         let (consensus_tx, _consensus_rx) = mpsc::sync_channel(CAP);
         let (background_tx, _background_rx) = mpsc::sync_channel(CAP);
         let (lane_tx, _lane_rx) = mpsc::sync_channel(CAP);
@@ -2561,7 +2570,7 @@ mod tests {
                 BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
                 BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
             )));
-        let block_payload_tx_fill = block_payload_tx.clone();
+        let vote_tx_fill = vote_tx.clone();
         let handle = SumeragiHandle::new(
             block_payload_tx,
             block_tx,
@@ -2574,31 +2583,18 @@ mod tests {
             block_payload_dedup,
         );
 
-        let header = BlockHeader {
-            height: NonZeroU64::new(1).expect("non-zero"),
-            prev_block_hash: None,
-            merkle_root: None,
-            result_merkle_root: None,
-            da_proof_policies_hash: None,
-            da_commitments_hash: None,
-            da_pin_intents_hash: None,
-            creation_time_ms: 0,
-            view_change_index: 0,
-            confidential_features: None,
-        };
-        let key_pair = KeyPair::random();
-        let (_, private_key) = key_pair.into_parts();
-        let signature = SignatureOf::from_hash(&private_key, header.hash());
-        let block = SignedBlock::presigned_with_da(
-            BlockSignature::new(0, signature),
-            header,
-            Vec::new(),
-            None,
-        );
+        let filler_ready = BlockMessage::RbcReady(crate::sumeragi::consensus::RbcReady {
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([6u8; 32])),
+            height: 1,
+            view: 0,
+            epoch: 0,
+            roster_hash: Hash::prehashed([0x20; 32]),
+            chunk_root: Hash::prehashed([0x30; 32]),
+            sender: 0,
+            signature: vec![0x10],
+        });
 
-        block_payload_tx_fill
-            .send(BlockMessage::BlockCreated(message::BlockCreated { block }))
-            .expect("fill block payload channel");
+        vote_tx_fill.send(filler_ready).expect("fill vote channel");
 
         let ready = BlockMessage::RbcReady(crate::sumeragi::consensus::RbcReady {
             block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([7u8; 32])),
@@ -2620,21 +2616,23 @@ mod tests {
 
         assert!(
             done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
-            "RbcReady should wait for block payload queue capacity"
+            "RbcReady should wait for vote queue capacity"
         );
-        let _ = block_payload_rx
-            .recv()
-            .expect("drain block payload queue to unblock sender");
+        let _ = vote_rx.recv().expect("drain vote queue to unblock sender");
         let accepted = done_rx
             .recv_timeout(Duration::from_secs(1))
             .expect("RbcReady should be enqueued after space is available");
-        assert!(accepted, "RbcReady should be accepted after space is available");
+        assert!(
+            accepted,
+            "RbcReady should be accepted after space is available"
+        );
         join.join().expect("join RbcReady sender");
 
-        let received = block_payload_rx
+        let received = vote_rx
             .try_recv()
             .expect("RbcReady should be enqueued after space is freed");
         assert!(matches!(received, BlockMessage::RbcReady(_)));
+        assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
         assert!(matches!(
             block_payload_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
@@ -2647,7 +2645,7 @@ mod tests {
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(CAP);
         let (block_tx, _block_rx) = mpsc::sync_channel(CAP);
         let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(CAP);
-        let (vote_tx, _vote_rx) = mpsc::sync_channel(CAP);
+        let (vote_tx, vote_rx) = mpsc::sync_channel(CAP);
         let (consensus_tx, _consensus_rx) = mpsc::sync_channel(CAP);
         let (background_tx, _background_rx) = mpsc::sync_channel(CAP);
         let (lane_tx, _lane_rx) = mpsc::sync_channel(CAP);
@@ -2659,7 +2657,7 @@ mod tests {
                 BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
                 BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
             )));
-        let block_payload_tx_fill = block_payload_tx.clone();
+        let vote_tx_fill = vote_tx.clone();
         let handle = SumeragiHandle::new(
             block_payload_tx,
             block_tx,
@@ -2672,31 +2670,21 @@ mod tests {
             block_payload_dedup,
         );
 
-        let header = BlockHeader {
-            height: NonZeroU64::new(1).expect("non-zero"),
-            prev_block_hash: None,
-            merkle_root: None,
-            result_merkle_root: None,
-            da_proof_policies_hash: None,
-            da_commitments_hash: None,
-            da_pin_intents_hash: None,
-            creation_time_ms: 0,
-            view_change_index: 0,
-            confidential_features: None,
-        };
-        let key_pair = KeyPair::random();
-        let (_, private_key) = key_pair.into_parts();
-        let signature = SignatureOf::from_hash(&private_key, header.hash());
-        let block = SignedBlock::presigned_with_da(
-            BlockSignature::new(0, signature),
-            header,
-            Vec::new(),
-            None,
-        );
+        let filler_deliver = BlockMessage::RbcDeliver(crate::sumeragi::consensus::RbcDeliver {
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([7u8; 32])),
+            height: 1,
+            view: 0,
+            epoch: 0,
+            roster_hash: Hash::prehashed([0x21; 32]),
+            chunk_root: Hash::prehashed([0x41; 32]),
+            sender: 0,
+            signature: vec![0x21],
+            ready_signatures: Vec::new(),
+        });
 
-        block_payload_tx_fill
-            .send(BlockMessage::BlockCreated(message::BlockCreated { block }))
-            .expect("fill block payload channel");
+        vote_tx_fill
+            .send(filler_deliver)
+            .expect("fill vote channel");
 
         let deliver = BlockMessage::RbcDeliver(crate::sumeragi::consensus::RbcDeliver {
             block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([8u8; 32])),
@@ -2719,21 +2707,23 @@ mod tests {
 
         assert!(
             done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
-            "RbcDeliver should wait for block payload queue capacity"
+            "RbcDeliver should wait for vote queue capacity"
         );
-        let _ = block_payload_rx
-            .recv()
-            .expect("drain block payload queue to unblock sender");
+        let _ = vote_rx.recv().expect("drain vote queue to unblock sender");
         let accepted = done_rx
             .recv_timeout(Duration::from_secs(1))
             .expect("RbcDeliver should be enqueued after space is available");
-        assert!(accepted, "RbcDeliver should be accepted after space is available");
+        assert!(
+            accepted,
+            "RbcDeliver should be accepted after space is available"
+        );
         join.join().expect("join RbcDeliver sender");
 
-        let received = block_payload_rx
+        let received = vote_rx
             .try_recv()
             .expect("RbcDeliver should be enqueued after space is freed");
         assert!(matches!(received, BlockMessage::RbcDeliver(_)));
+        assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
         assert!(matches!(
             block_payload_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
@@ -2822,7 +2812,7 @@ mod tests {
     }
 
     #[test]
-    fn incoming_block_message_routes_rbc_ready_via_payload_queue() {
+    fn incoming_block_message_routes_rbc_ready_via_vote_queue() {
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -2863,11 +2853,14 @@ mod tests {
 
         handle.incoming_block_message(msg);
 
-        let received = block_payload_rx
+        let received = vote_rx
             .try_recv()
-            .expect("RbcReady should be enqueued to payload channel");
+            .expect("RbcReady should be enqueued to vote channel");
         assert!(matches!(received, BlockMessage::RbcReady(_)));
-        assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        assert!(matches!(
+            block_payload_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
         assert!(matches!(
             rbc_chunk_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
@@ -5163,7 +5156,7 @@ impl SumeragiHandle {
     ///
     /// Note: this is a best-effort enqueue that drops messages when queues are saturated
     /// to avoid stalling upstream relays. Block-sync updates and critical payload messages
-    /// (block creation, proposals, and RBC READY/DELIVER) always use blocking semantics
+    /// (block creation and proposals), plus RBC READY/DELIVER, always use blocking semantics
     /// because dropping them can stall consensus recovery.
     pub fn try_incoming_block_message(&self, msg: BlockMessage) -> bool {
         let blocking = matches!(
@@ -5367,10 +5360,10 @@ impl SumeragiHandle {
                     return false;
                 }
                 enqueue_blocking(
-                    &self.block_payload,
+                    &self.votes,
                     BlockMessage::RbcReady(message),
                     "RbcReady",
-                    status::WorkerQueueKind::BlockPayload,
+                    status::WorkerQueueKind::Votes,
                 )
             }
             BlockMessage::RbcDeliver(message) => {
@@ -5397,10 +5390,10 @@ impl SumeragiHandle {
                     return false;
                 }
                 enqueue_blocking(
-                    &self.block_payload,
+                    &self.votes,
                     BlockMessage::RbcDeliver(message),
                     "RbcDeliver",
-                    status::WorkerQueueKind::BlockPayload,
+                    status::WorkerQueueKind::Votes,
                 )
             }
             BlockMessage::BlockCreated(created) => {
@@ -5794,8 +5787,10 @@ pub struct SumeragiStartArgs {
     pub config: SumeragiConfig,
     /// Common configuration shared with other subsystems (keys, peers, chain id).
     pub common_config: CommonConfig,
-    /// Maximum consensus frame size (bytes) for block/control messages (converted to plaintext cap).
+    /// Maximum consensus frame size (bytes) for control-plane messages (plaintext cap).
     pub consensus_frame_cap: usize,
+    /// Maximum consensus payload frame size (bytes) for block/RBC payloads (plaintext cap).
+    pub consensus_payload_frame_cap: usize,
     /// Channel used to emit consensus lifecycle events to observers.
     pub events_sender: EventsSender,
     /// Handle to the world state view.
@@ -5834,6 +5829,7 @@ impl SumeragiStartArgs {
             config,
             common_config,
             consensus_frame_cap,
+            consensus_payload_frame_cap,
             events_sender,
             state,
             queue,
@@ -5897,6 +5893,7 @@ impl SumeragiStartArgs {
             config,
             common_config,
             consensus_frame_cap,
+            consensus_payload_frame_cap,
             events_sender,
             state,
             queue,
@@ -5944,6 +5941,7 @@ struct SumeragiWorker {
     config: SumeragiConfig,
     common_config: CommonConfig,
     consensus_frame_cap: usize,
+    consensus_payload_frame_cap: usize,
     events_sender: EventsSender,
     state: Arc<State>,
     queue: Arc<Queue>,
@@ -6852,6 +6850,7 @@ impl SumeragiWorker {
             shutdown_signal,
             rbc_status_handle,
             consensus_frame_cap,
+            consensus_payload_frame_cap,
             config,
             common_config,
             events_sender,
@@ -6908,6 +6907,7 @@ impl SumeragiWorker {
             config,
             common_config,
             consensus_frame_cap,
+            consensus_payload_frame_cap,
             events_sender,
             state,
             queue,

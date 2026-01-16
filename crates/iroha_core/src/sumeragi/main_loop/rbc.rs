@@ -1143,7 +1143,7 @@ impl Actor {
             );
         }
         self.update_rbc_status_entry(key, &plan.session, false);
-        self.record_rbc_session_roster(key, plan.roster.clone(), RbcRosterSource::Network);
+        self.record_rbc_session_roster(key, plan.roster.clone(), RbcRosterSource::Derived);
         self.persist_rbc_session(key, &plan.session);
         Ok(())
     }
@@ -1485,6 +1485,147 @@ impl Actor {
         }
     }
 
+    pub(super) fn request_missing_block_after_rbc_drop(
+        &mut self,
+        key: SessionKey,
+        reason: PendingRbcDropReason,
+        context: &'static str,
+    ) {
+        self.request_missing_block_for_pending_rbc(key, context, Some(reason));
+    }
+
+    fn request_missing_block_for_pending_rbc(
+        &mut self,
+        key: SessionKey,
+        context: &'static str,
+        reason: Option<PendingRbcDropReason>,
+    ) {
+        if self.block_payload_available_locally(key.0) {
+            return;
+        }
+        let roster = self.ensure_rbc_session_roster(key);
+        if roster.is_empty() {
+            match reason {
+                Some(reason) => {
+                    debug!(
+                        height = key.1,
+                        view = key.2,
+                        block = %key.0,
+                        drop_reason = reason.as_str(),
+                        context,
+                        "skipping missing BlockCreated fetch after RBC drop: empty roster"
+                    );
+                }
+                None => {
+                    debug!(
+                        height = key.1,
+                        view = key.2,
+                        block = %key.0,
+                        context,
+                        "skipping missing BlockCreated fetch for pending RBC: empty roster"
+                    );
+                }
+            }
+            return;
+        }
+        let topology = crate::sumeragi::network_topology::Topology::new(roster);
+        let retry_window = self.rebroadcast_cooldown();
+        let view_change_window = Some(self.quorum_timeout(self.runtime_da_enabled()));
+        let now = Instant::now();
+        let signers = BTreeSet::new();
+        let mut requests = core::mem::take(&mut self.pending.missing_block_requests);
+        let decision = super::plan_missing_block_fetch(
+            &mut requests,
+            key.0,
+            key.1,
+            key.2,
+            crate::sumeragi::consensus::Phase::Commit,
+            super::MissingBlockPriority::Consensus,
+            &signers,
+            &topology,
+            now,
+            retry_window,
+            view_change_window,
+            self.config.missing_block_signer_fallback_attempts,
+        );
+        self.pending.missing_block_requests = requests;
+        let dwell = self
+            .pending
+            .missing_block_requests
+            .get(&key.0)
+            .map(|stats| now.saturating_duration_since(stats.first_seen))
+            .unwrap_or_default();
+        let targets_len = match &decision {
+            MissingBlockFetchDecision::Requested { targets, .. } => targets.len(),
+            _ => 0,
+        };
+        self.note_missing_block_fetch_metrics(&decision, retry_window, targets_len, dwell);
+
+        match decision {
+            MissingBlockFetchDecision::Requested {
+                targets,
+                target_kind,
+            } => {
+                self.request_missing_block(key.0, &targets);
+                match reason {
+                    Some(reason) => {
+                        info!(
+                            height = key.1,
+                            view = key.2,
+                            block = %key.0,
+                            drop_reason = reason.as_str(),
+                            context,
+                            targets = ?targets,
+                            target_kind = target_kind.label(),
+                            retry_window_ms = retry_window.as_millis(),
+                            dwell_ms = dwell.as_millis(),
+                            "requested missing BlockCreated after RBC drop"
+                        );
+                    }
+                    None => {
+                        info!(
+                            height = key.1,
+                            view = key.2,
+                            block = %key.0,
+                            context,
+                            targets = ?targets,
+                            target_kind = target_kind.label(),
+                            retry_window_ms = retry_window.as_millis(),
+                            dwell_ms = dwell.as_millis(),
+                            "requested missing BlockCreated while awaiting RBC INIT"
+                        );
+                    }
+                }
+            }
+            MissingBlockFetchDecision::NoTargets => match reason {
+                Some(reason) => {
+                    warn!(
+                        height = key.1,
+                        view = key.2,
+                        block = %key.0,
+                        drop_reason = reason.as_str(),
+                        context,
+                        retry_window_ms = retry_window.as_millis(),
+                        dwell_ms = dwell.as_millis(),
+                        "missing BlockCreated fetch deferred after RBC drop: no targets available"
+                    );
+                }
+                None => {
+                    warn!(
+                        height = key.1,
+                        view = key.2,
+                        block = %key.0,
+                        context,
+                        retry_window_ms = retry_window.as_millis(),
+                        dwell_ms = dwell.as_millis(),
+                        "missing BlockCreated fetch deferred while awaiting RBC INIT: no targets available"
+                    );
+                }
+            },
+            MissingBlockFetchDecision::Backoff => {}
+        }
+    }
+
     pub(super) fn should_drop_stale_rbc_message(
         &self,
         height: crate::sumeragi::consensus::Height,
@@ -1509,14 +1650,14 @@ impl Actor {
             );
             return false;
         }
-        if self.runtime_da_enabled() {
+        if self.runtime_da_enabled() && self.rbc_rebroadcast_active(key) {
             debug!(
                 height,
                 view,
                 local_view,
                 block = %block_hash,
                 kind,
-                "accepting RBC message for stale view while DA is enabled"
+                "accepting RBC message for stale view on active block"
             );
             return false;
         }
@@ -1678,15 +1819,27 @@ impl Actor {
                 }
             }
         }
-        let mut reset_ready_state = false;
+        let derived_roster = self.rbc_roster_for_session(key);
+        if !derived_roster.is_empty() && derived_roster != init.roster {
+            warn!(
+                height = init.height,
+                view = init.view,
+                block = %init.block_hash,
+                "rejecting RBC init with roster snapshot that mismatches local commit topology"
+            );
+            return Ok(());
+        }
+        let (roster, roster_source) = if derived_roster.is_empty() {
+            (init.roster.clone(), RbcRosterSource::Init)
+        } else {
+            (derived_roster, RbcRosterSource::Derived)
+        };
         if let Some(existing_roster) = self.subsystems.da_rbc.rbc.session_rosters.get(&key) {
             let existing_hash = rbc_roster_hash(existing_roster);
-            if existing_hash == init.roster_hash {
-                self.record_rbc_session_roster(key, init.roster.clone(), RbcRosterSource::Network);
-            } else {
+            if existing_hash != init.roster_hash {
                 let source = self
                     .rbc_session_roster_source(key)
-                    .unwrap_or(RbcRosterSource::Derived);
+                    .unwrap_or(RbcRosterSource::Init);
                 if source.is_authoritative() {
                     warn!(
                         height = init.height,
@@ -1698,53 +1851,21 @@ impl Actor {
                     );
                     return Ok(());
                 }
-                debug!(
-                    height = init.height,
-                    view = init.view,
-                    block = %init.block_hash,
-                    expected = ?existing_hash,
-                    observed = ?init.roster_hash,
-                    "overriding derived RBC roster snapshot with init roster"
-                );
-                self.subsystems
-                    .da_rbc
-                    .rbc
-                    .session_rosters
-                    .insert(key, init.roster.clone());
-                self.subsystems
-                    .da_rbc
-                    .rbc
-                    .session_roster_sources
-                    .insert(key, RbcRosterSource::Network);
-                self.subsystems
-                    .da_rbc
-                    .rbc
-                    .persisted_full_sessions
-                    .remove(&key);
-                self.subsystems
-                    .da_rbc
-                    .rbc
-                    .payload_rebroadcast_last_sent
-                    .remove(&key);
-                self.subsystems
-                    .da_rbc
-                    .rbc
-                    .ready_rebroadcast_last_sent
-                    .remove(&key);
-                self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
-                reset_ready_state = true;
+                if !roster_source.is_authoritative() {
+                    warn!(
+                        height = init.height,
+                        view = init.view,
+                        block = %init.block_hash,
+                        expected = ?existing_hash,
+                        observed = ?init.roster_hash,
+                        "ignoring RBC init with conflicting unverified roster snapshot"
+                    );
+                    return Ok(());
+                }
             }
-        } else {
-            self.record_rbc_session_roster(key, init.roster.clone(), RbcRosterSource::Network);
         }
+        self.record_rbc_session_roster(key, roster, roster_source);
         if let Some(mut session) = self.subsystems.da_rbc.rbc.sessions.remove(&key) {
-            if reset_ready_state {
-                session.ready_signatures.clear();
-                session.sent_ready = false;
-                session.delivered = false;
-                session.deliver_sender = None;
-                session.deliver_signature = None;
-            }
             if session.payload_hash().is_none() {
                 session.payload_hash = Some(init.payload_hash);
             }
@@ -1885,6 +2006,11 @@ impl Actor {
                     dropped_bytes,
                     "dropping pending RBC chunk: stash session limit reached"
                 );
+                self.request_missing_block_after_rbc_drop(
+                    key,
+                    PendingRbcDropReason::SessionLimit,
+                    "rbc_chunk_stash_limit",
+                );
                 return Ok(());
             };
             let outcome = pending.push_chunk_capped(chunk, max_chunks, max_bytes, Instant::now());
@@ -1902,6 +2028,11 @@ impl Actor {
                             evicted_chunks,
                             evicted_bytes,
                         );
+                        self.request_missing_block_after_rbc_drop(
+                            key,
+                            PendingRbcDropReason::Cap,
+                            "rbc_chunk_stash_evicted",
+                        );
                     }
                     debug!(
                         ?key,
@@ -1911,6 +2042,9 @@ impl Actor {
                         evicted_bytes,
                         "stashed RBC chunk until INIT arrives"
                     );
+                    if evicted_chunks == 0 {
+                        self.request_missing_block_for_pending_rbc(key, "rbc_chunk_stash", None);
+                    }
                 }
                 PendingChunkOutcome::Dropped {
                     dropped_bytes,
@@ -1933,6 +2067,11 @@ impl Actor {
                         evicted_chunks,
                         evicted_bytes,
                         "dropping pending RBC chunk: stash limits exceeded before INIT"
+                    );
+                    self.request_missing_block_after_rbc_drop(
+                        key,
+                        PendingRbcDropReason::Cap,
+                        "rbc_chunk_stash_cap",
                     );
                 }
             }
@@ -2034,6 +2173,11 @@ impl Actor {
                         dropped_bytes,
                         "dropping pending RBC READY: stash session limit reached before INIT"
                     );
+                    self.request_missing_block_after_rbc_drop(
+                        key,
+                        PendingRbcDropReason::SessionLimit,
+                        "rbc_ready_stash_limit",
+                    );
                     return Ok(());
                 };
                 let (accepted, dropped_bytes) =
@@ -2054,6 +2198,7 @@ impl Actor {
                     ready_view,
                     "stashed RBC READY until INIT arrives"
                 );
+                self.request_missing_block_for_pending_rbc(key, "rbc_ready_stash", None);
             } else {
                 warn!(
                     ?key,
@@ -2065,6 +2210,11 @@ impl Actor {
                     1,
                     u64::try_from(dropped_bytes).unwrap_or(u64::MAX),
                 );
+                self.request_missing_block_after_rbc_drop(
+                    key,
+                    PendingRbcDropReason::Cap,
+                    "rbc_ready_stash_cap",
+                );
             }
             self.publish_rbc_backlog_snapshot();
             return Ok(());
@@ -2072,7 +2222,7 @@ impl Actor {
         let mut topology_peers = self.rbc_session_roster(key);
         let mut roster_source = self
             .rbc_session_roster_source(key)
-            .unwrap_or(RbcRosterSource::Derived);
+            .unwrap_or(RbcRosterSource::Init);
         fn stash_ready(
             actor: &mut Actor,
             key: SessionKey,
@@ -2100,6 +2250,11 @@ impl Actor {
                         ready_view,
                         dropped_bytes,
                         "dropping pending RBC READY: stash session limit reached"
+                    );
+                    actor.request_missing_block_after_rbc_drop(
+                        key,
+                        PendingRbcDropReason::SessionLimit,
+                        "rbc_ready_stash_limit",
                     );
                     return Ok(());
                 };
@@ -2133,6 +2288,11 @@ impl Actor {
                     1,
                     u64::try_from(dropped_bytes).unwrap_or(u64::MAX),
                 );
+                actor.request_missing_block_after_rbc_drop(
+                    key,
+                    PendingRbcDropReason::Cap,
+                    "rbc_ready_stash_cap",
+                );
             }
             actor.publish_rbc_backlog_snapshot();
             Ok(())
@@ -2142,7 +2302,7 @@ impl Actor {
                 topology_peers = refreshed;
                 roster_source = self
                     .rbc_session_roster_source(key)
-                    .unwrap_or(RbcRosterSource::Derived);
+                    .unwrap_or(RbcRosterSource::Init);
             }
         }
         if topology_peers.is_empty() {
@@ -2320,7 +2480,7 @@ impl Actor {
             .sessions
             .get(&key)
             .is_some_and(|session| session.delivered);
-        self.maybe_emit_rbc_deliver(key)?;
+        self.maybe_emit_rbc_ready(key)?;
         let delivered_after = self
             .subsystems
             .da_rbc
@@ -2561,6 +2721,11 @@ impl Actor {
                         dropped_bytes,
                         "dropping pending RBC DELIVER: stash session limit reached before INIT"
                     );
+                    self.request_missing_block_after_rbc_drop(
+                        key,
+                        PendingRbcDropReason::SessionLimit,
+                        "rbc_deliver_stash_limit",
+                    );
                     return Ok(());
                 };
                 let (accepted, dropped_bytes) =
@@ -2577,6 +2742,7 @@ impl Actor {
                     ?key,
                     pending_chunks, pending_bytes, "stashed RBC DELIVER until INIT arrives"
                 );
+                self.request_missing_block_for_pending_rbc(key, "rbc_deliver_stash", None);
             } else {
                 warn!(
                     ?key,
@@ -2588,6 +2754,11 @@ impl Actor {
                     1,
                     u64::try_from(dropped_bytes).unwrap_or(u64::MAX),
                 );
+                self.request_missing_block_after_rbc_drop(
+                    key,
+                    PendingRbcDropReason::Cap,
+                    "rbc_deliver_stash_cap",
+                );
             }
             self.publish_rbc_backlog_snapshot();
             return Ok(());
@@ -2595,7 +2766,7 @@ impl Actor {
         let mut topology_peers = self.rbc_session_roster(key);
         let mut roster_source = self
             .rbc_session_roster_source(key)
-            .unwrap_or(RbcRosterSource::Derived);
+            .unwrap_or(RbcRosterSource::Init);
         let mut roster_updated = false;
         fn stash_deliver(
             actor: &mut Actor,
@@ -2620,6 +2791,11 @@ impl Actor {
                         reason,
                         dropped_bytes,
                         "dropping pending RBC DELIVER: stash session limit reached"
+                    );
+                    actor.request_missing_block_after_rbc_drop(
+                        key,
+                        PendingRbcDropReason::SessionLimit,
+                        "rbc_deliver_stash_limit",
                     );
                     return Ok(());
                 };
@@ -2651,6 +2827,11 @@ impl Actor {
                     1,
                     u64::try_from(dropped_bytes).unwrap_or(u64::MAX),
                 );
+                actor.request_missing_block_after_rbc_drop(
+                    key,
+                    PendingRbcDropReason::Cap,
+                    "rbc_deliver_stash_cap",
+                );
             }
             actor.publish_rbc_backlog_snapshot();
             Ok(())
@@ -2661,7 +2842,7 @@ impl Actor {
                 roster_updated |= updated;
                 roster_source = self
                     .rbc_session_roster_source(key)
-                    .unwrap_or(RbcRosterSource::Derived);
+                    .unwrap_or(RbcRosterSource::Init);
             }
         }
         if topology_peers.is_empty() {
@@ -2898,6 +3079,11 @@ impl Actor {
                         dropped_bytes,
                         "dropping deferred RBC DELIVER: stash session limit reached"
                     );
+                    self.request_missing_block_after_rbc_drop(
+                        key,
+                        PendingRbcDropReason::SessionLimit,
+                        "rbc_deliver_defer_limit",
+                    );
                     return Ok(());
                 };
                 let (accepted, dropped_bytes) =
@@ -2932,6 +3118,11 @@ impl Actor {
                     PendingRbcDropReason::Cap,
                     1,
                     u64::try_from(dropped_bytes).unwrap_or(u64::MAX),
+                );
+                self.request_missing_block_after_rbc_drop(
+                    key,
+                    PendingRbcDropReason::Cap,
+                    "rbc_deliver_defer_cap",
                 );
             }
             self.publish_rbc_backlog_snapshot();
@@ -3032,7 +3223,7 @@ impl Actor {
                     for session_key in session_keys {
                         let roster_source = self
                             .rbc_session_roster_source(session_key)
-                            .unwrap_or(RbcRosterSource::Derived);
+                            .unwrap_or(RbcRosterSource::Init);
                         if !roster_source.is_authoritative() {
                             continue;
                         }
@@ -3176,7 +3367,7 @@ impl Actor {
         }
         let roster_source = self
             .rbc_session_roster_source(key)
-            .unwrap_or(RbcRosterSource::Derived);
+            .unwrap_or(RbcRosterSource::Init);
         if !roster_source.is_authoritative() {
             return;
         }

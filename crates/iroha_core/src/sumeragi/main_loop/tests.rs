@@ -63,6 +63,7 @@ use super::{
     super::rbc_store::{SessionKey, SoftwareManifest},
     Actor, BlockMessage,
     background::dispatch_background_request,
+    locked_qc::qc_extends_locked_with_lookup,
     vrf::VrfLocalState,
     *,
 };
@@ -1620,6 +1621,7 @@ async fn test_actor_harness_with_config_and_height_and_kura(
         consensus_cfg,
         common_config,
         network_cfg.max_frame_bytes_consensus,
+        network_cfg.max_frame_bytes_block_sync,
         events_sender,
         Arc::clone(&state),
         Arc::clone(&queue),
@@ -1644,6 +1646,7 @@ async fn test_actor_harness_with_config_and_height_and_kura(
         consensus_cfg,
         common_config,
         network_cfg.max_frame_bytes_consensus,
+        network_cfg.max_frame_bytes_block_sync,
         events_sender,
         Arc::clone(&state),
         Arc::clone(&queue),
@@ -1961,7 +1964,7 @@ async fn actor_next_tick_deadline_tracks_rbc_rebroadcast_cooldown() {
         actor.common_config.peer.id().clone(),
         PeerId::new(harness.key_pairs[1].public_key().clone()),
     ];
-    actor.record_rbc_session_roster(key, roster, RbcRosterSource::Network);
+    actor.record_rbc_session_roster(key, roster, RbcRosterSource::Init);
 
     let payload_cooldown = actor.payload_rebroadcast_cooldown();
     let deadline = actor
@@ -2161,7 +2164,7 @@ async fn observer_skips_rbc_rebroadcasts() {
         .expect("session");
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
     let roster = actor.effective_commit_topology();
-    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Network);
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
 
     let _ = harness.background_rx.try_iter().count();
     let progress = actor.rebroadcast_stalled_rbc_payloads(Instant::now());
@@ -2333,43 +2336,6 @@ async fn merge_committee_accepts_remote_signature() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn heartbeat_inserted_for_empty_batch() {
-    use std::borrow::Cow;
-
-    use iroha_data_model::isi::Log;
-    use iroha_logger::Level;
-
-    let mut harness = test_actor_harness(1).await;
-    let actor = &mut harness.actor;
-    let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-
-    let mut tx_batch = Vec::new();
-    let mut routing_batch = Vec::new();
-    actor
-        .add_heartbeat_if_empty(1, &time_source, &mut tx_batch, &mut routing_batch)
-        .expect("heartbeat insertion should succeed");
-    assert_eq!(tx_batch.len(), 1);
-    assert_eq!(routing_batch.len(), 1);
-    assert!(crate::tx::is_heartbeat_transaction(tx_batch[0].as_ref()));
-
-    let authority = AccountId::new(
-        "wonderland".parse().expect("domain"),
-        harness.key_pairs[0].public_key().clone(),
-    );
-    let tx = TransactionBuilder::new(actor.common_config.chain.clone(), authority)
-        .with_instructions([Log::new(Level::INFO, "noop".to_string())])
-        .sign(harness.key_pairs[0].private_key());
-    let mut tx_batch = vec![AcceptedTransaction::new_unchecked(Cow::Owned(tx))];
-    let mut routing_batch = vec![crate::queue::RoutingDecision::default()];
-    actor
-        .add_heartbeat_if_empty(2, &time_source, &mut tx_batch, &mut routing_batch)
-        .expect("heartbeat insertion should succeed");
-    assert_eq!(tx_batch.len(), 1);
-    assert_eq!(routing_batch.len(), 1);
-    assert!(!crate::tx::is_heartbeat_transaction(tx_batch[0].as_ref()));
-}
-
-#[tokio::test(flavor = "current_thread")]
 async fn latest_committed_qc_uses_epoch_for_height() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
@@ -2515,7 +2481,7 @@ async fn rbc_session_persists_only_after_full_payload_arrives() {
 
     harness
         .actor
-        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Network);
+        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
     harness.actor.persist_rbc_session(key, &session);
     let persisted = crate::sumeragi::rbc_store::load_session_from_dir(
         rbc_dir.path(),
@@ -2582,7 +2548,7 @@ async fn rbc_persist_worker_persists_full_session() {
     assert!(!roster.is_empty(), "roster should not be empty");
     harness
         .actor
-        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Network);
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
     harness
         .actor
         .subsystems
@@ -2669,7 +2635,7 @@ async fn rbc_persist_worker_wakes_on_result() {
     assert!(!roster.is_empty(), "roster should not be empty");
     harness
         .actor
-        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Network);
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
     harness
         .actor
         .subsystems
@@ -2724,7 +2690,7 @@ async fn rbc_persist_worker_does_not_block_on_full_wake_channel() {
     assert!(!roster.is_empty(), "roster should not be empty");
     harness
         .actor
-        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Network);
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
     harness
         .actor
         .subsystems
@@ -3172,6 +3138,125 @@ async fn block_sync_update_accepts_uncertified_missing_block_when_behind() {
     assert!(
         actor.block_known_locally(block.hash()),
         "block sync should accept missing-block payloads with quorum signatures when behind"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_sync_update_accepts_uncertified_missing_block_in_npos() {
+    use crate::sumeragi::status;
+
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let _genesis_hash = seed_genesis_block_for_state(&actor.state);
+    let (committed_height, _committed_hash) = {
+        let view = actor.state.view();
+        (
+            u64::try_from(view.height()).unwrap_or(u64::MAX),
+            view.latest_block_hash(),
+        )
+    };
+    let block_height = committed_height.saturating_add(2).max(2);
+    let view_index = 0_u64;
+
+    let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(block_height);
+    let signature_topology =
+        super::topology_for_view(&topology, block_height, view_index, mode_tag, prf_seed);
+    let leader_peer = signature_topology
+        .as_ref()
+        .first()
+        .expect("signer in topology");
+    let leader_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == leader_peer.public_key())
+        .expect("signer keypair exists in harness");
+    let leader_idx = signature_topology
+        .position(leader_kp.public_key())
+        .expect("signer index in topology");
+    let mut missing_parent =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x61; Hash::LENGTH]));
+    if actor.block_known_locally(missing_parent) {
+        missing_parent =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x62; Hash::LENGTH]));
+    }
+    let mut block = heartbeat_block_for_state(
+        actor.state.as_ref(),
+        &actor.common_config.chain,
+        block_height,
+        view_index,
+        Some(missing_parent),
+        leader_kp,
+        u64::try_from(leader_idx).expect("signer index fits u64"),
+    );
+    let required = signature_topology.min_votes_for_commit().max(1);
+    for (idx, peer) in signature_topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .take(required)
+    {
+        if idx == leader_idx {
+            continue;
+        }
+        let kp = harness
+            .key_pairs
+            .iter()
+            .find(|kp| kp.public_key() == peer.public_key())
+            .expect("signer keypair exists in harness");
+        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        block
+            .add_signature(BlockSignature::new(
+                u64::try_from(idx).expect("signer index fits u64"),
+                sig,
+            ))
+            .expect("signature added");
+    }
+
+    let update = super::message::BlockSyncUpdate::from(&block);
+    let now = Instant::now();
+    let retry_window = Duration::from_secs(1);
+    actor.pending.missing_block_requests.insert(
+        block.hash(),
+        super::MissingBlockRequest {
+            height: block_height,
+            view: view_index,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window,
+            view_change_window: Some(retry_window),
+            first_seen: now,
+            last_requested: now,
+            view_change_triggered: false,
+            attempts: 0,
+        },
+    );
+
+    actor
+        .handle_block_sync_update(update)
+        .expect("block sync update");
+
+    assert!(
+        actor.vote_roster_cache.contains_key(&block.hash()),
+        "block sync roster should be cached for vote validation"
+    );
+    let pending = actor.pending.pending_blocks.get(&block.hash());
+    assert!(pending.is_some(), "pending block should be inserted");
+    assert!(
+        pending.is_some_and(|pending| !pending.aborted),
+        "pending block should not be marked aborted"
+    );
+    assert!(
+        actor.block_known_locally(block.hash()),
+        "block sync should accept missing-block payloads under NPOS when requested"
     );
 
     harness.shutdown.send();
@@ -7610,7 +7695,7 @@ async fn rbc_payload_rebroadcast_sends_init_without_chunks() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn rbc_payload_rebroadcast_skips_derived_roster() {
+async fn rbc_payload_rebroadcast_allows_derived_roster() {
     let mut harness = test_actor_harness(4).await;
     let key = session_key();
     let payload = b"payload".to_vec();
@@ -7634,14 +7719,55 @@ async fn rbc_payload_rebroadcast_skips_derived_roster() {
     assert!(!roster.is_empty(), "roster should not be empty");
     harness
         .actor
-        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
+        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
 
     let _ = harness.background_rx.try_iter().count();
     harness.actor.rebroadcast_rbc_payload(key, &session);
 
-    assert!(
-        harness.background_rx.try_iter().next().is_none(),
-        "expected derived roster to skip INIT rebroadcast"
+    let posts: Vec<_> = harness.background_rx.try_iter().collect();
+    let roster = harness.actor.rbc_session_roster(key);
+    let local_peer_id = harness.actor.common_config.peer.id().clone();
+    let expected_targets = roster.iter().filter(|peer| *peer != &local_peer_id).count();
+    let seed = super::rbc::shuffle_seed(&key.0, key.1, key.2);
+    let should_rebroadcast = super::rbc::is_payload_rebroadcaster(&roster, &local_peer_id, seed);
+    let init_posts = posts
+        .iter()
+        .filter(|post| {
+            matches!(
+                post,
+                BackgroundPost::Post {
+                    msg: BlockMessage::RbcInit(_),
+                    ..
+                }
+            )
+        })
+        .count();
+    let chunk_posts = posts
+        .iter()
+        .filter(|post| {
+            matches!(
+                post,
+                BackgroundPost::Post {
+                    msg: BlockMessage::RbcChunk(_),
+                    ..
+                }
+            )
+        })
+        .count();
+    let chunk_count = usize::try_from(session.total_chunks()).unwrap_or(0);
+    let expected_posts = if should_rebroadcast {
+        expected_targets
+    } else {
+        0
+    };
+    assert_eq!(
+        init_posts, expected_posts,
+        "expected derived roster to rebroadcast INIT when selected"
+    );
+    assert_eq!(
+        chunk_posts,
+        expected_posts.saturating_mul(chunk_count),
+        "expected derived roster to rebroadcast chunks when selected"
     );
 
     harness.shutdown.send();
@@ -7650,7 +7776,7 @@ async fn rbc_payload_rebroadcast_skips_derived_roster() {
 #[tokio::test(flavor = "current_thread")]
 async fn rebroadcast_stalled_rbc_payloads_flushes_pending_with_roster() {
     let mut harness = test_actor_harness(4).await;
-    let key = session_key();
+    let key = insert_active_pending_block(&mut harness.actor, 0);
     let payload = b"payload".to_vec();
     let payload_hash = Hash::new(&payload);
     let epoch = harness.actor.epoch_for_height(key.1);
@@ -7723,7 +7849,7 @@ async fn rebroadcast_stalled_rbc_payloads_flushes_pending_with_roster() {
 #[tokio::test(flavor = "current_thread")]
 async fn rebroadcast_stalled_rbc_payloads_derives_roster_before_flush() {
     let mut harness = test_actor_harness(4).await;
-    let key = session_key();
+    let key = insert_active_pending_block(&mut harness.actor, 0);
     let payload = b"payload".to_vec();
     let payload_hash = Hash::new(&payload);
     let epoch = harness.actor.epoch_for_height(key.1);
@@ -7829,7 +7955,7 @@ async fn rbc_ready_rebroadcast_is_rate_limited_per_session() {
     let should_force = local_ready && !ready_quorum;
     harness
         .actor
-        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Network);
+        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
     let roster_hash = roster_hash(&roster);
     let readies = Actor::rbc_ready_bundle(key, &session, roster_hash).expect("readies");
     harness.actor.rebroadcast_rbc_ready_bundle(key, readies);
@@ -7925,7 +8051,7 @@ async fn rbc_ready_rebroadcast_forces_local_ready_when_not_rebroadcaster() {
 
     harness
         .actor
-        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Network);
+        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
     let roster_hash = roster_hash(&roster);
     let readies = Actor::rbc_ready_bundle(key, &session, roster_hash).expect("readies");
 
@@ -7954,7 +8080,7 @@ async fn rbc_ready_rebroadcast_forces_local_ready_when_not_rebroadcaster() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn rbc_ready_rebroadcast_skips_derived_roster() {
+async fn rbc_ready_rebroadcast_allows_derived_roster() {
     let mut harness = test_actor_harness(4).await;
     let key = session_key();
     let payload = b"payload".to_vec();
@@ -7974,9 +8100,45 @@ async fn rbc_ready_rebroadcast_skips_derived_roster() {
 
     let _ = harness.background_rx.try_iter().count();
     harness.actor.rebroadcast_rbc_ready_bundle(key, readies);
-    assert!(
-        harness.background_rx.try_iter().next().is_none(),
-        "expected derived roster to skip READY rebroadcast"
+    let posts: Vec<_> = harness.background_rx.try_iter().collect();
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let required = harness.actor.rbc_deliver_quorum(&topology);
+    let ready_quorum = required != 0 && session.ready_signatures.len() >= required;
+    let (_, mode_tag, prf_seed) = harness.actor.consensus_context_for_height(key.1);
+    let signature_topology = super::topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
+    let local_idx = harness
+        .actor
+        .local_validator_index_for_topology(&signature_topology);
+    let local_ready = local_idx.is_some_and(|idx| {
+        session
+            .ready_signatures
+            .iter()
+            .any(|entry| entry.sender == idx)
+    });
+    let should_rebroadcast =
+        harness.actor.should_rebroadcast_rbc_ready(&roster, key) || (!ready_quorum && local_ready);
+    let local_peer_id = harness.actor.common_config.peer.id().clone();
+    let expected_targets = roster.iter().filter(|peer| *peer != &local_peer_id).count();
+    let ready_posts = posts
+        .iter()
+        .filter(|post| {
+            matches!(
+                post,
+                BackgroundPost::Post {
+                    msg: BlockMessage::RbcReady(_),
+                    ..
+                }
+            )
+        })
+        .count();
+    let expected_ready_posts = if should_rebroadcast {
+        expected_targets.saturating_mul(session.ready_signatures.len())
+    } else {
+        0
+    };
+    assert_eq!(
+        ready_posts, expected_ready_posts,
+        "expected derived roster to rebroadcast READY when eligible"
     );
 
     harness.shutdown.send();
@@ -7996,7 +8158,7 @@ async fn rbc_ready_rebroadcast_skips_on_roster_hash_mismatch() {
     let roster = harness.actor.effective_commit_topology();
     harness
         .actor
-        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Network);
+        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
     assert!(roster.len() > 1, "roster should contain multiple peers");
     let mut mismatched_roster = roster.clone();
     mismatched_roster.pop();
@@ -8035,7 +8197,7 @@ async fn tick_rebroadcasts_stalled_rbc_payloads_and_respects_cooldown() {
     let roster = harness.actor.effective_commit_topology();
     harness
         .actor
-        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Network);
+        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
 
     harness.actor.tick();
 
@@ -9615,6 +9777,43 @@ async fn precommit_qc_advances_locked_qc_when_block_known() {
     let locked = actor.locked_qc.expect("locked qc should be set");
     assert_eq!(locked.height, 2);
     assert_eq!(locked.subject_block_hash, block2.hash());
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn precommit_qc_defers_locked_qc_until_block_validated() {
+    let _guard = super::status::qc_status_test_guard();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let block = sample_block(2, 0, None);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, 2, 0);
+    pending.validation_status = ValidationStatus::Pending;
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    let chain = actor.common_config.chain.clone();
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let qc = qc_with_bitmap(
+        &chain,
+        block_hash,
+        2,
+        0,
+        0,
+        vec![0b0000_1111],
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+
+    actor.handle_qc(qc).expect("handle precommit QC");
+
+    assert!(
+        actor.locked_qc.is_none(),
+        "precommit QC should not update locked QC for unvalidated block"
+    );
 
     harness.shutdown.send();
 }
@@ -11890,7 +12089,7 @@ async fn duplicate_rbc_ready_is_ignored() {
     let roster = harness.actor.effective_commit_topology();
     harness
         .actor
-        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Network);
+        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
 
     let ready = harness.actor.build_rbc_ready(key, &session).expect("ready");
     harness
@@ -11932,11 +12131,7 @@ async fn duplicate_rbc_ready_is_ignored() {
 #[tokio::test(flavor = "current_thread")]
 async fn handle_rbc_ready_stashes_on_roster_hash_mismatch() {
     let mut harness = test_actor_harness(4).await;
-    let key: SessionKey = (
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"rbc-ready-roster-missing")),
-        5,
-        0,
-    );
+    let key = insert_active_pending_block(&mut harness.actor, 0);
     let payload = b"payload".to_vec();
     let payload_hash = Hash::new(&payload);
     let session =
@@ -12011,7 +12206,7 @@ async fn handle_rbc_ready_stashes_on_roster_hash_mismatch() {
 
     harness
         .actor
-        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Network);
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
     let progress = harness
         .actor
         .rebroadcast_stalled_rbc_payloads(Instant::now());
@@ -12040,6 +12235,128 @@ async fn handle_rbc_ready_stashes_on_roster_hash_mismatch() {
             .pending
             .contains_key(&key)
     );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn handle_rbc_ready_requests_missing_block_on_stash_cap_drop() {
+    let mut harness = test_actor_harness(4).await;
+    harness.actor.config.rbc_chunk_max_bytes = 1;
+    harness.actor.config.rbc_pending_max_bytes = 1;
+    let key = session_key();
+    let roster = harness.actor.effective_commit_topology();
+    assert!(!roster.is_empty());
+    harness
+        .actor
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
+    let epoch = harness.actor.epoch_for_height(key.1);
+    let ready = crate::sumeragi::consensus::RbcReady {
+        block_hash: key.0,
+        height: key.1,
+        view: key.2,
+        epoch,
+        roster_hash: Hash::prehashed([0xAB; Hash::LENGTH]),
+        chunk_root: Hash::prehashed([0xAC; Hash::LENGTH]),
+        sender: 0,
+        signature: vec![0xAA],
+    };
+
+    assert!(
+        harness.actor.pending.missing_block_requests.is_empty(),
+        "missing block requests should start empty"
+    );
+    harness
+        .actor
+        .handle_rbc_ready(ready)
+        .expect("ready handled");
+    assert!(
+        harness
+            .actor
+            .pending
+            .missing_block_requests
+            .contains_key(&key.0),
+        "missing block request should be scheduled after READY drop"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn handle_rbc_ready_requests_missing_block_when_init_missing() {
+    let mut harness = test_actor_harness(4).await;
+    let height = u64::try_from(harness.actor.state.view().height())
+        .expect("height fits u64")
+        .saturating_add(1);
+    let key: SessionKey = (
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB7; Hash::LENGTH])),
+        height,
+        0,
+    );
+    let epoch = harness.actor.epoch_for_height(key.1);
+    let payload = b"payload".to_vec();
+    let payload_hash = Hash::new(&payload);
+    let session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
+        .expect("session");
+
+    let roster = harness.actor.effective_commit_topology();
+    assert!(!roster.is_empty());
+    let local_peer = harness.actor.common_config.peer.id().clone();
+    let signer_peer = roster
+        .iter()
+        .find(|peer| *peer != &local_peer)
+        .expect("signer peer")
+        .clone();
+    let signer_idx = roster
+        .iter()
+        .position(|peer| peer == &signer_peer)
+        .expect("signer index");
+    let signer_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == signer_peer.public_key())
+        .expect("signer keypair");
+    let chunk_root = session.expected_chunk_root.expect("chunk root");
+    let roster_hash = super::rbc::rbc_roster_hash(&roster);
+
+    let sender = u32::try_from(signer_idx).expect("signer index fits u32");
+    let mut ready = crate::sumeragi::consensus::RbcReady {
+        block_hash: key.0,
+        height: key.1,
+        view: key.2,
+        epoch,
+        roster_hash,
+        chunk_root,
+        sender,
+        signature: Vec::new(),
+    };
+    let (_, mode_tag, _prf_seed) = harness.actor.consensus_context_for_height(key.1);
+    let preimage = super::rbc_ready_preimage(&harness.actor.common_config.chain, mode_tag, &ready);
+    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    ready.signature = signature.payload().to_vec();
+
+    harness
+        .actor
+        .handle_rbc_ready(ready)
+        .expect("ready handled");
+
+    let pending = harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .pending
+        .get(&key)
+        .expect("pending stash");
+    assert_eq!(pending.ready.len(), 1);
+
+    let request = harness
+        .actor
+        .pending
+        .missing_block_requests
+        .get(&key.0)
+        .expect("missing block request");
+    assert_eq!(request.attempts, 1);
 
     harness.shutdown.send();
 }
@@ -12254,11 +12571,7 @@ async fn handle_rbc_ready_refreshes_derived_roster_on_mismatch() {
 #[tokio::test(flavor = "current_thread")]
 async fn handle_rbc_deliver_stashes_on_roster_hash_mismatch() {
     let mut harness = test_actor_harness(4).await;
-    let key: SessionKey = (
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"rbc-deliver-roster-missing")),
-        5,
-        0,
-    );
+    let key = insert_active_pending_block(&mut harness.actor, 0);
     let payload = b"payload".to_vec();
     let payload_hash = Hash::new(&payload);
     let mut session =
@@ -12337,7 +12650,7 @@ async fn handle_rbc_deliver_stashes_on_roster_hash_mismatch() {
 
     harness
         .actor
-        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Network);
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
     let progress = harness
         .actor
         .rebroadcast_stalled_rbc_payloads(Instant::now());
@@ -12557,7 +12870,7 @@ async fn maybe_emit_rbc_ready_marks_invalid_and_clears_pending_on_chunk_root_mis
     let roster = harness.actor.effective_commit_topology();
     harness
         .actor
-        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Network);
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
     let pending = harness.actor.pending_rbc_slot(key).expect("pending slot");
     let _ = pending.push_chunk_capped(
         crate::sumeragi::consensus::RbcChunk {
@@ -12681,7 +12994,7 @@ async fn maybe_emit_rbc_ready_defers_until_roster_available() {
 
     harness
         .actor
-        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Network);
+        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
 
     harness
         .actor
@@ -12772,7 +13085,7 @@ async fn maybe_emit_rbc_ready_after_ready_quorum_without_all_chunks() {
     assert!(!roster.is_empty());
     harness
         .actor
-        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Network);
+        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
 
     harness
         .actor
@@ -12808,11 +13121,7 @@ async fn maybe_emit_rbc_ready_after_ready_quorum_without_all_chunks() {
 #[tokio::test(flavor = "current_thread")]
 async fn rebroadcast_stalled_rbc_payloads_retries_ready_after_roster_arrives() {
     let mut harness = test_actor_harness(4).await;
-    let key: SessionKey = (
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"rbc-ready-rebroadcast")),
-        5,
-        0,
-    );
+    let key = insert_active_pending_block(&mut harness.actor, 0);
     let payload = vec![0xAB; 16];
     let payload_hash = Hash::new(&payload);
     let session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, 0)
@@ -12830,7 +13139,7 @@ async fn rebroadcast_stalled_rbc_payloads_retries_ready_after_roster_arrives() {
     assert!(!roster.is_empty());
     harness
         .actor
-        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Network);
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
 
     let progress = harness
         .actor
@@ -12853,11 +13162,7 @@ async fn rebroadcast_stalled_rbc_payloads_retries_ready_after_roster_arrives() {
 #[tokio::test(flavor = "current_thread")]
 async fn rebroadcast_stalled_rbc_payloads_retries_chunks_after_ready_quorum() {
     let mut harness = test_actor_harness(4).await;
-    let key: SessionKey = (
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"rbc-missing-chunk-rebroadcast")),
-        7,
-        0,
-    );
+    let key = insert_active_pending_block(&mut harness.actor, 0);
     let payload = vec![0xAB; 2048];
     let payload_hash = Hash::new(&payload);
     let mut session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, 0)
@@ -12896,7 +13201,7 @@ async fn rebroadcast_stalled_rbc_payloads_retries_chunks_after_ready_quorum() {
         .insert(key, session);
     harness
         .actor
-        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Network);
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
 
     let progress = harness
         .actor
@@ -12936,8 +13241,8 @@ async fn rebroadcast_stalled_rbc_payloads_respects_session_budget() {
 
     let payload = vec![0xAB; 64];
     let payload_hash = Hash::new(&payload);
-    for height in 10..=12_u64 {
-        let key = pending_session_key(height);
+    for view in 0..=2_u64 {
+        let key = insert_active_pending_block(&mut harness.actor, view);
         let session =
             Actor::build_rbc_session_from_payload(&payload, payload_hash, 32, 0).expect("session");
         harness
@@ -12950,7 +13255,7 @@ async fn rebroadcast_stalled_rbc_payloads_respects_session_budget() {
         harness.actor.record_rbc_session_roster(
             key,
             roster.clone(),
-            super::RbcRosterSource::Network,
+            super::RbcRosterSource::Init,
         );
     }
 
@@ -13042,7 +13347,7 @@ async fn handle_rbc_ready_uses_activation_height_mode_tag() {
         .sessions
         .insert(key, session.clone());
     let roster = actor.effective_commit_topology();
-    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Network);
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
 
     let ready = actor.build_rbc_ready(key, &session).expect("ready");
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
@@ -13135,7 +13440,7 @@ async fn handle_rbc_deliver_uses_activation_height_mode_tag() {
         .sessions
         .insert(key, session.clone());
     let roster = actor.effective_commit_topology();
-    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Network);
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
 
     let deliver = actor.build_rbc_deliver(key, &session).expect("deliver");
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
@@ -13208,7 +13513,7 @@ async fn recover_block_from_rbc_session_requests_missing_block_created() {
     actor.record_rbc_session_roster(
         key,
         actor.effective_commit_topology(),
-        super::RbcRosterSource::Network,
+        super::RbcRosterSource::Init,
     );
 
     actor.recover_block_from_rbc_session(key);
@@ -13249,7 +13554,7 @@ async fn recover_block_from_rbc_session_marks_invalid_on_payload_hash_mismatch()
     actor.record_rbc_session_roster(
         key,
         actor.effective_commit_topology(),
-        super::RbcRosterSource::Network,
+        super::RbcRosterSource::Init,
     );
     let pending = actor.pending_rbc_slot(key).expect("pending slot");
     let _ = pending.push_chunk_capped(
@@ -13343,7 +13648,7 @@ async fn record_rbc_session_roster_clears_persisted_full_session() {
         .rbc
         .persisted_full_sessions
         .insert(key);
-    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Network);
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
 
     assert!(
         actor
@@ -13416,7 +13721,7 @@ async fn record_rbc_session_roster_overrides_derived_with_authoritative() {
         .rbc
         .persisted_full_sessions
         .insert(key);
-    actor.record_rbc_session_roster(key, roster_b.clone(), super::RbcRosterSource::Network);
+    actor.record_rbc_session_roster(key, roster_b.clone(), super::RbcRosterSource::Init);
 
     assert_eq!(
         actor.subsystems.da_rbc.rbc.session_rosters.get(&key),
@@ -13430,7 +13735,7 @@ async fn record_rbc_session_roster_overrides_derived_with_authoritative() {
             .session_roster_sources
             .get(&key)
             .copied(),
-        Some(super::RbcRosterSource::Network)
+        Some(super::RbcRosterSource::Init)
     );
     assert!(
         !actor
@@ -13838,7 +14143,7 @@ async fn handle_rbc_init_overrides_derived_roster_mismatch() {
             .session_roster_sources
             .get(&key)
             .copied(),
-        Some(super::RbcRosterSource::Network),
+        Some(super::RbcRosterSource::Init),
         "init roster should be authoritative"
     );
     let session = actor
@@ -13971,7 +14276,7 @@ async fn handle_rbc_ready_rejects_epoch_mismatch() {
         .sessions
         .insert(key, session.clone());
     let roster = actor.effective_commit_topology();
-    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Network);
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
 
     let ready = actor.build_rbc_ready(key, &session).expect("ready");
     actor.handle_rbc_ready(ready).expect("ready handled");
@@ -14023,7 +14328,7 @@ async fn handle_rbc_deliver_rejects_epoch_mismatch() {
         .sessions
         .insert(key, session.clone());
     let roster = actor.effective_commit_topology();
-    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Network);
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
 
     let deliver = actor.build_rbc_deliver(key, &session).expect("deliver");
     actor.handle_rbc_deliver(deliver).expect("deliver handled");
@@ -14199,7 +14504,7 @@ async fn handle_rbc_ready_rejects_chunk_root_mismatch() {
         .insert(key, session.clone());
 
     let roster = actor.effective_commit_topology();
-    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Network);
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
     let local_peer = actor.common_config.peer.id().clone();
     let signer_peer = roster
         .iter()
@@ -14264,7 +14569,7 @@ async fn handle_rbc_ready_sets_expected_chunk_root_when_missing() {
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
 
     let roster = actor.effective_commit_topology();
-    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Network);
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
     let local_peer = actor.common_config.peer.id().clone();
     let signer_peer = roster
         .iter()
@@ -14312,6 +14617,92 @@ async fn handle_rbc_ready_sets_expected_chunk_root_when_missing() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn handle_rbc_ready_emits_local_ready_after_quorum() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let key = session_key();
+    let epoch = actor.epoch_for_height(key.1);
+    let payload_hash = Hash::prehashed([0x42; 32]);
+    let chunk_root = Hash::prehashed([0x24; 32]);
+    let session =
+        RbcSession::new(2, Some(payload_hash), Some(chunk_root), None, epoch).expect("session");
+
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    let roster = actor.effective_commit_topology();
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
+
+    let local_peer = actor.common_config.peer.id().clone();
+    let signer_peers: Vec<_> = roster
+        .iter()
+        .filter(|peer| *peer != &local_peer)
+        .take(2)
+        .cloned()
+        .collect();
+    assert_eq!(signer_peers.len(), 2, "test requires two remote signers");
+
+    for signer_peer in signer_peers {
+        let signer_idx = roster
+            .iter()
+            .position(|peer| peer == &signer_peer)
+            .expect("signer index");
+        let signer_kp = harness
+            .key_pairs
+            .iter()
+            .find(|kp| kp.public_key() == signer_peer.public_key())
+            .expect("signer keypair");
+        let mut ready = crate::sumeragi::consensus::RbcReady {
+            block_hash: key.0,
+            height: key.1,
+            view: key.2,
+            epoch,
+            roster_hash: roster_hash(&roster),
+            chunk_root,
+            sender: u32::try_from(signer_idx).expect("signer index fits u32"),
+            signature: Vec::new(),
+        };
+        let preimage =
+            super::rbc_ready_preimage(&actor.common_config.chain, actor.mode_tag(), &ready);
+        let signature = Signature::new(signer_kp.private_key(), &preimage);
+        ready.signature = signature.payload().to_vec();
+
+        actor.handle_rbc_ready(ready).expect("ready handled");
+    }
+
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let signature_topology = super::topology_for_view(
+        &topology,
+        key.1,
+        key.2,
+        actor.mode_tag(),
+        actor.npos_prf_seed(),
+    );
+    let local_sender = actor
+        .local_validator_index_for_topology(&signature_topology)
+        .expect("local sender");
+
+    let stored = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session");
+    assert!(stored.sent_ready);
+    assert_eq!(stored.received_chunks(), 0);
+    assert!(
+        stored
+            .ready_signatures
+            .iter()
+            .any(|entry| entry.sender == local_sender),
+        "local READY should be recorded after quorum"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn handle_rbc_deliver_rejects_chunk_root_mismatch() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -14335,7 +14726,7 @@ async fn handle_rbc_deliver_rejects_chunk_root_mismatch() {
         .insert(key, session.clone());
 
     let roster = actor.effective_commit_topology();
-    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Network);
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
     let local_peer = actor.common_config.peer.id().clone();
     let signer_peer = roster
         .iter()
@@ -14406,7 +14797,7 @@ async fn handle_rbc_deliver_sets_expected_chunk_root_when_missing() {
     session.expected_chunk_root = None;
 
     let roster = actor.effective_commit_topology();
-    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Network);
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
     let topology = super::network_topology::Topology::new(roster.clone());
     let required = actor.rbc_deliver_quorum(&topology);
     for idx in 0..required {
@@ -14460,7 +14851,7 @@ async fn handle_rbc_deliver_records_ready_bundle() {
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
     let roster = actor.effective_commit_topology();
     assert!(!roster.is_empty(), "roster should not be empty");
-    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Network);
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
 
     let topology = super::network_topology::Topology::new(roster.clone());
     let required = actor.rbc_deliver_quorum(&topology);
@@ -14572,7 +14963,7 @@ async fn rbc_ready_gossips_to_sampled_peers() {
     harness.actor.record_rbc_session_roster(
         key,
         harness.actor.effective_commit_topology(),
-        super::RbcRosterSource::Network,
+        super::RbcRosterSource::Init,
     );
 
     let roster = harness.actor.effective_commit_topology();
@@ -14687,7 +15078,7 @@ async fn rbc_ready_uses_session_roster_after_topology_change() {
 
     harness
         .actor
-        .record_rbc_session_roster(key, roster_a.clone(), super::RbcRosterSource::Network);
+        .record_rbc_session_roster(key, roster_a.clone(), super::RbcRosterSource::Init);
 
     let mut ready = crate::sumeragi::consensus::RbcReady {
         block_hash: key.0,
@@ -14773,7 +15164,7 @@ async fn rbc_session_roster_persists_across_restart_with_roster_change() {
 
     harness
         .actor
-        .record_rbc_session_roster(key, roster_a.clone(), super::RbcRosterSource::Network);
+        .record_rbc_session_roster(key, roster_a.clone(), super::RbcRosterSource::Init);
     harness.actor.persist_rbc_session(key, &session);
     harness.shutdown.send();
     drop(harness);
@@ -14880,7 +15271,7 @@ async fn duplicate_rbc_deliver_is_ignored() {
     let roster = harness.actor.effective_commit_topology();
     harness
         .actor
-        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Network);
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
 
     let deliver = harness
         .actor
@@ -15013,7 +15404,7 @@ async fn maybe_emit_rbc_deliver_defers_until_chunks_complete() {
         .insert(key, session);
     harness
         .actor
-        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Network);
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
 
     let _ = harness.background_rx.try_iter().count();
     harness
@@ -15079,7 +15470,7 @@ async fn maybe_emit_rbc_deliver_rejects_chunk_root_mismatch() {
         .insert(key, session);
     harness
         .actor
-        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Network);
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
 
     harness
         .actor
@@ -15121,7 +15512,7 @@ async fn rbc_session_ttl_prunes_stale_sessions() {
     let roster = harness.actor.effective_commit_topology();
     harness
         .actor
-        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Network);
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
     harness.actor.update_rbc_status_entry(key, &session, false);
 
     let stale_time = SystemTime::now() - Duration::from_secs(2);
@@ -15185,7 +15576,7 @@ async fn seed_rbc_session_flushes_pending_ready() {
     let roster = harness.actor.effective_commit_topology();
     harness
         .actor
-        .record_rbc_session_roster(session_key, roster, super::RbcRosterSource::Network);
+        .record_rbc_session_roster(session_key, roster, super::RbcRosterSource::Init);
     let mut ready = harness
         .actor
         .build_rbc_ready(session_key, &session)
@@ -16389,7 +16780,7 @@ fn non_rbc_payload_budget_clamps_to_lower_of_config_and_cap() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn consensus_frame_cap_is_plaintext_and_rbc_chunk_is_clamped() {
+async fn consensus_frame_caps_are_plaintext_and_rbc_chunk_is_clamped() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.rbc_chunk_max_bytes = 1024 * 1024;
     let mut harness = test_actor_harness_with_config(1, consensus_cfg, None).await;
@@ -16402,19 +16793,26 @@ async fn consensus_frame_cap_is_plaintext_and_rbc_chunk_is_clamped() {
         actor.consensus_frame_cap, expected_cap,
         "consensus frame cap should use plaintext bytes"
     );
+    let encrypted_payload_cap =
+        iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_BLOCK_SYNC.get();
+    let expected_payload_cap = iroha_p2p::frame_plaintext_cap(encrypted_payload_cap);
+    assert_eq!(
+        actor.consensus_payload_frame_cap, expected_payload_cap,
+        "consensus payload frame cap should use plaintext bytes"
+    );
     let expected_chunk_cap =
-        super::rbc_chunk_payload_cap(actor.common_config.peer.id(), expected_cap);
+        super::rbc_chunk_payload_cap(actor.common_config.peer.id(), expected_payload_cap);
     assert_eq!(
         actor.config.rbc_chunk_max_bytes, expected_chunk_cap,
-        "RBC chunk size should be clamped to consensus cap"
+        "RBC chunk size should be clamped to consensus payload cap"
     );
     let chunk = sample_chunk_with_len(0, actor.config.rbc_chunk_max_bytes);
     assert!(
         super::consensus_block_wire_len(
             actor.common_config.peer.id(),
             &BlockMessage::RbcChunk(chunk)
-        ) <= actor.consensus_frame_cap,
-        "RBC chunk should fit within consensus frame cap"
+        ) <= actor.consensus_payload_frame_cap,
+        "RBC chunk should fit within consensus payload cap"
     );
 
     harness.shutdown.send();
@@ -16473,12 +16871,12 @@ async fn trim_block_sync_update_drops_commit_votes_to_fit() {
 
     let mut no_votes = update.clone();
     no_votes.commit_votes.clear();
-    actor.consensus_frame_cap =
+    actor.consensus_payload_frame_cap =
         super::block_sync_update_wire_len(actor.common_config.peer.id(), &no_votes);
 
     assert!(
         super::block_sync_update_wire_len(actor.common_config.peer.id(), &update)
-            > actor.consensus_frame_cap,
+            > actor.consensus_payload_frame_cap,
         "block sync update with commit votes should exceed the cap"
     );
 
@@ -16489,8 +16887,82 @@ async fn trim_block_sync_update_drops_commit_votes_to_fit() {
     );
     assert!(
         super::block_sync_update_wire_len(actor.common_config.peer.id(), &update)
-            <= actor.consensus_frame_cap,
+            <= actor.consensus_payload_frame_cap,
         "trimmed block sync update should fit"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn trim_block_sync_update_keeps_stake_snapshot_in_npos() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da_enabled = true;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let roster = actor.effective_commit_topology();
+    let stake_snapshot = crate::sumeragi::stake_snapshot::CommitStakeSnapshot::from_roster(
+        actor.state.view().world(),
+        &roster,
+    )
+    .expect("stake snapshot");
+    let block = sample_block(1, 0, None);
+    let mut update = super::message::BlockSyncUpdate::from(&block);
+    update.stake_snapshot = Some(stake_snapshot);
+    update.commit_qc = Some(Qc {
+        phase: Phase::Commit,
+        subject_block_hash: block.hash(),
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: block.header().height().get(),
+        view: block.header().view_change_index(),
+        epoch: 0,
+        mode_tag: NPOS_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&roster),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: roster.clone(),
+        aggregate: QcAggregate {
+            signers_bitmap: vec![0x01],
+            bls_aggregate_signature: vec![0xAB; 96],
+        },
+    });
+    update.validator_checkpoint = Some(ValidatorSetCheckpoint::new(
+        block.header().height().get(),
+        block.header().view_change_index(),
+        block.hash(),
+        zero_state_root(),
+        zero_state_root(),
+        roster.clone(),
+        vec![0x01],
+        vec![0xCD; 96],
+        VALIDATOR_SET_HASH_VERSION_V1,
+        None,
+    ));
+
+    let full_len = super::block_sync_update_wire_len(actor.common_config.peer.id(), &update);
+    let mut no_commit_qc = update.clone();
+    no_commit_qc.commit_qc = None;
+    let trimmed_len =
+        super::block_sync_update_wire_len(actor.common_config.peer.id(), &no_commit_qc);
+    actor.consensus_payload_frame_cap = trimmed_len;
+
+    assert!(
+        full_len > actor.consensus_payload_frame_cap,
+        "block sync update with commit QC should exceed payload cap"
+    );
+    assert!(actor.trim_block_sync_update_for_frame_cap(&mut update));
+    assert!(update.commit_qc.is_none(), "commit QC should be trimmed");
+    assert!(
+        update.validator_checkpoint.is_some(),
+        "checkpoint should be retained in NPoS"
+    );
+    assert!(
+        update.stake_snapshot.is_some(),
+        "stake snapshot should be retained in NPoS"
     );
 
     harness.shutdown.send();
@@ -16754,6 +17226,7 @@ async fn stale_pending_block_requeues_transactions() {
         consensus_cfg,
         common_config,
         network_cfg.max_frame_bytes_consensus,
+        network_cfg.max_frame_bytes_block_sync,
         events_sender,
         Arc::clone(&state),
         Arc::clone(&queue),
@@ -16778,6 +17251,7 @@ async fn stale_pending_block_requeues_transactions() {
         consensus_cfg,
         common_config,
         network_cfg.max_frame_bytes_consensus,
+        network_cfg.max_frame_bytes_block_sync,
         events_sender,
         Arc::clone(&state),
         Arc::clone(&queue),
@@ -22488,7 +22962,7 @@ async fn trigger_view_change_prunes_proposals_seen_for_height() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn trigger_view_change_prunes_stale_pending_and_missing_block_state() {
+async fn trigger_view_change_prunes_pending_blocks_and_retains_missing_state_with_da() {
     let mut harness = test_actor_harness(4).await;
     let _guard = super::status::view_change_proof_test_guard();
     let actor = &mut harness.actor;
@@ -22613,30 +23087,30 @@ async fn trigger_view_change_prunes_stale_pending_and_missing_block_state() {
         "pending block for the new view should remain"
     );
     assert!(
-        !actor.subsystems.da_rbc.rbc.sessions.contains_key(&key_0),
-        "stale RBC session should be pruned"
+        actor.subsystems.da_rbc.rbc.sessions.contains_key(&key_0),
+        "stale RBC session should remain while payload is missing"
     );
     assert!(
-        !actor.subsystems.da_rbc.rbc.sessions.contains_key(&key_1),
-        "stale RBC session should be pruned"
+        actor.subsystems.da_rbc.rbc.sessions.contains_key(&key_1),
+        "stale RBC session should remain while payload is missing"
     );
     assert!(
         actor.subsystems.da_rbc.rbc.sessions.contains_key(&key_keep),
         "RBC session for the new view should remain"
     );
     assert!(
-        !actor
+        actor
             .pending
             .missing_block_requests
             .contains_key(&stale_block_0.hash()),
-        "stale missing-block request should be pruned"
+        "stale missing-block request should remain while payload is missing"
     );
     assert!(
-        !actor
+        actor
             .pending
             .missing_block_requests
             .contains_key(&stale_block_1.hash()),
-        "stale missing-block request should be pruned"
+        "stale missing-block request should remain while payload is missing"
     );
     assert!(
         actor
@@ -22644,6 +23118,73 @@ async fn trigger_view_change_prunes_stale_pending_and_missing_block_state() {
             .missing_block_requests
             .contains_key(&keep_block.hash()),
         "missing-block request for the new view should remain"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn prune_stale_view_state_prunes_rbc_and_missing_requests_when_payload_available() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = 3u64;
+    let current_view = 2u64;
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, Instant::now());
+
+    let leader_kp = &harness.key_pairs[0];
+    let make_block = |view| -> SignedBlock {
+        super::ValidBlock::new_dummy_and_modify_header(leader_kp.private_key(), |header| {
+            header.set_height(NonZeroU64::new(height).expect("height nonzero"));
+            header.set_view_change_index(view);
+        })
+        .into()
+    };
+
+    let stale_block = make_block(0);
+    let payload_hash = Hash::prehashed([0x30; Hash::LENGTH]);
+    let chunk_root = Hash::prehashed([0x31; Hash::LENGTH]);
+    let session = RbcSession::test_new(1, Some(payload_hash), Some(chunk_root), 0);
+    let key = (stale_block.hash(), height, 0);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    let now = Instant::now();
+    let retry_window = Duration::from_secs(1);
+    actor.pending.missing_block_requests.insert(
+        stale_block.hash(),
+        MissingBlockRequest {
+            height,
+            view: 0,
+            phase: Phase::Commit,
+            priority: MissingBlockPriority::Consensus,
+            retry_window,
+            view_change_window: Some(retry_window),
+            first_seen: now,
+            last_requested: now,
+            view_change_triggered: false,
+            attempts: 0,
+        },
+    );
+
+    actor
+        .pending
+        .pending_processing
+        .set(Some(stale_block.hash()));
+
+    actor.prune_stale_view_state(height, current_view.saturating_add(1));
+
+    assert!(
+        !actor.subsystems.da_rbc.rbc.sessions.contains_key(&key),
+        "stale RBC session should be pruned once payload is available"
+    );
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&stale_block.hash()),
+        "stale missing-block request should be pruned once payload is available"
     );
 
     harness.shutdown.send();
@@ -23577,6 +24118,64 @@ async fn should_defer_proposal_when_rbc_backlog_unresolved() {
     assert!(
         actor.should_defer_proposal(),
         "proposal assembly should defer while unresolved RBC sessions are present"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn should_defer_proposal_when_active_pending_rbc_session_not_delivered() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let genesis_hash = seed_genesis_block_for_state(&actor.state);
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1).max(1);
+    let parent = if height == 1 {
+        None
+    } else {
+        Some(genesis_hash)
+    };
+    let block = sample_block(height, 0, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(b"rbc-pending");
+
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, 0),
+    );
+
+    let session_key = Actor::session_key(&block_hash, height, 0);
+    let session = RbcSession::test_new(1, Some(payload_hash), None, 0);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(session_key, session);
+
+    assert!(
+        actor.should_defer_proposal(),
+        "proposal assembly should defer while pending RBC sessions are unresolved"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn should_defer_proposal_when_relay_backpressure_active() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    actor.relay_backpressure.reset_to_current();
+    iroha_p2p::network::inc_subscriber_queue_full_for_test(
+        iroha_p2p::network::message::Topic::Consensus,
+        1,
+    );
+
+    assert!(
+        actor.should_defer_proposal(),
+        "proposal assembly should defer when relay backpressure is active"
     );
 
     harness.shutdown.send();
@@ -26760,6 +27359,11 @@ async fn ensure_rbc_session_roster_falls_back_to_prev_commit_topology_without_sn
         roster,
         "ensure should cache the derived roster for the session"
     );
+    assert_eq!(
+        actor.rbc_session_roster_source(key),
+        Some(super::RbcRosterSource::Derived),
+        "derived roster should remain non-authoritative until init arrives"
+    );
 
     harness.shutdown.send();
 }
@@ -27792,7 +28396,6 @@ async fn assemble_proposal_schedules_rbc_after_proposal_messages() {
 async fn proposal_queue_scan_budget_limits_fetch() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = false;
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
@@ -27847,7 +28450,7 @@ async fn proposal_scan_budget_tracks_multiplier() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn da_proposal_rejects_single_tx_exceeding_consensus_frame_cap() {
+async fn da_proposal_rejects_single_tx_exceeding_consensus_payload_frame_cap() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da_enabled = true;
@@ -27855,7 +28458,7 @@ async fn da_proposal_rejects_single_tx_exceeding_consensus_frame_cap() {
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
-    let payload_len = actor.consensus_frame_cap.saturating_mul(2);
+    let payload_len = actor.consensus_payload_frame_cap.saturating_mul(2);
     let key_pair = KeyPair::random();
     let (public_key, private_key) = key_pair.clone().into_parts();
     let authority = AccountId::new("wonderland".parse().expect("domain id"), public_key.clone());
@@ -27899,6 +28502,79 @@ async fn da_proposal_rejects_single_tx_exceeding_consensus_frame_cap() {
     assert!(
         err.to_string().contains("proposal frame size"),
         "expected frame cap error, got: {err}"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_defers_when_all_txs_exceed_payload_budget() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let payload_len = 2048;
+    let key_pair = KeyPair::random();
+    let (public_key, private_key) = key_pair.clone().into_parts();
+    let authority = AccountId::new("wonderland".parse().expect("domain id"), public_key.clone());
+    let key = "payload".parse().expect("metadata key");
+    let value = iroha_primitives::json::Json::new("X".repeat(payload_len));
+    let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::domain(
+        "wonderland".parse().expect("domain id"),
+        key,
+        value,
+    )
+    .into();
+    let tx = TransactionBuilder::new(actor.common_config.chain.clone(), authority)
+        .with_instructions([instruction])
+        .sign(&private_key);
+    let encoded_len = norito::to_bytes(&tx).expect("encode transaction").len();
+    assert!(
+        encoded_len > super::RBC_MAX_TOTAL_CHUNKS as usize,
+        "transaction must exceed total RBC chunk budget"
+    );
+    actor.config.rbc_chunk_max_bytes = 1;
+
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let height = 1u64;
+    let view = 0u64;
+    let highest_qc = sample_qc_ref(0, 0);
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let local_idx = actor
+        .local_validator_index(&actor.state.view())
+        .expect("local validator index");
+
+    let assembled = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            /*leader_index*/ 0,
+            /*local_validator_index*/ local_idx,
+            Instant::now(),
+        )
+        .expect("proposal assembly should defer");
+    assert!(
+        !assembled,
+        "proposal should defer when all transactions exceed payload budget"
+    );
+    assert_eq!(
+        actor.queue.queued_len(),
+        1,
+        "oversized transactions should stay queued"
+    );
+    assert!(
+        actor.subsystems.propose.proposal_cache.proposals.is_empty(),
+        "proposal cache should remain empty when no tx fits"
     );
 
     harness.shutdown.send();
@@ -28948,11 +29624,13 @@ async fn pacemaker_uses_commit_qc_roster_for_proposal_leader() {
         actor.latest_committed_qc(),
         committed_height,
     );
-    let expected_chunk_cap =
-        super::rbc_chunk_payload_cap(actor.common_config.peer.id(), actor.consensus_frame_cap);
+    let expected_chunk_cap = super::rbc_chunk_payload_cap(
+        actor.common_config.peer.id(),
+        actor.consensus_payload_frame_cap,
+    );
     assert_eq!(
         actor.config.rbc_chunk_max_bytes, expected_chunk_cap,
-        "RBC chunk size should be clamped to consensus cap"
+        "RBC chunk size should be clamped to consensus payload cap"
     );
     let highest_qc = actor.latest_committed_qc().expect("committed qc");
     let prev_block = super::propose::resolve_prev_block_for_proposal(
@@ -36195,7 +36873,7 @@ async fn maybe_emit_rbc_deliver_throttles_repeated_deferral() {
         .da_rbc
         .rbc
         .session_roster_sources
-        .insert(key, super::RbcRosterSource::Network);
+        .insert(key, super::RbcRosterSource::Init);
 
     let session = RbcSession::test_new(0, Some(Hash::new(b"payload")), None, 0);
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
@@ -36864,6 +37542,7 @@ async fn proposal_assembly_defers_without_draining_queue_and_preserves_view_when
         consensus_cfg,
         common_config,
         network_cfg.max_frame_bytes_consensus,
+        network_cfg.max_frame_bytes_block_sync,
         events_sender,
         Arc::clone(&state),
         Arc::clone(&queue),
@@ -36887,6 +37566,7 @@ async fn proposal_assembly_defers_without_draining_queue_and_preserves_view_when
         consensus_cfg,
         common_config,
         network_cfg.max_frame_bytes_consensus,
+        network_cfg.max_frame_bytes_block_sync,
         events_sender,
         Arc::clone(&state),
         Arc::clone(&queue),
@@ -38957,6 +39637,27 @@ fn sample_block(height: u64, view: u64, parent: Option<HashOf<BlockHeader>>) -> 
     SignedBlock::presigned(block_signature, header, Vec::<SignedTransaction>::new())
 }
 
+fn insert_pending_block(actor: &mut Actor, height: u64, view: u64) -> SessionKey {
+    let parent = actor.state.view().latest_block_hash();
+    let block = sample_block(height, view, parent);
+    let payload_hash = Hash::prehashed([0xAD; 32]);
+    let key = (block.hash(), height, view);
+    let pending = PendingBlock::new(block, payload_hash, height, view);
+    actor.pending.pending_blocks.insert(key.0, pending);
+    key
+}
+
+fn insert_active_pending_block(actor: &mut Actor, view: u64) -> SessionKey {
+    let height = actor
+        .state
+        .view()
+        .height()
+        .saturating_add(1)
+        .try_into()
+        .unwrap_or(u64::MAX);
+    insert_pending_block(actor, height, view)
+}
+
 fn block_with_txs(
     height: u64,
     view: u64,
@@ -40491,7 +41192,26 @@ fn rbc_message_committed_flags_stale_inputs() {
 async fn rbc_stale_view_accepts_when_da_enabled() {
     let mut harness = test_actor_harness(4).await;
     let now = Instant::now();
-    let height = 5;
+    let height = 1;
+    let view = 0;
+    harness.actor.phase_tracker.start_new_round(height, now);
+    harness.actor.phase_tracker.on_view_change(height, 2, now);
+
+    let key = insert_active_pending_block(&mut harness.actor, view);
+    let drop = harness
+        .actor
+        .should_drop_stale_rbc_message(height, view, &key.0, "RbcInit");
+    assert!(
+        !drop,
+        "DA-enabled nodes must accept stale-view RBC messages for active pending blocks"
+    );
+}
+
+#[tokio::test]
+async fn rbc_stale_view_drops_without_active_block() {
+    let mut harness = test_actor_harness(4).await;
+    let now = Instant::now();
+    let height = 1;
     let view = 0;
     harness.actor.phase_tracker.start_new_round(height, now);
     harness.actor.phase_tracker.on_view_change(height, 2, now);
@@ -40501,9 +41221,32 @@ async fn rbc_stale_view_accepts_when_da_enabled() {
         .actor
         .should_drop_stale_rbc_message(height, view, &block_hash, "RbcInit");
     assert!(
-        !drop,
-        "DA-enabled nodes must accept stale-view RBC messages to keep availability moving"
+        drop,
+        "stale-view RBC messages should drop without an active block"
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rbc_backlog_ignores_inactive_sessions() {
+    let mut harness = test_actor_harness(4).await;
+    let key = session_key();
+    let payload_hash = Hash::prehashed([0x33; 32]);
+    let chunk_root = Hash::prehashed([0x44; 32]);
+    let session = RbcSession::test_new(1, Some(payload_hash), Some(chunk_root), 0);
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session);
+
+    assert!(
+        !harness.actor.has_unresolved_rbc_backlog(),
+        "inactive RBC sessions should not gate proposal assembly"
+    );
+
+    harness.shutdown.send();
 }
 
 #[test]

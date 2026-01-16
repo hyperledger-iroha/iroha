@@ -1,10 +1,7 @@
 //! Proposal assembly and pacemaker-driven propose path.
 
-use iroha_logger::prelude::*;
-use iroha_primitives::time::TimeSource;
-
+use super::proposals::block_payload_bytes;
 use super::*;
-
 pub(super) fn resolve_prev_block_for_proposal(
     proposal_height: u64,
     highest_qc: &crate::sumeragi::consensus::QcHeaderRef,
@@ -97,48 +94,6 @@ impl Actor {
         let max_in_block = NonZeroUsize::new(queue_len.min(max_tx_target).max(1))
             .expect("non-zero by construction");
         (max_tx_target, max_in_block)
-    }
-
-    pub(super) fn add_heartbeat_if_empty(
-        &self,
-        proposal_height: u64,
-        time_source: &TimeSource,
-        tx_batch: &mut Vec<AcceptedTransaction<'static>>,
-        routing_batch: &mut Vec<RoutingDecision>,
-    ) -> Result<()> {
-        if !tx_batch.is_empty() {
-            return Ok(());
-        }
-        let view = self.state.view();
-        let params = view.world().parameters();
-        let tx_params = params.transaction();
-        let max_clock_drift = params.sumeragi().max_clock_drift();
-        let crypto_cfg = view.crypto.clone();
-        let heartbeat = crate::tx::build_heartbeat_transaction_with_time_source(
-            self.common_config.chain.clone(),
-            &self.common_config.key_pair,
-            &tx_params,
-            proposal_height,
-            time_source,
-        );
-        let accepted = AcceptedTransaction::accept_with_time_source(
-            heartbeat,
-            &self.common_config.chain,
-            max_clock_drift,
-            tx_params,
-            crypto_cfg.as_ref(),
-            time_source,
-        )
-        .map_err(|err| eyre!("failed to accept heartbeat transaction: {err}"))?;
-        let routing = crate::queue::evaluate_policy_with_catalog(
-            &view.nexus.routing_policy,
-            &view.nexus.lane_catalog,
-            &view.nexus.dataspace_catalog,
-            &accepted,
-        );
-        tx_batch.push(accepted);
-        routing_batch.push(routing);
-        Ok(())
     }
 
     pub(super) fn pull_transactions_for_proposal(
@@ -403,7 +358,7 @@ impl Actor {
         } else {
             let mut payload_budget = Some(non_rbc_payload_budget(
                 self.config.block_max_payload_bytes,
-                self.consensus_frame_cap,
+                self.consensus_payload_frame_cap,
             ));
             tx_batch = Vec::with_capacity(transactions.len());
             routing_batch = Vec::with_capacity(routing_decisions.len());
@@ -437,18 +392,27 @@ impl Actor {
             }
         }
 
+        if tx_batch.is_empty() {
+            drop(tx_guards);
+            for tx in overflow_transactions {
+                if let Err(err) = self.queue.push(tx, self.state.view()) {
+                    warn!(?err.err, "failed to requeue oversized transaction");
+                }
+            }
+            info!(
+                height = proposal_height,
+                view,
+                queue_len = queue_len_after_pop,
+                "deferring proposal: no transactions fit within payload budget"
+            );
+            return Ok(false);
+        }
+
         let original_for_requeue = tx_batch.clone();
-        let heartbeat_time_source = TimeSource::new_system();
         let mut removed_for_chunk_cap: Vec<AcceptedTransaction<'static>> = Vec::new();
         let mut removed_for_frame_cap: Vec<AcceptedTransaction<'static>> = Vec::new();
 
         let assembly_result: Result<()> = (|| {
-            self.add_heartbeat_if_empty(
-                proposal_height,
-                &heartbeat_time_source,
-                &mut tx_batch,
-                &mut routing_batch,
-            )?;
             if tx_sizes.len() < tx_batch.len() {
                 for tx in tx_batch.iter().skip(tx_sizes.len()) {
                     tx_sizes.push(tx.as_ref().encode().len());
@@ -771,22 +735,22 @@ impl Actor {
                     self.common_config.peer.id(),
                     &block_created_msg,
                 );
-                if frame_len > self.consensus_frame_cap {
+                if frame_len > self.consensus_payload_frame_cap {
                     if tx_batch.len() <= 1 {
                         warn!(
                             height = proposal_height,
                             view,
                             frame_len,
-                            cap = self.consensus_frame_cap,
+                            cap = self.consensus_payload_frame_cap,
                             da_enabled,
-                            "BlockCreated frame exceeds consensus cap; unable to assemble proposal"
+                            "BlockCreated frame exceeds consensus payload cap; unable to assemble proposal"
                         );
                         return Err(eyre!(
-                            "proposal frame size {frame_len} exceeds consensus cap {}",
-                            self.consensus_frame_cap
+                            "proposal frame size {frame_len} exceeds consensus payload cap {}",
+                            self.consensus_payload_frame_cap
                         ));
                     }
-                    let excess = frame_len.saturating_sub(self.consensus_frame_cap);
+                    let excess = frame_len.saturating_sub(self.consensus_payload_frame_cap);
                     let removed = trim_batch_for_size_cap(
                         &mut tx_batch,
                         &mut routing_batch,
@@ -1097,8 +1061,11 @@ impl Actor {
 
     pub(super) fn should_defer_proposal(&mut self) -> bool {
         let queue_saturated = self.subsystems.propose.backpressure_gate.should_defer();
+        let active_pending = self.has_active_pending_blocks();
         let rbc_backlog = self.has_unresolved_rbc_backlog();
-        queue_saturated || rbc_backlog
+        let relay_backpressure =
+            self.relay_backpressure_active(Instant::now(), self.rebroadcast_cooldown());
+        queue_saturated || active_pending || rbc_backlog || relay_backpressure
     }
 
     pub(super) fn proposal_scan_budget(&self, max_in_block: NonZeroUsize) -> usize {
@@ -1112,7 +1079,9 @@ impl Actor {
         now: Instant,
         state: BackpressureState,
     ) {
+        let active_pending = self.has_active_pending_blocks();
         let rbc_backlog = self.has_unresolved_rbc_backlog();
+        let relay_backpressure = self.relay_backpressure_active(now, self.rebroadcast_cooldown());
         super::status::inc_pacemaker_backpressure_deferrals();
         #[cfg(feature = "telemetry")]
         {
@@ -1122,7 +1091,9 @@ impl Actor {
             ?now,
             tx_queue_depth = state.queued(),
             tx_queue_capacity = state.capacity().get(),
+            active_pending,
             rbc_backlog,
+            relay_backpressure,
             "Pacemaker deferred proposal assembly due to backpressure"
         );
     }
@@ -1190,7 +1161,7 @@ impl Actor {
         if da_enabled && !has_work {
             trace!(
                 da_enabled,
-                "DA enabled and transaction queue is empty; deferring heartbeat proposals"
+                "DA enabled and transaction queue is empty; deferring proposals"
             );
         }
 
@@ -1616,7 +1587,7 @@ impl Actor {
                 LockedQcRejection::HashMismatch { .. } => {
                     let locked_hash = self.locked_qc.map(|qc| qc.subject_block_hash);
                     let locked_missing =
-                        locked_hash.is_some_and(|hash| !self.block_known_locally(hash));
+                        locked_hash.is_some_and(|hash| !self.block_known_for_lock(hash));
                     if locked_missing {
                         iroha_logger::warn!(
                             ?reason,
