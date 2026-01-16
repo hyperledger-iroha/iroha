@@ -1,6 +1,8 @@
 # Status
 
 ## Latest Updates
+- Sumeragi/RBC: treat derived rosters as authoritative (INIT rosters are unverified), reject INIT roster mismatches against derived snapshots, gate local READY/DELIVER emission on authoritative rosters, and fall back to the effective commit topology when missing-block fetches have no session roster; update unit coverage and `docs/source/sumeragi.md`.
+- Tests: not run (not requested).
 - Docs/OpenAPI: regenerate Torii OpenAPI snapshots and re-sign manifests; rotate allowed signer to the drill ed25519 key used for docs fixtures.
 - Sumeragi/P2P: route consensus payloads through the block-sync frame cap (default 16 MiB) while keeping control messages on the 1 MiB consensus cap; raise default RBC chunk size to 256 KiB; preserve NPoS stake snapshots when trimming BlockSyncUpdate payloads to avoid QC stalls; update docs/tests accordingly.
 - Tests: not run (per request).

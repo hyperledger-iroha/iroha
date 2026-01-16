@@ -5241,7 +5241,14 @@ impl Actor {
     }
 
     fn ensure_rbc_session_roster(&mut self, key: super::rbc_store::SessionKey) -> Vec<PeerId> {
-        if let Some(roster) = self.subsystems.da_rbc.rbc.session_rosters.get(&key) {
+        if let Some(roster) = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .session_rosters
+            .get(&key)
+            .cloned()
+        {
             let roster_source = self
                 .rbc_session_roster_source(key)
                 .unwrap_or(RbcRosterSource::Init);
@@ -5250,7 +5257,7 @@ impl Actor {
                     return refreshed;
                 }
             }
-            return roster.clone();
+            return roster;
         }
         let roster = self.rbc_roster_for_session(key);
         if !roster.is_empty() {
@@ -5383,7 +5390,7 @@ impl Actor {
                         block = %key.0,
                         height = key.1,
                         view = key.2,
-                        "refreshing derived RBC roster snapshot"
+                        "refreshing unverified RBC roster snapshot"
                     );
                     entry.insert(roster);
                     self.subsystems
@@ -6398,8 +6405,7 @@ impl Actor {
                                 rbc_sessions.insert(key, session);
                                 if !roster.is_empty() {
                                     rbc_session_rosters.insert(key, roster);
-                                    rbc_session_roster_sources
-                                        .insert(key, RbcRosterSource::Init);
+                                    rbc_session_roster_sources.insert(key, RbcRosterSource::Init);
                                 }
                             }
                             Err(err) => {
@@ -8492,7 +8498,14 @@ impl Actor {
         if session.is_invalid() {
             return None;
         }
-        let roster = self.rbc_session_roster(key);
+        let roster = {
+            let existing = self.rbc_session_roster(key);
+            if existing.is_empty() {
+                self.rbc_roster_for_session(key)
+            } else {
+                existing
+            }
+        };
         if roster.is_empty() {
             return None;
         }
@@ -8535,12 +8548,23 @@ impl Actor {
                 return Ok(None);
             }
 
-            let commit_topology = self.rbc_session_roster(key);
+            let commit_topology = self.ensure_rbc_session_roster(key);
             if commit_topology.is_empty() {
                 debug!(
                     height = key.1,
                     view = key.2,
                     "deferring RBC READY until commit roster is available"
+                );
+                return Ok(None);
+            }
+            let roster_source = self
+                .rbc_session_roster_source(key)
+                .unwrap_or(RbcRosterSource::Init);
+            if !roster_source.is_authoritative() {
+                debug!(
+                    height = key.1,
+                    view = key.2,
+                    "deferring RBC READY until commit roster is verified"
                 );
                 return Ok(None);
             }
@@ -8704,7 +8728,7 @@ impl Actor {
         if !self.rbc_rebroadcast_active(key) {
             return;
         }
-        let roster = self.rbc_session_roster(key);
+        let roster = self.ensure_rbc_session_roster(key);
         if roster.is_empty() {
             return;
         }
@@ -8724,7 +8748,7 @@ impl Actor {
             return;
         }
         let expected_hash = readies.first().map(|ready| ready.roster_hash);
-        let topology_peers = self.rbc_session_roster(key);
+        let topology_peers = self.ensure_rbc_session_roster(key);
         let local_peer_id = self.common_config.peer.id().clone();
         if topology_peers.is_empty() {
             return;
@@ -9225,8 +9249,20 @@ impl Actor {
             return Ok(());
         }
 
-        let commit_topology = self.rbc_session_roster(key);
+        let commit_topology = self.ensure_rbc_session_roster(key);
         if commit_topology.is_empty() {
+            self.subsystems.da_rbc.rbc.sessions.insert(key, session);
+            return Ok(());
+        }
+        let roster_source = self
+            .rbc_session_roster_source(key)
+            .unwrap_or(RbcRosterSource::Init);
+        if !roster_source.is_authoritative() {
+            debug!(
+                height = key.1,
+                view = key.2,
+                "deferring RBC DELIVER until commit roster is verified"
+            );
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
             return Ok(());
         }
