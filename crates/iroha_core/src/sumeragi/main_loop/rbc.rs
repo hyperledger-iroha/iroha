@@ -1411,15 +1411,24 @@ impl Actor {
             }
             self.publish_rbc_backlog_snapshot();
         }
-        let roster = self.ensure_rbc_session_roster(key);
+        let mut roster = self.ensure_rbc_session_roster(key);
         if roster.is_empty() {
+            roster = self.effective_commit_topology();
+            if roster.is_empty() {
+                debug!(
+                    height = key.1,
+                    view = key.2,
+                    block = %key.0,
+                    "skipping missing BlockCreated fetch: empty roster"
+                );
+                return;
+            }
             debug!(
                 height = key.1,
                 view = key.2,
                 block = %key.0,
-                "skipping missing BlockCreated fetch: empty roster"
+                "using fallback commit topology for missing BlockCreated fetch"
             );
-            return;
         }
         let topology = crate::sumeragi::network_topology::Topology::new(roster);
         let retry_window = self.rebroadcast_cooldown();
@@ -1503,8 +1512,33 @@ impl Actor {
         if self.block_payload_available_locally(key.0) {
             return;
         }
-        let roster = self.ensure_rbc_session_roster(key);
+        let mut roster = self.ensure_rbc_session_roster(key);
         if roster.is_empty() {
+            roster = self.effective_commit_topology();
+            if roster.is_empty() {
+                match reason {
+                    Some(reason) => {
+                        debug!(
+                            height = key.1,
+                            view = key.2,
+                            block = %key.0,
+                            drop_reason = reason.as_str(),
+                            context,
+                            "skipping missing BlockCreated fetch after RBC drop: empty roster"
+                        );
+                    }
+                    None => {
+                        debug!(
+                            height = key.1,
+                            view = key.2,
+                            block = %key.0,
+                            context,
+                            "skipping missing BlockCreated fetch for pending RBC: empty roster"
+                        );
+                    }
+                }
+                return;
+            }
             match reason {
                 Some(reason) => {
                     debug!(
@@ -1513,7 +1547,7 @@ impl Actor {
                         block = %key.0,
                         drop_reason = reason.as_str(),
                         context,
-                        "skipping missing BlockCreated fetch after RBC drop: empty roster"
+                        "using fallback commit topology for missing BlockCreated fetch after RBC drop"
                     );
                 }
                 None => {
@@ -1522,11 +1556,10 @@ impl Actor {
                         view = key.2,
                         block = %key.0,
                         context,
-                        "skipping missing BlockCreated fetch for pending RBC: empty roster"
+                        "using fallback commit topology for missing BlockCreated fetch while awaiting RBC INIT"
                     );
                 }
             }
-            return;
         }
         let topology = crate::sumeragi::network_topology::Topology::new(roster);
         let retry_window = self.rebroadcast_cooldown();

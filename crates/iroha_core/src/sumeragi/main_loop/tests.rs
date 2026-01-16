@@ -2164,7 +2164,7 @@ async fn observer_skips_rbc_rebroadcasts() {
         .expect("session");
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
     let roster = actor.effective_commit_topology();
-    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
 
     let _ = harness.background_rx.try_iter().count();
     let progress = actor.rebroadcast_stalled_rbc_payloads(Instant::now());
@@ -2481,7 +2481,7 @@ async fn rbc_session_persists_only_after_full_payload_arrives() {
 
     harness
         .actor
-        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
+        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
     harness.actor.persist_rbc_session(key, &session);
     let persisted = crate::sumeragi::rbc_store::load_session_from_dir(
         rbc_dir.path(),
@@ -2548,7 +2548,7 @@ async fn rbc_persist_worker_persists_full_session() {
     assert!(!roster.is_empty(), "roster should not be empty");
     harness
         .actor
-        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
     harness
         .actor
         .subsystems
@@ -2635,7 +2635,7 @@ async fn rbc_persist_worker_wakes_on_result() {
     assert!(!roster.is_empty(), "roster should not be empty");
     harness
         .actor
-        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
     harness
         .actor
         .subsystems
@@ -2690,7 +2690,7 @@ async fn rbc_persist_worker_does_not_block_on_full_wake_channel() {
     assert!(!roster.is_empty(), "roster should not be empty");
     harness
         .actor
-        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
     harness
         .actor
         .subsystems
@@ -12206,7 +12206,7 @@ async fn handle_rbc_ready_stashes_on_roster_hash_mismatch() {
 
     harness
         .actor
-        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
     let progress = harness
         .actor
         .rebroadcast_stalled_rbc_payloads(Instant::now());
@@ -12355,6 +12355,47 @@ async fn handle_rbc_ready_requests_missing_block_when_init_missing() {
         .pending
         .missing_block_requests
         .get(&key.0)
+        .expect("missing block request");
+    assert_eq!(request.attempts, 1);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn request_missing_block_after_rbc_drop_uses_fallback_roster_when_session_roster_missing() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(2);
+    let view = 0u64;
+    let mut block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xE9; Hash::LENGTH]));
+    if actor.block_payload_available_locally(block_hash) {
+        block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xEA; Hash::LENGTH]));
+    }
+    let key = (block_hash, height, view);
+
+    assert!(
+        actor.rbc_roster_for_session(key).is_empty(),
+        "precondition: derived roster should be empty for far height"
+    );
+    assert!(
+        !actor.effective_commit_topology().is_empty(),
+        "fallback roster should be available"
+    );
+
+    actor.request_missing_block_after_rbc_drop(
+        key,
+        PendingRbcDropReason::Cap,
+        "rbc_drop_fallback_test",
+    );
+
+    let request = actor
+        .pending
+        .missing_block_requests
+        .get(&block_hash)
         .expect("missing block request");
     assert_eq!(request.attempts, 1);
 
@@ -12650,7 +12691,7 @@ async fn handle_rbc_deliver_stashes_on_roster_hash_mismatch() {
 
     harness
         .actor
-        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
     let progress = harness
         .actor
         .rebroadcast_stalled_rbc_payloads(Instant::now());
@@ -12870,7 +12911,7 @@ async fn maybe_emit_rbc_ready_marks_invalid_and_clears_pending_on_chunk_root_mis
     let roster = harness.actor.effective_commit_topology();
     harness
         .actor
-        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
     let pending = harness.actor.pending_rbc_slot(key).expect("pending slot");
     let _ = pending.push_chunk_capped(
         crate::sumeragi::consensus::RbcChunk {
@@ -12989,12 +13030,12 @@ async fn maybe_emit_rbc_ready_defers_until_roster_available() {
         .sessions
         .get(&key)
         .expect("session");
-    assert!(stored.sent_ready);
-    assert_eq!(stored.ready_signatures.len(), 1);
+    assert!(!stored.sent_ready);
+    assert!(stored.ready_signatures.is_empty());
 
     harness
         .actor
-        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
+        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
 
     harness
         .actor
@@ -13139,7 +13180,7 @@ async fn rebroadcast_stalled_rbc_payloads_retries_ready_after_roster_arrives() {
     assert!(!roster.is_empty());
     harness
         .actor
-        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
 
     let progress = harness
         .actor
@@ -13201,7 +13242,7 @@ async fn rebroadcast_stalled_rbc_payloads_retries_chunks_after_ready_quorum() {
         .insert(key, session);
     harness
         .actor
-        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
 
     let progress = harness
         .actor
@@ -13255,7 +13296,7 @@ async fn rebroadcast_stalled_rbc_payloads_respects_session_budget() {
         harness.actor.record_rbc_session_roster(
             key,
             roster.clone(),
-            super::RbcRosterSource::Init,
+            super::RbcRosterSource::Derived,
         );
     }
 
@@ -13496,7 +13537,8 @@ async fn recover_block_from_rbc_session_requests_missing_block_created() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
-    let height = actor.state.view().height() as u64 + 1;
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(2);
     let view = 0u64;
     let epoch = actor.epoch_for_height(height);
     let block = sample_block(height, view, None);
@@ -13510,10 +13552,14 @@ async fn recover_block_from_rbc_session_requests_missing_block_created() {
             .expect("session");
     session.test_set_delivered(true);
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
-    actor.record_rbc_session_roster(
-        key,
-        actor.effective_commit_topology(),
-        super::RbcRosterSource::Init,
+    let derived_roster = actor.rbc_roster_for_session(key);
+    assert!(
+        derived_roster.is_empty(),
+        "precondition: derived roster should be empty for far height"
+    );
+    assert!(
+        !actor.effective_commit_topology().is_empty(),
+        "fallback roster should be available"
     );
 
     actor.recover_block_from_rbc_session(key);
@@ -13648,7 +13694,7 @@ async fn record_rbc_session_roster_clears_persisted_full_session() {
         .rbc
         .persisted_full_sessions
         .insert(key);
-    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
 
     assert!(
         actor
@@ -13673,7 +13719,7 @@ async fn record_rbc_session_roster_clears_persisted_full_session() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn record_rbc_session_roster_overrides_derived_with_authoritative() {
+async fn record_rbc_session_roster_rejects_unverified_override() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -13725,7 +13771,7 @@ async fn record_rbc_session_roster_overrides_derived_with_authoritative() {
 
     assert_eq!(
         actor.subsystems.da_rbc.rbc.session_rosters.get(&key),
-        Some(&roster_b)
+        Some(&roster_a)
     );
     assert_eq!(
         actor
@@ -13735,15 +13781,16 @@ async fn record_rbc_session_roster_overrides_derived_with_authoritative() {
             .session_roster_sources
             .get(&key)
             .copied(),
-        Some(super::RbcRosterSource::Init)
+        Some(super::RbcRosterSource::Derived)
     );
     assert!(
-        !actor
+        actor
             .subsystems
             .da_rbc
             .rbc
             .persisted_full_sessions
-            .contains(&key)
+            .contains(&key),
+        "persisted sessions should remain for unverified override"
     );
     let session = actor
         .subsystems
@@ -13752,14 +13799,20 @@ async fn record_rbc_session_roster_overrides_derived_with_authoritative() {
         .sessions
         .get(&key)
         .expect("session stored");
-    assert!(session.ready_signatures.is_empty());
-    assert!(!session.sent_ready);
-    assert!(!session.delivered);
-    assert!(session.deliver_signature.is_none());
-    assert!(session.deliver_sender.is_none());
     assert!(
-        !actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
-        "pending stash should be cleared after roster override"
+        session
+            .ready_signatures
+            .iter()
+            .any(|entry| entry.sender == 42),
+        "ready signatures should remain after unverified override is ignored"
+    );
+    assert!(session.sent_ready);
+    assert!(session.delivered);
+    assert_eq!(session.deliver_signature, Some(vec![0xBB]));
+    assert_eq!(session.deliver_sender, Some(42));
+    assert!(
+        actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
+        "pending stash should remain after unverified override is ignored"
     );
 
     harness.shutdown.send();
@@ -14075,7 +14128,7 @@ async fn handle_rbc_init_ignores_payload_hash_mismatch_for_existing_session() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn handle_rbc_init_overrides_derived_roster_mismatch() {
+async fn handle_rbc_init_rejects_derived_roster_mismatch() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -14134,7 +14187,7 @@ async fn handle_rbc_init_overrides_derived_roster_mismatch() {
         .session_rosters
         .get(&key)
         .expect("roster stored");
-    assert_eq!(stored, &roster_b);
+    assert_eq!(stored, &roster_a);
     assert_eq!(
         actor
             .subsystems
@@ -14143,8 +14196,8 @@ async fn handle_rbc_init_overrides_derived_roster_mismatch() {
             .session_roster_sources
             .get(&key)
             .copied(),
-        Some(super::RbcRosterSource::Init),
-        "init roster should be authoritative"
+        Some(super::RbcRosterSource::Derived),
+        "derived roster should remain authoritative"
     );
     let session = actor
         .subsystems
@@ -14154,15 +14207,15 @@ async fn handle_rbc_init_overrides_derived_roster_mismatch() {
         .get(&key)
         .expect("session stored");
     assert!(
-        !session
+        session
             .ready_signatures
             .iter()
             .any(|entry| entry.sender == old_sender),
-        "ready signatures from derived roster should be cleared"
+        "ready signatures should be preserved after rejecting mismatched INIT"
     );
-    assert!(!session.delivered, "deliver state should be reset");
-    assert!(session.deliver_signature.is_none());
-    assert!(session.deliver_sender.is_none());
+    assert!(session.delivered, "deliver state should remain intact");
+    assert_eq!(session.deliver_signature, Some(vec![0xBB]));
+    assert_eq!(session.deliver_sender, Some(old_sender));
 
     harness.shutdown.send();
 }
@@ -14504,7 +14557,7 @@ async fn handle_rbc_ready_rejects_chunk_root_mismatch() {
         .insert(key, session.clone());
 
     let roster = actor.effective_commit_topology();
-    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
     let local_peer = actor.common_config.peer.id().clone();
     let signer_peer = roster
         .iter()
@@ -14569,7 +14622,7 @@ async fn handle_rbc_ready_sets_expected_chunk_root_when_missing() {
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
 
     let roster = actor.effective_commit_topology();
-    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
     let local_peer = actor.common_config.peer.id().clone();
     let signer_peer = roster
         .iter()
@@ -14631,7 +14684,7 @@ async fn handle_rbc_ready_emits_local_ready_after_quorum() {
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
 
     let roster = actor.effective_commit_topology();
-    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
 
     let local_peer = actor.common_config.peer.id().clone();
     let signer_peers: Vec<_> = roster
@@ -15340,11 +15393,31 @@ async fn maybe_emit_rbc_deliver_accepts_derived_roster() {
         .rbc
         .sessions
         .insert(key, session);
+
+    let _ = harness.background_rx.try_iter().count();
+    harness
+        .actor
+        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
+    harness
+        .actor
+        .maybe_emit_rbc_deliver(key)
+        .expect("maybe emit deliver");
+    let stored = harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session");
+    assert!(
+        stored.deliver_signature.is_none(),
+        "unverified roster should defer DELIVER"
+    );
+
     harness
         .actor
         .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
-
-    let _ = harness.background_rx.try_iter().count();
     harness
         .actor
         .maybe_emit_rbc_deliver(key)
