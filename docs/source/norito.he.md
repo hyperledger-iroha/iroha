@@ -111,7 +111,7 @@ Norito הוא קודק הסריאליזציה הבינארי של Iroha. הוא 
 
 ## פנקס Decode/Flags
 
-- דגלים: `COMPACT_LEN`,‏ `COMPACT_SEQ_LEN`,‏ `VARINT_OFFSETS`,‏ `PACKED_STRUCT`,‏ `PACKED_SEQ`,‏ `HEADERLESS`.
+- דגלים: `COMPACT_LEN`,‏ `PACKED_STRUCT`,‏ `PACKED_SEQ`,‏ `FIELD_BITSET`,‏ `HEADERLESS`.
 - `DecodeFlagsGuard` + `PayloadCtxGuard`.
 - `reset_decode_state` לאיפוס.
 

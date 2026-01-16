@@ -17,26 +17,16 @@ fn truncated_payload_is_rejected() {
 }
 
 #[test]
-fn packed_sequences_default_to_fixed_headers() {
+fn packed_sequences_use_fixed_headers() {
     use std::collections::BTreeSet;
 
     let mut validators = BTreeSet::new();
     validators.insert(42u64);
     let encoded = norito::codec::Encode::encode(&validators);
 
-    let heuristics = norito::core::heuristics::get();
-    let expect_compact =
-        !encoded.is_empty() && encoded.len() <= heuristics.enable_compact_seq_len_up_to;
-    if expect_compact {
-        assert_eq!(
-            encoded[0], 1u8,
-            "expected compact length header for len=1 set"
-        );
-    } else {
-        assert_eq!(
-            &encoded[..8],
-            &1u64.to_le_bytes(),
-            "expected fixed-length header for len=1 set"
-        );
-    }
+    assert_eq!(
+        &encoded[..8],
+        &1u64.to_le_bytes(),
+        "expected fixed-length header for len=1 set"
+    );
 }

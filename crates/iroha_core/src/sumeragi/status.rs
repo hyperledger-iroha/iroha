@@ -175,6 +175,50 @@ pub struct RbcAbortSnapshot {
     pub last_view: u64,
 }
 
+/// Classifies per-peer RBC payload mismatches for telemetry and status reporting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RbcMismatchKind {
+    /// Chunk digest does not match the declared digest list.
+    ChunkDigest,
+    /// Payload hash does not match the expected value.
+    PayloadHash,
+    /// Merkle root for chunk digests does not match the expected root.
+    ChunkRoot,
+}
+
+impl RbcMismatchKind {
+    /// Telemetry label for the mismatch kind.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::ChunkDigest => "chunk_digest",
+            Self::PayloadHash => "payload_hash",
+            Self::ChunkRoot => "chunk_root",
+        }
+    }
+}
+
+/// Snapshot of per-peer RBC payload mismatch counters.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RbcMismatchSnapshot {
+    /// Per-peer mismatch counters and last-observed timestamps.
+    pub entries: Vec<RbcMismatchEntry>,
+}
+
+/// Per-peer mismatch counters tracked for RBC payload validation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RbcMismatchEntry {
+    /// Peer associated with the mismatch counts.
+    pub peer_id: PeerId,
+    /// Count of RBC chunk digest mismatches attributed to the peer.
+    pub chunk_digest_mismatch_total: u64,
+    /// Count of payload-hash mismatches attributed to the peer.
+    pub payload_hash_mismatch_total: u64,
+    /// Count of chunk-root mismatches attributed to the peer.
+    pub chunk_root_mismatch_total: u64,
+    /// Timestamp (ms since UNIX epoch) when the last mismatch was recorded.
+    pub last_timestamp_ms: u64,
+}
+
 /// Snapshot of membership mismatch tracking.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MembershipMismatchSnapshot {
@@ -220,6 +264,14 @@ struct MembershipMismatchRegistry {
     last: Option<MembershipMismatchContext>,
 }
 
+#[derive(Clone, Debug, Default)]
+struct RbcMismatchCounts {
+    chunk_digest_mismatch_total: u64,
+    payload_hash_mismatch_total: u64,
+    chunk_root_mismatch_total: u64,
+    last_timestamp_ms: u64,
+}
+
 static LEADER_INDEX: AtomicU64 = AtomicU64::new(0);
 static HIGHEST_QC_HEIGHT: AtomicU64 = AtomicU64::new(0);
 static HIGHEST_QC_VIEW: AtomicU64 = AtomicU64::new(0);
@@ -244,6 +296,8 @@ static MEMBERSHIP_VIEW: AtomicU64 = AtomicU64::new(0);
 static MEMBERSHIP_EPOCH: AtomicU64 = AtomicU64::new(0);
 static MEMBERSHIP_VIEW_HASH: OnceLock<Mutex<[u8; 32]>> = OnceLock::new();
 static MEMBERSHIP_MISMATCH_REGISTRY: OnceLock<Mutex<MembershipMismatchRegistry>> = OnceLock::new();
+static RBC_MISMATCH_REGISTRY: OnceLock<Mutex<BTreeMap<PeerId, RbcMismatchCounts>>> =
+    OnceLock::new();
 static MODE_TAG: OnceLock<Mutex<String>> = OnceLock::new();
 static STAGED_MODE_TAG: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 static STAGED_MODE_ACTIVATION_HEIGHT: OnceLock<Mutex<Option<u64>>> = OnceLock::new();
@@ -1548,6 +1602,61 @@ pub fn membership_mismatch_snapshot() -> MembershipMismatchSnapshot {
     }
 }
 
+fn rbc_mismatch_registry()
+-> Option<std::sync::MutexGuard<'static, BTreeMap<PeerId, RbcMismatchCounts>>> {
+    RBC_MISMATCH_REGISTRY
+        .get_or_init(|| Mutex::new(BTreeMap::new()))
+        .lock()
+        .ok()
+}
+
+/// Record an RBC payload mismatch attributed to the given peer.
+pub fn record_rbc_mismatch(peer: &PeerId, kind: RbcMismatchKind) {
+    let now_ms = now_timestamp_ms();
+    let Some(mut registry) = rbc_mismatch_registry() else {
+        return;
+    };
+    let entry = registry.entry(peer.clone()).or_default();
+    entry.last_timestamp_ms = now_ms;
+    match kind {
+        RbcMismatchKind::ChunkDigest => {
+            entry.chunk_digest_mismatch_total = entry.chunk_digest_mismatch_total.saturating_add(1);
+        }
+        RbcMismatchKind::PayloadHash => {
+            entry.payload_hash_mismatch_total = entry.payload_hash_mismatch_total.saturating_add(1);
+        }
+        RbcMismatchKind::ChunkRoot => {
+            entry.chunk_root_mismatch_total = entry.chunk_root_mismatch_total.saturating_add(1);
+        }
+    }
+}
+
+/// Snapshot the per-peer RBC mismatch registry.
+pub fn rbc_mismatch_snapshot() -> RbcMismatchSnapshot {
+    let Some(registry) = rbc_mismatch_registry() else {
+        return RbcMismatchSnapshot::default();
+    };
+    let entries = registry
+        .iter()
+        .map(|(peer, entry)| RbcMismatchEntry {
+            peer_id: peer.clone(),
+            chunk_digest_mismatch_total: entry.chunk_digest_mismatch_total,
+            payload_hash_mismatch_total: entry.payload_hash_mismatch_total,
+            chunk_root_mismatch_total: entry.chunk_root_mismatch_total,
+            last_timestamp_ms: entry.last_timestamp_ms,
+        })
+        .collect();
+    RbcMismatchSnapshot { entries }
+}
+
+#[cfg(test)]
+/// Reset the RBC mismatch registry for unit tests.
+pub fn reset_rbc_mismatch_for_tests() {
+    if let Some(mut registry) = rbc_mismatch_registry() {
+        registry.clear();
+    }
+}
+
 #[cfg(test)]
 /// Reset the membership mismatch registry for unit tests.
 pub fn reset_membership_mismatch_for_tests() {
@@ -2612,6 +2721,8 @@ pub struct StatusSnapshot {
     pub rbc_store_evictions_total: u64,
     /// RBC abort counters and last occurrence.
     pub rbc_abort: RbcAbortSnapshot,
+    /// Per-peer RBC payload mismatch counters.
+    pub rbc_mismatch: RbcMismatchSnapshot,
     /// Most recent RBC sessions evicted due to TTL or capacity enforcement (bounded list).
     pub rbc_store_recent_evictions: Vec<RbcEvictedSession>,
     /// Snapshot of pending (pre-INIT) RBC stashes.
@@ -3306,6 +3417,7 @@ pub fn snapshot() -> StatusSnapshot {
             .load(Ordering::Relaxed),
         rbc_store_evictions_total: RBC_STORE_EVICTIONS_TOTAL.load(Ordering::Relaxed),
         rbc_abort: rbc_abort_snapshot(),
+        rbc_mismatch: rbc_mismatch_snapshot(),
         rbc_store_recent_evictions: recent_evictions,
         pending_rbc,
         collectors_targeted_current: COLLECTORS_TARGETED_CURRENT.load(Ordering::Relaxed),
@@ -5821,6 +5933,42 @@ mod tests {
 
         super::clear_membership_mismatch(&peer_b);
         super::reset_membership_mismatch_for_tests();
+    }
+
+    #[test]
+    fn rbc_mismatch_snapshot_tracks_counts_per_peer() {
+        super::reset_rbc_mismatch_for_tests();
+        let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+
+        super::record_rbc_mismatch(&peer_a, super::RbcMismatchKind::PayloadHash);
+        super::record_rbc_mismatch(&peer_a, super::RbcMismatchKind::ChunkDigest);
+        super::record_rbc_mismatch(&peer_a, super::RbcMismatchKind::ChunkDigest);
+        super::record_rbc_mismatch(&peer_b, super::RbcMismatchKind::ChunkRoot);
+
+        let snap = super::rbc_mismatch_snapshot();
+        assert_eq!(snap.entries.len(), 2);
+        let entry_a = snap
+            .entries
+            .iter()
+            .find(|entry| entry.peer_id == peer_a)
+            .expect("peer_a entry");
+        assert_eq!(entry_a.payload_hash_mismatch_total, 1);
+        assert_eq!(entry_a.chunk_digest_mismatch_total, 2);
+        assert_eq!(entry_a.chunk_root_mismatch_total, 0);
+        assert!(entry_a.last_timestamp_ms > 0);
+
+        let entry_b = snap
+            .entries
+            .iter()
+            .find(|entry| entry.peer_id == peer_b)
+            .expect("peer_b entry");
+        assert_eq!(entry_b.payload_hash_mismatch_total, 0);
+        assert_eq!(entry_b.chunk_digest_mismatch_total, 0);
+        assert_eq!(entry_b.chunk_root_mismatch_total, 1);
+        assert!(entry_b.last_timestamp_ms > 0);
+
+        super::reset_rbc_mismatch_for_tests();
     }
 
     #[test]

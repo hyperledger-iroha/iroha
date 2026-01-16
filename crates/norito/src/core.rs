@@ -186,12 +186,16 @@ pub mod header_flags {
     /// When not set, packed sequence layouts use `(len+1)` u64 offsets.
     /// This flag is scoped to packed sequences and does not affect other
     /// length prefixes.
+    ///
+    /// Reserved in v1; packed sequences always use fixed u64 offsets.
     pub const VARINT_OFFSETS: u8 = 0x08;
     /// Sequence length itself is encoded as compact varint instead of fixed u64.
     ///
     /// This applies to the outer length header used by sequences and maps when
     /// present. Decoders select behavior based on this flag only for the
     /// top-level sequence length prefix.
+    ///
+    /// Reserved in v1; sequence lengths always use fixed u64 headers.
     pub const COMPACT_SEQ_LEN: u8 = 0x10;
     /// Packed-struct omits per-field sizes for self-delimiting/fixed-size fields
     /// and prefixes a compact bitset indicating which fields carry an explicit size.
@@ -306,14 +310,10 @@ pub fn len_prefix_len(value: usize) -> usize {
 
 /// Number of bytes used to encode a sequence length prefix for `value`.
 ///
-/// Honors the active `COMPACT_SEQ_LEN` layout flag so callers can pre-compute
-/// sequence header sizes accurately.
+/// Sequence length headers are fixed-width in v1.
 pub fn seq_len_prefix_len(value: usize) -> usize {
-    if use_compact_seq_len() {
-        varint_encoded_len(value as u64)
-    } else {
-        8
-    }
+    let _ = value;
+    8
 }
 
 /// Number of bytes used to encode a compact varint length prefix.
@@ -333,9 +333,12 @@ const fn supported_header_flags() -> u8 {
     header_flags::PACKED_SEQ
         | header_flags::COMPACT_LEN
         | header_flags::PACKED_STRUCT
-        | header_flags::VARINT_OFFSETS
-        | header_flags::COMPACT_SEQ_LEN
         | header_flags::FIELD_BITSET
+}
+
+#[inline]
+fn sanitize_layout_flags(flags: u8) -> u8 {
+    flags & supported_header_flags()
 }
 
 /// Return the fixed v1 header/layout flags.
@@ -376,19 +379,11 @@ thread_local! {
 }
 
 thread_local! {
-    static ENCODE_VARINT_USED: Cell<bool> = const { Cell::new(false) };
-}
-
-thread_local! {
     static ENCODE_PACKED_FIXED_USED: Cell<bool> = const { Cell::new(false) };
 }
 
 thread_local! {
     static ENCODE_FIELD_BITSET_USED: Cell<bool> = const { Cell::new(false) };
-}
-
-thread_local! {
-    static ENCODE_COMPACT_SEQ_LEN_USED: Cell<bool> = const { Cell::new(false) };
 }
 
 thread_local! {
@@ -405,10 +400,8 @@ thread_local! {
 
 pub(crate) struct EncodeContextGuard {
     prev_active: bool,
-    prev_varint_used: bool,
     prev_fixed_used: bool,
     prev_field_bitset_used: bool,
-    prev_compact_seq_len_used: bool,
     prev_compact_len_used: bool,
 }
 
@@ -417,11 +410,6 @@ impl EncodeContextGuard {
         let prev_active = ENCODE_CONTEXT_ACTIVE.with(|cell| {
             let prev = cell.get();
             cell.set(true);
-            prev
-        });
-        let prev_varint_used = ENCODE_VARINT_USED.with(|cell| {
-            let prev = cell.get();
-            cell.set(false);
             prev
         });
         let prev_fixed_used = ENCODE_PACKED_FIXED_USED.with(|cell| {
@@ -434,11 +422,6 @@ impl EncodeContextGuard {
             cell.set(false);
             prev
         });
-        let prev_compact_seq_len_used = ENCODE_COMPACT_SEQ_LEN_USED.with(|cell| {
-            let prev = cell.get();
-            cell.set(false);
-            prev
-        });
         let prev_compact_len_used = ENCODE_COMPACT_LEN_USED.with(|cell| {
             let prev = cell.get();
             cell.set(false);
@@ -446,10 +429,8 @@ impl EncodeContextGuard {
         });
         Self {
             prev_active,
-            prev_varint_used,
             prev_fixed_used,
             prev_field_bitset_used,
-            prev_compact_seq_len_used,
             prev_compact_len_used,
         }
     }
@@ -490,20 +471,10 @@ impl Drop for SequentialOverrideGuard {
 impl Drop for EncodeContextGuard {
     fn drop(&mut self) {
         ENCODE_CONTEXT_ACTIVE.with(|cell| cell.set(self.prev_active));
-        ENCODE_VARINT_USED.with(|cell| cell.set(self.prev_varint_used));
         ENCODE_PACKED_FIXED_USED.with(|cell| cell.set(self.prev_fixed_used));
         ENCODE_FIELD_BITSET_USED.with(|cell| cell.set(self.prev_field_bitset_used));
-        ENCODE_COMPACT_SEQ_LEN_USED.with(|cell| cell.set(self.prev_compact_seq_len_used));
         ENCODE_COMPACT_LEN_USED.with(|cell| cell.set(self.prev_compact_len_used));
     }
-}
-
-fn mark_varint_offsets_used_if_encoding() {
-    ENCODE_CONTEXT_ACTIVE.with(|active| {
-        if active.get() {
-            ENCODE_VARINT_USED.with(|flag| flag.set(true));
-        }
-    });
 }
 
 fn mark_fixed_offsets_used_if_encoding() {
@@ -514,36 +485,9 @@ fn mark_fixed_offsets_used_if_encoding() {
     });
 }
 
-/// Record that a packed sequence emitted varint-coded offsets in the current encode pass.
-pub fn note_varint_offsets_emitted() {
-    mark_varint_offsets_used_if_encoding();
-}
-
 /// Record that a packed sequence emitted fixed-width offsets in the current encode pass.
 pub fn note_fixed_offsets_emitted() {
     mark_fixed_offsets_used_if_encoding();
-}
-
-fn mark_compact_seq_len_used_if_encoding() {
-    ENCODE_CONTEXT_ACTIVE.with(|active| {
-        if active.get() {
-            ENCODE_COMPACT_SEQ_LEN_USED.with(|flag| flag.set(true));
-        }
-    });
-}
-
-/// Record that a sequence used compact (varint) length headers in the current encode pass.
-pub fn note_compact_seq_len_emitted() {
-    mark_compact_seq_len_used_if_encoding();
-    #[cfg(debug_assertions)]
-    if crate::debug_trace_enabled() {
-        let active = ENCODE_CONTEXT_ACTIVE.with(|flag| flag.get());
-        eprintln!(
-            "note_compact_seq_len_emitted active={} compact_seq_len_used={}",
-            active,
-            ENCODE_COMPACT_SEQ_LEN_USED.with(|flag| flag.get())
-        );
-    }
 }
 
 fn mark_compact_len_used_if_encoding() {
@@ -573,20 +517,15 @@ pub fn mark_field_bitset_used_if_encoding() {
     });
 }
 
-pub(crate) fn varint_offsets_used() -> bool {
-    ENCODE_VARINT_USED.with(|flag| flag.get())
-}
-
 pub(crate) fn fixed_offsets_used() -> bool {
     ENCODE_PACKED_FIXED_USED.with(|flag| flag.get())
 }
 
+/// Return whether varint offsets were emitted during the current encode pass.
+///
+/// Varint offsets are reserved in v1, so this always reports false.
 pub(crate) fn field_bitset_used() -> bool {
     ENCODE_FIELD_BITSET_USED.with(|flag| flag.get())
-}
-
-pub(crate) fn compact_seq_len_used() -> bool {
-    ENCODE_COMPACT_SEQ_LEN_USED.with(|flag| flag.get())
 }
 
 pub(crate) fn compact_len_used() -> bool {
@@ -1079,7 +1018,7 @@ impl Drop for PayloadCtxGuard {
 
 /// Set decode flags for the current thread.
 fn set_decode_flags_raw(flags: u8) {
-    DECODE_FLAGS.with(|c| c.set(flags));
+    DECODE_FLAGS.with(|c| c.set(sanitize_layout_flags(flags)));
 }
 
 fn set_decode_flags_active(active: bool) {
@@ -1102,7 +1041,7 @@ pub(crate) fn decode_flags_active() -> bool {
 }
 
 fn set_decode_flags_hint(flags: u8) {
-    DECODE_FLAGS_HINT.with(|c| c.set(flags));
+    DECODE_FLAGS_HINT.with(|c| c.set(sanitize_layout_flags(flags)));
 }
 
 // Effective flags for encode/decode: if none were set explicitly for the
@@ -1230,7 +1169,7 @@ fn layout_flag_enabled(flag: u8) -> bool {
 
 #[inline]
 pub fn compact_seq_length_enabled() -> bool {
-    layout_flag_enabled(header_flags::COMPACT_SEQ_LEN)
+    false
 }
 
 /// True if packed sequence layouts are enabled for the current decode.
@@ -1250,13 +1189,14 @@ pub fn use_packed_struct() -> bool {
 
 /// True if packed sequences encode offsets as varint-coded lengths.
 ///
-/// Honor header-negotiated flags instead of compile-time defaults so a single
-/// binary can decode both packed and compact payloads.
+/// Reserved in v1; packed sequences always use fixed u64 offsets.
 pub fn use_varint_offsets() -> bool {
-    layout_flag_enabled(header_flags::VARINT_OFFSETS)
+    false
 }
 
 /// True if sequence lengths are varint-coded.
+///
+/// Reserved in v1; sequence lengths always use fixed u64 headers.
 pub fn use_compact_seq_len() -> bool {
     compact_seq_length_enabled()
 }
@@ -1268,29 +1208,13 @@ pub fn use_field_bitset() -> bool {
 
 /// Decode packed-struct offsets when the layout is enabled.
 ///
-/// Supports both fixed-offset (`PACKED_SEQ`) and varint-length (`VARINT_OFFSETS`)
-/// encodings emitted by derive-generated serializers. Returns the computed
-/// offsets, number of header bytes consumed, packed data length, and any optional
-/// tail length appended when varint tails are enabled.
+/// Returns the computed offsets, number of header bytes consumed, and packed
+/// data length.
 pub fn decode_packed_offsets_slice(
     slice: &[u8],
     count: usize,
 ) -> Result<(Vec<usize>, usize, usize, usize), Error> {
     if count == 0 {
-        if use_varint_offsets() {
-            if should_emit_varint_tail(count) {
-                if slice.len() < 8 {
-                    return Err(Error::LengthMismatch);
-                }
-                let mut buf = [0u8; 8];
-                buf.copy_from_slice(&slice[..8]);
-                if u64::from_le_bytes(buf) != 0 {
-                    return Err(Error::LengthMismatch);
-                }
-                return Ok((vec![0], 8, 0, 8));
-            }
-            return Ok((vec![0], 0, 0, 0));
-        }
         if slice.len() < 8 {
             return Err(Error::LengthMismatch);
         }
@@ -1300,32 +1224,6 @@ pub fn decode_packed_offsets_slice(
             return Err(Error::LengthMismatch);
         }
         return Ok((vec![0], 8, 0, 0));
-    }
-
-    if use_varint_offsets() {
-        let mut offsets: Vec<usize> = Vec::with_capacity(count + 1);
-        offsets.push(0);
-        let mut used = 0usize;
-        let mut total = 0usize;
-        for _ in 0..count {
-            let slice_tail = slice.get(used..).ok_or(Error::LengthMismatch)?;
-            let (span, span_used) = read_varint_len_from_slice(slice_tail)?;
-            used = used.checked_add(span_used).ok_or(Error::LengthMismatch)?;
-            total = total.checked_add(span).ok_or(Error::LengthMismatch)?;
-            offsets.push(total);
-        }
-        let tail_len = if should_emit_varint_tail(count) {
-            let entries = count.checked_add(1).ok_or(Error::LengthMismatch)?;
-            let tail_bytes = entries.checked_mul(8).ok_or(Error::LengthMismatch)?;
-            if slice.len() < used + tail_bytes {
-                return Err(Error::LengthMismatch);
-            }
-            used = used.checked_add(tail_bytes).ok_or(Error::LengthMismatch)?;
-            tail_bytes
-        } else {
-            0
-        };
-        return Ok((offsets, used, total, tail_len));
     }
 
     let entries = count.checked_add(1).ok_or(Error::LengthMismatch)?;
@@ -1369,17 +1267,9 @@ pub fn write_len<W: Write>(writer: &mut W, value: u64) -> std::io::Result<()> {
     }
 }
 
-/// Write a sequence length prefix honoring `COMPACT_SEQ_LEN`.
+/// Write a sequence length prefix (fixed u64).
 pub fn write_seq_len<W: Write>(writer: &mut W, value: u64) -> std::io::Result<()> {
-    if use_compact_seq_len() {
-        let mut buf = [0u8; MAX_VARINT_BYTES];
-        let used = encode_varint(value, &mut buf);
-        writer.write_all(&buf[..used])?;
-        note_compact_seq_len_emitted();
-        Ok(())
-    } else {
-        writer.write_u64::<LittleEndian>(value)
-    }
+    writer.write_u64::<LittleEndian>(value)
 }
 
 /// Append a length prefix honoring `COMPACT_LEN` to `out`.
@@ -1438,7 +1328,7 @@ where
         writer,
         u64::try_from(len).map_err(|_| Error::LengthMismatch)?,
     )?;
-    let packed = use_packed_seq() || use_varint_offsets();
+    let packed = use_packed_seq();
     if !packed {
         let mut buf = Vec::new();
         for item in iter {
@@ -1453,19 +1343,9 @@ where
         return Ok(());
     }
 
-    if use_varint_offsets() {
-        note_varint_offsets_emitted();
-    } else {
-        note_fixed_offsets_emitted();
-    }
+    note_fixed_offsets_emitted();
     if len == 0 {
-        if use_varint_offsets() {
-            if should_emit_varint_tail(len) {
-                write_fixed_offsets(writer, &[])?;
-            }
-        } else {
-            write_fixed_offsets(writer, &[])?;
-        }
+        write_fixed_offsets(writer, &[])?;
         return Ok(());
     }
 
@@ -1479,19 +1359,7 @@ where
         data.extend_from_slice(&buf);
     }
 
-    if use_varint_offsets() {
-        for len in &lengths {
-            write_varint_len(
-                writer,
-                u64::try_from(*len).map_err(|_| Error::LengthMismatch)?,
-            )?;
-        }
-        if should_emit_varint_tail(len) {
-            write_fixed_offsets(writer, &lengths)?;
-        }
-    } else {
-        write_fixed_offsets(writer, &lengths)?;
-    }
+    write_fixed_offsets(writer, &lengths)?;
 
     writer.write_all(&data)?;
     Ok(())
@@ -1540,24 +1408,17 @@ pub fn read_len_dyn_slice(bytes: &[u8]) -> Result<(usize, usize), Error> {
     read_len_from_slice(bytes)
 }
 
-/// Read a top-level sequence length header from a slice honoring
-/// `COMPACT_SEQ_LEN`. Returns (value, bytes consumed).
+/// Read a top-level sequence length header from a slice (fixed u64).
+/// Returns (value, bytes consumed).
 pub fn read_seq_len_slice(bytes: &[u8]) -> Result<(usize, usize), Error> {
-    if compact_seq_length_enabled() {
-        let (value, used) = decode_varint_from_slice(bytes)?;
-        record_slice_access(bytes, used);
-        let len = usize::try_from(value).map_err(|_| Error::LengthMismatch)?;
-        Ok((len, used))
-    } else {
-        if bytes.len() < 8 {
-            return Err(Error::LengthMismatch);
-        }
-        let mut len_bytes = [0u8; 8];
-        len_bytes.copy_from_slice(&bytes[..8]);
-        record_slice_access(bytes, 8);
-        let len = len_u64_to_usize(u64::from_le_bytes(len_bytes))?;
-        Ok((len, 8))
+    if bytes.len() < 8 {
+        return Err(Error::LengthMismatch);
     }
+    let mut len_bytes = [0u8; 8];
+    len_bytes.copy_from_slice(&bytes[..8]);
+    record_slice_access(bytes, 8);
+    let len = len_u64_to_usize(u64::from_le_bytes(len_bytes))?;
+    Ok((len, 8))
 }
 
 /// Pointer-based length read without relying on a global payload context.
@@ -1667,8 +1528,8 @@ unsafe fn decode_varint_from_ptr(ptr: *const u8) -> Result<(u64, usize), Error> 
     decode_varint_from_slice(slice)
 }
 
-/// Read a top-level sequence length header at a raw pointer honoring
-/// `COMPACT_SEQ_LEN`. Returns (value, bytes consumed).
+/// Read a top-level sequence length header at a raw pointer (fixed u64).
+/// Returns (value, bytes consumed).
 ///
 /// # Safety
 /// `ptr` must be valid for reading up to 10 bytes (varint) or 8 bytes (u64).
@@ -1847,22 +1708,10 @@ where
         let (len, mut offset) = read_seq_len_slice(bytes)?;
         let remaining = bytes.len().saturating_sub(offset);
         if use_packed_seq() {
-            if use_varint_offsets() {
-                let mut min_header = len;
-                if should_emit_varint_tail(len) {
-                    let entries = len.checked_add(1).ok_or(Error::LengthMismatch)?;
-                    let tail = entries.checked_mul(8).ok_or(Error::LengthMismatch)?;
-                    min_header = min_header.checked_add(tail).ok_or(Error::LengthMismatch)?;
-                }
-                if min_header > remaining {
-                    return Err(Error::LengthMismatch);
-                }
-            } else {
-                let entries = len.checked_add(1).ok_or(Error::LengthMismatch)?;
-                let header_bytes = entries.checked_mul(8).ok_or(Error::LengthMismatch)?;
-                if header_bytes > remaining {
-                    return Err(Error::LengthMismatch);
-                }
+            let entries = len.checked_add(1).ok_or(Error::LengthMismatch)?;
+            let header_bytes = entries.checked_mul(8).ok_or(Error::LengthMismatch)?;
+            if header_bytes > remaining {
+                return Err(Error::LengthMismatch);
             }
         } else {
             let min_header = if use_compact_len() { 1 } else { 8 };
@@ -2118,73 +1967,6 @@ where
         let (len, mut offset) = read_seq_len_slice(bytes)?;
         let mut out = BTreeMap::new();
         if use_packed_seq() {
-            if use_varint_offsets() {
-                let mut key_sizes = Vec::with_capacity(len);
-                let mut val_sizes = Vec::with_capacity(len);
-                let mut key_total = 0usize;
-                for _ in 0..len {
-                    let (size, used) = read_varint_len_from_slice(&bytes[offset..])?;
-                    offset = offset.checked_add(used).ok_or(Error::LengthMismatch)?;
-                    key_total = key_total.checked_add(size).ok_or(Error::LengthMismatch)?;
-                    key_sizes.push(size);
-                }
-                let mut val_total = 0usize;
-                for _ in 0..len {
-                    let (size, used) = read_varint_len_from_slice(&bytes[offset..])?;
-                    offset = offset.checked_add(used).ok_or(Error::LengthMismatch)?;
-                    val_total = val_total.checked_add(size).ok_or(Error::LengthMismatch)?;
-                    val_sizes.push(size);
-                }
-
-                let key_data_start = offset;
-                let key_data_end = key_data_start
-                    .checked_add(key_total)
-                    .ok_or(Error::LengthMismatch)?;
-                let val_data_start = key_data_end;
-                let val_data_end = val_data_start
-                    .checked_add(val_total)
-                    .ok_or(Error::LengthMismatch)?;
-                if val_data_end > bytes.len() {
-                    return Err(Error::LengthMismatch);
-                }
-
-                let mut keys = Vec::with_capacity(len);
-                let mut cursor = key_data_start;
-                for size in key_sizes {
-                    let end = cursor.checked_add(size).ok_or(Error::LengthMismatch)?;
-                    let key_slice = bytes.get(cursor..end).ok_or(Error::LengthMismatch)?;
-                    record_slice_access(key_slice, size);
-                    let (key, key_used) = decode_field_canonical::<K>(key_slice)?;
-                    if key_used != size {
-                        return Err(Error::LengthMismatch);
-                    }
-                    keys.push(key);
-                    cursor = end;
-                }
-                if cursor != key_data_end {
-                    return Err(Error::LengthMismatch);
-                }
-
-                let mut cursor = val_data_start;
-                for (key, size) in keys.into_iter().zip(val_sizes) {
-                    let end = cursor.checked_add(size).ok_or(Error::LengthMismatch)?;
-                    let value_slice = bytes.get(cursor..end).ok_or(Error::LengthMismatch)?;
-                    record_slice_access(value_slice, size);
-                    let (value, value_used) = decode_field_canonical::<V>(value_slice)?;
-                    if value_used != size {
-                        return Err(Error::LengthMismatch);
-                    }
-                    if out.insert(key, value).is_some() {
-                        return Err(Error::LengthMismatch);
-                    }
-                    cursor = end;
-                }
-                if cursor != val_data_end {
-                    return Err(Error::LengthMismatch);
-                }
-                return Ok((out, val_data_end));
-            }
-
             let entries = len.checked_add(1).ok_or(Error::LengthMismatch)?;
             let offsets_bytes = entries.checked_mul(16).ok_or(Error::LengthMismatch)?;
             let header_end = offset
@@ -2343,7 +2125,7 @@ where
             u64::try_from(len).map_err(|_| Error::LengthMismatch)?,
         )?;
 
-        let packed = use_packed_seq() || use_varint_offsets();
+        let packed = use_packed_seq();
         if !packed {
             let mut buffer = Vec::new();
             for (key, value) in self.iter() {
@@ -2366,16 +2148,10 @@ where
             return Ok(());
         }
 
-        if use_varint_offsets() {
-            note_varint_offsets_emitted();
-        } else {
-            note_fixed_offsets_emitted();
-        }
+        note_fixed_offsets_emitted();
         if len == 0 {
-            if !use_varint_offsets() {
-                write_fixed_offsets(&mut writer, &[])?;
-                write_fixed_offsets(&mut writer, &[])?;
-            }
+            write_fixed_offsets(&mut writer, &[])?;
+            write_fixed_offsets(&mut writer, &[])?;
             return Ok(());
         }
 
@@ -2398,23 +2174,8 @@ where
             val_data.extend_from_slice(&val_buf);
         }
 
-        if use_varint_offsets() {
-            for size in &key_sizes {
-                write_varint_len(
-                    &mut writer,
-                    u64::try_from(*size).map_err(|_| Error::LengthMismatch)?,
-                )?;
-            }
-            for size in &val_sizes {
-                write_varint_len(
-                    &mut writer,
-                    u64::try_from(*size).map_err(|_| Error::LengthMismatch)?,
-                )?;
-            }
-        } else {
-            write_fixed_offsets(&mut writer, &key_sizes)?;
-            write_fixed_offsets(&mut writer, &val_sizes)?;
-        }
+        write_fixed_offsets(&mut writer, &key_sizes)?;
+        write_fixed_offsets(&mut writer, &val_sizes)?;
 
         writer.write_all(&key_data)?;
         writer.write_all(&val_data)?;
@@ -2461,7 +2222,7 @@ where
             u64::try_from(len).map_err(|_| Error::LengthMismatch)?,
         )?;
 
-        let packed = use_packed_seq() || use_varint_offsets();
+        let packed = use_packed_seq();
         if !packed {
             let mut buffer = Vec::new();
             for (key, value) in entries.into_iter() {
@@ -2484,16 +2245,10 @@ where
             return Ok(());
         }
 
-        if use_varint_offsets() {
-            note_varint_offsets_emitted();
-        } else {
-            note_fixed_offsets_emitted();
-        }
+        note_fixed_offsets_emitted();
         if len == 0 {
-            if !use_varint_offsets() {
-                write_fixed_offsets(&mut writer, &[])?;
-                write_fixed_offsets(&mut writer, &[])?;
-            }
+            write_fixed_offsets(&mut writer, &[])?;
+            write_fixed_offsets(&mut writer, &[])?;
             return Ok(());
         }
 
@@ -2516,23 +2271,8 @@ where
             val_data.extend_from_slice(&val_buf);
         }
 
-        if use_varint_offsets() {
-            for size in &key_sizes {
-                write_varint_len(
-                    &mut writer,
-                    u64::try_from(*size).map_err(|_| Error::LengthMismatch)?,
-                )?;
-            }
-            for size in &val_sizes {
-                write_varint_len(
-                    &mut writer,
-                    u64::try_from(*size).map_err(|_| Error::LengthMismatch)?,
-                )?;
-            }
-        } else {
-            write_fixed_offsets(&mut writer, &key_sizes)?;
-            write_fixed_offsets(&mut writer, &val_sizes)?;
-        }
+        write_fixed_offsets(&mut writer, &key_sizes)?;
+        write_fixed_offsets(&mut writer, &val_sizes)?;
 
         writer.write_all(&key_data)?;
         writer.write_all(&val_data)?;
@@ -4934,8 +4674,6 @@ pub mod stream {
         ) -> Result<Self, Error> {
             let supported = header_flags::PACKED_SEQ
                 | header_flags::COMPACT_LEN
-                | header_flags::VARINT_OFFSETS
-                | header_flags::COMPACT_SEQ_LEN
                 | header_flags::PACKED_STRUCT
                 | header_flags::FIELD_BITSET;
             let unsupported = flags & !supported;
@@ -4944,51 +4682,27 @@ pub mod stream {
             }
 
             let packed = (flags & header_flags::PACKED_SEQ) != 0;
-            let varint_offsets = (flags & header_flags::VARINT_OFFSETS) != 0;
-            if varint_offsets && !packed {
-                return Err(Error::UnsupportedFeature(
-                    "varint-offsets require packed sequences",
-                ));
-            }
-
-            let len = if (flags & header_flags::COMPACT_SEQ_LEN) != 0 {
-                reader.read_varint_u64()?
-            } else {
-                reader.read_u64()?
-            };
+            let len = reader.read_u64()?;
             let total = u64_to_usize(len)?;
 
             let mode = if packed {
-                if varint_offsets {
-                    let mut lengths = Vec::with_capacity(total);
-                    for _ in 0..total {
-                        lengths.push(reader.read_varint_len()?);
-                    }
-                    if super::should_emit_varint_tail(total) {
-                        let entries = total.checked_add(1).ok_or(Error::LengthMismatch)?;
-                        let tail_bytes = entries.checked_mul(8).ok_or(Error::LengthMismatch)?;
-                        reader.skip_exact(tail_bytes)?;
-                    }
-                    SeqLenMode::Packed { lengths, index: 0 }
-                } else {
-                    let entries = total.checked_add(1).ok_or(Error::LengthMismatch)?;
-                    let mut offsets = Vec::with_capacity(entries);
-                    for _ in 0..entries {
-                        let raw = reader.read_u64()?;
-                        offsets.push(u64_to_usize(raw)?);
-                    }
-                    if offsets.first().copied().unwrap_or(0) != 0 {
-                        return Err(Error::LengthMismatch);
-                    }
-                    if offsets.windows(2).any(|w| w[1] < w[0]) {
-                        return Err(Error::LengthMismatch);
-                    }
-                    let mut lengths = Vec::with_capacity(total);
-                    for pair in offsets.windows(2) {
-                        lengths.push(pair[1] - pair[0]);
-                    }
-                    SeqLenMode::Packed { lengths, index: 0 }
+                let entries = total.checked_add(1).ok_or(Error::LengthMismatch)?;
+                let mut offsets = Vec::with_capacity(entries);
+                for _ in 0..entries {
+                    let raw = reader.read_u64()?;
+                    offsets.push(u64_to_usize(raw)?);
                 }
+                if offsets.first().copied().unwrap_or(0) != 0 {
+                    return Err(Error::LengthMismatch);
+                }
+                if offsets.windows(2).any(|w| w[1] < w[0]) {
+                    return Err(Error::LengthMismatch);
+                }
+                let mut lengths = Vec::with_capacity(total);
+                for pair in offsets.windows(2) {
+                    lengths.push(pair[1] - pair[0]);
+                }
+                SeqLenMode::Packed { lengths, index: 0 }
             } else {
                 SeqLenMode::Plain { remaining: total }
             };
@@ -5252,9 +4966,7 @@ macro_rules! impl_tuple {
                 // like `Vec<u8>` consistent with the decoder's expectations.
                 let __current = get_decode_flags();
                 let __defaults = default_encode_flags();
-                let __dynamic_mask = header_flags::PACKED_SEQ
-                    | header_flags::VARINT_OFFSETS
-                    | header_flags::COMPACT_SEQ_LEN;
+                let __dynamic_mask = header_flags::PACKED_SEQ;
                 let __static_defaults = __defaults & !__dynamic_mask;
                 let __merged = if __current == 0 {
                     __defaults
@@ -5505,10 +5217,8 @@ pub(crate) fn encode_bare_with_flags<T: NoritoSerialize>(
         value.serialize(&mut sink)?;
     }
     let payload = sink.into_inner();
-    let varint_used = ENCODE_VARINT_USED.with(|cell| cell.get());
     let fixed_offsets_used = fixed_offsets_used();
     let field_bitset_used = field_bitset_used();
-    let compact_seq_len_used = compact_seq_len_used();
     let compact_len_used = compact_len_used();
     drop(encode_guard);
     let mut final_flags = flags;
@@ -5522,21 +5232,11 @@ pub(crate) fn encode_bare_with_flags<T: NoritoSerialize>(
     } else {
         final_flags &= !header_flags::COMPACT_LEN;
     }
-    if compact_seq_len_used {
-        final_flags |= header_flags::COMPACT_SEQ_LEN;
-    } else {
-        final_flags &= !header_flags::COMPACT_SEQ_LEN;
-    }
-    let packed_seq_used = varint_used || fixed_offsets_used;
+    let packed_seq_used = fixed_offsets_used;
     if packed_seq_used {
         final_flags |= header_flags::PACKED_SEQ;
     } else {
         final_flags &= !header_flags::PACKED_SEQ;
-    }
-    if varint_used {
-        final_flags |= header_flags::VARINT_OFFSETS;
-    } else {
-        final_flags &= !header_flags::VARINT_OFFSETS;
     }
     record_last_header_flags(final_flags);
     Ok((payload, final_flags))
@@ -6429,6 +6129,20 @@ mod tests {
         assert!(res.is_ok());
     }
 
+    #[test]
+    fn varint_offset_hooks_are_disabled_in_v1() {
+        let _guard = EncodeContextGuard::enter();
+        assert!(!fixed_offsets_used());
+        assert!(!varint_offsets_used());
+        assert!(!compact_seq_len_used());
+
+        note_varint_offsets_emitted();
+
+        assert!(!fixed_offsets_used());
+        assert!(!varint_offsets_used());
+        assert!(!compact_seq_len_used());
+    }
+
     #[cfg(feature = "compression")]
     #[test]
     fn payload_stream_reads_zstd_payload() {
@@ -6633,9 +6347,7 @@ mod tests {
         let flags = header_flags::COMPACT_LEN
             | header_flags::PACKED_STRUCT
             | header_flags::FIELD_BITSET
-            | header_flags::VARINT_OFFSETS
-            | header_flags::PACKED_SEQ
-            | header_flags::COMPACT_SEQ_LEN;
+            | header_flags::PACKED_SEQ;
         let encoded = {
             let _guard = DecodeFlagsGuard::enter(flags);
             let mut buf = Vec::new();
@@ -6807,7 +6519,7 @@ mod tests {
         let bare = encode_adaptive(&value);
         // Override the recorded header flags with a combination that differs from
         // compile-time defaults to ensure the framing helper uses it.
-        let expected = header_flags::PACKED_SEQ | header_flags::VARINT_OFFSETS;
+        let expected = header_flags::PACKED_SEQ | header_flags::COMPACT_LEN;
         record_last_header_flags(expected);
         let stored = take_last_header_flags().expect("recorded flags should be present");
         assert_eq!(stored, expected);
@@ -6820,7 +6532,7 @@ mod tests {
         let header = Header::read(&mut cursor).expect("read framed header");
         assert_eq!(header.flags & !supported_header_flags(), 0);
         assert_eq!(
-            header.flags & (header_flags::PACKED_SEQ | header_flags::VARINT_OFFSETS),
+            header.flags & (header_flags::PACKED_SEQ | header_flags::COMPACT_LEN),
             expected,
         );
     }
@@ -6897,7 +6609,7 @@ mod tests {
             assert_eq!(hdr_ptr, 1);
         }
 
-        // Sequence headers fall back to fixed-width when COMPACT_SEQ_LEN is disabled.
+        // Sequence headers are fixed-width in v1.
         let mut seq_fixed = Vec::new();
         seq_fixed.extend_from_slice(&3u64.to_le_bytes());
         seq_fixed.extend_from_slice(&[0xAA, 0xBB, 0xCC]);
@@ -6913,24 +6625,6 @@ mod tests {
                 unsafe { read_seq_len_ptr(seq_fixed.as_ptr()) }.expect("sequence len ptr");
             assert_eq!(seq_len_ptr, 3);
             assert_eq!(seq_hdr_ptr, 8);
-        }
-
-        // When COMPACT_SEQ_LEN is enabled the compact varint path is used.
-        let mut seq_varint = Vec::new();
-        seq_varint.push(0x03);
-        seq_varint.extend_from_slice(&[0xAA, 0xBB, 0xCC]);
-        let seq_flags = header_flags::COMPACT_SEQ_LEN | header_flags::COMPACT_LEN;
-        {
-            let _guard = DecodeFlagsGuard::enter(seq_flags);
-            let (len_slice, hdr_slice) =
-                read_seq_len_slice(&seq_varint).expect("sequence compact slice");
-            assert_eq!(len_slice, 3);
-            assert_eq!(hdr_slice, 1);
-            let _payload_guard = PayloadCtxGuard::enter(&seq_varint);
-            let (len_ptr, hdr_ptr) =
-                unsafe { read_seq_len_ptr(seq_varint.as_ptr()) }.expect("sequence compact ptr");
-            assert_eq!(len_ptr, 3);
-            assert_eq!(hdr_ptr, 1);
         }
     }
 
@@ -7169,7 +6863,7 @@ mod tests {
     }
 
     #[test]
-    fn vec_header_without_compact_seq_len_is_u64() {
+    fn vec_header_is_u64() {
         use crate::core::header_flags;
 
         let value = vec![42u8; 3];
@@ -7191,7 +6885,7 @@ mod tests {
     #[test]
     fn decode_from_slice_option_and_result() {
         // Use compact-len for these slice-based decodes since we encode lengths via `write_len`.
-        set_decode_flags(header_flags::COMPACT_LEN | header_flags::COMPACT_SEQ_LEN);
+        set_decode_flags(header_flags::COMPACT_LEN);
         clear_payload_ctx();
         // Option::Some(String)
         let s = String::from("ok");
@@ -7222,7 +6916,7 @@ mod tests {
 
     #[test]
     fn decode_from_slice_borrowed_bytes() {
-        set_decode_flags(header_flags::COMPACT_LEN | header_flags::COMPACT_SEQ_LEN);
+        set_decode_flags(header_flags::COMPACT_LEN);
         let payload = b"bytes";
         let mut buf = Vec::new();
         crate::core::write_len(&mut buf, payload.len() as u64).unwrap();
@@ -7300,14 +6994,14 @@ mod tests {
             }
             payload.extend_from_slice(b"abc");
 
-            // Compose header with COMPACT_LEN and COMPACT_SEQ_LEN flags set
+            // Compose header with COMPACT_LEN flag set
             let mut bytes = Vec::new();
             let mut header = Header::new(
                 <String as NoritoSerialize>::schema_hash(),
                 payload.len() as u64,
                 crc64(&payload),
             );
-            header.flags |= header_flags::COMPACT_LEN | header_flags::COMPACT_SEQ_LEN;
+            header.flags |= header_flags::COMPACT_LEN;
             header.write(&mut bytes).unwrap();
             bytes.extend_from_slice(&payload);
 
@@ -7339,9 +7033,7 @@ mod tests {
     fn length_prefix_requires_compact_len_flag() {
         reset_decode_state();
         {
-            let _guard = DecodeFlagsGuard::enter(
-                header_flags::COMPACT_SEQ_LEN | header_flags::VARINT_OFFSETS,
-            );
+            let _guard = DecodeFlagsGuard::enter(0);
             let mut buf = Vec::new();
             write_len_to_vec(&mut buf, 5);
             assert_eq!(buf.len(), 8);
@@ -7350,23 +7042,6 @@ mod tests {
             assert_eq!(used, 8);
             assert_eq!(len_prefix_len(5), 8);
         }
-        reset_decode_state();
-    }
-
-    #[test]
-    fn packed_seq_varint_offsets_do_not_require_compact_len() {
-        reset_decode_state();
-        let mut buf = Vec::new();
-        buf.extend_from_slice(&(2u64).to_le_bytes());
-        buf.push(1u8);
-        buf.push(1u8);
-        buf.push(0x11);
-        buf.push(0x22);
-        let _guard =
-            DecodeFlagsGuard::enter(header_flags::PACKED_SEQ | header_flags::VARINT_OFFSETS);
-        let (out, used) = <Vec<u8> as DecodeFromSlice>::decode_from_slice(&buf).expect("decode");
-        assert_eq!(out, vec![0x11, 0x22]);
-        assert_eq!(used, buf.len());
         reset_decode_state();
     }
 
@@ -7405,7 +7080,7 @@ mod tests {
     }
     #[test]
     fn strict_safe_read_len_and_decode_from_slice() {
-        set_decode_flags(header_flags::COMPACT_LEN | header_flags::COMPACT_SEQ_LEN);
+        set_decode_flags(header_flags::COMPACT_LEN);
         let s = "hello-世界";
         let mut buf = Vec::new();
         crate::core::write_len(&mut buf, s.len() as u64).unwrap();

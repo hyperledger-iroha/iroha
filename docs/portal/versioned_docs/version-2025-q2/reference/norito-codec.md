@@ -13,9 +13,9 @@ and points to the full specification in `norito.md`.
 | **Bare payload** | Deterministic value encoding used for hashing/comparison. The same layout is wrapped by the header for transport. | `norito::codec::{Encode, Decode}` |
 | **Compression** | Optional Zstd (and experimental GPU acceleration) activated via the `compression` flag byte. | `norito.md`, “Compression negotiation” |
 
-The full flag registry (packed-struct, packed-seq, varint offsets, compact
-lengths, compression) lives in `norito::header::flags`. `norito::header::Flags`
-exposes convenience checks for runtime inspection.
+The full flag registry (packed-struct, packed-seq, compact lengths, compression)
+lives in `norito::header::flags`. `norito::header::Flags` exposes convenience
+checks for runtime inspection; reserved layout bits are rejected by decoders.
 
 ## Derive support
 
@@ -25,9 +25,8 @@ Key conventions:
 - Structs/enums derive packed layouts when the `packed-struct` feature is
   enabled (default). Implementation lives in `crates/norito_derive/src/derive_struct.rs`
   and the behaviour is documented in `norito.md` (“Packed layouts”).
-- Packed collections can use compact sequence headers (`COMPACT_SEQ_LEN`),
-  varint-coded offsets (`VARINT_OFFSETS`), and per-value length prefixes
-  controlled by `COMPACT_LEN`.
+- Packed collections use fixed-width sequence headers and offsets in v1; only
+  per-value length prefixes are affected by `COMPACT_LEN`.
 - JSON helpers (`norito::json`) provide deterministic Norito-backed JSON for
   open APIs. Use `norito::json::{to_json_pretty, from_json}` — never `serde_json`.
 

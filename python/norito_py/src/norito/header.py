@@ -28,7 +28,9 @@ MAJOR_VERSION = 0
 PACKED_SEQ = 0x01
 COMPACT_LEN = 0x02
 PACKED_STRUCT = 0x04
+# Reserved in v1; packed sequence offsets are fixed-width u64.
 VARINT_OFFSETS = 0x08
+# Reserved in v1; sequence length headers are fixed-width u64.
 COMPACT_SEQ_LEN = 0x10
 FIELD_BITSET = 0x20
 
@@ -45,8 +47,6 @@ SUPPORTED_FLAGS = {
     PACKED_SEQ,
     COMPACT_LEN,
     PACKED_STRUCT,
-    VARINT_OFFSETS,
-    COMPACT_SEQ_LEN,
     FIELD_BITSET,
 }
 

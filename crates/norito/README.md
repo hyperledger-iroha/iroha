@@ -139,9 +139,9 @@ The trailing header byte encodes feature/layout flags for the payload and is app
 
 - `PACKED_STRUCT (0x04)`: Derive-generated structs use packed layout. With `COMPACT_LEN`, derives emit a compact bitset of which fields carry explicit sizes, then only those sizes and the data block (no redundant per-field headers).
 
-- `VARINT_OFFSETS (0x08)`: Packed sequences (and packed-struct) encode element/field sizes as varint-coded sizes rather than `(len+1)` 64-bit offsets.
+- `VARINT_OFFSETS (0x08)`: Reserved in v1; packed sequences always use fixed `u64` offsets.
 
-- `COMPACT_SEQ_LEN (0x10)`: Sequence length headers are varint instead of fixed `u64`.
+- `COMPACT_SEQ_LEN (0x10)`: Reserved in v1; sequence length headers are fixed `u64`.
 
 - `FIELD_BITSET (0x20)`: Hybrid packed-struct encodes a bitset selecting fields that carry explicit sizes.
 
@@ -152,8 +152,7 @@ corresponding header flags.
 
 Flag scoping:
 - `COMPACT_LEN` affects per-value length prefixes only.
-- `COMPACT_SEQ_LEN` affects only the outer sequence length header.
-- `VARINT_OFFSETS` affects only packed-sequence offsets.
+- Reserved layout bits are rejected when decoding headers.
 
 ## Error Mapping
 

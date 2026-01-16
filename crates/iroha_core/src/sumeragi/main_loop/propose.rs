@@ -876,7 +876,7 @@ impl Actor {
             }
 
             if let BlockMessage::BlockCreated(block_msg) = block_created_msg.clone() {
-                self.handle_block_created(block_msg)?;
+                self.handle_block_created(block_msg, None)?;
             }
 
             if let Some(plan) = rbc_plan.take() {

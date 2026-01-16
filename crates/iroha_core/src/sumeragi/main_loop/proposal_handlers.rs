@@ -705,7 +705,11 @@ impl Actor {
     }
 
     #[allow(clippy::too_many_lines)]
-    pub(super) fn handle_block_created(&mut self, msg: super::message::BlockCreated) -> Result<()> {
+    pub(super) fn handle_block_created(
+        &mut self,
+        msg: super::message::BlockCreated,
+        sender: Option<PeerId>,
+    ) -> Result<()> {
         let block = msg.block;
         let block_hash = block.hash();
         let header = block.header();
@@ -822,7 +826,12 @@ impl Actor {
                 {
                     self.seed_rbc_session_from_block(session_key, &block, payload_hash)?;
                 }
-                self.hydrate_rbc_session_from_block(session_key, &payload_bytes, payload_hash)?;
+                self.hydrate_rbc_session_from_block(
+                    session_key,
+                    &payload_bytes,
+                    payload_hash,
+                    sender.as_ref(),
+                )?;
             }
             debug!(
                 height,
@@ -1138,7 +1147,12 @@ impl Actor {
                 );
                 self.seed_rbc_session_from_block(session_key, &block, payload_hash)?;
             }
-            self.hydrate_rbc_session_from_block(session_key, &payload_bytes, payload_hash)?;
+            self.hydrate_rbc_session_from_block(
+                session_key,
+                &payload_bytes,
+                payload_hash,
+                sender.as_ref(),
+            )?;
         }
         if self
             .pending

@@ -320,10 +320,11 @@ use iroha_data_model::{
         SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiMembershipMismatchStatus,
         SumeragiMembershipStatus, SumeragiMissingBlockFetchStatus, SumeragiPeerKeyPolicyStatus,
         SumeragiPendingRbcEntry, SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcSnapshot,
-        SumeragiQcStatus, SumeragiRbcEvictedSession, SumeragiRbcStoreStatus,
-        SumeragiRuntimeUpgradeHook, SumeragiStatusWire, SumeragiValidationRejectStatus,
-        SumeragiViewChangeCauseStatus, SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
-        SumeragiWorkerQueueDiagnostics, SumeragiWorkerQueueTotals,
+        SumeragiQcStatus, SumeragiRbcEvictedSession, SumeragiRbcMismatchEntry,
+        SumeragiRbcMismatchStatus, SumeragiRbcStoreStatus, SumeragiRuntimeUpgradeHook,
+        SumeragiStatusWire, SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
+        SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths, SumeragiWorkerQueueDiagnostics,
+        SumeragiWorkerQueueTotals,
     },
     domain::DomainId,
     events::{
@@ -20487,6 +20488,28 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("evictions_total", snap.rbc_store_evictions_total),
         json_entry("recent_evictions", recent_evictions),
     ]);
+    let rbc_mismatch_entries = Value::Array(
+        snap.rbc_mismatch
+            .entries
+            .iter()
+            .map(|entry| {
+                json_object(vec![
+                    json_entry("peer_id", Value::from(entry.peer_id.to_string())),
+                    json_entry(
+                        "chunk_digest_mismatch_total",
+                        entry.chunk_digest_mismatch_total,
+                    ),
+                    json_entry(
+                        "payload_hash_mismatch_total",
+                        entry.payload_hash_mismatch_total,
+                    ),
+                    json_entry("chunk_root_mismatch_total", entry.chunk_root_mismatch_total),
+                    json_entry("last_timestamp_ms", entry.last_timestamp_ms),
+                ])
+            })
+            .collect(),
+    );
+    let rbc_mismatch = json_object(vec![json_entry("entries", rbc_mismatch_entries)]);
     let pending_rbc_entries = Value::Array(
         snap.pending_rbc
             .entries
@@ -20760,6 +20783,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         ),
         json_entry("da_reschedule_total", snap.da_reschedule_total),
         json_entry("rbc_store", rbc_store),
+        json_entry("rbc_mismatch", rbc_mismatch),
         json_entry("pending_rbc", pending_rbc),
         json_entry("qc_rebuild_attempts_total", snap.qc_rebuild_attempts_total),
         json_entry(
@@ -20801,6 +20825,7 @@ mod status_tests {
             LaneVolatilityClass,
         },
         consensus::{ValidatorElectionOutcome, ValidatorElectionParameters, ValidatorTieBreak},
+        peer::PeerId,
     };
     use iroha_p2p::ConsensusConfigCaps;
 
@@ -21722,6 +21747,68 @@ mod status_tests {
     }
 
     #[test]
+    fn status_snapshot_json_includes_rbc_mismatch_entries() {
+        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_label = peer.to_string();
+        let entry = status::RbcMismatchEntry {
+            peer_id: peer,
+            chunk_digest_mismatch_total: 2,
+            payload_hash_mismatch_total: 1,
+            chunk_root_mismatch_total: 3,
+            last_timestamp_ms: 42,
+        };
+        let snap = sumeragi::StatusSnapshot {
+            rbc_mismatch: status::RbcMismatchSnapshot {
+                entries: vec![entry.clone()],
+            },
+            ..Default::default()
+        };
+        let payload = status_snapshot_json(&snap);
+        let mismatch = payload
+            .get("rbc_mismatch")
+            .and_then(Value::as_object)
+            .expect("rbc_mismatch object");
+        let entries = mismatch
+            .get("entries")
+            .and_then(Value::as_array)
+            .expect("entries array");
+        assert_eq!(entries.len(), 1);
+        let stored = entries.first().and_then(Value::as_object).unwrap();
+        assert_eq!(
+            stored.get("peer_id").and_then(Value::as_str).unwrap(),
+            peer_label
+        );
+        assert_eq!(
+            stored
+                .get("chunk_digest_mismatch_total")
+                .and_then(Value::as_u64)
+                .unwrap(),
+            entry.chunk_digest_mismatch_total
+        );
+        assert_eq!(
+            stored
+                .get("payload_hash_mismatch_total")
+                .and_then(Value::as_u64)
+                .unwrap(),
+            entry.payload_hash_mismatch_total
+        );
+        assert_eq!(
+            stored
+                .get("chunk_root_mismatch_total")
+                .and_then(Value::as_u64)
+                .unwrap(),
+            entry.chunk_root_mismatch_total
+        );
+        assert_eq!(
+            stored
+                .get("last_timestamp_ms")
+                .and_then(Value::as_u64)
+                .unwrap(),
+            entry.last_timestamp_ms
+        );
+    }
+
+    #[test]
     fn status_snapshot_json_includes_pending_rbc_stash_counters() {
         let hash = Hash::prehashed([0x11; Hash::LENGTH]);
         let hash_typed = HashOf::from_untyped_unchecked(hash);
@@ -22195,6 +22282,20 @@ pub async fn handle_v1_sumeragi_status(
                         )),
                         height: entry.height,
                         view: entry.view,
+                    })
+                    .collect(),
+            },
+            rbc_mismatch: SumeragiRbcMismatchStatus {
+                entries: snap
+                    .rbc_mismatch
+                    .entries
+                    .iter()
+                    .map(|entry| SumeragiRbcMismatchEntry {
+                        peer_id: entry.peer_id.clone(),
+                        chunk_digest_mismatch_total: entry.chunk_digest_mismatch_total,
+                        payload_hash_mismatch_total: entry.payload_hash_mismatch_total,
+                        chunk_root_mismatch_total: entry.chunk_root_mismatch_total,
+                        last_timestamp_ms: entry.last_timestamp_ms,
                     })
                     .collect(),
             },

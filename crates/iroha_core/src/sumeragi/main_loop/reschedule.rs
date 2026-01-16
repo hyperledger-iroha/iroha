@@ -26,6 +26,7 @@ impl Actor {
         let da_enabled = self.runtime_da_enabled();
         let quorum_timeout = self.quorum_timeout(da_enabled);
         let quorum_reschedule_cooldown = quorum_timeout.max(QUORUM_RESCHEDULE_COOLDOWN);
+        let availability_timeout = self.availability_timeout(quorum_timeout, da_enabled);
         // Keep aborted payloads long enough for missing-block fetches after reschedule drops.
         let retention_factor = self
             .config
@@ -45,6 +46,7 @@ impl Actor {
         let mut to_reschedule = Vec::new();
         let mut prevote_timeouts = Vec::new();
         let mut reschedule_backoff_skipped = 0usize;
+        let mut missing_data_backoff_skipped = 0usize;
         let mut stale_removed = 0usize;
         let mut aborted_removed = 0usize;
         for (hash, pending) in &self.pending.pending_blocks {
@@ -146,6 +148,12 @@ impl Actor {
                 self.commit_vote_quorum_status_for_block(*hash, pending.height, pending.view)
             };
             if missing_quorum_stale(pending_age, quorum_timeout, quorum_reached) {
+                if matches!(pending.last_gate, Some(GateReason::MissingLocalData))
+                    && pending_age < availability_timeout
+                {
+                    missing_data_backoff_skipped = missing_data_backoff_skipped.saturating_add(1);
+                    continue;
+                }
                 if !pending.reschedule_due(now, quorum_reschedule_cooldown) {
                     reschedule_backoff_skipped = reschedule_backoff_skipped.saturating_add(1);
                     continue;
@@ -312,6 +320,7 @@ impl Actor {
         if total_cost >= RESCHEDULE_TIMING_LOG_THRESHOLD
             || progress
             || reschedule_backoff_skipped > 0
+            || missing_data_backoff_skipped > 0
             || aborted_removed > 0
         {
             iroha_logger::info!(
@@ -321,6 +330,7 @@ impl Actor {
                 stale_removed,
                 aborted_removed,
                 backoff_skipped = reschedule_backoff_skipped,
+                missing_data_skipped = missing_data_backoff_skipped,
                 scan_ms = scan_cost.as_millis(),
                 total_ms = total_cost.as_millis(),
                 "reschedule sweep timing"

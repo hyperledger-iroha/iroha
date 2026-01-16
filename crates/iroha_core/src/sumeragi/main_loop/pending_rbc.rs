@@ -6,6 +6,7 @@ use std::{
 };
 
 use eyre::Result;
+use iroha_data_model::peer::PeerId;
 use iroha_logger::prelude::*;
 
 use super::Actor;
@@ -16,8 +17,14 @@ use crate::sumeragi::{
 };
 
 #[derive(Debug)]
+pub(super) struct PendingRbcChunk {
+    pub(super) chunk: RbcChunk,
+    pub(super) sender: Option<PeerId>,
+}
+
+#[derive(Debug)]
 pub(super) struct PendingRbcMessages {
-    pub(super) chunks: VecDeque<RbcChunk>,
+    pub(super) chunks: VecDeque<PendingRbcChunk>,
     pub(super) ready: Vec<RbcReady>,
     pub(super) deliver: Vec<RbcDeliver>,
     pending_bytes: usize,
@@ -130,6 +137,7 @@ impl PendingRbcMessages {
     pub(super) fn push_chunk_capped(
         &mut self,
         chunk: RbcChunk,
+        sender: Option<PeerId>,
         max_chunks: usize,
         max_bytes: usize,
         now: Instant,
@@ -151,7 +159,7 @@ impl PendingRbcMessages {
         {
             if let Some(evicted) = self.chunks.pop_front() {
                 evicted_chunks = evicted_chunks.saturating_add(1);
-                let evicted_len = evicted.bytes.len();
+                let evicted_len = evicted.chunk.bytes.len();
                 evicted_bytes =
                     evicted_bytes.saturating_add(u64::try_from(evicted_len).unwrap_or(u64::MAX));
                 self.pending_bytes = self.pending_bytes.saturating_sub(evicted_len);
@@ -175,7 +183,7 @@ impl PendingRbcMessages {
 
         self.touch(now);
         self.pending_bytes = self.pending_bytes.saturating_add(chunk_len);
-        self.chunks.push_back(chunk);
+        self.chunks.push_back(PendingRbcChunk { chunk, sender });
         PendingChunkOutcome::Inserted {
             pending_chunks: self.chunks.len(),
             pending_bytes: self.pending_bytes,
@@ -413,8 +421,8 @@ impl Actor {
             return Ok(());
         };
 
-        for chunk in pending.chunks {
-            self.handle_rbc_chunk(chunk)?;
+        for entry in pending.chunks {
+            self.handle_rbc_chunk(entry.chunk, entry.sender)?;
         }
         for ready in pending.ready {
             self.handle_rbc_ready(ready)?;

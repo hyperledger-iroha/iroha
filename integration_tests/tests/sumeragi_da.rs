@@ -23,7 +23,7 @@ use iroha::{
 };
 use iroha_config_base::toml::Writer as TomlWriter;
 use iroha_core::sumeragi::rbc_status;
-use iroha_test_network::{Network, NetworkBuilder};
+use iroha_test_network::{Network, NetworkBuilder, NetworkPeer};
 use norito::json::{self, Value};
 use rand::{Rng, SeedableRng, distr::Alphanumeric};
 use rand_chacha::ChaCha8Rng;
@@ -1157,6 +1157,135 @@ async fn sumeragi_rbc_unverified_roster_stash_requests_missing_block() -> Result
         Ok(())
     }
     .await;
+    if sandbox::handle_result(result, scenario_name)?.is_none() {
+        return Ok(());
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sumeragi_idle_view_change_recovers_after_leader_shutdown() -> Result<()> {
+    let scenario_name = stringify!(sumeragi_idle_view_change_recovers_after_leader_shutdown);
+    let builder = NetworkBuilder::new()
+        .with_peers(4)
+        .with_auto_populated_trusted_peers()
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::DaEnabled(true),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::BlockTimeMs(500),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::CommitTimeMs(1_000),
+        )))
+        .with_config_layer(|layer| {
+            layer
+                .write(["sumeragi", "consensus_mode"], "permissioned")
+                .write(["sumeragi", "npos", "timeouts", "propose_ms"], 200_i64)
+                .write(["sumeragi", "npos", "timeouts", "prevote_ms"], 400_i64)
+                .write(["sumeragi", "npos", "timeouts", "precommit_ms"], 600_i64)
+                .write(["sumeragi", "npos", "timeouts", "commit_ms"], 800_i64)
+                .write(["sumeragi", "npos", "timeouts", "da_ms"], 400_i64)
+                .write(["sumeragi", "pacemaker_max_backoff_ms"], 2_000_i64)
+                .write(["sumeragi", "pacemaker_rtt_floor_multiplier"], 1_i64);
+        });
+
+    let Some(network) = sandbox::start_network_async_or_skip(builder, scenario_name).await? else {
+        return Ok(());
+    };
+
+    let result: Result<()> = async {
+        network
+            .ensure_blocks_with(|height| height.total >= 1)
+            .await?;
+
+        let peers = network.peers();
+        let primary_peer = peers
+            .first()
+            .ok_or_else(|| eyre!("network must have at least one peer"))?;
+        let status_before = fetch_status(&primary_peer.client()).await?;
+        let leader_index = status_before
+            .sumeragi
+            .as_ref()
+            .map(|sumeragi| sumeragi.leader_index)
+            .ok_or_else(|| eyre!("status missing leader_index"))?;
+        let leader_idx = usize::try_from(leader_index)
+            .wrap_err("leader_index does not fit into usize")?;
+
+        let mut roster: Vec<_> = peers.iter().map(NetworkPeer::id).collect();
+        roster.sort();
+        let leader_peer_id = roster.get(leader_idx).ok_or_else(|| {
+            eyre!(
+                "leader_index {leader_idx} out of bounds for roster size {}",
+                roster.len()
+            )
+        })?;
+        let leader_peer = peers
+            .iter()
+            .find(|peer| peer.id() == *leader_peer_id)
+            .cloned()
+            .ok_or_else(|| eyre!("leader peer not found in network roster"))?;
+
+        let mut baseline_view_changes = Vec::with_capacity(peers.len());
+        for peer in peers.iter() {
+            let status = peer.status().await?;
+            baseline_view_changes.push(u64::from(status.view_changes));
+        }
+
+        leader_peer.shutdown().await;
+        sleep(Duration::from_millis(500)).await;
+
+        let running: Vec<NetworkPeer> = peers
+            .iter()
+            .filter(|peer| peer.is_running())
+            .cloned()
+            .collect();
+        ensure!(
+            running.len() >= 3,
+            "expected at least 3 running peers after leader shutdown, got {}",
+            running.len()
+        );
+
+        let submit_peer = running
+            .first()
+            .ok_or_else(|| eyre!("no running peers available for submission"))?;
+        let submit_client = submit_peer.client();
+        let payload = format!("{scenario_name}-liveness");
+        tokio::task::spawn_blocking(move || submit_client.submit(Log::new(Level::INFO, payload)))
+            .await
+            .wrap_err("submit log instruction")??;
+
+        let status_url = submit_peer
+            .client()
+            .torii_url
+            .join("status")
+            .wrap_err("compose status URL")?;
+        let start = Instant::now();
+        let elapsed = wait_for_height(reqwest::Client::new(), status_url, status_before.blocks + 1, start).await?;
+        ensure!(
+            elapsed <= Duration::from_secs(30),
+            "expected view change to recover within bound; elapsed={elapsed:?}"
+        );
+
+        for (idx, peer) in peers.iter().enumerate() {
+            if !peer.is_running() {
+                continue;
+            }
+            let status = peer.status().await?;
+            let baseline = baseline_view_changes[idx];
+            ensure!(
+                u64::from(status.view_changes) >= baseline.saturating_add(1),
+                "expected peer {idx} view_changes to advance after leader shutdown: before={baseline}, after={}",
+                status.view_changes
+            );
+        }
+
+        network.shutdown().await;
+        Ok(())
+    }
+    .await;
+
     if sandbox::handle_result(result, scenario_name)?.is_none() {
         return Ok(());
     }

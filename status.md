@@ -1,6 +1,40 @@
 # Status
 
 ## Latest Updates
+- NPoS roster: widen epoch validator roster filters when commit topology omits active validators; add unit coverage and update Sumeragi docs.
+- Data model: make Metadata encoded-length accumulators explicitly `usize` to avoid ambiguous numeric-type compilation errors.
+- Sumeragi/RBC: align `ingest_chunk_with_outcome` visibility with its outcome type to remove the private-interfaces warning.
+- Tests: `cargo test -p iroha_kagami localnet_npos_validator_roster_and_quorum_match_peer_count -- --nocapture` (pass).
+- Tests: `cargo test -p iroha_core public_lane_snapshot_widens_missing_commit_topology_membership -- --nocapture` (pass; Norito unused-function warnings remain).
+- Format: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Sumeragi/RBC: wire `rbc_mismatch` through Torii JSON/Norito + client JSON helpers, extend data-model status fixtures, and add unit coverage for mismatch tracking/throttling and chunk-ingest outcomes.
+- Tests: not run (not requested).
+- NPoS roster: append active validators missing from the commit topology to keep full validator participation; add unit coverage and update Sumeragi docs.
+- Tests: not run (not requested).
+- Sumeragi/RBC: propagate sender IDs through relay/pending stashes, throttle mismatch logs, and attribute per-peer digest/payload/root mismatches; add unit coverage and update docs.
+- Tests: not run (not requested).
+- Sumeragi/RBC: attribute mismatched chunk sources, record per-peer mismatch counters with log throttling, expose `sumeragi_rbc_mismatch_total` + `/v1/sumeragi/status.rbc_mismatch`, keep drop-only enforcement, add unit coverage, update Sumeragi/telemetry docs, and mark the roadmap item complete.
+- Tests: not run (per request).
+- Format: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Localnet/Kagami: scale Nexus dataspace fault tolerance from peer count so NPoS localnets use the full 3f+1 committee; add a regression covering validator roster + committee math for 7 peers.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test -p iroha_kagami localnet_npos_validator_roster_and_quorum_match_peer_count -- --nocapture` (failed: `norito` compile errors for missing `note_varint_offsets_emitted`/`varint_offsets_used` in `crates/norito/src/core.rs`, plus derive failures in `crates/norito/src/{schema,streaming}.rs`).
+- CLI/load: `iroha transaction ping` now caps parallel workers via `--parallel-cap` (default 1024; 0 disables) and reuses a single client per batch; `scripts/tx_load.py` shards load across peers (`--peer-urls`/`--peer-count`), reports 429 hits, and updates tests.
+- Tests: `python3 -m pytest scripts/tests/tx_load_test.py` (pass).
+- Tests: `cargo test -p iroha_cli resolve_ping_parallel -- --nocapture` (failed: duplicate `sumeragi_rbc_mismatch_total` field in `crates/iroha_telemetry/src/metrics.rs`).
+- Sumeragi: re-arm missing-block view-change triggers per view, refresh dwell windows on newer view/height updates, add unit coverage, and update Sumeragi docs.
+- Tests: `cargo test -p iroha_core missing_block_view_change_ -- --nocapture` (pass).
+- Roadmap: add tasks to attribute mismatched RBC chunks and re-arm missing-block view-change triggers across views.
+- Sumeragi: defer quorum reschedules while `MissingLocalData` until the availability timeout to avoid view-change storms during payload recovery; localnet NPoS aggregator timeout now matches the base pipeline to reduce QC shortfall; update unit coverage.
+- Tests: not run (per request).
+- Sumeragi: tolerate missing local highest QC blocks when checking locked-chain extensions and BlockCreated/proposal hints; fall back to the locked QC if the highest QC is missing; add unit coverage for missing-highest hints and proposal assembly.
+- Tests: `cargo test -p iroha_core missing_highest -- --nocapture`; `cargo test -p iroha_core hint_highest_missing -- --nocapture` (pass).
+- Localnet: 7-peer release run (base API/P2P ports 40180/47537) reported blocks=6, blocks_non_empty=6, commit_time_ms~9781, commit_qc_validator_set_len=4; load attempts with `scripts/tx_load.py` hit FD limits at `--parallel 4096` and timed out after ~10.1k submits with `ulimit -n 65535` / ~8.6k submits at `--parallel 1024`.
+- Sumeragi liveness: cap idle view-change timeouts when no proposal is observed (`min(commit_quorum_timeout, 4 * propose_interval)`), align relay/RBC backpressure overrides to the same timeout, add unit coverage, and update Sumeragi docs.
+- Integration tests: add `sumeragi_idle_view_change_recovers_after_leader_shutdown` in `integration_tests/tests/sumeragi_da.rs` to exercise leader-loss recovery under DA (not run).
+- Tests: `cargo test -p iroha_core --lib idle_view_timeout_caps_no_proposal_grace -- --nocapture` (pass).
+- Tests: `cargo test -p iroha_core --lib should_override_backpressure_after_idle_timeout_without_proposal -- --nocapture` (aborted by user request).
+- Format: `cargo fmt --all` (stable rustfmt warns about unstable options).
 - Consensus ingress: separate bulk payloads into their own buckets seeded from the standard caps, skip penalty cooldowns for bulk, and apply penalty cooldowns when critical caps are unset; update ingress unit coverage + docs/templates.
 - Tests: `cargo test -p irohad consensus_ingress_` (pass; warnings about unused `schedule_rbc_chunk_broadcast*` in `crates/iroha_core/src/sumeragi/main_loop/rbc.rs` and single-use lifetime in `crates/irohad/src/main.rs`).
 - Format: `cargo fmt --all` (stable rustfmt warns about unstable options).

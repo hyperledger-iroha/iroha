@@ -3913,18 +3913,6 @@ pub struct Norito {
         default = "defaults::norito::LARGE_THRESHOLD"
     )]
     pub large_threshold: usize,
-    /// Enable varint-coded top-level sequence length up to this payload size.
-    #[config(
-        env = "NORITO_ENABLE_COMPACT_SEQ_LEN_UP_TO",
-        default = "defaults::norito::ENABLE_COMPACT_SEQ_LEN_UP_TO"
-    )]
-    pub enable_compact_seq_len_up_to: usize,
-    /// Enable varint-coded per-element sizes (packed sequences) up to this payload size.
-    #[config(
-        env = "NORITO_ENABLE_VARINT_OFFSETS_UP_TO",
-        default = "defaults::norito::ENABLE_VARINT_OFFSETS_UP_TO"
-    )]
-    pub enable_varint_offsets_up_to: usize,
     /// Allow GPU compression offload when compiled and available.
     #[config(
         env = "NORITO_ALLOW_GPU_COMPRESSION",
@@ -3954,8 +3942,6 @@ impl Norito {
             zstd_level_large: self.zstd_level_large,
             zstd_level_gpu: self.zstd_level_gpu,
             large_threshold: self.large_threshold,
-            enable_compact_seq_len_up_to: self.enable_compact_seq_len_up_to,
-            enable_varint_offsets_up_to: self.enable_varint_offsets_up_to,
             allow_gpu_compression: self.allow_gpu_compression,
             max_archive_len: self.max_archive_len,
             aos_ncb_small_n: self.aos_ncb_small_n,

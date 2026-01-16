@@ -1515,10 +1515,6 @@ mod tests {
                 zstd_level_large: iroha_config::parameters::defaults::norito::ZSTD_LEVEL_LARGE,
                 zstd_level_gpu: iroha_config::parameters::defaults::norito::ZSTD_LEVEL_GPU,
                 large_threshold: iroha_config::parameters::defaults::norito::LARGE_THRESHOLD,
-                enable_compact_seq_len_up_to:
-                    iroha_config::parameters::defaults::norito::ENABLE_COMPACT_SEQ_LEN_UP_TO,
-                enable_varint_offsets_up_to:
-                    iroha_config::parameters::defaults::norito::ENABLE_VARINT_OFFSETS_UP_TO,
                 allow_gpu_compression:
                     iroha_config::parameters::defaults::norito::ALLOW_GPU_COMPRESSION,
                 max_archive_len: iroha_config::parameters::defaults::norito::MAX_ARCHIVE_LEN,

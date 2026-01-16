@@ -2136,10 +2136,6 @@ pub mod norito {
     pub const ZSTD_LEVEL_GPU: i32 = 1;
     /// Size threshold distinguishing small vs large for CPU zstd level.
     pub const LARGE_THRESHOLD: usize = 32 * 1024;
-    /// Enable varint-coded sequence length headers up to this payload size.
-    pub const ENABLE_COMPACT_SEQ_LEN_UP_TO: usize = usize::MAX;
-    /// Enable varint-coded per-element sizes for packed sequences up to this payload size.
-    pub const ENABLE_VARINT_OFFSETS_UP_TO: usize = usize::MAX;
     /// Allow GPU compression offload when compiled and available.
     pub const ALLOW_GPU_COMPRESSION: bool = true;
     /// Hard upper bound on Norito archive length after decompression (bytes).

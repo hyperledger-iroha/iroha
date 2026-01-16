@@ -18,7 +18,7 @@ fn serialize_never_sets_header_flags() {
 }
 
 #[test]
-fn decode_flags_guard_cannot_enable_compact_modes() {
+fn decode_flags_guard_sanitizes_reserved_bits() {
     core::reset_decode_state();
     assert!(!core::use_compact_len());
     assert!(!core::use_compact_seq_len());
@@ -32,12 +32,11 @@ fn decode_flags_guard_cannot_enable_compact_modes() {
                 | header_flags::PACKED_SEQ
                 | header_flags::PACKED_STRUCT,
         );
-        if !core::use_compact_len() {
-            assert!(!core::use_compact_seq_len());
-            assert!(!core::use_varint_offsets());
-            assert!(!core::use_packed_seq());
-            assert!(!core::use_packed_struct());
-        }
+        assert!(core::use_compact_len());
+        assert!(!core::use_compact_seq_len());
+        assert!(!core::use_varint_offsets());
+        assert!(core::use_packed_seq());
+        assert!(core::use_packed_struct());
     }
 
     core::reset_decode_state();

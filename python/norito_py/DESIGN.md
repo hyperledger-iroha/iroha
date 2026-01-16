@@ -9,7 +9,7 @@
 ## Scope in v0.1.0
 - Header handling: encode/decode `NoritoHeader` with magic `NRT0`, version (major=0, minor=0), schema hash (16 bytes), compression byte, payload length, CRC64, flag byte.
 - CRC64-XZ implementation with table-driven fast path and portable fallback.
-- Flag support: `PACKED_SEQ`, `COMPACT_LEN`, `VARINT_OFFSETS`, `COMPACT_SEQ_LEN`, `PACKED_STRUCT`, and `FIELD_BITSET` as documented in `norito.md`.
+- Flag support: `PACKED_SEQ`, `COMPACT_LEN`, `PACKED_STRUCT`, and `FIELD_BITSET` as documented in `norito.md` (reserved layout bits are rejected).
 - Compression: optional Zstandard backend via the `zstandard` Python module. When the dependency is missing, attempts to use compression raise `UnsupportedCompressionError`.
 - Encoding/decoding primitives:
   - Unsigned integers up to 64 bits (`u8`, `u16`, `u32`, `u64`).
@@ -41,7 +41,7 @@
 
 ## Determinism & Flags
 - Encoder accepts `flags` set; when `PACKED_SEQ` and `COMPACT_LEN` are present simultaneously, default to the hybrid layout described in `norito.md` for sequences and struct-like adapters.
-- Packed sequence implementation writes len header followed by either varint sizes or `(len+1)` u64 offsets depending on `VARINT_OFFSETS`. Provide deterministic decision tree identical to Rust defaults (varint only when the flag is explicitly enabled; defaults keep u64 offsets for determinism).
+- Packed sequence implementation writes a fixed u64 length header followed by `(len+1)` u64 offsets and concatenated data. Sequence length headers are fixed-width in v1.
 - Non-packed sequences fall back to compat layout (per-element header + payload).
 
 ## Testing Plan

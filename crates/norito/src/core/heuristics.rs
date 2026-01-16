@@ -32,13 +32,6 @@ pub struct Heuristics {
     /// Size threshold distinguishing small vs large for CPU zstd level.
     pub large_threshold: usize,
 
-    /// Enable varint-coded sequence length headers when total payload is up to this size.
-    /// For very large payloads, a fixed u64 length header is typically faster.
-    pub enable_compact_seq_len_up_to: usize,
-    /// Enable varint-coded per-element sizes (VARINT_OFFSETS) for packed sequences
-    /// when total payload is up to this size. Above this, fixed u64 offsets are faster to decode.
-    pub enable_varint_offsets_up_to: usize,
-
     /// Small-N threshold for AoS vs NCB adaptive selection in `columnar` helpers.
     ///
     /// For row counts `<= aos_ncb_small_n`, adaptive encoders will do a two-pass
@@ -110,9 +103,6 @@ impl Heuristics {
             // Switch to the higher CPU level for 32 KiB+ payloads (blocks), where
             // level 3 trimmed genesis SignedBlock size by ~15% over level 1.
             large_threshold: 32 * 1024,
-            // Varint lengths and offsets are disabled in the fixed-width canonical layout.
-            enable_compact_seq_len_up_to: 0,
-            enable_varint_offsets_up_to: 0,
             // Adaptive AoS/NCB selection threshold
             aos_ncb_small_n: 64,
             // Columnar combo heuristics: disable deltas for tiny inputs with empties

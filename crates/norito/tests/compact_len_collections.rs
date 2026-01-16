@@ -1,4 +1,4 @@
-//! Compact length and sequence length coverage for core collection serializers.
+//! Compact length coverage for core collection serializers.
 
 use std::{
     borrow::Cow,
@@ -21,7 +21,7 @@ fn serialize_payload<T: NoritoSerialize>(value: &T) -> Vec<u8> {
 fn assert_seq_header(bytes: &[u8], expected_len: usize) -> usize {
     let (len, hdr) = core::read_seq_len_slice(bytes).expect("seq header");
     assert_eq!(len, expected_len, "unexpected sequence length");
-    assert_eq!(hdr, 1, "sequence header should be varint");
+    assert_eq!(hdr, 8, "sequence header should be fixed-width");
     hdr
 }
 
@@ -32,10 +32,10 @@ fn assert_len_prefix(bytes: &[u8], expected_len: usize) {
 }
 
 #[test]
-fn compact_seq_len_serializers_use_varints() {
-    let _guard = DecodeFlagsGuard::enter(header_flags::COMPACT_LEN | header_flags::COMPACT_SEQ_LEN);
+fn compact_len_serializers_keep_fixed_seq_len() {
+    let _guard = DecodeFlagsGuard::enter(header_flags::COMPACT_LEN);
 
-    assert_eq!(core::seq_len_prefix_len(2), 1);
+    assert_eq!(core::seq_len_prefix_len(2), 8);
 
     let bytes = serialize_payload(&vec![1u8, 2]);
     let hdr = assert_seq_header(&bytes, 2);
@@ -117,7 +117,7 @@ fn owned_exact_lengths_respect_compact_len() {
 
 #[test]
 fn binaryheap_compact_roundtrip() {
-    let _guard = DecodeFlagsGuard::enter(header_flags::COMPACT_LEN | header_flags::COMPACT_SEQ_LEN);
+    let _guard = DecodeFlagsGuard::enter(header_flags::COMPACT_LEN);
 
     let heap = BinaryHeap::from(vec![3u8, 1u8, 2u8]);
     let bytes = core::to_bytes(&heap).expect("encode binary heap");

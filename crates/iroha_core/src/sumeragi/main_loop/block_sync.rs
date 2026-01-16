@@ -57,6 +57,7 @@ impl Actor {
     pub(super) fn handle_block_sync_update(
         &mut self,
         update: super::message::BlockSyncUpdate,
+        sender: Option<PeerId>,
     ) -> Result<()> {
         let super::message::BlockSyncUpdate {
             block,
@@ -367,7 +368,7 @@ impl Actor {
                         "deferring block sync update due to signature mismatch while behind"
                     );
                     let created = super::message::BlockCreated { block };
-                    let _ = self.handle_block_created(created);
+                    let _ = self.handle_block_created(created, sender.clone());
                     return Ok(());
                 }
                 super::status::inc_block_sync_drop_invalid_signatures();
@@ -746,7 +747,7 @@ impl Actor {
         );
 
         let created = super::message::BlockCreated { block };
-        let creation_result = self.handle_block_created(created);
+        let creation_result = self.handle_block_created(created, sender.clone());
         let block_known_after_creation = self.block_known_locally(block_hash);
         let creation_ok = creation_result.is_ok();
         let ready_for_qc = block_sync_ready_for_qc(block_known_after_creation, &creation_result);
