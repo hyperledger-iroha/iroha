@@ -3637,6 +3637,8 @@ pub struct Sumeragi {
     pub rbc_session_ttl: Duration,
     /// Maximum RBC sessions rebroadcast per tick.
     pub rbc_rebroadcast_sessions_per_tick: usize,
+    /// Maximum RBC payload chunks broadcast per tick.
+    pub rbc_payload_chunks_per_tick: usize,
     /// Maximum number of persisted RBC session summaries retained on disk.
     pub rbc_store_max_sessions: usize,
     /// Soft quota for persisted RBC session summaries.

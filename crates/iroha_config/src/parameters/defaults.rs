@@ -763,21 +763,20 @@ pub mod network {
 
     /// Optional per-peer consensus ingress rate (msgs/sec). When None, consensus ingress limiting is disabled.
     ///
-    /// Defaults tuned for fast DA pipelines so QC/vote traffic is not throttled.
-    pub const CONSENSUS_INGRESS_RATE_PER_SEC: Option<NonZeroU32> = Some(nonzero!(50_000_u32));
+    /// Defaults tuned for liveness-sensitive traffic without allowing abusive bursts.
+    pub const CONSENSUS_INGRESS_RATE_PER_SEC: Option<NonZeroU32> = Some(nonzero!(300_u32));
     /// Optional burst for consensus ingress rate limiting (msgs). Defaults to `rate` when None.
-    pub const CONSENSUS_INGRESS_BURST: Option<NonZeroU32> = Some(nonzero!(100_000_u32));
+    pub const CONSENSUS_INGRESS_BURST: Option<NonZeroU32> = Some(nonzero!(300_u32));
     /// Optional per-peer consensus ingress bytes/sec budget. When None, bytes limiting is disabled.
     pub const CONSENSUS_INGRESS_BYTES_PER_SEC: Option<NonZeroU32> = Some(nonzero!(67_108_864_u32)); // 64 MiB/s
     /// Optional burst size in bytes for consensus ingress limiting. Defaults to `bytes_per_sec` when None.
     pub const CONSENSUS_INGRESS_BYTES_BURST: Option<NonZeroU32> = Some(nonzero!(134_217_728_u32)); // 128 MiB
     /// Optional per-peer critical consensus ingress rate (msgs/sec). When None, critical limiting is disabled.
     ///
-    /// Critical traffic is liveness-sensitive (votes/QCs/VRF/RBC signals) and uses a higher cap.
-    pub const CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC: Option<NonZeroU32> =
-        Some(nonzero!(100_000_u32));
+    /// Critical traffic is liveness-sensitive (votes/QCs/VRF/RBC signals) and uses a dedicated cap.
+    pub const CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC: Option<NonZeroU32> = Some(nonzero!(300_u32));
     /// Optional burst for critical consensus ingress rate limiting (msgs). Defaults to `rate` when None.
-    pub const CONSENSUS_INGRESS_CRITICAL_BURST: Option<NonZeroU32> = Some(nonzero!(200_000_u32));
+    pub const CONSENSUS_INGRESS_CRITICAL_BURST: Option<NonZeroU32> = Some(nonzero!(300_u32));
     /// Optional per-peer critical consensus ingress bytes/sec budget. When None, bytes limiting is disabled.
     pub const CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC: Option<NonZeroU32> =
         Some(nonzero!(134_217_728_u32)); // 128 MiB/s
@@ -2320,6 +2319,8 @@ pub mod sumeragi {
     pub const RBC_SESSION_TTL_SECS: u64 = 120; // 2 minutes
     /// Maximum RBC sessions rebroadcast per tick to avoid payload storms.
     pub const RBC_REBROADCAST_SESSIONS_PER_TICK: usize = 8;
+    /// Maximum RBC payload chunks broadcast per tick to avoid bursty floods.
+    pub const RBC_PAYLOAD_CHUNKS_PER_TICK: usize = 64;
     /// Default maximum number of persisted RBC session summaries kept on disk.
     pub const RBC_STORE_MAX_SESSIONS: usize = 1024;
     /// Default soft quota for persisted RBC sessions. Back-pressure engages beyond this.

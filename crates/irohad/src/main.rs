@@ -725,6 +725,8 @@ struct ConsensusIngressLimiter {
 struct PeerIngressState {
     msg_bucket: Option<TokenBucket>,
     bytes_bucket: Option<TokenBucket>,
+    bulk_msg_bucket: Option<TokenBucket>,
+    bulk_bytes_bucket: Option<TokenBucket>,
     critical_msg_bucket: Option<TokenBucket>,
     critical_bytes_bucket: Option<TokenBucket>,
     rbc_sessions: HashMap<iroha_core::sumeragi::rbc_store::SessionKey, Instant>,
@@ -760,9 +762,10 @@ struct TokenBucket {
     last_refill: Instant,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum IngressRateClass {
     Limited,
+    Bulk,
     Critical,
 }
 
@@ -778,6 +781,14 @@ impl IngressPolicy {
         Self {
             rate_class: Some(IngressRateClass::Limited),
             apply_penalty: true,
+            apply_rbc_session_limit: true,
+        }
+    }
+
+    const fn bulk() -> Self {
+        Self {
+            rate_class: Some(IngressRateClass::Bulk),
+            apply_penalty: false,
             apply_rbc_session_limit: true,
         }
     }
@@ -805,19 +816,24 @@ impl ConsensusIngressLimiter {
 
         match msg {
             iroha_core::NetworkMessage::SumeragiBlock(block) => match block.as_ref() {
-                BlockMessage::BlockCreated(_)
-                | BlockMessage::BlockSyncUpdate(_)
-                | BlockMessage::FetchPendingBlock(_)
-                | BlockMessage::QcVote(_)
+                BlockMessage::QcVote(_)
                 | BlockMessage::Qc(_)
                 | BlockMessage::VrfCommit(_)
-                | BlockMessage::VrfReveal(_) => IngressPolicy::critical(),
+                | BlockMessage::VrfReveal(_)
+                | BlockMessage::FetchPendingBlock(_)
+                | BlockMessage::ProposalHint(_)
+                | BlockMessage::Proposal(_) => IngressPolicy::critical(),
                 BlockMessage::RbcInit(_)
                 | BlockMessage::RbcReady(_)
                 | BlockMessage::RbcDeliver(_) => IngressPolicy::critical_with_rbc_sessions(),
-                _ => IngressPolicy::limited(),
+                BlockMessage::ConsensusParams(_) => IngressPolicy::limited(),
+                BlockMessage::BlockCreated(_)
+                | BlockMessage::BlockSyncUpdate(_)
+                | BlockMessage::ExecWitness(_)
+                | BlockMessage::RbcChunk(_) => IngressPolicy::bulk(),
             },
-            iroha_core::NetworkMessage::BlockSync(_) => IngressPolicy::limited(),
+            iroha_core::NetworkMessage::SumeragiControlFlow(_) => IngressPolicy::critical(),
+            iroha_core::NetworkMessage::BlockSync(_) => IngressPolicy::bulk(),
             _ => IngressPolicy::limited(),
         }
     }
@@ -933,6 +949,10 @@ impl ConsensusIngressLimiter {
         size_bytes: usize,
     ) -> Option<ConsensusIngressDropReason> {
         let policy = Self::ingress_policy(msg);
+        let apply_penalty = policy.apply_penalty
+            || (policy.rate_class == Some(IngressRateClass::Critical)
+                && self.critical_msg_rate.is_none()
+                && self.critical_bytes_rate.is_none());
         let now = Instant::now();
         let entry = self
             .peers
@@ -947,14 +967,14 @@ impl ConsensusIngressLimiter {
                     self.penalty,
                 )
             });
-        if policy.apply_penalty && entry.penalty.is_suppressed(now) {
+        if apply_penalty && entry.penalty.is_suppressed(now) {
             return Some(ConsensusIngressDropReason::Penalty);
         }
         if let Some(rate_class) = policy.rate_class {
             if let Some(bucket) = entry.msg_bucket_for(rate_class)
                 && !bucket.allow(1.0, now)
             {
-                if policy.apply_penalty {
+                if apply_penalty {
                     entry.penalty.note_violation(now);
                 }
                 return Some(ConsensusIngressDropReason::Rate);
@@ -964,7 +984,7 @@ impl ConsensusIngressLimiter {
             if let Some(bucket) = entry.bytes_bucket_for(rate_class)
                 && !bucket.allow(size_bytes_f64, now)
             {
-                if policy.apply_penalty {
+                if apply_penalty {
                     entry.penalty.note_violation(now);
                 }
                 return Some(ConsensusIngressDropReason::Bytes);
@@ -978,7 +998,7 @@ impl ConsensusIngressLimiter {
             if !entry.rbc_sessions.contains_key(&key)
                 && entry.rbc_sessions.len() >= self.rbc_session_limit
             {
-                if policy.apply_penalty {
+                if apply_penalty {
                     entry.penalty.note_violation(now);
                 }
                 return Some(ConsensusIngressDropReason::RbcSessionLimit);
@@ -1018,6 +1038,8 @@ impl PeerIngressState {
         Self {
             msg_bucket: msg_rate.map(|cfg| TokenBucket::new(cfg, now)),
             bytes_bucket: bytes_rate.map(|cfg| TokenBucket::new(cfg, now)),
+            bulk_msg_bucket: msg_rate.map(|cfg| TokenBucket::new(cfg, now)),
+            bulk_bytes_bucket: bytes_rate.map(|cfg| TokenBucket::new(cfg, now)),
             critical_msg_bucket: critical_msg_rate.map(|cfg| TokenBucket::new(cfg, now)),
             critical_bytes_bucket: critical_bytes_rate.map(|cfg| TokenBucket::new(cfg, now)),
             rbc_sessions: HashMap::new(),
@@ -1031,7 +1053,14 @@ impl PeerIngressState {
     ) -> Option<&mut TokenBucket> {
         match class {
             IngressRateClass::Limited => self.msg_bucket.as_mut(),
-            IngressRateClass::Critical => self.critical_msg_bucket.as_mut(),
+            IngressRateClass::Bulk => self.bulk_msg_bucket.as_mut(),
+            IngressRateClass::Critical => {
+                if self.critical_msg_bucket.is_some() {
+                    self.critical_msg_bucket.as_mut()
+                } else {
+                    self.msg_bucket.as_mut()
+                }
+            }
         }
     }
 
@@ -1041,7 +1070,14 @@ impl PeerIngressState {
     ) -> Option<&mut TokenBucket> {
         match class {
             IngressRateClass::Limited => self.bytes_bucket.as_mut(),
-            IngressRateClass::Critical => self.critical_bytes_bucket.as_mut(),
+            IngressRateClass::Bulk => self.bulk_bytes_bucket.as_mut(),
+            IngressRateClass::Critical => {
+                if self.critical_bytes_bucket.is_some() {
+                    self.critical_bytes_bucket.as_mut()
+                } else {
+                    self.bytes_bucket.as_mut()
+                }
+            }
         }
     }
 
@@ -1826,8 +1862,11 @@ mod network_relay_tests {
         block::BlockBuilder,
         block_sync::message::{GetBlocksAfter, Message as BlockSyncMessage, ShareBlocks},
         sumeragi::{
-            consensus::{ConsensusBlockHeader, Phase, Proposal, QcHeaderRef},
-            message::{BlockMessage, BlockSyncUpdate, ConsensusParamsAdvert},
+            consensus::{
+                ConsensusBlockHeader, Evidence, EvidenceKind, EvidencePayload, ExecWitness,
+                ExecWitnessMsg, Phase, Proposal, QcHeaderRef,
+            },
+            message::{BlockMessage, BlockSyncUpdate, ConsensusParamsAdvert, ControlFlow},
         },
     };
     use iroha_crypto::{Hash, HashOf, KeyPair};
@@ -1916,10 +1955,10 @@ mod network_relay_tests {
         iroha_core::NetworkMessage::SumeragiBlock(Box::new(BlockMessage::ProposalHint(hint)))
     }
 
-    fn proposal_msg() -> iroha_core::NetworkMessage {
+    fn sample_proposal() -> Proposal {
         let parent_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x22; 32]));
-        let proposal = Proposal {
+        Proposal {
             header: ConsensusBlockHeader {
                 parent_hash,
                 tx_root: Hash::new(b"tx"),
@@ -1937,8 +1976,36 @@ mod network_relay_tests {
                 },
             },
             payload_hash: Hash::new(b"payload"),
-        };
+        }
+    }
+
+    fn proposal_msg() -> iroha_core::NetworkMessage {
+        let proposal = sample_proposal();
         iroha_core::NetworkMessage::SumeragiBlock(Box::new(BlockMessage::Proposal(proposal)))
+    }
+
+    fn exec_witness_msg() -> iroha_core::NetworkMessage {
+        let block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x23; 32]));
+        let msg = ExecWitnessMsg {
+            block_hash,
+            height: 2,
+            view: 0,
+            epoch: 0,
+            witness: ExecWitness::default(),
+        };
+        iroha_core::NetworkMessage::SumeragiBlock(Box::new(BlockMessage::ExecWitness(msg)))
+    }
+
+    fn control_flow_msg() -> iroha_core::NetworkMessage {
+        let evidence = Evidence {
+            kind: EvidenceKind::InvalidProposal,
+            payload: EvidencePayload::InvalidProposal {
+                proposal: sample_proposal(),
+                reason: "invalid proposal".to_owned(),
+            },
+        };
+        iroha_core::NetworkMessage::SumeragiControlFlow(Box::new(ControlFlow::Evidence(evidence)))
     }
 
     fn block_sync_update_msg() -> iroha_core::NetworkMessage {
@@ -2167,8 +2234,10 @@ mod network_relay_tests {
         let qc = qc_msg();
         let commit = vrf_commit_msg();
         let reveal = vrf_reveal_msg();
-        let created = block_created_msg();
-        let update = block_sync_update_msg();
+        let hint = proposal_hint_msg();
+        let proposal = proposal_msg();
+        let control_flow = control_flow_msg();
+        let init = rbc_init_msg(0x01, 2, 0);
         let ready = rbc_ready_msg(0x01, 2, 0);
         let deliver = rbc_deliver_msg(0x01, 2, 0);
         let mut limiter = ConsensusIngressLimiter::new(
@@ -2178,8 +2247,8 @@ mod network_relay_tests {
             }),
             None,
             Some(BucketConfig {
-                rate_per_sec: nz_u32(20),
-                burst: nz_u32(20),
+                rate_per_sec: nz_u32(32),
+                burst: nz_u32(32),
             }),
             None,
             0,
@@ -2200,14 +2269,16 @@ mod network_relay_tests {
         assert_eq!(limiter.should_drop(&peer, &qc, 1), None);
         assert_eq!(limiter.should_drop(&peer, &commit, 1), None);
         assert_eq!(limiter.should_drop(&peer, &reveal, 1), None);
-        assert_eq!(limiter.should_drop(&peer, &created, 1), None);
-        assert_eq!(limiter.should_drop(&peer, &update, 1), None);
+        assert_eq!(limiter.should_drop(&peer, &hint, 1), None);
+        assert_eq!(limiter.should_drop(&peer, &proposal, 1), None);
+        assert_eq!(limiter.should_drop(&peer, &control_flow, 1), None);
+        assert_eq!(limiter.should_drop(&peer, &init, 1), None);
         assert_eq!(limiter.should_drop(&peer, &ready, 1), None);
         assert_eq!(limiter.should_drop(&peer, &deliver, 1), None);
     }
 
     #[test]
-    fn consensus_ingress_proposal_uses_limited_bucket() {
+    fn consensus_ingress_proposal_uses_critical_bucket() {
         let peer = sample_peer();
         let msg = consensus_params_msg();
         let hint = proposal_hint_msg();
@@ -2219,8 +2290,8 @@ mod network_relay_tests {
             }),
             None,
             Some(BucketConfig {
-                rate_per_sec: nz_u32(10),
-                burst: nz_u32(10),
+                rate_per_sec: nz_u32(20),
+                burst: nz_u32(20),
             }),
             None,
             0,
@@ -2237,14 +2308,8 @@ mod network_relay_tests {
             limiter.should_drop(&peer, &msg, 1),
             Some(ConsensusIngressDropReason::Rate)
         );
-        assert_eq!(
-            limiter.should_drop(&peer, &hint, 1),
-            Some(ConsensusIngressDropReason::Rate)
-        );
-        assert_eq!(
-            limiter.should_drop(&peer, &proposal, 1),
-            Some(ConsensusIngressDropReason::Rate)
-        );
+        assert_eq!(limiter.should_drop(&peer, &hint, 1), None);
+        assert_eq!(limiter.should_drop(&peer, &proposal, 1), None);
     }
 
     #[test]
@@ -2280,8 +2345,9 @@ mod network_relay_tests {
     }
 
     #[test]
-    fn consensus_ingress_block_sync_uses_limited_bucket() {
+    fn consensus_ingress_block_sync_uses_bulk_bucket() {
         let peer = sample_peer();
+        let msg = consensus_params_msg();
         let sync = block_sync_msg(&peer);
         let mut limiter = ConsensusIngressLimiter::new(
             Some(BucketConfig {
@@ -2289,7 +2355,10 @@ mod network_relay_tests {
                 burst: nz_u32(1),
             }),
             None,
-            None,
+            Some(BucketConfig {
+                rate_per_sec: nz_u32(2),
+                burst: nz_u32(2),
+            }),
             None,
             0,
             Duration::from_secs(1),
@@ -2300,11 +2369,59 @@ mod network_relay_tests {
             },
         );
 
+        assert_eq!(limiter.should_drop(&peer, &msg, 1), None);
+        assert_eq!(
+            limiter.should_drop(&peer, &msg, 1),
+            Some(ConsensusIngressDropReason::Rate)
+        );
         assert_eq!(limiter.should_drop(&peer, &sync, 1), None);
         assert_eq!(
             limiter.should_drop(&peer, &sync, 1),
             Some(ConsensusIngressDropReason::Rate)
         );
+    }
+
+    #[test]
+    fn consensus_ingress_bulk_messages_use_bulk_bucket() {
+        fn assert_bulk(peer: &Peer, msg: iroha_core::NetworkMessage) {
+            let standard = consensus_params_msg();
+            let mut limiter = ConsensusIngressLimiter::new(
+                Some(BucketConfig {
+                    rate_per_sec: nz_u32(1),
+                    burst: nz_u32(1),
+                }),
+                None,
+                Some(BucketConfig {
+                    rate_per_sec: nz_u32(2),
+                    burst: nz_u32(2),
+                }),
+                None,
+                0,
+                Duration::from_secs(1),
+                PenaltyConfig {
+                    threshold: 0,
+                    window: Duration::from_secs(1),
+                    cooldown: Duration::from_secs(1),
+                },
+            );
+
+            assert_eq!(limiter.should_drop(peer, &standard, 1), None);
+            assert_eq!(
+                limiter.should_drop(peer, &standard, 1),
+                Some(ConsensusIngressDropReason::Rate)
+            );
+            assert_eq!(limiter.should_drop(peer, &msg, 1), None);
+            assert_eq!(
+                limiter.should_drop(peer, &msg, 1),
+                Some(ConsensusIngressDropReason::Rate)
+            );
+        }
+
+        let peer = sample_peer();
+        assert_bulk(&peer, block_created_msg());
+        assert_bulk(&peer, block_sync_update_msg());
+        assert_bulk(&peer, exec_witness_msg());
+        assert_bulk(&peer, rbc_chunk_msg(0x01, 2, 0));
     }
 
     #[test]
@@ -2413,6 +2530,9 @@ mod network_relay_tests {
         let qc = qc_msg();
         let commit = vrf_commit_msg();
         let reveal = vrf_reveal_msg();
+        let hint = proposal_hint_msg();
+        let proposal = proposal_msg();
+        let control_flow = control_flow_msg();
         let ready = rbc_ready_msg(0x01, 2, 0);
         let deliver = rbc_deliver_msg(0x01, 2, 0);
         let mut limiter = ConsensusIngressLimiter::new(
@@ -2444,8 +2564,76 @@ mod network_relay_tests {
         assert_eq!(limiter.should_drop(&peer, &qc, 8), None);
         assert_eq!(limiter.should_drop(&peer, &commit, 8), None);
         assert_eq!(limiter.should_drop(&peer, &reveal, 8), None);
+        assert_eq!(limiter.should_drop(&peer, &hint, 8), None);
+        assert_eq!(limiter.should_drop(&peer, &proposal, 8), None);
+        assert_eq!(limiter.should_drop(&peer, &control_flow, 8), None);
         assert_eq!(limiter.should_drop(&peer, &ready, 8), None);
         assert_eq!(limiter.should_drop(&peer, &deliver, 8), None);
+    }
+
+    #[test]
+    fn consensus_ingress_penalty_skips_bulk_messages() {
+        let peer = sample_peer();
+        let bulk = block_created_msg();
+        let standard = consensus_params_msg();
+        let mut limiter = ConsensusIngressLimiter::new(
+            Some(BucketConfig {
+                rate_per_sec: nz_u32(1),
+                burst: nz_u32(1),
+            }),
+            None,
+            Some(BucketConfig {
+                rate_per_sec: nz_u32(10),
+                burst: nz_u32(10),
+            }),
+            None,
+            0,
+            Duration::from_secs(1),
+            PenaltyConfig {
+                threshold: 1,
+                window: Duration::from_secs(5),
+                cooldown: Duration::from_secs(30),
+            },
+        );
+
+        assert_eq!(limiter.should_drop(&peer, &bulk, 8), None);
+        assert_eq!(
+            limiter.should_drop(&peer, &bulk, 8),
+            Some(ConsensusIngressDropReason::Rate)
+        );
+        assert_eq!(limiter.should_drop(&peer, &standard, 8), None);
+    }
+
+    #[test]
+    fn consensus_ingress_critical_fallback_applies_penalty_when_unset() {
+        let peer = sample_peer();
+        let vote = qc_vote_msg();
+        let mut limiter = ConsensusIngressLimiter::new(
+            Some(BucketConfig {
+                rate_per_sec: nz_u32(1),
+                burst: nz_u32(1),
+            }),
+            None,
+            None,
+            None,
+            0,
+            Duration::from_secs(1),
+            PenaltyConfig {
+                threshold: 1,
+                window: Duration::from_secs(5),
+                cooldown: Duration::from_secs(30),
+            },
+        );
+
+        assert_eq!(limiter.should_drop(&peer, &vote, 1), None);
+        assert_eq!(
+            limiter.should_drop(&peer, &vote, 1),
+            Some(ConsensusIngressDropReason::Rate)
+        );
+        assert_eq!(
+            limiter.should_drop(&peer, &vote, 1),
+            Some(ConsensusIngressDropReason::Penalty)
+        );
     }
 
     #[test]

@@ -1,6 +1,14 @@
 # Status
 
 ## Latest Updates
+- Consensus ingress: separate bulk payloads into their own buckets seeded from the standard caps, skip penalty cooldowns for bulk, and apply penalty cooldowns when critical caps are unset; update ingress unit coverage + docs/templates.
+- Tests: `cargo test -p irohad consensus_ingress_` (pass; warnings about unused `schedule_rbc_chunk_broadcast*` in `crates/iroha_core/src/sumeragi/main_loop/rbc.rs` and single-use lifetime in `crates/irohad/src/main.rs`).
+- Format: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Consensus ingress: split critical vs bulk (votes/VRF/proposal hint+proposal/fetch-pending + RBC INIT/READY/DELIVER + control-flow use critical caps; BlockCreated/BlockSyncUpdate/ExecWitness/RBC chunks/BlockSync use standard), critical caps fall back to standard when unset, and default caps are now 300 msg/s; update ingress unit coverage + docs/templates.
+- Tests: `env UPDATE_EXPECT=1 cargo test -p iroha_config minimal_config_snapshot` (pass).
+- Format: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Sumeragi/RBC: pace outbound RBC chunk broadcasts with a per-tick chunk budget, queue chunk fanout to avoid subscriber-queue bursts, and add `sumeragi.rbc_payload_chunks_per_tick` (localnet override + unit coverage); update config docs/templates.
+- Tests: not run (per request).
 - Tests: `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test sumeragi_da sumeragi_rbc_unverified_roster_stash_requests_missing_block -- --nocapture` (failed: timed out waiting for pending RBC stash on lagging peer; logs in `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_pIUWWr`).
 - Integration/RBC: add integration coverage for unverified-roster READY/DELIVER stashes with missing-block fetch metrics in `integration_tests/tests/sumeragi_da.rs`, plus JSON parsing unit tests.
 - Format: `cargo fmt --all` (stable rustfmt warns about unstable options).

@@ -976,6 +976,8 @@ fn test_sumeragi_config() -> SumeragiConfig {
         ),
         rbc_rebroadcast_sessions_per_tick:
             iroha_config::parameters::defaults::sumeragi::RBC_REBROADCAST_SESSIONS_PER_TICK,
+        rbc_payload_chunks_per_tick:
+            iroha_config::parameters::defaults::sumeragi::RBC_PAYLOAD_CHUNKS_PER_TICK,
         rbc_store_max_sessions:
             iroha_config::parameters::defaults::sumeragi::RBC_STORE_MAX_SESSIONS,
         rbc_store_soft_sessions:
@@ -7574,6 +7576,7 @@ async fn rbc_payload_rebroadcast_sends_single_init_and_respects_cooldown() {
         harness
             .actor
             .rebroadcast_rbc_payload_bundle(key, init.clone(), vec![chunk.clone()], 0);
+        let _ = harness.actor.flush_rbc_outbound_chunks(Instant::now());
     }
 
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
@@ -7715,6 +7718,92 @@ async fn rbc_payload_rebroadcast_sends_init_without_chunks() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn rbc_outbound_chunk_budget_limits_per_tick() {
+    let mut harness = test_actor_harness(4).await;
+    harness.actor.config.rbc_payload_chunks_per_tick = 2;
+    let key = session_key();
+    let roster = harness.actor.effective_commit_topology();
+    let chunks = vec![
+        crate::sumeragi::consensus::RbcChunk {
+            block_hash: key.0,
+            height: key.1,
+            view: key.2,
+            epoch: 0,
+            idx: 0,
+            bytes: vec![0xAA; 8],
+        },
+        crate::sumeragi::consensus::RbcChunk {
+            block_hash: key.0,
+            height: key.1,
+            view: key.2,
+            epoch: 0,
+            idx: 1,
+            bytes: vec![0xBB; 8],
+        },
+        crate::sumeragi::consensus::RbcChunk {
+            block_hash: key.0,
+            height: key.1,
+            view: key.2,
+            epoch: 0,
+            idx: 2,
+            bytes: vec![0xCC; 8],
+        },
+    ];
+
+    assert!(
+        harness
+            .actor
+            .enqueue_rbc_payload_chunks(key, chunks, &roster),
+        "expected outbound chunk queue to be seeded"
+    );
+
+    let local_peer_id = harness.actor.common_config.peer.id().clone();
+    let expected_targets = roster.iter().filter(|peer| *peer != &local_peer_id).count();
+    let _ = harness.background_rx.try_iter().count();
+
+    let _ = harness.actor.flush_rbc_outbound_chunks(Instant::now());
+    let first_posts: Vec<_> = harness.background_rx.try_iter().collect();
+    let first_chunk_posts = first_posts
+        .iter()
+        .filter(|post| {
+            matches!(
+                post,
+                BackgroundPost::Post {
+                    msg: BlockMessage::RbcChunk(_),
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(
+        first_chunk_posts,
+        expected_targets.saturating_mul(2),
+        "first flush should respect per-tick chunk budget"
+    );
+
+    let _ = harness.actor.flush_rbc_outbound_chunks(Instant::now());
+    let second_posts: Vec<_> = harness.background_rx.try_iter().collect();
+    let second_chunk_posts = second_posts
+        .iter()
+        .filter(|post| {
+            matches!(
+                post,
+                BackgroundPost::Post {
+                    msg: BlockMessage::RbcChunk(_),
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(
+        second_chunk_posts, expected_targets,
+        "second flush should send the remaining chunk"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn rbc_payload_rebroadcast_allows_derived_roster() {
     let mut harness = test_actor_harness(4).await;
     let key = session_key();
@@ -7743,6 +7832,7 @@ async fn rbc_payload_rebroadcast_allows_derived_roster() {
 
     let _ = harness.background_rx.try_iter().count();
     harness.actor.rebroadcast_rbc_payload(key, &session);
+    let _ = harness.actor.flush_rbc_outbound_chunks(Instant::now());
 
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
     let roster = harness.actor.rbc_session_roster(key);
@@ -24360,14 +24450,37 @@ async fn force_view_change_if_idle_skips_when_rbc_backlog() {
         .sessions
         .insert(session_key, session);
 
+    let start = now
+        .checked_sub(timeout.saturating_sub(Duration::from_millis(1)))
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, start);
     assert!(
         !actor.force_view_change_if_idle(now),
-        "idle view change should not trigger while RBC backlog is unresolved"
+        "idle view change should not trigger before timeout while RBC backlog is unresolved"
     );
-
     let snapshot = super::status::snapshot().view_change_causes;
     assert_eq!(snapshot.missing_qc_total, 0);
     assert!(snapshot.last_cause.is_none());
+
+    super::status::reset_view_change_cause_counters_for_tests();
+    let start = now
+        .checked_sub(timeout + Duration::from_millis(1))
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, start);
+    assert!(
+        actor.force_view_change_if_idle(now),
+        "idle view change should trigger after timeout even with RBC backlog"
+    );
+    let snapshot = super::status::snapshot().view_change_causes;
+    assert_eq!(snapshot.missing_qc_total, 1);
+    assert_eq!(
+        snapshot.last_cause.as_deref(),
+        Some(super::ViewChangeCause::MissingQc.as_str())
+    );
 
     super::status::reset_view_change_cause_counters_for_tests();
     harness.shutdown.send();
@@ -24449,6 +24562,53 @@ async fn should_defer_proposal_when_relay_backpressure_active() {
     assert!(
         actor.should_defer_proposal(),
         "proposal assembly should defer when relay backpressure is active"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn should_override_relay_backpressure_after_liveness_timeout() {
+    use std::borrow::Cow;
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_height = actor.state.view().height() as u64;
+    let highest_qc = sample_qc_ref(committed_height, 0);
+    actor.highest_qc = Some(highest_qc);
+    let height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    let current_view = 0u64;
+    let now = Instant::now();
+    let start = now
+        .checked_sub(actor.commit_quorum_timeout() + Duration::from_millis(1))
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, start);
+
+    actor.relay_backpressure.reset_to_current();
+    iroha_p2p::network::inc_subscriber_queue_full_for_test(
+        iroha_p2p::network::message::Topic::Consensus,
+        1,
+    );
+
+    assert!(
+        !actor.should_defer_proposal(),
+        "proposal assembly should override relay backpressure after quorum timeout"
     );
 
     harness.shutdown.send();
@@ -28666,6 +28826,90 @@ async fn assemble_proposal_schedules_rbc_after_proposal_messages() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_allows_missing_highest_qc_hash() {
+    use std::borrow::Cow;
+
+    let _guard = super::status::qc_status_test_guard();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let locked_block = sample_block(1, 0, None);
+    let locked_hash = locked_block.hash();
+    actor
+        .kura
+        .store_block(locked_block)
+        .expect("store locked block");
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(locked_hash);
+
+    let epoch = actor.epoch_for_height(1);
+    actor.locked_qc = Some(QcHeaderRef {
+        height: 1,
+        view: 0,
+        epoch,
+        subject_block_hash: locked_hash,
+        phase: Phase::Commit,
+    });
+    super::status::set_locked_qc(1, 0, Some(locked_hash));
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let height = 2u64;
+    let view = 0u64;
+    let missing_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x55; Hash::LENGTH]));
+    let highest_qc = QcHeaderRef {
+        height: 1,
+        view: 0,
+        epoch,
+        subject_block_hash: missing_hash,
+        phase: Phase::Commit,
+    };
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let local_idx = actor
+        .local_validator_index(&actor.state.view())
+        .expect("local validator index");
+
+    let _ = harness.background_rx.try_iter().count();
+    let assembled = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            /*leader_index*/ 0,
+            /*local_validator_index*/ local_idx,
+            Instant::now(),
+        )
+        .expect("proposal assembly should succeed");
+    assert!(
+        assembled,
+        "proposal assembly should proceed when highest QC is missing locally"
+    );
+    let posts: Vec<_> = harness.background_rx.try_iter().collect();
+    assert!(
+        posts.iter().any(|post| matches!(
+            post,
+            BackgroundPost::Post {
+                msg: BlockMessage::Proposal(_) | BlockMessage::BlockCreated(_),
+                ..
+            }
+        )),
+        "proposal messages should be enqueued"
+    );
+
+    super::status::set_locked_qc(0, 0, None);
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn proposal_queue_scan_budget_limits_fetch() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
@@ -31036,6 +31280,92 @@ async fn block_created_uses_cached_proposal_when_lock_missing() {
     assert!(
         actor.pending.pending_blocks.contains_key(&block_hash),
         "BlockCreated should be accepted when proposal supplies the highest QC"
+    );
+
+    super::status::set_locked_qc(0, 0, None);
+    super::status::set_highest_qc(0, 0);
+    super::status::set_highest_qc_hash(HashOf::from_untyped_unchecked(Hash::prehashed(
+        [0; Hash::LENGTH],
+    )));
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_created_accepts_when_hint_highest_missing() {
+    let _guard = super::status::qc_status_test_guard();
+    super::status::set_locked_qc(0, 0, None);
+    super::status::set_highest_qc(0, 0);
+    super::status::set_highest_qc_hash(HashOf::from_untyped_unchecked(Hash::prehashed(
+        [0; Hash::LENGTH],
+    )));
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da_enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let locked_block = sample_block(1, 0, None);
+    let locked_hash = locked_block.hash();
+    actor
+        .kura
+        .store_block(locked_block)
+        .expect("store locked block");
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(locked_hash);
+
+    let epoch = actor.epoch_for_height(1);
+    actor.locked_qc = Some(QcHeaderRef {
+        height: 1,
+        view: 0,
+        epoch,
+        subject_block_hash: locked_hash,
+        phase: Phase::Commit,
+    });
+    super::status::set_locked_qc(1, 0, Some(locked_hash));
+
+    let height = 2u64;
+    let view = 0u64;
+    let block = sample_block(height, view, Some(locked_hash));
+    let block_hash = block.hash();
+
+    let missing_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x33; Hash::LENGTH]));
+    assert!(
+        !actor.block_known_for_lock(missing_hash),
+        "missing highest QC must be absent locally"
+    );
+    let hint_highest = QcHeaderRef {
+        height: 1,
+        view: 0,
+        epoch,
+        subject_block_hash: missing_hash,
+        phase: Phase::Commit,
+    };
+    actor
+        .subsystems
+        .propose
+        .proposal_cache
+        .insert_hint(super::message::ProposalHint {
+            height,
+            view,
+            block_hash,
+            highest_qc: hint_highest,
+        });
+
+    actor
+        .handle_block_created(super::message::BlockCreated { block })
+        .expect("handle BlockCreated");
+
+    assert!(
+        actor.pending.pending_blocks.contains_key(&block_hash),
+        "BlockCreated should be accepted when highest QC is missing locally"
+    );
+    assert_eq!(
+        actor.locked_qc.map(|qc| qc.subject_block_hash),
+        Some(locked_hash),
+        "locked QC should remain anchored to the known chain"
     );
 
     super::status::set_locked_qc(0, 0, None);
@@ -39700,6 +40030,54 @@ fn ensure_locked_qc_rejects_divergent_hash_at_same_height() {
             highest: highest_hash
         })
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn highest_qc_extends_locked_allows_missing_highest() {
+    let _guard = super::status::qc_status_test_guard();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let locked_block = sample_block(1, 0, None);
+    let locked_hash = locked_block.hash();
+    actor
+        .kura
+        .store_block(locked_block)
+        .expect("store locked block");
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(locked_hash);
+
+    let epoch = actor.epoch_for_height(1);
+    actor.locked_qc = Some(QcHeaderRef {
+        height: 1,
+        view: 0,
+        epoch,
+        subject_block_hash: locked_hash,
+        phase: Phase::Commit,
+    });
+    super::status::set_locked_qc(1, 0, Some(locked_hash));
+
+    let missing_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x44; Hash::LENGTH]));
+    assert!(
+        !actor.block_known_for_lock(missing_hash),
+        "highest QC should be missing locally for this test"
+    );
+    let highest = QcHeaderRef {
+        height: 1,
+        view: 0,
+        epoch,
+        subject_block_hash: missing_hash,
+        phase: Phase::Commit,
+    };
+
+    assert!(
+        actor.highest_qc_extends_locked(highest),
+        "missing highest QC should not block progress"
+    );
+
+    super::status::set_locked_qc(0, 0, None);
+    harness.shutdown.send();
 }
 
 #[test]

@@ -1082,11 +1082,17 @@ impl Actor {
     }
 
     pub(super) fn should_defer_proposal(&mut self) -> bool {
+        let now = Instant::now();
         let queue_saturated = self.subsystems.propose.backpressure_gate.should_defer();
         let active_pending = self.has_active_pending_blocks();
-        let rbc_backlog = self.has_unresolved_rbc_backlog();
-        let relay_backpressure =
-            self.relay_backpressure_active(Instant::now(), self.rebroadcast_cooldown());
+        let mut rbc_backlog = self.has_unresolved_rbc_backlog();
+        let mut relay_backpressure =
+            self.relay_backpressure_active(now, self.rebroadcast_cooldown());
+        if self.backpressure_override_due(now) {
+            // Liveness override: don't let prolonged relay/RBC backpressure stall proposals.
+            rbc_backlog = false;
+            relay_backpressure = false;
+        }
         queue_saturated || active_pending || rbc_backlog || relay_backpressure
     }
 
@@ -1610,6 +1616,7 @@ impl Actor {
                     let locked_hash = self.locked_qc.map(|qc| qc.subject_block_hash);
                     let locked_missing =
                         locked_hash.is_some_and(|hash| !self.block_known_for_lock(hash));
+                    let highest_missing = !self.block_known_for_lock(highest_qc.subject_block_hash);
                     if locked_missing {
                         iroha_logger::warn!(
                             ?reason,
@@ -1625,6 +1632,20 @@ impl Actor {
                             highest_qc.view,
                             Some(highest_qc.subject_block_hash),
                         );
+                    } else if highest_missing {
+                        let Some(lock) = self.locked_qc else {
+                            return false;
+                        };
+                        iroha_logger::info!(
+                            ?reason,
+                            height,
+                            view = view_idx,
+                            queue_len = pending_queue_len,
+                            highest_hash = ?highest_qc.subject_block_hash,
+                            locked_hash = ?locked_hash,
+                            "highest QC missing locally; proposing on locked chain"
+                        );
+                        highest_qc = lock;
                     } else {
                         iroha_logger::info!(
                             ?reason,

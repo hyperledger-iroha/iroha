@@ -264,10 +264,10 @@ fn minimal_config_snapshot() {
                 p2p_post_queue_cap: 2048,
                 p2p_subscriber_queue_cap: 8192,
                 consensus_ingress_rate_per_sec: Some(
-                    50000,
+                    300,
                 ),
                 consensus_ingress_burst: Some(
-                    50000,
+                    300,
                 ),
                 consensus_ingress_bytes_per_sec: Some(
                     67108864,
@@ -276,10 +276,10 @@ fn minimal_config_snapshot() {
                     67108864,
                 ),
                 consensus_ingress_critical_rate_per_sec: Some(
-                    100000,
+                    300,
                 ),
                 consensus_ingress_critical_burst: Some(
-                    100000,
+                    300,
                 ),
                 consensus_ingress_critical_bytes_per_sec: Some(
                     134217728,
@@ -900,6 +900,7 @@ fn minimal_config_snapshot() {
                 rbc_pending_ttl: 30s,
                 rbc_session_ttl: 120s,
                 rbc_rebroadcast_sessions_per_tick: 8,
+                rbc_payload_chunks_per_tick: 64,
                 rbc_store_max_sessions: 1024,
                 rbc_store_soft_sessions: 768,
                 rbc_store_max_bytes: 536870912,
@@ -2138,6 +2139,15 @@ fn sumeragi_rejects_zero_rbc_rebroadcast_sessions_per_tick() {
     let result =
         load_config_from_fixtures("bad.sumeragi_rbc_rebroadcast_sessions_per_tick_zero.toml");
     assert!(result.is_err(), "zero rebroadcast budget must be rejected");
+}
+
+#[test]
+fn sumeragi_rejects_zero_rbc_payload_chunks_per_tick() {
+    let result = load_config_from_fixtures("bad.sumeragi_rbc_payload_chunks_per_tick_zero.toml");
+    assert!(
+        result.is_err(),
+        "zero payload chunk budget must be rejected"
+    );
 }
 
 #[test]

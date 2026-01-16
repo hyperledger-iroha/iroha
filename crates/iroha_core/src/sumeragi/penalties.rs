@@ -750,6 +750,7 @@ mod tests {
             rbc_pending_ttl: Duration::from_secs(0),
             rbc_session_ttl: Duration::from_secs(0),
             rbc_rebroadcast_sessions_per_tick: 1,
+            rbc_payload_chunks_per_tick: 1,
             rbc_store_max_sessions: 0,
             rbc_store_soft_sessions: 0,
             rbc_store_max_bytes: 0,
