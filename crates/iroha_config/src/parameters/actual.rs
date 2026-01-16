@@ -1224,6 +1224,14 @@ pub struct Network {
     pub consensus_ingress_bytes_per_sec: Option<std::num::NonZeroU32>,
     /// Optional burst (bytes) for consensus ingress bytes limiting. Defaults to `bytes_per_sec` when None.
     pub consensus_ingress_bytes_burst: Option<std::num::NonZeroU32>,
+    /// Optional per-peer critical consensus ingress rate (msgs/sec). When None, critical limiting is disabled.
+    pub consensus_ingress_critical_rate_per_sec: Option<std::num::NonZeroU32>,
+    /// Optional burst for critical consensus ingress rate limiting. Defaults to `rate` when None.
+    pub consensus_ingress_critical_burst: Option<std::num::NonZeroU32>,
+    /// Optional per-peer critical consensus ingress bytes/sec budget. When None, bytes limiting is disabled.
+    pub consensus_ingress_critical_bytes_per_sec: Option<std::num::NonZeroU32>,
+    /// Optional burst (bytes) for critical consensus ingress bytes limiting. Defaults to `bytes_per_sec` when None.
+    pub consensus_ingress_critical_bytes_burst: Option<std::num::NonZeroU32>,
     /// Maximum concurrent RBC sessions accepted per peer before throttling (0 disables).
     pub consensus_ingress_rbc_session_limit: usize,
     /// Drop threshold (per window) before temporarily suppressing consensus ingress.

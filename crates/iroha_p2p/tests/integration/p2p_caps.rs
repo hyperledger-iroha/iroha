@@ -107,6 +107,14 @@ fn make_config(
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
         consensus_ingress_bytes_burst:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+        consensus_ingress_critical_rate_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
+        consensus_ingress_critical_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
+        consensus_ingress_critical_bytes_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
+        consensus_ingress_critical_bytes_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
         consensus_ingress_rbc_session_limit:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
         consensus_ingress_penalty_threshold:

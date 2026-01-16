@@ -75,6 +75,26 @@ fn trim_batch_for_size_cap<T, U>(
     removed_count
 }
 
+fn da_payload_budget(
+    rbc_chunk_max_bytes: usize,
+    rbc_pending_max_bytes: usize,
+    rbc_pending_max_chunks: usize,
+    block_max_payload_bytes: Option<NonZeroUsize>,
+    consensus_payload_frame_cap: usize,
+) -> usize {
+    let rbc_budget = rbc_chunk_max_bytes
+        .max(1)
+        .saturating_mul(usize::try_from(RBC_MAX_TOTAL_CHUNKS).expect("fits in usize"));
+    let pending_budget = rbc_pending_max_bytes.min(
+        rbc_chunk_max_bytes
+            .max(1)
+            .saturating_mul(rbc_pending_max_chunks.max(1)),
+    );
+    let payload_budget =
+        non_rbc_payload_budget(block_max_payload_bytes, consensus_payload_frame_cap);
+    payload_budget.min(rbc_budget).min(pending_budget)
+}
+
 impl Actor {
     pub(super) fn max_tx_budget(
         queue_len: usize,
@@ -336,11 +356,13 @@ impl Actor {
         let mut routing_batch;
         let mut tx_sizes;
         if da_enabled {
-            let mut remaining_budget = self
-                .config
-                .rbc_chunk_max_bytes
-                .max(1)
-                .saturating_mul(usize::try_from(RBC_MAX_TOTAL_CHUNKS).expect("fits in usize"));
+            let mut remaining_budget = da_payload_budget(
+                self.config.rbc_chunk_max_bytes,
+                self.config.rbc_pending_max_bytes,
+                self.config.rbc_pending_max_chunks,
+                self.config.block_max_payload_bytes,
+                self.consensus_payload_frame_cap,
+            );
             tx_batch = Vec::with_capacity(transactions.len());
             routing_batch = Vec::with_capacity(routing_decisions.len());
             tx_sizes = Vec::with_capacity(transactions.len());
@@ -1853,7 +1875,29 @@ impl Actor {
 
 #[cfg(test)]
 mod tests {
-    use super::trim_batch_for_size_cap;
+    use super::{da_payload_budget, trim_batch_for_size_cap};
+    use std::num::NonZeroUsize;
+
+    #[test]
+    fn da_payload_budget_caps_to_rbc_budget() {
+        let budget = da_payload_budget(1, 8 * 1024, 1024, None, 64 * 1024);
+        let rbc_budget =
+            usize::try_from(super::super::RBC_MAX_TOTAL_CHUNKS).expect("fits in usize");
+        assert_eq!(budget, rbc_budget.min(8 * 1024));
+    }
+
+    #[test]
+    fn da_payload_budget_honors_block_payload_cap() {
+        let cap = NonZeroUsize::new(4096).expect("non-zero");
+        let budget = da_payload_budget(256 * 1024, 32 * 1024, 1024, Some(cap), 64 * 1024);
+        assert_eq!(budget, 4096);
+    }
+
+    #[test]
+    fn da_payload_budget_honors_pending_caps() {
+        let budget = da_payload_budget(256 * 1024, 4 * 1024, 1, None, 64 * 1024);
+        assert_eq!(budget, 4 * 1024);
+    }
 
     #[test]
     fn trim_batch_for_size_cap_removes_multiple_entries() {

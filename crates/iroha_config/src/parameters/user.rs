@@ -7243,6 +7243,14 @@ pub struct Network {
     pub consensus_ingress_bytes_per_sec: Option<NonZeroU32>,
     /// Per-peer consensus ingress bytes burst. If unset, defaults apply.
     pub consensus_ingress_bytes_burst: Option<NonZeroU32>,
+    /// Per-peer critical consensus ingress rate limit (msgs/sec). If unset, defaults apply.
+    pub consensus_ingress_critical_rate_per_sec: Option<NonZeroU32>,
+    /// Per-peer critical consensus ingress burst (msgs). If unset, defaults apply.
+    pub consensus_ingress_critical_burst: Option<NonZeroU32>,
+    /// Per-peer critical consensus ingress bytes/sec limit. If unset, defaults apply.
+    pub consensus_ingress_critical_bytes_per_sec: Option<NonZeroU32>,
+    /// Per-peer critical consensus ingress bytes burst. If unset, defaults apply.
+    pub consensus_ingress_critical_bytes_burst: Option<NonZeroU32>,
     /// Maximum concurrent RBC sessions accepted per peer before throttling (0 disables).
     #[config(default = "defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT")]
     pub consensus_ingress_rbc_session_limit: usize,
@@ -7411,6 +7419,10 @@ impl Network {
             consensus_ingress_burst,
             consensus_ingress_bytes_per_sec,
             consensus_ingress_bytes_burst,
+            consensus_ingress_critical_rate_per_sec,
+            consensus_ingress_critical_burst,
+            consensus_ingress_critical_bytes_per_sec,
+            consensus_ingress_critical_bytes_burst,
             consensus_ingress_rbc_session_limit,
             consensus_ingress_penalty_threshold,
             consensus_ingress_penalty_window_ms,
@@ -7471,6 +7483,22 @@ impl Network {
         } else {
             None
         };
+        let consensus_ingress_critical_rate_per_sec = consensus_ingress_critical_rate_per_sec
+            .or(defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC);
+        let consensus_ingress_critical_burst = if consensus_ingress_critical_rate_per_sec.is_some()
+        {
+            consensus_ingress_critical_burst.or(consensus_ingress_critical_rate_per_sec)
+        } else {
+            None
+        };
+        let consensus_ingress_critical_bytes_per_sec = consensus_ingress_critical_bytes_per_sec
+            .or(defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC);
+        let consensus_ingress_critical_bytes_burst =
+            if consensus_ingress_critical_bytes_per_sec.is_some() {
+                consensus_ingress_critical_bytes_burst.or(consensus_ingress_critical_bytes_per_sec)
+            } else {
+                None
+            };
 
         let soranet_handshake = soranet_handshake.parse();
         let soranet_privacy = user_soranet_privacy.parse();
@@ -7568,6 +7596,10 @@ impl Network {
                 consensus_ingress_burst,
                 consensus_ingress_bytes_per_sec,
                 consensus_ingress_bytes_burst,
+                consensus_ingress_critical_rate_per_sec,
+                consensus_ingress_critical_burst,
+                consensus_ingress_critical_bytes_per_sec,
+                consensus_ingress_critical_bytes_burst,
                 consensus_ingress_rbc_session_limit,
                 consensus_ingress_penalty_threshold,
                 consensus_ingress_penalty_window: std::time::Duration::from_millis(

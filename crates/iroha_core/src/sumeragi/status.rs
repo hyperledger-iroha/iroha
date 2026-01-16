@@ -442,6 +442,17 @@ static PENDING_RBC_DROPS_CAP_BYTES_TOTAL: AtomicU64 = AtomicU64::new(0);
 static PENDING_RBC_DROPS_TTL_BYTES_TOTAL: AtomicU64 = AtomicU64::new(0);
 static PENDING_RBC_DROPPED_BYTES_TOTAL: AtomicU64 = AtomicU64::new(0);
 static PENDING_RBC_EVICTED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static PENDING_RBC_STASH_READY_TOTAL: AtomicU64 = AtomicU64::new(0);
+static PENDING_RBC_STASH_READY_INIT_MISSING_TOTAL: AtomicU64 = AtomicU64::new(0);
+static PENDING_RBC_STASH_READY_ROSTER_MISSING_TOTAL: AtomicU64 = AtomicU64::new(0);
+static PENDING_RBC_STASH_READY_ROSTER_HASH_MISMATCH_TOTAL: AtomicU64 = AtomicU64::new(0);
+static PENDING_RBC_STASH_READY_ROSTER_UNVERIFIED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static PENDING_RBC_STASH_DELIVER_TOTAL: AtomicU64 = AtomicU64::new(0);
+static PENDING_RBC_STASH_DELIVER_INIT_MISSING_TOTAL: AtomicU64 = AtomicU64::new(0);
+static PENDING_RBC_STASH_DELIVER_ROSTER_MISSING_TOTAL: AtomicU64 = AtomicU64::new(0);
+static PENDING_RBC_STASH_DELIVER_ROSTER_HASH_MISMATCH_TOTAL: AtomicU64 = AtomicU64::new(0);
+static PENDING_RBC_STASH_DELIVER_ROSTER_UNVERIFIED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static PENDING_RBC_STASH_CHUNK_TOTAL: AtomicU64 = AtomicU64::new(0);
 static RBC_STORE_SESSIONS: AtomicU64 = AtomicU64::new(0);
 static RBC_STORE_BYTES: AtomicU64 = AtomicU64::new(0);
 static RBC_STORE_PRESSURE_LEVEL: AtomicU8 = AtomicU8::new(0);
@@ -1121,8 +1132,54 @@ pub struct PendingRbcSnapshot {
     pub drops_bytes_total: u64,
     /// Total pending sessions evicted (TTL expiry or stash-cap eviction).
     pub evicted_total: u64,
+    /// Total READY frames stashed before processing.
+    pub stash_ready_total: u64,
+    /// READY frames stashed because INIT has not arrived yet.
+    pub stash_ready_init_missing_total: u64,
+    /// READY frames stashed because the commit roster is missing.
+    pub stash_ready_roster_missing_total: u64,
+    /// READY frames stashed because the commit roster hash mismatched.
+    pub stash_ready_roster_hash_mismatch_total: u64,
+    /// READY frames stashed while the commit roster is unverified.
+    pub stash_ready_roster_unverified_total: u64,
+    /// Total DELIVER frames stashed before processing.
+    pub stash_deliver_total: u64,
+    /// DELIVER frames stashed because INIT has not arrived yet.
+    pub stash_deliver_init_missing_total: u64,
+    /// DELIVER frames stashed because the commit roster is missing.
+    pub stash_deliver_roster_missing_total: u64,
+    /// DELIVER frames stashed because the commit roster hash mismatched.
+    pub stash_deliver_roster_hash_mismatch_total: u64,
+    /// DELIVER frames stashed while the commit roster is unverified.
+    pub stash_deliver_roster_unverified_total: u64,
+    /// Chunk frames stashed before INIT arrives.
+    pub stash_chunk_total: u64,
     /// Pending sessions with per-session drop counters.
     pub entries: Vec<PendingRbcEntrySnapshot>,
+}
+
+/// Kind of pending RBC message stashed before processing.
+#[derive(Clone, Copy, Debug)]
+pub enum PendingRbcStashKind {
+    /// READY messages stashed before processing.
+    Ready,
+    /// DELIVER messages stashed before processing.
+    Deliver,
+    /// Chunk messages stashed before INIT arrives.
+    Chunk,
+}
+
+/// Reason a pending RBC message was stashed.
+#[derive(Clone, Copy, Debug)]
+pub enum PendingRbcStashReason {
+    /// INIT has not arrived yet for this session.
+    InitMissing,
+    /// Commit roster is missing for the target height/view.
+    RosterMissing,
+    /// Commit roster hash mismatched the message metadata.
+    RosterHashMismatch,
+    /// Commit roster is present but not yet verified.
+    RosterUnverified,
 }
 
 /// Per-lane execution summary for operator dashboards.
@@ -4153,7 +4210,80 @@ pub fn pending_rbc_snapshot() -> PendingRbcSnapshot {
     snapshot.drops_ttl_bytes_total = PENDING_RBC_DROPS_TTL_BYTES_TOTAL.load(Ordering::Relaxed);
     snapshot.drops_bytes_total = PENDING_RBC_DROPPED_BYTES_TOTAL.load(Ordering::Relaxed);
     snapshot.evicted_total = PENDING_RBC_EVICTED_TOTAL.load(Ordering::Relaxed);
+    snapshot.stash_ready_total = PENDING_RBC_STASH_READY_TOTAL.load(Ordering::Relaxed);
+    snapshot.stash_ready_init_missing_total =
+        PENDING_RBC_STASH_READY_INIT_MISSING_TOTAL.load(Ordering::Relaxed);
+    snapshot.stash_ready_roster_missing_total =
+        PENDING_RBC_STASH_READY_ROSTER_MISSING_TOTAL.load(Ordering::Relaxed);
+    snapshot.stash_ready_roster_hash_mismatch_total =
+        PENDING_RBC_STASH_READY_ROSTER_HASH_MISMATCH_TOTAL.load(Ordering::Relaxed);
+    snapshot.stash_ready_roster_unverified_total =
+        PENDING_RBC_STASH_READY_ROSTER_UNVERIFIED_TOTAL.load(Ordering::Relaxed);
+    snapshot.stash_deliver_total = PENDING_RBC_STASH_DELIVER_TOTAL.load(Ordering::Relaxed);
+    snapshot.stash_deliver_init_missing_total =
+        PENDING_RBC_STASH_DELIVER_INIT_MISSING_TOTAL.load(Ordering::Relaxed);
+    snapshot.stash_deliver_roster_missing_total =
+        PENDING_RBC_STASH_DELIVER_ROSTER_MISSING_TOTAL.load(Ordering::Relaxed);
+    snapshot.stash_deliver_roster_hash_mismatch_total =
+        PENDING_RBC_STASH_DELIVER_ROSTER_HASH_MISMATCH_TOTAL.load(Ordering::Relaxed);
+    snapshot.stash_deliver_roster_unverified_total =
+        PENDING_RBC_STASH_DELIVER_ROSTER_UNVERIFIED_TOTAL.load(Ordering::Relaxed);
+    snapshot.stash_chunk_total = PENDING_RBC_STASH_CHUNK_TOTAL.load(Ordering::Relaxed);
     snapshot
+}
+
+/// Record pending-RBC stash counts by message kind and reason.
+pub fn inc_pending_rbc_stash(kind: PendingRbcStashKind, reason: Option<PendingRbcStashReason>) {
+    match kind {
+        PendingRbcStashKind::Chunk => {
+            PENDING_RBC_STASH_CHUNK_TOTAL.fetch_add(1, Ordering::Relaxed);
+        }
+        PendingRbcStashKind::Ready => {
+            PENDING_RBC_STASH_READY_TOTAL.fetch_add(1, Ordering::Relaxed);
+            if let Some(reason) = reason {
+                match reason {
+                    PendingRbcStashReason::InitMissing => {
+                        PENDING_RBC_STASH_READY_INIT_MISSING_TOTAL.fetch_add(1, Ordering::Relaxed);
+                    }
+                    PendingRbcStashReason::RosterMissing => {
+                        PENDING_RBC_STASH_READY_ROSTER_MISSING_TOTAL
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    PendingRbcStashReason::RosterHashMismatch => {
+                        PENDING_RBC_STASH_READY_ROSTER_HASH_MISMATCH_TOTAL
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    PendingRbcStashReason::RosterUnverified => {
+                        PENDING_RBC_STASH_READY_ROSTER_UNVERIFIED_TOTAL
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+        PendingRbcStashKind::Deliver => {
+            PENDING_RBC_STASH_DELIVER_TOTAL.fetch_add(1, Ordering::Relaxed);
+            if let Some(reason) = reason {
+                match reason {
+                    PendingRbcStashReason::InitMissing => {
+                        PENDING_RBC_STASH_DELIVER_INIT_MISSING_TOTAL
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    PendingRbcStashReason::RosterMissing => {
+                        PENDING_RBC_STASH_DELIVER_ROSTER_MISSING_TOTAL
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    PendingRbcStashReason::RosterHashMismatch => {
+                        PENDING_RBC_STASH_DELIVER_ROSTER_HASH_MISMATCH_TOTAL
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    PendingRbcStashReason::RosterUnverified => {
+                        PENDING_RBC_STASH_DELIVER_ROSTER_UNVERIFIED_TOTAL
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Record dropped pending RBC frames (cap or TTL enforcement).
@@ -5194,6 +5324,17 @@ pub(crate) fn reset_pending_rbc_for_tests() {
     PENDING_RBC_DROPS_TTL_BYTES_TOTAL.store(0, Ordering::Relaxed);
     PENDING_RBC_DROPPED_BYTES_TOTAL.store(0, Ordering::Relaxed);
     PENDING_RBC_EVICTED_TOTAL.store(0, Ordering::Relaxed);
+    PENDING_RBC_STASH_READY_TOTAL.store(0, Ordering::Relaxed);
+    PENDING_RBC_STASH_READY_INIT_MISSING_TOTAL.store(0, Ordering::Relaxed);
+    PENDING_RBC_STASH_READY_ROSTER_MISSING_TOTAL.store(0, Ordering::Relaxed);
+    PENDING_RBC_STASH_READY_ROSTER_HASH_MISMATCH_TOTAL.store(0, Ordering::Relaxed);
+    PENDING_RBC_STASH_READY_ROSTER_UNVERIFIED_TOTAL.store(0, Ordering::Relaxed);
+    PENDING_RBC_STASH_DELIVER_TOTAL.store(0, Ordering::Relaxed);
+    PENDING_RBC_STASH_DELIVER_INIT_MISSING_TOTAL.store(0, Ordering::Relaxed);
+    PENDING_RBC_STASH_DELIVER_ROSTER_MISSING_TOTAL.store(0, Ordering::Relaxed);
+    PENDING_RBC_STASH_DELIVER_ROSTER_HASH_MISMATCH_TOTAL.store(0, Ordering::Relaxed);
+    PENDING_RBC_STASH_DELIVER_ROSTER_UNVERIFIED_TOTAL.store(0, Ordering::Relaxed);
+    PENDING_RBC_STASH_CHUNK_TOTAL.store(0, Ordering::Relaxed);
     *pending_rbc_slot().lock().unwrap() = PendingRbcSnapshot::default();
 }
 
@@ -6003,6 +6144,59 @@ mod tests {
         assert_eq!(snapshot.drops_ttl_bytes_total, 6);
         assert_eq!(snapshot.drops_bytes_total, 20);
         assert_eq!(snapshot.evicted_total, 2);
+
+        super::reset_pending_rbc_for_tests();
+    }
+
+    #[test]
+    fn pending_rbc_stash_counters_track_reasons() {
+        super::reset_pending_rbc_for_tests();
+        super::inc_pending_rbc_stash(super::PendingRbcStashKind::Chunk, None);
+        super::inc_pending_rbc_stash(
+            super::PendingRbcStashKind::Ready,
+            Some(super::PendingRbcStashReason::InitMissing),
+        );
+        super::inc_pending_rbc_stash(
+            super::PendingRbcStashKind::Ready,
+            Some(super::PendingRbcStashReason::RosterMissing),
+        );
+        super::inc_pending_rbc_stash(
+            super::PendingRbcStashKind::Ready,
+            Some(super::PendingRbcStashReason::RosterHashMismatch),
+        );
+        super::inc_pending_rbc_stash(
+            super::PendingRbcStashKind::Ready,
+            Some(super::PendingRbcStashReason::RosterUnverified),
+        );
+        super::inc_pending_rbc_stash(
+            super::PendingRbcStashKind::Deliver,
+            Some(super::PendingRbcStashReason::InitMissing),
+        );
+        super::inc_pending_rbc_stash(
+            super::PendingRbcStashKind::Deliver,
+            Some(super::PendingRbcStashReason::RosterMissing),
+        );
+        super::inc_pending_rbc_stash(
+            super::PendingRbcStashKind::Deliver,
+            Some(super::PendingRbcStashReason::RosterHashMismatch),
+        );
+        super::inc_pending_rbc_stash(
+            super::PendingRbcStashKind::Deliver,
+            Some(super::PendingRbcStashReason::RosterUnverified),
+        );
+
+        let snapshot = super::pending_rbc_snapshot();
+        assert_eq!(snapshot.stash_chunk_total, 1);
+        assert_eq!(snapshot.stash_ready_total, 4);
+        assert_eq!(snapshot.stash_ready_init_missing_total, 1);
+        assert_eq!(snapshot.stash_ready_roster_missing_total, 1);
+        assert_eq!(snapshot.stash_ready_roster_hash_mismatch_total, 1);
+        assert_eq!(snapshot.stash_ready_roster_unverified_total, 1);
+        assert_eq!(snapshot.stash_deliver_total, 4);
+        assert_eq!(snapshot.stash_deliver_init_missing_total, 1);
+        assert_eq!(snapshot.stash_deliver_roster_missing_total, 1);
+        assert_eq!(snapshot.stash_deliver_roster_hash_mismatch_total, 1);
+        assert_eq!(snapshot.stash_deliver_roster_unverified_total, 1);
 
         super::reset_pending_rbc_for_tests();
     }

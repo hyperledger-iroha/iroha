@@ -931,6 +931,39 @@ pub struct SumeragiPendingRbcStatus {
     /// Total pending sessions evicted (TTL expiry or stash-cap eviction).
     #[norito(default)]
     pub evicted_total: u64,
+    /// Total READY frames stashed before processing.
+    #[norito(default)]
+    pub stash_ready_total: u64,
+    /// READY frames stashed because INIT has not arrived yet.
+    #[norito(default)]
+    pub stash_ready_init_missing_total: u64,
+    /// READY frames stashed because the commit roster is missing.
+    #[norito(default)]
+    pub stash_ready_roster_missing_total: u64,
+    /// READY frames stashed because the commit roster hash mismatched.
+    #[norito(default)]
+    pub stash_ready_roster_hash_mismatch_total: u64,
+    /// READY frames stashed while the commit roster is unverified.
+    #[norito(default)]
+    pub stash_ready_roster_unverified_total: u64,
+    /// Total DELIVER frames stashed before processing.
+    #[norito(default)]
+    pub stash_deliver_total: u64,
+    /// DELIVER frames stashed because INIT has not arrived yet.
+    #[norito(default)]
+    pub stash_deliver_init_missing_total: u64,
+    /// DELIVER frames stashed because the commit roster is missing.
+    #[norito(default)]
+    pub stash_deliver_roster_missing_total: u64,
+    /// DELIVER frames stashed because the commit roster hash mismatched.
+    #[norito(default)]
+    pub stash_deliver_roster_hash_mismatch_total: u64,
+    /// DELIVER frames stashed while the commit roster is unverified.
+    #[norito(default)]
+    pub stash_deliver_roster_unverified_total: u64,
+    /// Chunk frames stashed before INIT arrives.
+    #[norito(default)]
+    pub stash_chunk_total: u64,
     /// Pending sessions with per-session drop counters.
     #[norito(default)]
     pub entries: Vec<SumeragiPendingRbcEntry>,
