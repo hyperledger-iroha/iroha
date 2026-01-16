@@ -22085,6 +22085,27 @@ pub async fn handle_v1_sumeragi_status(
                 drops_ttl_bytes_total: snap.pending_rbc.drops_ttl_bytes_total,
                 drops_bytes_total: snap.pending_rbc.drops_bytes_total,
                 evicted_total: snap.pending_rbc.evicted_total,
+                stash_ready_total: snap.pending_rbc.stash_ready_total,
+                stash_ready_init_missing_total: snap.pending_rbc.stash_ready_init_missing_total,
+                stash_ready_roster_missing_total: snap.pending_rbc.stash_ready_roster_missing_total,
+                stash_ready_roster_hash_mismatch_total: snap
+                    .pending_rbc
+                    .stash_ready_roster_hash_mismatch_total,
+                stash_ready_roster_unverified_total: snap
+                    .pending_rbc
+                    .stash_ready_roster_unverified_total,
+                stash_deliver_total: snap.pending_rbc.stash_deliver_total,
+                stash_deliver_init_missing_total: snap.pending_rbc.stash_deliver_init_missing_total,
+                stash_deliver_roster_missing_total: snap
+                    .pending_rbc
+                    .stash_deliver_roster_missing_total,
+                stash_deliver_roster_hash_mismatch_total: snap
+                    .pending_rbc
+                    .stash_deliver_roster_hash_mismatch_total,
+                stash_deliver_roster_unverified_total: snap
+                    .pending_rbc
+                    .stash_deliver_roster_unverified_total,
+                stash_chunk_total: snap.pending_rbc.stash_chunk_total,
                 entries: snap
                     .pending_rbc
                     .entries
@@ -22104,6 +22125,7 @@ pub async fn handle_v1_sumeragi_status(
                         age_ms: entry.age_ms,
                     })
                     .collect(),
+                ..Default::default()
             },
             tx_queue_depth: snap.tx_queue_depth,
             tx_queue_capacity: snap.tx_queue_capacity,

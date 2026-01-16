@@ -398,9 +398,9 @@ Because queues are always bounded, overflow counters rise whenever a channel dro
   This cap is enforced on encrypted frames, so AEAD overhead (nonce + tag) counts
   toward the limit (currently 28 bytes for ChaCha20-Poly1305).
 - Topic caps (post-decode enforcement, tightened defaults) apply to decrypted payload sizes:
-  - `[network].max_frame_bytes_consensus` (default 1 MiB)
+  - `[network].max_frame_bytes_consensus` (default 16 MiB)
   - `[network].max_frame_bytes_control` (default 128 KiB)
-  - `[network].max_frame_bytes_block_sync` (default = global cap; also caps consensus payloads such as `BlockCreated`, `BlockSyncUpdate`, and RBC chunks)
+  - `[network].max_frame_bytes_block_sync` (default = global cap; also caps consensus payloads such as `BlockCreated`, `BlockSyncUpdate`, `RbcReady`/`RbcDeliver`, and RBC chunks)
   - `[network].max_frame_bytes_tx_gossip` (default 128 KiB)
   - `[network].max_frame_bytes_peer_gossip` (default 64 KiB)
   - `[network].max_frame_bytes_health` (default 32 KiB)

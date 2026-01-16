@@ -1,6 +1,21 @@
 # Status
 
 ## Latest Updates
+- Tests: `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test sumeragi_da sumeragi_rbc_unverified_roster_stash_requests_missing_block -- --nocapture` (failed: timed out waiting for pending RBC stash on lagging peer; logs in `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_pIUWWr`).
+- Integration/RBC: add integration coverage for unverified-roster READY/DELIVER stashes with missing-block fetch metrics in `integration_tests/tests/sumeragi_da.rs`, plus JSON parsing unit tests.
+- Format: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Consensus ingress/P2P: add critical ingress caps for QC/VRF/RBC INIT/READY/DELIVER + block payload recovery (no penalty cooldowns, still rate/byte limited and RBC session limited), keep READY/DELIVER on the payload topic/cap, keep relay queue sizing, and align the consensus frame cap with the global limit; update docs/tests accordingly.
+- Tests: not run (not requested).
+- Integration/RBC: assert DELIVER deferral counters in `sumeragi_da_payload_loss_does_not_block_commit` and note missing-block fetches during unverified-roster stashes in `docs/source/sumeragi.md`.
+- Tests: not run (not requested).
+- Consensus ingress: raise default per-peer rate/burst caps, exempt `QcVote` from ingress limiting, update config docs/templates, and add ingress unit coverage.
+- Sumeragi/NEW_VIEW: send NEW_VIEW votes to the view leader only and add unit coverage.
+- Tests: not run (per request).
+- Tests: add integration coverage ensuring `/status` reports the NPoS mode tag on startup.
+- Sumeragi/telemetry: seed consensus mode tags during actor init so `/status` reflects NPoS immediately; add unit coverage.
+- Tests: not run (not requested).
+- Sumeragi/RBC: stash inbound READY/DELIVER until a roster is authoritative, request missing BlockCreated on unverified roster stashes, add deliver-unverified unit coverage, and update `docs/source/sumeragi.ja.md` + `docs/source/sumeragi.he.md`.
+- Tests: not run (not requested).
 - Sumeragi/RBC: treat derived rosters as authoritative (INIT rosters are unverified), reject INIT roster mismatches against derived snapshots, gate local READY/DELIVER emission on authoritative rosters, and fall back to the effective commit topology when missing-block fetches have no session roster; update unit coverage and `docs/source/sumeragi.md`.
 - Tests: not run (not requested).
 - Docs/OpenAPI: regenerate Torii OpenAPI snapshots and re-sign manifests; rotate allowed signer to the drill ed25519 key used for docs fixtures.

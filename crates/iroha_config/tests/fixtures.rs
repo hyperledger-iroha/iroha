@@ -200,13 +200,13 @@ fn minimal_config_snapshot() {
                         },
                     },
                     client_capabilities: WithOrigin {
-                        value_hex: "010100020101010200020101010400030203010202000200047f100004deadbeef7f110004cafebabe",
+                        value_hex: "0101000201010102000201010104000282030202000200047f100004deadbeef7f110004cafebabe",
                         origin: Default {
                             id: ParameterId(network.soranet_handshake.client_capabilities),
                         },
                     },
                     relay_capabilities: WithOrigin {
-                        value_hex: "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f0104000302030102010001010202000200047f12000412345678",
+                        value_hex: "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002820302010001010202000200047f12000412345678",
                         origin: Default {
                             id: ParameterId(network.soranet_handshake.relay_capabilities),
                         },
@@ -247,7 +247,7 @@ fn minimal_config_snapshot() {
                 require_sm_openssl_preview_match: true,
                 idle_timeout: 300s,
                 peer_gossip_period: 1s,
-                peer_gossip_max_period: 1s,
+                peer_gossip_max_period: 30s,
                 trust_gossip: true,
                 trust_decay_half_life: 300s,
                 trust_penalty_bad_gossip: 5,
@@ -264,15 +264,27 @@ fn minimal_config_snapshot() {
                 p2p_post_queue_cap: 2048,
                 p2p_subscriber_queue_cap: 8192,
                 consensus_ingress_rate_per_sec: Some(
-                    1000,
+                    50000,
                 ),
                 consensus_ingress_burst: Some(
-                    2000,
+                    50000,
                 ),
                 consensus_ingress_bytes_per_sec: Some(
                     67108864,
                 ),
                 consensus_ingress_bytes_burst: Some(
+                    67108864,
+                ),
+                consensus_ingress_critical_rate_per_sec: Some(
+                    100000,
+                ),
+                consensus_ingress_critical_burst: Some(
+                    100000,
+                ),
+                consensus_ingress_critical_bytes_per_sec: Some(
+                    134217728,
+                ),
+                consensus_ingress_critical_bytes_burst: Some(
                     134217728,
                 ),
                 consensus_ingress_rbc_session_limit: 64,
@@ -306,7 +318,7 @@ fn minimal_config_snapshot() {
                 tcp_keepalive: Some(
                     60s,
                 ),
-                max_frame_bytes_consensus: 1048576,
+                max_frame_bytes_consensus: 16777216,
                 max_frame_bytes_control: 131072,
                 max_frame_bytes_block_sync: 16777216,
                 max_frame_bytes_tx_gossip: 131072,
@@ -402,8 +414,8 @@ fn minimal_config_snapshot() {
                 operator_auth: ToriiOperatorAuth {
                     enabled: false,
                     require_mtls: false,
-                    token_fallback: OperatorTokenFallback::Bootstrap,
-                    token_source: OperatorTokenSource::OperatorTokens,
+                    token_fallback: Bootstrap,
+                    token_source: OperatorTokens,
                     tokens: [],
                     rate_per_minute: Some(
                         30,
@@ -420,7 +432,9 @@ fn minimal_config_snapshot() {
                     },
                     webauthn: None,
                 },
-                preauth_max_connections: Some(std::num::NonZeroUsize::new(1024).expect("nonzero")),
+                preauth_max_connections: Some(
+                    1024,
+                ),
                 preauth_max_connections_per_ip: None,
                 preauth_rate_per_ip_per_sec: Some(
                     20,
@@ -437,6 +451,7 @@ fn minimal_config_snapshot() {
                 api_high_load_stream_threshold: None,
                 api_high_load_subscription_threshold: None,
                 events_buffer_capacity: 10000,
+                ws_message_timeout: 10s,
                 attachments_ttl_secs: 604800,
                 attachments_max_bytes: 4194304,
                 attachments_per_tenant_max_count: 128,
@@ -818,7 +833,9 @@ fn minimal_config_snapshot() {
                         id: ParameterId(kura.store_dir),
                     },
                 },
-                max_disk_usage_bytes: Bytes(0),
+                max_disk_usage_bytes: Bytes(
+                    82463372085,
+                ),
                 blocks_in_memory: 1024,
                 block_sync_roster_retention: 7200,
                 roster_sidecar_retention: 512,
@@ -876,7 +893,7 @@ fn minimal_config_snapshot() {
                 commit_cert_history_cap: 512,
                 zk_finality_k: 0,
                 require_precommit_qc: true,
-                rbc_chunk_max_bytes: 65536,
+                rbc_chunk_max_bytes: 262144,
                 rbc_chunk_fanout: None,
                 rbc_pending_max_chunks: 128,
                 rbc_pending_max_bytes: 8388608,
@@ -957,13 +974,13 @@ fn minimal_config_snapshot() {
             },
             block_sync: BlockSync {
                 gossip_period: 10s,
-                gossip_max_period: 10s,
+                gossip_max_period: 30s,
                 gossip_size: 4,
             },
             transaction_gossiper: TransactionGossiper {
                 gossip_period: 1s,
                 gossip_size: 500,
-                gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
+                gossip_resend_ticks: 3,
                 dataspace: DataspaceGossip {
                     drop_unknown_dataspace: false,
                     restricted_target_cap: None,
@@ -995,7 +1012,21 @@ fn minimal_config_snapshot() {
             },
             nexus: Nexus {
                 enabled: true,
-                storage: NexusStorage::default(),
+                storage: NexusStorage {
+                    max_disk_usage_bytes: Bytes(
+                        274877906944,
+                    ),
+                    max_wsv_memory_bytes: Bytes(
+                        8589934592,
+                    ),
+                    disk_budget_weights: NexusStorageWeights {
+                        kura_blocks_bps: 3000,
+                        wsv_snapshots_bps: 2000,
+                        sorafs_bps: 4000,
+                        soranet_spool_bps: 500,
+                        soravpn_spool_bps: 500,
+                    },
+                },
                 staking: NexusStaking {
                     public_validator_mode: StakeElected,
                     restricted_validator_mode: AdminManaged,
@@ -1233,14 +1264,20 @@ fn minimal_config_snapshot() {
                 amx_per_syscall_ns: 120,
             },
             tiered_state: TieredState {
-                enabled: false,
+                enabled: true,
                 hot_retained_keys: 0,
-                hot_retained_bytes: Bytes(0),
+                hot_retained_bytes: Bytes(
+                    8589934592,
+                ),
                 hot_retained_grace_snapshots: 1,
-                cold_store_root: None,
+                cold_store_root: Some(
+                    "./storage/tiered_state",
+                ),
                 da_store_root: None,
                 max_snapshots: 2,
-                max_cold_bytes: Bytes(0),
+                max_cold_bytes: Bytes(
+                    54975581388,
+                ),
             },
             compute: Compute {
                 enabled: false,
@@ -1549,6 +1586,13 @@ fn minimal_config_snapshot() {
                 jdg_signature_schemes: {
                     SimpleThreshold,
                 },
+                runtime_upgrade_provenance: RuntimeUpgradeProvenancePolicy {
+                    mode: Optional,
+                    require_sbom: false,
+                    require_slsa: false,
+                    trusted_signers: {},
+                    signature_threshold: 0,
+                },
                 citizen_service: CitizenServiceDiscipline {
                     seat_cooldown_blocks: 10000,
                     max_seats_per_epoch: 1,
@@ -1820,11 +1864,15 @@ fn minimal_config_snapshot() {
                     access_kind: Authenticated,
                     channel_salt: "iroha.soranet.channel.seed.v1",
                     provision_spool_dir: "./storage/streaming/soranet_routes",
-                    provision_spool_max_bytes: Bytes(0),
+                    provision_spool_max_bytes: Bytes(
+                        13743895347,
+                    ),
                 },
                 soravpn: StreamingSoravpn {
                     provision_spool_dir: "./storage/streaming/soravpn_routes",
-                    provision_spool_max_bytes: Bytes(0),
+                    provision_spool_max_bytes: Bytes(
+                        13743895347,
+                    ),
                 },
                 sync: StreamingSync {
                     enabled: false,

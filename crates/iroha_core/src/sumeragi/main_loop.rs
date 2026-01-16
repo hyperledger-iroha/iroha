@@ -6331,6 +6331,18 @@ impl Actor {
             #[cfg(feature = "telemetry")]
             telemetry.set_prf_context(Some(cfg.seed), block_count.0 as u64, 0);
         }
+        let (staged_mode_tag, staged_mode_activation_height) = {
+            let view = state.view();
+            let params = view.world.parameters().sumeragi();
+            staged_mode_info(params)
+        };
+        let mode_tag = match consensus_mode {
+            ConsensusMode::Permissioned => PERMISSIONED_TAG,
+            ConsensusMode::Npos => NPOS_TAG,
+        };
+        super::status::set_mode_tags(mode_tag, staged_mode_tag, staged_mode_activation_height);
+        #[cfg(feature = "telemetry")]
+        telemetry.set_mode_tags(mode_tag, staged_mode_tag, staged_mode_activation_height);
 
         let chunk_store = if let Some(cfg) = rbc_store.as_ref() {
             if cfg.max_sessions == 0 || cfg.max_bytes == 0 {
@@ -8073,14 +8085,14 @@ impl Actor {
             | BlockMessage::FetchPendingBlock(_)
             | BlockMessage::Proposal(_)
             | BlockMessage::RbcChunk(_)
-            | BlockMessage::RbcInit(_) => self.consensus_payload_frame_cap,
+            | BlockMessage::RbcInit(_)
+            | BlockMessage::RbcDeliver(_)
+            | BlockMessage::RbcReady(_) => self.consensus_payload_frame_cap,
             BlockMessage::ConsensusParams(_)
             | BlockMessage::ExecWitness(_)
             | BlockMessage::ProposalHint(_)
             | BlockMessage::Qc(_)
             | BlockMessage::QcVote(_)
-            | BlockMessage::RbcDeliver(_)
-            | BlockMessage::RbcReady(_)
             | BlockMessage::VrfCommit(_)
             | BlockMessage::VrfReveal(_) => self.consensus_frame_cap,
         }

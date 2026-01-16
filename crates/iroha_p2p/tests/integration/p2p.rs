@@ -140,6 +140,14 @@ fn trust_config(
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
         consensus_ingress_bytes_burst:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+        consensus_ingress_critical_rate_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
+        consensus_ingress_critical_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
+        consensus_ingress_critical_bytes_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
+        consensus_ingress_critical_bytes_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
         consensus_ingress_rbc_session_limit:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
         consensus_ingress_penalty_threshold:
@@ -243,6 +251,14 @@ async fn network_create() {
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
         consensus_ingress_bytes_burst:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+        consensus_ingress_critical_rate_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
+        consensus_ingress_critical_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
+        consensus_ingress_critical_bytes_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
+        consensus_ingress_critical_bytes_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
         consensus_ingress_rbc_session_limit:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
         consensus_ingress_penalty_threshold:
@@ -602,6 +618,14 @@ async fn ws_fallback_connects_and_handshakes() {
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
             consensus_ingress_bytes_burst:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+            consensus_ingress_critical_rate_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
+            consensus_ingress_critical_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
+            consensus_ingress_critical_bytes_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
+            consensus_ingress_critical_bytes_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
             consensus_ingress_rbc_session_limit:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
             consensus_ingress_penalty_threshold:
@@ -810,6 +834,14 @@ async fn ws_fallback_connects_and_handshakes() {
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
             consensus_ingress_bytes_burst:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+            consensus_ingress_critical_rate_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
+            consensus_ingress_critical_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
+            consensus_ingress_critical_bytes_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
+            consensus_ingress_critical_bytes_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
             consensus_ingress_rbc_session_limit:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
             consensus_ingress_penalty_threshold:
@@ -1020,6 +1052,14 @@ async fn two_networks() {
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
         consensus_ingress_bytes_burst:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+        consensus_ingress_critical_rate_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
+        consensus_ingress_critical_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
+        consensus_ingress_critical_bytes_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
+        consensus_ingress_critical_bytes_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
         consensus_ingress_rbc_session_limit:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
         consensus_ingress_penalty_threshold:
@@ -1125,6 +1165,14 @@ async fn two_networks() {
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
         consensus_ingress_bytes_burst:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+        consensus_ingress_critical_rate_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
+        consensus_ingress_critical_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
+        consensus_ingress_critical_bytes_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
+        consensus_ingress_critical_bytes_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
         consensus_ingress_rbc_session_limit:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
         consensus_ingress_penalty_threshold:
@@ -1297,6 +1345,14 @@ async fn update_peers_triggers_immediate_connect() {
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
             consensus_ingress_bytes_burst:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+            consensus_ingress_critical_rate_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
+            consensus_ingress_critical_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
+            consensus_ingress_critical_bytes_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
+            consensus_ingress_critical_bytes_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
             consensus_ingress_rbc_session_limit:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
             consensus_ingress_penalty_threshold:
@@ -1404,6 +1460,14 @@ async fn update_peers_triggers_immediate_connect() {
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
             consensus_ingress_bytes_burst:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+            consensus_ingress_critical_rate_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
+            consensus_ingress_critical_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
+            consensus_ingress_critical_bytes_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
+            consensus_ingress_critical_bytes_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
             consensus_ingress_rbc_session_limit:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
             consensus_ingress_penalty_threshold:
@@ -1553,6 +1617,14 @@ async fn happy_eyeballs_parallel_dials() {
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
             consensus_ingress_bytes_burst:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+            consensus_ingress_critical_rate_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
+            consensus_ingress_critical_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
+            consensus_ingress_critical_bytes_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
+            consensus_ingress_critical_bytes_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
             consensus_ingress_rbc_session_limit:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
             consensus_ingress_penalty_threshold:
@@ -1661,6 +1733,14 @@ async fn happy_eyeballs_parallel_dials() {
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
             consensus_ingress_bytes_burst:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+            consensus_ingress_critical_rate_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
+            consensus_ingress_critical_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
+            consensus_ingress_critical_bytes_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
+            consensus_ingress_critical_bytes_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
             consensus_ingress_rbc_session_limit:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
             consensus_ingress_penalty_threshold:
@@ -1807,6 +1887,14 @@ async fn low_topics_do_not_starve_each_other() {
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
             consensus_ingress_bytes_burst:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+            consensus_ingress_critical_rate_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
+            consensus_ingress_critical_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
+            consensus_ingress_critical_bytes_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
+            consensus_ingress_critical_bytes_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
             consensus_ingress_rbc_session_limit:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
             consensus_ingress_penalty_threshold:
@@ -1915,6 +2003,14 @@ async fn low_topics_do_not_starve_each_other() {
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
             consensus_ingress_bytes_burst:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+            consensus_ingress_critical_rate_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
+            consensus_ingress_critical_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
+            consensus_ingress_critical_bytes_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
+            consensus_ingress_critical_bytes_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
             consensus_ingress_rbc_session_limit:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
             consensus_ingress_penalty_threshold:
@@ -2073,7 +2169,8 @@ async fn relay_hub_routes_consensus_between_spokes() {
     let make_config =
         |address: iroha_primitives::addr::SocketAddr,
          relay_mode: RelayMode,
-         relay_hub_address: Option<iroha_primitives::addr::SocketAddr>| Config {
+         relay_hub_address: Option<iroha_primitives::addr::SocketAddr>| {
+            Config {
             address: WithOrigin::inline(address.clone()),
             public_address: WithOrigin::inline(address),
             relay_mode,
@@ -2117,6 +2214,14 @@ async fn relay_hub_routes_consensus_between_spokes() {
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
             consensus_ingress_bytes_burst:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+            consensus_ingress_critical_rate_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
+            consensus_ingress_critical_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
+            consensus_ingress_critical_bytes_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
+            consensus_ingress_critical_bytes_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
             consensus_ingress_rbc_session_limit:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
             consensus_ingress_penalty_threshold:
@@ -2161,6 +2266,7 @@ async fn relay_hub_routes_consensus_between_spokes() {
             max_frame_bytes_other: 262_144,
             tls_only_v1_3: true,
             quic_max_idle_timeout: None,
+        }
         };
 
     let (mut hub_net, _hub_child) = match NetworkHandle::<ConsensusMessage>::start(
@@ -2407,6 +2513,14 @@ async fn start_network(
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
         consensus_ingress_bytes_burst:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+        consensus_ingress_critical_rate_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
+        consensus_ingress_critical_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
+        consensus_ingress_critical_bytes_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
+        consensus_ingress_critical_bytes_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
         consensus_ingress_rbc_session_limit:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
         consensus_ingress_penalty_threshold:
@@ -2584,6 +2698,14 @@ async fn tls_inbound_listener_smoke() {
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
         consensus_ingress_bytes_burst:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+        consensus_ingress_critical_rate_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
+        consensus_ingress_critical_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
+        consensus_ingress_critical_bytes_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
+        consensus_ingress_critical_bytes_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
         consensus_ingress_rbc_session_limit:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
         consensus_ingress_penalty_threshold:
@@ -2696,6 +2818,14 @@ async fn tls_inbound_listener_smoke() {
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
             consensus_ingress_bytes_burst:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+            consensus_ingress_critical_rate_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
+            consensus_ingress_critical_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
+            consensus_ingress_critical_bytes_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
+            consensus_ingress_critical_bytes_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
             consensus_ingress_rbc_session_limit:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
             consensus_ingress_penalty_threshold:

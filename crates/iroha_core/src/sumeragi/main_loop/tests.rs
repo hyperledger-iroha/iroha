@@ -1488,6 +1488,14 @@ async fn test_actor_harness_with_config_and_height_and_kura(
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
         consensus_ingress_bytes_burst:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+        consensus_ingress_critical_rate_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
+        consensus_ingress_critical_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
+        consensus_ingress_critical_bytes_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
+        consensus_ingress_critical_bytes_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
         consensus_ingress_rbc_session_limit:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
         consensus_ingress_penalty_threshold:
@@ -1675,6 +1683,18 @@ async fn test_actor_harness_with_config_and_height_and_kura(
         _rbc_status_guard: rbc_status_guard,
         key_pairs,
     }
+}
+
+#[cfg(feature = "telemetry")]
+#[tokio::test]
+async fn actor_initializes_mode_tag_in_telemetry_snapshot() {
+    let consensus_cfg = test_sumeragi_config();
+    let harness = test_actor_harness_with_config(1, consensus_cfg, None).await;
+    let metrics = harness.actor.telemetry.metrics().await;
+    assert_eq!(
+        metrics.sumeragi_mode_tag(),
+        crate::sumeragi::consensus::NPOS_TAG.to_string()
+    );
 }
 
 fn on_chain_permissioned_collector_params(actor: &Actor) -> (usize, u8) {
@@ -1964,7 +1984,7 @@ async fn actor_next_tick_deadline_tracks_rbc_rebroadcast_cooldown() {
         actor.common_config.peer.id().clone(),
         PeerId::new(harness.key_pairs[1].public_key().clone()),
     ];
-    actor.record_rbc_session_roster(key, roster, RbcRosterSource::Init);
+    actor.record_rbc_session_roster(key, roster, RbcRosterSource::Derived);
 
     let payload_cooldown = actor.payload_rebroadcast_cooldown();
     let deadline = actor
@@ -7955,7 +7975,7 @@ async fn rbc_ready_rebroadcast_is_rate_limited_per_session() {
     let should_force = local_ready && !ready_quorum;
     harness
         .actor
-        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
+        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
     let roster_hash = roster_hash(&roster);
     let readies = Actor::rbc_ready_bundle(key, &session, roster_hash).expect("readies");
     harness.actor.rebroadcast_rbc_ready_bundle(key, readies);
@@ -8051,7 +8071,7 @@ async fn rbc_ready_rebroadcast_forces_local_ready_when_not_rebroadcaster() {
 
     harness
         .actor
-        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
+        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
     let roster_hash = roster_hash(&roster);
     let readies = Actor::rbc_ready_bundle(key, &session, roster_hash).expect("readies");
 
@@ -8158,7 +8178,7 @@ async fn rbc_ready_rebroadcast_skips_on_roster_hash_mismatch() {
     let roster = harness.actor.effective_commit_topology();
     harness
         .actor
-        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
+        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
     assert!(roster.len() > 1, "roster should contain multiple peers");
     let mut mismatched_roster = roster.clone();
     mismatched_roster.pop();
@@ -8197,7 +8217,7 @@ async fn tick_rebroadcasts_stalled_rbc_payloads_and_respects_cooldown() {
     let roster = harness.actor.effective_commit_topology();
     harness
         .actor
-        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
+        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
 
     harness.actor.tick();
 
@@ -12089,7 +12109,7 @@ async fn duplicate_rbc_ready_is_ignored() {
     let roster = harness.actor.effective_commit_topology();
     harness
         .actor
-        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
+        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
 
     let ready = harness.actor.build_rbc_ready(key, &session).expect("ready");
     harness
@@ -12129,7 +12149,7 @@ async fn duplicate_rbc_ready_is_ignored() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn handle_rbc_ready_stashes_on_roster_hash_mismatch() {
+async fn handle_rbc_ready_drops_on_roster_hash_mismatch() {
     let mut harness = test_actor_harness(4).await;
     let key = insert_active_pending_block(&mut harness.actor, 0);
     let payload = b"payload".to_vec();
@@ -12147,6 +12167,9 @@ async fn handle_rbc_ready_stashes_on_roster_hash_mismatch() {
 
     let roster = harness.actor.effective_commit_topology();
     assert!(!roster.is_empty());
+    harness
+        .actor
+        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
     let local_peer = harness.actor.common_config.peer.id().clone();
     let signer_peer = roster
         .iter()
@@ -12185,6 +12208,74 @@ async fn handle_rbc_ready_stashes_on_roster_hash_mismatch() {
         .actor
         .handle_rbc_ready(ready)
         .expect("ready handled");
+    assert!(
+        !harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .pending
+            .contains_key(&key),
+        "mismatched roster hash should be dropped with an authoritative roster"
+    );
+    let stored = harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session");
+    assert!(stored.ready_signatures.is_empty());
+
+    let stored = harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session");
+    assert!(
+        stored
+            .ready_signatures
+            .iter()
+            .all(|entry| entry.sender != mismatched_sender),
+        "mismatched roster hash should not be recorded"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn handle_rbc_ready_stashes_when_roster_unverified() {
+    let mut harness = test_actor_harness(4).await;
+    let key = session_key();
+    let payload = b"payload".to_vec();
+    let payload_hash = Hash::new(&payload);
+    let session =
+        Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, 0).expect("session");
+
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session.clone());
+
+    let roster = harness.actor.effective_commit_topology();
+    assert!(!roster.is_empty());
+    harness
+        .actor
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
+
+    let ready = harness.actor.build_rbc_ready(key, &session).expect("ready");
+    harness
+        .actor
+        .handle_rbc_ready(ready)
+        .expect("ready handled");
+
     let pending = harness
         .actor
         .subsystems
@@ -12202,39 +12293,17 @@ async fn handle_rbc_ready_stashes_on_roster_hash_mismatch() {
         .sessions
         .get(&key)
         .expect("session");
-    assert!(stored.ready_signatures.is_empty());
-
-    harness
-        .actor
-        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
-    let progress = harness
-        .actor
-        .rebroadcast_stalled_rbc_payloads(Instant::now());
-    assert!(progress);
-    let stored = harness
-        .actor
-        .subsystems
-        .da_rbc
-        .rbc
-        .sessions
-        .get(&key)
-        .expect("session");
     assert!(
-        stored
-            .ready_signatures
-            .iter()
-            .all(|entry| entry.sender != mismatched_sender),
-        "mismatched roster hash should drop the pending READY after roster arrival"
+        stored.ready_signatures.is_empty(),
+        "unverified roster should not record READY signatures"
     );
-    assert!(
-        !harness
-            .actor
-            .subsystems
-            .da_rbc
-            .rbc
-            .pending
-            .contains_key(&key)
-    );
+    let request = harness
+        .actor
+        .pending
+        .missing_block_requests
+        .get(&key.0)
+        .expect("missing block request");
+    assert_eq!(request.attempts, 1);
 
     harness.shutdown.send();
 }
@@ -12403,7 +12472,7 @@ async fn request_missing_block_after_rbc_drop_uses_fallback_roster_when_session_
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn handle_rbc_ready_stashes_when_derived_roster_mismatches() {
+async fn handle_rbc_ready_drops_when_derived_roster_mismatches() {
     let mut harness = test_actor_harness(4).await;
     let key: SessionKey = (
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"rbc-ready-derived-mismatch")),
@@ -12472,15 +12541,16 @@ async fn handle_rbc_ready_stashes_when_derived_roster_mismatches() {
         .handle_rbc_ready(ready)
         .expect("ready handled");
 
-    let pending = harness
-        .actor
-        .subsystems
-        .da_rbc
-        .rbc
-        .pending
-        .get(&key)
-        .expect("pending stash");
-    assert_eq!(pending.ready.len(), 1);
+    assert!(
+        !harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .pending
+            .contains_key(&key),
+        "mismatched READY should be dropped with an authoritative roster"
+    );
     assert!(
         harness
             .actor
@@ -12519,7 +12589,7 @@ async fn handle_rbc_ready_stashes_when_derived_roster_mismatches() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn handle_rbc_ready_refreshes_derived_roster_on_mismatch() {
+async fn handle_rbc_ready_refreshes_roster_on_unverified_mismatch() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -12538,7 +12608,7 @@ async fn handle_rbc_ready_refreshes_derived_roster_on_mismatch() {
 
     let roster_a = actor.effective_commit_topology();
     assert!(roster_a.len() > 1, "test requires multiple peers");
-    actor.record_rbc_session_roster(key, roster_a.clone(), super::RbcRosterSource::Derived);
+    actor.record_rbc_session_roster(key, roster_a.clone(), super::RbcRosterSource::Init);
 
     let mut roster_b = roster_a.clone();
     roster_b.pop();
@@ -12593,6 +12663,16 @@ async fn handle_rbc_ready_refreshes_derived_roster_on_mismatch() {
         actor.subsystems.da_rbc.rbc.session_rosters.get(&key),
         Some(&roster_b)
     );
+    assert_eq!(
+        actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .session_roster_sources
+            .get(&key)
+            .copied(),
+        Some(super::RbcRosterSource::Derived)
+    );
     let stored = actor
         .subsystems
         .da_rbc
@@ -12610,7 +12690,7 @@ async fn handle_rbc_ready_refreshes_derived_roster_on_mismatch() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn handle_rbc_deliver_stashes_on_roster_hash_mismatch() {
+async fn handle_rbc_deliver_drops_on_roster_hash_mismatch() {
     let mut harness = test_actor_harness(4).await;
     let key = insert_active_pending_block(&mut harness.actor, 0);
     let payload = b"payload".to_vec();
@@ -12631,6 +12711,9 @@ async fn handle_rbc_deliver_stashes_on_roster_hash_mismatch() {
         .insert(key, session.clone());
 
     let roster = harness.actor.effective_commit_topology();
+    harness
+        .actor
+        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
     let local_peer = harness.actor.common_config.peer.id().clone();
     let signer_peer = roster
         .iter()
@@ -12670,6 +12753,93 @@ async fn handle_rbc_deliver_stashes_on_roster_hash_mismatch() {
         .actor
         .handle_rbc_deliver(deliver)
         .expect("deliver handled");
+    assert!(
+        !harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .pending
+            .contains_key(&key),
+        "mismatched roster hash should be dropped with an authoritative roster"
+    );
+    let stored = harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session");
+    assert!(!stored.delivered);
+    assert!(stored.deliver_signature.is_none());
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn handle_rbc_deliver_stashes_when_roster_unverified() {
+    let mut harness = test_actor_harness(4).await;
+    let key = session_key();
+    let payload = b"payload".to_vec();
+    let payload_hash = Hash::new(&payload);
+    let session =
+        Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, 0).expect("session");
+
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session.clone());
+
+    let roster = harness.actor.effective_commit_topology();
+    assert!(!roster.is_empty());
+    harness
+        .actor
+        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
+    let local_peer = harness.actor.common_config.peer.id().clone();
+    let signer_peer = roster
+        .iter()
+        .find(|peer| *peer != &local_peer)
+        .expect("signer peer")
+        .clone();
+    let signer_idx = roster
+        .iter()
+        .position(|peer| peer == &signer_peer)
+        .expect("signer index");
+    let signer_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == signer_peer.public_key())
+        .expect("signer keypair");
+    let chunk_root = session.expected_chunk_root.expect("chunk root");
+    let epoch = harness.actor.epoch_for_height(key.1);
+    let roster_hash = super::rbc::rbc_roster_hash(&roster);
+
+    let mut deliver = crate::sumeragi::consensus::RbcDeliver {
+        block_hash: key.0,
+        height: key.1,
+        view: key.2,
+        epoch,
+        roster_hash,
+        chunk_root,
+        sender: u32::try_from(signer_idx).expect("signer index fits u32"),
+        signature: Vec::new(),
+        ready_signatures: Vec::new(),
+    };
+    let (_, mode_tag, _prf_seed) = harness.actor.consensus_context_for_height(key.1);
+    let preimage =
+        super::rbc_deliver_preimage(&harness.actor.common_config.chain, mode_tag, &deliver);
+    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    deliver.signature = signature.payload().to_vec();
+
+    harness
+        .actor
+        .handle_rbc_deliver(deliver)
+        .expect("deliver handled");
+
     let pending = harness
         .actor
         .subsystems
@@ -12688,40 +12858,20 @@ async fn handle_rbc_deliver_stashes_on_roster_hash_mismatch() {
         .get(&key)
         .expect("session");
     assert!(!stored.delivered);
-
-    harness
-        .actor
-        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
-    let progress = harness
-        .actor
-        .rebroadcast_stalled_rbc_payloads(Instant::now());
-    assert!(progress);
-    assert!(
-        !harness
-            .actor
-            .subsystems
-            .da_rbc
-            .rbc
-            .pending
-            .contains_key(&key),
-        "pending deliver should be flushed after roster update"
-    );
-    let stored = harness
-        .actor
-        .subsystems
-        .da_rbc
-        .rbc
-        .sessions
-        .get(&key)
-        .expect("session");
-    assert!(!stored.delivered);
     assert!(stored.deliver_signature.is_none());
+    let request = harness
+        .actor
+        .pending
+        .missing_block_requests
+        .get(&key.0)
+        .expect("missing block request");
+    assert_eq!(request.attempts, 1);
 
     harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn handle_rbc_deliver_stashes_when_derived_roster_mismatches() {
+async fn handle_rbc_deliver_drops_when_derived_roster_mismatches() {
     let mut harness = test_actor_harness(4).await;
     let key: SessionKey = (
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"rbc-deliver-derived-mismatch")),
@@ -12795,15 +12945,16 @@ async fn handle_rbc_deliver_stashes_when_derived_roster_mismatches() {
         .handle_rbc_deliver(deliver)
         .expect("deliver handled");
 
-    let pending = harness
-        .actor
-        .subsystems
-        .da_rbc
-        .rbc
-        .pending
-        .get(&key)
-        .expect("pending stash");
-    assert_eq!(pending.deliver.len(), 1);
+    assert!(
+        !harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .pending
+            .contains_key(&key),
+        "mismatched DELIVER should be dropped with an authoritative roster"
+    );
     assert!(
         harness
             .actor
@@ -13126,7 +13277,7 @@ async fn maybe_emit_rbc_ready_after_ready_quorum_without_all_chunks() {
     assert!(!roster.is_empty());
     harness
         .actor
-        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
+        .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
 
     harness
         .actor
@@ -13388,7 +13539,7 @@ async fn handle_rbc_ready_uses_activation_height_mode_tag() {
         .sessions
         .insert(key, session.clone());
     let roster = actor.effective_commit_topology();
-    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
 
     let ready = actor.build_rbc_ready(key, &session).expect("ready");
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
@@ -13481,7 +13632,7 @@ async fn handle_rbc_deliver_uses_activation_height_mode_tag() {
         .sessions
         .insert(key, session.clone());
     let roster = actor.effective_commit_topology();
-    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
 
     let deliver = actor.build_rbc_deliver(key, &session).expect("deliver");
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
@@ -13600,7 +13751,7 @@ async fn recover_block_from_rbc_session_marks_invalid_on_payload_hash_mismatch()
     actor.record_rbc_session_roster(
         key,
         actor.effective_commit_topology(),
-        super::RbcRosterSource::Init,
+        super::RbcRosterSource::Derived,
     );
     let pending = actor.pending_rbc_slot(key).expect("pending slot");
     let _ = pending.push_chunk_capped(
@@ -13746,7 +13897,7 @@ async fn record_rbc_session_roster_rejects_unverified_override() {
     session.deliver_signature = Some(vec![0xBB]);
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
 
-    actor.record_rbc_session_roster(key, roster_a, super::RbcRosterSource::Derived);
+    actor.record_rbc_session_roster(key, roster_a.clone(), super::RbcRosterSource::Derived);
     let pending = actor.pending_rbc_slot(key).expect("pending slot");
     let _ = pending.push_chunk_capped(
         crate::sumeragi::consensus::RbcChunk {
@@ -13846,7 +13997,7 @@ async fn record_rbc_session_roster_refreshes_derived_on_change() {
     session.deliver_signature = Some(vec![0xBB]);
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
 
-    actor.record_rbc_session_roster(key, roster_a, super::RbcRosterSource::Derived);
+    actor.record_rbc_session_roster(key, roster_a.clone(), super::RbcRosterSource::Derived);
     actor.record_rbc_session_roster(key, roster_b.clone(), super::RbcRosterSource::Derived);
 
     assert_eq!(
@@ -14161,7 +14312,7 @@ async fn handle_rbc_init_rejects_derived_roster_mismatch() {
     roster_b.pop();
     assert!(!roster_b.is_empty(), "roster should remain non-empty");
 
-    actor.record_rbc_session_roster(key, roster_a, super::RbcRosterSource::Derived);
+    actor.record_rbc_session_roster(key, roster_a.clone(), super::RbcRosterSource::Derived);
 
     let init = crate::sumeragi::consensus::RbcInit {
         block_hash,
@@ -14329,7 +14480,7 @@ async fn handle_rbc_ready_rejects_epoch_mismatch() {
         .sessions
         .insert(key, session.clone());
     let roster = actor.effective_commit_topology();
-    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
 
     let ready = actor.build_rbc_ready(key, &session).expect("ready");
     actor.handle_rbc_ready(ready).expect("ready handled");
@@ -14381,7 +14532,7 @@ async fn handle_rbc_deliver_rejects_epoch_mismatch() {
         .sessions
         .insert(key, session.clone());
     let roster = actor.effective_commit_topology();
-    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
 
     let deliver = actor.build_rbc_deliver(key, &session).expect("deliver");
     actor.handle_rbc_deliver(deliver).expect("deliver handled");
@@ -14779,7 +14930,7 @@ async fn handle_rbc_deliver_rejects_chunk_root_mismatch() {
         .insert(key, session.clone());
 
     let roster = actor.effective_commit_topology();
-    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
     let local_peer = actor.common_config.peer.id().clone();
     let signer_peer = roster
         .iter()
@@ -14850,7 +15001,7 @@ async fn handle_rbc_deliver_sets_expected_chunk_root_when_missing() {
     session.expected_chunk_root = None;
 
     let roster = actor.effective_commit_topology();
-    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
     let topology = super::network_topology::Topology::new(roster.clone());
     let required = actor.rbc_deliver_quorum(&topology);
     for idx in 0..required {
@@ -14904,7 +15055,7 @@ async fn handle_rbc_deliver_records_ready_bundle() {
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
     let roster = actor.effective_commit_topology();
     assert!(!roster.is_empty(), "roster should not be empty");
-    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
 
     let topology = super::network_topology::Topology::new(roster.clone());
     let required = actor.rbc_deliver_quorum(&topology);
@@ -15016,7 +15167,7 @@ async fn rbc_ready_gossips_to_sampled_peers() {
     harness.actor.record_rbc_session_roster(
         key,
         harness.actor.effective_commit_topology(),
-        super::RbcRosterSource::Init,
+        super::RbcRosterSource::Derived,
     );
 
     let roster = harness.actor.effective_commit_topology();
@@ -15131,7 +15282,7 @@ async fn rbc_ready_uses_session_roster_after_topology_change() {
 
     harness
         .actor
-        .record_rbc_session_roster(key, roster_a.clone(), super::RbcRosterSource::Init);
+        .record_rbc_session_roster(key, roster_a.clone(), super::RbcRosterSource::Derived);
 
     let mut ready = crate::sumeragi::consensus::RbcReady {
         block_hash: key.0,
@@ -15217,7 +15368,7 @@ async fn rbc_session_roster_persists_across_restart_with_roster_change() {
 
     harness
         .actor
-        .record_rbc_session_roster(key, roster_a.clone(), super::RbcRosterSource::Init);
+        .record_rbc_session_roster(key, roster_a.clone(), super::RbcRosterSource::Derived);
     harness.actor.persist_rbc_session(key, &session);
     harness.shutdown.send();
     drop(harness);
@@ -15324,7 +15475,7 @@ async fn duplicate_rbc_deliver_is_ignored() {
     let roster = harness.actor.effective_commit_topology();
     harness
         .actor
-        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
 
     let deliver = harness
         .actor
@@ -15477,7 +15628,7 @@ async fn maybe_emit_rbc_deliver_defers_until_chunks_complete() {
         .insert(key, session);
     harness
         .actor
-        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
 
     let _ = harness.background_rx.try_iter().count();
     harness
@@ -15585,7 +15736,7 @@ async fn rbc_session_ttl_prunes_stale_sessions() {
     let roster = harness.actor.effective_commit_topology();
     harness
         .actor
-        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
     harness.actor.update_rbc_status_entry(key, &session, false);
 
     let stale_time = SystemTime::now() - Duration::from_secs(2);
@@ -15649,7 +15800,7 @@ async fn seed_rbc_session_flushes_pending_ready() {
     let roster = harness.actor.effective_commit_topology();
     harness
         .actor
-        .record_rbc_session_roster(session_key, roster, super::RbcRosterSource::Init);
+        .record_rbc_session_roster(session_key, roster, super::RbcRosterSource::Derived);
     let mut ready = harness
         .actor
         .build_rbc_ready(session_key, &session)
@@ -16891,6 +17042,47 @@ async fn consensus_frame_caps_are_plaintext_and_rbc_chunk_is_clamped() {
     harness.shutdown.send();
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn block_message_frame_cap_uses_payload_for_ready_and_deliver() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAB; 32]));
+    let ready = crate::sumeragi::consensus::RbcReady {
+        block_hash,
+        height: 1,
+        view: 0,
+        epoch: 0,
+        roster_hash: Hash::prehashed([0x01; 32]),
+        chunk_root: Hash::prehashed([0x02; 32]),
+        sender: 0,
+        signature: vec![0x03],
+    };
+    let deliver = crate::sumeragi::consensus::RbcDeliver {
+        block_hash,
+        height: 1,
+        view: 0,
+        epoch: 0,
+        roster_hash: Hash::prehashed([0x04; 32]),
+        chunk_root: Hash::prehashed([0x05; 32]),
+        sender: 0,
+        signature: vec![0x06],
+        ready_signatures: Vec::new(),
+    };
+
+    assert_eq!(
+        actor.block_message_frame_cap(&BlockMessage::RbcReady(ready)),
+        actor.consensus_payload_frame_cap,
+        "RbcReady should use the payload frame cap"
+    );
+    assert_eq!(
+        actor.block_message_frame_cap(&BlockMessage::RbcDeliver(deliver)),
+        actor.consensus_payload_frame_cap,
+        "RbcDeliver should use the payload frame cap"
+    );
+
+    harness.shutdown.send();
+}
+
 #[test]
 fn consensus_block_wire_len_matches_network_message() {
     let block = sample_block(1, 0, None);
@@ -17174,6 +17366,14 @@ async fn stale_pending_block_requeues_transactions() {
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
         consensus_ingress_bytes_burst:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+        consensus_ingress_critical_rate_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
+        consensus_ingress_critical_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
+        consensus_ingress_critical_bytes_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
+        consensus_ingress_critical_bytes_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
         consensus_ingress_rbc_session_limit:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
         consensus_ingress_penalty_threshold:
@@ -29060,6 +29260,51 @@ async fn new_view_gossip_targets_excludes_sender_and_local() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn new_view_votes_target_leader_only() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    seed_genesis_block_for_state(&actor.state);
+    while harness.background_rx.try_recv().is_ok() {}
+
+    let committed_qc = actor.latest_committed_qc().expect("committed qc");
+    let height = committed_qc.height.saturating_add(1);
+    let view = 1;
+
+    let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster);
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let leader = signature_topology.leader().clone();
+    let local_peer = actor.common_config.peer.id().clone();
+
+    assert!(
+        actor.emit_new_view_vote(height, view, committed_qc, &topology),
+        "new view vote should be emitted"
+    );
+
+    let mut targets = Vec::new();
+    while let Ok(post) = harness.background_rx.try_recv() {
+        if let BackgroundPost::Post { peer, msg, .. } = post
+            && matches!(msg, BlockMessage::QcVote(_))
+        {
+            targets.push(peer);
+        }
+    }
+
+    if leader == local_peer {
+        assert!(
+            targets.is_empty(),
+            "leader should not send NEW_VIEW votes to itself"
+        );
+    } else {
+        assert_eq!(targets, vec![leader]);
+    }
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn pacemaker_keeps_new_view_entries_with_pending_txs() {
     use std::borrow::Cow;
 
@@ -36946,7 +37191,7 @@ async fn maybe_emit_rbc_deliver_throttles_repeated_deferral() {
         .da_rbc
         .rbc
         .session_roster_sources
-        .insert(key, super::RbcRosterSource::Init);
+        .insert(key, super::RbcRosterSource::Derived);
 
     let session = RbcSession::test_new(0, Some(Hash::new(b"payload")), None, 0);
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
@@ -37490,6 +37735,14 @@ async fn proposal_assembly_defers_without_draining_queue_and_preserves_view_when
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
         consensus_ingress_bytes_burst:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+        consensus_ingress_critical_rate_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
+        consensus_ingress_critical_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
+        consensus_ingress_critical_bytes_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
+        consensus_ingress_critical_bytes_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
         consensus_ingress_rbc_session_limit:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
         consensus_ingress_penalty_threshold:

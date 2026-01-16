@@ -2537,28 +2537,21 @@ impl Actor {
 
         let vote_msg = BlockMessage::QcVote(vote);
         let local_peer_id = self.common_config.peer.id().clone();
-        let targets: Vec<_> = signature_topology
-            .as_ref()
-            .iter()
-            .filter(|peer| *peer != &local_peer_id)
-            .cloned()
-            .collect();
-        if targets.is_empty() {
+        let leader = signature_topology.leader().clone();
+        if leader == local_peer_id {
             return true;
         }
         info!(
             height,
             view,
             signer = local_idx,
-            targets = targets.len(),
-            "sending NEW_VIEW vote to view-aligned commit topology"
+            leader = %leader,
+            "sending NEW_VIEW vote to view-aligned leader"
         );
-        for peer in targets {
-            self.schedule_background(BackgroundRequest::Post {
-                peer,
-                msg: vote_msg.clone(),
-            });
-        }
+        self.schedule_background(BackgroundRequest::Post {
+            peer: leader,
+            msg: vote_msg,
+        });
         true
     }
 

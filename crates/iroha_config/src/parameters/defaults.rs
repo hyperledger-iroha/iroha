@@ -762,13 +762,28 @@ pub mod network {
     pub const P2P_SUBSCRIBER_QUEUE_CAP: NonZeroUsize = nonzero!(8192_usize);
 
     /// Optional per-peer consensus ingress rate (msgs/sec). When None, consensus ingress limiting is disabled.
-    pub const CONSENSUS_INGRESS_RATE_PER_SEC: Option<NonZeroU32> = Some(nonzero!(1000_u32));
+    ///
+    /// Defaults tuned for fast DA pipelines so QC/vote traffic is not throttled.
+    pub const CONSENSUS_INGRESS_RATE_PER_SEC: Option<NonZeroU32> = Some(nonzero!(50_000_u32));
     /// Optional burst for consensus ingress rate limiting (msgs). Defaults to `rate` when None.
-    pub const CONSENSUS_INGRESS_BURST: Option<NonZeroU32> = Some(nonzero!(2000_u32));
+    pub const CONSENSUS_INGRESS_BURST: Option<NonZeroU32> = Some(nonzero!(100_000_u32));
     /// Optional per-peer consensus ingress bytes/sec budget. When None, bytes limiting is disabled.
     pub const CONSENSUS_INGRESS_BYTES_PER_SEC: Option<NonZeroU32> = Some(nonzero!(67_108_864_u32)); // 64 MiB/s
     /// Optional burst size in bytes for consensus ingress limiting. Defaults to `bytes_per_sec` when None.
     pub const CONSENSUS_INGRESS_BYTES_BURST: Option<NonZeroU32> = Some(nonzero!(134_217_728_u32)); // 128 MiB
+    /// Optional per-peer critical consensus ingress rate (msgs/sec). When None, critical limiting is disabled.
+    ///
+    /// Critical traffic is liveness-sensitive (votes/QCs/VRF/RBC signals) and uses a higher cap.
+    pub const CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC: Option<NonZeroU32> =
+        Some(nonzero!(100_000_u32));
+    /// Optional burst for critical consensus ingress rate limiting (msgs). Defaults to `rate` when None.
+    pub const CONSENSUS_INGRESS_CRITICAL_BURST: Option<NonZeroU32> = Some(nonzero!(200_000_u32));
+    /// Optional per-peer critical consensus ingress bytes/sec budget. When None, bytes limiting is disabled.
+    pub const CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC: Option<NonZeroU32> =
+        Some(nonzero!(134_217_728_u32)); // 128 MiB/s
+    /// Optional burst size in bytes for critical consensus ingress limiting. Defaults to `bytes_per_sec` when None.
+    pub const CONSENSUS_INGRESS_CRITICAL_BYTES_BURST: Option<NonZeroU32> =
+        Some(nonzero!(268_435_456_u32)); // 256 MiB
     /// Maximum concurrent RBC sessions accepted per peer before throttling (0 disables).
     pub const CONSENSUS_INGRESS_RBC_SESSION_LIMIT: usize = 64;
     /// Drop threshold (per window) before temporarily suppressing consensus ingress.
@@ -793,7 +808,10 @@ pub mod network {
     pub const MAX_FRAME_BYTES: NonZeroUsize = nonzero!(16 * 1024 * 1024_usize); // 16 MiB default
     // Per-topic caps (defaults stricter than global except BlockSync)
     /// Maximum frame size for consensus control traffic.
-    pub const MAX_FRAME_BYTES_CONSENSUS: NonZeroUsize = nonzero!(1_048_576_usize); // 1 MiB default
+    ///
+    /// Consensus certificates and READY bundles can scale with validator set size, so keep
+    /// this aligned with the global frame cap to avoid dropping liveness-critical frames.
+    pub const MAX_FRAME_BYTES_CONSENSUS: NonZeroUsize = MAX_FRAME_BYTES;
     /// Maximum frame size for control-plane messages.
     pub const MAX_FRAME_BYTES_CONTROL: NonZeroUsize = nonzero!(131_072_usize);
     /// Maximum frame size for block sync / consensus payload traffic.

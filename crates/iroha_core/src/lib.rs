@@ -244,14 +244,14 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 | BlockMessage::FetchPendingBlock(_)
                 | BlockMessage::Proposal(_)
                 | BlockMessage::RbcChunk(_)
-                | BlockMessage::RbcInit(_) => T::ConsensusPayload,
+                | BlockMessage::RbcInit(_)
+                | BlockMessage::RbcReady(_)
+                | BlockMessage::RbcDeliver(_) => T::ConsensusPayload,
                 BlockMessage::ConsensusParams(_)
                 | BlockMessage::ExecWitness(_)
                 | BlockMessage::ProposalHint(_)
                 | BlockMessage::Qc(_)
                 | BlockMessage::QcVote(_)
-                | BlockMessage::RbcDeliver(_)
-                | BlockMessage::RbcReady(_)
                 | BlockMessage::VrfCommit(_)
                 | BlockMessage::VrfReveal(_) => T::Consensus,
             },
@@ -549,7 +549,7 @@ mod tests {
             signature: vec![7],
         };
         let ready_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessage::RbcReady(ready)));
-        assert_eq!(ready_msg.topic(), NetworkTopic::Consensus);
+        assert_eq!(ready_msg.topic(), NetworkTopic::ConsensusPayload);
 
         let deliver = RbcDeliver {
             block_hash,
@@ -564,7 +564,7 @@ mod tests {
         };
         let deliver_msg =
             NetworkMessage::SumeragiBlock(Box::new(BlockMessage::RbcDeliver(deliver)));
-        assert_eq!(deliver_msg.topic(), NetworkTopic::Consensus);
+        assert_eq!(deliver_msg.topic(), NetworkTopic::ConsensusPayload);
     }
 
     #[test]

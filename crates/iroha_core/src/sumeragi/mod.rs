@@ -2731,6 +2731,99 @@ mod tests {
     }
 
     #[test]
+    fn try_incoming_block_message_waits_when_qc_vote_queue_full() {
+        const CAP: usize = 1;
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(CAP);
+        let (block_tx, _block_rx) = mpsc::sync_channel(CAP);
+        let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(CAP);
+        let (vote_tx, vote_rx) = mpsc::sync_channel(CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(CAP);
+        let vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>> = Arc::new(Mutex::new(
+            DedupCache::new(VOTE_DEDUP_CACHE_CAP, VOTE_DEDUP_CACHE_TTL),
+        ));
+        let block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>> =
+            Arc::new(Mutex::new(BlockPayloadDedupCache::new(
+                BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
+                BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
+            )));
+        let vote_tx_fill = vote_tx.clone();
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        let filler_vote = Vote {
+            phase: Phase::Commit,
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([9u8; 32])),
+            parent_state_root: Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: Hash::prehashed([1u8; iroha_crypto::Hash::LENGTH]),
+            height: 1,
+            view: 0,
+            epoch: 0,
+            highest_qc: None,
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+
+        vote_tx_fill
+            .send(BlockMessage::QcVote(filler_vote))
+            .expect("fill vote channel");
+
+        let vote = Vote {
+            phase: Phase::Commit,
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([8u8; 32])),
+            parent_state_root: Hash::prehashed([2u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: Hash::prehashed([3u8; iroha_crypto::Hash::LENGTH]),
+            height: 2,
+            view: 0,
+            epoch: 0,
+            highest_qc: None,
+            signer: 1,
+            bls_sig: Vec::new(),
+        };
+
+        let (done_tx, done_rx) = mpsc::channel();
+        let handle_clone = handle.clone();
+        let join = std::thread::spawn(move || {
+            let accepted = handle_clone.try_incoming_block_message(BlockMessage::QcVote(vote));
+            let _ = done_tx.send(accepted);
+        });
+
+        assert!(
+            done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+            "QcVote should wait for vote queue capacity"
+        );
+        let _ = vote_rx.recv().expect("drain vote queue to unblock sender");
+        let accepted = done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("QcVote should be enqueued after space is available");
+        assert!(
+            accepted,
+            "QcVote should be accepted after space is available"
+        );
+        join.join().expect("join QcVote sender");
+
+        let received = vote_rx
+            .try_recv()
+            .expect("QcVote should be enqueued after space is freed");
+        assert!(matches!(received, BlockMessage::QcVote(_)));
+        assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        assert!(matches!(
+            block_payload_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
     fn incoming_block_message_waits_when_rbc_chunk_queue_full() {
         const CAP: usize = 1;
         let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(CAP);
@@ -5156,14 +5249,16 @@ impl SumeragiHandle {
     ///
     /// Note: this is a best-effort enqueue that drops messages when queues are saturated
     /// to avoid stalling upstream relays. Block-sync updates and critical payload messages
-    /// (block creation and proposals), plus RBC READY/DELIVER, always use blocking semantics
-    /// because dropping them can stall consensus recovery.
+    /// (block creation and proposals), plus RBC READY/DELIVER and QC votes/certificates,
+    /// always use blocking semantics because dropping them can stall consensus recovery.
     pub fn try_incoming_block_message(&self, msg: BlockMessage) -> bool {
         let blocking = matches!(
             &msg,
             BlockMessage::BlockSyncUpdate(_)
                 | BlockMessage::BlockCreated(_)
                 | BlockMessage::Proposal(_)
+                | BlockMessage::QcVote(_)
+                | BlockMessage::Qc(_)
                 | BlockMessage::RbcReady(_)
                 | BlockMessage::RbcDeliver(_)
         );

@@ -2054,6 +2054,7 @@ impl Actor {
                     evicted_chunks,
                     evicted_bytes,
                 } => {
+                    status::inc_pending_rbc_stash(status::PendingRbcStashKind::Chunk, None);
                     if evicted_chunks > 0 {
                         Self::record_pending_drop_counts(
                             self.telemetry_handle(),
@@ -2223,6 +2224,10 @@ impl Actor {
                 )
             };
             if accepted {
+                status::inc_pending_rbc_stash(
+                    status::PendingRbcStashKind::Ready,
+                    Some(status::PendingRbcStashReason::InitMissing),
+                );
                 info!(
                     ?key,
                     pending_chunks,
@@ -2362,6 +2367,11 @@ impl Actor {
                 return Ok(());
             }
             stash_ready(self, key, ready, "commit roster hash mismatch")?;
+            return Ok(());
+        }
+        if !roster_source.is_authoritative() {
+            stash_ready(self, key, ready, "commit roster unverified")?;
+            self.request_missing_block_for_pending_rbc(key, "rbc_ready_unverified_roster", None);
             return Ok(());
         }
         let topology = crate::sumeragi::network_topology::Topology::new(topology_peers);
@@ -2771,6 +2781,10 @@ impl Actor {
                 )
             };
             if accepted {
+                status::inc_pending_rbc_stash(
+                    status::PendingRbcStashKind::Deliver,
+                    Some(status::PendingRbcStashReason::InitMissing),
+                );
                 debug!(
                     ?key,
                     pending_chunks, pending_bytes, "stashed RBC DELIVER until INIT arrives"
@@ -2806,6 +2820,7 @@ impl Actor {
             key: SessionKey,
             deliver: RbcDeliver,
             reason: &'static str,
+            stash_reason: status::PendingRbcStashReason,
         ) -> Result<()> {
             let max_bytes = actor.pending_rbc_caps().1;
             let deliver_bytes = rbc_deliver_stash_bytes(&deliver);
@@ -2842,6 +2857,10 @@ impl Actor {
                 )
             };
             if accepted {
+                status::inc_pending_rbc_stash(
+                    status::PendingRbcStashKind::Deliver,
+                    Some(stash_reason),
+                );
                 debug!(
                     ?key,
                     pending_chunks,
@@ -2879,7 +2898,13 @@ impl Actor {
             }
         }
         if topology_peers.is_empty() {
-            stash_deliver(self, key, deliver, "commit roster missing")?;
+            stash_deliver(
+                self,
+                key,
+                deliver,
+                "commit roster missing",
+                status::PendingRbcStashReason::RosterMissing,
+            )?;
             return Ok(());
         }
         let mut roster_hash = rbc_roster_hash(&topology_peers);
@@ -2902,7 +2927,24 @@ impl Actor {
                 );
                 return Ok(());
             }
-            stash_deliver(self, key, deliver, "commit roster hash mismatch")?;
+            stash_deliver(
+                self,
+                key,
+                deliver,
+                "commit roster hash mismatch",
+                status::PendingRbcStashReason::RosterHashMismatch,
+            )?;
+            return Ok(());
+        }
+        if !roster_source.is_authoritative() {
+            stash_deliver(
+                self,
+                key,
+                deliver,
+                "commit roster unverified",
+                status::PendingRbcStashReason::RosterUnverified,
+            )?;
+            self.request_missing_block_for_pending_rbc(key, "rbc_deliver_unverified_roster", None);
             return Ok(());
         }
         let topology = crate::sumeragi::network_topology::Topology::new(topology_peers);

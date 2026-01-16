@@ -2,6 +2,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use eyre::ensure;
+use iroha_core::sumeragi::consensus::NPOS_TAG;
 use iroha_data_model::{Level, isi::Log, peer::Peer};
 use iroha_test_network::NetworkBuilder;
 use tokio::runtime::Runtime;
@@ -120,6 +122,33 @@ fn commit_time() -> eyre::Result<()> {
             "No peer can commit block immediately, even the leader one"
         );
     }
+
+    Ok(())
+}
+
+#[test]
+fn status_reports_npos_mode_tag_on_start() -> eyre::Result<()> {
+    let builder = builder_with_full_telemetry()
+        .with_peers(4)
+        .with_auto_populated_trusted_peers()
+        .with_config_layer(|layer| {
+            layer.write(["sumeragi", "consensus_mode"], "npos");
+        });
+    let Some((network, _rt)) =
+        start_network(builder, stringify!(status_reports_npos_mode_tag_on_start))?
+    else {
+        return Ok(());
+    };
+
+    let status = network.client().get_status()?;
+    let sumeragi = status
+        .sumeragi
+        .expect("sumeragi status must be present when telemetry is enabled");
+    ensure!(
+        sumeragi.mode_tag == NPOS_TAG,
+        "expected /status mode_tag to be {NPOS_TAG}, got {}",
+        sumeragi.mode_tag
+    );
 
     Ok(())
 }
