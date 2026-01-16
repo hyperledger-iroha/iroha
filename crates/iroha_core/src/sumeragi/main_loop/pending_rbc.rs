@@ -378,6 +378,11 @@ impl Actor {
                     eviction.reason,
                     &eviction.removed,
                 );
+                self.request_missing_block_after_rbc_drop(
+                    eviction.key,
+                    eviction.reason,
+                    "pending_rbc_eviction",
+                );
             }
             self.publish_rbc_backlog_snapshot();
         }

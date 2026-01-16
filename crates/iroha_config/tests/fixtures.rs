@@ -301,14 +301,14 @@ fn minimal_config_snapshot() {
                 allow_cidrs: [],
                 deny_cidrs: [],
                 disconnect_on_post_overflow: true,
-                max_frame_bytes: 1048576,
+                max_frame_bytes: 16777216,
                 tcp_nodelay: true,
                 tcp_keepalive: Some(
                     60s,
                 ),
                 max_frame_bytes_consensus: 1048576,
                 max_frame_bytes_control: 131072,
-                max_frame_bytes_block_sync: 1048576,
+                max_frame_bytes_block_sync: 16777216,
                 max_frame_bytes_tx_gossip: 131072,
                 max_frame_bytes_peer_gossip: 65536,
                 max_frame_bytes_health: 32768,
@@ -963,6 +963,7 @@ fn minimal_config_snapshot() {
             transaction_gossiper: TransactionGossiper {
                 gossip_period: 1s,
                 gossip_size: 500,
+                gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
                 dataspace: DataspaceGossip {
                     drop_unknown_dataspace: false,
                     restricted_target_cap: None,
@@ -1444,7 +1445,7 @@ fn minimal_config_snapshot() {
                 enable_compact_seq_len_up_to: 18446744073709551615,
                 enable_varint_offsets_up_to: 18446744073709551615,
                 allow_gpu_compression: true,
-                max_archive_len: 67108864,
+                max_archive_len: 536870912,
                 aos_ncb_small_n: 64,
             },
             hijiri: Hijiri {

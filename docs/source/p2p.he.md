@@ -146,10 +146,13 @@ block_gossip_max_period_ms = 30000
 peer_gossip_period_ms = 1000
 peer_gossip_max_period_ms = 30000
 transaction_gossip_size = 500
+transaction_gossip_resend_ticks = 3
 ```
 
 - מרווחי gossip/idle מוגבלים למינימום של 100ms כדי למנוע לולאות סחרור.
 - גוסיפ כתובות עמיתים מונע ע״י שינוי עם backoff מעריכי עד `peer_gossip_max_period_ms`
   (ומוגבל כאשר ה־relay מפיל מסרים נכנסים); דגימת block sync מבצעת backoff דומה עד
   `block_gossip_max_period_ms` כאשר אין התקדמות.
+- גוסיפ טרנזקציות נעצר זמנית כאשר relay backpressure פעיל (נפילות בתור subscriber)
+  וחוזר אחרי `transaction_gossip_period_ms * transaction_gossip_resend_ticks` כדי למנוע הצפה.
 </div>

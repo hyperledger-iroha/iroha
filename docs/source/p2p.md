@@ -206,6 +206,7 @@ peer_gossip_period_ms = 1000
 peer_gossip_max_period_ms = 30000
 transaction_gossip_size = 500
 transaction_gossip_period_ms = 1000
+transaction_gossip_resend_ticks = 3
 idle_timeout_ms = 60000
 # Trust decay/penalties for gossip senders (decays toward 0)
 trust_decay_half_life_ms = 300000  # halve negative scores every 5 minutes
@@ -218,6 +219,9 @@ trust_min_score = -20              # drop trust gossip at or below this score
 - Peer-address gossip is change-driven with exponential backoff up to `peer_gossip_max_period_ms`
   (and is throttled when the relay drops inbound frames); block-sync sampling similarly backs off
   up to `block_gossip_max_period_ms` when no progress is observed.
+- Transaction gossip pauses when relay backpressure is active (recent subscriber-queue drops) and
+  resumes after `transaction_gossip_period_ms * transaction_gossip_resend_ticks` to avoid
+  flooding under load.
 - NEW_VIEW gossip uses the same `block_gossip_size` fanout; peers rotate a deterministic,
   per-node sample window on each rebroadcast so all peers are eventually covered. Rebroadcasts
   are paced by the block-time-based cooldown (clamped >=200ms) and run on pacemaker ticks even
@@ -387,7 +391,7 @@ Because queues are always bounded, overflow counters rise whenever a channel dro
 
 ### Frame Size Caps
 
-- Global cap: `[network].max_frame_bytes` (default 1 MiB) rejects oversized frames early.
+- Global cap: `[network].max_frame_bytes` (default 16 MiB) rejects oversized frames early.
   The limit now applies uniformly to TCP, TLS, QUIC, and Torii `/p2p` WebSocket
   accepts as well as outbound dialers, with `p2p_post_overflow_by_topic`
   counters incremented whenever an inbound frame is dropped by the topic caps.
@@ -396,7 +400,7 @@ Because queues are always bounded, overflow counters rise whenever a channel dro
 - Topic caps (post-decode enforcement, tightened defaults) apply to decrypted payload sizes:
   - `[network].max_frame_bytes_consensus` (default 1 MiB)
   - `[network].max_frame_bytes_control` (default 128 KiB)
-  - `[network].max_frame_bytes_block_sync` (default = global cap)
+  - `[network].max_frame_bytes_block_sync` (default = global cap; also caps consensus payloads such as `BlockCreated`, `BlockSyncUpdate`, and RBC chunks)
   - `[network].max_frame_bytes_tx_gossip` (default 128 KiB)
   - `[network].max_frame_bytes_peer_gossip` (default 64 KiB)
   - `[network].max_frame_bytes_health` (default 32 KiB)

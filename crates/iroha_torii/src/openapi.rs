@@ -2393,7 +2393,7 @@ fn transaction_paths() -> Map {
         "#/components/schemas/JsonValue",
         vec![required_string_query_param(
             "hash",
-            "Signed transaction hash (hex).",
+            "Transaction hash (hex).",
         )],
     );
     if let Some(Value::Object(get_op)) = pipeline_status.get_mut("get") {

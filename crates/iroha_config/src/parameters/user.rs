@@ -7170,6 +7170,9 @@ pub struct Network {
     /// Interval between transaction gossip batches in milliseconds (clamped to >= 100ms).
     #[config(default = "defaults::network::TRANSACTION_GOSSIP_PERIOD.into()")]
     pub transaction_gossip_period_ms: DurationMs,
+    /// Number of gossip periods to wait before re-sending the same transactions.
+    #[config(default = "defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS")]
+    pub transaction_gossip_resend_ticks: NonZeroU32,
     /// Drop transaction gossip for dataspaces missing from the lane catalog instead of falling
     /// back to restricted routing.
     #[config(default = "defaults::network::TX_GOSSIP_DROP_UNKNOWN_DATASPACE")]
@@ -7386,6 +7389,7 @@ impl Network {
             trust_min_score,
             transaction_gossip_size,
             transaction_gossip_period_ms: transaction_gossip_period,
+            transaction_gossip_resend_ticks,
             transaction_gossip_drop_unknown_dataspace,
             transaction_gossip_restricted_target_cap,
             transaction_gossip_public_target_cap,
@@ -7619,6 +7623,7 @@ impl Network {
             actual::TransactionGossiper {
                 gossip_period: transaction_gossip_period,
                 gossip_size: transaction_gossip_size,
+                gossip_resend_ticks: transaction_gossip_resend_ticks,
                 dataspace: actual::DataspaceGossip {
                     drop_unknown_dataspace: transaction_gossip_drop_unknown_dataspace,
                     restricted_target_cap: transaction_gossip_restricted_target_cap,
@@ -14567,6 +14572,15 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         assert_eq!(
             actual.transaction_gossiper.dataspace.restricted_target_cap,
             defaults::network::TX_GOSSIP_RESTRICTED_TARGET_CAP
+        );
+    }
+
+    #[test]
+    fn network_defaults_apply_transaction_gossip_resend_ticks() {
+        let actual = load_root(base_table());
+        assert_eq!(
+            actual.transaction_gossiper.gossip_resend_ticks,
+            defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS
         );
     }
 

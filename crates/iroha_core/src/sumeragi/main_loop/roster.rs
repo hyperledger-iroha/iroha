@@ -9,6 +9,7 @@ use iroha_config::parameters::actual::ConsensusMode;
 use iroha_crypto::blake2::{Blake2b512, Digest as BlakeDigest, digest::Update as BlakeUpdate};
 use iroha_data_model::{ChainId, Encode as _, nexus::PublicLaneValidatorStatus, peer::PeerId};
 use iroha_logger::prelude::*;
+use mv::storage::StorageReadOnly;
 
 use crate::{
     state::{State, StateView, WorldReadOnly},
@@ -241,6 +242,7 @@ pub(super) fn derive_active_topology_from_views(
 }
 
 #[allow(clippy::if_not_else)]
+#[cfg(test)]
 pub(super) fn derive_active_topology(
     view: &StateView<'_>,
     trusted: &iroha_config::parameters::actual::TrustedPeers,
@@ -257,9 +259,23 @@ pub(super) fn derive_active_topology_for_mode(
     consensus_mode: ConsensusMode,
 ) -> Vec<PeerId> {
     let commit_topology = view.commit_topology();
-    if matches!(consensus_mode, ConsensusMode::Npos) && commit_topology.is_empty() {
-        let mut roster = active_validator_roster_from_world(view.world());
-        if !roster.is_empty() {
+    let use_commit = !commit_topology.is_empty();
+    if matches!(consensus_mode, ConsensusMode::Npos) {
+        let active_roster = active_validator_roster_from_world(view.world());
+        if !active_roster.is_empty() {
+            let active_set: BTreeSet<_> = active_roster.iter().cloned().collect();
+            let mut roster = if use_commit {
+                commit_topology
+                    .iter()
+                    .filter(|peer| active_set.contains(*peer))
+                    .cloned()
+                    .collect()
+            } else {
+                active_roster.clone()
+            };
+            if roster.is_empty() {
+                roster = active_roster.clone();
+            }
             roster = if trusted.pops.is_empty() {
                 roster
             } else {
@@ -274,12 +290,20 @@ pub(super) fn derive_active_topology_for_mode(
                 }
                 guard_pop_quorum(filtered, &roster, trusted.pops.len())
             };
-            return canonicalize_roster(roster);
+            roster = if use_commit {
+                dedup_preserving_order(roster)
+            } else {
+                canonicalize_roster(roster)
+            };
+            if !roster.is_empty() {
+                return roster;
+            }
         }
     }
     derive_active_topology_from_views(view.world(), commit_topology.as_slice(), trusted, me)
 }
 
+#[cfg(test)]
 pub(super) fn derive_local_validator_index(
     view: &StateView<'_>,
     trusted: &iroha_config::parameters::actual::TrustedPeers,
@@ -545,7 +569,81 @@ mod tests {
         }
 
         let trusted = iroha_config::parameters::actual::TrustedPeers {
-            myself: Peer::new("127.0.0.1:10000".parse().expect("addr"), peer_active.clone()),
+            myself: Peer::new(
+                "127.0.0.1:10000".parse().expect("addr"),
+                peer_active.clone(),
+            ),
+            others: UniqueVec::new(),
+            pops: BTreeMap::new(),
+        };
+        let view = state.view();
+        let roster =
+            derive_active_topology_for_mode(&view, &trusted, &peer_active, ConsensusMode::Npos);
+
+        assert_eq!(roster, vec![peer_active]);
+    }
+
+    #[test]
+    fn active_topology_for_npos_filters_inactive_commit_topology() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+
+        let domain: DomainId = "validators".parse().expect("domain id");
+        let keypair_active = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair_inactive = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let account_active = AccountId::new(domain.clone(), keypair_active.public_key().clone());
+        let account_inactive = AccountId::new(domain, keypair_inactive.public_key().clone());
+        let peer_active = PeerId::new(keypair_active.public_key().clone());
+        let peer_inactive = PeerId::new(keypair_inactive.public_key().clone());
+
+        {
+            let mut block = state.world.public_lane_validators.block();
+            block.insert(
+                (LaneId::new(1), account_active.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::new(1),
+                    validator: account_active.clone(),
+                    stake_account: account_active,
+                    total_stake: Numeric::new(10, 0),
+                    self_stake: Numeric::new(10, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+            block.insert(
+                (LaneId::new(1), account_inactive.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::new(1),
+                    validator: account_inactive.clone(),
+                    stake_account: account_inactive,
+                    total_stake: Numeric::new(15, 0),
+                    self_stake: Numeric::new(15, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::PendingActivation(1),
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+            block.commit();
+        }
+        {
+            let mut block = state.commit_topology.block();
+            let mut tx = block.transaction();
+            *tx = vec![peer_inactive.clone(), peer_active.clone()];
+            tx.apply();
+            block.commit();
+        }
+
+        let trusted = iroha_config::parameters::actual::TrustedPeers {
+            myself: Peer::new(
+                "127.0.0.1:10000".parse().expect("addr"),
+                peer_active.clone(),
+            ),
             others: UniqueVec::new(),
             pops: BTreeMap::new(),
         };
@@ -588,7 +686,10 @@ mod tests {
         }
 
         let trusted = iroha_config::parameters::actual::TrustedPeers {
-            myself: Peer::new("127.0.0.1:10000".parse().expect("addr"), peer_active.clone()),
+            myself: Peer::new(
+                "127.0.0.1:10000".parse().expect("addr"),
+                peer_active.clone(),
+            ),
             others: UniqueVec::new(),
             pops: BTreeMap::new(),
         };

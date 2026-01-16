@@ -276,6 +276,7 @@ fn prevote_quorum_stale(
         && pending_age >= quorum_timeout
 }
 
+#[cfg(test)]
 fn new_view_target(
     highest_qc: crate::sumeragi::consensus::QcHeaderRef,
     target_height: Option<u64>,
@@ -2936,9 +2937,9 @@ fn empty_block_disfavored(tx_count: usize, queue_len: usize, has_nonempty_pendin
 
 fn non_rbc_payload_budget(
     block_max_payload_bytes: Option<NonZeroUsize>,
-    consensus_frame_cap: usize,
+    payload_frame_cap: usize,
 ) -> usize {
-    let frame_cap = consensus_frame_cap.saturating_sub(NON_RBC_FRAME_HEADROOM_BYTES);
+    let frame_cap = payload_frame_cap.saturating_sub(NON_RBC_FRAME_HEADROOM_BYTES);
     let config_cap = block_max_payload_bytes.map_or(frame_cap, NonZeroUsize::get);
     config_cap.min(frame_cap)
 }
@@ -2958,7 +2959,7 @@ fn consensus_block_wire_len_owned(origin: &PeerId, msg: BlockMessage) -> usize {
     )
 }
 
-fn rbc_chunk_payload_cap(origin: &PeerId, consensus_frame_cap: usize) -> usize {
+fn rbc_chunk_payload_cap(origin: &PeerId, payload_frame_cap: usize) -> usize {
     // Use max values for varint fields so the cap holds for any height/view/index.
     let mut chunk = crate::sumeragi::consensus::RbcChunk {
         block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH])),
@@ -2969,17 +2970,17 @@ fn rbc_chunk_payload_cap(origin: &PeerId, consensus_frame_cap: usize) -> usize {
         bytes: Vec::new(),
     };
     let base_len = consensus_block_wire_len_owned(origin, BlockMessage::RbcChunk(chunk.clone()));
-    if base_len >= consensus_frame_cap {
+    if base_len >= payload_frame_cap {
         return 0;
     }
     let mut low = 0usize;
-    let mut high = consensus_frame_cap - base_len;
+    let mut high = payload_frame_cap - base_len;
     while low < high {
         let mid = (low + high).div_ceil(2);
         chunk.bytes.resize(mid, 0);
         let encoded_len =
             consensus_block_wire_len_owned(origin, BlockMessage::RbcChunk(chunk.clone()));
-        if encoded_len <= consensus_frame_cap {
+        if encoded_len <= payload_frame_cap {
             low = mid;
         } else {
             high = mid - 1;
@@ -3037,28 +3038,90 @@ impl Actor {
         })
     }
 
+    fn rbc_rebroadcast_active_with_tip(
+        &self,
+        key: super::rbc_store::SessionKey,
+        tip_height: usize,
+        tip_hash: Option<HashOf<BlockHeader>>,
+    ) -> bool {
+        if let Some(pending) = self.pending.pending_blocks.get(&key.0) {
+            if !pending.aborted
+                && pending.height == key.1
+                && pending.view == key.2
+                && pending_extends_tip(
+                    pending.height,
+                    pending.block.header().prev_block_hash(),
+                    tip_height,
+                    tip_hash,
+                )
+            {
+                return true;
+            }
+        }
+        if let Some(inflight) = self.subsystems.commit.inflight.as_ref() {
+            if inflight.block_hash == key.0
+                && !inflight.pending.aborted
+                && inflight.pending.height == key.1
+                && inflight.pending.view == key.2
+                && pending_extends_tip(
+                    inflight.pending.height,
+                    inflight.pending.block.header().prev_block_hash(),
+                    tip_height,
+                    tip_hash,
+                )
+            {
+                return true;
+            }
+        }
+        if self
+            .pending
+            .pending_processing
+            .get()
+            .is_some_and(|hash| hash == key.0)
+        {
+            return true;
+        }
+        false
+    }
+
+    fn rbc_rebroadcast_active(&self, key: super::rbc_store::SessionKey) -> bool {
+        let view = self.state.view();
+        let tip_height = view.height();
+        let tip_hash = view.latest_block_hash();
+        drop(view);
+        self.rbc_rebroadcast_active_with_tip(key, tip_height, tip_hash)
+    }
+
     fn has_unresolved_rbc_backlog(&self) -> bool {
         if !self.runtime_da_enabled() {
             return false;
         }
-        let unresolved_sessions =
-            self.subsystems
-                .da_rbc
-                .rbc
-                .sessions
-                .iter()
-                .any(|(key, session)| {
-                    !session.is_invalid() && !self.block_payload_available_locally(key.0)
-                });
-        if unresolved_sessions {
-            return true;
-        }
-        self.subsystems
+        let view = self.state.view();
+        let tip_height = view.height();
+        let tip_hash = view.latest_block_hash();
+        drop(view);
+        let missing_payload = self
+            .subsystems
             .da_rbc
             .rbc
-            .pending
-            .keys()
-            .any(|key| !self.block_payload_available_locally(key.0))
+            .sessions
+            .iter()
+            .any(|(key, session)| {
+                self.rbc_rebroadcast_active_with_tip(*key, tip_height, tip_hash)
+                    && !session.is_invalid()
+                    && !self.block_payload_available_locally(key.0)
+            });
+        if missing_payload {
+            return true;
+        }
+        let pending_payload = self.subsystems.da_rbc.rbc.pending.keys().any(|key| {
+            self.rbc_rebroadcast_active_with_tip(*key, tip_height, tip_hash)
+                && !self.block_payload_available_locally(key.0)
+        });
+        if pending_payload {
+            return true;
+        }
+        false
     }
 
     fn is_peer_admin_transaction(tx: &AcceptedTransaction<'_>) -> bool {
@@ -3110,6 +3173,7 @@ where
     Some(height == tip_height && head == tip_hash)
 }
 
+#[cfg(test)]
 fn child_qc_extending_lock<F, I>(
     lock: crate::sumeragi::consensus::QcHeaderRef,
     qcs: I,
@@ -3243,6 +3307,7 @@ pub(super) struct Actor {
     chain_id: ChainId,
     chain_hash: Hash,
     consensus_frame_cap: usize,
+    consensus_payload_frame_cap: usize,
     events_sender: EventsSender,
     state: Arc<State>,
     queue: Arc<Queue>,
@@ -3577,13 +3642,15 @@ struct MergeLaneState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RbcRosterSource {
+    /// Locally derived commit-topology snapshot (authoritative).
     Derived,
-    Network,
+    /// Unverified roster snapshot (e.g., from RBC INIT or persisted sessions).
+    Init,
 }
 
 impl RbcRosterSource {
     fn is_authoritative(self) -> bool {
-        matches!(self, Self::Network)
+        matches!(self, Self::Derived)
     }
 
     fn merge(self, other: Self) -> Self {
@@ -4950,6 +5017,10 @@ fn select_block_sync_roster(
         } else {
             BlockSyncRosterSource::CommitTopologySnapshot
         };
+        let stake_snapshot = match consensus_mode {
+            ConsensusMode::Npos => roster_cache.stake_snapshot_for_roster(&roster),
+            ConsensusMode::Permissioned => None,
+        };
         drop(view);
 
         if !roster.is_empty() {
@@ -4958,7 +5029,7 @@ fn select_block_sync_roster(
                 source,
                 commit_qc: None,
                 checkpoint: None,
-                stake_snapshot: None,
+                stake_snapshot,
             });
         }
     }
@@ -5171,16 +5242,19 @@ impl Actor {
 
     fn ensure_rbc_session_roster(&mut self, key: super::rbc_store::SessionKey) -> Vec<PeerId> {
         if let Some(roster) = self.subsystems.da_rbc.rbc.session_rosters.get(&key) {
+            let roster_source = self
+                .rbc_session_roster_source(key)
+                .unwrap_or(RbcRosterSource::Init);
+            if !roster_source.is_authoritative() {
+                if let Some((refreshed, _updated)) = self.refresh_derived_rbc_session_roster(key) {
+                    return refreshed;
+                }
+            }
             return roster.clone();
         }
         let roster = self.rbc_roster_for_session(key);
         if !roster.is_empty() {
-            let (consensus_mode, _, _) = self.consensus_context_for_height(key.1);
-            let source = match consensus_mode {
-                ConsensusMode::Permissioned => RbcRosterSource::Network,
-                ConsensusMode::Npos => RbcRosterSource::Derived,
-            };
-            self.record_rbc_session_roster(key, roster.clone(), source);
+            self.record_rbc_session_roster(key, roster.clone(), RbcRosterSource::Derived);
         }
         roster
     }
@@ -5191,7 +5265,7 @@ impl Actor {
     ) -> Option<(Vec<PeerId>, bool)> {
         let existing_source = self
             .rbc_session_roster_source(key)
-            .unwrap_or(RbcRosterSource::Derived);
+            .unwrap_or(RbcRosterSource::Init);
         if existing_source.is_authoritative() {
             return None;
         }
@@ -5201,10 +5275,10 @@ impl Actor {
         }
         let existing_roster = self.rbc_session_roster(key);
         let updated = existing_roster != roster;
-        if updated {
+        if updated || !existing_roster.is_empty() {
             self.record_rbc_session_roster(key, roster.clone(), RbcRosterSource::Derived);
         }
-        Some((roster, updated))
+        Some((roster, updated || !existing_roster.is_empty()))
     }
 
     #[allow(clippy::too_many_lines)]
@@ -5242,7 +5316,7 @@ impl Actor {
                     .session_roster_sources
                     .get(&key)
                     .copied()
-                    .unwrap_or(RbcRosterSource::Derived);
+                    .unwrap_or(RbcRosterSource::Init);
                 if existing_roster == &roster {
                     let merged = existing_source.merge(source);
                     if merged != existing_source {
@@ -5783,6 +5857,27 @@ impl Actor {
             || self.kura.get_block_height_by_hash(hash).is_some()
     }
 
+    fn block_known_for_lock(&self, hash: HashOf<BlockHeader>) -> bool {
+        self.pending
+            .pending_blocks
+            .get(&hash)
+            .is_some_and(|pending| {
+                !pending.aborted && pending.validation_status == ValidationStatus::Valid
+            })
+            || self
+                .subsystems
+                .commit
+                .inflight
+                .as_ref()
+                .is_some_and(|inflight| inflight.block_hash == hash && !inflight.pending.aborted)
+            || self
+                .pending
+                .pending_processing
+                .get()
+                .is_some_and(|pending| pending == hash)
+            || self.kura.get_block_height_by_hash(hash).is_some()
+    }
+
     fn local_block_height_view(&self, hash: HashOf<BlockHeader>) -> Option<(u64, u64)> {
         if let Some(height) = self.kura.get_block_height_by_hash(hash) {
             if let Some(block) = self.kura.get_block(height) {
@@ -5849,7 +5944,7 @@ impl Actor {
             self.locked_qc,
             highest,
             |hash, height| self.parent_hash_for(hash, height),
-            |hash| self.block_known_locally(hash),
+            |hash| self.block_known_for_lock(hash),
         )
     }
 
@@ -6041,6 +6136,7 @@ impl Actor {
         mut config: SumeragiConfig,
         common_config: CommonConfig,
         consensus_frame_cap: usize,
+        consensus_payload_frame_cap: usize,
         events_sender: EventsSender,
         state: Arc<State>,
         queue: Arc<Queue>,
@@ -6059,19 +6155,28 @@ impl Actor {
         rbc_status_handle: rbc_status::Handle,
     ) -> Result<Self> {
         let consensus_frame_cap = frame_plaintext_cap(consensus_frame_cap);
+        let mut consensus_payload_frame_cap = frame_plaintext_cap(consensus_payload_frame_cap);
+        if consensus_payload_frame_cap < consensus_frame_cap {
+            warn!(
+                payload_cap = consensus_payload_frame_cap,
+                consensus_cap = consensus_frame_cap,
+                "consensus payload frame cap below consensus cap; clamping to consensus cap"
+            );
+            consensus_payload_frame_cap = consensus_frame_cap;
+        }
         let local_peer_id = common_config.peer.id();
-        let rbc_chunk_cap = rbc_chunk_payload_cap(local_peer_id, consensus_frame_cap);
+        let rbc_chunk_cap = rbc_chunk_payload_cap(local_peer_id, consensus_payload_frame_cap);
         if rbc_chunk_cap == 0 {
             return Err(eyre!(
-                "consensus frame cap {consensus_frame_cap} is too small to encode RBC chunk headers"
+                "consensus payload frame cap {consensus_payload_frame_cap} is too small to encode RBC chunk headers"
             ));
         }
         if config.rbc_chunk_max_bytes > rbc_chunk_cap {
             warn!(
                 configured = config.rbc_chunk_max_bytes,
                 capped = rbc_chunk_cap,
-                consensus_frame_cap,
-                "clamping rbc_chunk_max_bytes to fit consensus frame cap"
+                consensus_payload_frame_cap,
+                "clamping rbc_chunk_max_bytes to fit consensus payload frame cap"
             );
             config.rbc_chunk_max_bytes = rbc_chunk_cap;
         }
@@ -6294,7 +6399,7 @@ impl Actor {
                                 if !roster.is_empty() {
                                     rbc_session_rosters.insert(key, roster);
                                     rbc_session_roster_sources
-                                        .insert(key, RbcRosterSource::Network);
+                                        .insert(key, RbcRosterSource::Init);
                                 }
                             }
                             Err(err) => {
@@ -6471,6 +6576,7 @@ impl Actor {
             chain_id,
             chain_hash,
             consensus_frame_cap,
+            consensus_payload_frame_cap,
             events_sender,
             state,
             queue,
@@ -7127,7 +7233,7 @@ impl Actor {
                 let roster = self.rbc_session_roster(*key);
                 let roster_source = self
                     .rbc_session_roster_source(*key)
-                    .unwrap_or(RbcRosterSource::Derived);
+                    .unwrap_or(RbcRosterSource::Init);
                 if !roster.is_empty() && roster_source.is_authoritative() {
                     return Some(now);
                 }
@@ -7136,7 +7242,7 @@ impl Actor {
             let roster = self.rbc_session_roster(*key);
             let roster_source = self
                 .rbc_session_roster_source(*key)
-                .unwrap_or(RbcRosterSource::Derived);
+                .unwrap_or(RbcRosterSource::Init);
             if roster.is_empty() || !roster_source.is_authoritative() {
                 continue;
             }
@@ -7886,15 +7992,16 @@ impl Actor {
         update: &mut super::message::BlockSyncUpdate,
     ) -> bool {
         let origin = self.common_config.peer.id();
+        let payload_cap = self.consensus_payload_frame_cap;
         let mut wire_len = block_sync_update_wire_len(origin, update);
-        if wire_len <= self.consensus_frame_cap {
+        if wire_len <= payload_cap {
             return true;
         }
 
         if !update.commit_votes.is_empty() {
             update.commit_votes.clear();
             wire_len = block_sync_update_wire_len(origin, update);
-            if wire_len <= self.consensus_frame_cap {
+            if wire_len <= payload_cap {
                 return true;
             }
         }
@@ -7907,46 +8014,45 @@ impl Actor {
                 if update.stake_snapshot.is_some() {
                     update.stake_snapshot = None;
                     wire_len = block_sync_update_wire_len(origin, update);
-                    if wire_len <= self.consensus_frame_cap {
+                    if wire_len <= payload_cap {
                         return true;
                     }
                 }
-                if update.validator_checkpoint.is_some() {
-                    update.validator_checkpoint = None;
-                    wire_len = block_sync_update_wire_len(origin, update);
-                    if wire_len <= self.consensus_frame_cap {
-                        return true;
-                    }
-                }
-                if update.commit_qc.is_some() {
+                let checkpoint = update.validator_checkpoint.clone();
+                let commit_qc = update.commit_qc.clone();
+                if let (Some(checkpoint), Some(commit_qc)) = (checkpoint, commit_qc) {
                     update.commit_qc = None;
                     wire_len = block_sync_update_wire_len(origin, update);
-                    if wire_len <= self.consensus_frame_cap {
+                    if wire_len <= payload_cap {
                         return true;
                     }
+                    update.commit_qc = Some(commit_qc.clone());
+                    update.validator_checkpoint = None;
+                    wire_len = block_sync_update_wire_len(origin, update);
+                    if wire_len <= payload_cap {
+                        return true;
+                    }
+                    update.validator_checkpoint = Some(checkpoint);
+                    update.commit_qc = Some(commit_qc);
                 }
             }
             ConsensusMode::Npos => {
-                if update.validator_checkpoint.is_some() {
-                    update.validator_checkpoint = None;
-                    wire_len = block_sync_update_wire_len(origin, update);
-                    if wire_len <= self.consensus_frame_cap {
-                        return true;
-                    }
-                }
-                if update.commit_qc.is_some() {
+                let checkpoint = update.validator_checkpoint.clone();
+                let commit_qc = update.commit_qc.clone();
+                if let (Some(checkpoint), Some(commit_qc)) = (checkpoint, commit_qc) {
                     update.commit_qc = None;
                     wire_len = block_sync_update_wire_len(origin, update);
-                    if wire_len <= self.consensus_frame_cap {
+                    if wire_len <= payload_cap {
                         return true;
                     }
-                }
-                if update.stake_snapshot.is_some() {
-                    update.stake_snapshot = None;
+                    update.commit_qc = Some(commit_qc.clone());
+                    update.validator_checkpoint = None;
                     wire_len = block_sync_update_wire_len(origin, update);
-                    if wire_len <= self.consensus_frame_cap {
+                    if wire_len <= payload_cap {
                         return true;
                     }
+                    update.validator_checkpoint = Some(checkpoint);
+                    update.commit_qc = Some(commit_qc);
                 }
             }
         }
@@ -7954,29 +8060,46 @@ impl Actor {
         false
     }
 
+    fn block_message_frame_cap(&self, msg: &BlockMessage) -> usize {
+        match msg {
+            BlockMessage::BlockCreated(_)
+            | BlockMessage::BlockSyncUpdate(_)
+            | BlockMessage::FetchPendingBlock(_)
+            | BlockMessage::Proposal(_)
+            | BlockMessage::RbcChunk(_)
+            | BlockMessage::RbcInit(_) => self.consensus_payload_frame_cap,
+            BlockMessage::ConsensusParams(_)
+            | BlockMessage::ExecWitness(_)
+            | BlockMessage::ProposalHint(_)
+            | BlockMessage::Qc(_)
+            | BlockMessage::QcVote(_)
+            | BlockMessage::RbcDeliver(_)
+            | BlockMessage::RbcReady(_)
+            | BlockMessage::VrfCommit(_)
+            | BlockMessage::VrfReveal(_) => self.consensus_frame_cap,
+        }
+    }
+
     fn prepare_background_block_message(&self, msg: &mut BlockMessage) -> bool {
         let origin = self.common_config.peer.id();
         let mut wire_len = consensus_block_wire_len(origin, msg);
+        let cap = self.block_message_frame_cap(msg);
         if let BlockMessage::BlockSyncUpdate(update) = msg {
-            if wire_len > self.consensus_frame_cap {
+            if wire_len > cap {
                 if !self.trim_block_sync_update_for_frame_cap(update) {
                     warn!(
                         kind = Self::block_message_kind(msg),
-                        wire_len,
-                        cap = self.consensus_frame_cap,
-                        "dropping consensus message over frame cap"
+                        wire_len, cap, "dropping consensus message over frame cap"
                     );
                     return false;
                 }
                 wire_len = consensus_block_wire_len(origin, msg);
             }
         }
-        if wire_len > self.consensus_frame_cap {
+        if wire_len > cap {
             warn!(
                 kind = Self::block_message_kind(msg),
-                wire_len,
-                cap = self.consensus_frame_cap,
-                "dropping consensus message over frame cap"
+                wire_len, cap, "dropping consensus message over frame cap"
             );
             return false;
         }
@@ -8578,14 +8701,11 @@ impl Actor {
         key: super::rbc_store::SessionKey,
         session: &RbcSession,
     ) {
-        let roster = self.rbc_session_roster(key);
-        let roster_source = self
-            .rbc_session_roster_source(key)
-            .unwrap_or(RbcRosterSource::Derived);
-        if roster.is_empty() {
+        if !self.rbc_rebroadcast_active(key) {
             return;
         }
-        if !roster_source.is_authoritative() {
+        let roster = self.rbc_session_roster(key);
+        if roster.is_empty() {
             return;
         }
         let roster_hash = rbc::rbc_roster_hash(&roster);
@@ -8605,14 +8725,8 @@ impl Actor {
         }
         let expected_hash = readies.first().map(|ready| ready.roster_hash);
         let topology_peers = self.rbc_session_roster(key);
-        let roster_source = self
-            .rbc_session_roster_source(key)
-            .unwrap_or(RbcRosterSource::Derived);
         let local_peer_id = self.common_config.peer.id().clone();
         if topology_peers.is_empty() {
-            return;
-        }
-        if !roster_source.is_authoritative() {
             return;
         }
         if let Some(expected_hash) = expected_hash {
@@ -8816,25 +8930,16 @@ impl Actor {
     }
 
     fn rebroadcast_rbc_payload(&mut self, key: super::rbc_store::SessionKey, session: &RbcSession) {
+        if !self.rbc_rebroadcast_active(key) {
+            return;
+        }
         let roster = self.rbc_session_roster(key);
-        let roster_source = self
-            .rbc_session_roster_source(key)
-            .unwrap_or(RbcRosterSource::Derived);
         if roster.is_empty() {
             debug!(
                 height = key.1,
                 view = key.2,
                 block = %key.0,
                 "skipping RBC payload rebroadcast: roster missing"
-            );
-            return;
-        }
-        if !roster_source.is_authoritative() {
-            debug!(
-                height = key.1,
-                view = key.2,
-                block = %key.0,
-                "skipping RBC payload rebroadcast: roster not authoritative"
             );
             return;
         }
@@ -8918,12 +9023,17 @@ impl Actor {
             return false;
         }
         let ready_cooldown = self.rebroadcast_cooldown();
+        let view = self.state.view();
+        let tip_height = view.height();
+        let tip_hash = view.latest_block_hash();
+        drop(view);
         // Rotate through sessions with a per-tick budget so large backlogs do not trigger storms.
         let total_sessions = self.subsystems.da_rbc.rbc.sessions.len();
         let session_budget = self.config.rbc_rebroadcast_sessions_per_tick.max(1);
         let limit = session_budget.min(total_sessions);
         let cursor = self.subsystems.da_rbc.rbc.rebroadcast_cursor;
         let mut keys = Vec::with_capacity(limit);
+        let mut last_key = cursor;
         if let Some(cursor_key) = cursor {
             for (key, _) in self
                 .subsystems
@@ -8932,32 +9042,39 @@ impl Actor {
                 .sessions
                 .range((Excluded(cursor_key), Unbounded))
             {
-                keys.push(*key);
-                if keys.len() >= limit {
-                    break;
-                }
-            }
-            if keys.len() < limit {
-                for (key, _) in self.subsystems.da_rbc.rbc.sessions.range(..=cursor_key) {
+                last_key = Some(*key);
+                if self.rbc_rebroadcast_active_with_tip(*key, tip_height, tip_hash) {
                     keys.push(*key);
                     if keys.len() >= limit {
                         break;
                     }
                 }
             }
+            if keys.len() < limit {
+                for (key, _) in self.subsystems.da_rbc.rbc.sessions.range(..=cursor_key) {
+                    last_key = Some(*key);
+                    if self.rbc_rebroadcast_active_with_tip(*key, tip_height, tip_hash) {
+                        keys.push(*key);
+                        if keys.len() >= limit {
+                            break;
+                        }
+                    }
+                }
+            }
         } else {
             for (key, _) in self.subsystems.da_rbc.rbc.sessions.iter() {
-                keys.push(*key);
-                if keys.len() >= limit {
-                    break;
+                last_key = Some(*key);
+                if self.rbc_rebroadcast_active_with_tip(*key, tip_height, tip_hash) {
+                    keys.push(*key);
+                    if keys.len() >= limit {
+                        break;
+                    }
                 }
             }
         }
         let mut progress = false;
-        let mut last_key = cursor;
 
         for key in keys {
-            last_key = Some(key);
             if self.flush_pending_rbc_if_roster_ready(key) {
                 progress = true;
             }
@@ -9003,7 +9120,7 @@ impl Actor {
             let roster = self.rbc_session_roster(key);
             let roster_source = self
                 .rbc_session_roster_source(key)
-                .unwrap_or(RbcRosterSource::Derived);
+                .unwrap_or(RbcRosterSource::Init);
             if roster.is_empty() || !roster_source.is_authoritative() {
                 continue;
             }
@@ -9409,6 +9526,8 @@ impl Actor {
     }
 
     fn prune_stale_view_state(&mut self, height: u64, min_view: u64) {
+        let da_enabled = self.runtime_da_enabled();
+        // Keep DA availability state across view changes until the payload is locally available.
         let stale_pending: Vec<_> = self
             .pending
             .pending_blocks
@@ -9419,28 +9538,40 @@ impl Actor {
         let mut pending_removed = 0usize;
         for hash in stale_pending {
             if let Some(pending) = self.pending.pending_blocks.remove(&hash) {
-                self.clean_rbc_sessions_for_block(hash, pending.height);
+                let payload_available = self.block_payload_available_locally(hash);
+                if !da_enabled || payload_available {
+                    self.clean_rbc_sessions_for_block(hash, pending.height);
+                }
                 pending_removed = pending_removed.saturating_add(1);
             }
         }
 
         let mut missing_removed = 0usize;
-        self.pending.missing_block_requests.retain(|_, request| {
-            let stale = request.height == height && request.view < min_view;
-            if stale {
+        let stale_missing: Vec<_> = self
+            .pending
+            .missing_block_requests
+            .iter()
+            .filter(|(_, request)| request.height == height && request.view < min_view)
+            .filter(|(hash, _)| !da_enabled || self.block_payload_available_locally(**hash))
+            .map(|(hash, _)| *hash)
+            .collect();
+        for hash in stale_missing {
+            if self.pending.missing_block_requests.remove(&hash).is_some() {
                 missing_removed = missing_removed.saturating_add(1);
             }
-            !stale
-        });
+        }
 
         let stale_rbc: Vec<_> = self
             .subsystems
             .da_rbc
             .rbc
             .sessions
-            .keys()
-            .filter(|key| key.1 == height && key.2 < min_view)
-            .copied()
+            .iter()
+            .filter(|(key, _)| key.1 == height && key.2 < min_view)
+            .filter(|(key, session)| {
+                !da_enabled || session.is_invalid() || self.block_payload_available_locally(key.0)
+            })
+            .map(|(key, _)| *key)
             .collect();
         let mut rbc_removed = 0usize;
         for key in stale_rbc {

@@ -3,6 +3,7 @@
 use iroha_crypto::Hash;
 use iroha_logger::prelude::*;
 
+use super::locked_qc::qc_extends_locked_with_lookup;
 use super::*;
 
 #[derive(Debug)]
@@ -1111,6 +1112,9 @@ impl Actor {
         let Some(lock) = self.locked_qc else {
             return true;
         };
+        if !self.block_known_for_lock(lock.subject_block_hash) {
+            return true;
+        }
         let candidate = crate::sumeragi::consensus::QcHeaderRef {
             phase: crate::sumeragi::consensus::Phase::Commit,
             subject_block_hash: block_hash,
@@ -1243,7 +1247,7 @@ impl Actor {
 
     pub(super) fn drop_missing_lock_if_unknown(&mut self, qc: &crate::sumeragi::consensus::Qc) {
         if let Some(lock) = self.locked_qc {
-            if !self.block_known_locally(lock.subject_block_hash) {
+            if !self.block_known_for_lock(lock.subject_block_hash) {
                 info!(
                     locked_height = lock.height,
                     locked_view = lock.view,
@@ -1361,7 +1365,7 @@ impl Actor {
         self.record_phase_sample(PipelinePhase::CollectCommit, qc.height, qc.view);
         let qc_ref = Self::qc_to_header_ref(qc);
         if let Some(lock) = self.locked_qc {
-            if self.block_known_locally(lock.subject_block_hash) {
+            if self.block_known_for_lock(lock.subject_block_hash) {
                 let conflicts_locked = qc.height < lock.height
                     || (qc.height == lock.height
                         && qc.subject_block_hash != lock.subject_block_hash);
@@ -1383,7 +1387,7 @@ impl Actor {
                 self.locked_qc,
                 qc_ref,
                 |hash, height| self.parent_hash_for(hash, height),
-                |hash| self.block_known_locally(hash),
+                |hash| self.block_known_for_lock(hash),
             );
             if !extends_locked {
                 if !allow_nonextending {
@@ -1445,7 +1449,7 @@ impl Actor {
                 height = qc.height,
                 view = qc.view,
                 hash = %qc.subject_block_hash,
-                "precommit QC arrived before block; cached without updating locks/highest"
+                "precommit QC arrived before block validation; cached without updating locks/highest"
             );
         }
         true
@@ -1844,23 +1848,25 @@ impl Actor {
             CommittedQcDecision::Drop => return Ok(()),
         }
 
-        let block_known = self.block_known_locally(qc.subject_block_hash);
+        let block_known_locally = self.block_known_locally(qc.subject_block_hash);
+        let block_known_for_lock = self.block_known_for_lock(qc.subject_block_hash);
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
             iroha_logger::debug!(
                 height = qc.height,
                 view = qc.view,
                 block = %qc.subject_block_hash,
                 signers = signer_indices.len(),
-                block_known,
+                block_known = block_known_locally,
+                block_validated = block_known_for_lock,
                 pending = self.pending.pending_blocks.contains_key(&qc.subject_block_hash),
                 "processing precommit QC"
             );
         }
-        if self.should_skip_precommit_on_empty_block(&qc, block_known) {
+        if self.should_skip_precommit_on_empty_block(&qc, block_known_locally) {
             return Ok(());
         }
 
-        if !block_known {
+        if !block_known_locally {
             info!(
                 height = qc.height,
                 view = qc.view,
@@ -1943,15 +1949,23 @@ impl Actor {
                 }
             }
             super::status::record_missing_block_fetch(targets_len, dwell_ms_u64);
+        } else if !block_known_for_lock {
+            info!(
+                height = qc.height,
+                view = qc.view,
+                phase = ?qc.phase,
+                hash = %qc.subject_block_hash,
+                "received QC for unvalidated block; caching without updating locks/highest"
+            );
         }
 
         let accepted = match qc.phase {
             crate::sumeragi::consensus::Phase::Prepare => {
-                self.process_prevote_qc(&qc, block_known);
+                self.process_prevote_qc(&qc, block_known_locally);
                 true
             }
             crate::sumeragi::consensus::Phase::Commit => {
-                self.process_precommit_qc(&qc, block_known, false)
+                self.process_precommit_qc(&qc, block_known_for_lock, false)
             }
             crate::sumeragi::consensus::Phase::NewView => {
                 self.process_new_view_qc(&qc, &signer_indices, &topology);
@@ -1983,30 +1997,43 @@ impl Actor {
             cache_len = self.qc_cache.len(),
             "cached validated QC"
         );
-        if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) && block_known {
-            let commit_ready = self
-                .pending
-                .pending_blocks
-                .get(&qc.subject_block_hash)
-                .and_then(|pending| {
-                    let (state_height, tip_hash) = {
-                        let view = self.state.view();
-                        (view.height(), view.latest_block_hash())
-                    };
-                    let parent = pending.block.header().prev_block_hash();
-                    super::pending_extends_tip(pending.height, parent, state_height, tip_hash)
-                        .then_some(())
-                })
-                .is_some();
-            if commit_ready {
-                let _ = self.rehydrate_pending_from_kura_for_qc(&qc);
-                self.apply_commit_qc(
-                    &qc,
-                    &commit_topology,
-                    qc.subject_block_hash,
-                    qc.height,
-                    qc.view,
-                );
+        if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) && block_known_locally {
+            if block_known_for_lock {
+                let commit_ready = self
+                    .pending
+                    .pending_blocks
+                    .get(&qc.subject_block_hash)
+                    .and_then(|pending| {
+                        let (state_height, tip_hash) = {
+                            let view = self.state.view();
+                            (view.height(), view.latest_block_hash())
+                        };
+                        let parent = pending.block.header().prev_block_hash();
+                        super::pending_extends_tip(pending.height, parent, state_height, tip_hash)
+                            .then_some(())
+                    })
+                    .is_some();
+                if commit_ready {
+                    let _ = self.rehydrate_pending_from_kura_for_qc(&qc);
+                    self.apply_commit_qc(
+                        &qc,
+                        &commit_topology,
+                        qc.subject_block_hash,
+                        qc.height,
+                        qc.view,
+                    );
+                } else if let Some(pending) =
+                    self.pending.pending_blocks.get_mut(&qc.subject_block_hash)
+                {
+                    pending.commit_qc_seen = true;
+                    pending.commit_qc_epoch = Some(qc.epoch);
+                    info!(
+                        height = qc.height,
+                        view = qc.view,
+                        block = %qc.subject_block_hash,
+                        "deferring commit QC application until block extends committed tip"
+                    );
+                }
             } else if let Some(pending) =
                 self.pending.pending_blocks.get_mut(&qc.subject_block_hash)
             {
@@ -2016,11 +2043,11 @@ impl Actor {
                     height = qc.height,
                     view = qc.view,
                     block = %qc.subject_block_hash,
-                    "deferring commit QC application until block extends committed tip"
+                    "deferring commit QC application until block is validated"
                 );
             }
         }
-        if !block_known {
+        if !block_known_for_lock {
             if let Some(lock) = self.locked_qc {
                 // Keep status in sync if we cleared an unknown lock earlier.
                 super::status::set_locked_qc(lock.height, lock.view, Some(lock.subject_block_hash));

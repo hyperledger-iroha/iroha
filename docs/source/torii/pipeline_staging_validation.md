@@ -21,7 +21,7 @@ summary: Checklist for Torii owners to prove the pipeline endpoints, telemetry, 
 
 ## 3.1 Submit & Poll (`/v1/pipeline/transactions`)
 
-1. Compute or reuse the transaction hash for the envelope under test (e.g., `transfer_asset.norito`). This is required because Torii responds with an empty body for successful submits.
+1. Compute or reuse the transaction hash for the envelope under test (e.g., `transfer_asset.norito`). This is required because Torii responds with an empty body for successful submits. The transaction hash is canonical and matches the entrypoint hash for external transactions.
 2. Submit the envelope over HTTPS with Norito content type:
 
 ```bash

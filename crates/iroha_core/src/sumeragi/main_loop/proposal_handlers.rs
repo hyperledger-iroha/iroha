@@ -4,6 +4,7 @@ use iroha_logger::prelude::*;
 
 use crate::sumeragi::rbc_store::SessionKey;
 
+use super::proposals::block_payload_bytes;
 use super::*;
 
 pub(super) fn invalid_proposal_evidence(
@@ -931,7 +932,7 @@ impl Actor {
             if let Err(reason) = ensure_locked_qc_allows(self.locked_qc, hint.highest_qc) {
                 let locked_hash = self.locked_qc.map(|qc| qc.subject_block_hash);
                 let locked_missing =
-                    locked_hash.is_some_and(|hash| !self.block_known_locally(hash));
+                    locked_hash.is_some_and(|hash| !self.block_known_for_lock(hash));
                 if locked_missing {
                     warn!(
                         ?reason,
@@ -1018,7 +1019,7 @@ impl Actor {
             );
             if let Some(lock) = self.locked_qc {
                 let locked_hash = lock.subject_block_hash;
-                if self.block_known_locally(locked_hash) {
+                if self.block_known_for_lock(locked_hash) {
                     let parent_hash = header.prev_block_hash();
                     let extends = super::chain_extends_tip(
                         block_hash,

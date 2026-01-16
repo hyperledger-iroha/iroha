@@ -691,6 +691,8 @@ pub mod network {
 
     /// Interval between transaction gossip batches.
     pub const TRANSACTION_GOSSIP_PERIOD: Duration = Duration::from_secs(1);
+    /// Number of gossip ticks to wait before re-sending the same transactions.
+    pub const TRANSACTION_GOSSIP_RESEND_TICKS: NonZeroU32 = nonzero!(3u32);
     /// Number of transactions gossiped per batch.
     pub const TRANSACTION_GOSSIP_SIZE: NonZeroU32 = nonzero!(500u32);
     /// Drop transaction gossip for dataspaces that are missing from the lane catalog instead of
@@ -787,14 +789,14 @@ pub mod network {
     pub const RELAY_TTL: u8 = 8;
 
     // Maximum allowed Norito frame size for peer messages (bytes)
-    /// Maximum Norito frame size for peer messages in bytes (1 MiB default).
-    pub const MAX_FRAME_BYTES: NonZeroUsize = nonzero!(1_048_576_usize); // 1 MiB default
+    /// Maximum Norito frame size for peer messages in bytes (16 MiB default).
+    pub const MAX_FRAME_BYTES: NonZeroUsize = nonzero!(16 * 1024 * 1024_usize); // 16 MiB default
     // Per-topic caps (defaults stricter than global except BlockSync)
-    /// Maximum frame size for consensus traffic.
-    pub const MAX_FRAME_BYTES_CONSENSUS: NonZeroUsize = MAX_FRAME_BYTES; // allow full 1 MiB frame by default
+    /// Maximum frame size for consensus control traffic.
+    pub const MAX_FRAME_BYTES_CONSENSUS: NonZeroUsize = nonzero!(1_048_576_usize); // 1 MiB default
     /// Maximum frame size for control-plane messages.
     pub const MAX_FRAME_BYTES_CONTROL: NonZeroUsize = nonzero!(131_072_usize);
-    /// Maximum frame size for block sync traffic.
+    /// Maximum frame size for block sync / consensus payload traffic.
     pub const MAX_FRAME_BYTES_BLOCK_SYNC: NonZeroUsize = MAX_FRAME_BYTES; // allow full frame
     /// Maximum frame size for transaction gossip.
     pub const MAX_FRAME_BYTES_TX_GOSSIP: NonZeroUsize = nonzero!(131_072_usize); // 128 KiB
@@ -2126,8 +2128,10 @@ pub mod norito {
     /// Hard upper bound on Norito archive length after decompression (bytes).
     ///
     /// This limit is enforced before allocations to reject decompression bombs
-    /// and other adversarial inputs that advertise extreme lengths.
-    pub const MAX_ARCHIVE_LEN: u64 = 64 * 1024 * 1024; // 64 MiB
+    /// and other adversarial inputs that advertise extreme lengths. The default
+    /// aligns with the RBC store cap to avoid rejecting persisted consensus
+    /// payloads.
+    pub const MAX_ARCHIVE_LEN: u64 = super::sumeragi::RBC_STORE_MAX_BYTES as u64; // 512 MiB
     /// Small-N threshold for AoS vs NCB adaptive selection in Norito columnar helpers.
     /// Inputs with `n <= AOS_NCB_SMALL_N` are encoded with a two-pass probe (AoS vs NCB, pick smaller).
     pub const AOS_NCB_SMALL_N: usize = 64;
@@ -2291,7 +2295,7 @@ pub mod sumeragi {
     /// Default: real BLS signing/verification enabled.
     pub const ENABLE_BLS: bool = true;
     /// Default RBC chunk maximum bytes per chunk.
-    pub const RBC_CHUNK_MAX_BYTES: usize = 64 * 1024; // 64 KiB
+    pub const RBC_CHUNK_MAX_BYTES: usize = 256 * 1024; // 256 KiB
     /// Optional fanout cap for RBC chunk broadcasts (None = auto based on topology).
     pub const RBC_CHUNK_FANOUT: Option<NonZeroUsize> = None;
     /// Default RBC session TTL (seconds) before pruning inactive sessions.
@@ -2364,6 +2368,8 @@ pub mod sumeragi {
     pub const PACEMAKER_MAX_BACKOFF_MS: u64 = 10_000; // 10 seconds to keep localnet responsive
     /// Pacemaker jitter band size as permille of the backoff window (0..=1000). 0 disables jitter.
     pub const PACEMAKER_JITTER_FRAC_PERMILLE: u32 = 0;
+    /// Permissioned default block time (ms); keep aligned with on-chain defaults.
+    pub const BLOCK_TIME_MS: u64 = 2_000;
     /// Minimum lead time (blocks) between publishing a new consensus key and its activation.
     pub const KEY_ACTIVATION_LEAD_BLOCKS: u64 = 1;
     /// Grace/overlap window (blocks) during which both old and new keys remain valid.

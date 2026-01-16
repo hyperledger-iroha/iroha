@@ -476,6 +476,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
         transaction_gossiper: A::TransactionGossiper {
             gossip_period: core::time::Duration::from_millis(200),
             gossip_size: nonzero!(32u32),
+            gossip_resend_ticks: iroha_config::parameters::defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
             dataspace: A::DataspaceGossip::default(),
         },
         live_query_store: A::LiveQueryStore::default(),

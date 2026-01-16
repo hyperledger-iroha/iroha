@@ -22,11 +22,12 @@ translator: manual
 - `observer`: 合意トポロジから除外され（役割は `Undefined`）、本来その位置がコレクターであっても提案・投票・収集を行いません。ブロックゴシップで完全同期し、受信した commit certificate を使ってコミットできます。
 
 ### バリデータ鍵要件
-- バリデータは BLS-Normal 公開鍵と証明（PoP）を必ず提示する必要があります。起動時（高さ 0）、NPoS ではステーキングの public lane で Active なバリデータ集合を優先し、Active が存在しない場合は `trusted_peers` から BLS-Normal 鍵を持たないピア、または PoP が欠落・無効なピアを除外した集合を初期バリデータ集合として採用します。BLS でない、もしくは PoP 不備のピアは合意集合から外されます。
+- バリデータは BLS-Normal 公開鍵と証明（PoP）を必ず提示する必要があります。NPoS ではステーキングの public lane で Active なバリデータ集合に基づいて合意ロスターをフィルタします（commit topology 更新後も適用）。Active が存在しない場合は `trusted_peers` から BLS-Normal 鍵を持たないピア、または PoP が欠落・無効なピアを除外した集合を初期バリデータ集合として採用します。BLS でない、もしくは PoP 不備のピアは合意集合から外されます。
 - commit certificate には同一メッセージ署名に対する BLS 集約署名、明示的な署名集合、コンパクトな署名者ビットマップが必須で添付されます。合意検証は明示署名に基づいたままです。集約署名とビットマップは監査目的のアーティファクトであり、セマンティクスを変えてはなりません。
 
 ### メッセージフロー（定常状態）
 - **リーダー**: ブロック作成が必要な状況（トランザクション待ち）で期限が来ると `BlockCreated` をブロードキャストします。キューが空のときはペースメーカーは待機しハートビート提案は行いません。
+- **提案の延期**: リレーのバックプレッシャが有効、アクティブ先端に未解決の RBC セッションがある、または先端を延長する保留ブロックがある場合、提案組み立ては延期され、ペースメーカーはバックログが解消するまで待機します。
 - **バリデータ**: ブロックを検証し、可用性投票を発行し、指定コレクターへ Prevote/Precommit 投票を送ります。ビュー 0 でローカルタイムアウトした場合、ノードは最大 `r` 個まで追加コレクターに投票をファンアウトできます。
 - **コレクター**: 投票を集約し、Availability/Prevote/Precommit の各 commit certificate を公表します。`(height, hash)` ごとに最初の正当な Precommit phase commit certificate が勝者となり、遅い commit certificate は無視されます。
 - **観測ピア**: ビュー 0 では投票しません。後続ビューでは投票する場合があります。ブロック本体と一致する Precommit phase commit certificate が揃った時点で決定論的にコミットします。
@@ -66,6 +67,7 @@ translator: manual
 ### RBC／DA（データ可用性）
 - RBC はトポロジから導出された Collector 集合を使用してブロック本体を配布します。ブロックヘッダーには RBC セッション ID とパケットメタデータが含まれます。
 - `sumeragi.da_enabled` を有効にすると、可用性証跡（`availability evidence`）を追跡しますがコミットは待機しません（ローカルの RBC `DELIVER` は条件になりません）。可用性証跡が不足している間は `sumeragi_da_gate_block_total{reason="missing_local_data"}` が増加し、`da_reschedule_total` はレガシーのため通常 0 のままです。
+- INIT 前に READY/DELIVER/チャンクが届いた場合、ノードはスタッシュし、欠落した `BlockCreated` を即時にリクエストします（欠落ブロックのバックオフを尊重）。
 - `sumeragi.rbc_rebroadcast_sessions_per_tick` が tick あたりの RBC 再送セッション数を制限し、バックログ時の再送嵐を抑制します。復旧速度を上げたい場合は増やし、P2P キューが詰まる場合は下げます。
 - 大規模ペイロード（≥10 MiB）を扱うシナリオでは RBC デリバリー時間、コミット時間、スループット、キュー深さをテレメトリで監視し、SLO 違反をアラートします。
 

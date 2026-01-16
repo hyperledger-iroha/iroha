@@ -1140,6 +1140,8 @@ mod tests {
             transaction_gossiper: TransactionGossiper {
                 gossip_period: std::time::Duration::from_millis(200),
                 gossip_size: NonZeroU32::new(32).unwrap(),
+                gossip_resend_ticks:
+                    iroha_config::parameters::defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
                 dataspace: DataspaceGossip::default(),
             },
             live_query_store: LiveQueryStore::default(),

@@ -47,6 +47,7 @@
 # peer_gossip_period_ms = 1_000   # clamped to >= 100ms
 # peer_gossip_max_period_ms = 30_000 # clamped to >= peer_gossip_period_ms
 # transaction_gossip_period_ms = 1_000  # clamped to >= 100ms
+# transaction_gossip_resend_ticks = 3   # resend after N gossip periods
 # transaction_gossip_size = 500
 # transaction_gossip_public_target_cap = 16        # public-lane fanout cap (null = broadcast)
 # transaction_gossip_restricted_target_cap = null  # restricted-lane fanout cap (null = full commit topology)

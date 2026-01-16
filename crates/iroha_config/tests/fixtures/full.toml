@@ -22,6 +22,7 @@ public_address = "addr:localhost:3840#EB2D"
 block_gossip_period_ms = 10_000
 block_gossip_size = 4
 transaction_gossip_period_ms = 1_000
+transaction_gossip_resend_ticks = 3
 transaction_gossip_size = 500
 idle_timeout_ms = 10_000
 

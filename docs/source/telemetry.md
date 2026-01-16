@@ -64,7 +64,7 @@ Runbook guidance
 Configuration
 - `telemetry_enabled` (default: true): Master kill switch. When set to false, the daemon skips telemetry worker startup, Torii hides `/metrics` and `/status`, and runtime instrumentation is bypassed regardless of profile.
 - `telemetry_profile` (default: `operator`): Capability bundle wiring both Torii routing and runtime sinks. Profiles toggle three capability flags — `metrics`, `expensive_metrics`, and `developer_outputs`. When `telemetry_enabled = false`, the effective profile is forced to `disabled`.
-- `torii.peer_telemetry_urls` (default: empty): Optional list of Torii base URLs used to fetch peer telemetry metadata. When set, Torii uses these URLs instead of deriving targets from P2P peer addresses.
+- `torii.peer_telemetry_urls` (default: empty): Optional list of Torii base URLs used to fetch peer telemetry metadata. When unset, peer telemetry discovery is disabled to avoid probing P2P ports.
 - `torii.peer_geo.enabled` (default: false): Enable peer geo lookups for Torii telemetry (opt-in; requires network access to the configured endpoint).
 - `torii.peer_geo.endpoint` (default: unset): Optional ip-api compatible endpoint used for peer geo lookups; when unset and `torii.peer_geo.enabled = true`, Torii uses the built-in ip-api default.
 - Build-time ISI instrumentation: `#[metrics]` counters (`isi{kind="total|success"}`) and timing histograms (`isi_times`) require building `irohad` with `--features expensive-telemetry` (or `iroha_core` `expensive-telemetry`). The runtime still respects `telemetry_enabled` and `telemetry_profile` for exposure.
@@ -781,7 +781,7 @@ Configuration
 
 DA/RBC (Sumeragi) configuration
 - `sumeragi.da_enabled` (bool): enables data availability tracking and Reliable Broadcast (RBC) payload distribution together. Availability evidence (`availability evidence` or an RBC `READY` quorum) is recorded but does not gate commit; RBC remains transport/recovery and its delivery latency is still tracked.
-- `sumeragi.rbc_chunk_max_bytes` (usize): maximum bytes per RBC chunk when broadcasting payloads; must be > 0. Clamped at startup so serialized RBC chunks fit within the consensus frame plaintext cap derived from `network.max_frame_bytes_consensus`.
+- `sumeragi.rbc_chunk_max_bytes` (usize): maximum bytes per RBC chunk when broadcasting payloads; must be > 0. Clamped at startup so serialized RBC chunks fit within the consensus payload plaintext cap derived from `network.max_frame_bytes_block_sync`.
 - `sumeragi.rbc_session_ttl_secs` (u64): inactive RBC sessions are pruned after this TTL to bound memory.
 - `sumeragi.rbc_rebroadcast_sessions_per_tick` (usize): cap on RBC session rebroadcasts per tick to prevent payload storms when backlogs accumulate.
 

@@ -6,6 +6,7 @@ use iroha_logger::prelude::*;
 
 use crate::sumeragi::consensus::Phase;
 
+use super::locked_qc::qc_extends_locked_with_lookup;
 use super::*;
 
 pub(super) type VoteLogKey = (
@@ -546,7 +547,7 @@ impl Actor {
         let Some(lock) = self.locked_qc else {
             return false;
         };
-        if !self.block_known_locally(lock.subject_block_hash) {
+        if !self.block_known_for_lock(lock.subject_block_hash) {
             return false;
         }
         if vote.height < lock.height {
@@ -585,10 +586,9 @@ impl Actor {
                 view: vote.view,
                 epoch: vote.epoch,
             };
-            let extends_locked =
-                super::qc_extends_locked_with_lookup(lock, candidate, |hash, height| {
-                    self.parent_hash_for(hash, height)
-                });
+            let extends_locked = qc_extends_locked_with_lookup(lock, candidate, |hash, height| {
+                self.parent_hash_for(hash, height)
+            });
             if !extends_locked {
                 iroha_logger::debug!(
                     height = vote.height,

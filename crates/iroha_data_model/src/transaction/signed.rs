@@ -15,7 +15,7 @@ use std::{
 #[cfg(feature = "fault_injection")]
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use derive_more::{Deref, Display, From, TryInto};
-use iroha_crypto::{Algorithm, HashOf, PublicKey, Signature, SignatureOf};
+use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, Signature, SignatureOf};
 use iroha_data_model_derive::model;
 use iroha_primitives::{const_vec::ConstVec, json::Json, time::TimeSource};
 use iroha_schema::IntoSchema;
@@ -431,13 +431,20 @@ impl SignedTransaction {
             .transpose()
     }
 
-    /// Hash for this external transaction.
+    /// Canonical hash for this external transaction.
+    ///
+    /// The canonical hash is defined as the hash of the corresponding
+    /// `TransactionEntrypoint::External` wrapper so it matches the entrypoint
+    /// hash used in blocks and proofs.
     #[inline]
     pub fn hash(&self) -> HashOf<Self> {
-        HashOf::new(self)
+        let entry_hash = self.hash_as_entrypoint();
+        HashOf::from_untyped_unchecked(Hash::from(entry_hash))
     }
 
     /// Hash for this external transaction as `TransactionEntrypoint`.
+    ///
+    /// This matches the canonical transaction hash returned by [`Self::hash`].
     #[inline]
     pub fn hash_as_entrypoint(&self) -> HashOf<TransactionEntrypoint> {
         HashOf::new(&TransactionEntrypoint::External(self.clone()))
@@ -1073,6 +1080,7 @@ mod tests {
         let entry = TransactionEntrypoint::External(tx.clone());
         assert_eq!(HashOf::new(&entry), entry.hash());
         assert_eq!(tx.hash_as_entrypoint(), entry.hash());
+        assert_eq!(Hash::from(tx.hash()), Hash::from(tx.hash_as_entrypoint()));
 
         let time_entry = TimeTriggerEntrypoint {
             id: "trigger".parse().unwrap(),
