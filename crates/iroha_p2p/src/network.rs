@@ -967,12 +967,8 @@ fn inc_post_overflow_for(topic: message::Topic) {
         message::Topic::Consensus | message::Topic::ConsensusPayload => {
             POST_OVERFLOWS_CONSENSUS.fetch_add(1, Ordering::Relaxed)
         }
-        message::Topic::ConsensusChunk => {
-            POST_OVERFLOWS_BLOCK_SYNC.fetch_add(1, Ordering::Relaxed)
-        }
-        message::Topic::BlockSync => {
-            POST_OVERFLOWS_BLOCK_SYNC.fetch_add(1, Ordering::Relaxed)
-        }
+        message::Topic::ConsensusChunk => POST_OVERFLOWS_BLOCK_SYNC.fetch_add(1, Ordering::Relaxed),
+        message::Topic::BlockSync => POST_OVERFLOWS_BLOCK_SYNC.fetch_add(1, Ordering::Relaxed),
         message::Topic::Control => POST_OVERFLOWS_CONTROL.fetch_add(1, Ordering::Relaxed),
         message::Topic::TxGossip | message::Topic::TxGossipRestricted => {
             POST_OVERFLOWS_TX_GOSSIP.fetch_add(1, Ordering::Relaxed)
@@ -1064,12 +1060,8 @@ fn inc_cap_violation(topic: message::Topic) {
         message::Topic::Consensus | message::Topic::ConsensusPayload => {
             CAP_VIOL_CONSENSUS.fetch_add(1, Ordering::Relaxed)
         }
-        message::Topic::ConsensusChunk => {
-            CAP_VIOL_BLOCK_SYNC.fetch_add(1, Ordering::Relaxed)
-        }
-        message::Topic::BlockSync => {
-            CAP_VIOL_BLOCK_SYNC.fetch_add(1, Ordering::Relaxed)
-        }
+        message::Topic::ConsensusChunk => CAP_VIOL_BLOCK_SYNC.fetch_add(1, Ordering::Relaxed),
+        message::Topic::BlockSync => CAP_VIOL_BLOCK_SYNC.fetch_add(1, Ordering::Relaxed),
         message::Topic::Control => CAP_VIOL_CONTROL.fetch_add(1, Ordering::Relaxed),
         message::Topic::TxGossip | message::Topic::TxGossipRestricted => {
             CAP_VIOL_TX_GOSSIP.fetch_add(1, Ordering::Relaxed)
