@@ -45,32 +45,32 @@ impl BackpressureGate {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PacemakerBackpressureAction {
-    /// Entered a saturated state for the first time; record deferral and skip proposals.
+    /// Entered a deferral state for the first time; record deferral and skip proposals.
     First,
-    /// Still saturated; continue deferring without recording a new deferral.
+    /// Still deferring; continue without recording a new deferral.
     Subsequent,
-    /// Not saturated; pacemaker may proceed.
+    /// Not deferring; pacemaker may proceed.
     None,
 }
 
 pub(super) struct PacemakerBackpressure {
-    saturated: bool,
+    deferring: bool,
 }
 
 impl PacemakerBackpressure {
     pub(super) fn new() -> Self {
-        Self { saturated: false }
+        Self { deferring: false }
     }
 
-    pub(super) fn update(&mut self, saturated: bool) -> PacemakerBackpressureAction {
-        match (self.saturated, saturated) {
+    pub(super) fn update(&mut self, deferring: bool) -> PacemakerBackpressureAction {
+        match (self.deferring, deferring) {
             (false, true) => {
-                self.saturated = true;
+                self.deferring = true;
                 PacemakerBackpressureAction::First
             }
             (true, true) => PacemakerBackpressureAction::Subsequent,
             (true, false) => {
-                self.saturated = false;
+                self.deferring = false;
                 PacemakerBackpressureAction::None
             }
             (false, false) => PacemakerBackpressureAction::None,

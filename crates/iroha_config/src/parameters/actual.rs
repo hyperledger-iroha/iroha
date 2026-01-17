@@ -3848,7 +3848,9 @@ pub struct TrustedPeers {
     /// Other trusted peers.
     pub others: UniqueVec<Peer>,
     /// Optional Proof-of-Possession (PoP) for validators' BLS keys, keyed by public key.
-    /// Peers without a valid PoP will be excluded from the consensus topology.
+    /// PoP entries must cover the full validator roster at config parse time; incomplete
+    /// or invalid PoP maps are rejected. As a safety fallback, runtime roster derivation
+    /// skips PoP filtering if the map is incomplete to avoid divergent topologies.
     pub pops: std::collections::BTreeMap<PublicKey, Vec<u8>>,
 }
 

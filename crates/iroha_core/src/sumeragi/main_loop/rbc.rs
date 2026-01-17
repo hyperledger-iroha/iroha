@@ -166,6 +166,7 @@ pub(super) struct HydrationOutcome {
     pub(super) chunk_digest_mismatch: bool,
     pub(super) layout_mismatch: bool,
     pub(super) observed_chunks: Option<u32>,
+    pub(super) observed_chunk_root: Option<Hash>,
 }
 
 pub(super) fn apply_hydrated_payload(
@@ -211,6 +212,11 @@ pub(super) fn apply_hydrated_payload(
         outcome.updated = true;
     }
 
+    outcome.observed_chunk_root =
+        MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(digests.clone())
+            .root()
+            .map(Hash::from);
+
     let dropped = session.drop_mismatched_chunks();
     if dropped > 0 {
         outcome.updated = true;
@@ -240,14 +246,15 @@ pub(super) fn apply_hydrated_payload(
         || (session.total_chunks() != 0 && session.received_chunks() == session.total_chunks());
     if all_chunks_present {
         outcome.all_chunks_present = true;
-        if let Some(computed_root) = session.chunk_root() {
+        let observed_root = outcome.observed_chunk_root.or_else(|| session.chunk_root());
+        if let Some(observed_root) = observed_root {
             if let Some(expected_root) = session.expected_chunk_root {
-                if expected_root != computed_root {
+                if expected_root != observed_root {
                     session.invalid = true;
                     outcome.chunk_root_mismatch = true;
                 }
             } else {
-                session.expected_chunk_root = Some(computed_root);
+                session.expected_chunk_root = Some(observed_root);
                 outcome.updated = true;
             }
         }
@@ -1307,14 +1314,14 @@ impl Actor {
                 self.record_rbc_mismatch(peer, status::RbcMismatchKind::ChunkRoot, key.1, key.2)
             });
             let expected_root = session.expected_chunk_root;
-            let computed_root = session.chunk_root();
+            let observed_root = outcome.observed_chunk_root.or_else(|| session.chunk_root());
             if log_outcome.map_or(true, |outcome| outcome.should_log()) {
                 warn!(
                     height = key.1,
                     view = key.2,
                     sender = ?sender,
                     ?expected_root,
-                    ?computed_root,
+                    ?observed_root,
                     "hydrated payload chunk-root mismatches INIT; marking invalid"
                 );
             } else {
@@ -1323,7 +1330,7 @@ impl Actor {
                     view = key.2,
                     sender = ?sender,
                     ?expected_root,
-                    ?computed_root,
+                    ?observed_root,
                     "suppressing repeated hydrated chunk-root mismatch log"
                 );
             }

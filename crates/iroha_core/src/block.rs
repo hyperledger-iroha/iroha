@@ -1728,7 +1728,7 @@ mod pending {
                 .map(AsRef::as_ref)
                 .map(SignedTransaction::creation_time)
                 .max()
-                // Empty block is allowed
+                // No transactions present; validation still rejects empty payloads.
                 .unwrap_or(Duration::ZERO);
 
             let now = self.0.time_source.get_unix_time();

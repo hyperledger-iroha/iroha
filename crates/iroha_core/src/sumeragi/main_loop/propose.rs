@@ -94,6 +94,28 @@ impl InternalProposalWork {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ProposalBackpressure {
+    pub(super) queue_state: BackpressureState,
+    pub(super) active_pending: bool,
+    pub(super) rbc_backlog: bool,
+    pub(super) relay_backpressure: bool,
+}
+
+impl ProposalBackpressure {
+    pub(super) fn should_defer(self) -> bool {
+        self.queue_state.is_saturated()
+            || self.active_pending
+            || self.rbc_backlog
+            || self.relay_backpressure
+    }
+
+    pub(super) fn only_queue_saturation(self) -> bool {
+        self.queue_state.is_saturated()
+            && !(self.active_pending || self.rbc_backlog || self.relay_backpressure)
+    }
+}
+
 fn da_payload_budget(
     rbc_chunk_max_bytes: usize,
     rbc_pending_max_bytes: usize,
@@ -1247,10 +1269,14 @@ impl Actor {
         }
     }
 
-    pub(super) fn should_defer_proposal(&mut self) -> bool {
-        let now = Instant::now();
-        let queue_saturated = self.subsystems.propose.backpressure_gate.should_defer();
-        let active_pending = self.has_active_pending_blocks();
+    pub(super) fn proposal_backpressure(&mut self) -> ProposalBackpressure {
+        self.proposal_backpressure_at(Instant::now())
+    }
+
+    pub(super) fn proposal_backpressure_at(&mut self, now: Instant) -> ProposalBackpressure {
+        self.subsystems.propose.backpressure_gate.refresh();
+        let queue_state = self.subsystems.propose.backpressure_gate.state();
+        let active_pending = self.has_blocking_pending_blocks();
         let mut rbc_backlog = self.has_unresolved_rbc_backlog();
         let mut relay_backpressure =
             self.relay_backpressure_active(now, self.rebroadcast_cooldown());
@@ -1259,7 +1285,12 @@ impl Actor {
             rbc_backlog = false;
             relay_backpressure = false;
         }
-        queue_saturated || active_pending || rbc_backlog || relay_backpressure
+        ProposalBackpressure {
+            queue_state,
+            active_pending,
+            rbc_backlog,
+            relay_backpressure,
+        }
     }
 
     pub(super) fn proposal_scan_budget(&self, max_in_block: NonZeroUsize) -> usize {
@@ -1273,7 +1304,7 @@ impl Actor {
         now: Instant,
         state: BackpressureState,
     ) {
-        let active_pending = self.has_active_pending_blocks();
+        let active_pending = self.has_blocking_pending_blocks();
         let rbc_backlog = self.has_unresolved_rbc_backlog();
         let relay_backpressure = self.relay_backpressure_active(now, self.rebroadcast_cooldown());
         super::status::inc_pacemaker_backpressure_deferrals();

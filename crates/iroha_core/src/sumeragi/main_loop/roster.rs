@@ -148,6 +148,16 @@ fn filter_roster_bls(roster: impl IntoIterator<Item = PeerId>) -> Vec<PeerId> {
     dedup_preserving_order(roster.into_iter().filter(roster_member_allowed_bls))
 }
 
+fn missing_pops_for_roster(
+    roster: &[PeerId],
+    pops: &BTreeMap<iroha_crypto::PublicKey, Vec<u8>>,
+) -> usize {
+    roster
+        .iter()
+        .filter(|peer| !pops.contains_key(peer.public_key()))
+        .count()
+}
+
 fn guard_pop_quorum(filtered: Vec<PeerId>, baseline: &[PeerId], pops_len: usize) -> Vec<PeerId> {
     if baseline.is_empty() {
         return Vec::new();
@@ -195,16 +205,19 @@ pub(super) fn derive_active_topology_from_views(
     let mut roster = if trusted.pops.is_empty() {
         baseline
     } else {
-        let filtered = filter_roster_with_pops(baseline.clone(), &trusted.pops);
-        if filtered.len() < baseline.len() {
+        let missing = missing_pops_for_roster(&baseline, &trusted.pops);
+        if missing > 0 {
             iroha_logger::warn!(
+                missing,
                 pops = trusted.pops.len(),
                 baseline = baseline.len(),
-                filtered = filtered.len(),
-                "PoP map incomplete for active topology; excluding peers without PoP"
+                "PoP map incomplete for active topology; skipping PoP filtering"
             );
+            baseline
+        } else {
+            let filtered = filter_roster_with_pops(baseline.clone(), &trusted.pops);
+            guard_pop_quorum(filtered, &baseline, trusted.pops.len())
         }
-        guard_pop_quorum(filtered, &baseline, trusted.pops.len())
     };
 
     roster = if use_commit {
@@ -227,16 +240,19 @@ pub(super) fn derive_active_topology_from_views(
         filter_roster_bls(crate::sumeragi::filter_validators_from_trusted(trusted))
     } else {
         let baseline = filter_roster_bls(crate::sumeragi::filter_validators_from_trusted(trusted));
-        let filtered = filter_roster_with_pops(baseline.clone(), &trusted.pops);
-        if filtered.len() < baseline.len() {
+        let missing = missing_pops_for_roster(&baseline, &trusted.pops);
+        if missing > 0 {
             iroha_logger::warn!(
+                missing,
                 pops = trusted.pops.len(),
                 baseline = baseline.len(),
-                filtered = filtered.len(),
-                "PoP map incomplete for trusted roster fallback; excluding peers without PoP"
+                "PoP map incomplete for trusted roster fallback; skipping PoP filtering"
             );
+            baseline
+        } else {
+            let filtered = filter_roster_with_pops(baseline.clone(), &trusted.pops);
+            guard_pop_quorum(filtered, &baseline, trusted.pops.len())
         }
-        guard_pop_quorum(filtered, &baseline, trusted.pops.len())
     };
     canonicalize_roster(fallback)
 }
@@ -296,16 +312,19 @@ pub(super) fn derive_active_topology_for_mode(
             roster = if trusted.pops.is_empty() {
                 roster
             } else {
-                let filtered = filter_roster_with_pops(roster.clone(), &trusted.pops);
-                if filtered.len() < roster.len() {
+                let missing = missing_pops_for_roster(&roster, &trusted.pops);
+                if missing > 0 {
                     iroha_logger::warn!(
+                        missing,
                         pops = trusted.pops.len(),
                         baseline = roster.len(),
-                        filtered = filtered.len(),
-                        "PoP map incomplete for NPoS validator roster; excluding peers without PoP"
+                        "PoP map incomplete for NPoS validator roster; skipping PoP filtering"
                     );
+                    roster
+                } else {
+                    let filtered = filter_roster_with_pops(roster.clone(), &trusted.pops);
+                    guard_pop_quorum(filtered, &roster, trusted.pops.len())
                 }
-                guard_pop_quorum(filtered, &roster, trusted.pops.len())
             };
             roster = if use_commit {
                 dedup_preserving_order(roster)
@@ -430,6 +449,10 @@ mod tests {
 
     use super::*;
 
+    fn make_peer(peer_id: PeerId, port: u16) -> Peer {
+        Peer::new(format!("127.0.0.1:{port}").parse().expect("addr"), peer_id)
+    }
+
     #[test]
     fn canonicalize_roster_sorts_and_dedups() {
         let first = PeerId::new(
@@ -494,6 +517,54 @@ mod tests {
         let guarded = guard_pop_quorum(filtered.clone(), &peers, pops.len());
 
         assert_eq!(guarded, peers);
+    }
+
+    #[test]
+    fn active_topology_skips_incomplete_pops() {
+        let keypairs: Vec<KeyPair> = (0..4)
+            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .collect();
+        let peers: Vec<PeerId> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+
+        let world = World::new();
+        {
+            let mut block = world.block();
+            let peers_cell = block.peers.get_mut();
+            for peer in &peers {
+                let _ = peers_cell.push(peer.clone());
+            }
+            block.commit();
+        }
+
+        let mut pops = BTreeMap::new();
+        for kp in keypairs.iter().take(3) {
+            let pop = bls_normal_pop_prove(kp.private_key()).expect("pop");
+            pops.insert(kp.public_key().clone(), pop);
+        }
+
+        let trusted = iroha_config::parameters::actual::TrustedPeers {
+            myself: make_peer(peers[0].clone(), 10_000),
+            others: UniqueVec::from_iter(
+                peers
+                    .iter()
+                    .skip(1)
+                    .enumerate()
+                    .map(|(idx, peer_id)| make_peer(peer_id.clone(), 10_001 + idx as u16)),
+            ),
+            pops,
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_for_testing(world, kura, LiveQueryStore::start_test());
+        let view = state.view();
+        let roster = derive_active_topology(&view, &trusted, &peers[0]);
+
+        let mut expected = peers.clone();
+        expected.sort();
+        assert_eq!(roster, expected);
     }
 
     #[test]
@@ -598,6 +669,75 @@ mod tests {
             derive_active_topology_for_mode(&view, &trusted, &peer_active, ConsensusMode::Npos);
 
         assert_eq!(roster, vec![peer_active]);
+    }
+
+    #[test]
+    fn active_topology_for_npos_skips_incomplete_pops() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+
+        let domain: DomainId = "validators".parse().expect("domain id");
+        let keypairs: Vec<KeyPair> = (0..3)
+            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .collect();
+        let accounts: Vec<AccountId> = keypairs
+            .iter()
+            .map(|kp| AccountId::new(domain.clone(), kp.public_key().clone()))
+            .collect();
+        let peers: Vec<PeerId> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+
+        {
+            let mut block = state.world.public_lane_validators.block();
+            for (idx, account) in accounts.iter().enumerate() {
+                let lane_id = LaneId::new(idx as u32 + 1);
+                block.insert(
+                    (lane_id, account.clone()),
+                    PublicLaneValidatorRecord {
+                        lane_id,
+                        validator: account.clone(),
+                        stake_account: account.clone(),
+                        total_stake: Numeric::new(10, 0),
+                        self_stake: Numeric::new(10, 0),
+                        metadata: Metadata::default(),
+                        status: PublicLaneValidatorStatus::Active,
+                        activation_epoch: None,
+                        activation_height: None,
+                        last_reward_epoch: None,
+                    },
+                );
+            }
+            block.commit();
+        }
+
+        let mut pops = BTreeMap::new();
+        for kp in keypairs.iter().take(2) {
+            let pop = bls_normal_pop_prove(kp.private_key()).expect("pop");
+            pops.insert(kp.public_key().clone(), pop);
+        }
+
+        let trusted = iroha_config::parameters::actual::TrustedPeers {
+            myself: make_peer(peers[0].clone(), 11_000),
+            others: UniqueVec::from_iter(
+                peers
+                    .iter()
+                    .skip(1)
+                    .enumerate()
+                    .map(|(idx, peer_id)| make_peer(peer_id.clone(), 11_001 + idx as u16)),
+            ),
+            pops,
+        };
+
+        let view = state.view();
+        let roster =
+            derive_active_topology_for_mode(&view, &trusted, &peers[0], ConsensusMode::Npos);
+
+        let mut expected = peers.clone();
+        expected.sort();
+        assert_eq!(roster, expected);
     }
 
     #[test]

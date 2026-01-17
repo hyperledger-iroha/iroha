@@ -235,8 +235,6 @@ async fn sumeragi_restart_retains_lock_convergence() -> Result<()> {
     );
 
     let post_restart_deadline = Instant::now() + Duration::from_secs(60);
-    let mut last_locked: Option<Vec<QcEntry>> = None;
-    let mut last_highest: Option<Vec<QcEntry>> = None;
     loop {
         let mut post_restart_snapshots = Vec::new();
         for peer in &running {
@@ -260,13 +258,9 @@ async fn sumeragi_restart_retains_lock_convergence() -> Result<()> {
         if locked_converged && highest_converged && locked_height_ok {
             break;
         }
-        last_locked = Some(post_locked);
-        last_highest = Some(post_highest);
         if Instant::now() >= post_restart_deadline {
-            let locked = last_locked.as_deref().unwrap_or_default();
-            let highest = last_highest.as_deref().unwrap_or_default();
             return Err(eyre!(
-                "timed out waiting for post-restart QC convergence; locked={locked:?}, highest={highest:?}"
+                "timed out waiting for post-restart QC convergence; locked={post_locked:?}, highest={post_highest:?}"
             ));
         }
         sleep(Duration::from_millis(200)).await;

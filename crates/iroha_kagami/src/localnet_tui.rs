@@ -188,6 +188,7 @@ impl<T: Write> RunArgs<T> for LocalnetWizardArgs {
         let opts = LocalnetOptions {
             build_line,
             sora_profile,
+            perf_profile: None,
             peers,
             seed,
             bind_host: DEFAULT_BIND_HOST.to_string(),
