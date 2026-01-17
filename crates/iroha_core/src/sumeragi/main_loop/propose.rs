@@ -2,6 +2,10 @@
 
 use super::proposals::block_payload_bytes;
 use super::*;
+use crate::smartcontracts::isi::triggers::set::SetReadOnly;
+use crate::smartcontracts::isi::triggers::specialized::LoadedActionTrait;
+use iroha_data_model::events::EventFilter;
+use iroha_data_model::prelude::Repeats;
 pub(super) fn resolve_prev_block_for_proposal(
     proposal_height: u64,
     highest_qc: &crate::sumeragi::consensus::QcHeaderRef,
@@ -75,6 +79,21 @@ fn trim_batch_for_size_cap<T, U>(
     removed_count
 }
 
+const PROPOSAL_TIME_PADDING: std::time::Duration = std::time::Duration::from_millis(1);
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct InternalProposalWork {
+    pub(super) time_triggers: bool,
+    pub(super) da_commitments: bool,
+    pub(super) da_pin_intents: bool,
+}
+
+impl InternalProposalWork {
+    pub(super) const fn has_work(self) -> bool {
+        self.time_triggers || self.da_commitments || self.da_pin_intents
+    }
+}
+
 fn da_payload_budget(
     rbc_chunk_max_bytes: usize,
     rbc_pending_max_bytes: usize,
@@ -96,6 +115,139 @@ fn da_payload_budget(
 }
 
 impl Actor {
+    pub(super) fn internal_proposal_work(
+        &mut self,
+        proposal_height: u64,
+        prev_block: Option<&SignedBlock>,
+    ) -> InternalProposalWork {
+        let time_triggers = self.proposal_time_triggers_due(proposal_height, prev_block);
+        if !self.runtime_da_enabled() {
+            return InternalProposalWork {
+                time_triggers,
+                da_commitments: false,
+                da_pin_intents: false,
+            };
+        }
+        let (da_commitments, da_pin_intents) = self.proposal_da_spool_work();
+        InternalProposalWork {
+            time_triggers,
+            da_commitments,
+            da_pin_intents,
+        }
+    }
+
+    fn proposal_time_triggers_due(
+        &self,
+        proposal_height: u64,
+        prev_block: Option<&SignedBlock>,
+    ) -> bool {
+        let now = iroha_primitives::time::TimeSource::new_system().get_unix_time();
+        let prev_block_time = prev_block.map_or(std::time::Duration::ZERO, |block| {
+            block.header().creation_time()
+        });
+        let creation_time = std::cmp::max(
+            now,
+            std::cmp::max(
+                prev_block_time.saturating_add(PROPOSAL_TIME_PADDING),
+                PROPOSAL_TIME_PADDING,
+            ),
+        );
+        let view = self.state.view();
+        let since = view
+            .latest_block()
+            .map_or(creation_time, |block| block.header().creation_time());
+        let (since, length) = creation_time
+            .checked_sub(since)
+            .map_or((creation_time, std::time::Duration::ZERO), |length| {
+                (since, length)
+            });
+        let event = iroha_data_model::events::time::TimeEvent {
+            interval: iroha_data_model::events::time::TimeInterval::new(since, length),
+        };
+        let key_height = "__registered_block_height"
+            .parse::<iroha_data_model::name::Name>()
+            .ok();
+        view.world()
+            .triggers()
+            .time_triggers()
+            .iter()
+            .filter(|(_, action)| {
+                crate::smartcontracts::isi::triggers::trigger_is_enabled(action.metadata())
+            })
+            .any(|(_, action)| {
+                let mut count = action.filter.count_matches(&event);
+                if let Repeats::Exactly(repeats) = action.repeats {
+                    count = std::cmp::min(repeats, count);
+                }
+                if count == 0 {
+                    return false;
+                }
+                let registered_height = key_height
+                    .as_ref()
+                    .and_then(|key| action.metadata().get(key))
+                    .and_then(|json| json.try_into_any_norito::<u64>().ok());
+                registered_height.is_some_and(|height| height != proposal_height)
+            })
+    }
+
+    fn proposal_da_spool_work(&mut self) -> (bool, bool) {
+        let da_rbc = &mut self.subsystems.da_rbc;
+        let commitment_has = match da_rbc.spool_cache.load_commitment_bundle(&da_rbc.spool_dir) {
+            Ok((value, cache_outcome)) => {
+                #[cfg(feature = "telemetry")]
+                self.telemetry.note_da_spool_cache(
+                    crate::telemetry::DaSpoolCacheKind::Commitments,
+                    cache_outcome.as_telemetry(),
+                );
+                #[cfg(not(feature = "telemetry"))]
+                let _ = cache_outcome;
+                value.is_some_and(|bundle| {
+                    bundle.commitments.iter().any(|record| {
+                        let key =
+                            iroha_data_model::da::commitment::DaCommitmentKey::from_record(record);
+                        !da_rbc.da.sealed_commitments.contains(&key)
+                    })
+                })
+            }
+            Err(err) => {
+                warn!(
+                    ?err,
+                    spool = %da_rbc.spool_dir.display(),
+                    "failed to load DA commitments from spool; proceeding without DA bundle"
+                );
+                false
+            }
+        };
+
+        let pin_intent_has = match da_rbc.spool_cache.load_pin_bundle(&da_rbc.spool_dir) {
+            Ok((value, cache_outcome)) => {
+                #[cfg(feature = "telemetry")]
+                self.telemetry.note_da_spool_cache(
+                    crate::telemetry::DaSpoolCacheKind::PinIntents,
+                    cache_outcome.as_telemetry(),
+                );
+                #[cfg(not(feature = "telemetry"))]
+                let _ = cache_outcome;
+                value.is_some_and(|bundle| {
+                    bundle.intents.iter().any(|intent| {
+                        let key = (intent.lane_id.as_u32(), intent.epoch, intent.sequence);
+                        !da_rbc.da.sealed_pin_intents.contains(&key)
+                    })
+                })
+            }
+            Err(err) => {
+                warn!(
+                    ?err,
+                    spool = %da_rbc.spool_dir.display(),
+                    "failed to load DA pin intents from spool; proceeding without pin bundle"
+                );
+                false
+            }
+        };
+
+        (commitment_has, pin_intent_has)
+    }
+
     pub(super) fn max_tx_budget(
         queue_len: usize,
         block_param_limit: u64,
@@ -336,18 +488,19 @@ impl Actor {
         }
 
         let queue_len_after_pop = self.queue.queued_len();
-        if empty_block_disfavored(
-            transactions.len(),
-            queue_len_after_pop,
-            self.has_nonempty_pending_at_height(proposal_height),
-        ) {
-            info!(
-                height,
-                view,
-                queue_len = queue_len_after_pop,
-                "deferring empty proposal while transactions are queued"
-            );
-            return Ok(false);
+        let mut internal_work = None;
+        if transactions.is_empty() {
+            let work = self.internal_proposal_work(proposal_height, prev_block.as_deref());
+            if !work.has_work() {
+                info!(
+                    height,
+                    view,
+                    queue_len = queue_len_after_pop,
+                    "skipping empty proposal; empty blocks are disallowed"
+                );
+                return Ok(false);
+            }
+            internal_work = Some(work);
         }
 
         let da_enabled = self.runtime_da_enabled();
@@ -415,19 +568,32 @@ impl Actor {
         }
 
         if tx_batch.is_empty() {
-            drop(tx_guards);
-            for tx in overflow_transactions {
+            tx_guards.clear();
+            for tx in overflow_transactions.drain(..) {
                 if let Err(err) = self.queue.push(tx, self.state.view()) {
                     warn!(?err.err, "failed to requeue oversized transaction");
                 }
             }
-            info!(
+            let has_internal_work = internal_work
+                .map(InternalProposalWork::has_work)
+                .unwrap_or_else(|| {
+                    let work = self.internal_proposal_work(proposal_height, prev_block.as_deref());
+                    internal_work = Some(work);
+                    work.has_work()
+                });
+            if !has_internal_work {
+                info!(
+                    height = proposal_height,
+                    view,
+                    queue_len = queue_len_after_pop,
+                    "deferring proposal: no transactions fit within payload budget"
+                );
+                return Ok(false);
+            }
+            debug!(
                 height = proposal_height,
-                view,
-                queue_len = queue_len_after_pop,
-                "deferring proposal: no transactions fit within payload budget"
+                view, "assembling proposal without external transactions"
             );
-            return Ok(false);
         }
 
         let original_for_requeue = tx_batch.clone();
@@ -908,7 +1074,7 @@ impl Actor {
         })();
 
         if let Err(err) = assembly_result {
-            drop(tx_guards);
+            tx_guards.clear();
             for tx in original_for_requeue {
                 if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
                     continue;
@@ -917,7 +1083,7 @@ impl Actor {
                     warn!(?push_err.err, "failed to requeue transaction after assembly failure");
                 }
             }
-            for tx in overflow_transactions {
+            for tx in overflow_transactions.drain(..) {
                 if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
                     continue;
                 }
@@ -947,8 +1113,8 @@ impl Actor {
             return Err(err);
         }
 
-        drop(tx_guards);
-        for tx in overflow_transactions {
+        tx_guards.clear();
+        for tx in overflow_transactions.drain(..) {
             if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
                 continue;
             }
@@ -1185,11 +1351,11 @@ impl Actor {
         let local_idx = self.local_validator_index_for_topology(&topology);
         let local_peer = local_idx.map(|_| local_peer_id.clone());
 
-        let has_work = pending_queue_len > 0;
-        if da_enabled && !has_work {
+        let has_queue_work = pending_queue_len > 0;
+        if da_enabled && !has_queue_work {
             trace!(
                 da_enabled,
-                "DA enabled and transaction queue is empty; deferring proposals"
+                "DA enabled and transaction queue is empty; checking internal work"
             );
         }
 
@@ -1323,14 +1489,6 @@ impl Actor {
                 );
             }
         }
-        if !has_work {
-            trace!(
-                height = view_height,
-                "deferring proposal: no queued transactions"
-            );
-            return false;
-        }
-
         let new_view_summary: Vec<String> = self
             .subsystems
             .propose
@@ -1829,6 +1987,27 @@ impl Actor {
             warn!(local_pos, "local validator index exceeds u32 limits");
             return false;
         };
+
+        let has_internal_work = if !has_queue_work {
+            let prev_block = resolve_prev_block_for_proposal(
+                height,
+                &highest_qc,
+                &self.kura,
+                &self.pending.pending_blocks,
+            );
+            self.internal_proposal_work(height, prev_block.as_deref())
+                .has_work()
+        } else {
+            false
+        };
+        if !has_queue_work && !has_internal_work {
+            trace!(
+                height,
+                view = view_idx,
+                "deferring proposal: no queued transactions or internal work"
+            );
+            return false;
+        }
 
         debug!(
             height,

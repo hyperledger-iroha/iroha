@@ -146,9 +146,10 @@ fn decode_flags_guard_resets_hint_state() {
             core::DecodeFlagsGuard::enter(header_flags::PACKED_SEQ | header_flags::COMPACT_LEN);
         assert!(core::use_packed_seq(), "packed seq should be active");
         assert!(core::use_compact_len(), "compact len should be active");
-        assert!(
-            !core::use_compact_seq_len(),
-            "compact seq len remains disabled in v1"
+        assert_eq!(
+            core::get_decode_flags(),
+            header_flags::PACKED_SEQ | header_flags::COMPACT_LEN,
+            "decode flags should ignore reserved bits"
         );
     }
 
@@ -166,10 +167,6 @@ fn decode_flags_guard_resets_hint_state() {
     assert!(
         !core::use_compact_len(),
         "compact len must remain disabled when header flags are zero"
-    );
-    assert!(
-        !core::use_compact_seq_len(),
-        "compact seq len must remain disabled when header flags are zero"
     );
 }
 

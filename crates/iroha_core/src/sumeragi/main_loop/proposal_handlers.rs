@@ -102,6 +102,11 @@ impl Actor {
                 block = %hint.block_hash,
                 "dropping proposal hint at or below committed height"
             );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::ProposalHint,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::StaleHeight,
+            );
             self.subsystems
                 .propose
                 .proposal_cache
@@ -109,6 +114,11 @@ impl Actor {
             return Ok(());
         }
         if self.drop_stale_view(height, view, "ProposalHint") {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::ProposalHint,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::StaleView,
+            );
             return Ok(());
         }
         let expected_highest_height = height.saturating_sub(1);
@@ -120,6 +130,11 @@ impl Actor {
                 expected_highest_height,
                 block = %highest_qc.subject_block_hash,
                 "dropping proposal hint: highest QC height does not match proposal height"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::ProposalHint,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::HighestQcMismatch,
             );
             return Ok(());
         }
@@ -133,6 +148,11 @@ impl Actor {
                 expected_epoch,
                 block = %highest_qc.subject_block_hash,
                 "dropping proposal hint: highest QC epoch mismatch"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::ProposalHint,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::EpochMismatch,
             );
             return Ok(());
         }
@@ -176,6 +196,11 @@ impl Actor {
                         incoming_highest = %highest_qc.subject_block_hash,
                         "ignoring conflicting proposal hint for cached slot"
                     );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::ProposalHint,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::Duplicate,
+                    );
                     return Ok(());
                 }
             }
@@ -188,12 +213,17 @@ impl Actor {
         {
             if stored_height != highest_qc.height {
                 warn!(
-                    height,
-                    view,
+                        height,
+                        view,
                     stored_height,
                     highest_height = highest_qc.height,
                     block = %highest_qc.subject_block_hash,
                     "dropping proposal hint: highest QC hash stored at different height"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::ProposalHint,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::HighestQcMismatch,
                 );
                 return Ok(());
             }
@@ -206,12 +236,17 @@ impl Actor {
                 && stored_hash.is_some_and(|hash| hash != highest_qc.subject_block_hash)
             {
                 info!(
-                    height,
-                    view,
+                        height,
+                        view,
                     committed_height,
                     committed_hash = %stored_hash.unwrap_or(highest_qc.subject_block_hash),
                     highest_hash = %highest_qc.subject_block_hash,
                     "dropping proposal hint: highest QC conflicts with committed block at height"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::ProposalHint,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::CommitConflict,
                 );
                 return Ok(());
             }
@@ -223,6 +258,11 @@ impl Actor {
                 highest_height = highest_qc.height,
                 block = %highest_qc.subject_block_hash,
                 "dropping proposal hint: highest QC block missing locally for committed height"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::ProposalHint,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::MissingHighestQc,
             );
             return Ok(());
         } else {
@@ -239,24 +279,34 @@ impl Actor {
         {
             if local_height != highest_qc.height {
                 warn!(
-                    height,
-                    view,
+                        height,
+                        view,
                     highest_height = highest_qc.height,
                     local_height,
                     block = %highest_qc.subject_block_hash,
                     "dropping proposal hint: highest QC height does not match local block height"
                 );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::ProposalHint,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::HighestQcMismatch,
+                );
                 return Ok(());
             }
             if local_view != highest_qc.view {
                 warn!(
-                    height,
-                    view,
-                    highest_height = highest_qc.height,
+                        height,
+                        view,
+                        highest_height = highest_qc.height,
                     highest_view = highest_qc.view,
                     local_view,
                     block = %highest_qc.subject_block_hash,
                     "dropping proposal hint: highest QC view does not match local block view"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::ProposalHint,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::HighestQcMismatch,
                 );
                 return Ok(());
             }
@@ -264,6 +314,11 @@ impl Actor {
 
         self.update_prf_context(height, view);
         if !self.ensure_highest_qc_extends_locked(height, view, highest_qc, "proposal hint") {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::ProposalHint,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::LockedQc,
+            );
             return Ok(());
         }
         let should_update_highest = self.highest_qc.is_none_or(|current| {
@@ -387,6 +442,11 @@ impl Actor {
                 payload = %proposal.payload_hash,
                 "dropping proposal at or below committed height"
             );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::Proposal,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::StaleHeight,
+            );
             self.subsystems
                 .propose
                 .proposal_cache
@@ -394,6 +454,11 @@ impl Actor {
             return Ok(());
         }
         if self.drop_stale_view(height, view, "Proposal") {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::Proposal,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::StaleView,
+            );
             return Ok(());
         }
         let expected_epoch = self.epoch_for_height(height);
@@ -405,6 +470,11 @@ impl Actor {
                 proposal_epoch = proposal.header.epoch,
                 payload = %proposal.payload_hash,
                 "dropping proposal with mismatched epoch"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::Proposal,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::EpochMismatch,
             );
             return Ok(());
         }
@@ -420,6 +490,11 @@ impl Actor {
                 payload = %proposal.payload_hash,
                 "dropping proposal: highest QC height does not match proposal height"
             );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::Proposal,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::HighestQcMismatch,
+            );
             return Ok(());
         }
         let expected_highest_epoch = self.epoch_for_height(highest_qc.height);
@@ -434,6 +509,11 @@ impl Actor {
                 payload = %proposal.payload_hash,
                 "dropping proposal: highest QC epoch mismatch"
             );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::Proposal,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::EpochMismatch,
+            );
             return Ok(());
         }
         if proposal.header.parent_hash != highest_qc.subject_block_hash {
@@ -445,6 +525,11 @@ impl Actor {
                 payload = %proposal.payload_hash,
                 "dropping proposal: parent hash does not match highest QC"
             );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::Proposal,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::HighestQcMismatch,
+            );
             return Ok(());
         }
         let committed_qc_height = self.latest_committed_qc().map_or(0, |qc| qc.height);
@@ -455,13 +540,18 @@ impl Actor {
         {
             if stored_height != highest_qc.height {
                 warn!(
-                    height,
-                    view,
+                        height,
+                        view,
                     stored_height,
                     highest_height = highest_qc.height,
                     block = %highest_qc.subject_block_hash,
                     payload = %proposal.payload_hash,
                     "dropping proposal: highest QC hash stored at different height"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::Proposal,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::HighestQcMismatch,
                 );
                 return Ok(());
             }
@@ -474,13 +564,18 @@ impl Actor {
                 && stored_hash.is_some_and(|hash| hash != highest_qc.subject_block_hash)
             {
                 info!(
-                    height,
-                    view,
-                    committed_height = committed_qc_height,
+                        height,
+                        view,
+                        committed_height = committed_qc_height,
                     committed_hash = %stored_hash.unwrap_or(highest_qc.subject_block_hash),
                     highest_hash = %highest_qc.subject_block_hash,
                     payload = %proposal.payload_hash,
                     "dropping proposal: highest QC conflicts with committed block at height"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::Proposal,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::CommitConflict,
                 );
                 return Ok(());
             }
@@ -493,6 +588,11 @@ impl Actor {
                 block = %highest_qc.subject_block_hash,
                 payload = %proposal.payload_hash,
                 "dropping proposal: highest QC block missing locally for committed height"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::Proposal,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::MissingHighestQc,
             );
             return Ok(());
         } else {
@@ -510,32 +610,47 @@ impl Actor {
         {
             if local_height != highest_qc.height {
                 warn!(
-                    height,
-                    view,
+                        height,
+                        view,
                     highest_height = highest_qc.height,
                     local_height,
                     block = %highest_qc.subject_block_hash,
                     payload = %proposal.payload_hash,
                     "dropping proposal: highest QC height does not match local block height"
                 );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::Proposal,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::HighestQcMismatch,
+                );
                 return Ok(());
             }
             if local_view != highest_qc.view {
                 warn!(
-                    height,
-                    view,
-                    highest_height = highest_qc.height,
-                    highest_view = highest_qc.view,
+                        height,
+                        view,
+                        highest_height = highest_qc.height,
+                        highest_view = highest_qc.view,
                     local_view,
                     block = %highest_qc.subject_block_hash,
                     payload = %proposal.payload_hash,
                     "dropping proposal: highest QC view does not match local block view"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::Proposal,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::HighestQcMismatch,
                 );
                 return Ok(());
             }
         }
         self.update_prf_context(height, view);
         if !self.ensure_highest_qc_extends_locked(height, view, highest_qc, "proposal") {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::Proposal,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::LockedQc,
+            );
             return Ok(());
         }
         let should_update_highest = self.highest_qc.is_none_or(|current| {
@@ -735,6 +850,11 @@ impl Actor {
                 block = %block_hash,
                 "dropping BlockCreated at or below committed height"
             );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::BlockCreated,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::StaleHeight,
+            );
             self.pending.pending_blocks.remove(&block_hash);
             self.subsystems
                 .propose
@@ -768,6 +888,11 @@ impl Actor {
                     local_view,
                     kind = "BlockCreated",
                     "dropping consensus message for stale view"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::BlockCreated,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::StaleView,
                 );
                 return Ok(());
             }
@@ -812,7 +937,15 @@ impl Actor {
                 );
             }
         }
-        if self.pending.pending_blocks.contains_key(&block_hash) {
+        let pending_status = self
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .map(|pending| (pending.aborted, pending.validation_status));
+        let revive_aborted = pending_status.is_some_and(|(aborted, status)| {
+            aborted && !matches!(status, ValidationStatus::Invalid)
+        });
+        if pending_status.is_some() && !revive_aborted {
             if da_enabled {
                 let session_key = Self::session_key(&block_hash, height, view);
                 let payload_bytes = super::proposals::block_payload_bytes(&block);
@@ -839,7 +972,24 @@ impl Actor {
                 block = %block_hash,
                 "dropping duplicate BlockCreated"
             );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::BlockCreated,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::Duplicate,
+            );
+            self.clear_missing_block_request(
+                &block_hash,
+                MissingBlockClearReason::PayloadAvailable,
+            );
             return Ok(());
+        }
+        if revive_aborted {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                "accepting BlockCreated to revive aborted pending block"
+            );
         }
         iroha_logger::info!(
             height,
@@ -913,6 +1063,11 @@ impl Actor {
                         height,
                         view,
                         "BlockCreated hint mismatch"
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::BlockCreated,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::HintMismatch,
                     );
                     return Ok(());
                 }
@@ -995,6 +1150,11 @@ impl Actor {
                         view,
                         "BlockCreated rejected by locked QC gate"
                     );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::BlockCreated,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::LockedQc,
+                    );
                     return Ok(());
                 }
             }
@@ -1037,6 +1197,11 @@ impl Actor {
                     view,
                     "BlockCreated rejected: highest QC does not extend locked chain"
                 );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::BlockCreated,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::LockedQc,
+                );
                 return Ok(());
             }
         } else {
@@ -1075,6 +1240,11 @@ impl Actor {
                                 block = %block_hash,
                                 "BlockCreated rejected without hint: block does not extend locked chain"
                             );
+                            self.record_consensus_message_handling(
+                                super::status::ConsensusMessageKind::BlockCreated,
+                                super::status::ConsensusMessageOutcome::Dropped,
+                                super::status::ConsensusMessageReason::LockedQc,
+                            );
                             return Ok(());
                         }
                         Some(true) => {}
@@ -1105,19 +1275,14 @@ impl Actor {
         }
         let payload_bytes = payload_bytes.unwrap_or_else(|| block_payload_bytes(&block));
         let payload_hash = payload_hash.unwrap_or_else(|| Hash::new(&payload_bytes));
-        let tx_count = block.transactions_vec().len();
         let queue_len = self.queue.queued_len();
-        if empty_block_disfavored(
-            tx_count,
-            queue_len,
-            self.has_nonempty_pending_at_height(height),
-        ) {
+        if block.is_empty() {
             iroha_logger::info!(
                 height,
                 view,
                 queue_len,
                 block = %block_hash,
-                "accepting empty BlockCreated despite queued transactions or competing non-empty candidate to stay in sync"
+                "received empty BlockCreated; empty blocks are disallowed"
             );
         }
         if let Some(reason) = proposal_mismatch
@@ -1166,6 +1331,10 @@ impl Actor {
                 block = %block_hash,
                 "BlockCreated received while pending block is being processed; skipping pending update"
             );
+            self.clear_missing_block_request(
+                &block_hash,
+                MissingBlockClearReason::PayloadAvailable,
+            );
             return Ok(());
         }
         if self
@@ -1181,12 +1350,21 @@ impl Actor {
                 block = %block_hash,
                 "BlockCreated received while commit is in flight; skipping pending update"
             );
+            self.clear_missing_block_request(
+                &block_hash,
+                MissingBlockClearReason::PayloadAvailable,
+            );
             return Ok(());
         }
         match self.pending.pending_blocks.entry(block_hash) {
             Entry::Occupied(mut occ) => {
-                occ.get_mut()
-                    .replace_block(block, payload_hash, height, view);
+                if revive_aborted {
+                    occ.get_mut()
+                        .revive_after_abort(block, payload_hash, height, view);
+                } else {
+                    occ.get_mut()
+                        .replace_block(block, payload_hash, height, view);
+                }
             }
             Entry::Vacant(vac) => {
                 vac.insert(PendingBlock::new(block, payload_hash, height, view));
@@ -1283,6 +1461,11 @@ impl Actor {
                     expected = ?expected_hash,
                     observed = ?payload_hash,
                     "BlockCreated payload hash mismatches RBC session"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::BlockCreated,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::PayloadMismatch,
                 );
                 self.invalidate_proposal(
                     height,

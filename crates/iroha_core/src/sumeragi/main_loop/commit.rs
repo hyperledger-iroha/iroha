@@ -71,6 +71,13 @@ pub(super) struct CommitWorkerHandle {
     pub(super) join_handle: std::thread::JoinHandle<()>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct CommitQuorumStatus {
+    pub vote_count: usize,
+    pub quorum_reached: bool,
+    pub stake_quorum_missing: bool,
+}
+
 pub(super) fn spawn_commit_worker(
     state: Arc<State>,
     kura: Arc<Kura>,
@@ -1247,7 +1254,7 @@ impl Actor {
             self.trigger_view_change_with_cause(
                 pending_height,
                 pending_view,
-                view_change_cause_for_quorum(vote_count),
+                view_change_cause_for_quorum(vote_count, false),
             );
         }
         if committed {
@@ -2503,7 +2510,7 @@ impl Actor {
             return false;
         }
         let epoch = self.epoch_for_height(height);
-        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(height);
+        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let signature_topology = topology_for_view(topology, height, view, mode_tag, prf_seed);
         let Some(local_idx) = self.local_validator_index_for_topology(&signature_topology) else {
             warn!(
@@ -2552,34 +2559,80 @@ impl Actor {
         let vote_msg = BlockMessage::QcVote(vote);
         let local_peer_id = self.common_config.peer.id().clone();
         let leader = signature_topology.leader().clone();
-        if leader == local_peer_id {
+        let (collectors_k, _) = self.collector_plan_params_for_mode(consensus_mode);
+        let mut targets = if collectors_k == 0 {
+            Vec::new()
+        } else {
+            super::collectors::deterministic_collectors(
+                &signature_topology,
+                consensus_mode,
+                collectors_k,
+                prf_seed,
+                height,
+                view,
+            )
+        };
+        let required = signature_topology.min_votes_for_commit();
+        let mut fallback_to_topology = false;
+        if targets.is_empty() {
+            fallback_to_topology = true;
+            targets = signature_topology.as_ref().to_vec();
+        }
+        targets.retain(|peer| peer != &local_peer_id);
+        if targets.len() < required {
+            fallback_to_topology = true;
+            targets = signature_topology.as_ref().to_vec();
+            targets.retain(|peer| peer != &local_peer_id);
+        }
+        if leader != local_peer_id && !targets.contains(&leader) {
+            targets.push(leader.clone());
+        }
+        if targets.is_empty() {
             return true;
         }
-        info!(
-            height,
-            view,
-            signer = local_idx,
-            leader = %leader,
-            "sending NEW_VIEW vote to view-aligned leader"
-        );
-        self.schedule_background(BackgroundRequest::Post {
-            peer: leader,
-            msg: vote_msg,
-        });
+        if fallback_to_topology {
+            info!(
+                height,
+                view,
+                signer = local_idx,
+                leader = %leader,
+                targets = targets.len(),
+                "sending NEW_VIEW vote to commit topology (collector plan empty or below quorum)"
+            );
+        } else {
+            info!(
+                height,
+                view,
+                signer = local_idx,
+                leader = %leader,
+                targets = targets.len(),
+                "sending NEW_VIEW vote to collectors"
+            );
+        }
+        for peer in targets {
+            self.schedule_background(BackgroundRequest::Post {
+                peer,
+                msg: vote_msg.clone(),
+            });
+        }
         true
     }
 
-    pub(super) fn commit_vote_quorum_status_for_block(
+    pub(super) fn commit_vote_quorum_status_for_block_detail(
         &self,
         block_hash: HashOf<BlockHeader>,
         height: u64,
         view: u64,
-    ) -> (usize, bool) {
+    ) -> CommitQuorumStatus {
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let commit_topology =
             self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
         if commit_topology.is_empty() {
-            return (0, false);
+            return CommitQuorumStatus {
+                vote_count: 0,
+                quorum_reached: false,
+                stake_quorum_missing: false,
+            };
         }
         let topology = super::network_topology::Topology::new(commit_topology.clone());
         let signature_topology = topology_for_view(&topology, height, view, mode_tag, prf_seed);
@@ -2604,33 +2657,59 @@ impl Actor {
             signers = filtered;
         }
         let vote_count = signers.len();
+        let mut stake_result: Option<Result<bool, super::stake_snapshot::StakeQuorumError>> = None;
         let quorum_reached = match consensus_mode {
             ConsensusMode::Permissioned => vote_count >= signature_topology.min_votes_for_commit(),
             ConsensusMode::Npos => {
-                let roster_set: BTreeSet<_> = commit_topology.iter().cloned().collect();
-                let mut signer_peers = BTreeSet::new();
-                for signer in &signers {
-                    let Ok(idx) = usize::try_from(*signer) else {
-                        return (vote_count, false);
-                    };
-                    let Some(peer) = signature_topology.as_ref().get(idx) else {
-                        return (vote_count, false);
-                    };
-                    if !roster_set.contains(peer) {
-                        return (vote_count, false);
+                let result = (|| {
+                    let roster_set: BTreeSet<_> = commit_topology.iter().cloned().collect();
+                    let mut signer_peers = BTreeSet::new();
+                    for signer in &signers {
+                        let idx = usize::try_from(*signer).map_err(|_| {
+                            super::stake_snapshot::StakeQuorumError::SignerOutOfRoster
+                        })?;
+                        let peer = signature_topology
+                            .as_ref()
+                            .get(idx)
+                            .ok_or(super::stake_snapshot::StakeQuorumError::SignerOutOfRoster)?;
+                        if !roster_set.contains(peer) {
+                            return Err(super::stake_snapshot::StakeQuorumError::SignerOutOfRoster);
+                        }
+                        signer_peers.insert(peer.clone());
                     }
-                    signer_peers.insert(peer.clone());
-                }
-                let view = self.state.view();
-                super::stake_snapshot::stake_quorum_reached_for_peers(
-                    &view,
-                    &commit_topology,
-                    &signer_peers,
-                )
-                .unwrap_or(false)
+                    let view = self.state.view();
+                    super::stake_snapshot::stake_quorum_reached_for_peers(
+                        &view,
+                        &commit_topology,
+                        &signer_peers,
+                    )
+                })();
+                stake_result = Some(result);
+                stake_result
+                    .as_ref()
+                    .and_then(|result| result.ok())
+                    .unwrap_or(false)
             }
         };
-        (vote_count, quorum_reached)
+        let stake_quorum_missing = matches!(consensus_mode, ConsensusMode::Npos)
+            && vote_count > 0
+            && matches!(stake_result, Some(Ok(false) | Err(_)));
+        CommitQuorumStatus {
+            vote_count,
+            quorum_reached,
+            stake_quorum_missing,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn commit_vote_quorum_status_for_block(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> (usize, bool) {
+        let status = self.commit_vote_quorum_status_for_block_detail(block_hash, height, view);
+        (status.vote_count, status.quorum_reached)
     }
 
     pub(super) fn apply_commit_qc(

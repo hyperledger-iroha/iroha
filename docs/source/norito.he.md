@@ -86,7 +86,7 @@ Norito הוא קודק הסריאליזציה הבינארי של Iroha. הוא 
 - **Strings/Bytes:** `[len][data]` עם Varint/Fix.
 - **Option/Result:** תג `u8` + Payload.
 - **Arrays/Tuples:** בהתאם לגודל קבוע/משתנה.
-- **`Vec<T>`:** Pack (Varint/Offsets) לפי דגלים.
+- **`Vec<T>`:** Pack עם offsets קבועים (u64).
 - **Maps/Sets:** נקראים כזוגות.
 - **Struct:** לפי derive-packing או Layout רגיל.
 - **Enums:** Tag + Variant Payload.

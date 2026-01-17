@@ -451,8 +451,14 @@ mod tests {
     fn sample_private_key() -> (PrivateKey, String) {
         let key_pair = KeyPair::from_seed(vec![1_u8; 32], Algorithm::Ed25519);
         let private_key = key_pair.private_key().clone();
-        let private_key_str = private_key.to_string();
+        let private_key_str = ExposedPrivateKey(private_key.clone()).to_string();
         (private_key, private_key_str)
+    }
+
+    fn sample_account_id(seed: u8) -> AccountId {
+        let domain = "wonderland".parse().expect("domain");
+        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        AccountId::new(domain, key_pair.public_key().clone())
     }
 
     fn sample_plan(provider: AccountId, asset_definition: AssetDefinitionId) -> SubscriptionPlan {
@@ -476,7 +482,7 @@ mod tests {
 
     #[test]
     fn plan_create_args_build_request() {
-        let provider: AccountId = "alice@wonderland".parse().expect("provider");
+        let provider = sample_account_id(1);
         let plan_id: AssetDefinitionId = "plan#commerce".parse().expect("plan id");
         let asset_definition: AssetDefinitionId = "usd#pay".parse().expect("asset def");
         let plan = sample_plan(provider.clone(), asset_definition);
@@ -497,20 +503,21 @@ mod tests {
 
     #[test]
     fn plan_list_args_build_params() {
+        let provider = sample_account_id(1).to_string();
         let args = PlanListArgs {
-            provider: Some("alice@wonderland".to_string()),
+            provider: Some(provider.clone()),
             limit: Some(5),
             offset: 2,
         };
         let params = args.to_params();
-        assert_eq!(params.provider.as_deref(), Some("alice@wonderland"));
+        assert_eq!(params.provider.as_deref(), Some(provider.as_str()));
         assert_eq!(params.limit, Some(5));
         assert_eq!(params.offset, 2);
     }
 
     #[test]
     fn subscription_create_args_build_request() {
-        let subscriber: AccountId = "bob@wonderland".parse().expect("subscriber");
+        let subscriber = sample_account_id(2);
         let plan_id: AssetDefinitionId = "plan#commerce".parse().expect("plan id");
         let subscription_id: NftId = "sub-1$subscriptions".parse().expect("subscription id");
         let billing_trigger_id: TriggerId = "sub-1-bill".parse().expect("billing trigger");
@@ -540,16 +547,18 @@ mod tests {
 
     #[test]
     fn subscription_list_args_build_params() {
+        let owned_by = sample_account_id(2).to_string();
+        let provider = sample_account_id(1).to_string();
         let args = SubscriptionListArgs {
-            owned_by: Some("bob@wonderland".to_string()),
-            provider: Some("alice@wonderland".to_string()),
+            owned_by: Some(owned_by.clone()),
+            provider: Some(provider.clone()),
             status: Some("active".to_string()),
             limit: Some(10),
             offset: 4,
         };
         let params = args.to_params();
-        assert_eq!(params.owned_by.as_deref(), Some("bob@wonderland"));
-        assert_eq!(params.provider.as_deref(), Some("alice@wonderland"));
+        assert_eq!(params.owned_by.as_deref(), Some(owned_by.as_str()));
+        assert_eq!(params.provider.as_deref(), Some(provider.as_str()));
         assert_eq!(params.status.as_deref(), Some("active"));
         assert_eq!(params.limit, Some(10));
         assert_eq!(params.offset, 4);
@@ -557,7 +566,7 @@ mod tests {
 
     #[test]
     fn subscription_action_args_build_request() {
-        let subscriber: AccountId = "bob@wonderland".parse().expect("subscriber");
+        let subscriber = sample_account_id(2);
         let subscription_id: NftId = "sub-1$subscriptions".parse().expect("subscription id");
         let (private_key, private_key_str) = sample_private_key();
         let args = SubscriptionActionArgs {
@@ -576,7 +585,7 @@ mod tests {
 
     #[test]
     fn subscription_usage_args_build_request() {
-        let subscriber: AccountId = "bob@wonderland".parse().expect("subscriber");
+        let subscriber = sample_account_id(2);
         let subscription_id: NftId = "sub-1$subscriptions".parse().expect("subscription id");
         let unit_key: Name = "compute_ms".parse().expect("unit key");
         let usage_trigger_id: TriggerId = "usage-1".parse().expect("usage trigger");
@@ -600,7 +609,7 @@ mod tests {
 
     #[test]
     fn load_plan_reads_json_file() {
-        let provider: AccountId = "alice@wonderland".parse().expect("provider");
+        let provider = sample_account_id(1);
         let asset_definition: AssetDefinitionId = "usd#pay".parse().expect("asset def");
         let plan = sample_plan(provider, asset_definition);
         let payload = norito::json::to_json(&plan).expect("encode plan");

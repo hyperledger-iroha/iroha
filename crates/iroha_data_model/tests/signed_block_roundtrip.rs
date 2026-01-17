@@ -121,13 +121,9 @@ fn canonical_signed_block_wire_roundtrip_is_sequential() {
         "canonical frame must include Norito header"
     );
     let header_flags = framed[1 + norito::core::Header::SIZE - 1];
-    let dynamic_mask = norito::core::header_flags::PACKED_SEQ
-        | norito::core::header_flags::VARINT_OFFSETS
-        | norito::core::header_flags::COMPACT_SEQ_LEN;
     assert_eq!(
-        header_flags & dynamic_mask,
-        0,
-        "canonical header must not advertise packed or reserved varint layouts"
+        header_flags, 0,
+        "canonical header must not advertise layout flags"
     );
     let decoded = decode_framed_signed_block(framed).expect("decode framed block");
     assert_eq!(

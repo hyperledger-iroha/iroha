@@ -229,8 +229,7 @@ public final class NoritoAdapters {
 
     @Override
     public void encode(NoritoEncoder encoder, byte[] value) {
-      boolean compactSeq = (encoder.flags() & NoritoHeader.COMPACT_SEQ_LEN) != 0;
-      encoder.writeLength(value.length, compactSeq);
+      encoder.writeLength(value.length, false);
       if ((encoder.flags() & NoritoHeader.PACKED_SEQ) != 0) {
         encodePacked(encoder, value);
       } else {
@@ -244,7 +243,7 @@ public final class NoritoAdapters {
 
     @Override
     public byte[] decode(NoritoDecoder decoder) {
-      long length = decoder.readLength(decoder.compactSeqLenActive());
+      long length = decoder.readLength(false);
       if (length > Integer.MAX_VALUE) {
         throw new IllegalArgumentException("Byte vector too large");
       }
@@ -281,17 +280,11 @@ public final class NoritoAdapters {
     }
 
     private void encodePacked(NoritoEncoder encoder, byte[] value) {
-      if ((encoder.flags() & NoritoHeader.VARINT_OFFSETS) != 0) {
-        for (int i = 0; i < value.length; i++) {
-          encoder.append(Varint.encode(1));
-        }
-      } else {
-        long offset = 0;
+      long offset = 0;
+      encoder.writeUInt(offset, 64);
+      for (int i = 0; i < value.length; i++) {
+        offset += 1;
         encoder.writeUInt(offset, 64);
-        for (int i = 0; i < value.length; i++) {
-          offset += 1;
-          encoder.writeUInt(offset, 64);
-        }
       }
       encoder.writeBytes(value);
     }
@@ -316,30 +309,19 @@ public final class NoritoAdapters {
             "Packed byte vector declared zero length but carried trailing data");
       }
 
-      boolean varintOffsets = (decoder.flags() & NoritoHeader.VARINT_OFFSETS) != 0;
       List<Integer> sizes = new ArrayList<>(count);
-      if (varintOffsets) {
-        for (int i = 0; i < count; i++) {
-          long size = decoder.readVarint();
-          if (size > Integer.MAX_VALUE) {
-            throw new IllegalArgumentException("Packed byte element too large");
-          }
-          sizes.add((int) size);
+      long previous = decoder.readUInt(64);
+      if (previous != 0) {
+        throw new IllegalArgumentException("Packed offsets must start at 0");
+      }
+      for (int i = 0; i < count; i++) {
+        long current = decoder.readUInt(64);
+        long delta = current - previous;
+        if (delta < 0 || delta > Integer.MAX_VALUE) {
+          throw new IllegalArgumentException("Invalid packed offsets");
         }
-      } else {
-        long previous = decoder.readUInt(64);
-        if (previous != 0) {
-          throw new IllegalArgumentException("Packed offsets must start at 0");
-        }
-        for (int i = 0; i < count; i++) {
-          long current = decoder.readUInt(64);
-          long delta = current - previous;
-          if (delta < 0 || delta > Integer.MAX_VALUE) {
-            throw new IllegalArgumentException("Invalid packed offsets");
-          }
-          sizes.add((int) delta);
-          previous = current;
-        }
+        sizes.add((int) delta);
+        previous = current;
       }
 
       byte[] out = new byte[count];
@@ -531,8 +513,7 @@ public final class NoritoAdapters {
 
     @Override
     public void encode(NoritoEncoder encoder, List<T> values) {
-      boolean compactLen = (encoder.flags() & NoritoHeader.COMPACT_SEQ_LEN) != 0;
-      encoder.writeLength(values.size(), compactLen);
+      encoder.writeLength(values.size(), false);
       if ((encoder.flags() & NoritoHeader.PACKED_SEQ) != 0) {
         encodePacked(encoder, values);
       } else {
@@ -554,17 +535,11 @@ public final class NoritoAdapters {
         element.encode(child, value);
         encodedElements.add(child.toByteArray());
       }
-      if ((encoder.flags() & NoritoHeader.VARINT_OFFSETS) != 0) {
-        for (byte[] chunk : encodedElements) {
-          encoder.append(Varint.encode(chunk.length));
-        }
-      } else {
-        long offset = 0;
+      long offset = 0;
+      encoder.writeUInt(offset, 64);
+      for (byte[] chunk : encodedElements) {
+        offset += chunk.length;
         encoder.writeUInt(offset, 64);
-        for (byte[] chunk : encodedElements) {
-          offset += chunk.length;
-          encoder.writeUInt(offset, 64);
-        }
       }
       for (byte[] chunk : encodedElements) {
         encoder.append(chunk);
@@ -573,7 +548,7 @@ public final class NoritoAdapters {
 
     @Override
     public List<T> decode(NoritoDecoder decoder) {
-      long length = decoder.readLength(decoder.compactSeqLenActive());
+      long length = decoder.readLength(false);
       if (length > Integer.MAX_VALUE) {
         throw new IllegalArgumentException("Sequence too large");
       }
@@ -605,7 +580,6 @@ public final class NoritoAdapters {
     }
 
     private List<T> decodePacked(NoritoDecoder decoder, int count) {
-      boolean varintOffsets = (decoder.flags() & NoritoHeader.VARINT_OFFSETS) != 0;
       if (count == 0) {
         int tailLen = decoder.remaining();
         if (tailLen == 0) {
@@ -626,28 +600,18 @@ public final class NoritoAdapters {
       }
 
       List<Integer> sizes = new ArrayList<>(count);
-      if (varintOffsets) {
-        for (int i = 0; i < count; i++) {
-          long size = decoder.readVarint();
-          if (size > Integer.MAX_VALUE) {
-            throw new IllegalArgumentException("Packed element too large");
-          }
-          sizes.add((int) size);
+      long previous = decoder.readUInt(64);
+      if (previous != 0) {
+        throw new IllegalArgumentException("Packed offsets must start at 0");
+      }
+      for (int i = 0; i < count; i++) {
+        long current = decoder.readUInt(64);
+        long delta = current - previous;
+        if (delta < 0 || delta > Integer.MAX_VALUE) {
+          throw new IllegalArgumentException("Invalid packed offsets");
         }
-      } else {
-        long previous = decoder.readUInt(64);
-        if (previous != 0) {
-          throw new IllegalArgumentException("Packed offsets must start at 0");
-        }
-        for (int i = 0; i < count; i++) {
-          long current = decoder.readUInt(64);
-          long delta = current - previous;
-          if (delta < 0 || delta > Integer.MAX_VALUE) {
-            throw new IllegalArgumentException("Invalid packed offsets");
-          }
-          sizes.add((int) delta);
-          previous = current;
-        }
+        sizes.add((int) delta);
+        previous = current;
       }
 
       List<T> values = new ArrayList<>(count);
@@ -676,8 +640,7 @@ public final class NoritoAdapters {
     @Override
     public void encode(NoritoEncoder encoder, Map<K, V> map) {
       List<Map.Entry<K, V>> entries = sortedEntries(map);
-      boolean compactLen = (encoder.flags() & NoritoHeader.COMPACT_SEQ_LEN) != 0;
-      encoder.writeLength(entries.size(), compactLen);
+      encoder.writeLength(entries.size(), false);
       if ((encoder.flags() & NoritoHeader.PACKED_SEQ) != 0) {
         encodePacked(encoder, entries);
       } else {
@@ -687,7 +650,7 @@ public final class NoritoAdapters {
 
     @Override
     public Map<K, V> decode(NoritoDecoder decoder) {
-      long length = decoder.readLength(decoder.compactSeqLenActive());
+      long length = decoder.readLength(false);
       if (length > Integer.MAX_VALUE) {
         throw new IllegalArgumentException("Map too large");
       }
@@ -726,16 +689,8 @@ public final class NoritoAdapters {
     }
 
     private Map<K, V> decodePacked(final NoritoDecoder decoder, final int count) {
-      boolean varintOffsets = (decoder.flags() & NoritoHeader.VARINT_OFFSETS) != 0;
-      List<Integer> keySizes;
-      List<Integer> valueSizes;
-      if (varintOffsets) {
-        keySizes = readVarintSizes(decoder, count, "Map key");
-        valueSizes = readVarintSizes(decoder, count, "Map value");
-      } else {
-        keySizes = readFixedOffsets(decoder, count, "Map key");
-        valueSizes = readFixedOffsets(decoder, count, "Map value");
-      }
+      List<Integer> keySizes = readFixedOffsets(decoder, count, "Map key");
+      List<Integer> valueSizes = readFixedOffsets(decoder, count, "Map value");
 
       List<K> keys = new ArrayList<>(count);
       for (int size : keySizes) {
@@ -796,12 +751,9 @@ public final class NoritoAdapters {
     }
 
     private void encodePacked(final NoritoEncoder encoder, final List<Map.Entry<K, V>> entries) {
-      boolean varintOffsets = (encoder.flags() & NoritoHeader.VARINT_OFFSETS) != 0;
       if (entries.isEmpty()) {
-        if (!varintOffsets) {
-          writeFixedOffsets(encoder, List.of());
-          writeFixedOffsets(encoder, List.of());
-        }
+        writeFixedOffsets(encoder, List.of());
+        writeFixedOffsets(encoder, List.of());
         return;
       }
       List<Integer> keySizes = new ArrayList<>(entries.size());
@@ -816,13 +768,8 @@ public final class NoritoAdapters {
         keyPayloads.add(keyBytes);
         valuePayloads.add(valueBytes);
       }
-      if (varintOffsets) {
-        writeVarintSizes(encoder, keySizes);
-        writeVarintSizes(encoder, valueSizes);
-      } else {
-        writeFixedOffsets(encoder, keySizes);
-        writeFixedOffsets(encoder, valueSizes);
-      }
+      writeFixedOffsets(encoder, keySizes);
+      writeFixedOffsets(encoder, valueSizes);
       for (byte[] keyBytes : keyPayloads) {
         encoder.append(keyBytes);
       }
@@ -849,19 +796,6 @@ public final class NoritoAdapters {
       return value;
     }
 
-    private List<Integer> readVarintSizes(
-        final NoritoDecoder decoder, final int count, final String label) {
-      List<Integer> sizes = new ArrayList<>(count);
-      for (int i = 0; i < count; i++) {
-        long size = decoder.readVarint();
-        if (size > Integer.MAX_VALUE) {
-          throw new IllegalArgumentException(label + " too large");
-        }
-        sizes.add((int) size);
-      }
-      return sizes;
-    }
-
     private List<Integer> readFixedOffsets(
         final NoritoDecoder decoder, final int count, final String label) {
       List<Integer> sizes = new ArrayList<>(count);
@@ -879,12 +813,6 @@ public final class NoritoAdapters {
         previous = current;
       }
       return sizes;
-    }
-
-    private void writeVarintSizes(final NoritoEncoder encoder, final List<Integer> sizes) {
-      for (int size : sizes) {
-        encoder.append(Varint.encode(size));
-      }
     }
 
     private void writeFixedOffsets(final NoritoEncoder encoder, final List<Integer> sizes) {

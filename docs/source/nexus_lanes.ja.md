@@ -98,6 +98,7 @@ LaneConfigEntry {
 ## ストレージ予算
 
 - `nexus.storage.max_disk_usage_bytes` は、Nexus ノードが Kura、WSV のコールドスナップショット、SoraFS ストレージ、ストリーミングスプール（SoraNet/SoraVPN）で消費すべき総ディスク予算を定義する。
+- 全体予算を超えた場合のエビクションは決定論的で、SoraNet のプロビジョニングスプールをパス順で削除し、次に SoraVPN スプール、続いて tiered-state のコールドスナップショットを古い順に削除し、最後に Kura の退役セグメントを削除する。アクティブなブロックボディは DA 再水和が利用可能になるまで削除しない。
 - `nexus.storage.max_wsv_memory_bytes` は Norito の決定論的ペイロードサイズを `tiered_state.hot_retained_bytes` に反映させて WSV ホット層を上限化する。グレース保持により一時的に超過する可能性があるが、超過はテレメトリ（`state_tiered_hot_bytes`, `state_tiered_hot_grace_overflow_bytes`）で観測できる。
 - `nexus.storage.disk_budget_weights` は基準点でディスク予算をコンポーネントに分割する（合計 10,000 必須）。導出された上限は `kura.max_disk_usage_bytes`、`tiered_state.max_cold_bytes`、`sorafs.storage.max_capacity_bytes`、`streaming.soranet.provision_spool_max_bytes`、`streaming.soravpn.provision_spool_max_bytes` に適用される。
 - Kura のストレージ予算の適用は、アクティブ/引退レーンのセグメントに跨るブロックストアのバイト数を合算し、未永続化のキュー済みブロックも含めて書き込み遅延中の超過を防ぐ。

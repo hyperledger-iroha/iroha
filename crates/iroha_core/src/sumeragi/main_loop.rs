@@ -2631,7 +2631,9 @@ impl Actor {
             MissingBlockFetchDecision::Requested { targets, .. } => targets.len(),
             _ => 0,
         };
+        let dwell_ms = dwell.as_millis().try_into().unwrap_or(u64::MAX);
         self.note_missing_block_fetch_metrics(&decision, retry_window, targets_len, dwell);
+        super::status::record_missing_block_fetch(targets_len, dwell_ms);
 
         match decision {
             MissingBlockFetchDecision::Requested {
@@ -3038,10 +3040,6 @@ const fn missing_block_clear_allowed(
         MissingBlockClearReason::PayloadAvailable => block_known_locally,
         MissingBlockClearReason::Obsolete => true,
     }
-}
-
-fn empty_block_disfavored(tx_count: usize, queue_len: usize, has_nonempty_pending: bool) -> bool {
-    tx_count == 0 && (queue_len > 0 || has_nonempty_pending)
 }
 
 fn non_rbc_payload_budget(
@@ -4155,6 +4153,7 @@ fn block_sync_update_wire_len(origin: &PeerId, update: &super::message::BlockSyn
 enum ViewChangeCause {
     CommitFailure,
     QuorumTimeout,
+    StakeQuorumTimeout,
     CensorshipEvidence,
     MissingPayload,
     MissingQc,
@@ -4166,6 +4165,7 @@ impl ViewChangeCause {
         match self {
             Self::CommitFailure => "commit_failure",
             Self::QuorumTimeout => "quorum_timeout",
+            Self::StakeQuorumTimeout => "stake_quorum_timeout",
             Self::CensorshipEvidence => "censorship_evidence",
             Self::MissingPayload => "missing_payload",
             Self::MissingQc => "missing_qc",
@@ -4174,9 +4174,11 @@ impl ViewChangeCause {
     }
 }
 
-fn view_change_cause_for_quorum(vote_count: usize) -> ViewChangeCause {
+fn view_change_cause_for_quorum(vote_count: usize, stake_quorum_missing: bool) -> ViewChangeCause {
     if vote_count == 0 {
         ViewChangeCause::MissingQc
+    } else if stake_quorum_missing {
+        ViewChangeCause::StakeQuorumTimeout
     } else {
         ViewChangeCause::QuorumTimeout
     }
@@ -6163,6 +6165,11 @@ impl Actor {
 
     fn record_evidence(&mut self, evidence: &crate::sumeragi::consensus::Evidence) -> Result<bool> {
         if !self.evidence_is_fresh(evidence) {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::Evidence,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::StaleHeight,
+            );
             return Ok(false);
         }
         let (subject_height, _) = super::evidence::evidence_subject_height_view(evidence);
@@ -6192,6 +6199,11 @@ impl Actor {
                 height = evidence_height,
                 "dropping evidence with empty commit topology"
             );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::Evidence,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::RosterMissing,
+            );
             return Ok(false);
         }
         let topology = super::network_topology::Topology::new(topology_peers);
@@ -6202,6 +6214,11 @@ impl Actor {
             prf_seed,
         };
         if !self.evidence_store.insert(evidence, &context) {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::Evidence,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::Duplicate,
+            );
             return Ok(false);
         }
         Ok(super::evidence::persist_record(
@@ -7777,6 +7794,23 @@ impl Actor {
     #[cfg(not(feature = "telemetry"))]
     fn note_message_received(&self, _msg: &BlockMessage) {}
 
+    fn record_consensus_message_handling(
+        &self,
+        kind: super::status::ConsensusMessageKind,
+        outcome: super::status::ConsensusMessageOutcome,
+        reason: super::status::ConsensusMessageReason,
+    ) {
+        super::status::record_consensus_message_handling(kind, outcome, reason);
+        #[cfg(feature = "telemetry")]
+        if let Some(telemetry) = self.telemetry_handle() {
+            telemetry.note_consensus_message_handling(
+                kind.as_str(),
+                outcome.as_str(),
+                reason.as_str(),
+            );
+        }
+    }
+
     pub(super) fn on_block_message(&mut self, msg: super::InboundBlockMessage) -> Result<()> {
         let super::InboundBlockMessage {
             message: msg,
@@ -7790,6 +7824,128 @@ impl Actor {
                 view,
                 Self::block_message_kind(&msg),
             ) {
+                match &msg {
+                    BlockMessage::BlockCreated(created) => {
+                        let header = created.block.header();
+                        let block_hash = created.block.hash();
+                        let height = header.height().get();
+                        let view = header.view_change_index();
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::BlockCreated,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::FutureWindow,
+                        );
+                        if let Some(parent_hash) = header.prev_block_hash() {
+                            let local_height = {
+                                let view = self.state.view();
+                                u64::try_from(view.height()).unwrap_or(u64::MAX)
+                            };
+                            let expected_height = local_height.saturating_add(1);
+                            let active_commit_topology = self.effective_commit_topology();
+                            let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+                            let mut commit_topology = self.roster_for_vote_with_mode(
+                                block_hash,
+                                height,
+                                view,
+                                consensus_mode,
+                            );
+                            if commit_topology.is_empty() {
+                                commit_topology.clone_from(&active_commit_topology);
+                            }
+                            let expected_usize = usize::try_from(expected_height).ok();
+                            let actual_usize = usize::try_from(height).ok();
+                            self.request_missing_parent(
+                                block_hash,
+                                height,
+                                view,
+                                parent_hash,
+                                &commit_topology,
+                                None,
+                                expected_usize,
+                                actual_usize,
+                                "block_created_future_window",
+                            );
+                            if height > expected_height.saturating_add(1) {
+                                self.request_missing_parents_for_gap(
+                                    &active_commit_topology,
+                                    None,
+                                    "block_created_future_gap",
+                                );
+                            }
+                        }
+                    }
+                    BlockMessage::ExecWitness(_) => {
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::ExecWitness,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::FutureWindow,
+                        );
+                    }
+                    BlockMessage::ProposalHint(_) => {
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::ProposalHint,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::FutureWindow,
+                        );
+                    }
+                    BlockMessage::Proposal(_) => {
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::Proposal,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::FutureWindow,
+                        );
+                    }
+                    BlockMessage::QcVote(_) => {
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::QcVote,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::FutureWindow,
+                        );
+                    }
+                    BlockMessage::Qc(_) => {
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::Qc,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::FutureWindow,
+                        );
+                    }
+                    BlockMessage::RbcInit(_) => {
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::RbcInit,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::FutureWindow,
+                        );
+                    }
+                    BlockMessage::RbcChunk(_) => {
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::RbcChunk,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::FutureWindow,
+                        );
+                    }
+                    BlockMessage::RbcReady(_) => {
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::RbcReady,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::FutureWindow,
+                        );
+                    }
+                    BlockMessage::RbcDeliver(deliver) => {
+                        let key =
+                            Self::session_key(&deliver.block_hash, deliver.height, deliver.view);
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::RbcDeliver,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::FutureWindow,
+                        );
+                        self.request_missing_block_for_pending_rbc(
+                            key,
+                            "rbc_deliver_future_window",
+                            None,
+                        );
+                    }
+                    _ => {}
+                }
                 return Ok(());
             }
         }
@@ -8319,10 +8475,11 @@ impl Actor {
     fn dispatch_background_fallback(&mut self, request: BackgroundRequest) {
         match request {
             BackgroundRequest::Post { peer, msg } => {
+                let priority = msg.priority();
                 self.network.post(iroha_p2p::Post {
                     data: NetworkMessage::SumeragiBlock(Box::new(msg)),
                     peer_id: peer,
-                    priority: iroha_p2p::Priority::High,
+                    priority,
                 });
             }
             BackgroundRequest::PostControlFlow { peer, frame } => {
@@ -8333,9 +8490,10 @@ impl Actor {
                 });
             }
             BackgroundRequest::Broadcast { msg } => {
+                let priority = msg.priority();
                 self.network.broadcast(iroha_p2p::Broadcast {
                     data: NetworkMessage::SumeragiBlock(Box::new(msg)),
-                    priority: iroha_p2p::Priority::High,
+                    priority,
                 });
             }
             BackgroundRequest::BroadcastControlFlow { frame } => {
@@ -9822,6 +9980,9 @@ impl Actor {
 
     fn force_view_change_if_idle(&mut self, now: Instant) -> bool {
         if self.has_active_pending_blocks() {
+            return false;
+        }
+        if self.subsystems.commit.inflight.is_some() {
             return false;
         }
         if self.queue.active_len() == 0 {

@@ -23,13 +23,34 @@ impl Actor {
                 self.config.consensus_mode,
             );
             if !self.trim_block_sync_update_for_frame_cap(update) {
+                let fallback = BlockMessage::BlockCreated(super::message::BlockCreated {
+                    block: update.block.clone(),
+                });
+                let fallback_len =
+                    super::consensus_block_wire_len(self.common_config.peer.id(), &fallback);
+                if fallback_len > self.consensus_payload_frame_cap {
+                    warn!(
+                        height,
+                        view,
+                        block = %block_hash,
+                        cap = self.consensus_payload_frame_cap,
+                        fallback_len,
+                        "dropping oversized block sync response; BlockCreated still exceeds cap"
+                    );
+                    return;
+                }
                 warn!(
                     height,
                     view,
                     block = %block_hash,
                     cap = self.consensus_payload_frame_cap,
-                    "dropping oversized block sync response"
+                    fallback_len,
+                    "block sync response exceeds frame cap; sending BlockCreated instead"
                 );
+                self.schedule_background(BackgroundRequest::Post {
+                    peer,
+                    msg: fallback,
+                });
                 return;
             }
         }
@@ -81,6 +102,39 @@ impl Actor {
             block_view,
             requested_missing_block,
         ) {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::BlockSyncUpdate,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::FutureWindow,
+            );
+            if let Some(parent_hash) = parent_hash {
+                let local_height = {
+                    let view = self.state.view();
+                    u64::try_from(view.height()).unwrap_or(u64::MAX)
+                };
+                let expected_height = local_height.saturating_add(1);
+                let commit_topology = self.effective_commit_topology();
+                let expected_usize = usize::try_from(expected_height).ok();
+                let actual_usize = usize::try_from(block_height).ok();
+                self.request_missing_parent(
+                    block_hash,
+                    block_height,
+                    block_view,
+                    parent_hash,
+                    &commit_topology,
+                    None,
+                    expected_usize,
+                    actual_usize,
+                    "block_sync_future_window",
+                );
+                if block_height > expected_height.saturating_add(1) {
+                    self.request_missing_parents_for_gap(
+                        &commit_topology,
+                        None,
+                        "block_sync_future_gap",
+                    );
+                }
+            }
             return Ok(());
         }
         if let Some(local_view) = self.stale_view(block_height, block_view) {
@@ -92,6 +146,11 @@ impl Actor {
                     local_view,
                     kind = "BlockSyncUpdate",
                     "dropping consensus message for stale view"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::BlockSyncUpdate,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::StaleView,
                 );
                 return Ok(());
             }
@@ -115,6 +174,11 @@ impl Actor {
                     committed_hash = %committed_hash,
                     incoming_hash = %block_hash,
                     "dropping block sync update that conflicts with committed block"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::BlockSyncUpdate,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::CommitConflict,
                 );
                 self.clear_missing_block_request(&block_hash, MissingBlockClearReason::Obsolete);
                 return Ok(());
@@ -250,6 +314,11 @@ impl Actor {
             );
             super::status::inc_block_sync_drop_invalid_signatures();
             super::status::inc_block_sync_roster_drop_missing();
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::BlockSyncUpdate,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::RosterMissing,
+            );
             #[cfg(feature = "telemetry")]
             if let Some(telemetry) = self.telemetry_handle() {
                 telemetry.note_block_sync_roster_drop("missing");
@@ -367,6 +436,11 @@ impl Actor {
                         local_height,
                         "deferring block sync update due to signature mismatch while behind"
                     );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::BlockSyncUpdate,
+                        super::status::ConsensusMessageOutcome::Deferred,
+                        super::status::ConsensusMessageReason::SignatureMismatchDeferred,
+                    );
                     let created = super::message::BlockCreated { block };
                     let _ = self.handle_block_created(created, sender.clone());
                     return Ok(());
@@ -378,6 +452,11 @@ impl Actor {
                     height = block_height,
                     view = block_view,
                     "dropping block sync update with invalid or insufficient signatures"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::BlockSyncUpdate,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::InvalidSignature,
                 );
                 return Ok(());
             }
@@ -652,6 +731,11 @@ impl Actor {
                 local_height,
                 "dropping block sync update missing commit-role quorum"
             );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::BlockSyncUpdate,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::QuorumMissing,
+            );
             return Ok(());
         } else if requested_missing_block
             && block_signer_count < commit_quorum
@@ -768,6 +852,11 @@ impl Actor {
                     "dropping block sync update: block not accepted locally"
                 );
             }
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::BlockSyncUpdate,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::PayloadUnapplied,
+            );
         }
         process_commit_votes(self);
 
@@ -1127,6 +1216,7 @@ impl Actor {
     ) -> Result<()> {
         let block_hash = request.block_hash;
         let peer = request.requester;
+        let mut responded = false;
 
         if let Some(inflight) = self
             .subsystems
@@ -1182,6 +1272,7 @@ impl Actor {
                         BlockMessage::BlockSyncUpdate(update),
                     );
                 }
+                responded = true;
                 return Ok(());
             }
         }
@@ -1231,6 +1322,7 @@ impl Actor {
                         BlockMessage::BlockSyncUpdate(update),
                     );
                 }
+                responded = true;
                 return Ok(());
             }
         }
@@ -1272,9 +1364,17 @@ impl Actor {
                     BlockMessage::BlockSyncUpdate(update)
                 };
                 self.send_fetch_pending_block_response(peer.clone(), msg);
+                responded = true;
             }
         }
 
+        if !responded {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::FetchPendingBlock,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::NotFound,
+            );
+        }
         Ok(())
     }
 }

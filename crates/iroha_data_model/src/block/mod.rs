@@ -1250,6 +1250,124 @@ mod tests {
     }
 
     #[test]
+    fn signed_block_is_empty_without_entrypoints_or_artifacts() {
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let block = SignedBlock {
+            signatures: BTreeSet::new(),
+            payload: BlockPayload {
+                header,
+                transactions: Vec::new(),
+                da_commitments: None,
+                da_proof_policies: None,
+                da_pin_intents: None,
+            },
+            result: None,
+        };
+
+        assert!(block.is_empty());
+    }
+
+    #[test]
+    fn signed_block_is_not_empty_with_time_triggers() {
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let authority: crate::account::AccountId =
+            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245@wonderland"
+                .parse()
+                .expect("authority parses");
+        let entrypoint = crate::trigger::TimeTriggerEntrypoint {
+            id: "time_trigger".parse().expect("trigger id parses"),
+            instructions: crate::transaction::ExecutionStep(
+                iroha_primitives::const_vec::ConstVec::new_empty(),
+            ),
+            authority,
+        };
+        let entry_hash = entrypoint.hash_as_entrypoint();
+        let mut entry_merkle = iroha_crypto::MerkleTree::default();
+        entry_merkle.add(entry_hash);
+
+        let result_inner = crate::transaction::signed::TransactionResultInner::Ok(
+            crate::trigger::DataTriggerSequence::default(),
+        );
+        let mut result_merkle = iroha_crypto::MerkleTree::default();
+        result_merkle
+            .add(crate::transaction::signed::TransactionResult::hash_from_inner(&result_inner));
+
+        let result = BlockResult {
+            time_triggers: vec![entrypoint],
+            merkle: entry_merkle,
+            result_merkle,
+            transaction_results: vec![crate::transaction::signed::TransactionResult::from(
+                result_inner,
+            )],
+            fastpq_transcripts: std::collections::BTreeMap::new(),
+            axt_envelopes: Vec::new(),
+            axt_policy_snapshot: None,
+        };
+
+        let block = SignedBlock {
+            signatures: BTreeSet::new(),
+            payload: BlockPayload {
+                header,
+                transactions: Vec::new(),
+                da_commitments: None,
+                da_proof_policies: None,
+                da_pin_intents: None,
+            },
+            result: Some(result),
+        };
+
+        assert!(!block.is_empty());
+    }
+
+    #[test]
+    fn signed_block_is_not_empty_with_da_commitments() {
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let mut block = SignedBlock {
+            signatures: BTreeSet::new(),
+            payload: BlockPayload {
+                header,
+                transactions: Vec::new(),
+                da_commitments: None,
+                da_proof_policies: None,
+                da_pin_intents: None,
+            },
+            result: None,
+        };
+
+        block.set_da_commitments(Some(sample_da_bundle()));
+
+        assert!(!block.is_empty());
+    }
+
+    #[test]
+    fn signed_block_is_not_empty_with_da_pin_intents() {
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let mut block = SignedBlock {
+            signatures: BTreeSet::new(),
+            payload: BlockPayload {
+                header,
+                transactions: Vec::new(),
+                da_commitments: None,
+                da_proof_policies: None,
+                da_pin_intents: None,
+            },
+            result: None,
+        };
+
+        let intent = DaPinIntent::new(
+            LaneId::new(7),
+            9,
+            11,
+            StorageTicketId::new([0xAB; 32]),
+            ManifestDigest::new([0xCD; 32]),
+        );
+        let bundle = DaPinIntentBundle::new(vec![intent]);
+        block.set_da_pin_intents(Some(bundle));
+
+        assert!(!block.is_empty());
+    }
+
+    #[test]
     fn block_header_has_projection_impls() {
         assert_predicate::<BlockHeader>();
         assert_selector::<BlockHeader>();

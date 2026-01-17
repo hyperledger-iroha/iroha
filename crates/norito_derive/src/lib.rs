@@ -1189,7 +1189,7 @@ fn derive_struct_serialize(
     // Build encoded_len_exact body depending on layout:
     // - packed-struct hybrid: bitset bytes + sum(exact) for self-delim or fixed +
     //   sum(prefix_len(exact)+exact) for needs-size fields
-    // - compat: sum(prefix_len + exact) per field (varint offsets when enabled)
+    // - compat: sum(prefix_len + exact) per field (compact lengths when enabled)
     let len_exact_body: TokenStream2 = match fields {
         Fields::Named(named) => {
             let mut parts: Vec<TokenStream2> = Vec::new();

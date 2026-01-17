@@ -61,6 +61,8 @@ async fn kagami_localnet_bootstrap_produces_blocks() -> Result<()> {
             "expected non-empty block in kagami localnet (baseline={baseline}, current={})",
             status.blocks_non_empty
         );
+        wait_for_validator_and_commit_qc_counts(&client, u64::from(LOCALNET_PEERS), READY_TIMEOUT)
+            .await?;
         Ok(())
     }
     .await;
@@ -340,6 +342,37 @@ async fn wait_for_blocks_non_empty(
             return Err(eyre!(
                 "timed out waiting for non-empty block target {target}"
             ));
+        }
+        sleep(READY_POLL).await;
+    }
+}
+
+async fn wait_for_validator_and_commit_qc_counts(
+    client: &Client,
+    expected_peers: u64,
+    timeout: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    let mut last_status_peers: Option<u64> = None;
+    let mut last_commit_qc_validator_set_len = None;
+    loop {
+        if Instant::now() >= deadline {
+            let last_validator_count = last_status_peers.map(|peers| peers.saturating_add(1));
+            return Err(eyre!(
+                "timed out waiting for validator/commit QC counts: expected_peers={expected_peers}, last_validator_count={last_validator_count:?}, last_commit_qc_validator_set_len={last_commit_qc_validator_set_len:?}"
+            ));
+        }
+        if let Ok(status) = client.get_status() {
+            last_status_peers = Some(status.peers);
+            // Status.peers excludes the reporting peer, so add 1 for the validator count.
+            if status.peers.saturating_add(1) == expected_peers {
+                if let Ok(sumeragi) = client.get_sumeragi_status() {
+                    last_commit_qc_validator_set_len = Some(sumeragi.commit_qc.validator_set_len);
+                    if sumeragi.commit_qc.validator_set_len == expected_peers {
+                        return Ok(());
+                    }
+                }
+            }
         }
         sleep(READY_POLL).await;
     }

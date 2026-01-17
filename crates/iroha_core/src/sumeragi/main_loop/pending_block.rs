@@ -155,6 +155,33 @@ impl PendingBlock {
         }
     }
 
+    pub(super) fn revive_after_abort(
+        &mut self,
+        block: SignedBlock,
+        payload_hash: Hash,
+        height: u64,
+        view: u64,
+    ) {
+        self.block = block;
+        self.payload_hash = payload_hash;
+        self.height = height;
+        self.view = view;
+        self.aborted = false;
+        self.inserted_at = Instant::now();
+        self.validation_status = ValidationStatus::Pending;
+        self.precommit_vote_sent = false;
+        self.commit_qc_seen = false;
+        self.commit_qc_epoch = None;
+        self.last_gate = None;
+        self.last_gate_satisfied = None;
+        self.reset_kura_retry();
+        self.last_precommit_rebroadcast = None;
+        self.last_quorum_reschedule = None;
+        self.parent_state_root = None;
+        self.post_state_root = None;
+        self.last_block_sync_update = None;
+    }
+
     pub(super) fn reschedule_due(&self, now: Instant, backoff: Duration) -> bool {
         self.last_quorum_reschedule
             .is_none_or(|last| now.saturating_duration_since(last) >= backoff)
@@ -412,6 +439,23 @@ mod tests {
         pending.mark_aborted();
         assert!(pending.parent_state_root.is_none());
         assert!(pending.post_state_root.is_none());
+    }
+
+    #[test]
+    fn revive_after_abort_resets_tracking_and_validation() {
+        let mut pending =
+            PendingBlock::new(sample_block(1), Hash::prehashed([0x11; Hash::LENGTH]), 1, 0);
+        pending.validation_status = ValidationStatus::Valid;
+        pending.kura_persisted = true;
+        pending.last_quorum_reschedule = Some(Instant::now());
+        pending.mark_aborted();
+
+        pending.revive_after_abort(sample_block(1), Hash::prehashed([0x22; Hash::LENGTH]), 1, 0);
+
+        assert!(!pending.aborted);
+        assert_eq!(pending.validation_status, ValidationStatus::Pending);
+        assert!(pending.kura_persisted);
+        assert!(pending.last_quorum_reschedule.is_none());
     }
 
     #[test]

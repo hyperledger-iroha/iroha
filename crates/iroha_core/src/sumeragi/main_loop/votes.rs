@@ -81,6 +81,11 @@ impl Actor {
                 kind = InvalidSigKind::Vote.as_str(),
                 "dropping vote from penalized signer"
             );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::QcVote,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::PenalizedSender,
+            );
             return;
         }
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(vote.height);
@@ -376,6 +381,11 @@ impl Actor {
                     committed_height,
                     "dropping stale vote below committed height"
                 );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::QcVote,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::StaleHeight,
+                );
                 return true;
             }
         }
@@ -390,6 +400,11 @@ impl Actor {
                 signer = vote.signer,
                 block_hash = %vote.block_hash,
                 "dropping vote with mismatched epoch"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::QcVote,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::EpochMismatch,
             );
             return true;
         }
@@ -427,6 +442,11 @@ impl Actor {
                     local_view,
                     kind = "Vote",
                     "dropping consensus message for stale view"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::QcVote,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::StaleView,
                 );
                 return true;
             }
@@ -498,6 +518,10 @@ impl Actor {
             _ => 0,
         };
         self.note_missing_block_fetch_metrics(&decision, retry_window, targets_len, dwell);
+        super::status::record_missing_block_fetch(
+            targets_len,
+            dwell.as_millis().try_into().unwrap_or(u64::MAX),
+        );
         match decision {
             MissingBlockFetchDecision::Requested {
                 targets,
@@ -561,6 +585,11 @@ impl Actor {
                 locked_hash = %lock.subject_block_hash,
                 "dropping precommit vote below locked height"
             );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::QcVote,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::LockedQc,
+            );
             return true;
         }
         if vote.height == lock.height {
@@ -574,6 +603,11 @@ impl Actor {
                     locked_height = lock.height,
                     locked_hash = %lock.subject_block_hash,
                     "dropping precommit vote that conflicts with locked block"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::QcVote,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::LockedQc,
                 );
                 return true;
             }
@@ -600,6 +634,11 @@ impl Actor {
                     locked_hash = %lock.subject_block_hash,
                     "dropping precommit vote that does not extend locked chain"
                 );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::QcVote,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::LockedQc,
+                );
                 return true;
             }
         }
@@ -623,6 +662,11 @@ impl Actor {
                 signer = vote.signer,
                 block_hash = %vote.block_hash,
                 "dropping duplicate vote already recorded"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::QcVote,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::Duplicate,
             );
             return false;
         }
@@ -664,6 +708,11 @@ impl Actor {
                         "suppressing repeated invalid vote signature log"
                     );
                 }
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::QcVote,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::InvalidSignature,
+                );
                 return false;
             }
         }
@@ -675,6 +724,11 @@ impl Actor {
                     view = vote.view,
                     signer = vote.signer,
                     "dropping NEW_VIEW vote missing highest certificate reference"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::QcVote,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::MissingHighestQc,
                 );
                 return false;
             };
@@ -689,6 +743,11 @@ impl Actor {
                     expected_epoch,
                     "dropping NEW_VIEW vote with mismatched highest QC epoch"
                 );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::QcVote,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::EpochMismatch,
+                );
                 return false;
             }
             if highest.phase != Phase::Commit {
@@ -701,6 +760,11 @@ impl Actor {
                     phase = ?highest.phase,
                     "dropping NEW_VIEW vote with non-commit highest certificate"
                 );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::QcVote,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::HighestQcMismatch,
+                );
                 return false;
             }
             if highest.subject_block_hash != vote.block_hash {
@@ -711,6 +775,11 @@ impl Actor {
                     block_hash = %vote.block_hash,
                     highest_hash = %highest.subject_block_hash,
                     "dropping NEW_VIEW vote with mismatched highest block hash"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::QcVote,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::HighestQcMismatch,
                 );
                 return false;
             }
@@ -723,6 +792,11 @@ impl Actor {
                     highest_height = highest.height,
                     expected_height,
                     "dropping NEW_VIEW vote with mismatched height"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::QcVote,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::HighestQcMismatch,
                 );
                 return false;
             }
@@ -739,6 +813,11 @@ impl Actor {
                         local_height,
                         local_view,
                         "dropping NEW_VIEW vote with highest QC that mismatches local block metadata"
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::QcVote,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::HighestQcMismatch,
                     );
                     return false;
                 }
@@ -786,6 +865,11 @@ impl Actor {
                 block_hash = %vote.block_hash,
                 existing_block = %existing.block_hash,
                 "dropping conflicting vote for signer"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::QcVote,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::ConflictingVote,
             );
             return false;
         }
@@ -876,27 +960,35 @@ impl Actor {
         let view = vote.view;
         let signer = vote.signer;
         let block_hash = vote.block_hash;
-        let entry = self.deferred_votes.entry(block_hash).or_default();
-        if entry.contains_key(&key) {
-            debug!(
-                phase = ?phase,
-                height,
-                view,
-                signer,
-                block_hash = %block_hash,
-                reason,
-                "deferring duplicate vote while roster is unresolved"
-            );
-            return;
-        }
-        entry.insert(key, vote);
+        let deferred = {
+            let entry = self.deferred_votes.entry(block_hash).or_default();
+            if entry.contains_key(&key) {
+                debug!(
+                    phase = ?phase,
+                    height,
+                    view,
+                    signer,
+                    block_hash = %block_hash,
+                    reason,
+                    "deferring duplicate vote while roster is unresolved"
+                );
+                return;
+            }
+            entry.insert(key, vote);
+            entry.len()
+        };
+        self.record_consensus_message_handling(
+            super::status::ConsensusMessageKind::QcVote,
+            super::status::ConsensusMessageOutcome::Deferred,
+            super::status::ConsensusMessageReason::RosterMissing,
+        );
         info!(
             phase = ?phase,
             height,
             view,
             signer,
             block_hash = %block_hash,
-            deferred = entry.len(),
+            deferred,
             reason,
             "deferring vote until commit roster is available"
         );
@@ -950,6 +1042,10 @@ impl Actor {
             _ => 0,
         };
         self.note_missing_block_fetch_metrics(&decision, retry_window, targets_len, dwell);
+        super::status::record_missing_block_fetch(
+            targets_len,
+            dwell.as_millis().try_into().unwrap_or(u64::MAX),
+        );
         match decision {
             MissingBlockFetchDecision::Requested {
                 targets,

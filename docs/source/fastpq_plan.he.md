@@ -384,7 +384,7 @@ else:
 ## סכמת Public IO
 | שדה | בתים | קידוד | הערות |
 |------|------|--------|--------|
-| `dsid` | 16 | UUID LE | מתויג ב-`fastpq:v1:dsid`. |
+| `dsid` | 16 | UUID LE | מזהה מרחב הנתונים של ה-lane (GLOBAL לליין ברירת מחדל); מתויג ב-`fastpq:v1:dsid`. |
 | `slot` | 8 | u64 LE | זמן בננו-שניות. |
 | `old_root` | 32 | Poseidon2 LE | שורש SMT לפני הבאטצ’. |
 | `new_root` | 32 | Poseidon2 LE | שורש SMT אחרי הבאטצ’. |

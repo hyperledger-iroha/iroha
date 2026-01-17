@@ -140,7 +140,7 @@ p2p_post_queue_cap = 2048     # per-peer post channel
 p2p_subscriber_queue_cap = 8192  # inbound relay subscriber queue
 
 # 参考: その他のネットワークパラメータ
-block_gossip_size = 4        # ブロック同期/可用性投票/NEW_VIEW gossipのファンアウト上限（ピアサンプル + ブロック同期更新）
+block_gossip_size = 4        # ブロック同期/可用性投票のファンアウト上限（ピアサンプル + ブロック同期更新）
 block_gossip_period_ms = 10000
 block_gossip_max_period_ms = 30000
 peer_gossip_period_ms = 1000

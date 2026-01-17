@@ -1,5 +1,7 @@
 //! Runtime consensus-mode flip helpers.
 
+use std::time::SystemTime;
+
 use iroha_logger::prelude::*;
 
 use super::*;
@@ -69,6 +71,31 @@ impl Actor {
     pub(super) fn apply_mode_flip(&mut self, target: ConsensusMode) -> Result<()> {
         if target == self.consensus_mode {
             self.pending_mode_flip = None;
+            return Ok(());
+        }
+        let processing_hash = self.pending.pending_processing.get();
+        let inflight = self.subsystems.commit.inflight.as_ref();
+        if processing_hash.is_some() || inflight.is_some() {
+            let reason = match (processing_hash.is_some(), inflight.is_some()) {
+                (true, true) => "commit_pipeline_busy",
+                (true, false) => "pending_processing",
+                (false, true) => "commit_inflight",
+                (false, false) => "commit_pipeline_idle",
+            };
+            let now_ms = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+                .unwrap_or(0);
+            super::status::note_mode_flip_blocked(reason, now_ms);
+            #[cfg(feature = "telemetry")]
+            self.telemetry
+                .inc_mode_flip_blocked(self.mode_tag(), now_ms);
+            debug!(
+                reason,
+                processing = ?processing_hash,
+                inflight_hash = ?inflight.as_ref().map(|entry| entry.block_hash),
+                "deferring runtime consensus mode flip while commit pipeline is active"
+            );
             return Ok(());
         }
         info!(

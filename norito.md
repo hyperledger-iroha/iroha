@@ -51,7 +51,7 @@ These flags are ORed into the final header byte. Unknown bits are rejected.
 
 Flag scoping rules:
 - `COMPACT_LEN` affects per-value length prefixes only.
-- Reserved layout bits are rejected when decoding headers.
+- Reserved layout bits (`VARINT_OFFSETS`, `COMPACT_SEQ_LEN`) are rejected when decoding headers.
 
 These flags are independent; no heuristic cross-effects are permitted.
 

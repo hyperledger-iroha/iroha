@@ -7,7 +7,7 @@ without native dependencies.
 
 ## Features
 - Header parsing/serialization (`NRT0`, major 0 with fixed v1 minor `0x00`) with CRC64-XZ validation
-- Flag support: packed sequences, compact lengths, varint offsets, packed structs
+- Flag support: packed sequences, compact lengths, packed structs, field bitset
 - Adapters for signed/unsigned integers, booleans, UTF-8 strings, byte arrays,
   options (`Optional`), results (`Result.Ok`/`Result.Err`), sequences, maps, and
   packed structs with hybrid bitset layout

@@ -142,11 +142,21 @@ impl Actor {
                 prevote_timeouts.push((key, pending_age, qc_any, commit_roster));
                 continue;
             }
-            let (vote_count, quorum_reached) = if pending.commit_qc_seen || commit_qc_cached {
-                (0, true)
-            } else {
-                self.commit_vote_quorum_status_for_block(*hash, pending.height, pending.view)
-            };
+            let (vote_count, quorum_reached, stake_quorum_missing) =
+                if pending.commit_qc_seen || commit_qc_cached {
+                    (0, true, false)
+                } else {
+                    let status = self.commit_vote_quorum_status_for_block_detail(
+                        *hash,
+                        pending.height,
+                        pending.view,
+                    );
+                    (
+                        status.vote_count,
+                        status.quorum_reached,
+                        status.stake_quorum_missing,
+                    )
+                };
             if missing_quorum_stale(pending_age, quorum_timeout, quorum_reached) {
                 if matches!(pending.last_gate, Some(GateReason::MissingLocalData))
                     && pending_age < availability_timeout
@@ -158,7 +168,13 @@ impl Actor {
                     reschedule_backoff_skipped = reschedule_backoff_skipped.saturating_add(1);
                     continue;
                 }
-                to_reschedule.push((key, pending_age, vote_count, min_votes_for_commit));
+                to_reschedule.push((
+                    key,
+                    pending_age,
+                    vote_count,
+                    min_votes_for_commit,
+                    stake_quorum_missing,
+                ));
             }
         }
         let scan_done = Instant::now();
@@ -205,7 +221,7 @@ impl Actor {
         }
 
         let mut progress = aborted_removed > 0;
-        for (key, age, vote_count, min_votes) in to_reschedule {
+        for (key, age, vote_count, min_votes, stake_quorum_missing) in to_reschedule {
             if let Some(pending) = self.pending.pending_blocks.remove(&key.0) {
                 self.reschedule_pending_quorum_block(
                     pending,
@@ -219,7 +235,7 @@ impl Actor {
                 self.trigger_view_change_with_cause(
                     key.1,
                     key.2,
-                    view_change_cause_for_quorum(vote_count),
+                    view_change_cause_for_quorum(vote_count, stake_quorum_missing),
                 );
                 progress = true;
             }
@@ -309,7 +325,7 @@ impl Actor {
                 self.trigger_view_change_with_cause(
                     key.1,
                     key.2,
-                    view_change_cause_for_quorum(vote_count),
+                    view_change_cause_for_quorum(vote_count, false),
                 );
                 progress = true;
             }

@@ -179,23 +179,9 @@ pub mod header_flags {
     pub const COMPACT_LEN: u8 = 0x02;
     /// Packed struct layout (offsets + data) for derive-generated types.
     pub const PACKED_STRUCT: u8 = 0x04;
-    /// Packed sequence uses varint-coded lengths instead of u64 offsets.
-    ///
-    /// When set, packed sequence layouts write `len` varints representing
-    /// element sizes, followed by the concatenated data segment.
-    /// When not set, packed sequence layouts use `(len+1)` u64 offsets.
-    /// This flag is scoped to packed sequences and does not affect other
-    /// length prefixes.
-    ///
     /// Reserved in v1; packed sequences always use fixed u64 offsets.
     pub const VARINT_OFFSETS: u8 = 0x08;
-    /// Sequence length itself is encoded as compact varint instead of fixed u64.
-    ///
-    /// This applies to the outer length header used by sequences and maps when
-    /// present. Decoders select behavior based on this flag only for the
-    /// top-level sequence length prefix.
-    ///
-    /// Reserved in v1; sequence lengths always use fixed u64 headers.
+    /// Reserved in v1; sequence length headers are fixed u64.
     pub const COMPACT_SEQ_LEN: u8 = 0x10;
     /// Packed-struct omits per-field sizes for self-delimiting/fixed-size fields
     /// and prefixes a compact bitset indicating which fields carry an explicit size.
@@ -521,9 +507,7 @@ pub(crate) fn fixed_offsets_used() -> bool {
     ENCODE_PACKED_FIXED_USED.with(|flag| flag.get())
 }
 
-/// Return whether varint offsets were emitted during the current encode pass.
-///
-/// Varint offsets are reserved in v1, so this always reports false.
+/// Return whether field bitsets were emitted during the current encode pass.
 pub(crate) fn field_bitset_used() -> bool {
     ENCODE_FIELD_BITSET_USED.with(|flag| flag.get())
 }
@@ -1167,11 +1151,6 @@ fn layout_flag_enabled(flag: u8) -> bool {
     (effective_layout_flags() & flag) != 0
 }
 
-#[inline]
-pub fn compact_seq_length_enabled() -> bool {
-    false
-}
-
 /// True if packed sequence layouts are enabled for the current decode.
 pub fn use_packed_seq() -> bool {
     layout_flag_enabled(header_flags::PACKED_SEQ)
@@ -1185,20 +1164,6 @@ pub fn use_compact_len() -> bool {
 /// True if packed struct layout is enabled for the current decode.
 pub fn use_packed_struct() -> bool {
     layout_flag_enabled(header_flags::PACKED_STRUCT)
-}
-
-/// True if packed sequences encode offsets as varint-coded lengths.
-///
-/// Reserved in v1; packed sequences always use fixed u64 offsets.
-pub fn use_varint_offsets() -> bool {
-    false
-}
-
-/// True if sequence lengths are varint-coded.
-///
-/// Reserved in v1; sequence lengths always use fixed u64 headers.
-pub fn use_compact_seq_len() -> bool {
-    compact_seq_length_enabled()
 }
 
 /// True if packed-struct encodes a bitset selecting fields with explicit sizes.
@@ -6127,20 +6092,6 @@ mod tests {
         let ptr = core::ptr::NonNull::<u8>::dangling().as_ptr();
         let res = unsafe { copy_from_payload(ptr, &mut out as *mut u8, 0) };
         assert!(res.is_ok());
-    }
-
-    #[test]
-    fn varint_offset_hooks_are_disabled_in_v1() {
-        let _guard = EncodeContextGuard::enter();
-        assert!(!fixed_offsets_used());
-        assert!(!varint_offsets_used());
-        assert!(!compact_seq_len_used());
-
-        note_varint_offsets_emitted();
-
-        assert!(!fixed_offsets_used());
-        assert!(!varint_offsets_used());
-        assert!(!compact_seq_len_used());
     }
 
     #[cfg(feature = "compression")]

@@ -266,7 +266,7 @@ public final class NoritoCodecAdapterTests {
     assert execDecoder.remaining() == 0 : "Executable has trailing bytes";
 
     final NoritoDecoder listDecoder = new NoritoDecoder(instructionsField, NoritoHeader.MINOR_VERSION);
-    final long count = listDecoder.readLength(listDecoder.compactSeqLenActive());
+    final long count = listDecoder.readLength(false);
     assert count == 1L : "Instruction list should contain one element";
     final long elementLength = listDecoder.readLength(listDecoder.compactLenActive());
     assert elementLength > 0 : "Instruction element must not be empty";

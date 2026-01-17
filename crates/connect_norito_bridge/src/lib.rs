@@ -7397,7 +7397,7 @@ mod accel_tests {
         };
         assert_eq!(result, 0, "expected success");
         let expected_hash =
-            decode_hex_32("a629da62f865c17dd280dd37e5a0fbe1d1a5705b012393f4d19225c049d7976b");
+            decode_hex_32("88c1e5cf1580715da99671ae721baf4bf97ff654831c5a848e9bf8d018a97939");
         assert_eq!(out_hash, expected_hash);
         unsafe {
             free(out_signed_ptr as *mut _);
@@ -7445,7 +7445,7 @@ mod accel_tests {
         };
         assert_eq!(result, 0, "expected success");
         let expected_hash =
-            decode_hex_32("fcf26e02e57afbbcdcc9fae28c8fcaff49e21c4a5ee2bb2216c82641cde27ee1");
+            decode_hex_32("1b90f6d8bacac187e4248e2c4f5cc3ca121c521c345a62c542aca3932478ad05");
         assert_eq!(out_hash, expected_hash);
         unsafe {
             free(out_signed_ptr as *mut _);
@@ -7493,7 +7493,7 @@ mod accel_tests {
         };
         assert_eq!(result, 0, "expected success");
         let expected_hash =
-            decode_hex_32("fbdfefe7764729312d6819e7c599abe06422a789d49b57d95066f1462b98c79b");
+            decode_hex_32("eb1388b5dfde2381e374d7e09d78388f172b0cd5a8c5db7fa3e74d7aca996beb");
         assert_eq!(out_hash, expected_hash);
         unsafe {
             free(out_signed_ptr as *mut _);

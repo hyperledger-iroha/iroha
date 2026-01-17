@@ -6,16 +6,16 @@ use std::{
 };
 
 use eyre::{Result, WrapErr, ensure, eyre};
-use futures_util::future::try_join_all;
+use futures_util::{StreamExt, TryStreamExt, future::try_join_all, stream};
 use integration_tests::sandbox;
 use iroha::data_model::{
     Level,
     isi::{InstructionBox, Log, SetParameter},
-    parameter::{BlockParameter, Parameter},
+    parameter::{BlockParameter, Parameter, SumeragiParameter},
 };
 use iroha_test_network::{Network, NetworkBuilder, init_instruction_registry};
 use nonzero_ext::nonzero;
-use tokio::{sync::Mutex, time::sleep};
+use tokio::{sync::Mutex, task, time::sleep};
 
 static LOCALNET_SMOKE_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
 const SMOKE_PIPELINE_TIME: Duration = Duration::from_secs(2);
@@ -31,6 +31,17 @@ const SOAK_STATUS_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const SOAK_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(10);
 const SOAK_STALL_THRESHOLD: Duration = Duration::from_secs(40);
 const SOAK_CLIENT_TTL: Duration = Duration::from_secs(2 * 60 * 60);
+const THROUGHPUT_PIPELINE_TIME: Duration = Duration::from_secs(2);
+const THROUGHPUT_BLOCK_TIME_MS: u64 = 1_000;
+const THROUGHPUT_COMMIT_TIME_MS: u64 = 1_000;
+const THROUGHPUT_TARGET_BLOCKS: u64 = 50;
+const THROUGHPUT_BLOCK_MAX_TXS: u64 = 10_000;
+const THROUGHPUT_SUBMIT_BATCH: u64 = 512;
+const THROUGHPUT_SUBMIT_PARALLELISM: u64 = 128;
+const THROUGHPUT_QUEUE_SOFT_LIMIT: u64 = 20_000;
+const THROUGHPUT_STALL_THRESHOLD: Duration = Duration::from_secs(60);
+const THROUGHPUT_COMMIT_TIME_MAX_MULTIPLIER: u64 = 2;
+const THROUGHPUT_CLIENT_TTL: Duration = Duration::from_secs(2 * 60 * 60);
 
 #[allow(unsafe_code)]
 fn set_env_var(key: &str, value: impl AsRef<std::ffi::OsStr>) {
@@ -456,6 +467,264 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
     }
 
     if sandbox::handle_result(result, stringify!(permissioned_localnet_soak_thousands))?.is_none() {
+        return Ok(());
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "long-running 7-peer localnet throughput regression (10k tps target)"]
+#[allow(clippy::too_many_lines)]
+async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
+    init_instruction_registry();
+    let _guard = LOCALNET_SMOKE_GUARD
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .await;
+
+    let previous_ttl = std::env::var_os("IROHA_TEST_CLIENT_TTL_MS");
+    set_env_var(
+        "IROHA_TEST_CLIENT_TTL_MS",
+        THROUGHPUT_CLIENT_TTL.as_millis().to_string(),
+    );
+
+    let builder = NetworkBuilder::new()
+        .with_peers(7)
+        .with_auto_populated_trusted_peers()
+        .with_real_genesis_keypair()
+        .with_pipeline_time(THROUGHPUT_PIPELINE_TIME)
+        .with_genesis_instruction(SetParameter::new(Parameter::Block(
+            BlockParameter::MaxTransactions(nonzero!(THROUGHPUT_BLOCK_MAX_TXS)),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::BlockTimeMs(THROUGHPUT_BLOCK_TIME_MS),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::CommitTimeMs(THROUGHPUT_COMMIT_TIME_MS),
+        )))
+        .with_config_layer(|layer| {
+            layer
+                .write(["sumeragi", "consensus_mode"], "permissioned")
+                .write(["network", "transaction_gossip_period_ms"], 200_i64)
+                .write(
+                    ["network", "transaction_gossip_restricted_fallback"],
+                    "public_overlay",
+                )
+                .write(
+                    ["network", "transaction_gossip_restricted_public_payload"],
+                    "forward",
+                )
+                // Tighten local timeouts to keep proposal/view-change cadence bounded.
+                .write(["sumeragi", "npos", "timeouts", "propose_ms"], 200_i64)
+                .write(["sumeragi", "npos", "timeouts", "prevote_ms"], 400_i64)
+                .write(["sumeragi", "npos", "timeouts", "precommit_ms"], 600_i64)
+                .write(["sumeragi", "npos", "timeouts", "commit_ms"], 800_i64)
+                .write(["sumeragi", "npos", "timeouts", "da_ms"], 400_i64)
+                // Give DA quorum extra breathing room under sustained load.
+                .write(["sumeragi", "da_quorum_timeout_multiplier"], 7_i64)
+                .write(["sumeragi", "da_availability_timeout_multiplier"], 3_i64)
+                .write(["sumeragi", "pacemaker_max_backoff_ms"], 5_000_i64)
+                .write(["sumeragi", "pacemaker_rtt_floor_multiplier"], 1_i64);
+        });
+
+    let result: Result<()> = async {
+        let Some(network) = sandbox::start_network_async_or_skip(
+            builder,
+            stringify!(permissioned_localnet_throughput_10k_tps),
+        )
+        .await?
+        else {
+            return Ok(());
+        };
+
+        wait_for_status_responses(&network, Duration::from_secs(30)).await?;
+        let baseline_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
+        let baseline_non_empty = baseline_statuses
+            .iter()
+            .map(|status| status.blocks_non_empty)
+            .min()
+            .unwrap_or_default();
+
+        let target_blocks =
+            env_or_default("IROHA_THROUGHPUT_TARGET_BLOCKS", THROUGHPUT_TARGET_BLOCKS);
+        let submit_batch =
+            env_or_default("IROHA_THROUGHPUT_SUBMIT_BATCH", THROUGHPUT_SUBMIT_BATCH).max(1);
+        let submit_parallelism =
+            env_or_default("IROHA_THROUGHPUT_PARALLELISM", THROUGHPUT_SUBMIT_PARALLELISM)
+                .max(1)
+                .min(submit_batch);
+        let submit_parallelism = usize::try_from(submit_parallelism)
+            .wrap_err("submit parallelism exceeds host limits")?;
+        let queue_soft_limit = env_or_default(
+            "IROHA_THROUGHPUT_QUEUE_SOFT_LIMIT",
+            THROUGHPUT_QUEUE_SOFT_LIMIT,
+        );
+        let target_height = baseline_non_empty.saturating_add(target_blocks);
+        let target_txs = target_blocks.saturating_mul(THROUGHPUT_BLOCK_MAX_TXS);
+
+        let submit_peer = network
+            .peers()
+            .first()
+            .cloned()
+            .ok_or_else(|| eyre!("network must have at least one peer"))?;
+        let client = submit_peer.client();
+        let submit_start = Instant::now();
+        let mut submitted = 0_u64;
+        while submitted < target_txs {
+            let remaining = target_txs.saturating_sub(submitted);
+            let batch_count = remaining.min(submit_batch);
+            let start_idx = submitted;
+            stream::iter(start_idx..start_idx.saturating_add(batch_count))
+                .map(|idx| {
+                    let client = client.clone();
+                    async move {
+                        let handle = task::spawn_blocking(move || {
+                            client
+                                .submit::<InstructionBox>(
+                                    Log::new(Level::INFO, format!("localnet throughput {idx}"))
+                                        .into(),
+                                )
+                                .wrap_err_with(|| {
+                                    format!("failed to submit log instruction {idx}")
+                                })
+                        });
+                        handle.await.wrap_err("submit task join failed")?
+                    }
+                })
+                .buffer_unordered(submit_parallelism)
+                .try_for_each(|_| async { Ok(()) })
+                .await?;
+            submitted = submitted.saturating_add(batch_count);
+            wait_for_queue_depth(&network, queue_soft_limit, SOAK_STATUS_POLL_TIMEOUT).await?;
+        }
+        let submit_elapsed = submit_start.elapsed();
+        let commit_wait_start = Instant::now();
+
+        let mut last_progress = Instant::now();
+        let mut last_min_non_empty = baseline_non_empty;
+        let mut last_log = Instant::now()
+            .checked_sub(SOAK_PROGRESS_LOG_INTERVAL)
+            .unwrap_or_else(Instant::now);
+        let mut last_snapshot: Vec<StatusSnapshot> = Vec::new();
+
+        loop {
+            if let Ok(statuses) = collect_statuses(&network, SOAK_STATUS_POLL_TIMEOUT).await {
+                let min_non_empty = statuses
+                    .iter()
+                    .map(|status| status.blocks_non_empty)
+                    .min()
+                    .unwrap_or_default();
+                let max_non_empty = statuses
+                    .iter()
+                    .map(|status| status.blocks_non_empty)
+                    .max()
+                    .unwrap_or_default();
+                if min_non_empty > last_min_non_empty {
+                    last_min_non_empty = min_non_empty;
+                    last_progress = Instant::now();
+                }
+                last_snapshot = statuses
+                    .iter()
+                    .map(StatusSnapshot::from_status)
+                    .collect();
+                if last_log.elapsed() >= SOAK_PROGRESS_LOG_INTERVAL {
+                    eprintln!(
+                        "localnet throughput progress (target_non_empty={target_height}, min_non_empty={min_non_empty}, max_non_empty={max_non_empty}): {last_snapshot:?}"
+                    );
+                    last_log = Instant::now();
+                }
+                if statuses
+                    .iter()
+                    .all(|status| status.blocks_non_empty >= target_height)
+                {
+                    break;
+                }
+            }
+
+            if last_progress.elapsed() >= THROUGHPUT_STALL_THRESHOLD {
+                return Err(eyre!(
+                    "localnet throughput stalled for {:?} (min_non_empty={last_min_non_empty}, target_non_empty={target_height}): last_snapshot={last_snapshot:?}",
+                    THROUGHPUT_STALL_THRESHOLD
+                ));
+            }
+
+            sleep(SOAK_STATUS_POLL_INTERVAL).await;
+        }
+
+        let commit_wait_elapsed = commit_wait_start.elapsed();
+        let total_elapsed = submit_start.elapsed();
+
+        let after_statuses = collect_statuses(&network, SOAK_STATUS_POLL_TIMEOUT).await?;
+        ensure!(
+            after_statuses
+                .iter()
+                .all(|status| status.blocks_non_empty >= target_height),
+            "not all peers reached target non-empty height {target_height}: {after_statuses:?}"
+        );
+        let max_commit_time_ms = after_statuses
+            .iter()
+            .map(|status| status.commit_time_ms)
+            .max()
+            .unwrap_or_default();
+        let max_commit_time_allowed = THROUGHPUT_COMMIT_TIME_MS
+            .saturating_mul(THROUGHPUT_COMMIT_TIME_MAX_MULTIPLIER);
+        let mut min_commit_time_ms = u64::MAX;
+        let mut sum_commit_time_ms = 0_u128;
+        for status in &after_statuses {
+            let value = status.commit_time_ms;
+            min_commit_time_ms = min_commit_time_ms.min(value);
+            sum_commit_time_ms = sum_commit_time_ms.saturating_add(u128::from(value));
+        }
+        let avg_commit_time_ms = if after_statuses.is_empty() {
+            0_u64
+        } else {
+            (sum_commit_time_ms / u128::from(after_statuses.len() as u64)) as u64
+        };
+        let min_commit_time_ms = if min_commit_time_ms == u64::MAX {
+            0_u64
+        } else {
+            min_commit_time_ms
+        };
+        let throughput_tps = if total_elapsed.as_secs_f64() > 0.0 {
+            target_txs as f64 / total_elapsed.as_secs_f64()
+        } else {
+            0.0
+        };
+        eprintln!(
+            "localnet throughput metrics: peers={}, target_blocks={}, target_txs={}, submit_batch={}, submit_parallelism={}, queue_soft_limit={}, submit_elapsed={:?}, commit_wait_elapsed={:?}, total_elapsed={:?}, throughput_tps={:.2}, commit_time_ms(min/avg/max)={}/{}/{}",
+            network.peers().len(),
+            target_blocks,
+            target_txs,
+            submit_batch,
+            submit_parallelism,
+            queue_soft_limit,
+            submit_elapsed,
+            commit_wait_elapsed,
+            total_elapsed,
+            throughput_tps,
+            min_commit_time_ms,
+            avg_commit_time_ms,
+            max_commit_time_ms
+        );
+        ensure!(
+            max_commit_time_ms <= max_commit_time_allowed,
+            "commit time exceeded target: max_commit_time_ms={max_commit_time_ms}, allowed={max_commit_time_allowed}",
+        );
+
+        network.shutdown().await;
+        Ok(())
+    }
+    .await;
+
+    if let Some(previous_ttl) = previous_ttl {
+        set_env_var("IROHA_TEST_CLIENT_TTL_MS", previous_ttl);
+    } else {
+        remove_env_var("IROHA_TEST_CLIENT_TTL_MS");
+    }
+
+    if sandbox::handle_result(result, stringify!(permissioned_localnet_throughput_10k_tps))?
+        .is_none()
+    {
         return Ok(());
     }
     Ok(())

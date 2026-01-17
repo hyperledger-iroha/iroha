@@ -69,7 +69,7 @@ pub use metal_config::{FftTuning, PoseidonTuning};
 pub use ordering::ordering_hash;
 pub use overrides::{MetalOverrides, apply_metal_overrides};
 pub use packing::{LIMB_BYTES, PackedBytes, pack_bytes, unpack_bytes};
-pub use poseidon::PoseidonSponge;
+pub use poseidon::{FIELD_MODULUS, PoseidonSponge, hash_field_elements};
 pub use proof::{Proof, Prover, verify};
 pub use trace::{
     ColumnDigests, PoseidonPipelinePolicy, RowUsage, Trace, TraceColumn, build_trace,

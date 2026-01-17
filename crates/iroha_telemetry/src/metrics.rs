@@ -6146,6 +6146,8 @@ pub struct Metrics {
     pub sumeragi_block_sync_roster_drop_total: IntCounterVec,
     /// Sumeragi: block-sync ShareBlocks dropped because no request was tracked.
     pub sumeragi_block_sync_share_blocks_unsolicited_total: IntCounter,
+    /// Sumeragi: consensus message drops/deferrals grouped by kind, outcome, and reason.
+    pub sumeragi_consensus_message_handling_total: IntCounterVec,
     /// Sumeragi: view-change triggers grouped by cause.
     pub sumeragi_view_change_cause_total: IntCounterVec,
     /// Sumeragi: unix timestamp (ms) of the last view-change trigger grouped by cause.
@@ -6464,6 +6466,8 @@ pub struct Metrics {
     pub p2p_post_overflow_total: GenericGauge<AtomicU64>,
     /// Per-topic breakdown for post channel overflows
     pub p2p_post_overflow_by_topic: GenericGaugeVec<AtomicU64>,
+    /// Consensus ingress drops grouped by topic and reason.
+    pub consensus_ingress_drop_total: IntCounterVec,
     /// Number of DNS interval-based refresh cycles performed.
     pub p2p_dns_refresh_total: GenericGauge<AtomicU64>,
     /// Number of DNS TTL-based refresh cycles performed.
@@ -8903,6 +8907,14 @@ impl Default for Metrics {
             &["priority", "topic"],
         )
         .expect("Infallible");
+        let consensus_ingress_drop_total = IntCounterVec::new(
+            Opts::new(
+                "consensus_ingress_drop_total",
+                "Consensus ingress drops grouped by topic and reason",
+            ),
+            &["topic", "reason"],
+        )
+        .expect("Infallible");
         let p2p_dns_refresh_total = GenericGauge::new(
             "p2p_dns_refresh_total",
             "Number of DNS interval-based refresh cycles performed",
@@ -9872,6 +9884,14 @@ impl Default for Metrics {
             "Block-sync ShareBlocks dropped because no matching request was tracked",
         )
         .expect("Infallible");
+        let sumeragi_consensus_message_handling_total = IntCounterVec::new(
+            Opts::new(
+                "sumeragi_consensus_message_handling_total",
+                "Consensus message drops/deferrals grouped by kind, outcome, and reason",
+            ),
+            &["kind", "outcome", "reason"],
+        )
+        .expect("Infallible");
         let sumeragi_view_change_cause_total = IntCounterVec::new(
             Opts::new(
                 "sumeragi_view_change_cause_total",
@@ -9891,6 +9911,7 @@ impl Default for Metrics {
         for label in [
             "commit_failure",
             "quorum_timeout",
+            "stake_quorum_timeout",
             "censorship_evidence",
             "da_gate",
             "missing_payload",
@@ -12585,6 +12606,7 @@ impl Default for Metrics {
             p2p_low_post_throttled_total,
             p2p_low_broadcast_throttled_total,
             p2p_post_overflow_total,
+            consensus_ingress_drop_total,
             p2p_dns_refresh_total,
             p2p_dns_ttl_refresh_total,
             p2p_dns_resolution_fail_total,
@@ -12640,6 +12662,7 @@ impl Default for Metrics {
             sumeragi_block_sync_roster_source_total,
             sumeragi_block_sync_roster_drop_total,
             sumeragi_block_sync_share_blocks_unsolicited_total,
+            sumeragi_consensus_message_handling_total,
             sumeragi_view_change_cause_total,
             sumeragi_view_change_cause_last_timestamp_ms,
             sumeragi_qc_signer_counts,
@@ -13131,6 +13154,7 @@ impl Default for Metrics {
             p2p_low_broadcast_throttled_total,
             p2p_post_overflow_total,
             p2p_post_overflow_by_topic,
+            consensus_ingress_drop_total,
             p2p_dns_refresh_total,
             p2p_dns_ttl_refresh_total,
             p2p_dns_resolution_fail_total,
@@ -13187,6 +13211,7 @@ impl Default for Metrics {
             sumeragi_block_sync_roster_source_total,
             sumeragi_block_sync_roster_drop_total,
             sumeragi_block_sync_share_blocks_unsolicited_total,
+            sumeragi_consensus_message_handling_total,
             sumeragi_view_change_cause_total,
             sumeragi_view_change_cause_last_timestamp_ms,
             sumeragi_qc_signer_counts,

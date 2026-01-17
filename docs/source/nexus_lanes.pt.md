@@ -96,6 +96,7 @@ LaneConfigEntry {
 ## Orcamentos de armazenamento
 
 - `nexus.storage.max_disk_usage_bytes` define o orcamento total em disco que nos Nexus devem consumir entre Kura, snapshots frios de WSV, armazenamento SoraFS e spools de streaming (SoraNet/SoraVPN).
+- Quando o orcamento global e excedido, a eviccao e deterministica: primeiro poda os spools de provisao SoraNet em ordem lexicografica de caminho, depois os spools SoraVPN, depois os snapshots frios do tiered-state (do mais antigo ao mais recente), e por fim os segmentos Kura aposentados. Corpos de bloco ativos nao sao removidos ate que a reidratacao DA esteja disponivel.
 - `nexus.storage.max_wsv_memory_bytes` limita a camada quente de WSV propagando o dimensionamento determinista do payload Norito em `tiered_state.hot_retained_bytes`; a retencao de graca pode exceder temporariamente o orcamento, mas o excesso e observavel via telemetria (`state_tiered_hot_bytes`, `state_tiered_hot_grace_overflow_bytes`).
 - `nexus.storage.disk_budget_weights` divide o orcamento de disco entre componentes usando pontos base (deve somar 10.000). Os limites derivados se aplicam a `kura.max_disk_usage_bytes`, `tiered_state.max_cold_bytes`, `sorafs.storage.max_capacity_bytes`, `streaming.soranet.provision_spool_max_bytes` e `streaming.soravpn.provision_spool_max_bytes`.
 - A aplicacao do orcamento de Kura soma os bytes do block-store em segmentos de lanes ativas e aposentadas e inclui blocos em fila ainda nao persistidos para evitar estouros durante o atraso de escrita.

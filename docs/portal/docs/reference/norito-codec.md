@@ -13,7 +13,7 @@ and points to the full specification in `norito.md`.
 | **Bare payload** | Deterministic value encoding used for hashing/comparison. On-wire transport always uses a header; bare bytes are internal-only. | `norito::codec::{Encode, Decode}` |
 | **Compression** | Optional Zstd (and experimental GPU acceleration) selected via the header compression byte. | `norito.md`, “Compression negotiation” |
 
-The layout flag registry (packed-struct, packed-seq, varint offsets, compact
+The layout flag registry (packed-struct, packed-seq, field bitset, compact
 lengths) lives in `norito::header::flags`. V1 defaults to flags `0x00` but
 accepts explicit header flags within the supported mask; unknown bits are
 rejected. `norito::header::Flags` is retained for internal inspection and

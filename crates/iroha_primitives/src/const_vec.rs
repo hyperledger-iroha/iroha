@@ -881,32 +881,7 @@ where
         + for<'de> NoritoDeserialize<'de>
         + for<'slice> ncore::DecodeFromSlice<'slice>,
 {
-    let vec = match decode_adaptive_with_streaming_fallback::<T>(bytes) {
-        Ok(vec) => vec,
-        Err(err) => {
-            let packed_flags = ncore::header_flags::PACKED_SEQ;
-            let vec_packed = {
-                let _guard = ncore::DecodeFlagsGuard::enter_with_hint(packed_flags, packed_flags);
-                decode_adaptive_with_streaming_fallback::<T>(bytes)
-            };
-            match vec_packed {
-                Ok(vec) => vec,
-                Err(packed_err) => {
-                    #[cfg(not(debug_assertions))]
-                    let _ = &err;
-                    #[cfg(debug_assertions)]
-                    if norito::debug_trace_enabled() {
-                        eprintln!(
-                            "ConstVec::<{}>::decode_const_vec_via_codec adaptive path failed err={err:?} len={}; packed_flags_err={packed_err:?}",
-                            core::any::type_name::<T>(),
-                            bytes.len()
-                        );
-                    }
-                    return Err(packed_err);
-                }
-            }
-        }
-    };
+    let vec = decode_adaptive_with_streaming_fallback::<T>(bytes)?;
     match reencode_and_verify::<T>(&vec, bytes) {
         Ok(_) => Ok(ConstVec::from(vec)),
         Err(ncore::Error::LengthMismatch) => {
@@ -1293,6 +1268,28 @@ mod tests {
     }
 
     #[test]
+    fn packed_seq_payload_requires_flags() {
+        if !cfg!(feature = "packed-seq") {
+            return;
+        }
+        let value = ConstVec::from(vec![1_u8, 2, 3]);
+        let flags = ncore::header_flags::PACKED_SEQ;
+        let mut packed = Vec::new();
+        {
+            let _guard = ncore::DecodeFlagsGuard::enter(flags);
+            NoritoSerialize::serialize(&value, &mut packed).expect("serialize packed const vec");
+        }
+        ncore::reset_decode_state();
+
+        let err = <ConstVec<u8> as ncore::DecodeFromSlice>::decode_from_slice(&packed)
+            .expect_err("packed payload should require packed-seq flags");
+        assert!(matches!(
+            err,
+            ncore::Error::LengthMismatch | ncore::Error::DecodePanic { .. }
+        ));
+    }
+
+    #[test]
     fn matches_vec_encoding_canonical_flags() {
         let items = vec![vec![0xAAu8; 17], vec![0xBBu8; 9], vec![0xCCu8; 23]];
         let const_bytes = ConstVec::from(items.clone()).encode();
@@ -1419,8 +1416,8 @@ mod tests {
             payload[..hdr].fill(0);
         }
         // Append trailing bytes to mimic compat payloads that keep auxiliary data
-        // after the packed span. Prior to the fix, this confused the manual
-        // decoder into discarding the inferred offsets.
+        // after the packed span. The manual decoder should still reject the
+        // corrupted header.
         payload.extend_from_slice(&[0xAAu8; 8]);
 
         let archived = ncore::archived_from_slice_unchecked::<ConstVec<Vec<u8>>>(&payload);

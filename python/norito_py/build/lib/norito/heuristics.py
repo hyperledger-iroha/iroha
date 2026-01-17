@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-ENABLE_VARINT_OFFSETS_UP_TO: int = 0
 AOS_NCB_SMALL_N: int = 64
 COMBO_NO_DELTA_SMALL_N_IF_EMPTY: int = 2
 COMBO_ID_DELTA_MIN_ROWS: int = 2
@@ -12,7 +11,6 @@ COMBO_DICT_RATIO_MAX: float = 0.40
 COMBO_DICT_AVG_LEN_MIN: float = 8.0
 
 __all__ = [
-    "ENABLE_VARINT_OFFSETS_UP_TO",
     "AOS_NCB_SMALL_N",
     "COMBO_NO_DELTA_SMALL_N_IF_EMPTY",
     "COMBO_ID_DELTA_MIN_ROWS",

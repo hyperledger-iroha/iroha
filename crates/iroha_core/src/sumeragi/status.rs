@@ -354,6 +354,8 @@ static BG_POST_DROP_BROADCAST_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCK_CREATED_DROPPED_BY_LOCK_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCK_CREATED_HINT_MISMATCH_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCK_CREATED_PROPOSAL_MISMATCH_TOTAL: AtomicU64 = AtomicU64::new(0);
+static MESSAGE_HANDLING_TOTALS: OnceLock<Mutex<BTreeMap<ConsensusMessageHandlingKey, u64>>> =
+    OnceLock::new();
 static MISSING_BLOCK_FETCH_TOTAL: AtomicU64 = AtomicU64::new(0);
 static MISSING_BLOCK_FETCH_LAST_TARGETS: AtomicU64 = AtomicU64::new(0);
 static MISSING_BLOCK_FETCH_LAST_DWELL_MS: AtomicU64 = AtomicU64::new(0);
@@ -391,6 +393,7 @@ static BLOCK_SYNC_ROSTER_DROP_MISSING_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCK_SYNC_ROSTER_DROP_UNSOLICITED_SHARE_BLOCKS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_COMMIT_FAILURE_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_QUORUM_TIMEOUT_TOTAL: AtomicU64 = AtomicU64::new(0);
+static VIEW_CHANGE_CAUSE_STAKE_QUORUM_TIMEOUT_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_DA_GATE_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_CENSORSHIP_EVIDENCE_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_MISSING_PAYLOAD_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -400,6 +403,7 @@ static VIEW_CHANGE_CAUSE_LAST_TS_MS: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_LAST_LABEL: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 static VIEW_CHANGE_CAUSE_LAST_COMMIT_FAILURE_TS_MS: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_LAST_QUORUM_TIMEOUT_TS_MS: AtomicU64 = AtomicU64::new(0);
+static VIEW_CHANGE_CAUSE_LAST_STAKE_QUORUM_TIMEOUT_TS_MS: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_LAST_DA_GATE_TS_MS: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_LAST_CENSORSHIP_EVIDENCE_TS_MS: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_LAST_MISSING_PAYLOAD_TS_MS: AtomicU64 = AtomicU64::new(0);
@@ -466,6 +470,8 @@ static VIEW_CHANGE_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static VIEW_CHANGE_CAUSE_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
 static LANE_RELAY_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+#[cfg(test)]
+static MESSAGE_HANDLING_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
 static MISSING_BLOCK_FETCH_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
@@ -2209,6 +2215,234 @@ pub struct BlockSyncRosterSnapshot {
     pub drop_unsolicited_share_blocks_total: u64,
 }
 
+/// Consensus message kinds tracked for drop/deferral telemetry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ConsensusMessageKind {
+    /// Block payload creation (`BlockCreated`).
+    BlockCreated,
+    /// Block-sync update batches (`BlockSyncUpdate`).
+    BlockSyncUpdate,
+    /// Consensus-parameter advertisements (`ConsensusParams`).
+    ConsensusParams,
+    /// Proposal hints (`ProposalHint`).
+    ProposalHint,
+    /// Proposals (`Proposal`).
+    Proposal,
+    /// Commit votes (`QcVote`).
+    QcVote,
+    /// Commit certificates (`Qc`).
+    Qc,
+    /// VRF commit broadcasts (`VrfCommit`).
+    VrfCommit,
+    /// VRF reveal broadcasts (`VrfReveal`).
+    VrfReveal,
+    /// Execution witness payloads (`ExecWitness`).
+    ExecWitness,
+    /// RBC init payloads (`RbcInit`).
+    RbcInit,
+    /// RBC chunk payloads (`RbcChunk`).
+    RbcChunk,
+    /// RBC ready messages (`RbcReady`).
+    RbcReady,
+    /// RBC delivery notifications (`RbcDeliver`).
+    RbcDeliver,
+    /// Fetch-pending-block requests (`FetchPendingBlock`).
+    FetchPendingBlock,
+    /// Consensus control-flow evidence.
+    Evidence,
+}
+
+impl ConsensusMessageKind {
+    /// Stable label for telemetry and status.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ConsensusMessageKind::BlockCreated => "block_created",
+            ConsensusMessageKind::BlockSyncUpdate => "block_sync_update",
+            ConsensusMessageKind::ConsensusParams => "consensus_params",
+            ConsensusMessageKind::ProposalHint => "proposal_hint",
+            ConsensusMessageKind::Proposal => "proposal",
+            ConsensusMessageKind::QcVote => "qc_vote",
+            ConsensusMessageKind::Qc => "qc",
+            ConsensusMessageKind::VrfCommit => "vrf_commit",
+            ConsensusMessageKind::VrfReveal => "vrf_reveal",
+            ConsensusMessageKind::ExecWitness => "exec_witness",
+            ConsensusMessageKind::RbcInit => "rbc_init",
+            ConsensusMessageKind::RbcChunk => "rbc_chunk",
+            ConsensusMessageKind::RbcReady => "rbc_ready",
+            ConsensusMessageKind::RbcDeliver => "rbc_deliver",
+            ConsensusMessageKind::FetchPendingBlock => "fetch_pending_block",
+            ConsensusMessageKind::Evidence => "evidence",
+        }
+    }
+}
+
+/// Outcome recorded for consensus-message handling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ConsensusMessageOutcome {
+    /// The message was dropped.
+    Dropped,
+    /// The message was deferred/stashed for later processing.
+    Deferred,
+}
+
+impl ConsensusMessageOutcome {
+    /// Stable label for telemetry and status.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ConsensusMessageOutcome::Dropped => "dropped",
+            ConsensusMessageOutcome::Deferred => "deferred",
+        }
+    }
+}
+
+/// Reason a consensus message was dropped or deferred.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ConsensusMessageReason {
+    /// Beyond the configured future height/view window.
+    FutureWindow,
+    /// Height is at or below the committed tip.
+    StaleHeight,
+    /// View is older than the local view.
+    StaleView,
+    /// Duplicate payload already seen.
+    Duplicate,
+    /// Conflicting vote already recorded for the signer.
+    ConflictingVote,
+    /// Locked QC gate rejected the payload.
+    LockedQc,
+    /// Missing highest QC reference.
+    MissingHighestQc,
+    /// Highest QC header mismatch.
+    HighestQcMismatch,
+    /// BlockCreated hint validation failed.
+    HintMismatch,
+    /// Payload hash mismatched the expected value.
+    PayloadMismatch,
+    /// Payload failed basic validation.
+    InvalidPayload,
+    /// Payload exceeds size limits.
+    PayloadTooLarge,
+    /// Incoming block conflicts with a committed block hash.
+    CommitConflict,
+    /// No verifiable roster available for the payload.
+    RosterMissing,
+    /// Signature validation failed for the payload.
+    InvalidSignature,
+    /// Missing quorum evidence for block sync.
+    QuorumMissing,
+    /// Payload could not be applied locally.
+    PayloadUnapplied,
+    /// Signature mismatch deferred while the node catches up.
+    SignatureMismatchDeferred,
+    /// Delivery channel is unavailable.
+    EnqueueFailed,
+    /// Sender is currently penalized.
+    PenalizedSender,
+    /// Epoch mismatch on the payload.
+    EpochMismatch,
+    /// Payload already committed locally.
+    Committed,
+    /// Roster hash mismatched authoritative roster.
+    RosterHashMismatch,
+    /// RBC chunk digest mismatched expected hash.
+    ChunkDigestMismatch,
+    /// Chunk root mismatch detected.
+    ChunkRootMismatch,
+    /// Pending stash session cap reached.
+    StashSessionLimit,
+    /// Pending stash payload cap reached.
+    StashCap,
+    /// RBC DELIVER deferred awaiting READY quorum.
+    ReadyQuorumMissing,
+    /// RBC DELIVER deferred awaiting missing chunks.
+    ChunksMissing,
+    /// RBC DELIVER deferred while INIT is missing.
+    InitMissing,
+    /// RBC DELIVER deferred while roster is missing.
+    RosterMissingDeferred,
+    /// RBC DELIVER deferred while roster hash mismatches.
+    RosterHashMismatchDeferred,
+    /// RBC DELIVER deferred while roster is unverified.
+    RosterUnverifiedDeferred,
+    /// Consensus message ignored due to mismatched mode/context.
+    ModeMismatch,
+    /// Requested data not found locally.
+    NotFound,
+}
+
+impl ConsensusMessageReason {
+    /// Stable label for telemetry and status.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ConsensusMessageReason::FutureWindow => "future_window",
+            ConsensusMessageReason::StaleHeight => "stale_height",
+            ConsensusMessageReason::StaleView => "stale_view",
+            ConsensusMessageReason::Duplicate => "duplicate",
+            ConsensusMessageReason::ConflictingVote => "conflicting_vote",
+            ConsensusMessageReason::LockedQc => "locked_qc",
+            ConsensusMessageReason::MissingHighestQc => "missing_highest_qc",
+            ConsensusMessageReason::HighestQcMismatch => "highest_qc_mismatch",
+            ConsensusMessageReason::HintMismatch => "hint_mismatch",
+            ConsensusMessageReason::PayloadMismatch => "payload_mismatch",
+            ConsensusMessageReason::InvalidPayload => "invalid_payload",
+            ConsensusMessageReason::PayloadTooLarge => "payload_too_large",
+            ConsensusMessageReason::CommitConflict => "commit_conflict",
+            ConsensusMessageReason::RosterMissing => "roster_missing",
+            ConsensusMessageReason::InvalidSignature => "invalid_signature",
+            ConsensusMessageReason::QuorumMissing => "quorum_missing",
+            ConsensusMessageReason::PayloadUnapplied => "payload_unapplied",
+            ConsensusMessageReason::SignatureMismatchDeferred => "signature_mismatch_deferred",
+            ConsensusMessageReason::EnqueueFailed => "enqueue_failed",
+            ConsensusMessageReason::PenalizedSender => "penalized_sender",
+            ConsensusMessageReason::EpochMismatch => "epoch_mismatch",
+            ConsensusMessageReason::Committed => "committed",
+            ConsensusMessageReason::RosterHashMismatch => "roster_hash_mismatch",
+            ConsensusMessageReason::ChunkDigestMismatch => "chunk_digest_mismatch",
+            ConsensusMessageReason::ChunkRootMismatch => "chunk_root_mismatch",
+            ConsensusMessageReason::StashSessionLimit => "stash_session_limit",
+            ConsensusMessageReason::StashCap => "stash_cap",
+            ConsensusMessageReason::ReadyQuorumMissing => "ready_quorum_missing",
+            ConsensusMessageReason::ChunksMissing => "chunks_missing",
+            ConsensusMessageReason::InitMissing => "init_missing",
+            ConsensusMessageReason::RosterMissingDeferred => "roster_missing_deferred",
+            ConsensusMessageReason::RosterHashMismatchDeferred => "roster_hash_mismatch_deferred",
+            ConsensusMessageReason::RosterUnverifiedDeferred => "roster_unverified_deferred",
+            ConsensusMessageReason::ModeMismatch => "mode_mismatch",
+            ConsensusMessageReason::NotFound => "not_found",
+        }
+    }
+}
+
+/// Single consensus-message handling counter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConsensusMessageHandlingEntry {
+    /// Message kind.
+    pub kind: ConsensusMessageKind,
+    /// Handling outcome (dropped or deferred).
+    pub outcome: ConsensusMessageOutcome,
+    /// Reason label for the drop/deferral.
+    pub reason: ConsensusMessageReason,
+    /// Total count observed.
+    pub total: u64,
+}
+
+/// Snapshot of consensus-message handling counters.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConsensusMessageHandlingSnapshot {
+    /// Per-kind drop/deferral counters with reason labels.
+    pub entries: Vec<ConsensusMessageHandlingEntry>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct ConsensusMessageHandlingKey {
+    kind: ConsensusMessageKind,
+    outcome: ConsensusMessageOutcome,
+    reason: ConsensusMessageReason,
+}
+
 /// Snapshot of view-change causes and timing.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ViewChangeCauseSnapshot {
@@ -2216,6 +2450,8 @@ pub struct ViewChangeCauseSnapshot {
     pub commit_failure_total: u64,
     /// Total view changes triggered after quorum timeouts/missing commits.
     pub quorum_timeout_total: u64,
+    /// Total view changes triggered after stake-quorum timeouts (NPoS only).
+    pub stake_quorum_timeout_total: u64,
     /// Total view changes triggered after DA availability aborts (unused when DA is advisory).
     pub da_gate_total: u64,
     /// Total view changes triggered after censorship evidence reaches quorum.
@@ -2234,6 +2470,8 @@ pub struct ViewChangeCauseSnapshot {
     pub last_commit_failure_timestamp_ms: u64,
     /// Milliseconds since UNIX epoch when a quorum-timeout cause was last recorded.
     pub last_quorum_timeout_timestamp_ms: u64,
+    /// Milliseconds since UNIX epoch when a stake-quorum-timeout cause was last recorded.
+    pub last_stake_quorum_timeout_timestamp_ms: u64,
     /// Milliseconds since UNIX epoch when a DA-gate cause was last recorded.
     pub last_da_gate_timestamp_ms: u64,
     /// Milliseconds since UNIX epoch when a censorship-evidence cause was last recorded.
@@ -2661,6 +2899,8 @@ pub struct StatusSnapshot {
     pub gossip_fallback_total: u64,
     /// Dedup eviction counters for inbound consensus traffic.
     pub dedup_evictions: DedupEvictionSnapshot,
+    /// Consensus message drop/deferral counters with reason labels.
+    pub consensus_message_handling: ConsensusMessageHandlingSnapshot,
     /// Total background Post drops when the worker is unavailable.
     pub bg_post_drop_post_total: u64,
     /// Total background Broadcast drops when the worker is unavailable.
@@ -3164,6 +3404,8 @@ fn view_change_cause_snapshot() -> ViewChangeCauseSnapshot {
     ViewChangeCauseSnapshot {
         commit_failure_total: VIEW_CHANGE_CAUSE_COMMIT_FAILURE_TOTAL.load(Ordering::Relaxed),
         quorum_timeout_total: VIEW_CHANGE_CAUSE_QUORUM_TIMEOUT_TOTAL.load(Ordering::Relaxed),
+        stake_quorum_timeout_total: VIEW_CHANGE_CAUSE_STAKE_QUORUM_TIMEOUT_TOTAL
+            .load(Ordering::Relaxed),
         da_gate_total: VIEW_CHANGE_CAUSE_DA_GATE_TOTAL.load(Ordering::Relaxed),
         censorship_evidence_total: VIEW_CHANGE_CAUSE_CENSORSHIP_EVIDENCE_TOTAL
             .load(Ordering::Relaxed),
@@ -3175,6 +3417,8 @@ fn view_change_cause_snapshot() -> ViewChangeCauseSnapshot {
         last_commit_failure_timestamp_ms: VIEW_CHANGE_CAUSE_LAST_COMMIT_FAILURE_TS_MS
             .load(Ordering::Relaxed),
         last_quorum_timeout_timestamp_ms: VIEW_CHANGE_CAUSE_LAST_QUORUM_TIMEOUT_TS_MS
+            .load(Ordering::Relaxed),
+        last_stake_quorum_timeout_timestamp_ms: VIEW_CHANGE_CAUSE_LAST_STAKE_QUORUM_TIMEOUT_TS_MS
             .load(Ordering::Relaxed),
         last_da_gate_timestamp_ms: VIEW_CHANGE_CAUSE_LAST_DA_GATE_TS_MS.load(Ordering::Relaxed),
         last_censorship_evidence_timestamp_ms: VIEW_CHANGE_CAUSE_LAST_CENSORSHIP_EVIDENCE_TS_MS
@@ -3258,6 +3502,25 @@ fn dedup_evictions_snapshot() -> DedupEvictionSnapshot {
         rbc_deliver_capacity_total: DEDUP_RBC_DELIVER_EVICT_CAPACITY_TOTAL.load(Ordering::Relaxed),
         rbc_deliver_expired_total: DEDUP_RBC_DELIVER_EVICT_EXPIRED_TOTAL.load(Ordering::Relaxed),
     }
+}
+
+fn consensus_message_handling_snapshot() -> ConsensusMessageHandlingSnapshot {
+    let Some(slot) = MESSAGE_HANDLING_TOTALS.get() else {
+        return ConsensusMessageHandlingSnapshot::default();
+    };
+    let guard = slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let entries = guard
+        .iter()
+        .map(|(key, total)| ConsensusMessageHandlingEntry {
+            kind: key.kind,
+            outcome: key.outcome,
+            reason: key.reason,
+            total: *total,
+        })
+        .collect();
+    ConsensusMessageHandlingSnapshot { entries }
 }
 
 /// Snapshot the current status: leader index, Highest/Locked QC, and drop counters.
@@ -3357,6 +3620,7 @@ pub fn snapshot() -> StatusSnapshot {
         settlement: settlement_snapshot(),
         gossip_fallback_total: GOSSIP_FALLBACK_TOTAL.load(Ordering::Relaxed),
         dedup_evictions: dedup_evictions_snapshot(),
+        consensus_message_handling: consensus_message_handling_snapshot(),
         bg_post_drop_post_total: BG_POST_DROP_POST_TOTAL.load(Ordering::Relaxed),
         bg_post_drop_broadcast_total: BG_POST_DROP_BROADCAST_TOTAL.load(Ordering::Relaxed),
         block_created_dropped_by_lock_total: BLOCK_CREATED_DROPPED_BY_LOCK_TOTAL
@@ -3630,6 +3894,27 @@ pub fn record_bg_post_drop(kind: &'static str) {
     }
 }
 
+/// Record a consensus message drop or deferral with a reason label.
+pub fn record_consensus_message_handling(
+    kind: ConsensusMessageKind,
+    outcome: ConsensusMessageOutcome,
+    reason: ConsensusMessageReason,
+) {
+    #[cfg(test)]
+    let _guard = message_handling_test_guard();
+    let slot = MESSAGE_HANDLING_TOTALS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut guard = slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let key = ConsensusMessageHandlingKey {
+        kind,
+        outcome,
+        reason,
+    };
+    let entry = guard.entry(key).or_insert(0);
+    *entry = entry.saturating_add(1);
+}
+
 /// Increment `BlockCreated` drop counter when locked QC gate rejects a proposal.
 pub fn inc_block_created_dropped_by_lock() {
     BLOCK_CREATED_DROPPED_BY_LOCK_TOTAL.fetch_add(1, Ordering::Relaxed);
@@ -3847,6 +4132,10 @@ pub fn record_view_change_cause(cause: &str) {
             VIEW_CHANGE_CAUSE_QUORUM_TIMEOUT_TOTAL.fetch_add(1, Ordering::Relaxed);
             VIEW_CHANGE_CAUSE_LAST_QUORUM_TIMEOUT_TS_MS.store(now_ms, Ordering::Relaxed);
         }
+        "stake_quorum_timeout" => {
+            VIEW_CHANGE_CAUSE_STAKE_QUORUM_TIMEOUT_TOTAL.fetch_add(1, Ordering::Relaxed);
+            VIEW_CHANGE_CAUSE_LAST_STAKE_QUORUM_TIMEOUT_TS_MS.store(now_ms, Ordering::Relaxed);
+        }
         "da_gate" => {
             VIEW_CHANGE_CAUSE_DA_GATE_TOTAL.fetch_add(1, Ordering::Relaxed);
             VIEW_CHANGE_CAUSE_LAST_DA_GATE_TS_MS.store(now_ms, Ordering::Relaxed);
@@ -3984,6 +4273,16 @@ pub(crate) fn reset_missing_block_fetch_counters_for_tests() {
 }
 
 #[cfg(test)]
+pub(crate) fn reset_message_handling_for_tests() {
+    let _guard = message_handling_test_guard();
+    if let Some(slot) = MESSAGE_HANDLING_TOTALS.get() {
+        slot.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn reset_block_sync_counters_for_tests() {
     let _guard = block_sync_test_guard();
     BLOCK_SYNC_DROP_INVALID_SIGNATURES_TOTAL.store(0, Ordering::Relaxed);
@@ -4013,6 +4312,7 @@ pub(crate) fn reset_view_change_cause_counters_for_tests() {
     let _guard = view_change_cause_test_guard();
     VIEW_CHANGE_CAUSE_COMMIT_FAILURE_TOTAL.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_QUORUM_TIMEOUT_TOTAL.store(0, Ordering::Relaxed);
+    VIEW_CHANGE_CAUSE_STAKE_QUORUM_TIMEOUT_TOTAL.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_DA_GATE_TOTAL.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_CENSORSHIP_EVIDENCE_TOTAL.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_MISSING_PAYLOAD_TOTAL.store(0, Ordering::Relaxed);
@@ -4021,6 +4321,7 @@ pub(crate) fn reset_view_change_cause_counters_for_tests() {
     VIEW_CHANGE_CAUSE_LAST_TS_MS.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_LAST_COMMIT_FAILURE_TS_MS.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_LAST_QUORUM_TIMEOUT_TS_MS.store(0, Ordering::Relaxed);
+    VIEW_CHANGE_CAUSE_LAST_STAKE_QUORUM_TIMEOUT_TS_MS.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_LAST_DA_GATE_TS_MS.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_LAST_CENSORSHIP_EVIDENCE_TS_MS.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_LAST_MISSING_PAYLOAD_TS_MS.store(0, Ordering::Relaxed);
@@ -5592,6 +5893,12 @@ pub(crate) fn lane_relay_test_guard() -> std::sync::MutexGuard<'static, ()> {
 
 #[cfg(test)]
 #[allow(private_interfaces)]
+pub(crate) fn message_handling_test_guard() -> TestLockGuard {
+    reentrant_test_guard(&MESSAGE_HANDLING_TEST_LOCK)
+}
+
+#[cfg(test)]
+#[allow(private_interfaces)]
 pub(crate) fn missing_block_fetch_test_guard() -> TestLockGuard {
     reentrant_test_guard(&MISSING_BLOCK_FETCH_TEST_LOCK)
 }
@@ -6382,6 +6689,102 @@ mod tests {
     }
 
     #[test]
+    fn consensus_message_handling_counters_surface_in_snapshot() {
+        super::reset_message_handling_for_tests();
+        super::record_consensus_message_handling(
+            super::ConsensusMessageKind::BlockCreated,
+            super::ConsensusMessageOutcome::Dropped,
+            super::ConsensusMessageReason::FutureWindow,
+        );
+        super::record_consensus_message_handling(
+            super::ConsensusMessageKind::BlockCreated,
+            super::ConsensusMessageOutcome::Dropped,
+            super::ConsensusMessageReason::FutureWindow,
+        );
+        super::record_consensus_message_handling(
+            super::ConsensusMessageKind::BlockSyncUpdate,
+            super::ConsensusMessageOutcome::Deferred,
+            super::ConsensusMessageReason::SignatureMismatchDeferred,
+        );
+
+        let snapshot = super::snapshot();
+        let entries = snapshot.consensus_message_handling.entries;
+        let block_created = entries
+            .iter()
+            .find(|entry| {
+                entry.kind == super::ConsensusMessageKind::BlockCreated
+                    && entry.outcome == super::ConsensusMessageOutcome::Dropped
+                    && entry.reason == super::ConsensusMessageReason::FutureWindow
+            })
+            .expect("block created drop entry");
+        assert_eq!(block_created.total, 2);
+        let deferred = entries
+            .iter()
+            .find(|entry| {
+                entry.kind == super::ConsensusMessageKind::BlockSyncUpdate
+                    && entry.outcome == super::ConsensusMessageOutcome::Deferred
+                    && entry.reason == super::ConsensusMessageReason::SignatureMismatchDeferred
+            })
+            .expect("block sync deferred entry");
+        assert_eq!(deferred.total, 1);
+        super::reset_message_handling_for_tests();
+    }
+
+    #[test]
+    fn consensus_message_handling_labels_include_new_variants() {
+        assert_eq!(
+            super::ConsensusMessageKind::ProposalHint.as_str(),
+            "proposal_hint"
+        );
+        assert_eq!(super::ConsensusMessageKind::Proposal.as_str(), "proposal");
+        assert_eq!(super::ConsensusMessageKind::QcVote.as_str(), "qc_vote");
+        assert_eq!(super::ConsensusMessageKind::Qc.as_str(), "qc");
+        assert_eq!(
+            super::ConsensusMessageKind::VrfCommit.as_str(),
+            "vrf_commit"
+        );
+        assert_eq!(super::ConsensusMessageKind::RbcInit.as_str(), "rbc_init");
+        assert_eq!(
+            super::ConsensusMessageKind::FetchPendingBlock.as_str(),
+            "fetch_pending_block"
+        );
+        assert_eq!(super::ConsensusMessageKind::Evidence.as_str(), "evidence");
+
+        assert_eq!(
+            super::ConsensusMessageReason::MissingHighestQc.as_str(),
+            "missing_highest_qc"
+        );
+        assert_eq!(
+            super::ConsensusMessageReason::HighestQcMismatch.as_str(),
+            "highest_qc_mismatch"
+        );
+        assert_eq!(
+            super::ConsensusMessageReason::ConflictingVote.as_str(),
+            "conflicting_vote"
+        );
+        assert_eq!(
+            super::ConsensusMessageReason::PayloadTooLarge.as_str(),
+            "payload_too_large"
+        );
+        assert_eq!(
+            super::ConsensusMessageReason::ChunkDigestMismatch.as_str(),
+            "chunk_digest_mismatch"
+        );
+        assert_eq!(
+            super::ConsensusMessageReason::InvalidPayload.as_str(),
+            "invalid_payload"
+        );
+        assert_eq!(
+            super::ConsensusMessageReason::ModeMismatch.as_str(),
+            "mode_mismatch"
+        );
+        assert_eq!(
+            super::ConsensusMessageReason::NotFound.as_str(),
+            "not_found"
+        );
+    }
+
+    #[test]
     fn block_sync_counters_surface_in_snapshot() {
         let _guard = super::block_sync_test_guard();
         super::reset_block_sync_counters_for_tests();
@@ -6446,6 +6849,7 @@ mod tests {
         super::reset_view_change_cause_counters_for_tests();
         super::record_view_change_cause("commit_failure");
         super::record_view_change_cause("quorum_timeout");
+        super::record_view_change_cause("stake_quorum_timeout");
         super::record_view_change_cause("da_gate");
         super::record_view_change_cause("censorship_evidence");
         super::record_view_change_cause("missing_payload");
@@ -6455,6 +6859,7 @@ mod tests {
         let snapshot = super::snapshot();
         assert_eq!(snapshot.view_change_causes.commit_failure_total, 1);
         assert_eq!(snapshot.view_change_causes.quorum_timeout_total, 1);
+        assert_eq!(snapshot.view_change_causes.stake_quorum_timeout_total, 1);
         assert_eq!(snapshot.view_change_causes.da_gate_total, 1);
         assert_eq!(snapshot.view_change_causes.censorship_evidence_total, 1);
         assert_eq!(snapshot.view_change_causes.missing_payload_total, 1);

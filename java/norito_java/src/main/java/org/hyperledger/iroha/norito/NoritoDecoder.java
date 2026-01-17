@@ -37,10 +37,6 @@ public final class NoritoDecoder {
     return explicitlyEnabled(NoritoHeader.COMPACT_LEN);
   }
 
-  public boolean compactSeqLenActive() {
-    return explicitlyEnabled(NoritoHeader.COMPACT_SEQ_LEN);
-  }
-
   private boolean explicitlyEnabled(int flag) {
     return (flags & flag) != 0;
   }

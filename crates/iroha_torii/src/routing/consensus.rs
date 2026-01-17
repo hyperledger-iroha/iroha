@@ -5,14 +5,16 @@ use iroha_core::state::StateReadOnly;
 use iroha_data_model::prelude::ChainId;
 use iroha_data_model::{
     block::consensus::{
-        SumeragiBlockSyncRosterStatus, SumeragiQcStatus, SumeragiCommitInflightStatus,
-        SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus, SumeragiDataspaceCommitment,
-        SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiMembershipMismatchStatus,
-        SumeragiMembershipStatus, SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcEntry,
-        SumeragiPendingRbcStatus, SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus,
-        SumeragiRuntimeUpgradeHook, SumeragiStatusWire, SumeragiValidationRejectStatus,
-        SumeragiViewChangeCauseStatus, SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
-        SumeragiWorkerQueueDiagnostics, SumeragiWorkerQueueTotals,
+        SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus,
+        SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus,
+        SumeragiConsensusMessageHandlingEntry, SumeragiConsensusMessageHandlingStatus,
+        SumeragiDataspaceCommitment, SumeragiLaneCommitment, SumeragiLaneGovernance,
+        SumeragiMembershipMismatchStatus, SumeragiMembershipStatus, SumeragiPeerKeyPolicyStatus,
+        SumeragiPendingRbcEntry, SumeragiPendingRbcStatus, SumeragiQcStatus,
+        SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus, SumeragiRuntimeUpgradeHook,
+        SumeragiStatusWire, SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
+        SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths, SumeragiWorkerQueueDiagnostics,
+        SumeragiWorkerQueueTotals,
     },
     nexus::{DataSpaceId, LaneId},
 };
@@ -1691,6 +1693,10 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "quorum_timeout_total",
             snap.view_change_causes.quorum_timeout_total,
         ),
+        json_entry(
+            "stake_quorum_timeout_total",
+            snap.view_change_causes.stake_quorum_timeout_total,
+        ),
         json_entry("da_gate_total", snap.view_change_causes.da_gate_total),
         json_entry(
             "missing_payload_total",
@@ -1720,6 +1726,11 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry(
             "last_quorum_timeout_timestamp_ms",
             snap.view_change_causes.last_quorum_timeout_timestamp_ms,
+        ),
+        json_entry(
+            "last_stake_quorum_timeout_timestamp_ms",
+            snap.view_change_causes
+                .last_stake_quorum_timeout_timestamp_ms,
         ),
         json_entry(
             "last_da_gate_timestamp_ms",
@@ -1821,6 +1832,22 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             snap.dedup_evictions.rbc_deliver_expired_total,
         ),
     ]);
+    let consensus_message_handling_entries = Value::Array(
+        snap.consensus_message_handling
+            .entries
+            .iter()
+            .map(|entry| {
+                json_object(vec![
+                    json_entry("kind", entry.kind.as_str()),
+                    json_entry("outcome", entry.outcome.as_str()),
+                    json_entry("reason", entry.reason.as_str()),
+                    json_entry("total", entry.total),
+                ])
+            })
+            .collect(),
+    );
+    let consensus_message_handling =
+        json_object(vec![json_entry("entries", consensus_message_handling_entries)]);
     let tx_queue = json_object(vec![
         json_entry("depth", snap.tx_queue_depth),
         json_entry("capacity", snap.tx_queue_capacity),
@@ -2010,6 +2037,10 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry(
             "quorum_timeout_total",
             snap.view_change_causes.quorum_timeout_total,
+        ),
+        json_entry(
+            "stake_quorum_timeout_total",
+            snap.view_change_causes.stake_quorum_timeout_total,
         ),
         json_entry("da_gate_total", snap.view_change_causes.da_gate_total),
         json_entry(
@@ -2582,6 +2613,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("epoch", epoch),
         json_entry("gossip_fallback_total", snap.gossip_fallback_total),
         json_entry("dedup_evictions", dedup_evictions),
+        json_entry("consensus_message_handling", consensus_message_handling),
         json_entry("bg_post_drop_post_total", snap.bg_post_drop_post_total),
         json_entry(
             "bg_post_drop_broadcast_total",
@@ -3065,6 +3097,67 @@ mod status_tests {
     }
 
     #[test]
+    fn status_snapshot_json_includes_rbc_mismatch() {
+        let peer_pk = PublicKey::from_hex(
+            Algorithm::Ed25519,
+            "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
+        )
+        .expect("peer pk parses");
+        let peer = PeerId::from(peer_pk);
+        let peer_id = peer.to_string();
+        let entry = status::RbcMismatchEntry {
+            peer_id: peer.clone(),
+            chunk_digest_mismatch_total: 3,
+            payload_hash_mismatch_total: 2,
+            chunk_root_mismatch_total: 1,
+            last_timestamp_ms: 1_724_000_000_123,
+        };
+        let snap = sumeragi::StatusSnapshot {
+            rbc_mismatch: status::RbcMismatchSnapshot {
+                entries: vec![entry],
+            },
+            ..Default::default()
+        };
+        let payload = status_snapshot_json(&snap);
+        let mismatch = payload
+            .get("rbc_mismatch")
+            .and_then(Value::as_object)
+            .expect("rbc_mismatch object");
+        let entries = mismatch
+            .get("entries")
+            .and_then(Value::as_array)
+            .expect("rbc_mismatch entries");
+        assert_eq!(entries.len(), 1);
+        let entry = entries[0].as_object().expect("rbc_mismatch entry object");
+        assert_eq!(
+            entry.get("peer_id").and_then(Value::as_str),
+            Some(peer_id.as_str())
+        );
+        assert_eq!(
+            entry
+                .get("chunk_digest_mismatch_total")
+                .and_then(Value::as_u64),
+            Some(3)
+        );
+        assert_eq!(
+            entry
+                .get("payload_hash_mismatch_total")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            entry
+                .get("chunk_root_mismatch_total")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            entry.get("last_timestamp_ms").and_then(Value::as_u64),
+            Some(1_724_000_000_123)
+        );
+    }
+
+    #[test]
     fn status_snapshot_json_includes_pending_rbc_stash_counters() {
         let hash = Hash::prehashed([0x11; Hash::LENGTH]);
         let hash_typed = HashOf::from_untyped_unchecked(hash);
@@ -3154,6 +3247,36 @@ mod status_tests {
         assert_eq!(entry.get("ready").and_then(Value::as_u64), Some(2));
         assert_eq!(entry.get("deliver").and_then(Value::as_u64), Some(1));
         assert_eq!(entry.get("age_ms").and_then(Value::as_u64), Some(42));
+    }
+
+    #[test]
+    fn status_snapshot_json_includes_consensus_message_handling() {
+        let snap = sumeragi::StatusSnapshot {
+            consensus_message_handling: status::ConsensusMessageHandlingSnapshot {
+                entries: vec![status::ConsensusMessageHandlingEntry {
+                    kind: status::ConsensusMessageKind::BlockCreated,
+                    outcome: status::ConsensusMessageOutcome::Dropped,
+                    reason: status::ConsensusMessageReason::HintMismatch,
+                    total: 4,
+                }],
+            },
+            ..Default::default()
+        };
+        let payload = status_snapshot_json(&snap);
+        let handling = payload
+            .get("consensus_message_handling")
+            .and_then(Value::as_object)
+            .expect("consensus_message_handling object");
+        let entries = handling
+            .get("entries")
+            .and_then(Value::as_array)
+            .expect("consensus_message_handling entries");
+        assert_eq!(entries.len(), 1);
+        let entry = entries[0].as_object().expect("entry object");
+        assert_eq!(entry.get("kind").and_then(Value::as_str), Some("block_created"));
+        assert_eq!(entry.get("outcome").and_then(Value::as_str), Some("dropped"));
+        assert_eq!(entry.get("reason").and_then(Value::as_str), Some("hint_mismatch"));
+        assert_eq!(entry.get("total").and_then(Value::as_u64), Some(4));
     }
 
     #[test]
@@ -3385,6 +3508,7 @@ pub async fn handle_v1_sumeragi_status(
             view_change_causes: SumeragiViewChangeCauseStatus {
                 commit_failure_total: snap.view_change_causes.commit_failure_total,
                 quorum_timeout_total: snap.view_change_causes.quorum_timeout_total,
+                stake_quorum_timeout_total: snap.view_change_causes.stake_quorum_timeout_total,
                 da_gate_total: snap.view_change_causes.da_gate_total,
                 missing_payload_total: snap.view_change_causes.missing_payload_total,
                 missing_qc_total: snap.view_change_causes.missing_qc_total,
@@ -3397,6 +3521,9 @@ pub async fn handle_v1_sumeragi_status(
                 last_quorum_timeout_timestamp_ms: snap
                     .view_change_causes
                     .last_quorum_timeout_timestamp_ms,
+                last_stake_quorum_timeout_timestamp_ms: snap
+                    .view_change_causes
+                    .last_stake_quorum_timeout_timestamp_ms,
                 last_da_gate_timestamp_ms: snap.view_change_causes.last_da_gate_timestamp_ms,
                 last_missing_payload_timestamp_ms: snap
                     .view_change_causes
@@ -3410,6 +3537,19 @@ pub async fn handle_v1_sumeragi_status(
             block_created_dropped_by_lock_total: snap.block_created_dropped_by_lock_total,
             block_created_hint_mismatch_total: snap.block_created_hint_mismatch_total,
             block_created_proposal_mismatch_total: snap.block_created_proposal_mismatch_total,
+            consensus_message_handling: SumeragiConsensusMessageHandlingStatus {
+                entries: snap
+                    .consensus_message_handling
+                    .entries
+                    .iter()
+                    .map(|entry| SumeragiConsensusMessageHandlingEntry {
+                        kind: entry.kind.as_str().to_owned(),
+                        outcome: entry.outcome.as_str().to_owned(),
+                        reason: entry.reason.as_str().to_owned(),
+                        total: entry.total,
+                    })
+                    .collect(),
+            },
             validation_reject_total: snap.validation_reject_total,
             validation_reject_reason: snap.validation_reject_reason.map(ToOwned::to_owned),
             validation_rejects: SumeragiValidationRejectStatus {

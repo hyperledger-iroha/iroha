@@ -608,10 +608,27 @@ fn build_state_with_triggers(n_time: usize, n_by_call: usize) -> State {
     // Use `new_for_testing` to provide a telemetry instance when required
     let state = State::new_for_testing(World::default(), kura, query_handle);
 
+    fn dummy_accepted_transaction() -> AcceptedTransaction<'static> {
+        use std::{borrow::Cow, time::Duration};
+
+        let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
+            .parse()
+            .expect("valid chain id");
+        let domain_id: DomainId = "dummy".parse().expect("valid domain id");
+        let keypair = KeyPair::random();
+        let authority = AccountId::new(domain_id, keypair.public_key().clone());
+        let mut builder = TransactionBuilder::new(chain_id, authority);
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx = builder
+            .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
+            .sign(keypair.private_key());
+        AcceptedTransaction::new_unchecked(Cow::Owned(tx))
+    }
+
     // Create a header for a block to stage registrations
     let latest = state.view().latest_block();
     let priv_key = iroha_crypto::KeyPair::random().private_key().clone();
-    let header = BlockBuilder::new(Vec::new())
+    let header = BlockBuilder::new(vec![dummy_accepted_transaction()])
         .chain(0, latest.as_deref())
         .sign(&priv_key)
         .unpack(|_| {})

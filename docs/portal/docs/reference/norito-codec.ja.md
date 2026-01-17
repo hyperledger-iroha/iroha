@@ -21,7 +21,7 @@ Norito は Iroha のカノニカルなシリアライゼーション層です。
 | **ベア payload** | ハッシュ/比較に使う決定的な値エンコード。オンワイヤ輸送は常にヘッダーを使い、ベアなバイト列は内部専用。 | `norito::codec::{Encode, Decode}` |
 | **圧縮** | ヘッダーの圧縮バイトで選択される任意の Zstd（および実験的 GPU アクセラレーション）。 | `norito.md`, “Compression negotiation” |
 
-レイアウトフラグのレジストリ（packed-struct, packed-seq, varint offsets, compact lengths）は `norito::header::flags` にあります。V1 は既定で `0x00` を使いますが、サポート済みマスク内の明示フラグを受け入れます。未知ビットは拒否されます。`norito::header::Flags` は内部検査と将来バージョン向けに保持されます。
+レイアウトフラグのレジストリ（packed-struct, packed-seq, field bitset, compact lengths）は `norito::header::flags` にあります。V1 は既定で `0x00` を使いますが、サポート済みマスク内の明示フラグを受け入れます。未知ビットは拒否されます。`norito::header::Flags` は内部検査と将来バージョン向けに保持されます。
 
 ## derive サポート
 

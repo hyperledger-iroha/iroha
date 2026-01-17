@@ -101,6 +101,11 @@ impl Actor {
         let view = qc.view;
         let block_hash = qc.subject_block_hash;
         self.deferred_qcs.insert(key, qc);
+        self.record_consensus_message_handling(
+            super::status::ConsensusMessageKind::Qc,
+            super::status::ConsensusMessageOutcome::Deferred,
+            super::status::ConsensusMessageReason::RosterMissing,
+        );
         info!(
             phase = ?phase,
             height,
@@ -1225,23 +1230,21 @@ impl Actor {
         }
     }
 
-    pub(super) fn block_tx_count(&self, hash: HashOf<BlockHeader>) -> Option<usize> {
+    pub(super) fn block_is_empty(&self, hash: HashOf<BlockHeader>) -> Option<bool> {
         if let Some(height) = self.kura.get_block_height_by_hash(hash) {
             if let Some(block) = self.kura.get_block(height) {
-                return Some(block.transactions_vec().len());
+                return Some(block.is_empty());
             }
         }
         self.pending
             .pending_blocks
             .get(&hash)
-            .map(|pending| pending.block.transactions_vec().len())
+            .map(|pending| pending.block.is_empty())
     }
 
     pub(super) fn has_nonempty_pending_at_height(&self, height: u64) -> bool {
         self.pending.pending_blocks.values().any(|pending| {
-            pending.height == height
-                && !pending.aborted
-                && !pending.block.transactions_vec().is_empty()
+            pending.height == height && !pending.aborted && !pending.block.is_empty()
         })
     }
 
@@ -1284,6 +1287,11 @@ impl Actor {
                     incoming_hash = %qc.subject_block_hash,
                     "dropping QC for already committed height with divergent hash"
                 );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::Qc,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::CommitConflict,
+                );
                 return CommittedQcDecision::Drop;
             }
             return CommittedQcDecision::RecordOnly;
@@ -1294,6 +1302,11 @@ impl Actor {
             committed_height,
             hash = %qc.subject_block_hash,
             "dropping QC for already committed height with unknown block"
+        );
+        self.record_consensus_message_handling(
+            super::status::ConsensusMessageKind::Qc,
+            super::status::ConsensusMessageOutcome::Dropped,
+            super::status::ConsensusMessageReason::Committed,
         );
         CommittedQcDecision::Drop
     }
@@ -1306,17 +1319,17 @@ impl Actor {
         if block_known && qc.phase == crate::sumeragi::consensus::Phase::Commit {
             let queue_len = self.queue.queued_len();
             let pending_nonempty = self.has_nonempty_pending_at_height(qc.height);
-            if let Some(tx_count) = self.block_tx_count(qc.subject_block_hash) {
-                if empty_block_disfavored(tx_count, queue_len, pending_nonempty) {
-                    info!(
-                        height = qc.height,
-                        view = qc.view,
-                        queue_len,
-                        pending_nonempty,
-                        hash = %qc.subject_block_hash,
-                        "processing precommit QC for empty block despite queued transactions to stay in sync"
-                    );
-                }
+            if let Some(is_empty) = self.block_is_empty(qc.subject_block_hash)
+                && is_empty
+            {
+                info!(
+                    height = qc.height,
+                    view = qc.view,
+                    queue_len,
+                    pending_nonempty,
+                    hash = %qc.subject_block_hash,
+                    "processing precommit QC for empty block; empty blocks are disallowed"
+                );
             }
         }
         false
@@ -1378,6 +1391,11 @@ impl Actor {
                         incoming_hash = %qc.subject_block_hash,
                         "ignoring precommit QC that conflicts with locked chain"
                     );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::Qc,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::LockedQc,
+                    );
                     return false;
                 }
             }
@@ -1401,6 +1419,11 @@ impl Actor {
                             .map(|lock| lock.subject_block_hash),
                         incoming_hash = %qc.subject_block_hash,
                         "precommit QC does not extend locked chain; dropping QC"
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::Qc,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::LockedQc,
                     );
                     return false;
                 }
@@ -1650,6 +1673,11 @@ impl Actor {
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Prepare)
             && self.drop_stale_view(qc.height, qc.view, "QC")
         {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::Qc,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::StaleView,
+            );
             return Ok(());
         }
         let expected_epoch = self.epoch_for_height(qc.height);
@@ -1663,6 +1691,11 @@ impl Actor {
                 block = %qc.subject_block_hash,
                 "dropping QC with mismatched epoch"
             );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::Qc,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::EpochMismatch,
+            );
             return Ok(());
         }
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView) {
@@ -1672,6 +1705,11 @@ impl Actor {
                     view = qc.view,
                     block = %qc.subject_block_hash,
                     "dropping NEW_VIEW QC missing highest certificate reference"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::Qc,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::MissingHighestQc,
                 );
                 return Ok(());
             };
@@ -1684,6 +1722,11 @@ impl Actor {
                     highest_epoch = highest.epoch,
                     expected_highest_epoch,
                     "dropping NEW_VIEW QC with mismatched highest epoch"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::Qc,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::EpochMismatch,
                 );
                 return Ok(());
             }
@@ -1699,6 +1742,11 @@ impl Actor {
                         local_height,
                         local_view,
                         "dropping NEW_VIEW QC with highest certificate that mismatches local block metadata"
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::Qc,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::HighestQcMismatch,
                     );
                     return Ok(());
                 }
@@ -1768,6 +1816,32 @@ impl Actor {
                         phase = ?qc.phase,
                         block = %qc.subject_block_hash,
                         "rejecting QC without valid signatures"
+                    );
+                    let handling_reason = match err {
+                        QcValidationError::MissingVotes { .. }
+                        | QcValidationError::InsufficientSigners { .. }
+                        | QcValidationError::StakeSnapshotUnavailable
+                        | QcValidationError::StakeQuorumMissing => {
+                            super::status::ConsensusMessageReason::QuorumMissing
+                        }
+                        QcValidationError::InvalidSignature { .. } => {
+                            super::status::ConsensusMessageReason::InvalidSignature
+                        }
+                        QcValidationError::HighestQcMismatch => {
+                            super::status::ConsensusMessageReason::HighestQcMismatch
+                        }
+                        QcValidationError::ModeTagMismatch => {
+                            super::status::ConsensusMessageReason::ModeMismatch
+                        }
+                        QcValidationError::ValidatorSetMismatch => {
+                            super::status::ConsensusMessageReason::RosterHashMismatch
+                        }
+                        _ => super::status::ConsensusMessageReason::InvalidPayload,
+                    };
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::Qc,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        handling_reason,
                     );
                     return Ok(());
                 }
@@ -2115,11 +2189,24 @@ impl Actor {
 
     pub(super) fn handle_exec_witness(&self, witness: crate::sumeragi::consensus::ExecWitnessMsg) {
         if self.drop_stale_view(witness.height, witness.view, "ExecWitness") {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::ExecWitness,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::StaleView,
+            );
             return;
         }
-        let _ = self
+        if self
             .events_sender
-            .send(EventBox::Pipeline(PipelineEventBox::Witness(witness)));
+            .send(EventBox::Pipeline(PipelineEventBox::Witness(witness)))
+            .is_err()
+        {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::ExecWitness,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::EnqueueFailed,
+            );
+        }
     }
 }
 

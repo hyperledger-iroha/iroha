@@ -96,6 +96,7 @@ LaneConfigEntry {
 ## Бюджеты хранения
 
 - `nexus.storage.max_disk_usage_bytes` задает общий дисковый бюджет, который узлы Nexus должны потреблять между Kura, холодными WSV snapshots, SoraFS storage и streaming spools (SoraNet/SoraVPN).
+- При превышении общего бюджета выселение детерминированное: сначала очищаются spools SoraNet в лексикографическом порядке путей, затем spools SoraVPN, затем холодные snapshots tiered-state (от самых старых к новым), и наконец retired сегменты Kura. Активные тела блоков не выселяются до появления DA rehydration.
 - `nexus.storage.max_wsv_memory_bytes` ограничивает горячий слой WSV, распространяя детерминированный Norito payload sizing в `tiered_state.hot_retained_bytes`; grace retention может временно превышать бюджет, но переполнение видно через телеметрию (`state_tiered_hot_bytes`, `state_tiered_hot_grace_overflow_bytes`).
 - `nexus.storage.disk_budget_weights` делит дисковый бюджет между компонентами в базисных пунктах (должно суммироваться до 10 000). Полученные caps применяются к `kura.max_disk_usage_bytes`, `tiered_state.max_cold_bytes`, `sorafs.storage.max_capacity_bytes`, `streaming.soranet.provision_spool_max_bytes` и `streaming.soravpn.provision_spool_max_bytes`.
 - Enforcement бюджета Kura суммирует bytes block-store по активным и retired сегментам lanes и учитывает queued blocks, еще не persisted, чтобы избежать overshoot при write lag.

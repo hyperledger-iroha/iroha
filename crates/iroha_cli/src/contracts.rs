@@ -334,7 +334,7 @@ fn program_summary_from_bytes(bytes: &[u8]) -> Result<ProgramSummary> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_crypto::Algorithm;
+    use iroha_crypto::{Algorithm, ExposedPrivateKey};
     use iroha_i18n::{Bundle, Language, Localizer};
     use url::Url;
 
@@ -363,13 +363,15 @@ mod tests {
 
     #[test]
     fn simulate_emits_gas_limit_metadata_key() {
-        let authority: AccountId = "alice@wonderland".parse().expect("authority");
+        let key_pair = KeyPair::from_seed(vec![1u8; 32], Algorithm::Ed25519);
+        let authority = AccountId::new(
+            "wonderland".parse().expect("domain"),
+            key_pair.public_key().clone(),
+        );
         let mut ctx = TestContext::new(authority.clone());
         let program = minimal_program();
         let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
-        let private_key = KeyPair::from_seed(vec![1u8; 32], Algorithm::Ed25519)
-            .private_key()
-            .to_string();
+        let private_key = ExposedPrivateKey(key_pair.private_key().clone()).to_string();
         let args = SimulateArgs {
             authority: authority.to_string(),
             private_key,

@@ -116,9 +116,10 @@ fn run(args: Args) -> Result<()> {
     let (_, pk_bytes) = keypair.public_key().to_bytes();
     let public_key_hex = hex::encode(pk_bytes);
 
+    let check_hints = !args.write_fixtures;
     let mut fixtures = Vec::with_capacity(raw_fixtures.len());
     for raw in &raw_fixtures {
-        fixtures.push(raw.clone().into_fixture(&keypair, args.check_encoded)?);
+        fixtures.push(raw.clone().into_fixture(&keypair, args.check_encoded, check_hints)?);
     }
 
     fs::create_dir_all(&args.out_dir)
@@ -211,7 +212,12 @@ struct PayloadSummary {
 }
 
 impl RawFixture {
-    fn into_fixture(self, keypair: &KeyPair, check_encoded: bool) -> Result<Fixture> {
+    fn into_fixture(
+        self,
+        keypair: &KeyPair,
+        check_encoded: bool,
+        check_hints: bool,
+    ) -> Result<Fixture> {
         let authority_source = self
             .authority_hint
             .as_deref()
@@ -404,12 +410,21 @@ impl RawFixture {
             let payload_hash_hex = format!("{}", HashOf::<TransactionPayload>::new(&payload));
             if let Some(hash_hint) = &self.payload_hash_hint {
                 if hash_hint != &payload_hash_hex {
-                    bail!(
-                        "fixture '{}' payload_hash mismatch: expected {}, got {}",
-                        self.name,
-                        hash_hint,
-                        payload_hash_hex
-                    );
+                    if check_hints {
+                        bail!(
+                            "fixture '{}' payload_hash mismatch: expected {}, got {}",
+                            self.name,
+                            hash_hint,
+                            payload_hash_hex
+                        );
+                    } else {
+                        eprintln!(
+                            "fixture '{}' payload_hash updated: {} -> {}",
+                            self.name,
+                            hash_hint,
+                            payload_hash_hex
+                        );
+                    }
                 }
             }
 
@@ -423,12 +438,21 @@ impl RawFixture {
                 let computed = format!("{}", HashOf::<SignedTransaction>::new(&signed));
                 if let Some(hash_hint) = &self.signed_hash_hint {
                     if hash_hint != &computed {
-                        bail!(
-                            "fixture '{}' signed_hash mismatch: expected {}, got {}",
-                            self.name,
-                            hash_hint,
-                            computed
-                        );
+                        if check_hints {
+                            bail!(
+                                "fixture '{}' signed_hash mismatch: expected {}, got {}",
+                                self.name,
+                                hash_hint,
+                                computed
+                            );
+                        } else {
+                            eprintln!(
+                                "fixture '{}' signed_hash updated: {} -> {}",
+                                self.name,
+                                hash_hint,
+                                computed
+                            );
+                        }
                     }
                 }
                 Some(signed)
@@ -2218,19 +2242,19 @@ mod tests {
         let base = sample_fixture(None);
         let actual = base
             .clone()
-            .into_fixture(&keypair, true)
+            .into_fixture(&keypair, true, true)
             .expect("baseline fixture");
         let mut mismatched = actual.summary.payload_base64.clone();
         mismatched.push('A');
 
         assert!(
             sample_fixture(Some(mismatched.clone()))
-                .into_fixture(&keypair, true)
+                .into_fixture(&keypair, true, true)
                 .is_err()
         );
         assert!(
             sample_fixture(Some(mismatched))
-                .into_fixture(&keypair, false)
+                .into_fixture(&keypair, false, true)
                 .is_ok()
         );
     }
@@ -2239,7 +2263,7 @@ mod tests {
     fn encoded_fixture_validates_hints() {
         let keypair = signing_keypair().expect("test keypair");
         let generated = sample_fixture(None)
-            .into_fixture(&keypair, true)
+            .into_fixture(&keypair, true, true)
             .expect("fixture from payload");
         let payload_bytes = BASE64
             .decode(generated.summary.payload_base64.as_bytes())
@@ -2265,26 +2289,26 @@ mod tests {
         };
 
         raw.clone()
-            .into_fixture(&keypair, true)
+            .into_fixture(&keypair, true, true)
             .expect("encoded fixture should validate");
 
         raw.chain_hint = Some("00000003".to_string());
         assert!(
-            raw.clone().into_fixture(&keypair, true).is_err(),
+            raw.clone().into_fixture(&keypair, true, true).is_err(),
             "chain hint mismatch should fail"
         );
 
         raw.chain_hint = Some(generated.summary.chain.clone());
         raw.creation_time_ms_hint = Some(generated.summary.creation_time_ms + 1);
         assert!(
-            raw.clone().into_fixture(&keypair, true).is_err(),
+            raw.clone().into_fixture(&keypair, true, true).is_err(),
             "creation_time_ms mismatch should fail"
         );
 
         raw.creation_time_ms_hint = Some(generated.summary.creation_time_ms);
         raw.payload_hash_hint = Some("bad-hash".to_string());
         assert!(
-            raw.into_fixture(&keypair, true).is_err(),
+            raw.into_fixture(&keypair, true, true).is_err(),
             "payload_hash mismatch should fail"
         );
     }
@@ -2293,7 +2317,7 @@ mod tests {
     fn manifest_entry_includes_creation_time_ms() {
         let keypair = signing_keypair().expect("test keypair");
         let generated = sample_fixture(None)
-            .into_fixture(&keypair, true)
+            .into_fixture(&keypair, true, true)
             .expect("fixture from payload");
         let entry = manifest_entry(&generated);
         let obj = entry.as_object().expect("manifest entry must be object");
@@ -2310,7 +2334,7 @@ mod tests {
         let raw = sample_fixture(None);
         let fixture = raw
             .clone()
-            .into_fixture(&keypair, true)
+            .into_fixture(&keypair, true, true)
             .expect("fixture");
 
         let value = build_fixtures_json(&[raw], &[fixture.clone()]).expect("fixtures json");
