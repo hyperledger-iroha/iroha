@@ -98,13 +98,14 @@ LaneConfigEntry {
 ## ストレージ予算
 
 - `nexus.storage.max_disk_usage_bytes` は、Nexus ノードが Kura、WSV のコールドスナップショット、SoraFS ストレージ、ストリーミングスプール（SoraNet/SoraVPN）で消費すべき総ディスク予算を定義する。
-- 全体予算を超えた場合のエビクションは決定論的で、SoraNet のプロビジョニングスプールをパス順で削除し、次に SoraVPN スプール、続いて tiered-state のコールドスナップショットを古い順に削除し、最後に Kura の退役セグメントを削除する。アクティブなブロックボディは DA 再水和が利用可能になるまで削除しない。
-- `nexus.storage.max_wsv_memory_bytes` は Norito の決定論的ペイロードサイズを `tiered_state.hot_retained_bytes` に反映させて WSV ホット層を上限化する。グレース保持により一時的に超過する可能性があるが、超過はテレメトリ（`state_tiered_hot_bytes`, `state_tiered_hot_grace_overflow_bytes`）で観測できる。
+- 全体予算を超えた場合のエビクションは決定論的で、SoraNet のプロビジョニングスプールをパス順で削除し、次に SoraVPN スプール、続いて tiered-state のコールドスナップショットを古い順に削除する（`da_store_root` が設定されている場合はそこへオフロード）、次に Kura の退役セグメントを削除し、最後に Kura のアクティブなブロックボディを `da_blocks/` に退避して読み取り時に DA 再水和する。
+- `nexus.storage.max_wsv_memory_bytes` は WSV の決定論的インメモリ計測サイズを `tiered_state.hot_retained_bytes` に反映させて WSV ホット層を上限化する。グレース保持により一時的に超過する可能性があるが、超過はテレメトリ（`state_tiered_hot_bytes`, `state_tiered_hot_grace_overflow_bytes`）で観測できる。
 - `nexus.storage.disk_budget_weights` は基準点でディスク予算をコンポーネントに分割する（合計 10,000 必須）。導出された上限は `kura.max_disk_usage_bytes`、`tiered_state.max_cold_bytes`、`sorafs.storage.max_capacity_bytes`、`streaming.soranet.provision_spool_max_bytes`、`streaming.soravpn.provision_spool_max_bytes` に適用される。
 - Kura のストレージ予算の適用は、アクティブ/引退レーンのセグメントに跨るブロックストアのバイト数を合算し、未永続化のキュー済みブロックも含めて書き込み遅延中の超過を防ぐ。
 - SoraVPN のプロビジョニングスプールは `streaming.soravpn` 設定を使い、SoraNet のプロビジョニングスプールと独立して上限が適用される。
 - コンポーネントごとの制限も有効で、明示的な非ゼロ上限がある場合は Nexus 由来の上限と小さい方が適用される。
 - 予算テレメトリは `storage_budget_bytes_used{component=...}` と `storage_budget_bytes_limit{component=...}` を用いて `kura`、`wsv_hot`、`wsv_cold`、`soranet_spool`、`soravpn_spool` の使用量/上限を報告する。`storage_budget_exceeded_total{component=...}` は新規データが拒否されると増加し、ログがオペレーターに警告を出す。
+- DA エビクションのテレメトリとして、`storage_da_cache_total{component=...,result=hit|miss}` と `storage_da_churn_bytes_total{component=...,direction=evicted|rehydrated}` が `kura` と `wsv_cold` のキャッシュ動作と移動バイト数を追跡する。
 - Kura は承認時に使う会計（ディスクバイト + キュー済みブロック、merge-ledger のペイロードがある場合はそれも含む）をそのまま報告するため、ゲージは永続化済みバイトだけではなく実効的な圧力を反映する。
 
 ## ルーティングと API

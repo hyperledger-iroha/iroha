@@ -2,6 +2,7 @@
 
 use std::{
     fs,
+    io::ErrorKind,
     num::NonZeroU64,
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -18,9 +19,11 @@ use iroha::{
         isi::{Log, SetParameter, Unregister},
         parameter::{Parameter, SumeragiParameter, TransactionParameter},
         prelude::QueryBuilderExt,
+        query::block::prelude::FindBlocks,
         query::peer::prelude::FindPeers,
     },
 };
+use iroha_config::parameters::actual::LaneConfig;
 use iroha_config_base::toml::Writer as TomlWriter;
 use iroha_core::sumeragi::rbc_status;
 use iroha_test_network::{Network, NetworkBuilder, NetworkPeer};
@@ -354,6 +357,233 @@ async fn sumeragi_rbc_background_queue_synchronous() -> Result<()> {
     if sandbox::handle_result(result, "sumeragi_rbc_background_queue_synchronous")?.is_none() {
         return Ok(());
     }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
+    let scenario_name = stringify!(sumeragi_da_kura_eviction_rehydrates_from_da_store);
+    let payload_bytes = 128 * 1024;
+    let tx_limit =
+        u64::try_from(torii_max_content_len_for_payload(payload_bytes)).unwrap_or(u64::MAX);
+    let tx_limit_nz =
+        NonZeroU64::new(tx_limit).ok_or_else(|| eyre!("tx_limit must be non-zero"))?;
+    let rbc_chunk_max_bytes = i64::try_from(payload_bytes).unwrap_or(i64::MAX);
+
+    let mut config_table = toml::Table::new();
+    {
+        let mut writer = TomlWriter::new(&mut config_table);
+        writer
+            .write("telemetry_enabled", true)
+            .write("telemetry_profile", "full")
+            .write(["logger", "level"], "WARN")
+            .write(["network", "max_frame_bytes"], CONSENSUS_FRAME_BUDGET_BYTES)
+            .write(
+                ["network", "max_frame_bytes_consensus"],
+                CONSENSUS_FRAME_BUDGET_BYTES,
+            )
+            .write(
+                ["network", "max_frame_bytes_control"],
+                CONSENSUS_FRAME_BUDGET_BYTES,
+            )
+            .write(
+                ["network", "max_frame_bytes_block_sync"],
+                CONSENSUS_FRAME_BUDGET_BYTES,
+            )
+            .write(
+                ["network", "max_frame_bytes_other"],
+                CONSENSUS_FRAME_BUDGET_BYTES,
+            )
+            .write(["network", "p2p_queue_cap_high"], P2P_QUEUE_CAP_HIGH)
+            .write(["network", "p2p_queue_cap_low"], P2P_QUEUE_CAP_LOW)
+            .write(["network", "p2p_post_queue_cap"], P2P_POST_QUEUE_CAP)
+            .write(
+                ["network", "max_frame_bytes_tx_gossip"],
+                P2P_TX_FRAME_BUDGET_BYTES,
+            )
+            .write(["sumeragi", "rbc_chunk_max_bytes"], rbc_chunk_max_bytes)
+            .write(
+                ["sumeragi", "debug", "rbc", "force_deliver_quorum_one"],
+                true,
+            )
+            .write(
+                ["torii", "max_content_len"],
+                torii_max_content_len_for_payload(payload_bytes),
+            )
+            .write(["kura", "blocks_in_memory"], 1_i64);
+    }
+
+    let mut nexus = toml::map::Map::new();
+    nexus.insert("enabled".into(), toml::Value::Boolean(true));
+    nexus.insert("lane_count".into(), toml::Value::Integer(1));
+
+    let mut lane = toml::map::Map::new();
+    lane.insert("alias".into(), toml::Value::String("lane0".into()));
+    lane.insert("index".into(), toml::Value::Integer(0));
+    let mut metadata = toml::map::Map::new();
+    metadata.insert(
+        "scheduler.teu_capacity".into(),
+        toml::Value::String("262144".into()),
+    );
+    lane.insert("metadata".into(), toml::Value::Table(metadata));
+    nexus.insert(
+        "lane_catalog".into(),
+        toml::Value::Array(vec![toml::Value::Table(lane)]),
+    );
+
+    let mut fusion = toml::map::Map::new();
+    fusion.insert("floor_teu".into(), toml::Value::Integer(131_072));
+    fusion.insert("exit_teu".into(), toml::Value::Integer(262_144));
+    nexus.insert("fusion".into(), toml::Value::Table(fusion));
+
+    let da_sample = 1_i64;
+    let da_threshold = 1_i64;
+    let mut da = toml::map::Map::new();
+    da.insert(
+        "q_in_slot_total".into(),
+        toml::Value::Integer(da_sample.max(1)),
+    );
+    da.insert("q_in_slot_per_ds_min".into(), toml::Value::Integer(1));
+    da.insert("sample_size_base".into(), toml::Value::Integer(da_sample));
+    da.insert("sample_size_max".into(), toml::Value::Integer(da_sample));
+    da.insert("threshold_base".into(), toml::Value::Integer(da_threshold));
+    da.insert("per_attester_shards".into(), toml::Value::Integer(1));
+    let mut audit = toml::map::Map::new();
+    audit.insert("sample_size".into(), toml::Value::Integer(da_sample));
+    audit.insert("window_count".into(), toml::Value::Integer(1));
+    audit.insert("interval_ms".into(), toml::Value::Integer(60_000));
+    da.insert("audit".into(), toml::Value::Table(audit));
+    nexus.insert("da".into(), toml::Value::Table(da));
+
+    let mut storage = toml::map::Map::new();
+    storage.insert("max_disk_usage_bytes".into(), toml::Value::Integer(400_000));
+    let mut weights = toml::map::Map::new();
+    weights.insert("kura_blocks_bps".into(), toml::Value::Integer(9_000));
+    weights.insert("wsv_snapshots_bps".into(), toml::Value::Integer(500));
+    weights.insert("sorafs_bps".into(), toml::Value::Integer(250));
+    weights.insert("soranet_spool_bps".into(), toml::Value::Integer(200));
+    weights.insert("soravpn_spool_bps".into(), toml::Value::Integer(50));
+    storage.insert("disk_budget_weights".into(), toml::Value::Table(weights));
+    nexus.insert("storage".into(), toml::Value::Table(storage));
+
+    {
+        let mut writer = TomlWriter::new(&mut config_table);
+        writer.write("nexus", toml::Value::Table(nexus));
+    }
+
+    let builder = NetworkBuilder::new()
+        .with_peers(4)
+        .with_auto_populated_trusted_peers()
+        .with_data_availability_enabled(true)
+        .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
+            TransactionParameter::MaxTxBytes(tx_limit_nz),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
+            TransactionParameter::MaxDecompressedBytes(tx_limit_nz),
+        )))
+        .with_config_table(config_table);
+    let Some(network) = sandbox::start_network_async_or_skip(builder, scenario_name).await? else {
+        return Ok(());
+    };
+
+    let result: Result<()> = async {
+        let mut client = network.client();
+        let status_timeout = Duration::from_secs(120);
+        client.transaction_status_timeout = status_timeout;
+        client.transaction_ttl = Some(status_timeout + Duration::from_secs(5));
+        set_sumeragi_parameter(&client, SumeragiParameter::DaEnabled(true)).await?;
+
+        let status_before = fetch_status(&client).await?;
+        let blocks_to_submit = 4_u64;
+        let expected_height = status_before.blocks + blocks_to_submit;
+
+        for idx in 0..blocks_to_submit {
+            let message =
+                generate_incompressible_payload(&format!("{scenario_name}-{idx}"), payload_bytes);
+            client
+                .submit_blocking(Log::new(Level::INFO, message))
+                .wrap_err("submit heavy log")?;
+        }
+
+        network
+            .ensure_blocks_with(|height| height.total >= expected_height)
+            .await?;
+
+        let peer = network.peer();
+        let store_dir = peer.kura_store_dir();
+        let lane_config = LaneConfig::default();
+        let primary_lane = lane_config.primary();
+        let candidate_blocks_dir = primary_lane.blocks_dir(&store_dir);
+        let blocks_dir = if candidate_blocks_dir.join("blocks.index").exists() {
+            candidate_blocks_dir
+        } else {
+            store_dir.clone()
+        };
+
+        let index_path = blocks_dir.join("blocks.index");
+        let hashes_path = blocks_dir.join("blocks.hashes");
+        let da_blocks_dir = blocks_dir.join("da_blocks");
+
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let evicted_height = loop {
+            let bytes = fs::read(&index_path).wrap_err("read blocks.index")?;
+            ensure!(
+                bytes.len() % 16 == 0,
+                "blocks.index size is not aligned to 16-byte entries"
+            );
+            let mut evicted = None;
+            for (idx, chunk) in bytes.chunks_exact(16).enumerate() {
+                if idx == 0 {
+                    continue;
+                }
+                let start = u64::from_le_bytes(chunk[0..8].try_into().expect("block index start"));
+                if start == u64::MAX {
+                    evicted = Some(idx as u64 + 1);
+                    break;
+                }
+            }
+            if let Some(height) = evicted {
+                break height;
+            }
+            ensure!(
+                Instant::now() < deadline,
+                "timed out waiting for DA-backed Kura eviction to mark blocks.index"
+            );
+            sleep(Duration::from_millis(200)).await;
+        };
+
+        let da_path = da_blocks_dir.join(format!("{evicted_height:020}.norito"));
+        ensure!(da_path.exists(), "expected DA block body at {da_path:?}");
+
+        let hashes = fs::read(&hashes_path).wrap_err("read blocks.hashes")?;
+        ensure!(
+            hashes.len() % 32 == 0,
+            "blocks.hashes size is not aligned to 32-byte entries"
+        );
+        let hash_offset = (evicted_height - 1) as usize * 32;
+        let expected_hash = hashes
+            .get(hash_offset..hash_offset + 32)
+            .ok_or_else(|| eyre!("missing hash for evicted height {evicted_height}"))?;
+
+        let blocks = client.query(FindBlocks).execute_all()?;
+        let evicted_block = blocks
+            .iter()
+            .find(|block| block.header().height().get() == evicted_height)
+            .ok_or_else(|| eyre!("missing block at evicted height {evicted_height}"))?;
+        ensure!(
+            expected_hash == evicted_block.hash().as_ref(),
+            "rehydrated block hash mismatch at height {evicted_height}"
+        );
+
+        network.shutdown().await;
+        Ok(())
+    }
+    .await;
+
+    if sandbox::handle_result(result, scenario_name)?.is_none() {
+        return Ok(());
+    }
+
     Ok(())
 }
 
@@ -2231,6 +2461,74 @@ async fn wait_for_height(
     }
 }
 
+fn collect_da_block_files(root: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == ErrorKind::NotFound => continue,
+            Err(err) => {
+                return Err(err)
+                    .wrap_err_with(|| format!("failed to read directory {}", dir.display()));
+            }
+        };
+        for entry in entries {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            let path = entry.path();
+            if file_type.is_dir() {
+                if entry.file_name() == std::ffi::OsStr::new("da_blocks") {
+                    let da_entries = match fs::read_dir(&path) {
+                        Ok(entries) => entries,
+                        Err(err) if err.kind() == ErrorKind::NotFound => continue,
+                        Err(err) => {
+                            return Err(err).wrap_err_with(|| {
+                                format!("failed to read directory {}", path.display())
+                            });
+                        }
+                    };
+                    for da_entry in da_entries {
+                        let da_entry = da_entry?;
+                        let da_path = da_entry.path();
+                        if da_entry.file_type()?.is_file()
+                            && da_path.extension().and_then(|ext| ext.to_str()) == Some("norito")
+                        {
+                            files.push(da_path);
+                        }
+                    }
+                } else {
+                    stack.push(path);
+                }
+            }
+        }
+    }
+    Ok(files)
+}
+
+fn da_block_height(path: &Path) -> Option<u64> {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .and_then(|stem| stem.parse::<u64>().ok())
+}
+
+async fn wait_for_da_block_files(root: PathBuf, timeout: Duration) -> Result<Vec<PathBuf>> {
+    let start = Instant::now();
+    loop {
+        let files = collect_da_block_files(&root)?;
+        if !files.is_empty() {
+            return Ok(files);
+        }
+        if start.elapsed() > timeout {
+            return Err(eyre!(
+                "timed out waiting for DA-evicted blocks under {}",
+                root.display()
+            ));
+        }
+        sleep(Duration::from_millis(200)).await;
+    }
+}
+
 async fn wait_for_commit_certificates(
     http: &reqwest::Client,
     torii_urls: &[String],
@@ -2451,6 +2749,152 @@ async fn wait_for_recovered_flag(
         }
         sleep(Duration::from_millis(200)).await;
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
+    let scenario_name = stringify!(sumeragi_da_eviction_rehydrates_block_bodies);
+    let payload_bytes = 128 * 1024;
+    let tx_limit =
+        u64::try_from(torii_max_content_len_for_payload(payload_bytes)).unwrap_or(u64::MAX);
+    let tx_limit_nz =
+        NonZeroU64::new(tx_limit).ok_or_else(|| eyre!("tx_limit must be non-zero"))?;
+
+    let builder = NetworkBuilder::new()
+        .with_peers(4)
+        .with_auto_populated_trusted_peers()
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::DaEnabled(true),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
+            TransactionParameter::MaxTxBytes(tx_limit_nz),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
+            TransactionParameter::MaxDecompressedBytes(tx_limit_nz),
+        )))
+        .with_config_layer(|layer| {
+            layer
+                .write("telemetry_enabled", true)
+                .write("telemetry_profile", "full")
+                .write(["logger", "level"], "INFO")
+                .write(
+                    ["torii", "max_content_len"],
+                    torii_max_content_len_for_payload(payload_bytes),
+                )
+                .write(["sumeragi", "da_enabled"], true)
+                .write(["nexus", "enabled"], true)
+                .write(["nexus", "storage", "max_disk_usage_bytes"], 1_000_000i64)
+                .write(
+                    ["nexus", "storage", "disk_budget_weights", "kura_blocks_bps"],
+                    9_000i64,
+                )
+                .write(
+                    [
+                        "nexus",
+                        "storage",
+                        "disk_budget_weights",
+                        "wsv_snapshots_bps",
+                    ],
+                    500i64,
+                )
+                .write(
+                    ["nexus", "storage", "disk_budget_weights", "sorafs_bps"],
+                    300i64,
+                )
+                .write(
+                    [
+                        "nexus",
+                        "storage",
+                        "disk_budget_weights",
+                        "soranet_spool_bps",
+                    ],
+                    100i64,
+                )
+                .write(
+                    [
+                        "nexus",
+                        "storage",
+                        "disk_budget_weights",
+                        "soravpn_spool_bps",
+                    ],
+                    100i64,
+                )
+                .write(["kura", "blocks_in_memory"], 2i64);
+        });
+
+    let Some(network) = sandbox::start_network_async_or_skip(builder, scenario_name).await? else {
+        return Ok(());
+    };
+
+    let result: Result<()> = async {
+        network
+            .ensure_blocks_with(|height| height.total >= 1)
+            .await?;
+
+        let peers = network.peers();
+        let primary_peer = &peers[0];
+        let client = primary_peer.client();
+        let http = reqwest::Client::new();
+        let status_url = client
+            .torii_url
+            .join("status")
+            .wrap_err("compose status URL")?;
+
+        let status_before = fetch_status(&client).await?;
+        let mut expected_height = status_before.blocks;
+        for idx in 0..10u64 {
+            expected_height = expected_height.saturating_add(1);
+            let payload = generate_incompressible_payload(
+                &format!("{scenario_name}-payload-{idx}"),
+                payload_bytes,
+            );
+            let submit_client = client.clone();
+            tokio::task::spawn_blocking(move || {
+                submit_client.submit(Log::new(Level::INFO, payload))
+            })
+            .await
+            .wrap_err("submit log instruction")??;
+            let _ = wait_for_height(
+                http.clone(),
+                status_url.clone(),
+                expected_height,
+                Instant::now(),
+            )
+            .await?;
+        }
+
+        let da_files =
+            wait_for_da_block_files(primary_peer.kura_store_dir(), Duration::from_secs(30)).await?;
+        ensure!(
+            !da_files.is_empty(),
+            "expected DA-evicted block files under Kura storage"
+        );
+        let evicted_height = da_files
+            .iter()
+            .filter_map(|path| da_block_height(path))
+            .min()
+            .ok_or_else(|| eyre!("failed to parse DA block heights"))?;
+
+        let blocks = client.query(FindBlocks).execute_all()?;
+        let evicted_block = blocks
+            .iter()
+            .find(|block| block.header().height().get() == evicted_height)
+            .ok_or_else(|| eyre!("missing block at evicted height {evicted_height}"))?;
+        ensure!(
+            evicted_block.external_transactions().len() > 0,
+            "expected rehydrated block to include transactions at height {evicted_height}"
+        );
+
+        network.shutdown().await;
+        Ok(())
+    }
+    .await;
+
+    if sandbox::handle_result(result, scenario_name)?.is_none() {
+        return Ok(());
+    }
+
+    Ok(())
 }
 
 struct RbcSessionSnapshot {

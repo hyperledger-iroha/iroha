@@ -5959,6 +5959,10 @@ pub struct Metrics {
     pub storage_budget_bytes_limit: GenericGaugeVec<AtomicU64>,
     /// Storage budget: cap exceed events per component.
     pub storage_budget_exceeded_total: IntCounterVec,
+    /// DA storage: cache outcomes per component.
+    pub storage_da_cache_total: IntCounterVec,
+    /// DA storage: churn bytes per component and direction.
+    pub storage_da_churn_bytes_total: IntCounterVec,
     /// Governance: proposal counts grouped by status
     pub governance_proposals_status: GenericGaugeVec<AtomicU64>,
     /// Governance: latest council members count.
@@ -8145,6 +8149,22 @@ impl Default for Metrics {
                 "Storage budget exceed events per component",
             ),
             &["component"],
+        )
+        .expect("Infallible");
+        let storage_da_cache_total = IntCounterVec::new(
+            Opts::new(
+                "storage_da_cache_total",
+                "DA storage cache outcomes per component",
+            ),
+            &["component", "result"],
+        )
+        .expect("Infallible");
+        let storage_da_churn_bytes_total = IntCounterVec::new(
+            Opts::new(
+                "storage_da_churn_bytes_total",
+                "DA storage churn bytes per component and direction",
+            ),
+            &["component", "direction"],
         )
         .expect("Infallible");
         let governance_proposals_status = GenericGaugeVec::new(
@@ -12571,6 +12591,8 @@ impl Default for Metrics {
             storage_budget_bytes_used,
             storage_budget_bytes_limit,
             storage_budget_exceeded_total,
+            storage_da_cache_total,
+            storage_da_churn_bytes_total,
             alias_usage_total,
             iso_reference_status,
             iso_reference_age_seconds,
@@ -13062,6 +13084,8 @@ impl Default for Metrics {
             storage_budget_bytes_used,
             storage_budget_bytes_limit,
             storage_budget_exceeded_total,
+            storage_da_cache_total,
+            storage_da_churn_bytes_total,
             governance_proposals_status,
             governance_council_members,
             governance_council_alternates,

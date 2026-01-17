@@ -1,6 +1,40 @@
 # Status
 
 ## Latest Updates
+- Consensus telemetry: add per-peer vote-validation drop aggregates (roster hash + reasons) to the Sumeragi status surface; re-export new drop DTOs; update RBC init tests to sign with the view-aligned leader key.
+- Telemetry: add DA storage cache/churn counters to the metrics registry, expose StateTelemetry helpers with unit coverage, and fix VoteValidationDropReasonCount copy semantics + drop logging borrow.
+- Tests: `IROHA_THROUGHPUT_ARTIFACT_DIR=artifacts/localnet-throughput IROHA_TEST_NETWORK_KEEP_DIRS=1 IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=target/debug/irohad cargo test -p integration_tests --test sumeragi_localnet_smoke permissioned_localnet_throughput_10k_tps -- --ignored --nocapture` (timed out after 20m; height stuck at 2 with repeated view-change/missing-QC logs; peer logs in `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_hMZDGM`).
+- Nexus storage: offload tiered-state cold snapshots to `da_store_root`, evict active Kura block bodies into `da_blocks/`, and rehydrate on read with DA cache/churn telemetry; added unit tests, a 4-peer DA integration test, and updated docs/translations.
+- Tests: not run (not requested).
+- Nexus storage: hot-tier sizing now uses deterministic in-memory WSV measurement (MeasuredBytes), tiered-state docs/config comments refreshed, and DA-backed cold payload rehydration records cache/churn telemetry.
+- Storage DA retention: Kura telemetry attaches to state, DA cache/churn metrics are wired, tiered cold reads rehydrate into `cold_store_root`, and new unit/integration coverage added (`sumeragi_da_eviction_rehydrates_block_bodies`).
+- Tests: not run (not requested).
+- Tests: `IROHA_THROUGHPUT_ARTIFACT_DIR=artifacts/localnet-throughput IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test sumeragi_localnet_smoke permissioned_localnet_throughput_10k_tps -- --ignored --nocapture` (skipped: sandboxed loopback bind denied at 127.0.0.1:30000).
+- Tests: same command with loopback networking allowed failed to compile `iroha_core` (E0277: `MeasuredBytes` bounds in `crates/iroha_core/src/state/tiered.rs`, plus `Self` size error).
+- Consensus telemetry: add vote-validation drop snapshots (reason + roster hash + signer) surfaced in `/v1/sumeragi/status` wire/JSON; data model + Torii mappings updated; unit coverage added.
+- Localnet DEBUG (4 peers, 1s, NPoS, DA/RBC): reran with load targeting peer1 (ports 46380/50537). `/v1/sumeragi/status` shows `commit_qc.validator_set_len=4` on all peers with commit heights 3-5; `stake_quorum_timeout_total` peer0=4, peer1=10, peer2=4, peer3=4; `missing_qc_total` peer0=4, peer1=26, peer2=7, peer3=5. `vote_validation_drops` shows only `duplicate`/`stale_height` (no invalid signature/out-of-range) and no subscriber-queue drop logs; localnet stopped.
+- Build: `cargo build -p irohad -p iroha_kagami -p iroha_cli` (warnings: norito unused helpers, existing iroha_core unused warnings).
+- Tests: not run (per request).
+- Wizard/env PoP: Kagami wizard now emits BLS keys and `trusted_peers_pop` (CLI + prompts), Sora Nexus/Testus templates + `wizard-output` updated, config env parsing accepts `TRUSTED_PEERS_POP`, default docker-compose/local/single pass `--topology` + `GENESIS_PEER_POPS` and include `TRUSTED_PEERS_POP`, and config fixtures/env snapshots refreshed.
+- Sumeragi/PoP: require `trusted_peers_pop` coverage for all BLS validators (reject non-BLS trusted peers), merge config PoPs into QC/roster validation, and refresh fixtures/default configs; add unit coverage for config gaps and fallback PoP cache.
+- Tests: not run (not requested).
+- Localnet throughput: deterministic 10k TPS harness with warmup/steady phases, SLO checks, status/metrics sampling, artifact export (`IROHA_THROUGHPUT_ARTIFACT_DIR`), and `scripts/run_localnet_throughput.sh`.
+- Kagami/localnet: perf profiles (`10k-permissioned`, `10k-npos`) exposed via `--perf-profile`, deploy script updated, and new throughput docs (`docs/source/sumeragi_localnet_throughput.md`) plus README refresh.
+- Tests: `cargo test --workspace` (failed: `iroha_core` compile errors in `crates/iroha_core/src/block_sync.rs` and `crates/iroha_core/src/sumeragi/main_loop.rs`; missing `StorageReadOnly` import for `consensus_keys().iter()`, type mismatch in `pops.get(pk)`).
+- Format: `cargo fmt --all` (stable rustfmt warns about `format_code_in_doc_comments`, `imports_granularity`, `group_imports`).
+- Localnet throughput: document 1s-finality SLOs, pass/fail windows, telemetry fields, and the report template/artifact capture for the 10k TPS run (`docs/source/sumeragi_localnet_throughput.md`).
+- Roadmap: mark the LOCALNET-10K-TPS SLO/report tasks complete.
+- Tests: not run (docs-only change).
+- Localnet DEBUG (4 peers, NPoS, 1s): ran 5k ping load (`--parallel 64 --no-wait`, ports 46180/50337). Peer0 `/v1/sumeragi/status` shows `commit_qc.validator_set_len=0` (height 0) with `stake_quorum_timeout_total=13` and `missing_qc_total=31`; peers 1–3 show `validator_set_len=4` (height 7–9) with nonzero `stake_quorum_timeout_total` (2–3). Peer0 remains stuck at height 1; localnet stopped.
+- Tests: not run (per request).
+- Docs/comments: align pacemaker backpressure deferral wording with relay/RBC/pending-block gating in `docs/source/sumeragi.md`, `docs/source/telemetry.md`, `docs/source/telemetry.ja.md`, `docs/source/telemetry.he.md`, and `crates/iroha_core/src/sumeragi/status.rs`.
+- Format: `cargo fmt --all` (stable rustfmt warns about unstable options like `format_code_in_doc_comments`, `imports_granularity`, `group_imports`).
+- Tests: `cargo test -p iroha_core --lib kickstart_pacemaker_after_commit -- --nocapture` (pass; norito dead_code warnings, block_sync unused-assign warnings).
+- Sumeragi: post-commit pacemaker kickstart now respects full proposal backpressure (relay/RBC/pending blocks) instead of queue-only saturation; added unit coverage.
+- Format: `cargo fmt --all` (stable rustfmt warns about unstable options like `format_code_in_doc_comments`, `imports_granularity`, `group_imports`).
+- Tests: `cargo test -p iroha_core --lib kickstart_pacemaker_after_commit -- --nocapture` (pass; norito dead_code warnings, block_sync unused-assign warnings).
+- Kagami/localnet: derive NPoS bootstrap stake amount from min_self_bond (raises perf-profile/default stake as needed) and update localnet stake bootstrap coverage.
+- Tests: not run (per request).
 - Empty blocks: drop empty BlockCreated/QC payloads early, clear pending/missing/QC caches, add unit coverage, and make consensus test blocks non-empty by default; clarify empty-block comment in block builder.
 - Tests: not run (not requested).
 - Sumeragi pacemaker/backpressure: keep non-queue deferrals sticky, allow proposals after reschedule only when pending blocks are unblocked, and unify per-tick backpressure snapshots; update Sumeragi docs/translations.

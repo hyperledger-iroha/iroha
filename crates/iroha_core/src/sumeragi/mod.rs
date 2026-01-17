@@ -3366,10 +3366,26 @@ mod tests {
             block_payload_dedup,
         );
 
+        let height = 2;
+        let view = 0;
+        let block_header = BlockHeader::new(
+            NonZeroU64::new(height).expect("block height must be non-zero"),
+            None,
+            None,
+            None,
+            0,
+            view,
+        );
+        let leader_key = KeyPair::random();
+        let (_, leader_private) = leader_key.into_parts();
+        let leader_signature = BlockSignature::new(
+            0,
+            SignatureOf::from_hash(&leader_private, block_header.hash()),
+        );
         let msg = BlockMessage::RbcInit(crate::sumeragi::consensus::RbcInit {
             block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([3u8; 32])),
-            height: 2,
-            view: 0,
+            height,
+            view,
             epoch: 0,
             roster: vec![PeerId::new(KeyPair::random().public_key().clone())],
             roster_hash: Hash::prehashed([0x14; 32]),
@@ -3377,6 +3393,8 @@ mod tests {
             chunk_digests: vec![[5u8; 32]],
             payload_hash: Hash::prehashed([4u8; 32]),
             chunk_root: Hash::prehashed([5u8; 32]),
+            block_header,
+            leader_signature,
         });
 
         handle.incoming_block_message(msg);

@@ -30,6 +30,23 @@ fn vote_duplicate(
         .is_some_and(|existing| existing.block_hash == vote.block_hash)
 }
 
+fn record_vote_drop_without_roster(
+    vote: &crate::sumeragi::consensus::Vote,
+    reason: super::status::VoteValidationDropReason,
+) {
+    super::status::record_vote_validation_drop(super::status::VoteValidationDropRecord {
+        reason,
+        height: vote.height,
+        view: vote.view,
+        epoch: vote.epoch,
+        signer_index: vote.signer,
+        peer_id: None,
+        roster_hash: None,
+        roster_len: 0,
+        block_hash: vote.block_hash,
+    });
+}
+
 impl Actor {
     pub(super) fn consensus_context_for_height(
         &self,
@@ -86,6 +103,10 @@ impl Actor {
                 super::status::ConsensusMessageOutcome::Dropped,
                 super::status::ConsensusMessageReason::PenalizedSender,
             );
+            record_vote_drop_without_roster(
+                &vote,
+                super::status::VoteValidationDropReason::PenalizedSender,
+            );
             return;
         }
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(vote.height);
@@ -103,6 +124,10 @@ impl Actor {
             if matches!(vote.phase, Phase::Prepare | Phase::Commit) {
                 self.maybe_request_missing_block_for_unresolved_roster(&vote);
             }
+            record_vote_drop_without_roster(
+                &vote,
+                super::status::VoteValidationDropReason::RosterMissing,
+            );
             self.defer_vote_for_roster(vote, "commit topology missing");
             return;
         }
@@ -386,6 +411,10 @@ impl Actor {
                     super::status::ConsensusMessageOutcome::Dropped,
                     super::status::ConsensusMessageReason::StaleHeight,
                 );
+                record_vote_drop_without_roster(
+                    vote,
+                    super::status::VoteValidationDropReason::StaleHeight,
+                );
                 return true;
             }
         }
@@ -405,6 +434,10 @@ impl Actor {
                 super::status::ConsensusMessageKind::QcVote,
                 super::status::ConsensusMessageOutcome::Dropped,
                 super::status::ConsensusMessageReason::EpochMismatch,
+            );
+            record_vote_drop_without_roster(
+                vote,
+                super::status::VoteValidationDropReason::EpochMismatch,
             );
             return true;
         }
@@ -447,6 +480,10 @@ impl Actor {
                     super::status::ConsensusMessageKind::QcVote,
                     super::status::ConsensusMessageOutcome::Dropped,
                     super::status::ConsensusMessageReason::StaleView,
+                );
+                record_vote_drop_without_roster(
+                    vote,
+                    super::status::VoteValidationDropReason::StaleView,
                 );
                 return true;
             }
@@ -609,6 +646,10 @@ impl Actor {
                     super::status::ConsensusMessageOutcome::Dropped,
                     super::status::ConsensusMessageReason::LockedQc,
                 );
+                record_vote_drop_without_roster(
+                    vote,
+                    super::status::VoteValidationDropReason::LockedQc,
+                );
                 return true;
             }
         }
@@ -639,6 +680,10 @@ impl Actor {
                     super::status::ConsensusMessageOutcome::Dropped,
                     super::status::ConsensusMessageReason::LockedQc,
                 );
+                record_vote_drop_without_roster(
+                    vote,
+                    super::status::VoteValidationDropReason::LockedQc,
+                );
                 return true;
             }
         }
@@ -653,6 +698,24 @@ impl Actor {
         evidence_context: &super::evidence::EvidenceValidationContext<'_>,
         mode_tag: &str,
     ) -> bool {
+        let roster_len = u32::try_from(signature_topology.as_ref().len()).unwrap_or(u32::MAX);
+        let roster_hash = iroha_crypto::HashOf::new(&signature_topology.as_ref().to_vec());
+        let peer_id = usize::try_from(vote.signer)
+            .ok()
+            .and_then(|idx| signature_topology.as_ref().get(idx).cloned());
+        let record_drop = |reason| {
+            super::status::record_vote_validation_drop(super::status::VoteValidationDropRecord {
+                reason,
+                height: vote.height,
+                view: vote.view,
+                epoch: vote.epoch,
+                signer_index: vote.signer,
+                peer_id: peer_id.clone(),
+                roster_hash: Some(roster_hash.clone()),
+                roster_len,
+                block_hash: vote.block_hash,
+            });
+        };
         if vote_duplicate(&self.vote_log, vote) {
             iroha_logger::debug!(
                 phase = ?vote.phase,
@@ -668,6 +731,7 @@ impl Actor {
                 super::status::ConsensusMessageOutcome::Dropped,
                 super::status::ConsensusMessageReason::Duplicate,
             );
+            record_drop(super::status::VoteValidationDropReason::Duplicate);
             return false;
         }
         match vote_signature_check(
@@ -692,7 +756,10 @@ impl Actor {
                         view = vote.view,
                         signer = vote.signer,
                         block_hash = %vote.block_hash,
+                        peer = ?peer_id,
                         roster_len,
+                        roster_hash = %roster_hash,
+                        mode_tag,
                         ?err,
                         "dropping vote with invalid signature"
                     );
@@ -703,11 +770,26 @@ impl Actor {
                         view = vote.view,
                         signer = vote.signer,
                         block_hash = %vote.block_hash,
+                        peer = ?peer_id,
                         roster_len,
+                        roster_hash = %roster_hash,
+                        mode_tag,
                         ?err,
                         "suppressing repeated invalid vote signature log"
                     );
                 }
+                let drop_reason = match err {
+                    super::VoteSignatureError::SignerIndexOverflow(_) => {
+                        super::status::VoteValidationDropReason::SignerIndexOverflow
+                    }
+                    super::VoteSignatureError::SignerOutOfRange { .. } => {
+                        super::status::VoteValidationDropReason::SignerOutOfRange
+                    }
+                    super::VoteSignatureError::SignatureInvalid => {
+                        super::status::VoteValidationDropReason::SignatureInvalid
+                    }
+                };
+                record_drop(drop_reason);
                 self.record_consensus_message_handling(
                     super::status::ConsensusMessageKind::QcVote,
                     super::status::ConsensusMessageOutcome::Dropped,
@@ -730,6 +812,7 @@ impl Actor {
                     super::status::ConsensusMessageOutcome::Dropped,
                     super::status::ConsensusMessageReason::MissingHighestQc,
                 );
+                record_drop(super::status::VoteValidationDropReason::MissingHighestQc);
                 return false;
             };
             let expected_epoch = self.epoch_for_height(highest.height);
@@ -748,6 +831,7 @@ impl Actor {
                     super::status::ConsensusMessageOutcome::Dropped,
                     super::status::ConsensusMessageReason::EpochMismatch,
                 );
+                record_drop(super::status::VoteValidationDropReason::EpochMismatch);
                 return false;
             }
             if highest.phase != Phase::Commit {
@@ -765,6 +849,7 @@ impl Actor {
                     super::status::ConsensusMessageOutcome::Dropped,
                     super::status::ConsensusMessageReason::HighestQcMismatch,
                 );
+                record_drop(super::status::VoteValidationDropReason::HighestQcMismatch);
                 return false;
             }
             if highest.subject_block_hash != vote.block_hash {
@@ -781,6 +866,7 @@ impl Actor {
                     super::status::ConsensusMessageOutcome::Dropped,
                     super::status::ConsensusMessageReason::HighestQcMismatch,
                 );
+                record_drop(super::status::VoteValidationDropReason::HighestQcMismatch);
                 return false;
             }
             let expected_height = highest.height.saturating_add(1);
@@ -798,6 +884,7 @@ impl Actor {
                     super::status::ConsensusMessageOutcome::Dropped,
                     super::status::ConsensusMessageReason::HighestQcMismatch,
                 );
+                record_drop(super::status::VoteValidationDropReason::HighestQcMismatch);
                 return false;
             }
             if let Some((local_height, local_view)) =
@@ -819,6 +906,7 @@ impl Actor {
                         super::status::ConsensusMessageOutcome::Dropped,
                         super::status::ConsensusMessageReason::HighestQcMismatch,
                     );
+                    record_drop(super::status::VoteValidationDropReason::HighestQcMismatch);
                     return false;
                 }
             }
@@ -835,6 +923,7 @@ impl Actor {
                     block_hash = %vote.block_hash,
                     "dropping duplicate vote already recorded"
                 );
+                record_drop(super::status::VoteValidationDropReason::Duplicate);
                 return false;
             }
             self.note_double_vote(Some(&existing), vote, evidence_context);
@@ -871,6 +960,7 @@ impl Actor {
                 super::status::ConsensusMessageOutcome::Dropped,
                 super::status::ConsensusMessageReason::ConflictingVote,
             );
+            record_drop(super::status::VoteValidationDropReason::ConflictingVote);
             return false;
         }
         let previous = self.vote_log.insert(key, vote.clone());
@@ -1624,7 +1714,7 @@ mod tests {
         let (trusted, me_id) = trusted_self();
         let roster_cache = {
             let view = state.view();
-            super::RosterValidationCache::from_world(view.world(), super::EPOCH_LENGTH_BLOCKS)
+            super::RosterValidationCache::from_world(view.world(), super::EPOCH_LENGTH_BLOCKS, None)
         };
         let mut update = super::block_sync_update_with_roster(
             &block,

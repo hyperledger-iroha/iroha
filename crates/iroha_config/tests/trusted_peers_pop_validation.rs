@@ -87,6 +87,22 @@ pop_hex = "{base_pop_hex}"
 }
 
 #[test]
+fn trusted_peers_pop_missing_rejects_config() {
+    let base = base_keypair();
+    let inline = format!(
+        r#"
+trusted_peers = [
+  "{base_pk}@127.0.0.1:1338",
+]
+trusted_peers_pop = []
+"#,
+        base_pk = base.public_key(),
+    );
+    let user_cfg = build_user_config(&inline);
+    assert!(user_cfg.parse().is_err());
+}
+
+#[test]
 fn trusted_peers_pop_rejects_invalid_hex() {
     let base = base_keypair();
     let inline = format!(

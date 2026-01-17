@@ -556,6 +556,7 @@ impl Actor {
                 world,
                 &block_signers,
                 block_view,
+                &self.roster_validation_cache.pops,
                 &self.common_config.chain,
                 consensus_mode,
                 stake_snapshot.as_ref(),
@@ -602,6 +603,7 @@ impl Actor {
                     world,
                     &block_signers,
                     block_view,
+                    &self.roster_validation_cache.pops,
                     &self.common_config.chain,
                     consensus_mode,
                     stake_snapshot.as_ref(),
@@ -629,17 +631,13 @@ impl Actor {
         };
         if incoming_qc.is_none() && had_incoming_qc {
             if let Some(qc) = original_candidate_qc {
-                let aggregate_ok = {
-                    let state_view = self.state.view();
-                    let world = state_view.world();
-                    super::qc_aggregate_consistent(
-                        &qc,
-                        &topology,
-                        world,
-                        &self.common_config.chain,
-                        mode_tag,
-                    )
-                };
+                let aggregate_ok = super::qc_aggregate_consistent(
+                    &qc,
+                    &topology,
+                    &self.roster_validation_cache.pops,
+                    &self.common_config.chain,
+                    mode_tag,
+                );
                 if aggregate_ok {
                     let stake_quorum_ok = match consensus_mode {
                         ConsensusMode::Permissioned => true,
@@ -932,6 +930,7 @@ impl Actor {
                         world,
                         &block_signers,
                         block_view,
+                        &self.roster_validation_cache.pops,
                         &self.common_config.chain,
                         consensus_mode,
                         stake_snapshot.as_ref(),
@@ -1139,6 +1138,7 @@ impl Actor {
                 world,
                 block_signers,
                 block_view,
+                &self.roster_validation_cache.pops,
                 &self.common_config.chain,
                 consensus_mode,
                 stake_snapshot.as_ref(),

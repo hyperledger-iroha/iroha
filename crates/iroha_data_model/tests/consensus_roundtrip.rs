@@ -7,10 +7,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree};
+use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree, SignatureOf};
 use iroha_data_model::{
     block::{
-        Header as BlockHeader,
+        BlockSignature, Header as BlockHeader,
         consensus::{
             CertPhase, ConsensusBlockHeader, ConsensusGenesisParams, Evidence, EvidenceKind,
             EvidencePayload, EvidenceRecord, ExecKv, ExecWitness, ExecWitnessMsg,
@@ -27,6 +27,8 @@ use iroha_data_model::{
             SumeragiRbcEvictedSession, SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus,
             SumeragiRbcStoreStatus, SumeragiRuntimeUpgradeHook, SumeragiStatusWire,
             SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
+            SumeragiVoteValidationDropEntry, SumeragiVoteValidationDropPeerEntry,
+            SumeragiVoteValidationDropReasonCount, SumeragiVoteValidationDropStatus,
             SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths, SumeragiWorkerQueueDiagnostics,
             SumeragiWorkerQueueTotals, VrfCommit, VrfReveal,
         },
@@ -404,6 +406,8 @@ fn rng_roster(rng: &mut DeterministicRng) -> Vec<PeerId> {
 fn rng_rbc_init(rng: &mut DeterministicRng) -> RbcInit {
     let roster = rng_roster(rng);
     let roster_hash = Hash::new(roster.encode());
+    let height = rng.next_u64().max(1);
+    let view = rng.next_u64();
     let total_chunks = u32::try_from(rng.range_inclusive(1, 8)).expect("range bound fits u32");
     let mut chunk_digests = Vec::with_capacity(total_chunks as usize);
     for _ in 0..total_chunks {
@@ -415,10 +419,24 @@ fn rng_rbc_init(rng: &mut DeterministicRng) -> RbcInit {
         .root()
         .map(Hash::from)
         .expect("chunk root");
+    let block_header = BlockHeader::new(
+        NonZeroU64::new(height).expect("block height must be non-zero"),
+        None,
+        None,
+        None,
+        0,
+        view,
+    );
+    let leader_key = KeyPair::random();
+    let (_, leader_private) = leader_key.into_parts();
+    let leader_signature = BlockSignature::new(
+        0,
+        SignatureOf::from_hash(&leader_private, block_header.hash()),
+    );
     RbcInit {
-        block_hash: rng_block_hash(rng),
-        height: rng.next_u64(),
-        view: rng.next_u64(),
+        block_hash: block_header.hash(),
+        height,
+        view,
         epoch: rng.next_u64(),
         roster,
         roster_hash,
@@ -426,6 +444,8 @@ fn rng_rbc_init(rng: &mut DeterministicRng) -> RbcInit {
         chunk_digests,
         payload_hash: rng_hash(rng),
         chunk_root,
+        block_header,
+        leader_signature,
     }
 }
 
@@ -593,6 +613,7 @@ fn rng_sumeragi_status(rng: &mut DeterministicRng) -> SumeragiStatusWire {
         block_created_hint_mismatch_total: rng.next_u64(),
         block_created_proposal_mismatch_total: rng.next_u64(),
         consensus_message_handling: rng_consensus_message_handling_status(rng),
+        vote_validation_drops: rng_vote_validation_drop_status(rng),
         validation_reject_total: rng.next_u64(),
         validation_reject_reason: if rng.next_bool() {
             Some("stateless".to_string())
@@ -1018,6 +1039,72 @@ fn rng_consensus_message_handling_status(
     SumeragiConsensusMessageHandlingStatus { entries }
 }
 
+fn rng_vote_validation_drop_entry(rng: &mut DeterministicRng) -> SumeragiVoteValidationDropEntry {
+    SumeragiVoteValidationDropEntry {
+        reason: rng_ascii_string(rng, 24),
+        height: rng.next_u64(),
+        view: rng.next_u64(),
+        epoch: rng.next_u64(),
+        signer_index: rng.next_u32(),
+        peer_id: rng
+            .next_bool()
+            .then(|| PeerId::from(KeyPair::random().public_key().clone())),
+        roster_hash: rng
+            .next_bool()
+            .then(|| HashOf::<Vec<PeerId>>::from_untyped_unchecked(rng_hash(rng))),
+        roster_len: rng.next_u32(),
+        block_hash: rng_block_hash(rng),
+        timestamp_ms: rng.next_u64(),
+    }
+}
+
+fn rng_vote_validation_drop_reason_count(
+    rng: &mut DeterministicRng,
+) -> SumeragiVoteValidationDropReasonCount {
+    SumeragiVoteValidationDropReasonCount {
+        reason: rng_ascii_string(rng, 12),
+        total: rng.next_u64(),
+    }
+}
+
+fn rng_vote_validation_drop_peer_entry(
+    rng: &mut DeterministicRng,
+) -> SumeragiVoteValidationDropPeerEntry {
+    let reason_len = rng.up_to(3);
+    let reasons = (0..reason_len)
+        .map(|_| rng_vote_validation_drop_reason_count(rng))
+        .collect();
+    SumeragiVoteValidationDropPeerEntry {
+        peer_id: PeerId::from(KeyPair::random().public_key().clone()),
+        roster_hash: rng
+            .next_bool()
+            .then(|| HashOf::<Vec<PeerId>>::from_untyped_unchecked(rng_hash(rng))),
+        roster_len: rng.next_u32(),
+        total: rng.next_u64(),
+        reasons,
+        last_height: rng.next_u64(),
+        last_view: rng.next_u64(),
+        last_epoch: rng.next_u64(),
+        last_timestamp_ms: rng.next_u64(),
+    }
+}
+
+fn rng_vote_validation_drop_status(rng: &mut DeterministicRng) -> SumeragiVoteValidationDropStatus {
+    let entry_len = rng.up_to(3);
+    let entries = (0..entry_len)
+        .map(|_| rng_vote_validation_drop_entry(rng))
+        .collect();
+    let peer_entry_len = rng.up_to(3);
+    let peer_entries = (0..peer_entry_len)
+        .map(|_| rng_vote_validation_drop_peer_entry(rng))
+        .collect();
+    SumeragiVoteValidationDropStatus {
+        total: rng.next_u64(),
+        entries,
+        peer_entries,
+    }
+}
+
 fn rng_worker_queue_depths(rng: &mut DeterministicRng) -> SumeragiWorkerQueueDepths {
     SumeragiWorkerQueueDepths {
         vote_rx: rng.next_u64(),
@@ -1214,6 +1301,39 @@ fn sumeragi_wire_status_roundtrip() {
                 outcome: "dropped".to_string(),
                 reason: "hint_mismatch".to_string(),
                 total: 3,
+            }],
+        },
+        vote_validation_drops: SumeragiVoteValidationDropStatus {
+            total: 2,
+            entries: vec![SumeragiVoteValidationDropEntry {
+                reason: "invalid_signature".to_string(),
+                height: 9,
+                view: 2,
+                epoch: 0,
+                signer_index: 1,
+                peer_id: Some(PeerId::from(KeyPair::random().public_key().clone())),
+                roster_hash: Some(HashOf::<Vec<PeerId>>::from_untyped_unchecked(
+                    Hash::prehashed([0xAE; Hash::LENGTH]),
+                )),
+                roster_len: 4,
+                block_hash: sample_block_hash(0x94),
+                timestamp_ms: 456,
+            }],
+            peer_entries: vec![SumeragiVoteValidationDropPeerEntry {
+                peer_id: PeerId::from(KeyPair::random().public_key().clone()),
+                roster_hash: Some(HashOf::<Vec<PeerId>>::from_untyped_unchecked(
+                    Hash::prehashed([0xAF; Hash::LENGTH]),
+                )),
+                roster_len: 4,
+                total: 2,
+                reasons: vec![SumeragiVoteValidationDropReasonCount {
+                    reason: "invalid_signature".to_string(),
+                    total: 2,
+                }],
+                last_height: 9,
+                last_view: 2,
+                last_epoch: 0,
+                last_timestamp_ms: 789,
             }],
         },
         validation_reject_total: 1,
@@ -1748,8 +1868,22 @@ fn consensus_messages_norito_roundtrip() {
         .root()
         .map(Hash::from)
         .expect("chunk root");
+    let block_header = BlockHeader::new(
+        NonZeroU64::new(44).expect("block height must be non-zero"),
+        None,
+        None,
+        None,
+        0,
+        7,
+    );
+    let leader_key = KeyPair::random();
+    let (_, leader_private) = leader_key.into_parts();
+    let leader_signature = BlockSignature::new(
+        0,
+        SignatureOf::from_hash(&leader_private, block_header.hash()),
+    );
     let rbc_init = RbcInit {
-        block_hash: sample_block_hash(0x30),
+        block_hash: block_header.hash(),
         height: 44,
         view: 7,
         epoch: 2,
@@ -1759,6 +1893,8 @@ fn consensus_messages_norito_roundtrip() {
         chunk_digests,
         payload_hash: sample_hash(0x31),
         chunk_root,
+        block_header,
+        leader_signature,
     };
     let rbc_chunk = RbcChunk {
         block_hash: rbc_init.block_hash,

@@ -146,6 +146,19 @@ impl SignedBlock {
         }
     }
 
+    /// Create a block with a given signature and payload.
+    #[cfg(feature = "transparent_api")]
+    pub fn presigned_with_payload(
+        signature: BlockSignature,
+        payload: BlockPayload,
+    ) -> SignedBlock {
+        SignedBlock {
+            signatures: [signature].into_iter().collect(),
+            payload,
+            result: None,
+        }
+    }
+
     /// Set this block's transaction results and update the Merkle roots accordingly.
     #[cfg(feature = "transparent_api")]
     pub fn set_transaction_results(
@@ -1265,6 +1278,32 @@ mod tests {
         };
 
         assert!(block.is_empty());
+    }
+
+    #[test]
+    #[cfg(feature = "transparent_api")]
+    fn presigned_with_payload_preserves_payload_and_signature() {
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let payload = BlockPayload {
+            header,
+            transactions: Vec::new(),
+            da_commitments: None,
+            da_proof_policies: None,
+            da_pin_intents: None,
+        };
+        let key_pair = iroha_crypto::KeyPair::random_with_algorithm(
+            iroha_crypto::Algorithm::BlsNormal,
+        );
+        let signature = BlockSignature::new(
+            0,
+            iroha_crypto::SignatureOf::from_hash(key_pair.private_key(), payload.header.hash()),
+        );
+
+        let block = SignedBlock::presigned_with_payload(signature.clone(), payload.clone());
+
+        assert_eq!(block.header(), payload.header);
+        assert_eq!(block.transactions_vec(), &payload.transactions);
+        assert!(block.signatures().any(|sig| sig == &signature));
     }
 
     #[test]

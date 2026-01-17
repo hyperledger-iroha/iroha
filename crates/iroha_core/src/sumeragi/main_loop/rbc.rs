@@ -19,11 +19,12 @@ use eyre::{Result, eyre};
 use iroha_crypto::{Hash, HashOf, MerkleTree, Signature};
 use iroha_data_model::{
     ChainId, Encode as _,
-    block::{BlockHeader, SignedBlock},
+    block::{BlockHeader, BlockPayload, SignedBlock},
     nexus::{DataSpaceId, LaneId},
     peer::PeerId,
 };
 use iroha_logger::prelude::*;
+use norito::codec::Decode;
 use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 use sha2::{Digest, Sha256};
 
@@ -691,6 +692,12 @@ impl Actor {
             .ok_or_else(|| eyre!("failed to compute RBC chunk root"))?;
 
         let block_hash = signed_block.hash();
+        let leader_signature = signed_block
+            .signatures()
+            .find(|signature| signature.index() == u64::from(local_validator_index))
+            .cloned()
+            .ok_or_else(|| eyre!("missing leader signature for RBC init"))?;
+        let block_header = signed_block.header();
         let mut session = RbcSession::new(
             total_chunks,
             Some(payload_hash),
@@ -699,6 +706,8 @@ impl Actor {
             epoch,
         )
         .map_err(|err| eyre!(err))?;
+        session.block_header = Some(block_header);
+        session.leader_signature = Some(leader_signature.clone());
         for (idx, chunk) in chunk_bytes.iter().enumerate() {
             let chunk_index = u32::try_from(idx).expect("chunk index fits within a 32-bit range");
             session.ingest_chunk(chunk_index, chunk.clone(), Some(local_validator_index));
@@ -764,6 +773,8 @@ impl Actor {
             chunk_digests: digests.clone(),
             payload_hash,
             chunk_root,
+            block_header,
+            leader_signature: leader_signature.clone(),
         };
 
         let primary_plan = RbcSessionPlan {
@@ -850,6 +861,8 @@ impl Actor {
                         chunk_digests: digests.clone(),
                         payload_hash,
                         chunk_root,
+                        block_header,
+                        leader_signature: leader_signature.clone(),
                     },
                     chunks: dup_chunks,
                     roster: dup_roster.clone(),
@@ -1395,9 +1408,8 @@ impl Actor {
         Some(payload)
     }
 
-    /// Request a missing `BlockCreated` once the full RBC payload is available.
-    /// The RBC payload contains canonical block payload bytes, so we still need
-    /// the signed header from peers to pass validation and vote.
+    /// Attempt to reconstruct `BlockCreated` once the full RBC payload is available.
+    /// Falls back to requesting a missing `BlockCreated` if the signed header is unavailable.
     pub(super) fn recover_block_from_rbc_session(&mut self, key: SessionKey) {
         if self.pending.pending_blocks.contains_key(&key.0) {
             return;
@@ -1434,6 +1446,69 @@ impl Actor {
                 self.persist_rbc_session(key, &session);
             }
             self.publish_rbc_backlog_snapshot();
+        }
+        if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {
+            if let (Some(block_header), Some(leader_signature)) =
+                (session.block_header, session.leader_signature.clone())
+            {
+                if block_header.hash() != key.0 {
+                    warn!(
+                        height = key.1,
+                        view = key.2,
+                        expected = ?key.0,
+                        observed = ?block_header.hash(),
+                        "skipping RBC payload recovery: block header hash mismatch"
+                    );
+                } else {
+                    match BlockPayload::decode(&mut &payload[..]) {
+                        Ok(mut payload) => {
+                            let mut expected_header = block_header;
+                            expected_header.result_merkle_root = None;
+                            if payload.header != expected_header {
+                                warn!(
+                                    height = key.1,
+                                    view = key.2,
+                                    block = %key.0,
+                                    "skipping RBC payload recovery: header mismatch"
+                                );
+                            } else {
+                                payload.header = block_header;
+                                let block =
+                                    SignedBlock::presigned_with_payload(leader_signature, payload);
+                                if let Err(err) = self.handle_block_created(
+                                    super::message::BlockCreated { block },
+                                    None,
+                                ) {
+                                    warn!(
+                                        ?err,
+                                        height = key.1,
+                                        view = key.2,
+                                        block = %key.0,
+                                        "failed to handle recovered BlockCreated from RBC payload"
+                                    );
+                                } else {
+                                    debug!(
+                                        height = key.1,
+                                        view = key.2,
+                                        block = %key.0,
+                                        "recovered BlockCreated from RBC payload"
+                                    );
+                                    return;
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            warn!(
+                                ?err,
+                                height = key.1,
+                                view = key.2,
+                                block = %key.0,
+                                "skipping RBC payload recovery: decode failed"
+                            );
+                        }
+                    }
+                }
+            }
         }
         let mut roster = self.ensure_rbc_session_roster(key);
         if roster.is_empty() {
@@ -1884,6 +1959,111 @@ impl Actor {
             );
             return Ok(());
         }
+        let header_hash = init.block_header.hash();
+        if header_hash != init.block_hash {
+            warn!(
+                height = init.height,
+                view = init.view,
+                block = %init.block_hash,
+                expected = ?init.block_hash,
+                observed = ?header_hash,
+                "rejecting RBC init with mismatched block header hash"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcInit,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::PayloadMismatch,
+            );
+            return Ok(());
+        }
+        if init.block_header.height().get() != init.height
+            || init.block_header.view_change_index() != init.view
+        {
+            warn!(
+                height = init.height,
+                view = init.view,
+                block = %init.block_hash,
+                "rejecting RBC init with header height/view mismatch"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcInit,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidPayload,
+            );
+            return Ok(());
+        }
+        let mut signature_topology =
+            crate::sumeragi::network_topology::Topology::new(init.roster.clone());
+        let expected_leader_index =
+            match self.leader_index_for(&mut signature_topology, init.height, init.view) {
+                Ok(idx) => idx,
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        height = init.height,
+                        view = init.view,
+                        block = %init.block_hash,
+                        "rejecting RBC init: failed to derive leader index"
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::RbcInit,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::InvalidPayload,
+                    );
+                    return Ok(());
+                }
+            };
+        let Some(leader_peer) = signature_topology.as_ref().get(expected_leader_index) else {
+            warn!(
+                height = init.height,
+                view = init.view,
+                block = %init.block_hash,
+                "rejecting RBC init: leader index out of range"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcInit,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidPayload,
+            );
+            return Ok(());
+        };
+        let expected_leader_index =
+            u64::try_from(expected_leader_index).unwrap_or(u64::MAX);
+        if init.leader_signature.index() != expected_leader_index {
+            warn!(
+                height = init.height,
+                view = init.view,
+                block = %init.block_hash,
+                expected = expected_leader_index,
+                observed = init.leader_signature.index(),
+                "rejecting RBC init: leader signature index mismatch"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcInit,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidSignature,
+            );
+            return Ok(());
+        }
+        if init
+            .leader_signature
+            .signature()
+            .verify_hash(leader_peer.public_key(), header_hash)
+            .is_err()
+        {
+            warn!(
+                height = init.height,
+                view = init.view,
+                block = %init.block_hash,
+                "rejecting RBC init: leader signature invalid"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcInit,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidSignature,
+            );
+            return Ok(());
+        }
         if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {
             if let Some(expected_hash) = session.payload_hash() {
                 if expected_hash != init.payload_hash {
@@ -1898,6 +2078,38 @@ impl Actor {
                         super::status::ConsensusMessageKind::RbcInit,
                         super::status::ConsensusMessageOutcome::Dropped,
                         super::status::ConsensusMessageReason::PayloadMismatch,
+                    );
+                    return Ok(());
+                }
+            }
+            if let Some(existing) = session.block_header {
+                if existing != init.block_header {
+                    warn!(
+                        height = init.height,
+                        view = init.view,
+                        block = %init.block_hash,
+                        "dropping RBC INIT that mismatches existing block header"
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::RbcInit,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::PayloadMismatch,
+                    );
+                    return Ok(());
+                }
+            }
+            if let Some(existing) = session.leader_signature.as_ref() {
+                if existing != &init.leader_signature {
+                    warn!(
+                        height = init.height,
+                        view = init.view,
+                        block = %init.block_hash,
+                        "dropping RBC INIT that mismatches existing leader signature"
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::RbcInit,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::InvalidSignature,
                     );
                     return Ok(());
                 }
@@ -2031,6 +2243,8 @@ impl Actor {
                 session.expected_chunk_root = Some(init.chunk_root);
             }
             session.epoch = init.epoch;
+            session.block_header = Some(init.block_header);
+            session.leader_signature = Some(init.leader_signature);
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
             self.flush_pending_rbc(key)?;
             self.maybe_emit_rbc_ready(key)?;
@@ -2065,6 +2279,9 @@ impl Actor {
                 return Ok(());
             }
         };
+        let mut session = session;
+        session.block_header = Some(init.block_header);
+        session.leader_signature = Some(init.leader_signature);
         if self
             .subsystems
             .da_rbc

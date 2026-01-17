@@ -24,7 +24,7 @@ use iroha_data_model::{
     ChainId, Encode as _,
     account::AccountId,
     block::{
-        BlockHeader, SignedBlock,
+        BlockHeader, BlockSignature, SignedBlock,
         consensus::{RbcReadySignature, SumeragiMembershipStatus},
     },
     consensus::{
@@ -900,6 +900,7 @@ fn validate_qc_with_evidence(
     qc: &crate::sumeragi::consensus::Qc,
     topology: &super::network_topology::Topology,
     world: &impl WorldReadOnly,
+    pops: &BTreeMap<PublicKey, Vec<u8>>,
     chain_id: &ChainId,
     consensus_mode: ConsensusMode,
     stake_snapshot: Option<&CommitStakeSnapshot>,
@@ -914,6 +915,7 @@ fn validate_qc_with_evidence(
         qc,
         topology,
         world,
+        pops,
         chain_id,
         consensus_mode,
         stake_snapshot,
@@ -1094,7 +1096,7 @@ fn qc_validator_set_matches_topology(
 fn qc_aggregate_consistent(
     qc: &crate::sumeragi::consensus::Qc,
     canonical_topology: &super::network_topology::Topology,
-    world: &impl WorldReadOnly,
+    pops: &BTreeMap<PublicKey, Vec<u8>>,
     chain_id: &ChainId,
     mode_tag: &str,
 ) -> bool {
@@ -1119,7 +1121,7 @@ fn qc_aggregate_consistent(
         return false;
     }
     let mut public_keys: Vec<&PublicKey> = Vec::with_capacity(parsed_signers.present.len());
-    let mut pops: Vec<Vec<u8>> = Vec::with_capacity(parsed_signers.present.len());
+    let mut signer_pops: Vec<Vec<u8>> = Vec::with_capacity(parsed_signers.present.len());
     for signer in &parsed_signers.present {
         let Ok(idx) = usize::try_from(*signer) else {
             return false;
@@ -1128,14 +1130,14 @@ fn qc_aggregate_consistent(
             return false;
         };
         let pk = peer.public_key();
-        let Some(pop) = consensus_key_pop_for_public_key(world, pk) else {
+        let Some(pop) = pops.get(pk) else {
             return false;
         };
         public_keys.push(pk);
-        pops.push(pop);
+        signer_pops.push(pop.clone());
     }
     let preimage = qc_bls_preimage(qc, chain_id, mode_tag);
-    let pop_refs: Vec<&[u8]> = pops.iter().map(Vec::as_slice).collect();
+    let pop_refs: Vec<&[u8]> = signer_pops.iter().map(Vec::as_slice).collect();
     iroha_crypto::bls_normal_verify_preaggregated_same_message(
         &preimage,
         &qc.aggregate.bls_aggregate_signature,
@@ -1147,13 +1149,13 @@ fn qc_aggregate_consistent(
 
 fn kickstart_pacemaker_after_commit<F>(
     queue_len: usize,
-    defer_proposals: bool,
+    backpressure: propose::ProposalBackpressure,
     mut trigger: F,
 ) -> bool
 where
     F: FnMut(Instant) -> bool,
 {
-    if queue_len > 0 && !defer_proposals {
+    if queue_len > 0 && !backpressure.should_defer() {
         let now = Instant::now();
         let _ = trigger(now);
         return true;
@@ -1374,7 +1376,11 @@ struct RosterValidationCache {
 }
 
 impl RosterValidationCache {
-    fn from_world(world: &impl WorldReadOnly, fallback_epoch_length: u64) -> Self {
+    fn from_world(
+        world: &impl WorldReadOnly,
+        fallback_epoch_length: u64,
+        fallback_pops: Option<&BTreeMap<PublicKey, Vec<u8>>>,
+    ) -> Self {
         let epoch_schedule =
             super::EpochScheduleSnapshot::from_world_with_fallback(world, fallback_epoch_length);
         let mut pops = BTreeMap::new();
@@ -1382,6 +1388,11 @@ impl RosterValidationCache {
             if let Some(pop) = record.pop.as_ref() {
                 pops.entry(record.public_key.clone())
                     .or_insert_with(|| pop.clone());
+            }
+        }
+        if let Some(fallback_pops) = fallback_pops {
+            for (pk, pop) in fallback_pops {
+                pops.entry(pk.clone()).or_insert_with(|| pop.clone());
             }
         }
         let stake_map = stake_map_from_world(world);
@@ -1394,8 +1405,13 @@ impl RosterValidationCache {
         }
     }
 
-    fn refresh_from_world(&mut self, world: &impl WorldReadOnly, fallback_epoch_length: u64) {
-        *self = Self::from_world(world, fallback_epoch_length);
+    fn refresh_from_world(
+        &mut self,
+        world: &impl WorldReadOnly,
+        fallback_epoch_length: u64,
+        fallback_pops: Option<&BTreeMap<PublicKey, Vec<u8>>>,
+    ) {
+        *self = Self::from_world(world, fallback_epoch_length, fallback_pops);
     }
 
     fn expected_epoch(&self, height: u64, consensus_mode: ConsensusMode) -> u64 {
@@ -1426,6 +1442,7 @@ pub(crate) fn validate_block_sync_qc(
     world: &impl WorldReadOnly,
     block_signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
     block_view: u64,
+    pops: &BTreeMap<PublicKey, Vec<u8>>,
     chain_id: &ChainId,
     consensus_mode: ConsensusMode,
     stake_snapshot: Option<&CommitStakeSnapshot>,
@@ -1490,7 +1507,7 @@ pub(crate) fn validate_block_sync_qc(
             }
         }
     }
-    if !qc_aggregate_consistent(qc, topology, world, chain_id, mode_tag) {
+    if !qc_aggregate_consistent(qc, topology, pops, chain_id, mode_tag) {
         return Err(QcValidationError::AggregateMismatch);
     }
     // Return the raw bitmap indices so cached signers reproduce the QC bitmap correctly.
@@ -1633,6 +1650,7 @@ fn tally_qc_against_votes(
     qc: &crate::sumeragi::consensus::Qc,
     topology: &super::network_topology::Topology,
     world: &impl WorldReadOnly,
+    pops: &BTreeMap<PublicKey, Vec<u8>>,
     chain_id: &ChainId,
     consensus_mode: ConsensusMode,
     stake_snapshot: Option<&CommitStakeSnapshot>,
@@ -1644,6 +1662,7 @@ fn tally_qc_against_votes(
         qc,
         topology,
         world,
+        pops,
         chain_id,
         consensus_mode,
         stake_snapshot,
@@ -1669,6 +1688,7 @@ fn tally_qc_against_block_signers(
     world: &impl WorldReadOnly,
     block_signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
     block_view: u64,
+    pops: &BTreeMap<PublicKey, Vec<u8>>,
     chain_id: &ChainId,
     consensus_mode: ConsensusMode,
     stake_snapshot: Option<&CommitStakeSnapshot>,
@@ -1681,6 +1701,7 @@ fn tally_qc_against_block_signers(
         world,
         block_signers,
         block_view,
+        pops,
         chain_id,
         consensus_mode,
         stake_snapshot,
@@ -1732,6 +1753,7 @@ fn validate_qc_against_votes(
     qc: &crate::sumeragi::consensus::Qc,
     topology: &super::network_topology::Topology,
     world: &impl WorldReadOnly,
+    pops: &BTreeMap<PublicKey, Vec<u8>>,
     chain_id: &ChainId,
     consensus_mode: ConsensusMode,
     stake_snapshot: Option<&CommitStakeSnapshot>,
@@ -1778,7 +1800,7 @@ fn validate_qc_against_votes(
         }
     }
 
-    if !qc_aggregate_consistent(qc, topology, world, chain_id, mode_tag) {
+    if !qc_aggregate_consistent(qc, topology, pops, chain_id, mode_tag) {
         return Err(QcValidationError::AggregateMismatch);
     }
     let mut missing = 0usize;
@@ -1840,12 +1862,13 @@ fn fallback_qc_tally_from_bitmap(
     qc: &crate::sumeragi::consensus::Qc,
     topology: &super::network_topology::Topology,
     world: &impl WorldReadOnly,
+    pops: &BTreeMap<PublicKey, Vec<u8>>,
     chain_id: &ChainId,
     mode_tag: &str,
     prf_seed: Option<[u8; 32]>,
 ) -> Option<QcSignerTally> {
     let _signature_topology = topology_for_view(topology, qc.height, qc.view, mode_tag, prf_seed);
-    if !qc_aggregate_consistent(qc, topology, world, chain_id, mode_tag) {
+    if !qc_aggregate_consistent(qc, topology, pops, chain_id, mode_tag) {
         return None;
     }
     let roster_len = topology.as_ref().len();
@@ -5657,6 +5680,7 @@ impl Actor {
             return Some(tally.clone());
         }
 
+        let pops = &self.roster_validation_cache.pops;
         let (result, evidence, fallback_tally, sync_err) = {
             let state_view = self.state.view();
             let world = state_view.world();
@@ -5669,6 +5693,7 @@ impl Actor {
                 qc,
                 topology,
                 world,
+                pops,
                 &self.common_config.chain,
                 consensus_mode,
                 stake_snapshot.as_ref(),
@@ -5684,6 +5709,7 @@ impl Actor {
                     world,
                     block_signers,
                     block_view,
+                    pops,
                     &self.common_config.chain,
                     consensus_mode,
                     stake_snapshot.as_ref(),
@@ -5697,6 +5723,7 @@ impl Actor {
                             qc,
                             topology,
                             world,
+                            pops,
                             &self.common_config.chain,
                             mode_tag,
                             prf_seed,
@@ -6754,7 +6781,12 @@ impl Actor {
         };
         let roster_validation_cache = {
             let world = state.world.view();
-            let cache = RosterValidationCache::from_world(&world, config.epoch_length_blocks);
+            let trusted_pops = &common_config.trusted_peers.value().pops;
+            let cache = RosterValidationCache::from_world(
+                &world,
+                config.epoch_length_blocks,
+                Some(trusted_pops),
+            );
             drop(world);
             cache
         };
@@ -8887,6 +8919,8 @@ impl Actor {
         let chunk_root = session
             .expected_chunk_root
             .or_else(|| session.chunk_root())?;
+        let block_header = session.block_header?;
+        let leader_signature = session.leader_signature.clone()?;
         Some(RbcInit {
             block_hash: key.0,
             height: key.1,
@@ -8898,6 +8932,8 @@ impl Actor {
             chunk_digests,
             payload_hash,
             chunk_root,
+            block_header,
+            leader_signature,
         })
     }
 
@@ -9204,6 +9240,8 @@ impl Actor {
         let chunk_root = session
             .expected_chunk_root
             .or_else(|| session.chunk_root())?;
+        let block_header = session.block_header?;
+        let leader_signature = session.leader_signature.clone()?;
         let mut chunks = Vec::with_capacity(session.total_chunks() as usize);
         for idx in 0..session.total_chunks() {
             if let Some(bytes) = session.chunk_bytes(idx) {
@@ -9229,6 +9267,8 @@ impl Actor {
             chunk_digests,
             payload_hash,
             chunk_root,
+            block_header,
+            leader_signature,
         };
         Some((init, chunks))
     }
@@ -11053,6 +11093,8 @@ pub(crate) struct RbcSession {
     payload_hash: Option<Hash>,
     expected_chunk_root: Option<Hash>,
     expected_chunk_digests: Option<Vec<[u8; 32]>>,
+    block_header: Option<BlockHeader>,
+    leader_signature: Option<BlockSignature>,
     epoch: u64,
     chunks: Vec<Option<RbcChunkEntry>>,
     received_chunks: u32,
@@ -11095,6 +11137,8 @@ impl RbcSession {
             payload_hash,
             expected_chunk_root,
             expected_chunk_digests,
+            block_header: None,
+            leader_signature: None,
             epoch,
             chunks: vec![None; capacity],
             received_chunks: 0,
@@ -11327,6 +11371,8 @@ impl RbcSession {
             height: key.1,
             view: key.2,
             epoch: self.epoch,
+            block_header: self.block_header,
+            leader_signature: self.leader_signature.clone(),
             total_chunks: self.total_chunks,
             chunk_digests,
             payload_hash: self.payload_hash,
@@ -11372,6 +11418,8 @@ impl RbcSession {
             sent_ready,
             chunks,
             epoch,
+            block_header,
+            leader_signature,
             ..
         } = persisted.clone();
         let expected_chunk_root = expected_chunk_root.or(computed_chunk_root);
@@ -11479,6 +11527,8 @@ impl RbcSession {
         session.deliver_sender = deliver_sender;
         session.deliver_signature = deliver_signature;
         session.invalid = invalid;
+        session.block_header = block_header;
+        session.leader_signature = leader_signature;
         session.drop_mismatched_chunks();
         session.recovered_from_disk = true;
         Ok(session)

@@ -96,13 +96,14 @@ LaneConfigEntry {
 ## Бюджеты хранения
 
 - `nexus.storage.max_disk_usage_bytes` задает общий дисковый бюджет, который узлы Nexus должны потреблять между Kura, холодными WSV snapshots, SoraFS storage и streaming spools (SoraNet/SoraVPN).
-- При превышении общего бюджета выселение детерминированное: сначала очищаются spools SoraNet в лексикографическом порядке путей, затем spools SoraVPN, затем холодные snapshots tiered-state (от самых старых к новым), и наконец retired сегменты Kura. Активные тела блоков не выселяются до появления DA rehydration.
-- `nexus.storage.max_wsv_memory_bytes` ограничивает горячий слой WSV, распространяя детерминированный Norito payload sizing в `tiered_state.hot_retained_bytes`; grace retention может временно превышать бюджет, но переполнение видно через телеметрию (`state_tiered_hot_bytes`, `state_tiered_hot_grace_overflow_bytes`).
+- При превышении общего бюджета выселение детерминированное: сначала очищаются spools SoraNet в лексикографическом порядке путей, затем spools SoraVPN, затем холодные snapshots tiered-state (от самых старых к новым, с offload в `da_store_root` когда настроен), затем retired сегменты Kura, и наконец активные тела блоков Kura выгружаются в `da_blocks/` для DA-реидратации при чтении.
+- `nexus.storage.max_wsv_memory_bytes` ограничивает горячий слой WSV, распространяя детерминированный in-memory размер WSV в `tiered_state.hot_retained_bytes`; grace retention может временно превышать бюджет, но переполнение видно через телеметрию (`state_tiered_hot_bytes`, `state_tiered_hot_grace_overflow_bytes`).
 - `nexus.storage.disk_budget_weights` делит дисковый бюджет между компонентами в базисных пунктах (должно суммироваться до 10 000). Полученные caps применяются к `kura.max_disk_usage_bytes`, `tiered_state.max_cold_bytes`, `sorafs.storage.max_capacity_bytes`, `streaming.soranet.provision_spool_max_bytes` и `streaming.soravpn.provision_spool_max_bytes`.
 - Enforcement бюджета Kura суммирует bytes block-store по активным и retired сегментам lanes и учитывает queued blocks, еще не persisted, чтобы избежать overshoot при write lag.
 - Provision spools SoraVPN используют настройки `streaming.soravpn` и ограничиваются независимо от provision spool SoraNet.
 - Per-component limits сохраняются: когда компонент имеет явный ненулевой cap, применяется меньший из cap и производного Nexus бюджета.
 - Telemetria бюджета использует `storage_budget_bytes_used{component=...}` и `storage_budget_bytes_limit{component=...}` для отчетов по usage/caps для `kura`, `wsv_hot`, `wsv_cold`, `soranet_spool` и `soravpn_spool`; `storage_budget_exceeded_total{component=...}` увеличивается, когда enforcement отклоняет новые данные и логи предупреждают оператора.
+- Телеметрия DA-эвикции добавляет `storage_da_cache_total{component=...,result=hit|miss}` и `storage_da_churn_bytes_total{component=...,direction=evicted|rehydrated}` для отслеживания cache-активности и перемещенных байтов для `kura` и `wsv_cold`.
 - Kura сообщает ту же отчетность, что используется при admission (bytes на диске плюс queued blocks, включая merge-ledger payloads при наличии), поэтому gauges отражают эффективное давление, а не только persisted bytes.
 
 ## Routing и APIs

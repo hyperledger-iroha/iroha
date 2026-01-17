@@ -1791,6 +1791,7 @@ impl Actor {
                 &qc,
                 &topology,
                 world,
+                &self.roster_validation_cache.pops,
                 &self.common_config.chain,
                 consensus_mode,
                 stake_snapshot.as_ref(),
@@ -2158,11 +2159,13 @@ impl Actor {
         let (_, mode_tag, prf_seed) = self.consensus_context_for_height(qc.height);
         let _signature_topology =
             super::topology_for_view(topology, qc.height, qc.view, mode_tag, prf_seed);
-        let aggregate_ok = {
-            let state_view = self.state.view();
-            let world = state_view.world();
-            qc_aggregate_consistent(qc, topology, world, &self.common_config.chain, mode_tag)
-        };
+        let aggregate_ok = qc_aggregate_consistent(
+            qc,
+            topology,
+            &self.roster_validation_cache.pops,
+            &self.common_config.chain,
+            mode_tag,
+        );
         if !aggregate_ok {
             return None;
         }

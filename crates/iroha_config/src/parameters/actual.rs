@@ -2945,7 +2945,7 @@ pub struct TieredState {
     pub enabled: bool,
     /// Maximum number of keys to keep hot (0 = unlimited).
     pub hot_retained_keys: usize,
-    /// Hot-tier byte budget based on serialized Norito JSON size (0 = unlimited).
+    /// Hot-tier byte budget based on deterministic in-memory WSV sizing (0 = unlimited).
     /// Grace retention may temporarily exceed this budget.
     pub hot_retained_bytes: Bytes<u64>,
     /// Minimum snapshots to retain newly hot entries before demotion (0 = disabled).
@@ -3847,10 +3847,10 @@ pub struct TrustedPeers {
     pub myself: Peer,
     /// Other trusted peers.
     pub others: UniqueVec<Peer>,
-    /// Optional Proof-of-Possession (PoP) for validators' BLS keys, keyed by public key.
+    /// Proof-of-Possession (PoP) for validators' BLS keys, keyed by public key.
     /// PoP entries must cover the full validator roster at config parse time; incomplete
-    /// or invalid PoP maps are rejected. As a safety fallback, runtime roster derivation
-    /// skips PoP filtering if the map is incomplete to avoid divergent topologies.
+    /// or invalid PoP maps are rejected. Runtime roster derivation still guards against
+    /// missing or invalid PoPs to avoid divergent topologies.
     pub pops: std::collections::BTreeMap<PublicKey, Vec<u8>>,
 }
 

@@ -11693,6 +11693,12 @@ impl State {
             crypto: parking_lot::RwLock::new(Arc::new(initial_crypto.clone())),
             view_lock: parking_lot::RwLock::new(()),
         };
+        #[cfg(feature = "telemetry")]
+        {
+            s.kura.attach_telemetry(telemetry_seed.clone());
+            let mut backend = s.tiered_backend.lock();
+            backend.attach_telemetry(telemetry_seed.clone());
+        }
         s.run_storage_migrations();
         #[cfg(feature = "telemetry")]
         {
@@ -13574,7 +13580,39 @@ impl State {
         }
 
         if excess > 0 {
-            // TODO: evict active block bodies once DA rehydration is available.
+            let before = kura_used;
+            match self.kura.evict_block_bodies(excess) {
+                Ok(freed) if freed > 0 => {
+                    match self.kura.disk_usage_bytes() {
+                        Ok(bytes) => kura_used = bytes,
+                        Err(err) => {
+                            warn!(
+                                ?err,
+                                "nexus storage eviction: failed to remeasure Kura usage after eviction"
+                            );
+                        }
+                    }
+                    if kura_used < before {
+                        #[cfg(feature = "telemetry")]
+                        self.telemetry.inc_storage_budget_exceeded("kura");
+                    }
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        "nexus storage eviction: failed to evict active Kura block bodies"
+                    );
+                }
+            }
+            total = kura_used
+                .saturating_add(cold_used)
+                .saturating_add(soranet_used)
+                .saturating_add(soravpn_used);
+            excess = total.saturating_sub(max_disk);
+        }
+
+        if excess > 0 {
             warn!(
                 excess,
                 max_disk,

@@ -2025,10 +2025,10 @@ mod network_relay_tests {
         },
         tx::AcceptedTransaction,
     };
-    use iroha_crypto::{Hash, HashOf, KeyPair};
+    use iroha_crypto::{Hash, HashOf, KeyPair, SignatureOf};
     use iroha_data_model::{
         AccountId, ChainId, DomainId, Level,
-        block::{BlockHeader, SignedBlock},
+        block::{BlockHeader, BlockSignature, SignedBlock},
         isi::Log,
         peer::{Peer, PeerId},
         transaction::TransactionBuilder,
@@ -2283,6 +2283,18 @@ mod network_relay_tests {
 
     fn rbc_init_msg(tag: u8, height: u64, view: u64) -> iroha_core::NetworkMessage {
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([tag; 32]));
+        let block_header = BlockHeader::new(
+            std::num::NonZeroU64::new(height).expect("block height must be non-zero"),
+            None,
+            None,
+            None,
+            0,
+            view,
+        );
+        let leader_key = KeyPair::random();
+        let (_, leader_private) = leader_key.into_parts();
+        let leader_signature =
+            BlockSignature::new(0, SignatureOf::from_hash(&leader_private, block_header.hash()));
         let init = iroha_core::sumeragi::consensus::RbcInit {
             block_hash,
             height,
@@ -2294,6 +2306,8 @@ mod network_relay_tests {
             chunk_digests: vec![[0x22; 32]],
             payload_hash: Hash::prehashed([0x33; 32]),
             chunk_root: Hash::prehashed([0x44; 32]),
+            block_header,
+            leader_signature,
         };
         iroha_core::NetworkMessage::SumeragiBlock(Box::new(BlockMessage::RbcInit(init)))
     }

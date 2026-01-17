@@ -662,11 +662,11 @@ pub struct Root {
         default = "defaults::common::chain_discriminant()"
     )]
     chain_discriminant: WithOrigin<u16>,
-    /// Optional BLS Proof-of-Possession entries for trusted peers.
-    /// When provided, PoP entries must cover every BLS validator in `trusted_peers` and
-    /// are verified during config parsing; incomplete or invalid PoPs are rejected.
-    #[config(default)]
-    trusted_peers_pop: Vec<TrustedPeerPop>,
+    /// BLS Proof-of-Possession entries for trusted peers.
+    /// PoP entries must cover every BLS validator in `trusted_peers` and are verified
+    /// during config parsing; incomplete or invalid PoPs are rejected.
+    #[config(env = "TRUSTED_PEERS_POP", default)]
+    trusted_peers_pop: TrustedPeerPops,
     #[config(nested)]
     genesis: Genesis,
     #[config(nested)]
@@ -834,16 +834,22 @@ impl Root {
         trusted: &actual::TrustedPeers,
         emitter: &mut Emitter<ParseError>,
     ) {
-        if trusted.pops.is_empty() {
-            return;
-        }
-
         let mut roster_keys: BTreeSet<PublicKey> = BTreeSet::new();
+        let mut non_bls: Vec<String> = Vec::new();
         for peer in std::iter::once(&trusted.myself).chain(trusted.others.iter()) {
             let pk = peer.id().public_key();
             if pk.algorithm() == Algorithm::BlsNormal {
                 roster_keys.insert(pk.clone());
+            } else {
+                non_bls.push(pk.to_string());
             }
+        }
+        if !non_bls.is_empty() {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                    "trusted_peers contains non-BLS validator keys: {non_bls:?}"
+                )),
+            );
         }
 
         let missing: Vec<_> = roster_keys
@@ -909,7 +915,7 @@ impl Root {
         );
         let trusted_peers = self.trusted_peers.map(|x| {
             let others = x.0.into_iter().filter(|p| p.id() != peer.id()).collect();
-            let pops = Self::parse_trusted_peer_pops(&self.trusted_peers_pop, &mut emitter);
+            let pops = Self::parse_trusted_peer_pops(&self.trusted_peers_pop.0, &mut emitter);
             let trusted = actual::TrustedPeers {
                 myself: peer.clone(),
                 others,
@@ -2748,7 +2754,7 @@ pub struct TieredState {
         default = "defaults::tiered_state::HOT_RETAINED_KEYS"
     )]
     pub hot_retained_keys: usize,
-    /// Hot-tier byte budget based on serialized Norito JSON size (0 = unlimited).
+    /// Hot-tier byte budget based on deterministic in-memory WSV sizing (0 = unlimited).
     /// Grace retention may temporarily exceed this budget.
     #[config(
         env = "TIERED_STATE_HOT_RETAINED_BYTES",
@@ -5645,6 +5651,29 @@ impl FromEnvStr for TrustedPeers {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+struct TrustedPeerPops(Vec<TrustedPeerPop>);
+
+impl json::JsonDeserialize for TrustedPeerPops {
+    fn json_deserialize(
+        parser: &mut json::Parser<'_>,
+    ) -> ::core::result::Result<Self, json::Error> {
+        let entries = Vec::<TrustedPeerPop>::json_deserialize(parser)?;
+        Ok(Self(entries))
+    }
+}
+
+impl FromEnvStr for TrustedPeerPops {
+    type Error = json::Error;
+
+    fn from_env_str(value: Cow<'_, str>) -> std::result::Result<Self, Self::Error>
+    where
+        Self: Sized,
+    {
+        norito::json::from_json(value.as_ref())
+    }
+}
+
 impl Default for TrustedPeers {
     fn default() -> Self {
         Self(UniqueVec::new())
@@ -5659,6 +5688,31 @@ pub struct TrustedPeerPop {
     pub public_key: iroha_crypto::PublicKey,
     /// `PoP` bytes as hex string (e.g., "0x...") or plain hex.
     pub pop_hex: String,
+}
+
+#[cfg(test)]
+mod trusted_peers_pop_env_tests {
+    use std::{borrow::Cow, str::FromStr};
+
+    use super::*;
+
+    const PUBLIC_KEY_HEX: &str = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2";
+
+    #[test]
+    fn trusted_peers_pop_from_env_parses_json() {
+        let json = format!(
+            r#"[{{"public_key":"{public_key}","pop_hex":"deadbeef"}}]"#,
+            public_key = PUBLIC_KEY_HEX
+        );
+        let parsed =
+            TrustedPeerPops::from_env_str(Cow::Owned(json)).expect("parse trusted_peers_pop env");
+        assert_eq!(parsed.0.len(), 1);
+        assert_eq!(
+            parsed.0[0].public_key,
+            iroha_crypto::PublicKey::from_str(PUBLIC_KEY_HEX).expect("public key")
+        );
+        assert_eq!(parsed.0[0].pop_hex, "deadbeef");
+    }
 }
 
 impl AdaptiveObservability {
