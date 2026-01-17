@@ -39,13 +39,13 @@ use crate::{
 const SUMERAGI_STACK_SIZE_BYTES: usize = 64 * 1024 * 1024;
 const WORKER_WAKE_CHANNEL_CAP: usize = 1;
 
-/// Build initial validator topology from trusted peers by enforcing BLS-normal keys and `PoP`.
+/// Build the initial validator topology from trusted peers.
+/// Enforces BLS-normal keys and, when configured, valid PoP entries.
 /// Observers are not included; this helper filters the validator set only.
 pub fn filter_validators_from_trusted(
     tp: &iroha_config::parameters::actual::TrustedPeers,
 ) -> Vec<PeerId> {
-    let mut out: BTreeSet<PeerId> = BTreeSet::new();
-    // Compose iterator over myself + others
+    let mut baseline: BTreeSet<PeerId> = BTreeSet::new();
     let iter = std::iter::once(tp.myself.clone()).chain(tp.others.clone());
     for peer in iter {
         let pk = peer.id().public_key();
@@ -53,22 +53,49 @@ pub fn filter_validators_from_trusted(
             iroha_logger::warn!(?pk, "excluding peer: validator identity must be BLS-normal");
             continue;
         }
-        if let Some(pop) = tp.pops.get(pk) {
+        baseline.insert(PeerId::new(pk.clone()));
+    }
+
+    let mut out = if tp.pops.is_empty() {
+        baseline.clone()
+    } else {
+        let mut filtered: BTreeSet<PeerId> = BTreeSet::new();
+        for peer_id in &baseline {
+            let pk = peer_id.public_key();
+            let Some(pop) = tp.pops.get(pk) else {
+                iroha_logger::warn!(?pk, "missing PoP; excluding peer from consensus");
+                continue;
+            };
             if let Err(e) = iroha_crypto::bls_normal_pop_verify(pk, pop) {
                 iroha_logger::warn!(?pk, ?e, "invalid PoP; excluding peer from consensus");
                 continue;
             }
-        } else {
-            iroha_logger::warn!(?pk, "missing PoP; excluding peer from consensus");
-            continue;
+            filtered.insert(peer_id.clone());
         }
-        out.insert(PeerId::new(pk.clone()));
-    }
+        let baseline_len = baseline.len();
+        let needed = if baseline_len > 3 {
+            ((baseline_len.saturating_sub(1)) / 3) * 2 + 1
+        } else {
+            baseline_len
+        };
+        if filtered.len() < needed {
+            iroha_logger::warn!(
+                filtered = filtered.len(),
+                baseline = baseline_len,
+                needed,
+                pops = tp.pops.len(),
+                "PoP filtering produced sub-quorum roster; falling back to BLS baseline"
+            );
+            baseline.clone()
+        } else {
+            filtered
+        }
+    };
 
     // If the explicit peer roster was empty but the configuration still includes PoP
     // records, fall back to those so we do not silently collapse into a single-node
     // topology when addresses were omitted.
-    if out.is_empty() {
+    if out.is_empty() && !tp.pops.is_empty() {
         iroha_logger::warn!(
             roster_peers = tp.others.len().saturating_add(1),
             pops = tp.pops.len(),
@@ -463,13 +490,14 @@ pub(crate) fn npos_seed_for_height_from_world(
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::{BTreeMap, BTreeSet},
         num::NonZeroU64,
         sync::{Arc, Mutex, mpsc},
         time::Duration,
     };
 
     use iroha_config::parameters::actual::SumeragiNpos;
-    use iroha_crypto::{Hash, KeyPair, SignatureOf};
+    use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf, bls_normal_pop_prove};
     use iroha_data_model::{
         block::{
             BlockHeader, BlockSignature, SignedBlock,
@@ -481,8 +509,9 @@ mod tests {
             Parameter,
             system::{SumeragiConsensusMode, SumeragiNposParameters},
         },
-        peer::PeerId,
+        peer::{Peer, PeerId},
     };
+    use iroha_primitives::{addr::SocketAddr, unique_vec::UniqueVec};
 
     use super::*;
     use crate::{
@@ -527,6 +556,11 @@ mod tests {
         }
     }
 
+    fn make_peer(key_pair: &KeyPair, port: u16) -> Peer {
+        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+        Peer::new(addr, key_pair.public_key().clone())
+    }
+
     fn state_with_npos_params(params: SumeragiNposParameters) -> State {
         let world = World::new();
         {
@@ -543,6 +577,64 @@ mod tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         )
+    }
+
+    #[test]
+    fn trusted_roster_without_pops_keeps_bls_peers() {
+        let kp0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let kp1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let kp2 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer0 = make_peer(&kp0, 10_000);
+        let peer1 = make_peer(&kp1, 10_001);
+        let peer2 = make_peer(&kp2, 10_002);
+
+        let trusted = iroha_config::parameters::actual::TrustedPeers {
+            myself: peer0.clone(),
+            others: UniqueVec::from_iter(vec![peer1.clone(), peer2.clone()]),
+            pops: BTreeMap::new(),
+        };
+        let expected: BTreeSet<_> =
+            vec![peer0.id().clone(), peer1.id().clone(), peer2.id().clone()]
+                .into_iter()
+                .collect();
+        let actual: BTreeSet<_> = filter_validators_from_trusted(&trusted)
+            .into_iter()
+            .collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn trusted_roster_pop_filter_falls_back_on_sub_quorum() {
+        let kp0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let kp1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let kp2 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let kp3 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer0 = make_peer(&kp0, 10_010);
+        let peer1 = make_peer(&kp1, 10_011);
+        let peer2 = make_peer(&kp2, 10_012);
+        let peer3 = make_peer(&kp3, 10_013);
+
+        let mut pops = BTreeMap::new();
+        let pop = bls_normal_pop_prove(kp0.private_key()).expect("pop prove");
+        pops.insert(kp0.public_key().clone(), pop);
+
+        let trusted = iroha_config::parameters::actual::TrustedPeers {
+            myself: peer0.clone(),
+            others: UniqueVec::from_iter(vec![peer1.clone(), peer2.clone(), peer3.clone()]),
+            pops,
+        };
+        let expected: BTreeSet<_> = vec![
+            peer0.id().clone(),
+            peer1.id().clone(),
+            peer2.id().clone(),
+            peer3.id().clone(),
+        ]
+        .into_iter()
+        .collect();
+        let actual: BTreeSet<_> = filter_validators_from_trusted(&trusted)
+            .into_iter()
+            .collect();
+        assert_eq!(actual, expected);
     }
 
     #[test]

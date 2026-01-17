@@ -38876,7 +38876,7 @@ fn derive_vrf_material_is_deterministic() {
 async fn handle_vrf_commit_records_mode_mismatch_in_permissioned_mode() {
     let _guard = super::status::message_handling_test_guard();
     super::status::reset_message_handling_for_tests();
-    let harness = test_actor_harness(1).await;
+    let mut harness = test_actor_harness(1).await;
     let commit = crate::sumeragi::consensus::VrfCommit {
         epoch: 0,
         commitment: [0; 32],
@@ -38907,7 +38907,7 @@ async fn handle_vrf_commit_records_mode_mismatch_in_permissioned_mode() {
 async fn handle_vrf_reveal_records_mode_mismatch_in_permissioned_mode() {
     let _guard = super::status::message_handling_test_guard();
     super::status::reset_message_handling_for_tests();
-    let harness = test_actor_harness(1).await;
+    let mut harness = test_actor_harness(1).await;
     let reveal = crate::sumeragi::consensus::VrfReveal {
         epoch: 0,
         reveal: [0; 32],
