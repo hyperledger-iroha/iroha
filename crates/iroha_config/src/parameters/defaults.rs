@@ -2088,7 +2088,7 @@ pub mod tiered_state {
     pub const ENABLED: bool = false;
     /// Keep all keys hot unless explicitly configured.
     pub const HOT_RETAINED_KEYS: usize = 0;
-    /// Hot-tier byte budget based on serialized Norito JSON size (0 = unlimited).
+    /// Hot-tier byte budget based on deterministic in-memory WSV sizing (0 = unlimited).
     pub const HOT_RETAINED_BYTES: Bytes<u64> = Bytes(0);
     /// Minimum snapshots to retain newly hot entries before demotion (0 = disabled).
     pub const HOT_RETAINED_GRACE_SNAPSHOTS: u64 = 1;

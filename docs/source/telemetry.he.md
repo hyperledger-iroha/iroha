@@ -104,7 +104,7 @@ Iroha חושפת מדדים תואמי Prometheus ותמצית סטטוס בפו
 - `sumeragi_view_changes_total`: ספירת שינויי View.
 - `sumeragi_heartbeat_view_index`: view נוכחי לפי heartbeat.
 - `sumeragi_new_view_height`: גובה הבלוק של קבלת NEW_VIEW אחרונה.
-- `pacemaker_backpressure_deferrals_total`: מספר דחיות pacemaker בגלל עומס.
+- `pacemaker_backpressure_deferrals_total`: מספר דחיות pacemaker בגלל עומס (עומס בתור, backlog של relay/RBC או בלוק ממתין שחוסם הצעה).
 - `sumeragi_block_created_dropped_by_lock_total`, ‏`hint_mismatch_total`, ‏`proposal_mismatch_total`: מדדי נשירה של הצעות.
 - `sumeragi_da_gate_block_total{reason="missing_local_data"}`: מונה של הפעלות מחדש של עיבוד DA כאשר לא ניתן היה להרכיב availability evidence בזמן.
 - `sumeragi_rbc_sessions_active`: סשני RBC פעילים כרגע.
@@ -139,7 +139,7 @@ Iroha חושפת מדדים תואמי Prometheus ותמצית סטטוס בפו
 increase(pacemaker_backpressure_deferrals_total[5m])
 ```
 
-פיק ספייק מרמז על עומס ברשת או בעיות חומרה. אפשר לשלב עם
+פיק ספייק מרמז על עומס ברשת, עומס בתור, backlog של relay/RBC או בלוק ממתין שחוסם הצעה. אפשר לשלב עם
 
 ```promql
 histogram_quantile(0.95, sum(rate(sumeragi_phase_latency_ms_bucket[5m])) by (phase, le))
@@ -199,7 +199,7 @@ torii_tx_queue_depth / torii_tx_queue_capacity
 
 תהליך טיפול:
 1. לאסוף `/status` ולבדוק `pacemaker_backpressure_deferrals_total`.
-2. לבדוק את עומק תור העסקאות ותור RBC.
+2. לבדוק את עומק תור העסקאות, עומק/סטטוס RBC, ואותות backpressure של relay או בלוקים ממתינים.
 3. להשוות זמני שלבים ב-`/v1/sumeragi/phases`.
 
 ### חוסר פעילות VRF

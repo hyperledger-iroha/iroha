@@ -1309,11 +1309,11 @@ impl Actor {
                 super::status::set_highest_qc_hash(lock.subject_block_hash);
             }
 
-            let _ = kickstart_pacemaker_after_commit(
-                self.queue.queued_len(),
-                self.subsystems.propose.backpressure_gate.should_defer(),
-                |now| self.on_pacemaker_propose_ready(now),
-            );
+            let backpressure = self.proposal_backpressure_at(Instant::now());
+            let _ =
+                kickstart_pacemaker_after_commit(self.queue.queued_len(), backpressure, |now| {
+                    self.on_pacemaker_propose_ready(now)
+                });
 
             self.prune_descendants_not_on_tip(pending_height, block_hash);
 
@@ -4439,8 +4439,11 @@ impl Actor {
 
     fn refresh_roster_validation_cache(&mut self) {
         let world = self.state.world.view();
-        self.roster_validation_cache
-            .refresh_from_world(&world, self.config.epoch_length_blocks);
+        self.roster_validation_cache.refresh_from_world(
+            &world,
+            self.config.epoch_length_blocks,
+            Some(&self.common_config.trusted_peers.value().pops),
+        );
         drop(world);
     }
 
@@ -5633,7 +5636,7 @@ mod tests {
         let (trusted, me_id) = trusted_self();
         let roster_cache = {
             let view = state.view();
-            super::RosterValidationCache::from_world(view.world(), super::EPOCH_LENGTH_BLOCKS)
+            super::RosterValidationCache::from_world(view.world(), super::EPOCH_LENGTH_BLOCKS, None)
         };
         let mut update = block_sync_update_with_roster(
             &block,

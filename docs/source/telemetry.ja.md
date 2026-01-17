@@ -211,7 +211,7 @@ nexus_lane_configured_total != EXPECTED_LANE_COUNT
 - `increase(block_created_hint_mismatch_total[5m]) > 0`: 提案ヘッダの不整合
 - `increase(block_created_proposal_mismatch_total[5m]) > 0`: 提案ペイロードの不一致
 - `increase(block_created_dropped_by_lock_total[5m]) > 0`: Locked commit certificate によるドロップ
-- `increase(pacemaker_backpressure_deferrals_total[5m]) > 0`: キュー飽和による Pacemaker 停止
+- `increase(pacemaker_backpressure_deferrals_total[5m]) > 0`: キュー飽和・リレー/RBC バックログ・保留ブロック滞留による Pacemaker 停止
 - `increase(sumeragi_redundant_sends_total[5m])` と `rate(sumeragi_dropped_*[5m])` の同時増加は collector/チャネル設定の見直しを示唆
 - ログ相関の自動化: `python3 scripts/sumeragi_backpressure_log_scraper.py <logfile>` を実行すると、`pacemaker_backpressure_deferrals_total` のスパイクと RBC の `retry` / `abort` ログをまとめて確認できます。`journalctl -f ... | python3 scripts/sumeragi_backpressure_log_scraper.py -` のように標準入力からも扱え、`--status path/to/status.json` で `/v1/sumeragi/status` スナップショットを併せて把握できます。詳細はスクリプトの `--help` と英語版ランブックを参照してください。
 

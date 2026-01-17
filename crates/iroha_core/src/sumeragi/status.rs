@@ -473,6 +473,8 @@ static LANE_RELAY_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 #[cfg(test)]
 static MESSAGE_HANDLING_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
+static VOTE_VALIDATION_DROPS_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
+#[cfg(test)]
 static MISSING_BLOCK_FETCH_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
 static BLOCK_SYNC_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
@@ -529,7 +531,13 @@ static DA_GATE_LAST_REASON: AtomicU8 = AtomicU8::new(DaGateReasonSnapshot::None.
 static DA_GATE_LAST_SATISFIED: AtomicU8 = AtomicU8::new(DaGateSatisfactionSnapshot::None.as_code());
 static DA_GATE_MANIFEST_GUARD_TOTAL: AtomicU64 = AtomicU64::new(0);
 const RBC_STORE_RECENT_EVICTIONS_CAP: usize = 32;
+const VOTE_VALIDATION_DROPS_CAP: usize = 256;
 static RBC_STORE_RECENT_EVICTIONS: OnceLock<Mutex<VecDeque<RbcEvictedSession>>> = OnceLock::new();
+static VOTE_VALIDATION_DROPS: OnceLock<Mutex<VecDeque<VoteValidationDropEntry>>> = OnceLock::new();
+static VOTE_VALIDATION_DROPS_BY_PEER: OnceLock<
+    Mutex<BTreeMap<VoteValidationDropPeerKey, VoteValidationDropPeerState>>,
+> = OnceLock::new();
+static VOTE_VALIDATION_DROPS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static SETTLEMENT_STATUS: OnceLock<Mutex<SettlementStatusState>> = OnceLock::new();
 static LANE_ACTIVITY: OnceLock<Mutex<Vec<LaneActivitySnapshot>>> = OnceLock::new();
 static ACCESS_SET_SOURCES: OnceLock<Mutex<AccessSetSourceSummary>> = OnceLock::new();
@@ -1664,6 +1672,21 @@ pub fn reset_rbc_mismatch_for_tests() {
 }
 
 #[cfg(test)]
+/// Reset vote validation drop history for unit tests.
+pub fn reset_vote_validation_drops_for_tests() {
+    if let Some(slot) = VOTE_VALIDATION_DROPS.get() {
+        let mut guard = slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.clear();
+    }
+    if let Some(mut registry) = vote_validation_drop_peer_registry() {
+        registry.clear();
+    }
+    VOTE_VALIDATION_DROPS_TOTAL.store(0, Ordering::Relaxed);
+}
+
+#[cfg(test)]
 /// Reset the membership mismatch registry for unit tests.
 pub fn reset_membership_mismatch_for_tests() {
     if let Some(mut registry) = membership_mismatch_registry() {
@@ -2436,11 +2459,172 @@ pub struct ConsensusMessageHandlingSnapshot {
     pub entries: Vec<ConsensusMessageHandlingEntry>,
 }
 
+/// Reasons a consensus vote can be dropped during validation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum VoteValidationDropReason {
+    /// Height is at or below the committed tip.
+    StaleHeight,
+    /// View is older than the local view.
+    StaleView,
+    /// Epoch mismatch on the vote payload.
+    EpochMismatch,
+    /// Sender is currently penalized.
+    PenalizedSender,
+    /// Commit roster could not be resolved for the vote.
+    RosterMissing,
+    /// Locked QC gate rejected the vote.
+    LockedQc,
+    /// Duplicate vote already recorded.
+    Duplicate,
+    /// Signer index cannot be represented as usize.
+    SignerIndexOverflow,
+    /// Signer index exceeds the active roster length.
+    SignerOutOfRange,
+    /// Signature payload fails cryptographic validation.
+    SignatureInvalid,
+    /// NEW_VIEW vote missing the highest QC reference.
+    MissingHighestQc,
+    /// NEW_VIEW highest QC mismatch.
+    HighestQcMismatch,
+    /// Conflicting vote already recorded for the signer.
+    ConflictingVote,
+}
+
+impl VoteValidationDropReason {
+    /// Stable label for telemetry and status.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            VoteValidationDropReason::StaleHeight => "stale_height",
+            VoteValidationDropReason::StaleView => "stale_view",
+            VoteValidationDropReason::EpochMismatch => "epoch_mismatch",
+            VoteValidationDropReason::PenalizedSender => "penalized_sender",
+            VoteValidationDropReason::RosterMissing => "roster_missing",
+            VoteValidationDropReason::LockedQc => "locked_qc",
+            VoteValidationDropReason::Duplicate => "duplicate",
+            VoteValidationDropReason::SignerIndexOverflow => "signer_index_overflow",
+            VoteValidationDropReason::SignerOutOfRange => "signer_out_of_range",
+            VoteValidationDropReason::SignatureInvalid => "invalid_signature",
+            VoteValidationDropReason::MissingHighestQc => "missing_highest_qc",
+            VoteValidationDropReason::HighestQcMismatch => "highest_qc_mismatch",
+            VoteValidationDropReason::ConflictingVote => "conflicting_vote",
+        }
+    }
+}
+
+/// Input record for a vote validation drop event.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VoteValidationDropRecord {
+    /// Drop reason label.
+    pub reason: VoteValidationDropReason,
+    /// Vote height.
+    pub height: u64,
+    /// Vote view.
+    pub view: u64,
+    /// Vote epoch.
+    pub epoch: u64,
+    /// Signer index from the vote payload.
+    pub signer_index: u32,
+    /// Peer ID resolved from the validation roster (if any).
+    pub peer_id: Option<PeerId>,
+    /// Validator roster hash used for validation (if any).
+    pub roster_hash: Option<HashOf<Vec<PeerId>>>,
+    /// Validator roster length used for validation (if known).
+    pub roster_len: u32,
+    /// Block hash referenced by the vote.
+    pub block_hash: HashOf<BlockHeader>,
+}
+
+/// Recorded vote validation drop entry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VoteValidationDropEntry {
+    /// Drop reason label.
+    pub reason: VoteValidationDropReason,
+    /// Vote height.
+    pub height: u64,
+    /// Vote view.
+    pub view: u64,
+    /// Vote epoch.
+    pub epoch: u64,
+    /// Signer index from the vote payload.
+    pub signer_index: u32,
+    /// Peer ID resolved from the validation roster (if any).
+    pub peer_id: Option<PeerId>,
+    /// Validator roster hash used for validation (if any).
+    pub roster_hash: Option<HashOf<Vec<PeerId>>>,
+    /// Validator roster length used for validation (if known).
+    pub roster_len: u32,
+    /// Block hash referenced by the vote.
+    pub block_hash: HashOf<BlockHeader>,
+    /// Milliseconds since UNIX epoch when the drop was recorded.
+    pub timestamp_ms: u64,
+}
+
+/// Aggregated count for a vote-validation drop reason.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VoteValidationDropReasonCount {
+    /// Drop reason label.
+    pub reason: VoteValidationDropReason,
+    /// Total drops recorded for the reason.
+    pub total: u64,
+}
+
+/// Aggregated vote validation drops for a peer/roster hash pairing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VoteValidationDropPeerEntry {
+    /// Peer associated with the drop counts.
+    pub peer_id: PeerId,
+    /// Validator roster hash used for validation (if any).
+    pub roster_hash: Option<HashOf<Vec<PeerId>>>,
+    /// Validator roster length used for validation (if known).
+    pub roster_len: u32,
+    /// Total drops recorded for this peer/roster pairing.
+    pub total: u64,
+    /// Per-reason drop counters.
+    pub reasons: Vec<VoteValidationDropReasonCount>,
+    /// Height associated with the last drop.
+    pub last_height: u64,
+    /// View associated with the last drop.
+    pub last_view: u64,
+    /// Epoch associated with the last drop.
+    pub last_epoch: u64,
+    /// Milliseconds since UNIX epoch when the last drop was recorded.
+    pub last_timestamp_ms: u64,
+}
+
+/// Snapshot of recent vote validation drops.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct VoteValidationDropSnapshot {
+    /// Total vote validation drops recorded.
+    pub total: u64,
+    /// Recent drop entries (newest-first, bounded).
+    pub entries: Vec<VoteValidationDropEntry>,
+    /// Aggregated drop counters per peer/roster pairing.
+    pub peer_entries: Vec<VoteValidationDropPeerEntry>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct ConsensusMessageHandlingKey {
     kind: ConsensusMessageKind,
     outcome: ConsensusMessageOutcome,
     reason: ConsensusMessageReason,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct VoteValidationDropPeerKey {
+    peer_id: PeerId,
+    roster_hash: Option<HashOf<Vec<PeerId>>>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct VoteValidationDropPeerState {
+    roster_len: u32,
+    total: u64,
+    reasons: BTreeMap<VoteValidationDropReason, u64>,
+    last_height: u64,
+    last_view: u64,
+    last_epoch: u64,
+    last_timestamp_ms: u64,
 }
 
 /// Snapshot of view-change causes and timing.
@@ -2901,6 +3085,8 @@ pub struct StatusSnapshot {
     pub dedup_evictions: DedupEvictionSnapshot,
     /// Consensus message drop/deferral counters with reason labels.
     pub consensus_message_handling: ConsensusMessageHandlingSnapshot,
+    /// Recent vote validation drops with roster context.
+    pub vote_validation_drops: VoteValidationDropSnapshot,
     /// Total background Post drops when the worker is unavailable.
     pub bg_post_drop_post_total: u64,
     /// Total background Broadcast drops when the worker is unavailable.
@@ -2937,7 +3123,8 @@ pub struct StatusSnapshot {
     pub missing_block_fetch_last_dwell_ms: u64,
     /// Data-availability gate snapshot and counters.
     pub da_gate: DaGateSnapshot,
-    /// Total times pacemaker deferred proposal assembly due to transaction-queue backpressure.
+    /// Total times pacemaker deferred proposal assembly due to proposal backpressure
+    /// (queue saturation, relay/RBC backpressure, or blocking pending blocks).
     pub pacemaker_backpressure_deferrals_total: u64,
     /// Total times the commit pipeline executed from the pacemaker tick loop.
     pub commit_pipeline_tick_total: u64,
@@ -3523,6 +3710,62 @@ fn consensus_message_handling_snapshot() -> ConsensusMessageHandlingSnapshot {
     ConsensusMessageHandlingSnapshot { entries }
 }
 
+fn vote_validation_drop_peer_registry() -> Option<
+    std::sync::MutexGuard<
+        'static,
+        BTreeMap<VoteValidationDropPeerKey, VoteValidationDropPeerState>,
+    >,
+> {
+    VOTE_VALIDATION_DROPS_BY_PEER
+        .get_or_init(|| Mutex::new(BTreeMap::new()))
+        .lock()
+        .ok()
+}
+
+fn vote_validation_drop_peer_entries() -> Vec<VoteValidationDropPeerEntry> {
+    let Some(registry) = vote_validation_drop_peer_registry() else {
+        return Vec::new();
+    };
+    registry
+        .iter()
+        .map(|(key, entry)| VoteValidationDropPeerEntry {
+            peer_id: key.peer_id.clone(),
+            roster_hash: key.roster_hash,
+            roster_len: entry.roster_len,
+            total: entry.total,
+            reasons: entry
+                .reasons
+                .iter()
+                .map(|(reason, total)| VoteValidationDropReasonCount {
+                    reason: *reason,
+                    total: *total,
+                })
+                .collect(),
+            last_height: entry.last_height,
+            last_view: entry.last_view,
+            last_epoch: entry.last_epoch,
+            last_timestamp_ms: entry.last_timestamp_ms,
+        })
+        .collect()
+}
+
+fn vote_validation_drop_snapshot() -> VoteValidationDropSnapshot {
+    let entries = VOTE_VALIDATION_DROPS
+        .get()
+        .map(|slot| {
+            let guard = slot
+                .lock()
+                .expect("vote validation drop history mutex poisoned");
+            guard.iter().rev().cloned().collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    VoteValidationDropSnapshot {
+        total: VOTE_VALIDATION_DROPS_TOTAL.load(Ordering::Relaxed),
+        entries,
+        peer_entries: vote_validation_drop_peer_entries(),
+    }
+}
+
 /// Snapshot the current status: leader index, Highest/Locked QC, and drop counters.
 #[allow(clippy::too_many_lines)]
 pub fn snapshot() -> StatusSnapshot {
@@ -3621,6 +3864,7 @@ pub fn snapshot() -> StatusSnapshot {
         gossip_fallback_total: GOSSIP_FALLBACK_TOTAL.load(Ordering::Relaxed),
         dedup_evictions: dedup_evictions_snapshot(),
         consensus_message_handling: consensus_message_handling_snapshot(),
+        vote_validation_drops: vote_validation_drop_snapshot(),
         bg_post_drop_post_total: BG_POST_DROP_POST_TOTAL.load(Ordering::Relaxed),
         bg_post_drop_broadcast_total: BG_POST_DROP_BROADCAST_TOTAL.load(Ordering::Relaxed),
         block_created_dropped_by_lock_total: BLOCK_CREATED_DROPPED_BY_LOCK_TOTAL
@@ -3913,6 +4157,54 @@ pub fn record_consensus_message_handling(
     };
     let entry = guard.entry(key).or_insert(0);
     *entry = entry.saturating_add(1);
+}
+
+/// Record a vote-validation drop with roster context.
+pub fn record_vote_validation_drop(record: VoteValidationDropRecord) {
+    #[cfg(test)]
+    let _guard = vote_validation_drops_test_guard();
+    let now_ms = now_timestamp_ms();
+    let peer_id = record.peer_id.clone();
+    let entry = VoteValidationDropEntry {
+        reason: record.reason,
+        height: record.height,
+        view: record.view,
+        epoch: record.epoch,
+        signer_index: record.signer_index,
+        peer_id: record.peer_id,
+        roster_hash: record.roster_hash,
+        roster_len: record.roster_len,
+        block_hash: record.block_hash,
+        timestamp_ms: now_ms,
+    };
+    let slot = VOTE_VALIDATION_DROPS.get_or_init(|| Mutex::new(VecDeque::new()));
+    let mut guard = slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    guard.push_back(entry);
+    while guard.len() > VOTE_VALIDATION_DROPS_CAP {
+        guard.pop_front();
+    }
+    VOTE_VALIDATION_DROPS_TOTAL.fetch_add(1, Ordering::Relaxed);
+    let Some(peer_id) = peer_id else {
+        return;
+    };
+    let Some(mut registry) = vote_validation_drop_peer_registry() else {
+        return;
+    };
+    let key = VoteValidationDropPeerKey {
+        peer_id,
+        roster_hash: record.roster_hash,
+    };
+    let entry = registry.entry(key).or_default();
+    entry.total = entry.total.saturating_add(1);
+    entry.roster_len = record.roster_len;
+    let reason_total = entry.reasons.entry(record.reason).or_insert(0);
+    *reason_total = reason_total.saturating_add(1);
+    entry.last_height = record.height;
+    entry.last_view = record.view;
+    entry.last_epoch = record.epoch;
+    entry.last_timestamp_ms = now_ms;
 }
 
 /// Increment `BlockCreated` drop counter when locked QC gate rejects a proposal.
@@ -4481,7 +4773,8 @@ pub(crate) fn reset_da_gate_counters_for_tests() {
     );
 }
 
-/// Increment counter when the pacemaker skips proposal assembly due to queue backpressure.
+/// Increment counter when the pacemaker skips proposal assembly due to proposal backpressure
+/// (queue saturation, relay/RBC backpressure, or blocking pending blocks).
 pub fn inc_pacemaker_backpressure_deferrals() {
     PACEMAKER_BACKPRESSURE_DEFERRALS_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
@@ -5899,6 +6192,12 @@ pub(crate) fn message_handling_test_guard() -> TestLockGuard {
 
 #[cfg(test)]
 #[allow(private_interfaces)]
+pub(crate) fn vote_validation_drops_test_guard() -> TestLockGuard {
+    reentrant_test_guard(&VOTE_VALIDATION_DROPS_TEST_LOCK)
+}
+
+#[cfg(test)]
+#[allow(private_interfaces)]
 pub(crate) fn missing_block_fetch_test_guard() -> TestLockGuard {
     reentrant_test_guard(&MISSING_BLOCK_FETCH_TEST_LOCK)
 }
@@ -6276,6 +6575,102 @@ mod tests {
         assert!(entry_b.last_timestamp_ms > 0);
 
         super::reset_rbc_mismatch_for_tests();
+    }
+
+    #[test]
+    fn vote_validation_drop_snapshot_tracks_entries() {
+        super::reset_vote_validation_drops_for_tests();
+        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
+            [0xAB; UntypedHash::LENGTH],
+        ));
+        let roster_hash = HashOf::new(&vec![peer.clone()]);
+
+        super::record_vote_validation_drop(super::VoteValidationDropRecord {
+            reason: super::VoteValidationDropReason::SignatureInvalid,
+            height: 3,
+            view: 1,
+            epoch: 0,
+            signer_index: 0,
+            peer_id: Some(peer.clone()),
+            roster_hash: Some(roster_hash),
+            roster_len: 1,
+            block_hash,
+        });
+
+        let snap = super::snapshot().vote_validation_drops;
+        assert_eq!(snap.total, 1);
+        assert_eq!(snap.entries.len(), 1);
+        let entry = &snap.entries[0];
+        assert_eq!(
+            entry.reason,
+            super::VoteValidationDropReason::SignatureInvalid
+        );
+        assert_eq!(entry.peer_id, Some(peer));
+        assert_eq!(entry.roster_hash, Some(roster_hash));
+        assert_eq!(entry.block_hash, block_hash);
+        assert_eq!(entry.roster_len, 1);
+        assert!(entry.timestamp_ms > 0);
+    }
+
+    #[test]
+    fn vote_validation_drop_snapshot_tracks_peer_entries() {
+        super::reset_vote_validation_drops_for_tests();
+        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
+            [0xBC; UntypedHash::LENGTH],
+        ));
+        let roster_hash = HashOf::new(&vec![peer.clone()]);
+
+        super::record_vote_validation_drop(super::VoteValidationDropRecord {
+            reason: super::VoteValidationDropReason::SignatureInvalid,
+            height: 3,
+            view: 1,
+            epoch: 0,
+            signer_index: 0,
+            peer_id: Some(peer.clone()),
+            roster_hash: Some(roster_hash),
+            roster_len: 1,
+            block_hash,
+        });
+        super::record_vote_validation_drop(super::VoteValidationDropRecord {
+            reason: super::VoteValidationDropReason::Duplicate,
+            height: 4,
+            view: 2,
+            epoch: 1,
+            signer_index: 0,
+            peer_id: Some(peer.clone()),
+            roster_hash: Some(roster_hash),
+            roster_len: 1,
+            block_hash,
+        });
+
+        let snap = super::snapshot().vote_validation_drops;
+        let entry = snap
+            .peer_entries
+            .iter()
+            .find(|entry| entry.peer_id == peer)
+            .expect("peer entry");
+        let reason_counts: BTreeMap<_, _> = entry
+            .reasons
+            .iter()
+            .map(|entry| (entry.reason, entry.total))
+            .collect();
+        assert_eq!(entry.total, 2);
+        assert_eq!(entry.roster_hash, Some(roster_hash));
+        assert_eq!(entry.roster_len, 1);
+        assert_eq!(
+            reason_counts.get(&super::VoteValidationDropReason::SignatureInvalid),
+            Some(&1)
+        );
+        assert_eq!(
+            reason_counts.get(&super::VoteValidationDropReason::Duplicate),
+            Some(&1)
+        );
+        assert_eq!(entry.last_height, 4);
+        assert_eq!(entry.last_view, 2);
+        assert_eq!(entry.last_epoch, 1);
+        assert!(entry.last_timestamp_ms > 0);
     }
 
     #[test]

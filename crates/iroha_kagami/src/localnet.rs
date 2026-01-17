@@ -220,9 +220,7 @@ struct LocalnetPerfProfileSpec {
 impl LocalnetPerfProfile {
     fn spec(self) -> LocalnetPerfProfileSpec {
         let consensus_mode = match self {
-            LocalnetPerfProfile::Throughput10kPermissioned => {
-                SumeragiConsensusMode::Permissioned
-            }
+            LocalnetPerfProfile::Throughput10kPermissioned => SumeragiConsensusMode::Permissioned,
             LocalnetPerfProfile::Throughput10kNpos => SumeragiConsensusMode::Npos,
         };
         LocalnetPerfProfileSpec {
@@ -1514,8 +1512,8 @@ fn apply_parameter_overrides(
     let include_npos = matches!(consensus_mode, SumeragiConsensusMode::Npos)
         || matches!(next_consensus_mode, Some(SumeragiConsensusMode::Npos));
     let mut parameters = genesis.effective_parameters();
-    let block_max_transactions = NonZeroU64::new(block_max_transactions)
-        .expect("block_max_transactions must be non-zero");
+    let block_max_transactions =
+        NonZeroU64::new(block_max_transactions).expect("block_max_transactions must be non-zero");
     let should_update = block_time_ms.is_some()
         || commit_time_ms.is_some()
         || redundant_send_r.is_some()
@@ -2569,8 +2567,7 @@ mod tests {
 
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
 
-        let source =
-            TomlSource::from_file(temp.path().join("peer0.toml")).expect("read config");
+        let source = TomlSource::from_file(temp.path().join("peer0.toml")).expect("read config");
         let parsed = actual::Root::from_toml_source(source).expect("config should parse");
         assert_eq!(parsed.sumeragi.collectors_k, 3);
         assert_eq!(parsed.sumeragi.collectors_redundant_send_r, 2);
@@ -2929,10 +2926,7 @@ mod tests {
         for register in &validators {
             assert_eq!(register.lane_id, LaneId::SINGLE);
             assert_eq!(register.validator, register.stake_account);
-            assert_eq!(
-                register.initial_stake,
-                Numeric::from(expected_stake_amount)
-            );
+            assert_eq!(register.initial_stake, Numeric::from(expected_stake_amount));
         }
         for activate in &activations {
             assert_eq!(activate.lane_id, LaneId::SINGLE);

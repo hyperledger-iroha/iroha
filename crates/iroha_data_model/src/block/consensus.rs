@@ -13,7 +13,7 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_schema::{EnumMeta, EnumVariant, Ident, IntoSchema, MetaMap, Metadata, TypeId};
 use norito::codec::{Decode, DecodeAll, Encode};
 
-use super::Header as BlockHeader;
+use super::{BlockSignature, Header as BlockHeader};
 use crate::{
     fastpq::{FastpqTransitionBatch, TransferTranscriptBundle},
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
@@ -1212,6 +1212,100 @@ pub struct SumeragiConsensusMessageHandlingStatus {
     pub entries: Vec<SumeragiConsensusMessageHandlingEntry>,
 }
 
+/// Vote validation drop entry with roster context.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiVoteValidationDropEntry {
+    /// Drop reason label.
+    pub reason: String,
+    /// Vote height.
+    pub height: u64,
+    /// Vote view.
+    pub view: u64,
+    /// Vote epoch.
+    pub epoch: u64,
+    /// Signer index from the vote payload.
+    pub signer_index: u32,
+    /// Peer ID resolved from the validation roster (if any).
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub peer_id: Option<PeerId>,
+    /// Validator roster hash used for validation (if any).
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub roster_hash: Option<HashOf<Vec<PeerId>>>,
+    /// Validator roster length used for validation (if known).
+    pub roster_len: u32,
+    /// Block hash referenced by the vote.
+    pub block_hash: HashOf<BlockHeader>,
+    /// Milliseconds since UNIX epoch when the drop was recorded.
+    pub timestamp_ms: u64,
+}
+
+/// Aggregated count for a vote-validation drop reason.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiVoteValidationDropReasonCount {
+    /// Drop reason label.
+    pub reason: String,
+    /// Total drops recorded for the reason.
+    pub total: u64,
+}
+
+/// Aggregated vote validation drops for a peer/roster hash pairing.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiVoteValidationDropPeerEntry {
+    /// Peer associated with the drop counts.
+    pub peer_id: PeerId,
+    /// Validator roster hash used for validation (if any).
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub roster_hash: Option<HashOf<Vec<PeerId>>>,
+    /// Validator roster length used for validation (if known).
+    pub roster_len: u32,
+    /// Total drops recorded for this peer/roster pairing.
+    pub total: u64,
+    /// Per-reason drop counters.
+    #[norito(default)]
+    pub reasons: Vec<SumeragiVoteValidationDropReasonCount>,
+    /// Height associated with the last drop.
+    pub last_height: u64,
+    /// View associated with the last drop.
+    pub last_view: u64,
+    /// Epoch associated with the last drop.
+    pub last_epoch: u64,
+    /// Milliseconds since UNIX epoch when the last drop was recorded.
+    pub last_timestamp_ms: u64,
+}
+
+/// Vote validation drop snapshot surfaced via Sumeragi status.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiVoteValidationDropStatus {
+    /// Total vote validation drops recorded.
+    #[norito(default)]
+    pub total: u64,
+    /// Recent drop entries (newest-first, bounded).
+    #[norito(default)]
+    pub entries: Vec<SumeragiVoteValidationDropEntry>,
+    /// Aggregated drop counters per peer/roster pairing.
+    #[norito(default)]
+    pub peer_entries: Vec<SumeragiVoteValidationDropPeerEntry>,
+}
+
 /// Deterministic consensus configuration caps captured alongside status snapshots.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -1579,6 +1673,9 @@ pub struct SumeragiStatusWire {
     /// Consensus message drop/deferral counters (best-effort).
     #[norito(default)]
     pub consensus_message_handling: SumeragiConsensusMessageHandlingStatus,
+    /// Vote validation drop snapshot (best-effort).
+    #[norito(default)]
+    pub vote_validation_drops: SumeragiVoteValidationDropStatus,
     /// Total blocks rejected by the validation gate before voting.
     #[norito(default)]
     pub validation_reject_total: u64,
@@ -1819,6 +1916,10 @@ pub struct RbcInit {
     pub payload_hash: Hash,
     /// Merkle root of chunk digests for integrity proofs.
     pub chunk_root: Hash,
+    /// Full block header used to recover signed payloads without BlockCreated.
+    pub block_header: BlockHeader,
+    /// Leader signature over the block header.
+    pub leader_signature: BlockSignature,
 }
 
 /// RBC payload chunk.
@@ -2014,7 +2115,9 @@ impl<'a> norito::core::DecodeFromSlice<'a> for LaneSettlementReceipt {
 
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, KeyPair, MerkleTree};
+    use std::num::NonZeroU64;
+
+    use iroha_crypto::{Algorithm, KeyPair, MerkleTree, SignatureOf};
     use norito::core::DecodeFromSlice;
 
     use super::*;
@@ -2087,8 +2190,22 @@ mod tests {
             .root()
             .map(Hash::from)
             .expect("chunk root");
+        let block_header = BlockHeader::new(
+            NonZeroU64::new(6).expect("block height must be non-zero"),
+            None,
+            None,
+            None,
+            0,
+            3,
+        );
+        let leader_key = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let (_, leader_private) = leader_key.into_parts();
+        let leader_signature = BlockSignature::new(
+            0,
+            SignatureOf::from_hash(&leader_private, block_header.hash()),
+        );
         RbcInit {
-            block_hash: dummy_hash(),
+            block_hash: block_header.hash(),
             height: 6,
             view: 3,
             epoch: 1,
@@ -2098,6 +2215,8 @@ mod tests {
             chunk_digests,
             payload_hash: Hash::new(b"payload_hash"),
             chunk_root,
+            block_header,
+            leader_signature,
         }
     }
 

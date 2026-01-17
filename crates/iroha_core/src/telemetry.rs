@@ -2284,6 +2284,52 @@ impl StateTelemetry {
             .with_label_values(&[component])
             .inc();
     }
+
+    /// Record a DA cache hit/miss for a component.
+    #[cfg(feature = "telemetry")]
+    pub fn inc_storage_da_cache(&self, component: &'static str, result: &'static str) {
+        if !self.is_enabled() {
+            return;
+        }
+        self.metrics
+            .storage_da_cache_total
+            .with_label_values(&[component, result])
+            .inc();
+    }
+
+    /// No-op when telemetry is disabled.
+    #[cfg(not(feature = "telemetry"))]
+    #[allow(unused_variables)]
+    pub fn inc_storage_da_cache(&self, component: &'static str, result: &'static str) {}
+
+    /// Record DA-backed storage churn bytes for a component.
+    #[cfg(feature = "telemetry")]
+    pub fn add_storage_da_churn_bytes(
+        &self,
+        component: &'static str,
+        direction: &'static str,
+        bytes: u64,
+    ) {
+        if !self.is_enabled() || bytes == 0 {
+            return;
+        }
+        self.metrics
+            .storage_da_churn_bytes_total
+            .with_label_values(&[component, direction])
+            .inc_by(bytes);
+    }
+
+    /// No-op when telemetry is disabled.
+    #[cfg(not(feature = "telemetry"))]
+    #[allow(unused_variables)]
+    pub fn add_storage_da_churn_bytes(
+        &self,
+        component: &'static str,
+        direction: &'static str,
+        bytes: u64,
+    ) {
+    }
+
     /// Whether Nexus lane/dataspace metrics should be emitted.
     #[inline]
     fn nexus_lane_metrics_enabled(&self) -> bool {
@@ -11377,6 +11423,49 @@ mod tests {
                 .with_label_values(&["kura"])
                 .get(),
             1
+        );
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[test]
+    fn storage_da_metrics_updated() {
+        use std::sync::Arc;
+
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = StateTelemetry::new(metrics.clone(), true);
+
+        telemetry.inc_storage_da_cache("kura", "hit");
+        telemetry.inc_storage_da_cache("kura", "miss");
+        telemetry.add_storage_da_churn_bytes("kura", "evicted", 1024);
+        telemetry.add_storage_da_churn_bytes("kura", "rehydrated", 512);
+
+        assert_eq!(
+            metrics
+                .storage_da_cache_total
+                .with_label_values(&["kura", "hit"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .storage_da_cache_total
+                .with_label_values(&["kura", "miss"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .storage_da_churn_bytes_total
+                .with_label_values(&["kura", "evicted"])
+                .get(),
+            1024
+        );
+        assert_eq!(
+            metrics
+                .storage_da_churn_bytes_total
+                .with_label_values(&["kura", "rehydrated"])
+                .get(),
+            512
         );
     }
 

@@ -2452,12 +2452,22 @@ pub mod message {
             return None;
         }
         let prf_seed = prf_seed_for_block_sync(mode_tag, state_view, context.block_height);
+        let mut pops = BTreeMap::<iroha_crypto::PublicKey, Vec<u8>>::new();
+        for peer in topology.as_ref() {
+            if let Some(pop) = crate::state::consensus_key_pop_for_public_key(
+                state_view.world(),
+                peer.public_key(),
+            ) {
+                pops.insert(peer.public_key().clone(), pop);
+            }
+        }
         if let Err(err) = crate::sumeragi::main_loop::validate_block_sync_qc(
             &qc,
             topology,
             state_view.world(),
             block_signers,
             context.block_view,
+            &pops,
             state_view.chain_id(),
             consensus_mode,
             stake_snapshot,

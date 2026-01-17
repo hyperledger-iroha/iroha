@@ -12,8 +12,9 @@ pub use crate::block::consensus::{
     SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus, SumeragiConsensusMessageHandlingEntry,
     SumeragiConsensusMessageHandlingStatus, SumeragiMembershipMismatchStatus,
     SumeragiPeerKeyPolicyStatus, SumeragiQcEntry, SumeragiQcSnapshot, SumeragiQcStatus,
-    SumeragiStatusWire, SumeragiViewChangeCauseStatus, SumeragiWorkerLoopStatus,
-    SumeragiWorkerQueueDepths,
+    SumeragiStatusWire, SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropEntry,
+    SumeragiVoteValidationDropPeerEntry, SumeragiVoteValidationDropReasonCount,
+    SumeragiVoteValidationDropStatus, SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
 };
 use crate::prelude::*;
 

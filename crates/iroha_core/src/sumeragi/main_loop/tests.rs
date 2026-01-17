@@ -123,7 +123,7 @@ fn roster_cache_for_state(
     fallback_epoch_length: u64,
 ) -> super::RosterValidationCache {
     let world = state.world.view();
-    let cache = super::RosterValidationCache::from_world(&world, fallback_epoch_length);
+    let cache = super::RosterValidationCache::from_world(&world, fallback_epoch_length, None);
     drop(world);
     cache
 }
@@ -2425,13 +2425,7 @@ async fn latest_committed_qc_uses_epoch_for_height() {
     let actor = &harness.actor;
 
     let block1 = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
-    let block2 = nonempty_block_for_actor(
-        actor,
-        &harness.key_pairs,
-        2,
-        0,
-        Some(block1.hash()),
-    );
+    let block2 = nonempty_block_for_actor(actor, &harness.key_pairs, 2, 0, Some(block1.hash()));
 
     harness
         .actor
@@ -4640,12 +4634,19 @@ async fn block_sync_update_allows_nonextending_qc_without_commit_qc() {
     drop(state_view);
     let world = world_with_consensus_keys(topology.as_ref(), &harness.key_pairs);
     let world_view = world.view();
+    let inputs = roster_validation_inputs_for_view(
+        &world_view,
+        topology.as_ref(),
+        ConsensusMode::Permissioned,
+        None,
+    );
     super::validate_block_sync_qc(
         &qc,
         &topology,
         &world_view,
         &block_signers,
         candidate_block.header().view_change_index(),
+        &inputs.pops,
         &chain,
         ConsensusMode::Permissioned,
         None,
@@ -5264,11 +5265,17 @@ async fn block_sync_update_skips_fetch_when_qc_salvaged_by_aggregate_signature()
     );
     let world = world_with_consensus_keys(topology.as_ref(), &harness.key_pairs);
     let world_view = world.view();
+    let inputs = roster_validation_inputs_for_view(
+        &world_view,
+        topology.as_ref(),
+        ConsensusMode::Permissioned,
+        None,
+    );
     assert!(
         super::qc_aggregate_consistent(
             &qc,
             &topology,
-            &world_view,
+            &inputs.pops,
             &actor.common_config.chain,
             PERMISSIONED_TAG
         ),
@@ -5280,6 +5287,7 @@ async fn block_sync_update_skips_fetch_when_qc_salvaged_by_aggregate_signature()
         &world_view,
         &block_signers,
         view,
+        &inputs.pops,
         &actor.common_config.chain,
         ConsensusMode::Permissioned,
         None,
@@ -6970,11 +6978,14 @@ async fn commit_pipeline_rebuilds_qcs_with_empty_active_roster() {
     };
     let world = world_with_consensus_keys(topology.as_ref(), &harness.key_pairs);
     let world_view = world.view();
+    let inputs =
+        roster_validation_inputs_for_view(&world_view, topology.as_ref(), consensus_mode, None);
     let (validation, _) = super::validate_qc_with_evidence(
         &actor.vote_log,
         &qc,
         &topology,
         &world_view,
+        &inputs.pops,
         &actor.common_config.chain,
         consensus_mode,
         None,
@@ -7748,6 +7759,13 @@ async fn rbc_payload_rebroadcast_sends_single_init_and_respects_cooldown() {
     let mut harness = test_actor_harness(4).await;
     let key = session_key();
     let roster = harness.actor.rbc_roster_for_session(key);
+    let (block_header, leader_signature) = rbc_header_and_signature(
+        &harness.actor,
+        &roster,
+        key.1,
+        key.2,
+        &harness.key_pairs,
+    );
     let init = crate::sumeragi::consensus::RbcInit {
         block_hash: key.0,
         height: key.1,
@@ -7759,6 +7777,8 @@ async fn rbc_payload_rebroadcast_sends_single_init_and_respects_cooldown() {
         chunk_digests: vec![[0x55; 32]],
         payload_hash: Hash::prehashed([0x44; 32]),
         chunk_root: Hash::prehashed([0x55; 32]),
+        block_header,
+        leader_signature,
     };
     let chunk = crate::sumeragi::consensus::RbcChunk {
         block_hash: key.0,
@@ -7847,6 +7867,13 @@ async fn rbc_payload_rebroadcast_sends_init_without_chunks() {
     let mut harness = test_actor_harness(4).await;
     let key = session_key();
     let roster = harness.actor.rbc_roster_for_session(key);
+    let (block_header, leader_signature) = rbc_header_and_signature(
+        &harness.actor,
+        &roster,
+        key.1,
+        key.2,
+        &harness.key_pairs,
+    );
     let init = crate::sumeragi::consensus::RbcInit {
         block_hash: key.0,
         height: key.1,
@@ -7858,6 +7885,8 @@ async fn rbc_payload_rebroadcast_sends_init_without_chunks() {
         chunk_digests: vec![[0x77; 32]],
         payload_hash: Hash::prehashed([0x66; 32]),
         chunk_root: Hash::prehashed([0x77; 32]),
+        block_header,
+        leader_signature,
     };
 
     let seed = super::rbc::shuffle_seed(&key.0, key.1, key.2);
@@ -10901,11 +10930,17 @@ async fn deferred_qcs_replay_after_commit_roster_history_arrives() {
     {
         let topology = super::network_topology::Topology::new(derived_roster.clone());
         let view = actor.state.view();
+        let inputs = roster_validation_inputs_for_view(
+            view.world(),
+            topology.as_ref(),
+            ConsensusMode::Permissioned,
+            None,
+        );
         assert!(
             super::qc_aggregate_consistent(
                 &qc,
                 &topology,
-                view.world(),
+                &inputs.pops,
                 &actor.common_config.chain,
                 PERMISSIONED_TAG
             ),
@@ -11730,7 +11765,10 @@ async fn handle_qc_drops_empty_block_payload() {
         !actor.qc_cache.contains_key(&key),
         "empty-block QC should be dropped before caching"
     );
-    assert!(actor.locked_qc.is_none(), "empty-block QC must not update locks");
+    assert!(
+        actor.locked_qc.is_none(),
+        "empty-block QC must not update locks"
+    );
 
     let entries = super::status::snapshot().consensus_message_handling.entries;
     let entry = entries
@@ -14396,6 +14434,8 @@ async fn handle_rbc_init_rejects_epoch_mismatch() {
     let key = (block_hash, height, view);
     let expected_epoch = actor.epoch_for_height(height);
     let roster = actor.effective_commit_topology();
+    let (block_header, leader_signature) =
+        rbc_header_and_signature(actor, &roster_b, height, view, &harness.key_pairs);
     let init = crate::sumeragi::consensus::RbcInit {
         block_hash,
         height,
@@ -14407,6 +14447,8 @@ async fn handle_rbc_init_rejects_epoch_mismatch() {
         chunk_digests: vec![[0x55; 32]],
         payload_hash: Hash::prehashed([0x44; 32]),
         chunk_root: Hash::prehashed([0x55; 32]),
+        block_header,
+        leader_signature,
     };
 
     actor.handle_rbc_init(init).expect("init handled");
@@ -14429,6 +14471,8 @@ async fn handle_rbc_init_rejects_roster_hash_mismatch() {
     let key = (block_hash, height, view);
     let epoch = actor.epoch_for_height(height);
     let roster = actor.effective_commit_topology();
+    let (block_header, leader_signature) =
+        rbc_header_and_signature(actor, &roster, height, view, &harness.key_pairs);
     let init = crate::sumeragi::consensus::RbcInit {
         block_hash,
         height,
@@ -14440,6 +14484,8 @@ async fn handle_rbc_init_rejects_roster_hash_mismatch() {
         chunk_digests: vec![[0x22; 32]],
         payload_hash: Hash::prehashed([0x11; 32]),
         chunk_root: Hash::prehashed([0x22; 32]),
+        block_header,
+        leader_signature,
     };
 
     actor.handle_rbc_init(init).expect("init handled");
@@ -14471,6 +14517,8 @@ async fn handle_rbc_init_rejects_chunk_digest_mismatch() {
     let key = (block_hash, height, view);
     let epoch = actor.epoch_for_height(height);
     let roster = actor.effective_commit_topology();
+    let (block_header, leader_signature) =
+        rbc_header_and_signature(actor, &roster, height, view, &harness.key_pairs);
     let init = crate::sumeragi::consensus::RbcInit {
         block_hash,
         height,
@@ -14482,6 +14530,8 @@ async fn handle_rbc_init_rejects_chunk_digest_mismatch() {
         chunk_digests: vec![[0x11; 32]],
         payload_hash: Hash::prehashed([0x22; 32]),
         chunk_root: Hash::prehashed([0x33; 32]),
+        block_header,
+        leader_signature,
     };
 
     actor.handle_rbc_init(init).expect("init handled");
@@ -14538,6 +14588,8 @@ async fn handle_rbc_init_drops_mismatched_cached_chunks() {
         .map(Hash::from)
         .expect("chunk root");
     let roster = actor.effective_commit_topology();
+    let (block_header, leader_signature) =
+        rbc_header_and_signature(actor, &roster, height, view, &harness.key_pairs);
     let init = crate::sumeragi::consensus::RbcInit {
         block_hash,
         height,
@@ -14549,6 +14601,8 @@ async fn handle_rbc_init_drops_mismatched_cached_chunks() {
         chunk_digests: digests,
         payload_hash,
         chunk_root,
+        block_header,
+        leader_signature,
     };
 
     actor.handle_rbc_init(init).expect("init handled");
@@ -14601,6 +14655,8 @@ async fn handle_rbc_init_ignores_payload_hash_mismatch_for_existing_session() {
     let key = (block_hash, height, view);
     let epoch = actor.epoch_for_height(height);
     let roster = actor.effective_commit_topology();
+    let (block_header, leader_signature) =
+        rbc_header_and_signature(actor, &roster, height, view, &harness.key_pairs);
 
     let payload = b"payload".to_vec();
     let payload_hash = Hash::new(&payload);
@@ -14625,6 +14681,8 @@ async fn handle_rbc_init_ignores_payload_hash_mismatch_for_existing_session() {
         chunk_digests: expected_digests,
         payload_hash: Hash::new(b"other-payload"),
         chunk_root: expected_root,
+        block_header,
+        leader_signature,
     };
 
     actor.handle_rbc_init(init).expect("init handled");
@@ -14677,6 +14735,8 @@ async fn handle_rbc_init_rejects_derived_roster_mismatch() {
     assert!(!roster_b.is_empty(), "roster should remain non-empty");
 
     actor.record_rbc_session_roster(key, roster_a.clone(), super::RbcRosterSource::Derived);
+    let (block_header, leader_signature) =
+        rbc_header_and_signature(actor, &roster, height, view, &harness.key_pairs);
 
     let init = crate::sumeragi::consensus::RbcInit {
         block_hash,
@@ -14692,6 +14752,8 @@ async fn handle_rbc_init_rejects_derived_roster_mismatch() {
             .expect("chunk digests"),
         payload_hash,
         chunk_root: session.expected_chunk_root.expect("chunk root"),
+        block_header,
+        leader_signature,
     };
 
     actor.handle_rbc_init(init).expect("init handled");
@@ -14748,6 +14810,8 @@ async fn handle_rbc_init_rejects_duplicate_roster() {
     let mut roster = actor.effective_commit_topology();
     assert!(!roster.is_empty(), "test requires non-empty roster");
     roster.push(roster[0].clone());
+    let (block_header, leader_signature) =
+        rbc_header_and_signature(actor, &roster, height, view, &harness.key_pairs);
     let init = crate::sumeragi::consensus::RbcInit {
         block_hash,
         height,
@@ -14759,6 +14823,8 @@ async fn handle_rbc_init_rejects_duplicate_roster() {
         chunk_digests: vec![[0x44; 32]],
         payload_hash: Hash::prehashed([0x33; 32]),
         chunk_root: Hash::prehashed([0x44; 32]),
+        block_header,
+        leader_signature,
     };
 
     actor.handle_rbc_init(init).expect("init handled");
@@ -14794,6 +14860,8 @@ async fn handle_rbc_init_rejects_zero_chunks() {
     let key = (block_hash, height, view);
     let epoch = actor.epoch_for_height(height);
     let roster = actor.effective_commit_topology();
+    let (block_header, leader_signature) =
+        rbc_header_and_signature(actor, &roster, height, view, &harness.key_pairs);
     let init = crate::sumeragi::consensus::RbcInit {
         block_hash,
         height,
@@ -14805,6 +14873,8 @@ async fn handle_rbc_init_rejects_zero_chunks() {
         chunk_digests: Vec::new(),
         payload_hash: Hash::prehashed([0x11; 32]),
         chunk_root: Hash::prehashed([0x22; 32]),
+        block_header,
+        leader_signature,
     };
 
     actor.handle_rbc_init(init).expect("init handled");
@@ -14975,6 +15045,8 @@ async fn handle_rbc_chunk_rejects_digest_mismatch() {
     let key = (block_hash, height, view);
     let epoch = actor.epoch_for_height(height);
     let roster = actor.effective_commit_topology();
+    let (block_header, leader_signature) =
+        rbc_header_and_signature(actor, &roster, height, view, &harness.key_pairs);
 
     let payload = vec![0xAA; 16];
     let payload_hash = Hash::new(&payload);
@@ -14994,6 +15066,8 @@ async fn handle_rbc_chunk_rejects_digest_mismatch() {
             .expect("chunk digests"),
         payload_hash,
         chunk_root: session.expected_chunk_root.expect("chunk root"),
+        block_header,
+        leader_signature,
     };
 
     actor.handle_rbc_init(init).expect("init handled");
@@ -15078,6 +15152,8 @@ async fn handle_rbc_chunk_stash_attributes_mismatch_on_flush() {
     let key = (block_hash, height, view);
     let epoch = actor.epoch_for_height(height);
     let roster = actor.effective_commit_topology();
+    let (block_header, leader_signature) =
+        rbc_header_and_signature(actor, &roster, height, view, &harness.key_pairs);
 
     let payload = vec![0xAA; 16];
     let payload_hash = Hash::new(&payload);
@@ -15097,6 +15173,8 @@ async fn handle_rbc_chunk_stash_attributes_mismatch_on_flush() {
             .expect("chunk digests"),
         payload_hash,
         chunk_root: session.expected_chunk_root.expect("chunk root"),
+        block_header,
+        leader_signature,
     };
 
     let bad_chunk = crate::sumeragi::consensus::RbcChunk {
@@ -18333,11 +18411,18 @@ fn validate_qc_against_votes_with_keys(
 ) -> Result<super::QcValidationOutcome, super::QcValidationError> {
     let world = world_with_consensus_keys(topology.as_ref(), keypairs);
     let world_view = world.view();
+    let inputs = roster_validation_inputs_for_view(
+        &world_view,
+        topology.as_ref(),
+        consensus_mode,
+        stake_snapshot,
+    );
     super::validate_qc_against_votes(
         vote_log,
         qc,
         topology,
         &world_view,
+        &inputs.pops,
         chain_id,
         consensus_mode,
         stake_snapshot,
@@ -20294,6 +20379,22 @@ fn roster_validation_inputs_from_state_collects_pops_for_roster() {
     assert_eq!(inputs.pops.len(), peers.len());
     assert!(inputs.pops.contains_key(peer1.public_key()));
     assert!(inputs.pops.contains_key(peer2.public_key()));
+}
+
+#[test]
+fn roster_validation_cache_merges_fallback_pops() {
+    let (peer, pop, _kp) = bls_peer("127.0.0.1:7099");
+    let state = State::new_for_testing(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let view = state.world.view();
+    let mut fallback_pops = BTreeMap::new();
+    fallback_pops.insert(peer.id().public_key().clone(), pop.clone());
+    let cache =
+        super::RosterValidationCache::from_world(&view, EPOCH_LENGTH_BLOCKS, Some(&fallback_pops));
+    assert_eq!(cache.pops.get(peer.id().public_key()), Some(&pop));
 }
 
 #[test]
@@ -26455,11 +26556,18 @@ fn validate_qc_with_evidence_emits_invalid_qc_evidence() {
         },
     };
     let vote_log = BTreeMap::new();
+    let inputs = roster_validation_inputs_for_view(
+        &world_view,
+        topology.as_ref(),
+        ConsensusMode::Permissioned,
+        None,
+    );
     let (result, evidence) = super::validate_qc_with_evidence(
         &vote_log,
         &qc,
         &topology,
         &world_view,
+        &inputs.pops,
         &chain,
         ConsensusMode::Permissioned,
         None,
@@ -26642,11 +26750,18 @@ fn validate_qc_against_votes_rejects_new_view_missing_highest_qc() {
     );
     let world = world_with_consensus_keys(topology.as_ref(), &keypairs);
     let world_view = world.view();
+    let inputs = roster_validation_inputs_for_view(
+        &world_view,
+        topology.as_ref(),
+        ConsensusMode::Permissioned,
+        None,
+    );
     let result = super::validate_qc_against_votes(
         &vote_log,
         &qc,
         &topology,
         &world_view,
+        &inputs.pops,
         &chain,
         ConsensusMode::Permissioned,
         None,
@@ -26711,11 +26826,18 @@ fn validate_qc_against_votes_rejects_new_view_highest_hash_mismatch() {
     });
     let world = world_with_consensus_keys(topology.as_ref(), &keypairs);
     let world_view = world.view();
+    let inputs = roster_validation_inputs_for_view(
+        &world_view,
+        topology.as_ref(),
+        ConsensusMode::Permissioned,
+        None,
+    );
     let result = super::validate_qc_against_votes(
         &vote_log,
         &qc,
         &topology,
         &world_view,
+        &inputs.pops,
         &chain,
         ConsensusMode::Permissioned,
         None,
@@ -29291,6 +29413,7 @@ async fn handle_qc_uses_activation_height_mode_tag() {
             topology.as_ref(),
         )
     };
+    let pops = &actor.roster_validation_cache.pops;
     let (validation, _) = {
         let view = actor.state.view();
         super::validate_qc_with_evidence(
@@ -29298,6 +29421,7 @@ async fn handle_qc_uses_activation_height_mode_tag() {
             &qc,
             &topology,
             view.world(),
+            pops,
             &actor.common_config.chain,
             consensus_mode,
             stake_snapshot.as_ref(),
@@ -34166,11 +34290,17 @@ fn qc_aggregate_consistent_rejects_mode_tag_mismatch() {
     let world = world_with_consensus_keys(topology.as_ref(), &keypairs);
     let world_view = world.view();
     qc.mode_tag = super::NPOS_TAG.to_string();
+    let inputs = roster_validation_inputs_for_view(
+        &world_view,
+        topology.as_ref(),
+        ConsensusMode::Permissioned,
+        None,
+    );
     assert!(
         !super::qc_aggregate_consistent(
             &qc,
             &topology,
-            &world_view,
+            &inputs.pops,
             &chain,
             super::PERMISSIONED_TAG
         ),
@@ -34708,11 +34838,18 @@ fn validate_qc_against_votes_rejects_sparse_high_bit() {
         },
     };
     let vote_log = BTreeMap::new();
+    let inputs = roster_validation_inputs_for_view(
+        &world_view,
+        topology.as_ref(),
+        ConsensusMode::Permissioned,
+        None,
+    );
     let result = super::validate_qc_against_votes(
         &vote_log,
         &qc,
         &topology,
         &world_view,
+        &inputs.pops,
         &chain,
         ConsensusMode::Permissioned,
         None,
@@ -34771,12 +34908,19 @@ fn validate_block_sync_qc_rejects_bitmap_length_mismatch() {
         },
     };
 
+    let inputs = roster_validation_inputs_for_view(
+        &world_view,
+        topology.as_ref(),
+        ConsensusMode::Permissioned,
+        None,
+    );
     let result = super::validate_block_sync_qc(
         &qc,
         &topology,
         &world_view,
         &block_signers,
         qc.view,
+        &inputs.pops,
         &chain,
         ConsensusMode::Permissioned,
         None,
@@ -34831,12 +34975,19 @@ fn validate_block_sync_qc_rejects_aggregate_mismatch() {
         },
     };
 
+    let inputs = roster_validation_inputs_for_view(
+        &world_view,
+        topology.as_ref(),
+        ConsensusMode::Permissioned,
+        None,
+    );
     let result = super::validate_block_sync_qc(
         &qc,
         &topology,
         &world_view,
         &block_signers,
         qc.view,
+        &inputs.pops,
         &chain,
         ConsensusMode::Permissioned,
         None,
@@ -34874,12 +35025,19 @@ fn validate_block_sync_qc_rejects_mode_tag_mismatch() {
     );
     qc.mode_tag = super::NPOS_TAG.to_string();
 
+    let inputs = roster_validation_inputs_for_view(
+        &world_view,
+        topology.as_ref(),
+        ConsensusMode::Permissioned,
+        None,
+    );
     let result = super::validate_block_sync_qc(
         &qc,
         &topology,
         &world_view,
         &block_signers,
         0,
+        &inputs.pops,
         &chain,
         ConsensusMode::Permissioned,
         None,
@@ -34931,12 +35089,19 @@ fn validate_block_sync_qc_rejects_view_mismatch_in_permissioned_mode() {
         },
     };
 
+    let inputs = roster_validation_inputs_for_view(
+        &world_view,
+        topology.as_ref(),
+        ConsensusMode::Permissioned,
+        None,
+    );
     let result = super::validate_block_sync_qc(
         &qc,
         &topology,
         &world_view,
         &block_signers,
         0,
+        &inputs.pops,
         &chain,
         ConsensusMode::Permissioned,
         None,
@@ -34996,12 +35161,19 @@ fn validate_block_sync_qc_falls_back_without_stake_snapshot() {
         },
     };
 
+    let inputs = roster_validation_inputs_for_view(
+        &world_view,
+        topology.as_ref(),
+        ConsensusMode::Npos,
+        None,
+    );
     let (signers, present) = super::validate_block_sync_qc(
         &qc,
         &topology,
         &world_view,
         &block_signers,
         0,
+        &inputs.pops,
         &chain,
         ConsensusMode::Npos,
         None,
@@ -35070,12 +35242,19 @@ fn validate_block_sync_qc_rejects_missing_stake_quorum() {
             .collect(),
     };
 
+    let inputs = roster_validation_inputs_for_view(
+        &world_view,
+        topology.as_ref(),
+        ConsensusMode::Npos,
+        Some(&stake_snapshot),
+    );
     let result = super::validate_block_sync_qc(
         &qc,
         &topology,
         &world_view,
         &block_signers,
         0,
+        &inputs.pops,
         &chain,
         ConsensusMode::Npos,
         Some(&stake_snapshot),
@@ -35112,12 +35291,19 @@ fn validate_block_sync_qc_rejects_validator_set_mismatch() {
     qc.validator_set_hash = HashOf::new(&qc.validator_set);
 
     let block_signers = signers_from_bitmap(&signers_bitmap, topology.as_ref().len());
+    let inputs = roster_validation_inputs_for_view(
+        &world_view,
+        topology.as_ref(),
+        ConsensusMode::Permissioned,
+        None,
+    );
     let result = super::validate_block_sync_qc(
         &qc,
         &topology,
         &world_view,
         &block_signers,
         qc.view,
+        &inputs.pops,
         &chain,
         ConsensusMode::Permissioned,
         None,
@@ -35174,12 +35360,19 @@ fn validate_block_sync_qc_accepts_trimmed_block_signatures() {
         },
     };
 
+    let inputs = roster_validation_inputs_for_view(
+        &world_view,
+        topology.as_ref(),
+        ConsensusMode::Permissioned,
+        None,
+    );
     let result = super::validate_block_sync_qc(
         &qc,
         &topology,
         &world_view,
         &block_signers,
         qc.view,
+        &inputs.pops,
         &chain,
         ConsensusMode::Permissioned,
         None,
@@ -35461,12 +35654,19 @@ fn validate_block_sync_qc_accepts_valid_bitmap_and_block_signers() {
         },
     };
 
+    let inputs = roster_validation_inputs_for_view(
+        &world_view,
+        topology.as_ref(),
+        ConsensusMode::Permissioned,
+        None,
+    );
     let result = super::validate_block_sync_qc(
         &qc,
         &topology,
         &world_view,
         &block_signers,
         qc.view,
+        &inputs.pops,
         &chain,
         ConsensusMode::Permissioned,
         None,
@@ -35522,12 +35722,19 @@ fn validate_block_sync_qc_accepts_any_quorum_signers() {
         },
     };
 
+    let inputs = roster_validation_inputs_for_view(
+        &world_view,
+        topology.as_ref(),
+        ConsensusMode::Permissioned,
+        None,
+    );
     let result = super::validate_block_sync_qc(
         &qc,
         &topology,
         &world_view,
         &block_signers,
         0,
+        &inputs.pops,
         &chain,
         ConsensusMode::Permissioned,
         None,
@@ -35654,12 +35861,19 @@ fn validate_block_sync_qc_accepts_npos_rotated_signers_across_views() {
         ..qc_stub
     };
 
+    let inputs = roster_validation_inputs_for_view(
+        &world_view,
+        topology.as_ref(),
+        ConsensusMode::Permissioned,
+        None,
+    );
     let result = super::validate_block_sync_qc(
         &qc,
         &topology,
         &world_view,
         &block_signers,
         block_view,
+        &inputs.pops,
         &chain,
         ConsensusMode::Permissioned,
         None,
@@ -35983,12 +36197,19 @@ fn qc_validation_remaps_signers_across_block_and_qc_views() {
     let world = world_with_consensus_keys(topology.as_ref(), &keypairs);
     let world_view = world.view();
 
+    let inputs = roster_validation_inputs_for_view(
+        &world_view,
+        topology.as_ref(),
+        ConsensusMode::Permissioned,
+        None,
+    );
     let (voting_signers, present) = super::validate_block_sync_qc(
         &qc,
         &topology,
         &world_view,
         &block_signers,
         block.header().view_change_index(),
+        &inputs.pops,
         &chain,
         ConsensusMode::Permissioned,
         None,
@@ -36109,12 +36330,19 @@ fn validate_block_sync_qc_allows_signer_missing_from_block() {
         },
     };
 
+    let inputs = roster_validation_inputs_for_view(
+        &world_view,
+        topology.as_ref(),
+        ConsensusMode::Permissioned,
+        None,
+    );
     let result = super::validate_block_sync_qc(
         &qc,
         &topology,
         &world_view,
         &block_signers,
         qc.view,
+        &inputs.pops,
         &chain,
         ConsensusMode::Permissioned,
         None,
@@ -36175,11 +36403,18 @@ fn tally_qc_against_votes_counts_full_roster() {
         );
     }
 
+    let inputs = roster_validation_inputs_for_view(
+        &world_view,
+        topology.as_ref(),
+        ConsensusMode::Permissioned,
+        None,
+    );
     let tally = super::tally_qc_against_votes(
         &vote_log,
         &qc,
         &topology,
         &world_view,
+        &inputs.pops,
         &chain,
         ConsensusMode::Permissioned,
         None,
@@ -36288,11 +36523,18 @@ fn tally_qc_against_votes_rejects_wrong_signature_key() {
         vote_b,
     );
 
+    let inputs = roster_validation_inputs_for_view(
+        &world_view,
+        topology.as_ref(),
+        ConsensusMode::Permissioned,
+        None,
+    );
     let result = super::tally_qc_against_votes(
         &vote_log,
         &qc,
         &topology,
         &world_view,
+        &inputs.pops,
         &chain,
         ConsensusMode::Permissioned,
         None,
@@ -36347,12 +36589,19 @@ fn tally_qc_against_block_signers_accepts_without_votes() {
     };
     let block_signers: BTreeSet<_> = [0_u32, 1_u32].into_iter().collect();
 
+    let inputs = roster_validation_inputs_for_view(
+        &world_view,
+        topology.as_ref(),
+        ConsensusMode::Permissioned,
+        None,
+    );
     let tally = super::tally_qc_against_block_signers(
         &qc,
         &topology,
         &world_view,
         &block_signers,
         0,
+        &inputs.pops,
         &chain,
         ConsensusMode::Permissioned,
         None,
@@ -36386,12 +36635,19 @@ fn tally_qc_against_block_signers_preserves_bitmap_indices() {
     let world_view = world.view();
     let block_signers: BTreeSet<_> = [0_u32, 1_u32, 2_u32, 3_u32].into_iter().collect();
 
+    let inputs = roster_validation_inputs_for_view(
+        &world_view,
+        topology.as_ref(),
+        ConsensusMode::Permissioned,
+        None,
+    );
     let tally = super::tally_qc_against_block_signers(
         &qc,
         &topology,
         &world_view,
         &block_signers,
         0,
+        &inputs.pops,
         &chain,
         ConsensusMode::Permissioned,
         None,
@@ -41897,6 +42153,38 @@ fn session_key() -> SessionKey {
     )
 }
 
+fn rbc_header_and_signature(
+    actor: &Actor,
+    roster: &[PeerId],
+    height: u64,
+    view: u64,
+    key_pairs: &[KeyPair],
+) -> (BlockHeader, BlockSignature) {
+    let header = BlockHeader::new(
+        NonZeroU64::new(height).expect("block height must be non-zero"),
+        None,
+        None,
+        None,
+        0,
+        view,
+    );
+    let mut topology = super::network_topology::Topology::new(roster.to_vec());
+    let leader_index = actor
+        .leader_index_for(&mut topology, height, view)
+        .expect("leader index available for tests");
+    let leader_peer = topology
+        .as_ref()
+        .get(leader_index)
+        .expect("leader exists in topology");
+    let leader_key = key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == leader_peer.public_key())
+        .expect("leader key available in harness");
+    let signature = SignatureOf::from_hash(leader_key.private_key(), header.hash());
+    let index = u64::try_from(leader_index).unwrap_or(u64::MAX);
+    (header, BlockSignature::new(index, signature))
+}
+
 fn empty_block(height: u64, view: u64, parent: Option<HashOf<BlockHeader>>) -> SignedBlock {
     let header = BlockHeader {
         height: NonZeroU64::new(height).expect("block height must be non-zero"),
@@ -42507,6 +42795,13 @@ async fn stale_view_accepts_rbc_messages_with_da() {
     let chunk_root = Hash::prehashed([0x44; 32]);
     let key = (block_hash, height, stale_view);
     let roster = actor.effective_commit_topology();
+    let (block_header, leader_signature) = rbc_header_and_signature(
+        actor,
+        &roster,
+        height,
+        stale_view,
+        &harness.key_pairs,
+    );
 
     let init = crate::sumeragi::consensus::RbcInit {
         block_hash,
@@ -42519,6 +42814,8 @@ async fn stale_view_accepts_rbc_messages_with_da() {
         chunk_digests: vec![[0x44; 32]],
         payload_hash,
         chunk_root,
+        block_header,
+        leader_signature,
     };
     actor.handle_rbc_init(init).expect("rbc init");
     assert!(actor.subsystems.da_rbc.rbc.sessions.contains_key(&key));
@@ -44909,9 +45206,20 @@ fn kickstart_pacemaker_after_commit_triggers_only_when_allowed() {
         atomic::{AtomicUsize, Ordering},
     };
 
+    let capacity = NonZeroUsize::new(2).expect("non-zero");
+    let healthy = BackpressureState::Healthy {
+        queued: 0,
+        capacity,
+    };
+    let no_backpressure = ProposalBackpressure {
+        queue_state: healthy,
+        active_pending: false,
+        rbc_backlog: false,
+        relay_backpressure: false,
+    };
     let calls = Arc::new(AtomicUsize::new(0));
     let calls_clone = Arc::clone(&calls);
-    let triggered = super::kickstart_pacemaker_after_commit(1, false, move |_now| {
+    let triggered = super::kickstart_pacemaker_after_commit(1, no_backpressure, move |_now| {
         calls_clone.fetch_add(1, Ordering::SeqCst);
         true
     });
@@ -44920,16 +45228,22 @@ fn kickstart_pacemaker_after_commit_triggers_only_when_allowed() {
 
     let calls = Arc::new(AtomicUsize::new(0));
     let calls_clone = Arc::clone(&calls);
-    let triggered = super::kickstart_pacemaker_after_commit(0, false, move |_now| {
+    let triggered = super::kickstart_pacemaker_after_commit(0, no_backpressure, move |_now| {
         calls_clone.fetch_add(1, Ordering::SeqCst);
         true
     });
     assert!(!triggered);
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 
+    let backpressure = ProposalBackpressure {
+        queue_state: healthy,
+        active_pending: false,
+        rbc_backlog: true,
+        relay_backpressure: false,
+    };
     let calls = Arc::new(AtomicUsize::new(0));
     let calls_clone = Arc::clone(&calls);
-    let triggered = super::kickstart_pacemaker_after_commit(2, true, move |_now| {
+    let triggered = super::kickstart_pacemaker_after_commit(2, backpressure, move |_now| {
         calls_clone.fetch_add(1, Ordering::SeqCst);
         true
     });

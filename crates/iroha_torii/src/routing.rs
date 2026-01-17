@@ -324,6 +324,8 @@ use iroha_data_model::{
         SumeragiQcStatus, SumeragiRbcEvictedSession, SumeragiRbcMismatchEntry,
         SumeragiRbcMismatchStatus, SumeragiRbcStoreStatus, SumeragiRuntimeUpgradeHook,
         SumeragiStatusWire, SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
+        SumeragiVoteValidationDropEntry, SumeragiVoteValidationDropPeerEntry,
+        SumeragiVoteValidationDropReasonCount, SumeragiVoteValidationDropStatus,
         SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths, SumeragiWorkerQueueDiagnostics,
         SumeragiWorkerQueueTotals,
     },
@@ -19723,6 +19725,81 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         "entries",
         consensus_message_handling_entries,
     )]);
+    let vote_validation_drop_entries = Value::Array(
+        snap.vote_validation_drops
+            .entries
+            .iter()
+            .map(|entry| {
+                json_object(vec![
+                    json_entry("reason", entry.reason.as_str()),
+                    json_entry("height", entry.height),
+                    json_entry("view", entry.view),
+                    json_entry("epoch", entry.epoch),
+                    json_entry("signer_index", entry.signer_index),
+                    json_entry(
+                        "peer_id",
+                        entry
+                            .peer_id
+                            .as_ref()
+                            .map(|peer| Value::from(format!("{peer}")))
+                            .unwrap_or(Value::Null),
+                    ),
+                    json_entry(
+                        "roster_hash",
+                        entry
+                            .roster_hash
+                            .map(|hash| Value::from(format!("{hash}")))
+                            .unwrap_or(Value::Null),
+                    ),
+                    json_entry("roster_len", entry.roster_len),
+                    json_entry("block_hash", Value::from(format!("{}", entry.block_hash))),
+                    json_entry("timestamp_ms", entry.timestamp_ms),
+                ])
+            })
+            .collect(),
+    );
+    let vote_validation_drop_peer_entries = Value::Array(
+        snap.vote_validation_drops
+            .peer_entries
+            .iter()
+            .map(|entry| {
+                let reasons = Value::Array(
+                    entry
+                        .reasons
+                        .iter()
+                        .map(|reason| {
+                            json_object(vec![
+                                json_entry("reason", reason.reason.as_str()),
+                                json_entry("total", reason.total),
+                            ])
+                        })
+                        .collect(),
+                );
+                json_object(vec![
+                    json_entry("peer_id", Value::from(format!("{}", entry.peer_id))),
+                    json_entry(
+                        "roster_hash",
+                        entry
+                            .roster_hash
+                            .map(|hash| Value::from(format!("{hash}")))
+                            .unwrap_or(Value::Null),
+                    ),
+                    json_entry("roster_len", entry.roster_len),
+                    json_entry("total", entry.total),
+                    json_entry("reasons", reasons),
+                    json_entry("last_height", entry.last_height),
+                    json_entry("last_view", entry.last_view),
+                    json_entry("last_epoch", entry.last_epoch),
+                    json_entry("last_timestamp_ms", entry.last_timestamp_ms),
+                ])
+            })
+            .collect(),
+    );
+    let vote_validation_drops = json_object(vec![
+        json_entry("total", snap.vote_validation_drops.total),
+        json_entry("entries", vote_validation_drop_entries),
+        json_entry("peer_entries", vote_validation_drop_peer_entries),
+    ]);
     let tx_queue = json_object(vec![
         json_entry("depth", snap.tx_queue_depth),
         json_entry("capacity", snap.tx_queue_capacity),
@@ -20797,6 +20874,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("gossip_fallback_total", snap.gossip_fallback_total),
         json_entry("dedup_evictions", dedup_evictions),
         json_entry("consensus_message_handling", consensus_message_handling),
+        json_entry("vote_validation_drops", vote_validation_drops),
         json_entry("bg_post_drop_post_total", snap.bg_post_drop_post_total),
         json_entry(
             "bg_post_drop_broadcast_total",
@@ -22272,6 +22350,49 @@ pub async fn handle_v1_sumeragi_status(
                         outcome: entry.outcome.as_str().to_owned(),
                         reason: entry.reason.as_str().to_owned(),
                         total: entry.total,
+                    })
+                    .collect(),
+            },
+            vote_validation_drops: SumeragiVoteValidationDropStatus {
+                total: snap.vote_validation_drops.total,
+                entries: snap
+                    .vote_validation_drops
+                    .entries
+                    .iter()
+                    .map(|entry| SumeragiVoteValidationDropEntry {
+                        reason: entry.reason.as_str().to_owned(),
+                        height: entry.height,
+                        view: entry.view,
+                        epoch: entry.epoch,
+                        signer_index: entry.signer_index,
+                        peer_id: entry.peer_id.clone(),
+                        roster_hash: entry.roster_hash,
+                        roster_len: entry.roster_len,
+                        block_hash: entry.block_hash,
+                        timestamp_ms: entry.timestamp_ms,
+                    })
+                    .collect(),
+                peer_entries: snap
+                    .vote_validation_drops
+                    .peer_entries
+                    .iter()
+                    .map(|entry| SumeragiVoteValidationDropPeerEntry {
+                        peer_id: entry.peer_id.clone(),
+                        roster_hash: entry.roster_hash,
+                        roster_len: entry.roster_len,
+                        total: entry.total,
+                        reasons: entry
+                            .reasons
+                            .iter()
+                            .map(|reason| SumeragiVoteValidationDropReasonCount {
+                                reason: reason.reason.as_str().to_owned(),
+                                total: reason.total,
+                            })
+                            .collect(),
+                        last_height: entry.last_height,
+                        last_view: entry.last_view,
+                        last_epoch: entry.last_epoch,
+                        last_timestamp_ms: entry.last_timestamp_ms,
                     })
                     .collect(),
             },

@@ -27,6 +27,7 @@ Options:
   --block-time-ms <MS>       Override block time (ms) in generated configs
   --commit-time-ms <MS>      Override commit time (ms) in generated configs
   --consensus-mode <MODE>    Override consensus mode (permissioned or npos)
+  --perf-profile <NAME>      Apply Kagami localnet perf profile (10k-permissioned or 10k-npos)
   --base-api-port <PORT>     Base Torii API port (default: 29080)
   --base-p2p-port <PORT>     Base P2P port (default: 33337)
   --bind-host <HOST>         Bind host (default: 127.0.0.1)
@@ -63,6 +64,7 @@ FORCE=false
 BLOCK_TIME_MS=""
 COMMIT_TIME_MS=""
 CONSENSUS_MODE=""
+PERF_PROFILE=""
 CURL_TIMEOUT_SECS=2
 
 while [[ $# -gt 0 ]]; do
@@ -97,6 +99,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --consensus-mode)
       CONSENSUS_MODE="$2"
+      shift 2
+      ;;
+    --perf-profile)
+      PERF_PROFILE="$2"
       shift 2
       ;;
     --base-api-port)
@@ -256,6 +262,9 @@ if [[ -n "$COMMIT_TIME_MS" ]]; then
 fi
 if [[ -n "$CONSENSUS_MODE" ]]; then
   KAGAMI_ARGS+=(--consensus-mode "$CONSENSUS_MODE")
+fi
+if [[ -n "$PERF_PROFILE" ]]; then
+  KAGAMI_ARGS+=(--perf-profile "$PERF_PROFILE")
 fi
 "$KAGAMI_BIN" "${KAGAMI_ARGS[@]}"
 

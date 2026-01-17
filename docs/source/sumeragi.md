@@ -555,7 +555,7 @@ issues before commits approach the configured commit-time budget (permissioned `
   (watch `sumeragi_redundant_sends_total`), gossip fallback fires repeatedly
   (monitor `rate(sumeragi_gossip_fallback_total[5m]) > 0`), or proposals are
   dropped at the locked certificate gate (`increase(block_created_dropped_by_lock_total[5m]) > 0`), fail header checks (`increase(block_created_hint_mismatch_total[5m]) > 0`,
-  `increase(block_created_proposal_mismatch_total[5m]) > 0`), or stall due to queue saturation (`increase(pacemaker_backpressure_deferrals_total[5m]) > 0`). Sustained breaches indicate that the
+  `increase(block_created_proposal_mismatch_total[5m]) > 0`), or stall due to proposal backpressure (queue saturation, relay/RBC backlog, or blocking pending blocks; `increase(pacemaker_backpressure_deferrals_total[5m]) > 0`). Sustained breaches indicate that the
   primary collector is lagging or network backpressure is throttling vote flow.
 
 Redundant fan-out counters tick when the DA retry loop re-broadcasts cached RBC
