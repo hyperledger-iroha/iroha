@@ -1370,6 +1370,17 @@ impl TieredStateBackend {
         })
     }
 
+    /// Prune cold snapshots to fit within an explicit byte budget.
+    pub(crate) fn prune_cold_snapshots_to_bytes(&self, max_bytes: u64) -> Result<()> {
+        let Some(root) = self.primary_cold_root().cloned() else {
+            return Ok(());
+        };
+        if !root.exists() {
+            return Ok(());
+        }
+        Self::prune_snapshots_to_bytes(&root, max_bytes)
+    }
+
     fn prune_old_snapshots(&self, root: &Path) -> Result<()> {
         if self.max_snapshots == 0 {
             return Ok(());
@@ -1421,6 +1432,13 @@ impl TieredStateBackend {
         if self.max_cold_bytes == 0 {
             return Ok(());
         }
+        Self::prune_snapshots_to_bytes(root, self.max_cold_bytes)
+    }
+
+    fn prune_snapshots_to_bytes(root: &Path, max_bytes: u64) -> Result<()> {
+        if max_bytes == 0 && !root.exists() {
+            return Ok(());
+        }
 
         let mut entries = Vec::new();
         for entry in fs::read_dir(root).wrap_err_with(|| {
@@ -1450,7 +1468,7 @@ impl TieredStateBackend {
         }
 
         let mut pruned = false;
-        while total_bytes > self.max_cold_bytes && sizes.len() > 1 {
+        while total_bytes > max_bytes && sizes.len() > 1 {
             let (_, path, size) = sizes.remove(0);
             fs::remove_dir_all(&path).wrap_err_with(|| {
                 format!(
@@ -1462,10 +1480,10 @@ impl TieredStateBackend {
             pruned = true;
         }
 
-        if total_bytes > self.max_cold_bytes && sizes.len() == 1 {
+        if total_bytes > max_bytes && sizes.len() == 1 {
             let (_, path, size) = &sizes[0];
             iroha_logger::warn!(
-                budget = self.max_cold_bytes,
+                budget = max_bytes,
                 remaining = *size,
                 path = %path.display(),
                 "tiered-state: cold snapshot exceeds configured byte budget"
@@ -2532,6 +2550,34 @@ mod tests {
         snapshots.sort_unstable();
         assert_eq!(snapshots, vec![second_index]);
         assert_ne!(first_index, second_index);
+    }
+
+    #[test]
+    fn prune_cold_snapshots_to_bytes_prunes_oldest_first() {
+        let temp = tempdir().expect("tmpdir");
+        let cold_root = temp.path().join("cold");
+        fs::create_dir_all(&cold_root).expect("create cold root");
+
+        for idx in 1..=3u64 {
+            let dir = cold_root.join(format!("{idx:020}"));
+            fs::create_dir_all(&dir).expect("create snapshot dir");
+            fs::write(dir.join("payload.norito"), vec![0u8; 50]).expect("write snapshot payload");
+        }
+
+        let backend = TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 0, 0);
+        backend
+            .prune_cold_snapshots_to_bytes(80)
+            .expect("prune snapshots to budget");
+
+        let mut snapshots = fs::read_dir(&cold_root)
+            .unwrap()
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                TieredStateBackend::parse_snapshot_dir_name(&entry.file_name())
+            })
+            .collect::<Vec<_>>();
+        snapshots.sort_unstable();
+        assert_eq!(snapshots, vec![3]);
     }
 
     #[test]

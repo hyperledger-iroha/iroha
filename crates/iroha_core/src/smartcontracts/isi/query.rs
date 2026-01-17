@@ -2871,8 +2871,16 @@ impl ValidQueryRequest {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::many_single_char_names)]
+    use core::time::Duration;
+    use std::borrow::Cow;
+
     use iroha_crypto::{Algorithm, Hash, KeyPair};
-    use iroha_data_model::query::{dsl::CompoundPredicate, prelude::FindParameters};
+    use iroha_data_model::{
+        AccountId, ChainId, DomainId, Level,
+        isi::Log,
+        query::{dsl::CompoundPredicate, prelude::FindParameters},
+        transaction::TransactionBuilder,
+    };
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, gen_account_in};
     use nonzero_ext::nonzero;
     use tokio::test;
@@ -2887,6 +2895,21 @@ mod tests {
         sumeragi::network_topology::Topology,
         tx::AcceptedTransaction,
     };
+
+    fn dummy_accepted_transaction() -> AcceptedTransaction<'static> {
+        let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
+            .parse()
+            .expect("valid chain id");
+        let domain_id: DomainId = "dummy".parse().expect("valid domain id");
+        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(domain_id, keypair.public_key().clone());
+        let mut builder = TransactionBuilder::new(chain_id, authority);
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx = builder
+            .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
+            .sign(keypair.private_key());
+        AcceptedTransaction::new_unchecked(Cow::Owned(tx))
+    }
 
     #[tokio::test]
     async fn sorting_by_metadata_key_and_fetch_size() {
@@ -4732,13 +4755,13 @@ mod tests {
         SetKeyValue::domain(alpha_id.clone(), key.clone(), Json::new(2_u32))
             .execute(&ALICE_ID, &mut state_tx)?;
 
-        // Apply world changes and commit an empty block to satisfy transaction storage invariants
+        // Apply world changes and commit a minimal block to satisfy transaction storage invariants
         state_tx.apply();
 
         let (peer_pk, _) = bls_test_keypair().into_parts();
         let peer_id = PeerId::new(peer_pk);
         let topology = Topology::new(vec![peer_id]);
-        let unverified_block = BlockBuilder::new(Vec::new())
+        let unverified_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, parent_block.as_deref())
             .sign(ALICE_KEYPAIR.private_key())
             .unpack(|_| {});

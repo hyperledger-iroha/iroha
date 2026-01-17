@@ -18,6 +18,7 @@ use iroha_data_model::{
             Proposal, Qc, QcAggregate, QcRef, QcVote, RbcChunk, RbcDeliver, RbcInit, RbcReady,
             RbcReadySignature, Reconfig, SumeragiBlockSyncRosterStatus,
             SumeragiCommitInflightStatus, SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus,
+            SumeragiConsensusMessageHandlingEntry, SumeragiConsensusMessageHandlingStatus,
             SumeragiDaGateReason, SumeragiDaGateSatisfaction, SumeragiDaGateStatus,
             SumeragiDataspaceCommitment, SumeragiKuraStoreStatus, SumeragiLaneCommitment,
             SumeragiLaneGovernance, SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
@@ -566,6 +567,7 @@ fn rng_sumeragi_status(rng: &mut DeterministicRng) -> SumeragiStatusWire {
         view_change_causes: SumeragiViewChangeCauseStatus {
             commit_failure_total: rng.next_u64(),
             quorum_timeout_total: rng.next_u64(),
+            stake_quorum_timeout_total: rng.next_u64(),
             da_gate_total: rng.next_u64(),
             censorship_evidence_total: rng.next_u64(),
             missing_payload_total: rng.next_u64(),
@@ -579,6 +581,7 @@ fn rng_sumeragi_status(rng: &mut DeterministicRng) -> SumeragiStatusWire {
             last_cause_timestamp_ms: rng.next_u64(),
             last_commit_failure_timestamp_ms: rng.next_u64(),
             last_quorum_timeout_timestamp_ms: rng.next_u64(),
+            last_stake_quorum_timeout_timestamp_ms: rng.next_u64(),
             last_da_gate_timestamp_ms: rng.next_u64(),
             last_censorship_evidence_timestamp_ms: rng.next_u64(),
             last_missing_payload_timestamp_ms: rng.next_u64(),
@@ -589,6 +592,7 @@ fn rng_sumeragi_status(rng: &mut DeterministicRng) -> SumeragiStatusWire {
         block_created_dropped_by_lock_total: rng.next_u64(),
         block_created_hint_mismatch_total: rng.next_u64(),
         block_created_proposal_mismatch_total: rng.next_u64(),
+        consensus_message_handling: rng_consensus_message_handling_status(rng),
         validation_reject_total: rng.next_u64(),
         validation_reject_reason: if rng.next_bool() {
             Some("stateless".to_string())
@@ -999,6 +1003,21 @@ fn rng_rbc_mismatch_status(rng: &mut DeterministicRng) -> SumeragiRbcMismatchSta
     SumeragiRbcMismatchStatus { entries }
 }
 
+fn rng_consensus_message_handling_status(
+    rng: &mut DeterministicRng,
+) -> SumeragiConsensusMessageHandlingStatus {
+    let entry_len = rng.up_to(3);
+    let entries = (0..entry_len)
+        .map(|_| SumeragiConsensusMessageHandlingEntry {
+            kind: rng_ascii_string(rng, 16),
+            outcome: rng_ascii_string(rng, 12),
+            reason: rng_ascii_string(rng, 24),
+            total: rng.next_u64(),
+        })
+        .collect();
+    SumeragiConsensusMessageHandlingStatus { entries }
+}
+
 fn rng_worker_queue_depths(rng: &mut DeterministicRng) -> SumeragiWorkerQueueDepths {
     SumeragiWorkerQueueDepths {
         vote_rx: rng.next_u64(),
@@ -1168,6 +1187,7 @@ fn sumeragi_wire_status_roundtrip() {
         view_change_causes: SumeragiViewChangeCauseStatus {
             commit_failure_total: 1,
             quorum_timeout_total: 2,
+            stake_quorum_timeout_total: 0,
             da_gate_total: 3,
             censorship_evidence_total: 7,
             missing_payload_total: 4,
@@ -1177,6 +1197,7 @@ fn sumeragi_wire_status_roundtrip() {
             last_cause_timestamp_ms: 42,
             last_commit_failure_timestamp_ms: 10,
             last_quorum_timeout_timestamp_ms: 11,
+            last_stake_quorum_timeout_timestamp_ms: 0,
             last_da_gate_timestamp_ms: 12,
             last_censorship_evidence_timestamp_ms: 16,
             last_missing_payload_timestamp_ms: 13,
@@ -1187,6 +1208,14 @@ fn sumeragi_wire_status_roundtrip() {
         block_created_dropped_by_lock_total: 2,
         block_created_hint_mismatch_total: 1,
         block_created_proposal_mismatch_total: 4,
+        consensus_message_handling: SumeragiConsensusMessageHandlingStatus {
+            entries: vec![SumeragiConsensusMessageHandlingEntry {
+                kind: "block_created".to_string(),
+                outcome: "dropped".to_string(),
+                reason: "hint_mismatch".to_string(),
+                total: 3,
+            }],
+        },
         validation_reject_total: 1,
         validation_reject_reason: Some("stateless".to_string()),
         validation_rejects: SumeragiValidationRejectStatus {

@@ -3,7 +3,9 @@ pub mod lane;
 
 use std::collections::BTreeMap;
 
-use fastpq_prover::{OperationKind, PublicInputs, StateTransition, TransitionBatch};
+use fastpq_prover::{
+    OperationKind, PoseidonSponge, PublicInputs, StateTransition, TransitionBatch,
+};
 use iroha_crypto::Hash;
 use iroha_data_model::{
     DataSpaceId,
@@ -15,14 +17,18 @@ use iroha_data_model::{
         FastpqTransitionBatch, TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript,
         TransferTranscript, TransferTranscriptBundle,
     },
+    role::{Role, RoleId},
 };
 use iroha_primitives::numeric::Numeric;
-use iroha_zkp_halo2::poseidon;
+use iroha_zkp_halo2::poseidon as halo2_poseidon;
 use norito::{codec::Encode as NoritoEncode, to_bytes};
 use thiserror::Error;
 
 const AUTHORITY_DIGEST_DOMAIN: &[u8] = b"iroha:fastpq:v1:authority|";
 const TX_SET_HASH_DOMAIN: &[u8] = b"fastpq:v1:tx_set";
+const PERMISSION_TABLE_NODE_DOMAIN: &[u8] = b"fastpq:v1:poseidon_node";
+// TODO: wire real permission epochs once role permission metadata includes them.
+const PERMISSION_TABLE_EPOCH: u64 = 0;
 /// Metadata key storing the originating entry hash for a batch.
 pub const ENTRY_HASH_METADATA_KEY: &str = "entry_hash";
 /// Metadata key storing the transcript count embedded in a batch.
@@ -100,7 +106,7 @@ pub fn poseidon_preimage_digest(delta: &TransferDeltaTranscript, batch_hash: &Ha
     append_encoded(&mut preimage, &delta.asset_definition);
     append_encoded(&mut preimage, &delta.amount);
     preimage.extend_from_slice(batch_hash.as_ref());
-    Hash::prehashed(poseidon::hash_bytes(&preimage))
+    Hash::prehashed(halo2_poseidon::hash_bytes(&preimage))
 }
 
 fn append_encoded<T: NoritoEncode>(buffer: &mut Vec<u8>, value: &T) {
@@ -112,6 +118,7 @@ fn append_encoded<T: NoritoEncode>(buffer: &mut Vec<u8>, value: &T) {
 pub fn public_inputs_template_from_block(
     header: &BlockHeader,
     witness: &ExecWitness,
+    perm_root: [u8; 32],
 ) -> FastpqPublicInputsTemplate {
     let creation_ms = u64::try_from(header.creation_time().as_millis()).unwrap_or(u64::MAX);
     let slot = creation_ms.saturating_mul(1_000_000);
@@ -122,30 +129,134 @@ pub fn public_inputs_template_from_block(
         slot,
         old_root: old_root.into(),
         new_root: new_root.into(),
-        // TODO: thread permission table commitments once the WSV wiring lands.
-        perm_root: [0; 32],
+        perm_root,
     }
 }
 
-fn dataspace_id_bytes(dsid: DataSpaceId) -> [u8; 16] {
+pub(crate) fn dataspace_id_bytes(dsid: DataSpaceId) -> [u8; 16] {
     let mut out = [0u8; 16];
     out[..8].copy_from_slice(&dsid.as_u64().to_le_bytes());
     out
 }
 
+pub(crate) fn permission_table_root<'a, I>(roles: I) -> [u8; 32]
+where
+    I: IntoIterator<Item = (&'a RoleId, &'a Role)>,
+{
+    let mut entries = Vec::new();
+    let epoch_bytes = PERMISSION_TABLE_EPOCH.to_le_bytes();
+    for (role_id, role) in roles {
+        let role_bytes = hash_encoded(role_id);
+        for permission in &role.permissions {
+            entries.push(PermissionTableEntry {
+                role_bytes,
+                permission_bytes: hash_encoded(permission),
+                epoch_bytes,
+            });
+        }
+    }
+    if entries.is_empty() {
+        return [0u8; 32];
+    }
+    entries.sort_unstable_by(|left, right| {
+        (left.role_bytes, left.permission_bytes, left.epoch_bytes).cmp(&(
+            right.role_bytes,
+            right.permission_bytes,
+            right.epoch_bytes,
+        ))
+    });
+    let hashes: Vec<u64> = entries.iter().map(permission_hash_from_entry).collect();
+    field_element_bytes(poseidon_merkle_root(&hashes))
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PermissionTableEntry {
+    role_bytes: [u8; 32],
+    permission_bytes: [u8; 32],
+    epoch_bytes: [u8; 8],
+}
+
+fn hash_encoded<T: NoritoEncode>(value: &T) -> [u8; 32] {
+    let hash = Hash::new(value.encode());
+    hash.into()
+}
+
+fn permission_hash_from_entry(entry: &PermissionTableEntry) -> u64 {
+    let mut payload = Vec::with_capacity(32 + 32 + 8);
+    payload.extend_from_slice(&entry.role_bytes);
+    payload.extend_from_slice(&entry.permission_bytes);
+    payload.extend_from_slice(&entry.epoch_bytes);
+    let packed = fastpq_prover::pack_bytes(&payload);
+    fastpq_prover::hash_field_elements(&packed.limbs)
+}
+
+fn poseidon_merkle_root(leaves: &[u64]) -> u64 {
+    if leaves.is_empty() {
+        return 0;
+    }
+    let mut current = leaves.to_vec();
+    while current.len() > 1 {
+        if current.len() % 2 == 1 {
+            let last = *current.last().expect("non-empty vector");
+            current.push(last);
+        }
+        let mut next = Vec::with_capacity(current.len() / 2);
+        for pair in current.chunks(2) {
+            next.push(hash_field_with_domain(
+                PERMISSION_TABLE_NODE_DOMAIN,
+                &[pair[0], pair[1]],
+            ));
+        }
+        current = next;
+    }
+    current[0]
+}
+
+fn hash_field_with_domain(domain: &[u8], values: &[u64]) -> u64 {
+    let mut sponge = PoseidonSponge::new();
+    sponge.absorb(domain_seed(domain));
+    sponge.absorb_slice(values);
+    sponge.squeeze()
+}
+
+fn domain_seed(domain: &[u8]) -> u64 {
+    let digest = Hash::new(domain);
+    let bytes = digest.as_ref();
+    let mut chunk = [0u8; 8];
+    chunk.copy_from_slice(&bytes[..8]);
+    let raw = u64::from_le_bytes(chunk);
+    let reduced = u128::from(raw) % u128::from(fastpq_prover::FIELD_MODULUS);
+    u64::try_from(reduced).expect("modulus reduction fits u64")
+}
+
+fn field_element_bytes(value: u64) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out[..8].copy_from_slice(&value.to_le_bytes());
+    out
+}
+
 fn public_inputs_from_template(
     template: FastpqPublicInputsTemplate,
-    entry_hash: &Hash,
+    tx_set_hash: [u8; 32],
 ) -> FastpqPublicInputs {
-    let tx_set_hash = tx_set_hash_from_entry_hash(entry_hash);
     template.with_tx_set_hash(tx_set_hash)
 }
 
-fn tx_set_hash_from_entry_hash(entry_hash: &Hash) -> [u8; 32] {
-    // TODO: replace entry-hash derivation with scheduler-provided tx set hash.
-    let mut payload = Vec::with_capacity(TX_SET_HASH_DOMAIN.len() + Hash::LENGTH);
+/// Compute a transaction set commitment from ordered entrypoint hashes.
+pub(crate) fn tx_set_hash_from_ordered_hashes<I, H>(hashes: I) -> [u8; 32]
+where
+    I: IntoIterator<Item = H>,
+    H: AsRef<[u8; 32]>,
+{
+    let iter = hashes.into_iter();
+    let (lower, _) = iter.size_hint();
+    let mut payload =
+        Vec::with_capacity(TX_SET_HASH_DOMAIN.len() + lower.saturating_mul(Hash::LENGTH));
     payload.extend_from_slice(TX_SET_HASH_DOMAIN);
-    payload.extend_from_slice(entry_hash.as_ref());
+    for hash in iter {
+        let bytes = hash.as_ref();
+        payload.extend_from_slice(bytes);
+    }
     Hash::new(payload).into()
 }
 
@@ -265,16 +376,20 @@ pub fn batches_from_exec_witness(
 pub fn batches_from_bundles<'a, I>(
     parameter_set: &str,
     public_inputs: FastpqPublicInputsTemplate,
+    tx_set_hash: [u8; 32],
     bundles: I,
 ) -> Result<Vec<TransitionBatch>, TranscriptBatchError>
 where
     I: IntoIterator<Item = &'a TransferTranscriptBundle>,
 {
     let mut batches = Vec::new();
+    let public_inputs = public_inputs_from_template(public_inputs, tx_set_hash);
     for bundle in bundles {
-        let inputs = public_inputs_from_template(public_inputs, &bundle.entry_hash);
-        let mut batch =
-            batch_from_transcripts(parameter_set.to_string(), inputs, &bundle.transcripts)?;
+        let mut batch = batch_from_transcripts(
+            parameter_set.to_string(),
+            public_inputs,
+            &bundle.transcripts,
+        )?;
         annotate_metadata(&mut batch, &bundle.entry_hash, bundle.transcripts.len());
         batches.push(batch);
     }
@@ -298,6 +413,7 @@ fn annotate_metadata(batch: &mut TransitionBatch, entry_hash: &Hash, transcript_
 pub fn dto_batches_from_transcripts(
     parameter_set: &str,
     public_inputs: FastpqPublicInputsTemplate,
+    tx_set_hash: [u8; 32],
     transcripts: &BTreeMap<Hash, Vec<TransferTranscript>>,
 ) -> Result<Vec<FastpqTransitionBatch>, TranscriptBatchError> {
     let bundles: Vec<_> = transcripts
@@ -307,7 +423,7 @@ pub fn dto_batches_from_transcripts(
             transcripts: entries.clone(),
         })
         .collect();
-    let batches = batches_from_bundles(parameter_set, public_inputs, bundles.iter())?;
+    let batches = batches_from_bundles(parameter_set, public_inputs, tx_set_hash, bundles.iter())?;
     Ok(batches.iter().map(transition_batch_to_dto).collect())
 }
 
@@ -431,7 +547,11 @@ fn operation_from_dto(operation: &FastpqOperationKind) -> OperationKind {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, num::NonZeroU64, str::FromStr};
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        num::NonZeroU64,
+        str::FromStr,
+    };
 
     use iroha_data_model::{
         block::{
@@ -439,8 +559,10 @@ mod tests {
             consensus::{ExecKv, ExecWitness},
         },
         fastpq::{TransferTranscript, TransferTranscriptBundle},
+        permission::Permission,
+        role::{Role, RoleId},
     };
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::{json::Json, numeric::Numeric};
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use norito::decode_from_bytes;
 
@@ -480,6 +602,34 @@ mod tests {
     }
 
     #[test]
+    fn permission_table_root_is_order_independent() {
+        let perm_a = Permission::new("perm_a".to_string(), Json::new(()));
+        let perm_b = Permission::new("perm_b".to_string(), Json::new(()));
+        let role_a: RoleId = "role_a".parse().expect("role id");
+        let role_b: RoleId = "role_b".parse().expect("role id");
+        let role_a = Role {
+            id: role_a.clone(),
+            permissions: BTreeSet::from([perm_a.clone(), perm_b]),
+        };
+        let role_b = Role {
+            id: role_b.clone(),
+            permissions: BTreeSet::from([perm_a]),
+        };
+        let first = vec![
+            (role_b.id.clone(), role_b.clone()),
+            (role_a.id.clone(), role_a.clone()),
+        ];
+        let second = vec![
+            (role_a.id.clone(), role_a.clone()),
+            (role_b.id.clone(), role_b.clone()),
+        ];
+        let root_first = permission_table_root(first.iter().map(|(id, role)| (id, role)));
+        let root_second = permission_table_root(second.iter().map(|(id, role)| (id, role)));
+        assert_eq!(root_first, root_second);
+        assert_ne!(root_first, [0u8; 32]);
+    }
+
+    #[test]
     fn public_inputs_template_from_block_uses_header_and_roots() {
         let header = BlockHeader::new(
             NonZeroU64::new(1).expect("height"),
@@ -501,12 +651,13 @@ mod tests {
             fastpq_transcripts: Vec::new(),
             fastpq_batches: Vec::new(),
         };
-        let template = public_inputs_template_from_block(&header, &witness);
+        let perm_root = [0x11; 32];
+        let template = public_inputs_template_from_block(&header, &witness, perm_root);
         let mut expected_dsid = [0u8; 16];
         expected_dsid[..8].copy_from_slice(&DataSpaceId::GLOBAL.as_u64().to_le_bytes());
         assert_eq!(template.dsid, expected_dsid);
         assert_eq!(template.slot, 123_000_000);
-        assert_eq!(template.perm_root, [0u8; 32]);
+        assert_eq!(template.perm_root, perm_root);
         assert_eq!(
             template.old_root,
             <[u8; 32]>::from(crate::sumeragi::exec::parent_state_from_witness(&witness))
@@ -518,20 +669,31 @@ mod tests {
     }
 
     #[test]
-    fn public_inputs_from_template_derives_tx_set_hash() {
+    fn public_inputs_from_template_uses_tx_set_hash() {
         let template = sample_template();
-        let entry_hash = Hash::prehashed([0x22; 32]);
-        let inputs = public_inputs_from_template(template, &entry_hash);
-        let mut payload = Vec::with_capacity(TX_SET_HASH_DOMAIN.len() + Hash::LENGTH);
-        payload.extend_from_slice(TX_SET_HASH_DOMAIN);
-        payload.extend_from_slice(entry_hash.as_ref());
-        let expected: [u8; 32] = Hash::new(payload).into();
-        assert_eq!(inputs.tx_set_hash, expected);
+        let tx_set_hash = [0x22; 32];
+        let inputs = public_inputs_from_template(template, tx_set_hash);
+        assert_eq!(inputs.tx_set_hash, tx_set_hash);
         assert_eq!(inputs.dsid, template.dsid);
         assert_eq!(inputs.slot, template.slot);
         assert_eq!(inputs.old_root, template.old_root);
         assert_eq!(inputs.new_root, template.new_root);
         assert_eq!(inputs.perm_root, template.perm_root);
+    }
+
+    #[test]
+    fn tx_set_hash_from_ordered_hashes_matches_domain() {
+        let first = Hash::prehashed([0x11; 32]);
+        let second = Hash::prehashed([0x22; 32]);
+        let tx_set_hash = tx_set_hash_from_ordered_hashes([first, second]);
+        let mut payload = Vec::with_capacity(TX_SET_HASH_DOMAIN.len() + 2 * Hash::LENGTH);
+        payload.extend_from_slice(TX_SET_HASH_DOMAIN);
+        payload.extend_from_slice(first.as_ref());
+        payload.extend_from_slice(second.as_ref());
+        let expected: [u8; 32] = Hash::new(payload).into();
+        assert_eq!(tx_set_hash, expected);
+        let reversed = tx_set_hash_from_ordered_hashes([second, first]);
+        assert_ne!(tx_set_hash, reversed);
     }
 
     #[test]
@@ -600,9 +762,13 @@ mod tests {
     #[test]
     fn batches_from_bundles_add_metadata() {
         let bundle = sample_bundle(Hash::prehashed([0x33; 32]));
-        let batches =
-            batches_from_bundles(FASTPQ_CANONICAL_PARAMETER_SET, sample_template(), [&bundle])
-                .expect("batches");
+        let batches = batches_from_bundles(
+            FASTPQ_CANONICAL_PARAMETER_SET,
+            sample_template(),
+            sample_tx_set_hash(),
+            [&bundle],
+        )
+        .expect("batches");
         assert_eq!(batches.len(), 1);
         let batch = &batches[0];
         let entry_hex = batch
@@ -626,9 +792,13 @@ mod tests {
         let bundle_a = sample_bundle(Hash::prehashed([0x41; 32]));
         let bundle_b = sample_bundle(Hash::prehashed([0x42; 32]));
         let bundles = [&bundle_a, &bundle_b];
-        let built =
-            batches_from_bundles(FASTPQ_CANONICAL_PARAMETER_SET, sample_template(), bundles)
-                .expect("batches");
+        let built = batches_from_bundles(
+            FASTPQ_CANONICAL_PARAMETER_SET,
+            sample_template(),
+            sample_tx_set_hash(),
+            bundles,
+        )
+        .expect("batches");
         let witness = ExecWitness {
             reads: Vec::new(),
             writes: Vec::new(),
@@ -724,9 +894,13 @@ mod tests {
         let bundle = sample_bundle(Hash::prehashed([0x24; 32]));
         let mut map = BTreeMap::new();
         map.insert(bundle.entry_hash, bundle.transcripts.clone());
-        let batches =
-            dto_batches_from_transcripts(FASTPQ_CANONICAL_PARAMETER_SET, sample_template(), &map)
-                .expect("dto");
+        let batches = dto_batches_from_transcripts(
+            FASTPQ_CANONICAL_PARAMETER_SET,
+            sample_template(),
+            sample_tx_set_hash(),
+            &map,
+        )
+        .expect("dto");
         assert_eq!(batches.len(), 1);
         let entry_hex = hex::encode(
             batches[0]
@@ -758,7 +932,11 @@ mod tests {
     }
 
     fn sample_public_inputs() -> FastpqPublicInputs {
-        sample_template().with_tx_set_hash([0u8; 32])
+        sample_template().with_tx_set_hash(sample_tx_set_hash())
+    }
+
+    fn sample_tx_set_hash() -> [u8; 32] {
+        [0xCC; 32]
     }
 
     fn sample_transcript() -> TransferTranscript {

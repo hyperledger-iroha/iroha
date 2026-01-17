@@ -306,8 +306,8 @@ pub enum Role {
 
 /// Canonical layout flags for Connect Norito payloads.
 ///
-/// Connect sticks to the AoS/default Norito layout (no packed structs, compact
-/// lengths, or varint offsets). Enum tags stay on the default 32‑bit
+/// Connect sticks to the AoS/default Norito layout (no packed structs, packed
+/// sequences, or compact lengths). Enum tags stay on the default 32‑bit
 /// little‑endian discriminant emitted by `norito::derive` (see `Dir`/`Role`
 /// optimisations in the derive helper).
 pub const CONNECT_LAYOUT_FLAGS: u8 = 0;

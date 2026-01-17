@@ -1046,6 +1046,9 @@ pub struct SumeragiViewChangeCauseStatus {
     /// Total view changes triggered after quorum timeouts/missing commits.
     #[norito(default)]
     pub quorum_timeout_total: u64,
+    /// Total view changes triggered after stake-quorum timeouts (NPoS only).
+    #[norito(default)]
+    pub stake_quorum_timeout_total: u64,
     /// Total view changes triggered after DA availability aborts (unused when DA is advisory).
     #[norito(default)]
     pub da_gate_total: u64,
@@ -1074,6 +1077,9 @@ pub struct SumeragiViewChangeCauseStatus {
     /// Milliseconds since UNIX epoch when a quorum-timeout cause was last recorded.
     #[norito(default)]
     pub last_quorum_timeout_timestamp_ms: u64,
+    /// Milliseconds since UNIX epoch when a stake-quorum-timeout cause was last recorded.
+    #[norito(default)]
+    pub last_stake_quorum_timeout_timestamp_ms: u64,
     /// Milliseconds since UNIX epoch when a DA-gate cause was last recorded.
     #[norito(default)]
     pub last_da_gate_timestamp_ms: u64,
@@ -1175,6 +1181,35 @@ pub struct SumeragiPeerKeyPolicyStatus {
     /// Milliseconds since UNIX epoch when the last reject was recorded.
     #[norito(default)]
     pub last_timestamp_ms: u64,
+}
+
+/// Consensus message drop/deferral counter entry.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiConsensusMessageHandlingEntry {
+    /// Message kind label (e.g., `block_created`).
+    pub kind: String,
+    /// Handling outcome label (e.g., `dropped` or `deferred`).
+    pub outcome: String,
+    /// Drop/deferral reason label.
+    pub reason: String,
+    /// Total observed for the `(kind,outcome,reason)` tuple.
+    pub total: u64,
+}
+
+/// Consensus message drop/deferral counters surfaced via Sumeragi status.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiConsensusMessageHandlingStatus {
+    /// Per-kind drop/deferral counters (best-effort).
+    #[norito(default)]
+    pub entries: Vec<SumeragiConsensusMessageHandlingEntry>,
 }
 
 /// Deterministic consensus configuration caps captured alongside status snapshots.
@@ -1541,6 +1576,9 @@ pub struct SumeragiStatusWire {
     pub block_created_hint_mismatch_total: u64,
     /// Total proposals rejected due to payload/header mismatches.
     pub block_created_proposal_mismatch_total: u64,
+    /// Consensus message drop/deferral counters (best-effort).
+    #[norito(default)]
+    pub consensus_message_handling: SumeragiConsensusMessageHandlingStatus,
     /// Total blocks rejected by the validation gate before voting.
     #[norito(default)]
     pub validation_reject_total: u64,

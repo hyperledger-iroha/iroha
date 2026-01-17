@@ -18,7 +18,7 @@ Norito es la capa de serializacion canonica de Iroha. Cada mensaje on-wire, payl
 | **Payload sin encabezado** | Codificacion determinista de valores usada para hashing/comparacion. El transporte on-wire siempre usa encabezado; los bytes sin encabezado son solo internos. | `norito::codec::{Encode, Decode}` |
 | **Compresion** | Zstd opcional (y aceleracion GPU experimental) seleccionada via el byte de compresion del encabezado. | `norito.md`, "Compression negotiation" |
 
-El registro de flags de layout (packed-struct, packed-seq, varint offsets, compact lengths) vive en `norito::header::flags`. V1 usa flags `0x00` por defecto pero acepta flags explicitos dentro de la mascara soportada; los bits desconocidos se rechazan. `norito::header::Flags` se conserva para inspeccion interna y versiones futuras.
+El registro de flags de layout (packed-struct, packed-seq, field bitset, compact lengths) vive en `norito::header::flags`. V1 usa flags `0x00` por defecto pero acepta flags explicitos dentro de la mascara soportada; los bits desconocidos se rechazan. `norito::header::Flags` se conserva para inspeccion interna y versiones futuras.
 
 ## Soporte de derive
 

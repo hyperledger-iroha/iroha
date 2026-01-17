@@ -95,20 +95,50 @@ async fn sumeragi_view_change_lock_convergence() -> Result<()> {
         .first()
         .ok_or_else(|| eyre!("no running peers available"))?
         .client();
+    wait_client.submit_blocking(Log::new(
+        Level::INFO,
+        "lock convergence view-change tick".to_string(),
+    ))?;
     let _ = wait_for_height(&wait_client, target_height, Duration::from_secs(60)).await?;
 
+    let view_change_deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let mut all_advanced = true;
+        for (idx, peer) in network.peers().iter().enumerate() {
+            if !peer.is_running() {
+                continue;
+            }
+            let status = peer.status().await?;
+            let baseline = baseline_view_changes[idx];
+            if u64::from(status.view_changes) < baseline.saturating_add(1) {
+                all_advanced = false;
+                break;
+            }
+        }
+        if all_advanced {
+            break;
+        }
+        if Instant::now() >= view_change_deadline {
+            let mut snapshots = Vec::new();
+            for (idx, peer) in network.peers().iter().enumerate() {
+                if !peer.is_running() {
+                    continue;
+                }
+                let status = peer.status().await?;
+                snapshots.push((idx, status.view_changes));
+            }
+            return Err(eyre!(
+                "timed out waiting for view change counters to advance; view_changes={snapshots:?}"
+            ));
+        }
+        sleep(Duration::from_millis(200)).await;
+    }
+
     let mut locked_entries = Vec::new();
-    for (idx, peer) in network.peers().iter().enumerate() {
+    for peer in network.peers().iter() {
         if !peer.is_running() {
             continue;
         }
-        let status = peer.status().await?;
-        let baseline = baseline_view_changes[idx];
-        ensure!(
-            u64::from(status.view_changes) >= baseline.saturating_add(1),
-            "expected peer {idx} view_changes to advance: before={baseline}, after={}",
-            status.view_changes
-        );
         let snapshot = fetch_qc_snapshot(&peer.client()).await?;
         locked_entries.push(snapshot.locked);
     }
@@ -204,21 +234,42 @@ async fn sumeragi_restart_retains_lock_convergence() -> Result<()> {
         network.peers().len()
     );
 
-    let mut post_restart_snapshots = Vec::new();
-    for peer in &running {
-        post_restart_snapshots.push(fetch_qc_snapshot(&peer.client()).await?);
-    }
-    let post_locked: Vec<QcEntry> = post_restart_snapshots
-        .iter()
-        .map(|snap| snap.locked.clone())
-        .collect();
-    assert_qc_entries_match(&post_locked, "post-restart locked QC mismatch")?;
-    if let Some(entry) = post_locked.first() {
-        ensure!(
-            entry.height >= baseline_locked_height,
-            "locked QC height regressed after restart: baseline={baseline_locked_height}, after={}",
-            entry.height
-        );
+    let post_restart_deadline = Instant::now() + Duration::from_secs(60);
+    let mut last_locked: Option<Vec<QcEntry>> = None;
+    let mut last_highest: Option<Vec<QcEntry>> = None;
+    loop {
+        let mut post_restart_snapshots = Vec::new();
+        for peer in &running {
+            post_restart_snapshots.push(fetch_qc_snapshot(&peer.client()).await?);
+        }
+        let post_locked: Vec<QcEntry> = post_restart_snapshots
+            .iter()
+            .map(|snap| snap.locked.clone())
+            .collect();
+        let post_highest: Vec<QcEntry> = post_restart_snapshots
+            .iter()
+            .map(|snap| snap.highest.clone())
+            .collect();
+        let locked_converged =
+            assert_qc_entries_match(&post_locked, "post-restart locked QC mismatch").is_ok();
+        let highest_converged =
+            assert_qc_entries_match(&post_highest, "post-restart highest QC mismatch").is_ok();
+        let locked_height_ok = post_locked
+            .first()
+            .is_some_and(|entry| entry.height >= baseline_locked_height);
+        if locked_converged && highest_converged && locked_height_ok {
+            break;
+        }
+        last_locked = Some(post_locked);
+        last_highest = Some(post_highest);
+        if Instant::now() >= post_restart_deadline {
+            let locked = last_locked.as_deref().unwrap_or_default();
+            let highest = last_highest.as_deref().unwrap_or_default();
+            return Err(eyre!(
+                "timed out waiting for post-restart QC convergence; locked={locked:?}, highest={highest:?}"
+            ));
+        }
+        sleep(Duration::from_millis(200)).await;
     }
 
     let target_height = baseline_locked_height + 1;
@@ -226,6 +277,10 @@ async fn sumeragi_restart_retains_lock_convergence() -> Result<()> {
         .first()
         .ok_or_else(|| eyre!("no running peers after restart"))?
         .client();
+    wait_client.submit_blocking(Log::new(
+        Level::INFO,
+        "lock convergence restart tick".to_string(),
+    ))?;
     let _ = wait_for_height(&wait_client, target_height, Duration::from_secs(60)).await?;
     let mut final_locked = Vec::new();
     for peer in &running {

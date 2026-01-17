@@ -18,7 +18,7 @@ Norito هو طبقة التسلسل القياسية في Iroha. كل رسالة
 | **Payload بدون رأس** | ترميز قيم حتمي يستخدم للـ hashing/المقارنة. النقل on-wire يستخدم دائما رأسا؛ البايتات بدون رأس داخلية فقط. | `norito::codec::{Encode, Decode}` |
 | **الضغط** | Zstd اختياري (وتسريع GPU تجريبي) يتم اختياره عبر بايت الضغط في الرأس. | `norito.md`, “Compression negotiation” |
 
-سجل flags الخاص بالـ layout (packed-struct, packed-seq, varint offsets, compact lengths) موجود في `norito::header::flags`. تستخدم V1 افتراضيا flags `0x00` لكنها تقبل flags صريحة ضمن القناع المدعوم؛ يتم رفض البتات غير المعروفة. يتم الاحتفاظ بـ `norito::header::Flags` للفحص الداخلي والنسخ المستقبلية.
+سجل flags الخاص بالـ layout (packed-struct, packed-seq, field bitset, compact lengths) موجود في `norito::header::flags`. تستخدم V1 افتراضيا flags `0x00` لكنها تقبل flags صريحة ضمن القناع المدعوم؛ يتم رفض البتات غير المعروفة. يتم الاحتفاظ بـ `norito::header::Flags` للفحص الداخلي والنسخ المستقبلية.
 
 ## دعم derive
 

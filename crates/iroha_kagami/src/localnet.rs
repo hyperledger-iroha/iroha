@@ -249,6 +249,22 @@ const LOCALNET_MSG_CHANNEL_CAP_BLOCKS: usize = 512;
 const LOCALNET_CONTROL_MSG_CHANNEL_CAP: usize = 1024;
 /// Capacity for the inbound P2P subscriber queue in localnet configs.
 const LOCALNET_P2P_SUBSCRIBER_QUEUE_CAP: usize = 16_384;
+/// Default consensus ingress rate cap (msgs/sec) for localnet.
+const LOCALNET_CONSENSUS_INGRESS_RATE_PER_SEC: u32 = 600;
+/// Default consensus ingress burst cap (msgs) for localnet.
+const LOCALNET_CONSENSUS_INGRESS_BURST: u32 = 600;
+/// Default consensus ingress bytes/sec cap for localnet.
+const LOCALNET_CONSENSUS_INGRESS_BYTES_PER_SEC: u32 = 134_217_728; // 128 MiB
+/// Default consensus ingress bytes burst cap for localnet.
+const LOCALNET_CONSENSUS_INGRESS_BYTES_BURST: u32 = 268_435_456; // 256 MiB
+/// Default critical consensus ingress rate cap (msgs/sec) for localnet.
+const LOCALNET_CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC: u32 = 600;
+/// Default critical consensus ingress burst cap (msgs) for localnet.
+const LOCALNET_CONSENSUS_INGRESS_CRITICAL_BURST: u32 = 600;
+/// Default critical consensus ingress bytes/sec cap for localnet.
+const LOCALNET_CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC: u32 = 268_435_456; // 256 MiB
+/// Default critical consensus ingress bytes burst cap for localnet.
+const LOCALNET_CONSENSUS_INGRESS_CRITICAL_BYTES_BURST: u32 = 536_870_912; // 512 MiB
 /// Default listener host for generated P2P and Torii services.
 pub const DEFAULT_BIND_HOST: &str = "0.0.0.0";
 /// Default advertised host for generated peers and client config.
@@ -1164,6 +1180,38 @@ fn render_peer_config(
             i64::try_from(LOCALNET_P2P_SUBSCRIBER_QUEUE_CAP)
                 .expect("LOCALNET_P2P_SUBSCRIBER_QUEUE_CAP fits i64"),
         ),
+    );
+    network.insert(
+        "consensus_ingress_rate_per_sec".into(),
+        Value::Integer(i64::from(LOCALNET_CONSENSUS_INGRESS_RATE_PER_SEC)),
+    );
+    network.insert(
+        "consensus_ingress_burst".into(),
+        Value::Integer(i64::from(LOCALNET_CONSENSUS_INGRESS_BURST)),
+    );
+    network.insert(
+        "consensus_ingress_bytes_per_sec".into(),
+        Value::Integer(i64::from(LOCALNET_CONSENSUS_INGRESS_BYTES_PER_SEC)),
+    );
+    network.insert(
+        "consensus_ingress_bytes_burst".into(),
+        Value::Integer(i64::from(LOCALNET_CONSENSUS_INGRESS_BYTES_BURST)),
+    );
+    network.insert(
+        "consensus_ingress_critical_rate_per_sec".into(),
+        Value::Integer(i64::from(LOCALNET_CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC)),
+    );
+    network.insert(
+        "consensus_ingress_critical_burst".into(),
+        Value::Integer(i64::from(LOCALNET_CONSENSUS_INGRESS_CRITICAL_BURST)),
+    );
+    network.insert(
+        "consensus_ingress_critical_bytes_per_sec".into(),
+        Value::Integer(i64::from(LOCALNET_CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC)),
+    );
+    network.insert(
+        "consensus_ingress_critical_bytes_burst".into(),
+        Value::Integer(i64::from(LOCALNET_CONSENSUS_INGRESS_CRITICAL_BYTES_BURST)),
     );
     root.insert("network".into(), Value::Table(network));
 
@@ -2208,6 +2256,67 @@ mod tests {
             parsed.network.p2p_subscriber_queue_cap.get(),
             LOCALNET_P2P_SUBSCRIBER_QUEUE_CAP,
             "localnet should raise P2P subscriber queue cap for fast pipelines"
+        );
+        assert_eq!(
+            parsed
+                .network
+                .consensus_ingress_rate_per_sec
+                .map(NonZeroU32::get),
+            Some(LOCALNET_CONSENSUS_INGRESS_RATE_PER_SEC),
+            "localnet should raise consensus ingress rate caps"
+        );
+        assert_eq!(
+            parsed.network.consensus_ingress_burst.map(NonZeroU32::get),
+            Some(LOCALNET_CONSENSUS_INGRESS_BURST),
+            "localnet should raise consensus ingress burst caps"
+        );
+        assert_eq!(
+            parsed
+                .network
+                .consensus_ingress_bytes_per_sec
+                .map(NonZeroU32::get),
+            Some(LOCALNET_CONSENSUS_INGRESS_BYTES_PER_SEC),
+            "localnet should raise consensus ingress bytes caps"
+        );
+        assert_eq!(
+            parsed
+                .network
+                .consensus_ingress_bytes_burst
+                .map(NonZeroU32::get),
+            Some(LOCALNET_CONSENSUS_INGRESS_BYTES_BURST),
+            "localnet should raise consensus ingress bytes burst caps"
+        );
+        assert_eq!(
+            parsed
+                .network
+                .consensus_ingress_critical_rate_per_sec
+                .map(NonZeroU32::get),
+            Some(LOCALNET_CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC),
+            "localnet should raise critical consensus ingress rate caps"
+        );
+        assert_eq!(
+            parsed
+                .network
+                .consensus_ingress_critical_burst
+                .map(NonZeroU32::get),
+            Some(LOCALNET_CONSENSUS_INGRESS_CRITICAL_BURST),
+            "localnet should raise critical consensus ingress burst caps"
+        );
+        assert_eq!(
+            parsed
+                .network
+                .consensus_ingress_critical_bytes_per_sec
+                .map(NonZeroU32::get),
+            Some(LOCALNET_CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC),
+            "localnet should raise critical consensus ingress bytes caps"
+        );
+        assert_eq!(
+            parsed
+                .network
+                .consensus_ingress_critical_bytes_burst
+                .map(NonZeroU32::get),
+            Some(LOCALNET_CONSENSUS_INGRESS_CRITICAL_BYTES_BURST),
+            "localnet should raise critical consensus ingress bytes burst caps"
         );
         let (block_ms, commit_ms) = resolve_localnet_pipeline_times(None, None);
         let block_ms = block_ms.expect("localnet defaults provide block_time_ms");

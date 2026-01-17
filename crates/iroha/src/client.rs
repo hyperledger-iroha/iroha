@@ -1605,6 +1605,22 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
         "last_timestamp_ms".into(),
         Value::from(wire.validation_rejects.last_timestamp_ms),
     );
+    let consensus_message_handling_entries = Value::Array(
+        wire.consensus_message_handling
+            .entries
+            .iter()
+            .map(|entry| {
+                let mut map = Map::new();
+                map.insert("kind".into(), Value::from(entry.kind.clone()));
+                map.insert("outcome".into(), Value::from(entry.outcome.clone()));
+                map.insert("reason".into(), Value::from(entry.reason.clone()));
+                map.insert("total".into(), Value::from(entry.total));
+                Value::Object(map)
+            })
+            .collect(),
+    );
+    let mut consensus_message_handling = Map::new();
+    consensus_message_handling.insert("entries".into(), consensus_message_handling_entries);
 
     let mut block_sync_roster = Map::new();
     block_sync_roster.insert(
@@ -2213,6 +2229,10 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
     root.insert(
         "block_created_proposal_mismatch_total".into(),
         Value::from(wire.block_created_proposal_mismatch_total),
+    );
+    root.insert(
+        "consensus_message_handling".into(),
+        Value::Object(consensus_message_handling),
     );
     root.insert(
         "validation_reject_total".into(),
@@ -10098,18 +10118,20 @@ mod tests {
         time::Duration,
     };
 
-    use iroha_crypto::{Hash, HashOf};
+    use iroha_crypto::{Hash, HashOf, KeyPair};
     use iroha_data_model::{
         block::{
             BlockHeader,
             consensus::{
                 CertPhase, LaneBlockCommitment, LaneLiquidityProfile, LaneSettlementReceipt,
                 LaneSwapMetadata, LaneVolatilityClass, PERMISSIONED_TAG,
-                SumeragiBlockSyncRosterStatus, SumeragiDaGateReason, SumeragiDaGateSatisfaction,
-                SumeragiDaGateStatus, SumeragiKuraStoreStatus, SumeragiMembershipMismatchStatus,
-                SumeragiMembershipStatus, SumeragiMissingBlockFetchStatus,
-                SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcStatus, SumeragiQcEntry,
-                SumeragiQcSnapshot, SumeragiRbcMismatchStatus, SumeragiRbcStoreStatus,
+                SumeragiBlockSyncRosterStatus, SumeragiConsensusMessageHandlingEntry,
+                SumeragiConsensusMessageHandlingStatus, SumeragiDaGateReason,
+                SumeragiDaGateSatisfaction, SumeragiDaGateStatus, SumeragiKuraStoreStatus,
+                SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
+                SumeragiMissingBlockFetchStatus, SumeragiPeerKeyPolicyStatus,
+                SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcSnapshot,
+                SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus, SumeragiRbcStoreStatus,
                 SumeragiStatusWire, SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
             },
         },
@@ -10224,6 +10246,14 @@ mod tests {
             256,
         )
         .expect("construct lane relay envelope");
+        let mismatch_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let mismatch_entry = SumeragiRbcMismatchEntry {
+            peer_id: mismatch_peer,
+            chunk_digest_mismatch_total: 3,
+            payload_hash_mismatch_total: 2,
+            chunk_root_mismatch_total: 1,
+            last_timestamp_ms: 1_724_000_000_123,
+        };
         let status = SumeragiStatusWire {
             mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_string(),
             staged_mode_tag: None,
@@ -10257,6 +10287,14 @@ mod tests {
             block_created_dropped_by_lock_total: 1,
             block_created_hint_mismatch_total: 2,
             block_created_proposal_mismatch_total: 0,
+            consensus_message_handling: SumeragiConsensusMessageHandlingStatus {
+                entries: vec![SumeragiConsensusMessageHandlingEntry {
+                    kind: "block_created".to_owned(),
+                    outcome: "dropped".to_owned(),
+                    reason: "hint_mismatch".to_owned(),
+                    total: 2,
+                }],
+            },
             validation_reject_total: 0,
             validation_reject_reason: None,
             validation_rejects: SumeragiValidationRejectStatus::default(),
@@ -10303,7 +10341,9 @@ mod tests {
                 evictions_total: 0,
                 recent_evictions: Vec::new(),
             },
-            rbc_mismatch: SumeragiRbcMismatchStatus::default(),
+            rbc_mismatch: SumeragiRbcMismatchStatus {
+                entries: vec![mismatch_entry.clone()],
+            },
             pending_rbc: SumeragiPendingRbcStatus::default(),
             tx_queue_depth: 7,
             tx_queue_capacity: 20,
@@ -12130,6 +12170,7 @@ mod tests {
             block_created_dropped_by_lock_total: 0,
             block_created_hint_mismatch_total: 0,
             block_created_proposal_mismatch_total: 0,
+            consensus_message_handling: SumeragiConsensusMessageHandlingStatus::default(),
             validation_reject_total: 0,
             validation_reject_reason: None,
             validation_rejects: SumeragiValidationRejectStatus::default(),
@@ -12367,6 +12408,15 @@ mod tests {
             256,
         )
         .expect("construct lane relay envelope");
+        let mismatch_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let mismatch_peer_id = mismatch_peer.to_string();
+        let mismatch_entry = SumeragiRbcMismatchEntry {
+            peer_id: mismatch_peer,
+            chunk_digest_mismatch_total: 3,
+            payload_hash_mismatch_total: 2,
+            chunk_root_mismatch_total: 1,
+            last_timestamp_ms: 1_724_000_000_123,
+        };
         let status = SumeragiStatusWire {
             mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_string(),
             staged_mode_tag: None,
@@ -12400,11 +12450,22 @@ mod tests {
             block_created_dropped_by_lock_total: 1,
             block_created_hint_mismatch_total: 2,
             block_created_proposal_mismatch_total: 0,
+            consensus_message_handling: SumeragiConsensusMessageHandlingStatus {
+                entries: vec![SumeragiConsensusMessageHandlingEntry {
+                    kind: "block_sync_update".to_owned(),
+                    outcome: "deferred".to_owned(),
+                    reason: "signature_mismatch_deferred".to_owned(),
+                    total: 4,
+                }],
+            },
             validation_reject_total: 0,
             validation_reject_reason: None,
             validation_rejects: SumeragiValidationRejectStatus::default(),
             peer_key_policy: SumeragiPeerKeyPolicyStatus::default(),
-            block_sync_roster: SumeragiBlockSyncRosterStatus::default(),
+            block_sync_roster: SumeragiBlockSyncRosterStatus {
+                drop_unsolicited_share_blocks_total: 4,
+                ..Default::default()
+            },
             pacemaker_backpressure_deferrals_total: 6,
             commit_pipeline_tick_total: 0,
             da_reschedule_total: 0,
@@ -12437,7 +12498,9 @@ mod tests {
                 evictions_total: 0,
                 recent_evictions: Vec::new(),
             },
-            rbc_mismatch: SumeragiRbcMismatchStatus::default(),
+            rbc_mismatch: SumeragiRbcMismatchStatus {
+                entries: vec![mismatch_entry],
+            },
             pending_rbc: SumeragiPendingRbcStatus::default(),
             tx_queue_depth: 7,
             tx_queue_capacity: 20,
@@ -12536,6 +12599,42 @@ mod tests {
                 "{key} mismatch"
             );
         }
+        let handling = root
+            .get("consensus_message_handling")
+            .and_then(Value::as_object)
+            .expect("consensus_message_handling object");
+        let handling_entries = handling
+            .get("entries")
+            .and_then(Value::as_array)
+            .expect("consensus_message_handling entries");
+        assert_eq!(
+            handling_entries.len(),
+            1,
+            "expected one consensus_message_handling entry"
+        );
+        let handling_entry = handling_entries[0]
+            .as_object()
+            .expect("consensus_message_handling entry object");
+        assert_eq!(
+            handling_entry.get("kind").and_then(Value::as_str),
+            Some("block_sync_update"),
+            "consensus_message_handling kind mismatch"
+        );
+        assert_eq!(
+            handling_entry.get("outcome").and_then(Value::as_str),
+            Some("deferred"),
+            "consensus_message_handling outcome mismatch"
+        );
+        assert_eq!(
+            handling_entry.get("reason").and_then(Value::as_str),
+            Some("signature_mismatch_deferred"),
+            "consensus_message_handling reason mismatch"
+        );
+        assert_eq!(
+            handling_entry.get("total").and_then(Value::as_u64),
+            Some(4),
+            "consensus_message_handling total mismatch"
+        );
         assert_eq!(
             root.get("lane_governance_sealed_total")
                 .and_then(Value::as_u64),
@@ -12564,6 +12663,52 @@ mod tests {
                 .and_then(Value::as_u64),
             Some(4),
             "block_sync roster drop_unsolicited_share_blocks_total mismatch"
+        );
+
+        let rbc_mismatch = root
+            .get("rbc_mismatch")
+            .and_then(Value::as_object)
+            .expect("rbc_mismatch object");
+        let mismatch_entries = rbc_mismatch
+            .get("entries")
+            .and_then(Value::as_array)
+            .expect("rbc_mismatch entries array");
+        assert_eq!(mismatch_entries.len(), 1, "expected one rbc_mismatch entry");
+        let mismatch_entry = mismatch_entries[0]
+            .as_object()
+            .expect("rbc_mismatch entry object");
+        assert_eq!(
+            mismatch_entry.get("peer_id").and_then(Value::as_str),
+            Some(mismatch_peer_id.as_str()),
+            "rbc_mismatch peer_id mismatch"
+        );
+        assert_eq!(
+            mismatch_entry
+                .get("chunk_digest_mismatch_total")
+                .and_then(Value::as_u64),
+            Some(3),
+            "rbc_mismatch chunk_digest_mismatch_total mismatch"
+        );
+        assert_eq!(
+            mismatch_entry
+                .get("payload_hash_mismatch_total")
+                .and_then(Value::as_u64),
+            Some(2),
+            "rbc_mismatch payload_hash_mismatch_total mismatch"
+        );
+        assert_eq!(
+            mismatch_entry
+                .get("chunk_root_mismatch_total")
+                .and_then(Value::as_u64),
+            Some(1),
+            "rbc_mismatch chunk_root_mismatch_total mismatch"
+        );
+        assert_eq!(
+            mismatch_entry
+                .get("last_timestamp_ms")
+                .and_then(Value::as_u64),
+            Some(1_724_000_000_123),
+            "rbc_mismatch last_timestamp_ms mismatch"
         );
 
         let lane_governance = root

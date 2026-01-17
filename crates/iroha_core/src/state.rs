@@ -4,7 +4,7 @@ use std::{
     cell::OnceCell,
     collections::{BTreeMap, BTreeSet, VecDeque},
     fmt::Write,
-    mem,
+    io, mem,
     num::{NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
     sync::{
@@ -4069,6 +4069,8 @@ pub struct State {
     pub pipeline: iroha_config::parameters::actual::Pipeline,
     /// Oracle aggregation configuration.
     pub oracle: iroha_config::parameters::actual::Oracle,
+    /// Streaming configuration snapshot (spool paths, codec defaults).
+    streaming: iroha_config::parameters::actual::Streaming,
     /// Cryptography configuration (enabled algorithms, defaults).
     pub crypto: parking_lot::RwLock<Arc<iroha_config::parameters::actual::Crypto>>,
     /// Nexus configuration snapshot (lanes, fusion, DA policies).
@@ -4153,6 +4155,10 @@ pub struct StateBlock<'state> {
     settlement_accumulator: crate::settlement::SettlementAccumulator,
     /// Transfer transcripts recorded for each transaction hash (for FASTPQ witness plumbing).
     fastpq_transcripts: BTreeMap<Hash, Vec<iroha_data_model::fastpq::TransferTranscript>>,
+    /// Cached transaction set hash for FASTPQ public inputs.
+    fastpq_tx_set_hash: Option<[u8; 32]>,
+    /// Dataspace assignments for FASTPQ entry hashes in this block.
+    fastpq_entry_dataspaces: BTreeMap<Hash, DataSpaceId>,
     /// AXT envelope records captured while executing this block.
     axt_envelopes: Vec<AxtEnvelopeRecord>,
     /// Captured execution witness for the block (SBV‑AM).
@@ -11309,6 +11315,20 @@ impl State {
         let settlement_cfg = iroha_config::parameters::actual::Settlement::default();
         let settlement_engine = SettlementEngine::from_router_config(&settlement_cfg.router);
         let nexus = iroha_config::parameters::actual::Nexus::default();
+        let streaming = iroha_config::parameters::actual::Streaming {
+            key_material: iroha_crypto::streaming::StreamingKeyMaterial::new(
+                iroha_crypto::KeyPair::from_seed(vec![0u8; 32], Algorithm::Ed25519),
+            )
+            .expect("streaming key material"),
+            session_store_dir: PathBuf::from(
+                iroha_config::parameters::defaults::streaming::SESSION_STORE_DIR,
+            ),
+            feature_bits: iroha_config::parameters::defaults::streaming::FEATURE_BITS,
+            soranet: iroha_config::parameters::actual::StreamingSoranet::from_defaults(),
+            soravpn: iroha_config::parameters::actual::StreamingSoravpn::from_defaults(),
+            sync: iroha_config::parameters::actual::StreamingSync::from_defaults(),
+            codec: iroha_config::parameters::actual::StreamingCodec::from_defaults(),
+        };
         let da_shard_cursors = parking_lot::RwLock::new(DaShardCursorIndex::default());
         let store_root = kura.store_root();
         let roster_retention = kura.block_sync_roster_retention();
@@ -11421,6 +11441,7 @@ impl State {
                         iroha_config::parameters::defaults::pipeline::AMX_PER_SYSCALL_NS,
             },
             oracle: default_oracle(),
+            streaming,
             nexus: parking_lot::RwLock::new(nexus),
             tiered_backend: parking_lot::Mutex::new(TieredStateBackend::default()),
             fraud_monitoring: default_fraud_monitoring_cfg(),
@@ -11941,6 +11962,8 @@ impl State {
             pre_block_npos_seed,
             settlement_accumulator: crate::settlement::SettlementAccumulator::default(),
             fastpq_transcripts: BTreeMap::new(),
+            fastpq_tx_set_hash: None,
+            fastpq_entry_dataspaces: BTreeMap::new(),
             axt_envelopes: Vec::new(),
             touched_lanes: BTreeSet::new(),
             exec_witness: None,
@@ -12327,6 +12350,8 @@ impl State {
             pre_block_npos_seed,
             settlement_accumulator: crate::settlement::SettlementAccumulator::default(),
             fastpq_transcripts: BTreeMap::new(),
+            fastpq_tx_set_hash: None,
+            fastpq_entry_dataspaces: BTreeMap::new(),
             axt_envelopes: Vec::new(),
             touched_lanes: BTreeSet::new(),
             exec_witness: None,
@@ -13148,6 +13173,11 @@ impl State {
         self.oracle = oracle;
     }
 
+    /// Update streaming configuration snapshot.
+    pub fn set_streaming(&mut self, streaming: iroha_config::parameters::actual::Streaming) {
+        self.streaming = streaming;
+    }
+
     /// Update settlement configuration snapshot and rebuild the router engine.
     pub fn set_settlement(&mut self, settlement: iroha_config::parameters::actual::Settlement) {
         self.settlement = settlement;
@@ -13385,6 +13415,178 @@ impl State {
         self.merge_ledger.reconfigure_cache(sanitized);
     }
 
+    fn enforce_nexus_storage_budget(&self) {
+        let nexus = self.nexus.read();
+        if !nexus.enabled {
+            return;
+        }
+        let max_disk = nexus.storage.max_disk_usage_bytes.get();
+        if max_disk == 0 {
+            return;
+        }
+        drop(nexus);
+
+        let soranet_spool_dir = self.streaming.soranet.provision_spool_dir.clone();
+        let soravpn_spool_dir = self.streaming.soravpn.provision_spool_dir.clone();
+
+        let mut kura_used = match self.kura.disk_usage_bytes() {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                warn!(?err, "nexus storage eviction: failed to measure Kura usage");
+                return;
+            }
+        };
+
+        let mut soranet_used = match dir_size(&soranet_spool_dir) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    path = %soranet_spool_dir.display(),
+                    "nexus storage eviction: failed to measure SoraNet spool usage"
+                );
+                0
+            }
+        };
+        let mut soravpn_used = match dir_size(&soravpn_spool_dir) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    path = %soravpn_spool_dir.display(),
+                    "nexus storage eviction: failed to measure SoraVPN spool usage"
+                );
+                0
+            }
+        };
+
+        let mut cold_used = {
+            let backend = self.tiered_backend.lock();
+            match backend.cold_store_bytes() {
+                Ok(bytes) => bytes.unwrap_or(0),
+                Err(err) => {
+                    warn!(?err, "tiered-state: failed to measure cold store bytes");
+                    0
+                }
+            }
+        };
+
+        let mut total = kura_used
+            .saturating_add(cold_used)
+            .saturating_add(soranet_used)
+            .saturating_add(soravpn_used);
+        if total <= max_disk {
+            return;
+        }
+        let mut excess = total.saturating_sub(max_disk);
+
+        if excess > 0 && !soranet_spool_dir.as_os_str().is_empty() {
+            match prune_spool_dir(&soranet_spool_dir, excess) {
+                Ok((remaining, freed)) => {
+                    excess = remaining;
+                    soranet_used = soranet_used.saturating_sub(freed);
+                    #[cfg(feature = "telemetry")]
+                    if freed > 0 {
+                        self.telemetry.inc_storage_budget_exceeded("soranet_spool");
+                    }
+                }
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        path = %soranet_spool_dir.display(),
+                        "nexus storage eviction: failed to prune SoraNet spool"
+                    );
+                }
+            }
+        }
+
+        if excess > 0 && !soravpn_spool_dir.as_os_str().is_empty() {
+            match prune_spool_dir(&soravpn_spool_dir, excess) {
+                Ok((remaining, freed)) => {
+                    excess = remaining;
+                    soravpn_used = soravpn_used.saturating_sub(freed);
+                    #[cfg(feature = "telemetry")]
+                    if freed > 0 {
+                        self.telemetry.inc_storage_budget_exceeded("soravpn_spool");
+                    }
+                }
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        path = %soravpn_spool_dir.display(),
+                        "nexus storage eviction: failed to prune SoraVPN spool"
+                    );
+                }
+            }
+        }
+
+        if excess > 0 && cold_used > 0 {
+            let target = cold_used.saturating_sub(excess);
+            let backend = self.tiered_backend.lock();
+            if let Err(err) = backend.prune_cold_snapshots_to_bytes(target) {
+                warn!(
+                    ?err,
+                    "tiered-state: failed to prune cold snapshots for budget"
+                );
+            }
+            match backend.cold_store_bytes() {
+                Ok(bytes) => {
+                    let updated = bytes.unwrap_or(0);
+                    if updated < cold_used {
+                        #[cfg(feature = "telemetry")]
+                        self.telemetry.inc_storage_budget_exceeded("wsv_cold");
+                    }
+                    cold_used = updated;
+                }
+                Err(err) => {
+                    warn!(?err, "tiered-state: failed to remeasure cold store bytes");
+                }
+            }
+            total = kura_used
+                .saturating_add(cold_used)
+                .saturating_add(soranet_used)
+                .saturating_add(soravpn_used);
+            excess = total.saturating_sub(max_disk);
+        }
+
+        if excess > 0 {
+            let before = kura_used;
+            if self.kura.purge_retired_segments() {
+                match self.kura.disk_usage_bytes() {
+                    Ok(bytes) => kura_used = bytes,
+                    Err(err) => {
+                        warn!(
+                            ?err,
+                            "nexus storage eviction: failed to remeasure Kura usage"
+                        );
+                    }
+                }
+                if kura_used < before {
+                    #[cfg(feature = "telemetry")]
+                    self.telemetry.inc_storage_budget_exceeded("kura");
+                }
+            }
+            total = kura_used
+                .saturating_add(cold_used)
+                .saturating_add(soranet_used)
+                .saturating_add(soravpn_used);
+            excess = total.saturating_sub(max_disk);
+        }
+
+        if excess > 0 {
+            // TODO: evict active block bodies once DA rehydration is available.
+            warn!(
+                excess,
+                max_disk,
+                kura_used,
+                cold_used,
+                soranet_used,
+                soravpn_used,
+                "nexus storage eviction could not reclaim enough space"
+            );
+        }
+    }
+
     /// Update governance settings (default VKs and policy tunables) using loaded configuration.
     pub fn set_gov(&mut self, gov: iroha_config::parameters::actual::Governance) {
         for (provider, owner) in &gov.sorafs_provider_owners {
@@ -13406,6 +13608,95 @@ impl State {
         }
         self.gov = gov;
     }
+}
+
+struct SpoolEntry {
+    key: String,
+    path: PathBuf,
+    size: u64,
+}
+
+fn spool_entries_sorted(spool_dir: &Path) -> io::Result<Vec<SpoolEntry>> {
+    if spool_dir.as_os_str().is_empty() || !spool_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut files = Vec::new();
+    let mut stack = vec![spool_dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            let path = entry.path();
+            if file_type.is_dir() {
+                stack.push(path);
+            } else if file_type.is_file() {
+                if path.extension().and_then(|ext| ext.to_str()) == Some("tmp") {
+                    continue;
+                }
+                let size = entry.metadata()?.len();
+                let rel = path.strip_prefix(spool_dir).unwrap_or(&path);
+                let mut key = String::new();
+                for (idx, component) in rel.components().enumerate() {
+                    if idx > 0 {
+                        key.push('/');
+                    }
+                    key.push_str(&component.as_os_str().to_string_lossy());
+                }
+                files.push(SpoolEntry { key, path, size });
+            }
+        }
+    }
+    files.sort_by(|a, b| a.key.cmp(&b.key));
+    Ok(files)
+}
+
+fn prune_spool_dir(spool_dir: &Path, mut bytes_to_free: u64) -> io::Result<(u64, u64)> {
+    if bytes_to_free == 0 {
+        return Ok((0, 0));
+    }
+    let entries = spool_entries_sorted(spool_dir)?;
+    let mut freed = 0u64;
+    for entry in entries {
+        if bytes_to_free == 0 {
+            break;
+        }
+        match std::fs::remove_file(&entry.path) {
+            Ok(()) => {
+                freed = freed.saturating_add(entry.size);
+                bytes_to_free = bytes_to_free.saturating_sub(entry.size);
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => {
+                warn!(
+                    ?err,
+                    path = %entry.path.display(),
+                    "failed to remove spool file during eviction"
+                );
+            }
+        }
+    }
+    Ok((bytes_to_free, freed))
+}
+
+fn dir_size(path: &Path) -> io::Result<u64> {
+    if path.as_os_str().is_empty() || !path.exists() {
+        return Ok(0);
+    }
+    let mut total = 0u64;
+    let mut stack = vec![path.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            let entry_path = entry.path();
+            if file_type.is_dir() {
+                stack.push(entry_path);
+            } else if file_type.is_file() {
+                total = total.saturating_add(entry.metadata()?.len());
+            }
+        }
+    }
+    Ok(total)
 }
 
 struct LaneTopologyDiff<'a> {
@@ -14232,7 +14523,7 @@ impl StateReadOnlyWithTransactions for StateBlock<'_> {
 }
 
 impl<'state> StateBlock<'state> {
-    /// Number of committed fragments (transactions, triggers, deterministic updates) recorded in this block.
+    /// Number of committed fragments (transactions and triggers) recorded in this block.
     #[must_use]
     pub fn committed_fragment_count(&self) -> usize {
         self.committed_fragments
@@ -14424,16 +14715,63 @@ impl<'state> StateBlock<'state> {
         mem::take(&mut self.fastpq_transcripts)
     }
 
+    /// Cache the transaction set hash for FASTPQ public inputs.
+    pub(crate) fn set_fastpq_tx_set_hash(&mut self, tx_set_hash: [u8; 32]) {
+        self.fastpq_tx_set_hash = Some(tx_set_hash);
+    }
+
+    /// Cache per-entry dataspace ids for FASTPQ public inputs.
+    pub(crate) fn set_fastpq_entry_dataspaces(&mut self, entries: BTreeMap<Hash, DataSpaceId>) {
+        self.fastpq_entry_dataspaces = entries;
+    }
+
     /// Capture the execution witness accumulated during this block's execution.
     pub fn capture_exec_witness(&mut self) {
         if self.exec_witness.is_none() {
             let mut witness = crate::sumeragi::witness::drain_exec_witness();
+            let entry_dsid_bytes: BTreeMap<Hash, [u8; 16]> = self
+                .fastpq_entry_dataspaces
+                .iter()
+                .map(|(hash, dsid)| (*hash, crate::fastpq::dataspace_id_bytes(*dsid)))
+                .collect();
+            let tx_set_hash = if witness.fastpq_transcripts.is_empty()
+                && witness.fastpq_batches.is_empty()
+            {
+                None
+            } else {
+                Some(self.fastpq_tx_set_hash.unwrap_or_else(|| {
+                    if witness.fastpq_transcripts.is_empty() {
+                        [0u8; 32]
+                    } else {
+                        let mut entry_hashes: Vec<Hash> = witness
+                            .fastpq_transcripts
+                            .iter()
+                            .map(|bundle| bundle.entry_hash)
+                            .collect();
+                        entry_hashes.sort_unstable();
+                        crate::fastpq::tx_set_hash_from_ordered_hashes(entry_hashes.iter().copied())
+                    }
+                }))
+            };
+            let perm_root =
+                if witness.fastpq_transcripts.is_empty() && witness.fastpq_batches.is_empty() {
+                    None
+                } else {
+                    Some(crate::fastpq::permission_table_root(
+                        self.world.roles.iter(),
+                    ))
+                };
             if witness.fastpq_batches.is_empty() && !witness.fastpq_transcripts.is_empty() {
-                let template =
-                    crate::fastpq::public_inputs_template_from_block(&self._curr_block, &witness);
+                let template = crate::fastpq::public_inputs_template_from_block(
+                    &self._curr_block,
+                    &witness,
+                    perm_root.unwrap_or([0u8; 32]),
+                );
+                let tx_set_hash = tx_set_hash.unwrap_or([0u8; 32]);
                 match crate::fastpq::batches_from_bundles(
                     crate::fastpq::FASTPQ_CANONICAL_PARAMETER_SET,
                     template,
+                    tx_set_hash,
                     witness.fastpq_transcripts.iter(),
                 ) {
                     Ok(batches) => {
@@ -14448,6 +14786,30 @@ impl<'state> StateBlock<'state> {
                             "failed to build FASTPQ batches for exec witness"
                         );
                     }
+                }
+            }
+            if !entry_dsid_bytes.is_empty()
+                && !witness.fastpq_batches.is_empty()
+                && !witness.fastpq_transcripts.is_empty()
+            {
+                for (bundle, batch) in witness
+                    .fastpq_transcripts
+                    .iter()
+                    .zip(witness.fastpq_batches.iter_mut())
+                {
+                    if let Some(dsid) = entry_dsid_bytes.get(&bundle.entry_hash) {
+                        batch.public_inputs.dsid = *dsid;
+                    }
+                }
+            }
+            if let Some(tx_set_hash) = tx_set_hash {
+                for batch in &mut witness.fastpq_batches {
+                    batch.public_inputs.tx_set_hash = tx_set_hash;
+                }
+            }
+            if let Some(perm_root) = perm_root {
+                for batch in &mut witness.fastpq_batches {
+                    batch.public_inputs.perm_root = perm_root;
                 }
             }
             self.exec_witness = Some(witness);
@@ -14670,6 +15032,7 @@ impl<'state> StateBlock<'state> {
                 }
             }
         }
+        state_ref.enforce_nexus_storage_budget();
         Ok(())
     }
 
@@ -14757,21 +15120,46 @@ impl<'state> StateBlock<'state> {
             .mutate_vec(|vec| *vec = prev_topology);
         let checkpoint_topology = topology.clone();
         let mut world_peers: Vec<PeerId> = self.world.peers().iter().cloned().collect();
-        let next_topology = if world_peers.is_empty() {
-            Vec::new()
-        } else {
-            if topology.is_empty() {
+        let roster_source = if checkpoint_topology.is_empty() {
+            if world_peers.is_empty() {
+                Vec::new()
+            } else {
                 warn!(
                     height = block_height,
                     block = %block_hash,
                     "commit topology missing during block apply; deriving from world peers"
                 );
                 world_peers.sort();
+                world_peers
             }
-            // Always derive commit topology from the current world peer set to avoid
+        } else if world_peers.is_empty() {
+            checkpoint_topology.clone()
+        } else {
+            let checkpoint_set: BTreeSet<_> = checkpoint_topology.iter().cloned().collect();
+            let mut missing: Vec<_> = world_peers
+                .into_iter()
+                .filter(|peer| !checkpoint_set.contains(peer))
+                .collect();
+            if !missing.is_empty() {
+                missing.sort();
+                warn!(
+                    height = block_height,
+                    block = %block_hash,
+                    missing = missing.len(),
+                    "commit topology missing peers observed in world state; appending"
+                );
+            }
+            let mut combined = checkpoint_topology.clone();
+            combined.extend(missing);
+            combined
+        };
+        let next_topology = if roster_source.is_empty() {
+            Vec::new()
+        } else {
+            // Always derive commit topology from a deterministic roster source to avoid
             // clearing the roster when commit QC metadata is unavailable.
-            let mut topo = crate::sumeragi::network_topology::Topology::new(world_peers.clone());
-            topo.block_committed(world_peers, block_hash);
+            let mut topo = crate::sumeragi::network_topology::Topology::new(roster_source.clone());
+            topo.block_committed(roster_source, block_hash);
             topo.as_ref().to_vec()
         };
         self.commit_topology.mutate_vec(|vec| *vec = next_topology);
@@ -15357,6 +15745,225 @@ mod transfer_transcript_tests {
             crate::fastpq::authority_digest(&ALICE_ID)
         );
         assert!(transcript.poseidon_preimage_digest.is_none());
+    }
+}
+
+#[cfg(test)]
+mod fastpq_tx_set_hash_tests {
+    use std::{borrow::Cow, collections::BTreeSet, time::Duration};
+
+    use iroha_crypto::Hash;
+    use iroha_data_model::{
+        ChainId,
+        account::Account,
+        block::BlockHeader,
+        domain::Domain,
+        fastpq::{TransferDeltaTranscript, TransferTranscript},
+        isi::Log,
+        nexus::DataSpaceId,
+        permission::Permission,
+        role::{Role, RoleId},
+        transaction::TransactionBuilder,
+    };
+    use iroha_logger::Level;
+    use iroha_primitives::{json::Json, numeric::Numeric};
+    use iroha_test_samples::{ALICE_ID, BOB_ID, gen_account_in};
+    use nonzero_ext::nonzero;
+
+    use super::*;
+    use crate::{
+        block::BlockBuilder, kura::Kura, query::store::LiveQueryStore, tx::AcceptedTransaction,
+    };
+
+    #[test]
+    fn validate_and_record_transactions_sets_tx_set_hash() {
+        let (authority, keypair) = gen_account_in("wonderland");
+        let domain_id = "wonderland".parse().expect("valid domain");
+        let domain = Domain::new(domain_id).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let world = World::with([domain], [account], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new(world, kura, query);
+
+        let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
+            .parse()
+            .expect("valid chain id");
+        let mut builder = TransactionBuilder::new(chain_id.clone(), authority.clone());
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx1 = builder
+            .with_instructions([Log::new(Level::INFO, "alpha".to_owned())])
+            .sign(keypair.private_key());
+        let mut builder = TransactionBuilder::new(chain_id, authority);
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx2 = builder
+            .with_instructions([Log::new(Level::INFO, "beta".to_owned())])
+            .sign(keypair.private_key());
+
+        let accepted = vec![
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx1.clone())),
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx2.clone())),
+        ];
+        let new_block = BlockBuilder::new(accepted)
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let header = new_block.header();
+        let mut state_block = state.block(header);
+        let _ = new_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+
+        let mut entry_hashes = vec![tx1.hash_as_entrypoint(), tx2.hash_as_entrypoint()];
+        entry_hashes.sort_unstable();
+        let expected = crate::fastpq::tx_set_hash_from_ordered_hashes(entry_hashes.iter().copied());
+        assert_eq!(state_block.fastpq_tx_set_hash, Some(expected));
+    }
+
+    #[test]
+    fn capture_exec_witness_uses_cached_tx_set_hash() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let _guard = crate::sumeragi::witness::exec_witness_guard();
+        crate::sumeragi::witness::start_block();
+
+        let tx_set_hash = [0xEE; 32];
+        state_block.set_fastpq_tx_set_hash(tx_set_hash);
+
+        let delta = TransferDeltaTranscript {
+            from_account: (*ALICE_ID).clone(),
+            to_account: (*BOB_ID).clone(),
+            asset_definition: "rose#wonderland".parse().expect("valid asset id"),
+            amount: Numeric::from(10u32),
+            from_balance_before: Numeric::from(100u32),
+            from_balance_after: Numeric::from(90u32),
+            to_balance_before: Numeric::from(0u32),
+            to_balance_after: Numeric::from(10u32),
+            from_merkle_proof: None,
+            to_merkle_proof: None,
+        };
+        let batch_hash = Hash::prehashed([0x11; 32]);
+        let transcript = TransferTranscript {
+            batch_hash,
+            deltas: vec![delta.clone()],
+            authority_digest: crate::fastpq::authority_digest(&ALICE_ID),
+            poseidon_preimage_digest: Some(crate::fastpq::poseidon_preimage_digest(
+                &delta,
+                &batch_hash,
+            )),
+        };
+        crate::sumeragi::witness::record_fastpq_transcript(&transcript);
+
+        state_block.capture_exec_witness();
+        let witness = state_block.take_exec_witness().expect("exec witness");
+        assert_eq!(witness.fastpq_batches.len(), 1);
+        assert_eq!(
+            witness.fastpq_batches[0].public_inputs.tx_set_hash,
+            tx_set_hash
+        );
+    }
+
+    #[test]
+    fn capture_exec_witness_threads_entry_dataspace_dsid() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let _guard = crate::sumeragi::witness::exec_witness_guard();
+        crate::sumeragi::witness::start_block();
+
+        let delta = TransferDeltaTranscript {
+            from_account: (*ALICE_ID).clone(),
+            to_account: (*BOB_ID).clone(),
+            asset_definition: "rose#wonderland".parse().expect("valid asset id"),
+            amount: Numeric::from(10u32),
+            from_balance_before: Numeric::from(100u32),
+            from_balance_after: Numeric::from(90u32),
+            to_balance_before: Numeric::from(0u32),
+            to_balance_after: Numeric::from(10u32),
+            from_merkle_proof: None,
+            to_merkle_proof: None,
+        };
+        let batch_hash = Hash::prehashed([0x22; 32]);
+        let transcript = TransferTranscript {
+            batch_hash,
+            deltas: vec![delta.clone()],
+            authority_digest: crate::fastpq::authority_digest(&ALICE_ID),
+            poseidon_preimage_digest: Some(crate::fastpq::poseidon_preimage_digest(
+                &delta,
+                &batch_hash,
+            )),
+        };
+        crate::sumeragi::witness::record_fastpq_transcript(&transcript);
+
+        let dsid = DataSpaceId::new(7);
+        let mut entries = BTreeMap::new();
+        entries.insert(batch_hash, dsid);
+        state_block.set_fastpq_entry_dataspaces(entries);
+
+        state_block.capture_exec_witness();
+        let witness = state_block.take_exec_witness().expect("exec witness");
+        assert_eq!(witness.fastpq_batches.len(), 1);
+        assert_eq!(
+            witness.fastpq_batches[0].public_inputs.dsid,
+            crate::fastpq::dataspace_id_bytes(dsid)
+        );
+    }
+
+    #[test]
+    fn capture_exec_witness_sets_perm_root() {
+        let perm = Permission::new("perm_a".to_string(), Json::new(()));
+        let role_id: RoleId = "role_a".parse().expect("role id");
+        let role = Role {
+            id: role_id.clone(),
+            permissions: BTreeSet::from([perm]),
+        };
+        let entries = vec![(role_id.clone(), role.clone())];
+        let expected =
+            crate::fastpq::permission_table_root(entries.iter().map(|(id, role)| (id, role)));
+
+        let mut world = World::with([], [], []);
+        world.roles.insert(role.id.clone(), role);
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new(world, kura, query);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let _guard = crate::sumeragi::witness::exec_witness_guard();
+        crate::sumeragi::witness::start_block();
+
+        let delta = TransferDeltaTranscript {
+            from_account: (*ALICE_ID).clone(),
+            to_account: (*BOB_ID).clone(),
+            asset_definition: "rose#wonderland".parse().expect("valid asset id"),
+            amount: Numeric::from(10u32),
+            from_balance_before: Numeric::from(100u32),
+            from_balance_after: Numeric::from(90u32),
+            to_balance_before: Numeric::from(0u32),
+            to_balance_after: Numeric::from(10u32),
+            from_merkle_proof: None,
+            to_merkle_proof: None,
+        };
+        let batch_hash = Hash::prehashed([0x33; 32]);
+        let transcript = TransferTranscript {
+            batch_hash,
+            deltas: vec![delta.clone()],
+            authority_digest: crate::fastpq::authority_digest(&ALICE_ID),
+            poseidon_preimage_digest: Some(crate::fastpq::poseidon_preimage_digest(
+                &delta,
+                &batch_hash,
+            )),
+        };
+        crate::sumeragi::witness::record_fastpq_transcript(&transcript);
+
+        state_block.capture_exec_witness();
+        let witness = state_block.take_exec_witness().expect("exec witness");
+        assert_eq!(witness.fastpq_batches.len(), 1);
+        assert_eq!(witness.fastpq_batches[0].public_inputs.perm_root, expected);
     }
 }
 
@@ -18962,6 +19569,20 @@ pub(crate) mod deserialize {
         let telemetry_seed = telemetry.clone();
         let initial_crypto = iroha_config::parameters::actual::Crypto::default();
         let nexus = iroha_config::parameters::actual::Nexus::default();
+        let streaming = iroha_config::parameters::actual::Streaming {
+            key_material: iroha_crypto::streaming::StreamingKeyMaterial::new(
+                iroha_crypto::KeyPair::from_seed(vec![0u8; 32], Algorithm::Ed25519),
+            )
+            .expect("streaming key material"),
+            session_store_dir: PathBuf::from(
+                iroha_config::parameters::defaults::streaming::SESSION_STORE_DIR,
+            ),
+            feature_bits: iroha_config::parameters::defaults::streaming::FEATURE_BITS,
+            soranet: iroha_config::parameters::actual::StreamingSoranet::from_defaults(),
+            soravpn: iroha_config::parameters::actual::StreamingSoravpn::from_defaults(),
+            sync: iroha_config::parameters::actual::StreamingSync::from_defaults(),
+            codec: iroha_config::parameters::actual::StreamingCodec::from_defaults(),
+        };
         let da_receipt_cursors = parking_lot::RwLock::new(DaReceiptCursorIndex::default());
         let da_shard_cursors = parking_lot::RwLock::new(DaShardCursorIndex::default());
         let store_root = kura.store_root();
@@ -19000,6 +19621,7 @@ pub(crate) mod deserialize {
             query_handle,
             oracle: default_oracle(),
             pipeline: default_pipeline(),
+            streaming,
             crypto: parking_lot::RwLock::new(Arc::new(initial_crypto.clone())),
             nexus: parking_lot::RwLock::new(nexus),
             tiered_backend: parking_lot::Mutex::new(TieredStateBackend::default()),
@@ -19426,8 +20048,9 @@ fn default_fraud_monitoring_cfg() -> iroha_config::parameters::actual::FraudMoni
 
 #[cfg(test)]
 mod tests {
-    use core::{mem, num::NonZeroU64};
+    use core::{mem, num::NonZeroU64, time::Duration};
     use std::{
+        borrow::Cow,
         collections::{BTreeMap, BTreeSet},
         sync::Arc,
     };
@@ -19501,6 +20124,7 @@ mod tests {
         role::RoleIdWithOwner,
         smartcontracts::{Execute, ivm::host::CoreHost},
         sumeragi::{network_topology::Topology, status},
+        tx::AcceptedTransaction,
     };
 
     fn make_tlv(ty: PointerType, payload: &[u8]) -> Vec<u8> {
@@ -19513,6 +20137,19 @@ mod tests {
         let hash: [u8; 32] = Hash::new(payload).into();
         tlv.extend_from_slice(&hash);
         tlv
+    }
+
+    fn dummy_accepted_transaction() -> AcceptedTransaction<'static> {
+        let chain_id = (*super::DEFAULT_TEST_CHAIN_ID).clone();
+        let domain_id: DomainId = "dummy".parse().expect("valid domain id");
+        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(domain_id, keypair.public_key().clone());
+        let mut builder = TransactionBuilder::new(chain_id, authority);
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx = builder
+            .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
+            .sign(keypair.private_key());
+        AcceptedTransaction::new_unchecked(Cow::Owned(tx))
     }
 
     fn dataspace_catalog_for_lane_catalog(catalog: &LaneCatalog) -> DataSpaceCatalog {
@@ -19723,6 +20360,92 @@ mod tests {
             iroha_data_model::account::address::default_domain_name().as_ref(),
             "ledger"
         );
+    }
+
+    #[test]
+    fn set_streaming_updates_config() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let mut streaming = state.streaming.clone();
+        let soranet_spool = PathBuf::from("soranet-spool");
+        streaming.soranet.provision_spool_dir = soranet_spool.clone();
+        state.set_streaming(streaming);
+
+        assert_eq!(state.streaming.soranet.provision_spool_dir, soranet_spool);
+    }
+
+    #[test]
+    fn enforce_nexus_storage_budget_prunes_spools_before_cold() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let store_root = temp_dir.path().join("kura");
+        let soranet_spool = temp_dir.path().join("soranet");
+        let soravpn_spool = temp_dir.path().join("soravpn");
+        let cold_root = temp_dir.path().join("cold");
+
+        std::fs::create_dir_all(&soranet_spool).expect("create soranet spool");
+        std::fs::write(soranet_spool.join("b-file.norito"), vec![0u8; 60])
+            .expect("write spool file");
+        std::fs::write(soranet_spool.join("a-file.norito"), vec![0u8; 60])
+            .expect("write spool file");
+
+        let snapshot_dir = cold_root.join("00000000000000000001");
+        std::fs::create_dir_all(&snapshot_dir).expect("create snapshot dir");
+        std::fs::write(snapshot_dir.join("payload.norito"), vec![0u8; 50])
+            .expect("write cold payload");
+
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+            block_sync_roster_retention:
+                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention:
+                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let mut streaming = state.streaming.clone();
+        streaming.soranet.provision_spool_dir = soranet_spool.clone();
+        streaming.soravpn.provision_spool_dir = soravpn_spool.clone();
+        state.set_streaming(streaming);
+
+        state.set_tiered_backend(&iroha_config::parameters::actual::TieredState {
+            enabled: true,
+            hot_retained_keys: 0,
+            hot_retained_bytes: iroha_config::base::util::Bytes(0),
+            hot_retained_grace_snapshots: 0,
+            cold_store_root: Some(cold_root.clone()),
+            da_store_root: None,
+            max_snapshots: 0,
+            max_cold_bytes: iroha_config::base::util::Bytes(0),
+        });
+
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.enabled = true;
+        nexus.storage.max_disk_usage_bytes = iroha_config::base::util::Bytes(120);
+        state.set_nexus(nexus).expect("apply nexus config");
+
+        state.enforce_nexus_storage_budget();
+
+        assert!(
+            !soranet_spool.join("a-file.norito").exists(),
+            "oldest spool entry should be evicted"
+        );
+        assert!(
+            soranet_spool.join("b-file.norito").exists(),
+            "newer spool entry should remain"
+        );
+        assert!(snapshot_dir.exists(), "cold snapshot should remain");
     }
 
     #[test]
@@ -21458,7 +22181,7 @@ mod tests {
 
         let bundle = DaPinIntentBundle::new(vec![intent.clone()]);
         let keypair = KeyPair::random();
-        let new_block = BlockBuilder::new(Vec::new())
+        let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_pin_intents(Some(bundle))
             .sign(keypair.private_key())
@@ -21613,7 +22336,7 @@ mod tests {
         state.set_sumeragi_parameters(&sumeragi);
 
         let keypair = KeyPair::random();
-        let new_block = BlockBuilder::new(Vec::new())
+        let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .sign(keypair.private_key())
             .unpack(|_| {});
@@ -21637,7 +22360,7 @@ mod tests {
         state.set_sumeragi_parameters(&sumeragi);
 
         let keypair = KeyPair::random();
-        let new_block = BlockBuilder::new(Vec::new())
+        let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(DaCommitmentBundle::new(Vec::new())))
             .sign(keypair.private_key())
@@ -21704,7 +22427,7 @@ mod tests {
             StorageTicketId::new([0xEE; 32]),
             Signature::from_bytes(&[0x11; 64]),
         )]);
-        let new_block = BlockBuilder::new(Vec::new())
+        let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(bundle))
             .sign(keypair.private_key())
@@ -21754,7 +22477,7 @@ mod tests {
         };
 
         let first_bundle = DaCommitmentBundle::new(vec![make_record(1)]);
-        let first_block = BlockBuilder::new(Vec::new())
+        let first_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(first_bundle))
             .sign(keypair.private_key())
@@ -21769,7 +22492,7 @@ mod tests {
         }
 
         let second_bundle = DaCommitmentBundle::new(vec![make_record(0)]);
-        let second_block = BlockBuilder::new(Vec::new())
+        let second_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, Some(&signed_first))
             .with_da_commitments(Some(second_bundle))
             .sign(keypair.private_key())
@@ -21829,7 +22552,7 @@ mod tests {
             StorageTicketId::new([0x05; 32]),
             Signature::from_bytes(&[0x06; 64]),
         )]);
-        let block = BlockBuilder::new(Vec::new())
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(bundle))
             .sign(keypair.private_key())
@@ -21941,7 +22664,7 @@ mod tests {
                 Signature::from_bytes(&[0x12; 64]),
             ),
         ]);
-        let first_block = BlockBuilder::new(Vec::new())
+        let first_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(first_bundle))
             .sign(keypair.private_key())
@@ -21969,7 +22692,7 @@ mod tests {
             StorageTicketId::new([0xF0; 32]),
             Signature::from_bytes(&[0x13; 64]),
         )]);
-        let second_block = BlockBuilder::new(Vec::new())
+        let second_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, Some(&signed_first))
             .with_da_commitments(Some(second_bundle))
             .sign(keypair.private_key())
@@ -22120,7 +22843,7 @@ mod tests {
         };
 
         let first_bundle = DaCommitmentBundle::new(vec![make_record(1)]);
-        let first_block = BlockBuilder::new(Vec::new())
+        let first_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(first_bundle))
             .sign(keypair.private_key())
@@ -22135,7 +22858,7 @@ mod tests {
         }
 
         let second_bundle = DaCommitmentBundle::new(vec![make_record(2)]);
-        let second_block = BlockBuilder::new(Vec::new())
+        let second_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, Some(&signed_first))
             .with_da_commitments(Some(second_bundle))
             .sign(keypair.private_key())
@@ -22256,7 +22979,7 @@ mod tests {
         let bundle =
             DaCommitmentBundle::new(vec![lane_zero_record.clone(), lane_one_record.clone()]);
         let keypair = KeyPair::random();
-        let block = BlockBuilder::new(Vec::new())
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(bundle))
             .sign(keypair.private_key())
@@ -22336,7 +23059,7 @@ mod tests {
         );
         let bundle = DaCommitmentBundle::new(vec![committed_record.clone()]);
         let keypair = KeyPair::random();
-        let block = BlockBuilder::new(Vec::new())
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(bundle))
             .sign(keypair.private_key())
@@ -22435,7 +23158,7 @@ mod tests {
         };
 
         let first_bundle = DaCommitmentBundle::new(vec![make_record(LaneId::new(0), 1)]);
-        let first_block = BlockBuilder::new(Vec::new())
+        let first_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(first_bundle))
             .sign(keypair.private_key())
@@ -22450,7 +23173,7 @@ mod tests {
         }
 
         let second_bundle = DaCommitmentBundle::new(vec![make_record(LaneId::new(1), 1)]);
-        let second_block = BlockBuilder::new(Vec::new())
+        let second_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, Some(&signed_first))
             .with_da_commitments(Some(second_bundle))
             .sign(keypair.private_key())
@@ -22469,7 +23192,7 @@ mod tests {
             .expect("hydration should succeed");
 
         let replacement_bundle = DaCommitmentBundle::new(vec![make_record(LaneId::new(1), 2)]);
-        let replacement_block = BlockBuilder::new(Vec::new())
+        let replacement_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, Some(&signed_first))
             .with_da_commitments(Some(replacement_bundle))
             .sign(keypair.private_key())
@@ -22718,7 +23441,7 @@ mod tests {
 
         // Store a single block to set the latest height below the journal cursor.
         let keypair = KeyPair::random();
-        let block = BlockBuilder::new(Vec::new())
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .sign(keypair.private_key())
             .unpack(|_| {});
@@ -23157,7 +23880,7 @@ mod tests {
         };
 
         let first_bundle = DaCommitmentBundle::new(vec![make_record(1)]);
-        let first_block = BlockBuilder::new(Vec::new())
+        let first_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(first_bundle.clone()))
             .sign(keypair.private_key())
@@ -23183,7 +23906,7 @@ mod tests {
         let pin_bundle =
             iroha_data_model::da::pin_intent::DaPinIntentBundle::new(vec![pin_intent.clone()]);
         let second_bundle = DaCommitmentBundle::new(vec![make_record(2)]);
-        let second_block = BlockBuilder::new(Vec::new())
+        let second_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, Some(&signed_first))
             .with_da_commitments(Some(second_bundle.clone()))
             .with_da_pin_intents(Some(pin_bundle))
@@ -23261,7 +23984,7 @@ mod tests {
             .expect("apply Nexus catalog for telemetry validation");
 
         let keypair = KeyPair::random();
-        let block: SignedBlock = BlockBuilder::new(Vec::new())
+        let block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .sign(keypair.private_key())
             .unpack(|_| {})
@@ -23340,7 +24063,7 @@ mod tests {
         );
         let bundle = DaCommitmentBundle::new(vec![record]);
         let keypair = KeyPair::random();
-        let block: SignedBlock = BlockBuilder::new(Vec::new())
+        let block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(bundle))
             .sign(keypair.private_key())
@@ -23423,12 +24146,12 @@ mod tests {
             .advance_da_shard_cursors_from_bundle(1, &[record])
             .expect("advance cursor");
 
-        let first_block: SignedBlock = BlockBuilder::new(Vec::new())
+        let first_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .sign(keypair.private_key())
             .unpack(|_| {})
             .into();
-        let second_block: SignedBlock = BlockBuilder::new(Vec::new())
+        let second_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, Some(&first_block))
             .sign(keypair.private_key())
             .unpack(|_| {})
@@ -23564,7 +24287,7 @@ mod tests {
         );
         let bundle = DaCommitmentBundle::new(vec![record.clone()]);
         let keypair = KeyPair::random();
-        let signed_block: SignedBlock = BlockBuilder::new(Vec::new())
+        let signed_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(bundle))
             .sign(keypair.private_key())
@@ -23666,7 +24389,7 @@ mod tests {
             plain.clone(),
         ]);
         let keypair = KeyPair::random();
-        let new_block = BlockBuilder::new(Vec::new())
+        let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_pin_intents(Some(bundle))
             .sign(keypair.private_key())
@@ -23740,7 +24463,7 @@ mod tests {
 
         let bundle = DaPinIntentBundle::new(vec![missing_owner.clone(), valid.clone()]);
         let keypair = KeyPair::random();
-        let new_block = BlockBuilder::new(Vec::new())
+        let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_pin_intents(Some(bundle))
             .sign(keypair.private_key())
@@ -23800,7 +24523,7 @@ mod tests {
 
         let bundle = DaPinIntentBundle::new(vec![intent.clone()]);
         let keypair = KeyPair::random();
-        let new_block = BlockBuilder::new(Vec::new())
+        let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_pin_intents(Some(bundle))
             .sign(keypair.private_key())
@@ -27218,7 +27941,7 @@ mod tests {
                 .clone(),
         );
 
-        let block = BlockBuilder::new(Vec::new())
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .sign(keypairs[0].private_key())
             .unpack(|_| {});
@@ -27269,7 +27992,7 @@ mod tests {
                 .clone(),
         );
 
-        let block = BlockBuilder::new(Vec::new())
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .sign(keypairs[0].private_key())
             .unpack(|_| {});
@@ -27295,6 +28018,49 @@ mod tests {
         world_peers.push(new_peer);
         world_peers.sort();
         expected_topology.block_committed(world_peers, block_hash);
+        let expected = expected_topology.as_ref().to_vec();
+
+        let view = state.view();
+        let actual: Vec<_> = view.commit_topology().iter().cloned().collect();
+        assert_eq!(actual, expected);
+        let prev: Vec<_> = view.prev_commit_topology().iter().cloned().collect();
+        assert_eq!(prev, base_topology);
+    }
+
+    #[test]
+    fn apply_without_execution_prefers_checkpoint_topology_when_world_peers_incomplete() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+
+        let keypairs = configure_commit_topology(&state, 4);
+        let base_topology: Vec<_> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .sign(keypairs[0].private_key())
+            .unpack(|_| {});
+        let signed_block: SignedBlock = block.into();
+        let mut state_block = state.block(signed_block.header());
+
+        {
+            let mut peers = state_block.world.peers_mut_for_testing().transaction();
+            peers.clear();
+            peers.push(base_topology[0].clone());
+            peers.apply();
+        }
+
+        let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        let block_hash = committed.as_ref().hash();
+        let _ = state_block.apply_without_execution(&committed, base_topology.clone());
+        state_block.commit().expect("commit state block");
+
+        let mut expected_topology = Topology::new(base_topology.clone());
+        expected_topology.block_committed(base_topology.clone(), block_hash);
         let expected = expected_topology.as_ref().to_vec();
 
         let view = state.view();

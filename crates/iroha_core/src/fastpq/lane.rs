@@ -277,8 +277,14 @@ mod tests {
             new_root: [0u8; 32],
             perm_root: [0u8; 32],
         };
-        let batches = batches_from_bundles(FASTPQ_CANONICAL_PARAMETER_SET, template, [&bundle])
-            .expect("batches");
+        let tx_set_hash = [0x44; 32];
+        let batches = batches_from_bundles(
+            FASTPQ_CANONICAL_PARAMETER_SET,
+            template,
+            tx_set_hash,
+            [&bundle],
+        )
+        .expect("batches");
         let witness = ExecWitness {
             reads: Vec::new(),
             writes: Vec::new(),

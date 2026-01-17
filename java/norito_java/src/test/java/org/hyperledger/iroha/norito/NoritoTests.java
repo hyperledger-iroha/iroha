@@ -4,6 +4,8 @@
 package org.hyperledger.iroha.norito;
 
 import java.math.BigInteger;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -42,7 +44,7 @@ public final class NoritoTests {
     testCompressionProfiles();
     testColumnarHelpers();
     testDecodeRequiresCompactLenFlag();
-    testSequenceLenRespectsExplicitFlags();
+    testSequenceLenRejectsVarintHeader();
     testEncodeWithHeaderFlagsAdaptiveBits();
     testDecodeAdaptiveRespectsGuard();
     testDecodeAdaptiveInstallsRootPayload();
@@ -239,17 +241,13 @@ public final class NoritoTests {
   }
 
   private static void testSequenceAcceptsEmptyPackedTail() {
-    byte[] len = Varint.encode(0);
+    byte[] len = new byte[Long.BYTES];
     byte[] tail = new byte[Long.BYTES];
     byte[] payload = new byte[len.length + tail.length];
     System.arraycopy(len, 0, payload, 0, len.length);
     System.arraycopy(tail, 0, payload, len.length, tail.length);
 
-    int flags =
-        NoritoHeader.PACKED_SEQ
-            | NoritoHeader.COMPACT_LEN
-            | NoritoHeader.VARINT_OFFSETS
-            | NoritoHeader.COMPACT_SEQ_LEN;
+    int flags = NoritoHeader.PACKED_SEQ;
     NoritoDecoder decoder = new NoritoDecoder(payload, flags, NoritoHeader.MINOR_VERSION);
     TypeAdapter<List<byte[]>> adapter = NoritoAdapters.sequence(NoritoAdapters.bytesAdapter());
     List<byte[]> decoded = adapter.decode(decoder);
@@ -258,7 +256,7 @@ public final class NoritoTests {
   }
 
   private static void testSequenceAcceptsEmptyPackedTailWithFollowingData() {
-    byte[] len = Varint.encode(0);
+    byte[] len = new byte[Long.BYTES];
     byte[] tail = new byte[Long.BYTES];
     byte[] trailing = new byte[] {(byte) 0x12, (byte) 0x34, (byte) 0x56};
     byte[] payload = new byte[len.length + tail.length + trailing.length];
@@ -266,11 +264,7 @@ public final class NoritoTests {
     System.arraycopy(tail, 0, payload, len.length, tail.length);
     System.arraycopy(trailing, 0, payload, len.length + tail.length, trailing.length);
 
-    int flags =
-        NoritoHeader.PACKED_SEQ
-            | NoritoHeader.COMPACT_LEN
-            | NoritoHeader.VARINT_OFFSETS
-            | NoritoHeader.COMPACT_SEQ_LEN;
+    int flags = NoritoHeader.PACKED_SEQ;
     NoritoDecoder decoder = new NoritoDecoder(payload, flags, NoritoHeader.MINOR_VERSION);
     TypeAdapter<List<byte[]>> adapter = NoritoAdapters.sequence(NoritoAdapters.bytesAdapter());
     List<byte[]> decoded = adapter.decode(decoder);
@@ -438,27 +432,24 @@ public final class NoritoTests {
     Map<Long, Long> value = new java.util.HashMap<>();
     value.put(3L, 4L);
     value.put(1L, 2L);
-    int flags =
-        NoritoHeader.PACKED_SEQ
-            | NoritoHeader.VARINT_OFFSETS
-            | NoritoHeader.COMPACT_SEQ_LEN;
+    int flags = NoritoHeader.PACKED_SEQ;
     String schema = "iroha.test.PackedMap";
     byte[] encoded = NoritoCodec.encode(value, schema, adapter, flags);
     NoritoHeader.DecodeResult result =
         NoritoHeader.decode(encoded, SchemaHash.hash16(schema));
-    byte[] expected =
-        new byte[] {
-            (byte) 0x02,
-            (byte) 0x01,
-            (byte) 0x01,
-            (byte) 0x01,
-            (byte) 0x01,
-            (byte) 0x01,
-            (byte) 0x03,
-            (byte) 0x02,
-            (byte) 0x04
-        };
-    assert Arrays.equals(result.payload(), expected) : "Packed map payload mismatch";
+    ByteBuffer expected = ByteBuffer.allocate(60).order(ByteOrder.LITTLE_ENDIAN);
+    expected.putLong(2);
+    expected.putLong(0);
+    expected.putLong(1);
+    expected.putLong(2);
+    expected.putLong(0);
+    expected.putLong(1);
+    expected.putLong(2);
+    expected.put((byte) 0x01);
+    expected.put((byte) 0x03);
+    expected.put((byte) 0x02);
+    expected.put((byte) 0x04);
+    assert Arrays.equals(result.payload(), expected.array()) : "Packed map payload mismatch";
 
     Map<Long, Long> decoded = NoritoCodec.decode(encoded, adapter, schema);
     assert decoded.equals(Map.of(1L, 2L, 3L, 4L)) : "Packed map roundtrip mismatch";
@@ -646,7 +637,7 @@ public final class NoritoTests {
     assert failed : "Expected compact-len decode to fail without flag";
   }
 
-  private static void testSequenceLenRespectsExplicitFlags() {
+  private static void testSequenceLenRejectsVarintHeader() {
     TypeAdapter<List<Long>> adapter = NoritoAdapters.sequence(NoritoAdapters.uint(8));
     List<Long> values = List.of(1L, 2L, 3L, 4L);
     byte[] encoded = NoritoCodec.encode(values, "iroha.test.SeqFixed", adapter, 0);
@@ -665,7 +656,7 @@ public final class NoritoTests {
     } catch (IllegalArgumentException ex) {
       failed = true;
     }
-    assert failed : "Expected sequence varint decode to require COMPACT_SEQ_LEN flag";
+    assert failed : "Expected sequence varint header to be rejected";
   }
 
   private static void testEncodeWithHeaderFlagsAdaptiveBits() {
@@ -726,11 +717,11 @@ public final class NoritoTests {
   private static void testEffectiveDecodeFlagsHeaderContext() {
     FlagAwareAdapter adapter = new FlagAwareAdapter();
     byte[] encoded =
-        NoritoCodec.encode(21L, "iroha.test.FlagAware", adapter, NoritoHeader.VARINT_OFFSETS);
+        NoritoCodec.encode(21L, "iroha.test.FlagAware", adapter, NoritoHeader.COMPACT_LEN);
     long decoded = NoritoCodec.decode(encoded, adapter, "iroha.test.FlagAware");
     assert decoded == 21L;
     Integer observed = adapter.observedFlags();
-    int expected = NoritoHeader.VARINT_OFFSETS;
+    int expected = NoritoHeader.COMPACT_LEN;
     assert observed != null && observed == expected : "Header effective flags mismatch";
     NoritoCodec.resetDecodeState();
   }
@@ -738,15 +729,15 @@ public final class NoritoTests {
   private static void testHeaderFlagsOverrideDecodeGuard() {
     FlagAwareAdapter adapter = new FlagAwareAdapter();
     byte[] encoded =
-        NoritoCodec.encode(17L, "iroha.test.FlagAware", adapter, NoritoHeader.VARINT_OFFSETS);
+        NoritoCodec.encode(17L, "iroha.test.FlagAware", adapter, NoritoHeader.COMPACT_LEN);
     try (NoritoCodec.DecodeFlagsGuard guard =
         NoritoCodec.DecodeFlagsGuard.enter(
-            NoritoHeader.PACKED_SEQ | NoritoHeader.COMPACT_LEN | NoritoHeader.COMPACT_SEQ_LEN)) {
+            NoritoHeader.PACKED_SEQ)) {
       long decoded = NoritoCodec.decode(encoded, adapter, "iroha.test.FlagAware");
       assert decoded == 17L;
     }
     Integer observed = adapter.observedFlags();
-    int expected = NoritoHeader.VARINT_OFFSETS;
+    int expected = NoritoHeader.COMPACT_LEN;
     assert observed != null && observed == expected : "Header flags should override guard";
     NoritoCodec.resetDecodeState();
   }

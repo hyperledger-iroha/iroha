@@ -49,7 +49,7 @@
   - Roundtrip encoding/decoding for primitives, options, sequences, maps.
   - Header encode/decode parity including checksum failures.
   - CRC64 test vectors (cross-checked with known values from Rust implementation).
-  - Flag-specific behaviors: packed vs compat sequences, varint offsets.
+- Flag-specific behaviors: packed vs compat sequences, reserved flag rejection.
   - Deterministic outputs compared against golden byte arrays produced by minimal Rust fixtures (add static reference bytes sampled from the repo's tests).
 - Property-based fuzzing remains deferred until a lightweight pure-Python subset of the Rust harness is extracted (tracked in NORITO-PY#12); current unit tests cover the canonical encoders/decoders.
 

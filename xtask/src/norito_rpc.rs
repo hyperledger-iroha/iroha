@@ -385,7 +385,7 @@ pub fn generate_fixtures(options: FixtureOptions) -> Result<()> {
     })?;
     generated
         .validate(Some(temp_dir.path()))
-        .context("generated manifest failed validation")?;
+        .map_err(|err| eyre!("generated manifest failed validation: {err}"))?;
 
     let desired_names = if options.include_all {
         None

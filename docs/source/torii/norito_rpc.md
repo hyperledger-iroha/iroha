@@ -63,7 +63,7 @@ and layout metadata as shown below:
 | 22     | Compression | `u8`     | `0 = none`, `1 = zstd`.                   |
 | 23     | Length      | `u64`    | Uncompressed payload length in bytes.     |
 | 31     | CRC64       | `u64`    | CRC64-XZ (ECMA polynomial, reflected, init/xor all ones) over the payload. |
-| 39     | Flags       | `u8`     | Layout flags: packed sequences, compact lengths, varint offsets, field bitset (`crates/norito/src/core.rs:2460`,`crates/norito/src/core.rs:2474`,`crates/norito/src/core.rs:267`). |
+| 39     | Flags       | `u8`     | Layout flags: packed sequences, compact lengths, field bitset (`crates/norito/src/core.rs:2460`,`crates/norito/src/core.rs:2474`,`crates/norito/src/core.rs:267`). |
 
 Torii validates the header before decoding:
 

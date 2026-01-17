@@ -4977,7 +4977,7 @@ pub enum BackgroundPost {
 }
 
 /// Internal request type enqueued by subsystems that need the actor to schedule a background
-/// consensus transmission (high-priority control frames, RBC chunks, etc.).
+/// consensus transmission (control frames, payloads, RBC chunks, etc.).
 #[derive(Debug, Clone)]
 pub enum BackgroundRequest {
     /// Send a point-to-point `BlockMessage` to the given peer.

@@ -3718,7 +3718,7 @@ mod transaction {
         first_error: Option<eyre::Report>,
     }
 
-    const DEFAULT_PING_PARALLEL_CAP: usize = 1024;
+    pub(crate) const DEFAULT_PING_PARALLEL_CAP: usize = 1024;
 
     fn ping_message(base: &str, index: usize, count: usize, no_index: bool) -> String {
         if count <= 1 || no_index {
@@ -6376,6 +6376,7 @@ mod tests {
             msg: "ping".to_string(),
             count: 0,
             parallel: 1,
+            parallel_cap: transaction::DEFAULT_PING_PARALLEL_CAP,
             no_wait: false,
             no_index: false,
         };
@@ -6395,6 +6396,7 @@ mod tests {
             msg: "hello".to_string(),
             count: 1,
             parallel: 1,
+            parallel_cap: transaction::DEFAULT_PING_PARALLEL_CAP,
             no_wait: false,
             no_index: false,
         };

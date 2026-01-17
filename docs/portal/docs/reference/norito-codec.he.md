@@ -21,7 +21,7 @@ Norito היא שכבת הסריאליזציה הקנונית של Iroha. כל ה
 | **Payload חשוף** | קידוד ערכים דטרמיניסטי המשמש ל-hashing/השוואה. התעבורה on-wire תמיד משתמשת ב-header; בתים חשופים הם פנימיים בלבד. | `norito::codec::{Encode, Decode}` |
 | **דחיסה** | Zstd אופציונלי (והאצה ניסיונית ב-GPU) שנבחר דרך בייט הדחיסה ב-header. | `norito.md`, “Compression negotiation” |
 
-רישום ה-flags של ה-layout (packed-struct, packed-seq, varint offsets, compact lengths) נמצא ב-`norito::header::flags`. V1 משתמש ב-flags `0x00` כברירת מחדל אך מקבל flags מפורשים בתוך המסכה הנתמכת; ביטים לא מוכרים נדחים. `norito::header::Flags` נשמר לצורכי בדיקה פנימית ולגרסאות עתידיות.
+רישום ה-flags של ה-layout (packed-struct, packed-seq, field bitset, compact lengths) נמצא ב-`norito::header::flags`. V1 משתמש ב-flags `0x00` כברירת מחדל אך מקבל flags מפורשים בתוך המסכה הנתמכת; ביטים לא מוכרים נדחים. `norito::header::Flags` נשמר לצורכי בדיקה פנימית ולגרסאות עתידיות.
 
 ## תמיכת derive
 

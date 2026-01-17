@@ -9,7 +9,8 @@ use norito::codec::{Decode, Encode};
 
 pub use crate::block::consensus::{
     CertPhase, Qc, QcAggregate, QcRef, QcVote, SumeragiBlockSyncRosterStatus,
-    SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus, SumeragiMembershipMismatchStatus,
+    SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus, SumeragiConsensusMessageHandlingEntry,
+    SumeragiConsensusMessageHandlingStatus, SumeragiMembershipMismatchStatus,
     SumeragiPeerKeyPolicyStatus, SumeragiQcEntry, SumeragiQcSnapshot, SumeragiQcStatus,
     SumeragiStatusWire, SumeragiViewChangeCauseStatus, SumeragiWorkerLoopStatus,
     SumeragiWorkerQueueDepths,

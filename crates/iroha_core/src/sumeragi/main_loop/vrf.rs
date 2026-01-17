@@ -615,6 +615,11 @@ impl Actor {
         commit: crate::sumeragi::consensus::VrfCommit,
     ) -> Result<()> {
         if !matches!(self.consensus_mode, ConsensusMode::Npos) {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::VrfCommit,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::ModeMismatch,
+            );
             return Ok(());
         }
         let (height, roster_len, roster_indices) = self.current_height_and_roster();
@@ -627,6 +632,11 @@ impl Actor {
         if let Some(manager) = self.epoch_manager.as_mut() {
             apply_roster_indices_to_manager(manager, roster_len, roster_indices);
         } else {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::VrfCommit,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::ModeMismatch,
+            );
             return Ok(());
         }
         let roster_len_hint = u32::try_from(roster_len).unwrap_or_else(|_| {
@@ -645,6 +655,11 @@ impl Actor {
         reveal: crate::sumeragi::consensus::VrfReveal,
     ) -> Result<()> {
         if !matches!(self.consensus_mode, ConsensusMode::Npos) {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::VrfReveal,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::ModeMismatch,
+            );
             return Ok(());
         }
         let (height, roster_len, roster_indices) = self.current_height_and_roster();
@@ -657,6 +672,11 @@ impl Actor {
         if let Some(manager) = self.epoch_manager.as_mut() {
             apply_roster_indices_to_manager(manager, roster_len, roster_indices);
         } else {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::VrfReveal,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::ModeMismatch,
+            );
             return Ok(());
         }
         let roster_len_hint = u32::try_from(roster_len).unwrap_or_else(|_| {

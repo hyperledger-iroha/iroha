@@ -2183,7 +2183,7 @@ impl Network {
             .collect()
     }
 
-    /// Resolves when all _running_ peers have at least N non-empty blocks
+    /// Resolves when all _running_ peers have at least N blocks (non-empty in current policy)
     /// # Errors
     /// If this doesn't happen within a timeout.
     pub async fn ensure_blocks(&self, height: u64) -> Result<&Self> {

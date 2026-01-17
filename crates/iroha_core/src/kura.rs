@@ -592,6 +592,18 @@ impl Kura {
         self.store_root.clone()
     }
 
+    /// Return total on-disk bytes used by Kura (active + retired segments).
+    ///
+    /// This mirrors the accounting used for storage budget enforcement.
+    pub(crate) fn disk_usage_bytes(&self) -> Result<u64> {
+        self.kura_disk_usage_bytes()
+    }
+
+    /// Attempt to purge retired Kura segments to reclaim disk budget.
+    pub(crate) fn purge_retired_segments(&self) -> bool {
+        self.purge_retired_storage()
+    }
+
     /// Retention window for commit-roster snapshots.
     #[must_use]
     pub fn block_sync_roster_retention(&self) -> NonZeroUsize {
@@ -5980,7 +5992,7 @@ mod tests {
         let (kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
 
-        let base = kura.kura_disk_usage_bytes().expect("base usage");
+        let base = kura.disk_usage_bytes().expect("base usage");
         let blocks_dir = RuntimeLaneConfig::default()
             .primary()
             .blocks_dir(temp_dir.path());
@@ -6004,9 +6016,41 @@ mod tests {
             .with_extension("norito.tmp");
         std::fs::write(&temp_sidecar, [0u8; 3]).expect("write temp sidecar");
 
-        let updated = kura.kura_disk_usage_bytes().expect("usage with extras");
+        let updated = kura.disk_usage_bytes().expect("usage with extras");
         let extra = 7u64 + 5 + 3;
         assert_eq!(updated, base.saturating_add(extra));
+    }
+
+    #[test]
+    fn purge_retired_segments_removes_retired_dir() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: FSYNC_INTERVAL,
+            block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+        };
+        let (kura, _) =
+            Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+
+        let retired_dir = temp_dir.path().join("retired").join("blocks");
+        std::fs::create_dir_all(&retired_dir).expect("create retired dir");
+        std::fs::write(retired_dir.join("dummy.norito"), [0u8; 4]).expect("write retired file");
+
+        assert!(
+            kura.purge_retired_segments(),
+            "purge should remove retired data"
+        );
+        assert!(
+            !temp_dir.path().join("retired").exists(),
+            "retired dir should be removed"
+        );
     }
 
     #[test]

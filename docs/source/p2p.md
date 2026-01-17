@@ -199,7 +199,7 @@ p2p_post_queue_cap = 2048     # per-peer post channel
 p2p_subscriber_queue_cap = 8192  # inbound relay subscriber queue
 
 # Other networking parameters (for reference)
-block_gossip_size = 4        # fanout cap for block-sync gossip (peer samples, block sync updates, availability votes, NEW_VIEW)
+block_gossip_size = 4        # fanout cap for block-sync gossip (peer samples, block sync updates, availability votes)
 block_gossip_period_ms = 10000
 block_gossip_max_period_ms = 30000
 peer_gossip_period_ms = 1000
@@ -222,10 +222,9 @@ trust_min_score = -20              # drop trust gossip at or below this score
 - Transaction gossip pauses when relay backpressure is active (recent subscriber-queue drops) and
   resumes after `transaction_gossip_period_ms * transaction_gossip_resend_ticks` to avoid
   flooding under load.
-- NEW_VIEW gossip uses the same `block_gossip_size` fanout; peers rotate a deterministic,
-  per-node sample window on each rebroadcast so all peers are eventually covered. Rebroadcasts
-  are paced by the block-time-based cooldown (clamped >=200ms) and run on pacemaker ticks even
-  when the transaction queue is empty to prevent view-change starvation without flooding the network.
+- NEW_VIEW votes are sent to the deterministic collector set for the current view and always
+  include the leader; if the collector set is below commit quorum, the sender falls back to the
+  full commit topology. This provides redundancy without relying on full broadcast in the steady state.
 - Trust scoring is deterministic: scores start at 0, penalties subtract `trust_penalty_bad_gossip`,
   and the debt halves every `trust_decay_half_life_ms` until it reaches 0. In permissioned mode,
   trust gossip that advertises peers outside the current topology applies `trust_penalty_unknown_peer`;

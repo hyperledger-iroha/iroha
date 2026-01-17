@@ -315,7 +315,8 @@ use iroha_data_model::{
     account,
     block::consensus::{
         SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus, SumeragiCommitQuorumStatus,
-        SumeragiConsensusCapsStatus, SumeragiDaGateReason, SumeragiDaGateSatisfaction,
+        SumeragiConsensusCapsStatus, SumeragiConsensusMessageHandlingEntry,
+        SumeragiConsensusMessageHandlingStatus, SumeragiDaGateReason, SumeragiDaGateSatisfaction,
         SumeragiDaGateStatus, SumeragiDataspaceCommitment, SumeragiKuraStoreStatus,
         SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiMembershipMismatchStatus,
         SumeragiMembershipStatus, SumeragiMissingBlockFetchStatus, SumeragiPeerKeyPolicyStatus,
@@ -549,6 +550,29 @@ struct OkIdResponse {
 #[cfg(test)]
 fn json_string(value: Value) -> String {
     norito::json::to_string(&value).expect("serialize request body")
+}
+
+#[cfg(test)]
+fn dummy_accepted_transaction() -> iroha_core::tx::AcceptedTransaction<'static> {
+    use std::{borrow::Cow, time::Duration};
+
+    use iroha_crypto::KeyPair;
+    use iroha_data_model::{
+        AccountId, ChainId, DomainId, Level, isi::Log, transaction::TransactionBuilder,
+    };
+
+    let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
+        .parse()
+        .expect("valid chain id");
+    let domain_id: DomainId = "dummy".parse().expect("valid domain id");
+    let keypair = KeyPair::random();
+    let authority = AccountId::new(domain_id, keypair.public_key().clone());
+    let mut builder = TransactionBuilder::new(chain_id, authority);
+    builder.set_creation_time(Duration::from_millis(0));
+    let tx = builder
+        .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
+        .sign(keypair.private_key());
+    iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx))
 }
 
 mod debug_toggle_override {
@@ -14863,7 +14887,7 @@ mod tx_query_integration_smoke {
         // transactions block before committing to satisfy state invariants.
         let leader0 = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
-        let unverified0 = BlockBuilder::new(Vec::new())
+        let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, state.view().latest_block().as_deref())
             .sign(leader0.private_key())
             .unpack(|_| {});
@@ -14889,7 +14913,7 @@ mod tx_query_integration_smoke {
             .execute(&exec_id, &mut stx)
             .ok();
         stx.apply();
-        // Validate and persist an empty block record to initialize transactions state
+        // Validate and persist a minimal block record to initialize transactions state
         let valid0 = unverified0
             .clone()
             .validate_and_record_transactions(&mut st_block0)
@@ -15052,7 +15076,7 @@ mod tx_query_integration_smoke {
         // Register domain + operator + target account
         let leader0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
-        let unverified0 = BlockBuilder::new(Vec::new())
+        let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, state.view().latest_block().as_deref())
             .sign(leader0.private_key())
             .unpack(|_| {});
@@ -15155,7 +15179,7 @@ mod tx_query_integration_smoke {
         // Ensure domain and accounts exist before committing txs
         let leader0 = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
-        let unverified0 = BlockBuilder::new(Vec::new())
+        let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, state.view().latest_block().as_deref())
             .sign(leader0.private_key())
             .unpack(|_| {});
@@ -16512,7 +16536,7 @@ mod tx_query_integration_smoke {
         {
             let leader0 = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
             let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
-            let unverified0 = BlockBuilder::new(Vec::new())
+            let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
                 .chain(0, state.view().latest_block().as_deref())
                 .sign(leader0.private_key())
                 .unpack(|_| {});
@@ -16688,7 +16712,7 @@ mod tx_query_integration_smoke {
         {
             let leader0 = KeyPair::random();
             let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
-            let unverified0 = BlockBuilder::new(Vec::new())
+            let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
                 .chain(0, state.view().latest_block().as_deref())
                 .sign(leader0.private_key())
                 .unpack(|_| {});
@@ -18538,12 +18562,12 @@ mod query_endpoint_tests {
         isi.execute(&authority, &mut stx)
             .expect("execute verify-proof");
         stx.apply();
-        // Record an empty transactions block for commit invariants, then commit state
+        // Record a minimal transactions block for commit invariants, then commit state
         let leader = iroha_crypto::KeyPair::random();
         let _topo = iroha_core::sumeragi::network_topology::Topology::new(vec![
             iroha_data_model::peer::PeerId::new(leader.public_key().clone()),
         ]);
-        let unverified = iroha_core::block::BlockBuilder::new(Vec::new())
+        let unverified = iroha_core::block::BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, latest_block.as_deref())
             .sign(leader.private_key())
             .unpack(|_| {});
@@ -19681,6 +19705,24 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             snap.dedup_evictions.rbc_deliver_expired_total,
         ),
     ]);
+    let consensus_message_handling_entries = Value::Array(
+        snap.consensus_message_handling
+            .entries
+            .iter()
+            .map(|entry| {
+                json_object(vec![
+                    json_entry("kind", entry.kind.as_str()),
+                    json_entry("outcome", entry.outcome.as_str()),
+                    json_entry("reason", entry.reason.as_str()),
+                    json_entry("total", entry.total),
+                ])
+            })
+            .collect(),
+    );
+    let consensus_message_handling = json_object(vec![json_entry(
+        "entries",
+        consensus_message_handling_entries,
+    )]);
     let tx_queue = json_object(vec![
         json_entry("depth", snap.tx_queue_depth),
         json_entry("capacity", snap.tx_queue_capacity),
@@ -19792,6 +19834,10 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "quorum_timeout_total",
             snap.view_change_causes.quorum_timeout_total,
         ),
+        json_entry(
+            "stake_quorum_timeout_total",
+            snap.view_change_causes.stake_quorum_timeout_total,
+        ),
         json_entry("da_gate_total", snap.view_change_causes.da_gate_total),
         json_entry(
             "censorship_evidence_total",
@@ -19825,6 +19871,11 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry(
             "last_quorum_timeout_timestamp_ms",
             snap.view_change_causes.last_quorum_timeout_timestamp_ms,
+        ),
+        json_entry(
+            "last_stake_quorum_timeout_timestamp_ms",
+            snap.view_change_causes
+                .last_stake_quorum_timeout_timestamp_ms,
         ),
         json_entry(
             "last_da_gate_timestamp_ms",
@@ -20745,6 +20796,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("rbc_dataspace_backlog", rbc_dataspace_backlog),
         json_entry("gossip_fallback_total", snap.gossip_fallback_total),
         json_entry("dedup_evictions", dedup_evictions),
+        json_entry("consensus_message_handling", consensus_message_handling),
         json_entry("bg_post_drop_post_total", snap.bg_post_drop_post_total),
         json_entry(
             "bg_post_drop_broadcast_total",
@@ -21809,6 +21861,45 @@ mod status_tests {
     }
 
     #[test]
+    fn status_snapshot_json_includes_consensus_message_handling() {
+        let snap = sumeragi::StatusSnapshot {
+            consensus_message_handling: status::ConsensusMessageHandlingSnapshot {
+                entries: vec![status::ConsensusMessageHandlingEntry {
+                    kind: status::ConsensusMessageKind::BlockSyncUpdate,
+                    outcome: status::ConsensusMessageOutcome::Deferred,
+                    reason: status::ConsensusMessageReason::SignatureMismatchDeferred,
+                    total: 3,
+                }],
+            },
+            ..Default::default()
+        };
+        let payload = status_snapshot_json(&snap);
+        let handling = payload
+            .get("consensus_message_handling")
+            .and_then(Value::as_object)
+            .expect("consensus_message_handling object");
+        let entries = handling
+            .get("entries")
+            .and_then(Value::as_array)
+            .expect("consensus_message_handling entries");
+        assert_eq!(entries.len(), 1);
+        let entry = entries[0].as_object().expect("entry object");
+        assert_eq!(
+            entry.get("kind").and_then(Value::as_str),
+            Some("block_sync_update")
+        );
+        assert_eq!(
+            entry.get("outcome").and_then(Value::as_str),
+            Some("deferred")
+        );
+        assert_eq!(
+            entry.get("reason").and_then(Value::as_str),
+            Some("signature_mismatch_deferred")
+        );
+        assert_eq!(entry.get("total").and_then(Value::as_u64), Some(3));
+    }
+
+    #[test]
     fn status_snapshot_json_includes_pending_rbc_stash_counters() {
         let hash = Hash::prehashed([0x11; Hash::LENGTH]);
         let hash_typed = HashOf::from_untyped_unchecked(hash);
@@ -22138,6 +22229,7 @@ pub async fn handle_v1_sumeragi_status(
             view_change_causes: SumeragiViewChangeCauseStatus {
                 commit_failure_total: snap.view_change_causes.commit_failure_total,
                 quorum_timeout_total: snap.view_change_causes.quorum_timeout_total,
+                stake_quorum_timeout_total: snap.view_change_causes.stake_quorum_timeout_total,
                 da_gate_total: snap.view_change_causes.da_gate_total,
                 censorship_evidence_total: snap.view_change_causes.censorship_evidence_total,
                 missing_payload_total: snap.view_change_causes.missing_payload_total,
@@ -22151,6 +22243,9 @@ pub async fn handle_v1_sumeragi_status(
                 last_quorum_timeout_timestamp_ms: snap
                     .view_change_causes
                     .last_quorum_timeout_timestamp_ms,
+                last_stake_quorum_timeout_timestamp_ms: snap
+                    .view_change_causes
+                    .last_stake_quorum_timeout_timestamp_ms,
                 last_da_gate_timestamp_ms: snap.view_change_causes.last_da_gate_timestamp_ms,
                 last_censorship_evidence_timestamp_ms: snap
                     .view_change_causes
@@ -22167,6 +22262,19 @@ pub async fn handle_v1_sumeragi_status(
             block_created_dropped_by_lock_total: snap.block_created_dropped_by_lock_total,
             block_created_hint_mismatch_total: snap.block_created_hint_mismatch_total,
             block_created_proposal_mismatch_total: snap.block_created_proposal_mismatch_total,
+            consensus_message_handling: SumeragiConsensusMessageHandlingStatus {
+                entries: snap
+                    .consensus_message_handling
+                    .entries
+                    .iter()
+                    .map(|entry| SumeragiConsensusMessageHandlingEntry {
+                        kind: entry.kind.as_str().to_owned(),
+                        outcome: entry.outcome.as_str().to_owned(),
+                        reason: entry.reason.as_str().to_owned(),
+                        total: entry.total,
+                    })
+                    .collect(),
+            },
             validation_reject_total: snap.validation_reject_total,
             validation_reject_reason: snap.validation_reject_reason.map(ToOwned::to_owned),
             validation_rejects: SumeragiValidationRejectStatus {
@@ -25983,7 +26091,7 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
     let _topology = iroha_core::sumeragi::network_topology::Topology::new(vec![
         iroha_data_model::peer::PeerId::new(leader.public_key().clone()),
     ]);
-    let unverified = iroha_core::block::BlockBuilder::new(Vec::new())
+    let unverified = iroha_core::block::BlockBuilder::new(vec![dummy_accepted_transaction()])
         .chain(0, latest_block.as_deref())
         .sign(leader.private_key())
         .unpack(|_| {});
@@ -28197,7 +28305,7 @@ mod accounts_query_tests {
         // Register a domain with five accounts
         let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let _topology = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
-        let unverified = BlockBuilder::new(Vec::new())
+        let unverified = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, state.view().latest_block().as_deref())
             .sign(leader.private_key())
             .unpack(|_| {});

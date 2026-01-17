@@ -7720,6 +7720,16 @@ impl Telemetry {
         }
     }
 
+    /// Increment counter for consensus message drops/deferrals labeled by kind/outcome/reason.
+    pub fn note_consensus_message_handling(&self, kind: &str, outcome: &str, reason: &str) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .sumeragi_consensus_message_handling_total
+                .with_label_values(&[kind, outcome, reason])
+                .inc();
+        }
+    }
+
     /// Set current collector parameters (`collectors_k`, `redundant_send_r`) as gauges
     pub fn set_collectors_params(&self, collectors_k: u64, redundant_send_r: u64) {
         if self.enabled.load(Ordering::Relaxed) {
@@ -8135,6 +8145,8 @@ impl Actor {
         let full = &self.metrics.p2p_subscriber_queue_full_by_topic_total;
         full.with_label_values(&["Consensus"])
             .set(iroha_p2p::network::subscriber_queue_full_consensus_count());
+        full.with_label_values(&["ConsensusChunk"])
+            .set(iroha_p2p::network::subscriber_queue_full_consensus_chunk_count());
         full.with_label_values(&["Control"])
             .set(iroha_p2p::network::subscriber_queue_full_control_count());
         full.with_label_values(&["BlockSync"])
@@ -8154,6 +8166,9 @@ impl Actor {
         unrouted
             .with_label_values(&["Consensus"])
             .set(iroha_p2p::network::subscriber_unrouted_consensus_count());
+        unrouted
+            .with_label_values(&["ConsensusChunk"])
+            .set(iroha_p2p::network::subscriber_unrouted_consensus_chunk_count());
         unrouted
             .with_label_values(&["Control"])
             .set(iroha_p2p::network::subscriber_unrouted_control_count());
@@ -8555,10 +8570,7 @@ impl Actor {
 }
 
 fn block_counts_as_non_empty(block: &iroha_data_model::block::SignedBlock) -> bool {
-    if block.entrypoint_hashes().count() != 0 {
-        return true;
-    }
-    block.header().is_genesis()
+    !block.is_empty() || block.header().is_genesis()
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -8891,6 +8903,23 @@ mod tests {
                 .with_label_values(&["missing"])
                 .get(),
             1
+        );
+    }
+
+    #[test]
+    fn consensus_message_handling_metric_increments() {
+        let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
+        let telemetry = Telemetry::new(metrics.clone(), true);
+
+        telemetry.note_consensus_message_handling("block_created", "dropped", "hint_mismatch");
+        telemetry.note_consensus_message_handling("block_created", "dropped", "hint_mismatch");
+
+        assert_eq!(
+            metrics
+                .sumeragi_consensus_message_handling_total
+                .with_label_values(&["block_created", "dropped", "hint_mismatch"])
+                .get(),
+            2
         );
     }
 
@@ -12474,6 +12503,7 @@ mod tests {
         let mut baseline = BTreeMap::new();
         for topic in [
             "Consensus",
+            "ConsensusChunk",
             "Control",
             "BlockSync",
             "TxGossip",
@@ -12486,6 +12516,7 @@ mod tests {
 
         for &topic in &[
             Topic::Consensus,
+            Topic::ConsensusChunk,
             Topic::Control,
             Topic::BlockSync,
             Topic::TxGossip,
@@ -12501,6 +12532,7 @@ mod tests {
         let by = &metrics.p2p_subscriber_queue_full_by_topic_total;
         for topic in [
             "Consensus",
+            "ConsensusChunk",
             "Control",
             "BlockSync",
             "TxGossip",
@@ -12527,6 +12559,7 @@ mod tests {
         let mut baseline = BTreeMap::new();
         for topic in [
             "Consensus",
+            "ConsensusChunk",
             "Control",
             "BlockSync",
             "TxGossip",
@@ -12539,6 +12572,7 @@ mod tests {
 
         for &topic in &[
             Topic::Consensus,
+            Topic::ConsensusChunk,
             Topic::Control,
             Topic::BlockSync,
             Topic::TxGossip,
@@ -12554,6 +12588,7 @@ mod tests {
         let by = &metrics.p2p_subscriber_unrouted_by_topic_total;
         for topic in [
             "Consensus",
+            "ConsensusChunk",
             "Control",
             "BlockSync",
             "TxGossip",
@@ -13316,11 +13351,16 @@ mod tests {
     #[test]
     fn genesis_commit_time_is_zero() {
         let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1500));
-        let header = BlockBuilder::new_with_time_source(vec![], time_source.clone())
-            .chain(1, None)
-            .sign(KeyPair::random().private_key())
-            .unpack(|_| {})
-            .header();
+        let creation_time_ms =
+            u64::try_from(time_source.get_unix_time().as_millis()).unwrap_or(u64::MAX);
+        let header = BlockHeader::new(
+            std::num::NonZeroU64::new(1).expect("non-zero height"),
+            None,
+            None,
+            None,
+            creation_time_ms,
+            0,
+        );
 
         time_handle.advance(Duration::from_secs(12));
         let report = BlockCommitReport::new(&header, &time_source);
@@ -13346,6 +13386,12 @@ mod tests {
         assert!(!block_counts_as_non_empty(&block));
     }
 
+    #[test]
+    fn block_payload_detects_da_commitment_blocks() {
+        let block = block_with_da_commitments(2);
+        assert!(block_counts_as_non_empty(&block));
+    }
+
     fn empty_block(height: u64) -> iroha_data_model::block::SignedBlock {
         use std::num::NonZeroU64;
 
@@ -13364,6 +13410,55 @@ mod tests {
         let signature = BlockSignature::new(0, SignatureOf::new(signer.private_key(), &header));
 
         iroha_data_model::block::SignedBlock::presigned(signature, header, Vec::new())
+    }
+
+    fn block_with_da_commitments(height: u64) -> iroha_data_model::block::SignedBlock {
+        use std::num::NonZeroU64;
+
+        use iroha_crypto::{Hash, Signature, SignatureOf};
+        use iroha_data_model::{
+            block::{BlockHeader, BlockSignature},
+            da::{
+                commitment::{
+                    DaCommitmentBundle, DaCommitmentRecord, DaProofScheme, KzgCommitment,
+                },
+                types::{BlobDigest, RetentionPolicy, StorageTicketId},
+            },
+            nexus::LaneId,
+            sorafs::pin_registry::ManifestDigest,
+        };
+
+        let header = BlockHeader::new(
+            NonZeroU64::new(height).expect("height must be > 0"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let signer = KeyPair::random();
+        let signature = BlockSignature::new(0, SignatureOf::new(signer.private_key(), &header));
+        let mut block =
+            iroha_data_model::block::SignedBlock::presigned(signature, header, Vec::new());
+
+        let record = DaCommitmentRecord::new(
+            LaneId::new(0),
+            1,
+            1,
+            BlobDigest::new([0x11; 32]),
+            ManifestDigest::new([0x22; 32]),
+            DaProofScheme::MerkleSha256,
+            Hash::prehashed([0x33; 32]),
+            Some(KzgCommitment::new([0x44; 48])),
+            Some(Hash::prehashed([0x55; 32])),
+            RetentionPolicy::default(),
+            StorageTicketId::new([0x66; 32]),
+            Signature::from_bytes(&[0x77; 64]),
+        );
+        let bundle = DaCommitmentBundle::new(vec![record]);
+        block.set_da_commitments(Some(bundle));
+
+        block
     }
 
     fn block_with_transactions(height: u64) -> iroha_data_model::block::SignedBlock {

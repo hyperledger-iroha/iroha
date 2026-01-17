@@ -243,10 +243,10 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 | BlockMessage::BlockSyncUpdate(_)
                 | BlockMessage::FetchPendingBlock(_)
                 | BlockMessage::Proposal(_)
-                | BlockMessage::RbcChunk(_)
                 | BlockMessage::RbcInit(_)
                 | BlockMessage::RbcReady(_)
                 | BlockMessage::RbcDeliver(_) => T::ConsensusPayload,
+                BlockMessage::RbcChunk(_) => T::ConsensusChunk,
                 BlockMessage::ConsensusParams(_)
                 | BlockMessage::ExecWitness(_)
                 | BlockMessage::ProposalHint(_)
@@ -534,7 +534,7 @@ mod tests {
             bytes: vec![1, 2, 3],
         };
         let payload = NetworkMessage::SumeragiBlock(Box::new(BlockMessage::RbcChunk(chunk)));
-        assert_eq!(payload.topic(), NetworkTopic::ConsensusPayload);
+        assert_eq!(payload.topic(), NetworkTopic::ConsensusChunk);
 
         let roster_hash = Hash::prehashed([1; 32]);
         let chunk_root = Hash::prehashed([2; 32]);

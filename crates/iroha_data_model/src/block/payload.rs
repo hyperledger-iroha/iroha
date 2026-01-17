@@ -168,10 +168,28 @@ impl SignedBlock {
         self.payload.header.set_da_pin_intents_hash(hash);
     }
 
-    /// Check if block is empty (has no transactions)
+    /// Check whether the block has entrypoints or deterministic artifacts.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.payload.transactions.is_empty()
+        if !self.payload.transactions.is_empty() {
+            return false;
+        }
+        if let Some(result) = self.result.as_ref() {
+            if !result.time_triggers.is_empty() {
+                return false;
+            }
+        }
+        if let Some(bundle) = self.payload.da_commitments.as_ref() {
+            if !bundle.is_empty() {
+                return false;
+            }
+        }
+        if let Some(bundle) = self.payload.da_pin_intents.as_ref() {
+            if !bundle.is_empty() {
+                return false;
+            }
+        }
+        true
     }
 
     /// Time-triggered entrypoints in execution order, following external transactions.
