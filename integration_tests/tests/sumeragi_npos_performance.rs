@@ -15,13 +15,14 @@ use iroha::data_model::{
     Level,
     isi::{Log, SetParameter},
     parameter::{
-        Parameter, SumeragiParameter,
+        BlockParameter, Parameter, SumeragiParameter,
         system::{SumeragiConsensusMode, SumeragiNposParameters},
     },
     prelude::TransactionBuilder,
 };
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+use nonzero_ext::nonzero;
 use norito::json::{self, JsonSerialize, Map, Value};
 use tokio::time::sleep;
 
@@ -189,6 +190,9 @@ async fn npos_baseline_1s_k3_captures_metrics() -> Result<()> {
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::BlockTimeMs(BLOCK_TIME_MS),
         )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Block(
+            BlockParameter::MaxTransactions(nonzero!(1_u64)),
+        )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::CollectorsK(COLLECTORS_K),
         )))
@@ -222,6 +226,17 @@ async fn npos_baseline_1s_k3_captures_metrics() -> Result<()> {
         .wrap_err("fetch initial status snapshot")?;
     let start_non_empty = status_before.blocks_non_empty;
     let target_non_empty = start_non_empty.saturating_add(SAMPLE_BLOCKS);
+    let seed_start = start_non_empty.saturating_add(1);
+    let submit_client = client.clone();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        for offset in 0..SAMPLE_BLOCKS {
+            let message = format!("npos baseline seed {}", seed_start + offset);
+            submit_client.submit(Log::new(Level::INFO, message))?;
+        }
+        Ok(())
+    })
+    .await
+    .wrap_err("submit baseline log transactions")??;
 
     let http = reqwest::Client::new();
     let metrics_url = client

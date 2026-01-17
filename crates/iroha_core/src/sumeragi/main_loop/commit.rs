@@ -12,6 +12,7 @@ use iroha_logger::prelude::*;
 
 use super::locked_qc::qc_extends_locked_with_lookup;
 use super::pacing::{Pacemaker, PacemakerBackpressure, PacemakerBackpressureAction};
+use super::propose::ProposalBackpressure;
 use super::*;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -4618,24 +4619,27 @@ impl Actor {
     pub(super) fn evaluate_pacemaker(
         pacemaker: &mut Pacemaker,
         pacemaker_backpressure: &mut PacemakerBackpressure,
-        state: BackpressureState,
+        backpressure: ProposalBackpressure,
         now: Instant,
-        defer_on_fire: bool,
     ) -> (bool, bool, bool) {
-        let saturated = state.is_saturated();
-        let backpressure_action = pacemaker_backpressure.update(saturated);
+        let deferring = backpressure.should_defer();
+        let backpressure_action = pacemaker_backpressure.update(deferring);
         let log_initial_deferral =
             matches!(backpressure_action, PacemakerBackpressureAction::First);
         let should_fire_now = pacemaker.should_fire(now);
-        if defer_on_fire && saturated {
-            if should_fire_now {
-                // Allow proposals to proceed once the pacemaker deadline elapses even under
-                // saturation to avoid deadlock, but keep logging deferral.
-                return (log_initial_deferral, true, true);
+        if deferring {
+            if backpressure.only_queue_saturation() {
+                if should_fire_now {
+                    // Allow proposals to proceed once the pacemaker deadline elapses when queue
+                    // saturation is the only backpressure signal, but keep logging deferral.
+                    return (log_initial_deferral, true, true);
+                }
+                // Defer proposal assembly under backpressure, but still request a log on the first
+                // deferral of a saturation window even if the pacemaker deadline has not yet elapsed.
+                return (log_initial_deferral, log_initial_deferral, false);
             }
-            // Defer proposal assembly under backpressure, but still request a log on the first
-            // deferral of a saturation window even if the pacemaker deadline has not yet elapsed.
-            return (log_initial_deferral, log_initial_deferral, false);
+            // Non-queue backpressure keeps proposals deferred even when the pacemaker fires.
+            return (log_initial_deferral, should_fire_now, false);
         }
         (log_initial_deferral, false, should_fire_now)
     }

@@ -1,6 +1,49 @@
 # Status
 
 ## Latest Updates
+- Empty blocks: drop empty BlockCreated/QC payloads early, clear pending/missing/QC caches, add unit coverage, and make consensus test blocks non-empty by default; clarify empty-block comment in block builder.
+- Tests: not run (not requested).
+- Sumeragi pacemaker/backpressure: keep non-queue deferrals sticky, allow proposals after reschedule only when pending blocks are unblocked, and unify per-tick backpressure snapshots; update Sumeragi docs/translations.
+- Format: `cargo fmt --all` (stable rustfmt warns about unstable options like `format_code_in_doc_comments`, `imports_granularity`, `group_imports`).
+- Tests: `cargo test -p iroha_core --lib evaluate_pacemaker_ -- --nocapture`, `cargo test -p iroha_core --lib proposal_backpressure_ -- --nocapture` (pass; norito dead_code warnings, block_sync unused-assign warnings).
+- Roadmap: further refine LOCALNET-10K-TPS tasks into SLO criteria, report template/artifacts, harness determinism, profile selection, and per-mode runs.
+- Tests: not run (docs-only change).
+- Roadmap: refine LOCALNET-10K-TPS tasks into SLO thresholds, report template, per-mode config profiles, harness metrics, and per-mode throughput runs.
+- Tests: not run (docs-only change).
+- Config: avoid shadowing the key-pair option during user config parsing to fix streaming/unwrap type mismatches.
+- Tests: not run (not requested).
+- Kagami/localnet: start scripts now pass `--sora` whenever Nexus is enabled (NPoS bootstrap), fixing config startup errors.
+- Localnet DEBUG (4 peers, 1s, NPoS): ran 20k ping load (5k/peer, parallel 32 per shard). `/v1/sumeragi/status` shows `commit_qc.validator_set_len=4` (non-empty), but stake quorum timeouts still incremented (`stake_quorum_timeout_total=4`) and no txs admitted/committed (blocks_non_empty delta 0); view changes driven by missing payload/QC.
+- Tests: not run (per request).
+- Tests: add negative coverage for missing DA proof policy hash in BLS batch PoP blocks; ensure positive cases set proof policy bundles for validation.
+- Tests: `cargo test -p iroha_core --test bls_batch_pop` (pass; warnings: `norito` dead_code helpers, `iroha_core` unused assignments in `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs`).
+- NPoS perf test: drive non-empty blocks in `npos_baseline_1s_k3_captures_metrics` by capping max tx per block to 1 and submitting baseline log transactions.
+- Docs: add a safety/liveness proof sketch (permissioned + NPoS) to `docs/source/sumeragi.md`.
+- Tests: not run (docs-only change).
+- Kagami/localnet: split NPoS bootstrap so stake mints commit before validator registration/activation; enable Nexus in peer configs whenever NPoS bootstrap is requested (including staged cutovers); add staged-cutover Nexus config coverage.
+- Tests: not run (per request).
+- Sumeragi roster/PoP: skip PoP filtering when PoP maps are incomplete to keep validator rosters consistent; add unit coverage and update docs/config notes.
+- Format: `cargo fmt --all` (stable rustfmt warns about unstable options like `format_code_in_doc_comments`, `imports_granularity`, `group_imports`).
+- Tests: `cargo test -p iroha_core skips_incomplete_pops -- --nocapture` (pass; warnings: `norito` dead_code helpers, `iroha_core` unused assignments in `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs`).
+- Sumeragi pacemaker: treat proposal backpressure as a structured snapshot and only allow deadline overrides for pure queue saturation; defer proposals when RBC backlog, relay backpressure, or active pending blocks persist, with updated unit coverage.
+- Format: `cargo fmt --all` (stable rustfmt warns about unstable options like `format_code_in_doc_comments`, `imports_granularity`, `group_imports`).
+- Tests: `cargo test -p iroha_core --lib evaluate_pacemaker_ -- --nocapture`, `cargo test -p iroha_core --lib proposal_backpressure_ -- --nocapture`, `cargo test -p iroha_core --lib should_defer_proposal_when_ -- --nocapture` (pass; norito dead_code warnings, block_sync unused-assign warnings).
+- Sumeragi: seed locked/highest QC from the committed tip on actor startup to avoid restarts relying on empty blocks; assert QC seeding in `stale_pending_block_requeues_transactions`.
+- Integration tests: simplify post-restart QC convergence reporting in `sumeragi_lock_convergence` to avoid unused assignment warnings.
+- Tests: `cargo test -p iroha_core stale_pending_block_requeues_transactions -- --nocapture` (pass; norito dead_code warnings, block_sync unused-assign warnings).
+- Sumeragi/RBC: compute chunk-root mismatches from hydrated payload bytes so sender attribution captures root mismatches even when cached chunks exist.
+- Tests: `cargo test -p iroha_torii status_snapshot_json_includes_rbc_mismatch -- --nocapture` (pass; norito dead_code warnings).
+- Tests: `cargo test -p iroha_core handle_rbc_chunk_stash_attributes_mismatch_on_flush -- --nocapture` (pass; norito dead_code warnings, block_sync unused-assign warnings, network bind warning).
+- Tests: `cargo test -p iroha_core hydrate_rbc_session_from_block_attributes_mismatch_to_sender -- --nocapture` (failed: `bls_batch_pop` test binary killed by SIGKILL).
+- Tests: `cargo test -p iroha_core --lib hydrate_rbc_session_from_block_attributes_mismatch_to_sender -- --nocapture` (pass; norito dead_code warnings, block_sync unused-assign warnings, network bind warning).
+- Format: `cargo fmt --all` (stable rustfmt warns about unstable options like `format_code_in_doc_comments`, `imports_granularity`, `group_imports`).
+- Sumeragi tests: make VRF mode-mismatch harnesses mutable to fix `iroha_core` test builds (`crates/iroha_core/src/sumeragi/main_loop/tests.rs`).
+- Tests: `cargo test -p iroha_p2p peer_message_consensus_chunk_uses_block_sync_cap -- --nocapture`, `cargo test -p iroha_p2p overflow_counters_full_matrix -- --nocapture` (pass; norito dead_code warnings).
+- Tests: `cargo test -p iroha sumeragi_status_wire_roundtrip_to_json_preserves_fields -- --nocapture` (pass; norito dead_code warnings).
+- Tests: `cargo test -p iroha_torii status_snapshot_json_includes_rbc_mismatch -- --nocapture` (pass; norito dead_code warnings).
+- Tests: `cargo test -p iroha_core handle_rbc_chunk_rejects_digest_mismatch -- --nocapture`, `cargo test -p iroha_core handle_rbc_chunk_stash_attributes_mismatch_on_flush -- --nocapture`, `cargo test -p iroha_core hydrate_rbc_session_from_block_attributes_mismatch_to_sender -- --nocapture` (pass; norito dead_code warnings; unused assignment warnings in `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs`; network bind unavailable warnings in Sumeragi tests).
+- Localnet DEBUG (4 peers, 1s): 60k ping load (15k/peer, parallel 64) ran with extended telemetry; subscriber queue drops 0, blocks stuck at height 1, txs expired, view-change causes dominated by missing QC/stake quorum with RBC DELIVER deferrals; localnet stopped.
+- Fix: resolve a borrow conflict in deferred vote logging so debug builds complete.
 - Consensus telemetry: extend `consensus_message_handling` to proposals, votes, QCs, VRF commit/reveal, RBC init/ready/chunk, fetch-pending requests, and evidence with new reason labels and unit coverage.
 - Docs: update `docs/source/sumeragi.md` consensus-message handling guidance for the expanded surface.
 - Tests: not run (not requested).

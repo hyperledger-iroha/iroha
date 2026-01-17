@@ -663,7 +663,8 @@ pub struct Root {
     )]
     chain_discriminant: WithOrigin<u16>,
     /// Optional BLS Proof-of-Possession entries for trusted peers.
-    /// If provided, only peers with valid PoP will participate as validators.
+    /// When provided, PoP entries must cover every BLS validator in `trusted_peers` and
+    /// are verified during config parsing; incomplete or invalid PoPs are rejected.
     #[config(default)]
     trusted_peers_pop: Vec<TrustedPeerPop>,
     #[config(nested)]
@@ -784,6 +785,95 @@ pub enum ParseError {
 }
 
 impl Root {
+    fn parse_trusted_peer_pops(
+        entries: &[TrustedPeerPop],
+        emitter: &mut Emitter<ParseError>,
+    ) -> BTreeMap<PublicKey, Vec<u8>> {
+        let mut pops = BTreeMap::new();
+        for entry in entries {
+            let pk = &entry.public_key;
+            if pk.algorithm() != Algorithm::BlsNormal {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSumeragiConfig)
+                        .attach(format!("trusted_peers_pop entry uses non-BLS key: {pk}")),
+                );
+                continue;
+            }
+
+            let pop_bytes =
+                match hex::decode(entry.pop_hex.trim_start_matches("0x")) {
+                    Ok(bytes) => bytes,
+                    Err(err) => {
+                        emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                            format!("trusted_peers_pop entry has invalid hex for {pk}: {err}"),
+                        ));
+                        continue;
+                    }
+                };
+
+            if let Err(err) = iroha_crypto::bls_normal_pop_verify(pk, &pop_bytes) {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                        "trusted_peers_pop entry has invalid PoP for {pk}: {err}"
+                    )),
+                );
+                continue;
+            }
+
+            if pops.insert(pk.clone(), pop_bytes).is_some() {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSumeragiConfig)
+                        .attach(format!("trusted_peers_pop entry duplicated for {pk}")),
+                );
+            }
+        }
+        pops
+    }
+
+    fn validate_trusted_peer_pops(
+        trusted: &actual::TrustedPeers,
+        emitter: &mut Emitter<ParseError>,
+    ) {
+        if trusted.pops.is_empty() {
+            return;
+        }
+
+        let mut roster_keys: BTreeSet<PublicKey> = BTreeSet::new();
+        for peer in std::iter::once(&trusted.myself).chain(trusted.others.iter()) {
+            let pk = peer.id().public_key();
+            if pk.algorithm() == Algorithm::BlsNormal {
+                roster_keys.insert(pk.clone());
+            }
+        }
+
+        let missing: Vec<_> = roster_keys
+            .iter()
+            .filter(|pk| !trusted.pops.contains_key(*pk))
+            .map(ToString::to_string)
+            .collect();
+        if !missing.is_empty() {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                    "trusted_peers_pop missing PoPs for roster keys: {missing:?}"
+                )),
+            );
+        }
+
+        let extras: Vec<_> = trusted
+            .pops
+            .keys()
+            .filter(|pk| !roster_keys.contains(*pk))
+            .map(ToString::to_string)
+            .collect();
+        if !extras.is_empty() {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                    "trusted_peers_pop contains keys not in trusted_peers: {extras:?}"
+                )),
+            );
+        }
+    }
+
     /// Parses user configuration view into the internal repr.
     ///
     /// # Errors
@@ -810,34 +900,24 @@ impl Root {
         }
 
         let (network, block_sync, transaction_gossiper) = self.network.parse();
-        let Some((peer, trusted_peers)) = key_pair.as_ref().map(|key_pair| {
-            let peer = Peer::new(
-                network.address.value().clone(),
-                key_pair.public_key().clone(),
-            );
-
-            (
-                peer.clone(),
-                self.trusted_peers.map(|x| {
-                    let others = x.0.into_iter().filter(|p| p.id() != peer.id()).collect();
-                    actual::TrustedPeers {
-                        myself: peer,
-                        others,
-                        pops: self
-                            .trusted_peers_pop
-                            .iter()
-                            .filter_map(|e| {
-                                hex::decode(e.pop_hex.trim_start_matches("0x"))
-                                    .ok()
-                                    .map(|bytes| (e.public_key.clone(), bytes))
-                            })
-                            .collect(),
-                    }
-                }),
-            )
-        }) else {
+        let Some(key_pair_ref) = key_pair.as_ref() else {
             panic!("Key pair is missing");
         };
+        let peer = Peer::new(
+            network.address.value().clone(),
+            key_pair_ref.public_key().clone(),
+        );
+        let trusted_peers = self.trusted_peers.map(|x| {
+            let others = x.0.into_iter().filter(|p| p.id() != peer.id()).collect();
+            let pops = Self::parse_trusted_peer_pops(&self.trusted_peers_pop, &mut emitter);
+            let trusted = actual::TrustedPeers {
+                myself: peer.clone(),
+                others,
+                pops,
+            };
+            Self::validate_trusted_peer_pops(&trusted, &mut emitter);
+            trusted
+        });
 
         let genesis = self.genesis.into();
 

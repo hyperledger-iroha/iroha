@@ -1311,26 +1311,32 @@ impl Actor {
         CommittedQcDecision::Drop
     }
 
-    pub(super) fn should_skip_precommit_on_empty_block(
+    pub(super) fn should_drop_qc_on_empty_block(
         &self,
         qc: &crate::sumeragi::consensus::Qc,
         block_known: bool,
     ) -> bool {
-        if block_known && qc.phase == crate::sumeragi::consensus::Phase::Commit {
+        if !block_known {
+            return false;
+        }
+        if let Some(true) = self.block_is_empty(qc.subject_block_hash) {
             let queue_len = self.queue.queued_len();
             let pending_nonempty = self.has_nonempty_pending_at_height(qc.height);
-            if let Some(is_empty) = self.block_is_empty(qc.subject_block_hash)
-                && is_empty
-            {
-                info!(
-                    height = qc.height,
-                    view = qc.view,
-                    queue_len,
-                    pending_nonempty,
-                    hash = %qc.subject_block_hash,
-                    "processing precommit QC for empty block; empty blocks are disallowed"
-                );
-            }
+            info!(
+                phase = ?qc.phase,
+                height = qc.height,
+                view = qc.view,
+                queue_len,
+                pending_nonempty,
+                hash = %qc.subject_block_hash,
+                "dropping QC for empty block; empty blocks are disallowed"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::Qc,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidPayload,
+            );
+            return true;
         }
         false
     }
@@ -1936,7 +1942,7 @@ impl Actor {
                 "processing precommit QC"
             );
         }
-        if self.should_skip_precommit_on_empty_block(&qc, block_known_locally) {
+        if self.should_drop_qc_on_empty_block(&qc, block_known_locally) {
             return Ok(());
         }
 

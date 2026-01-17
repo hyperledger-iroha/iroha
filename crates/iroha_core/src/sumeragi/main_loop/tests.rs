@@ -44,6 +44,7 @@ use iroha_data_model::{
     isi::InstructionBox,
     merge::MergeCommitteeSignature,
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneStorageProfile, LaneVisibility},
+    parameter::TransactionParameters,
     peer::{Peer, PeerId},
     prelude::{AccountId, Domain, Register, TransactionBuilder},
     sorafs::pin_registry::ManifestDigest,
@@ -54,11 +55,12 @@ use iroha_data_model::{
     trigger::DataTriggerSequence,
 };
 use iroha_primitives::time::TimeSource;
-use iroha_test_samples::{ALICE_ID, SAMPLE_GENESIS_ACCOUNT_ID};
+use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID};
 use nonzero_ext::nonzero;
 use norito::to_bytes;
 use sha2::{Digest as _, Sha256};
 
+use super::propose::ProposalBackpressure;
 use super::{
     super::rbc_store::{SessionKey, SoftwareManifest},
     Actor, BlockMessage,
@@ -774,7 +776,7 @@ async fn apply_mode_flip_defers_while_commit_pipeline_active() {
     let height = 2u64;
     let view = 0u64;
     let parent = actor.state.view().latest_block_hash();
-    let block = sample_block(height, view, parent);
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, parent);
     let block_hash = block.hash();
     actor.pending.pending_processing.set(Some(block_hash));
     actor
@@ -2420,9 +2422,16 @@ async fn latest_committed_qc_uses_epoch_for_height() {
     consensus_cfg.epoch_length_blocks = 2;
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &harness.actor;
 
-    let block1 = sample_block(1, 0, None);
-    let block2 = sample_block(2, 0, Some(block1.hash()));
+    let block1 = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
+    let block2 = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        2,
+        0,
+        Some(block1.hash()),
+    );
 
     harness
         .actor
@@ -2475,8 +2484,8 @@ async fn realigns_locked_qc_when_diverged_from_committed_tip() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
-    let block1 = sample_block(1, 0, None);
-    let block2 = sample_block(2, 0, Some(block1.hash()));
+    let block1 = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
+    let block2 = nonempty_block_for_actor(actor, &harness.key_pairs, 2, 0, Some(block1.hash()));
     let fork_block2 = sample_block(2, 1, Some(block1.hash()));
 
     actor.kura.store_block(block1.clone()).expect("store block");
@@ -2904,8 +2913,9 @@ async fn current_height_and_roster_matches_effective_topology() {
 async fn block_sync_update_skips_known_block_without_roster_counters() {
     super::status::reset_block_sync_counters_for_tests();
     let mut harness = test_actor_harness(4).await;
+    let actor = &harness.actor;
 
-    let block = sample_block(1, 0, None);
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
     harness
         .actor
         .kura
@@ -3352,7 +3362,13 @@ async fn block_sync_update_defers_signature_mismatch_when_parent_missing() {
         missing_parent =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x62; Hash::LENGTH]));
     }
-    let block = sample_block(block_height, 0, Some(missing_parent));
+    let block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        block_height,
+        0,
+        Some(missing_parent),
+    );
     let block_hash = block.hash();
     let now = Instant::now();
     let retry_window = Duration::from_secs(1);
@@ -4694,7 +4710,7 @@ async fn fetch_pending_block_attaches_cached_qc() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
-    let block = sample_block(2, 0, None);
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, 2, 0, None);
     let block_hash = block.hash();
     actor.kura.store_block(block.clone()).expect("store block");
 
@@ -5965,7 +5981,7 @@ async fn process_precommit_qc_upgrades_highest_qc_phase() {
 #[tokio::test(flavor = "current_thread")]
 async fn quorum_reschedule_rebroadcasts_block_created_without_roster() {
     let mut harness = test_actor_harness(4).await;
-    let block = sample_block(1, 0, None);
+    let block = nonempty_block_for_actor(&harness.actor, &harness.key_pairs, 1, 0, None);
     let block_hash = block.hash();
     let payload_hash = Hash::prehashed([0x55; 32]);
     let pending = PendingBlock::new(block, payload_hash, 1, 0);
@@ -6024,7 +6040,7 @@ async fn quorum_reschedule_skips_duplicate_block_rebroadcasts() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
-    let block = sample_block(1, 0, None);
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     let height = block.header().height().get();
@@ -10028,8 +10044,8 @@ async fn precommit_qc_advances_locked_qc_when_block_known() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
-    let block1 = sample_block(1, 0, None);
-    let block2 = sample_block(2, 0, Some(block1.hash()));
+    let block1 = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
+    let block2 = nonempty_block_for_actor(actor, &harness.key_pairs, 2, 0, Some(block1.hash()));
 
     actor
         .kura
@@ -10081,7 +10097,7 @@ async fn precommit_qc_defers_locked_qc_until_block_validated() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
-    let block = sample_block(2, 0, None);
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, 2, 0, None);
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     let mut pending = PendingBlock::new(block, payload_hash, 2, 0);
@@ -10118,7 +10134,7 @@ async fn precommit_qc_drops_when_conflicts_with_locked_chain() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
-    let locked_block = sample_block(1, 0, None);
+    let locked_block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
     actor
         .kura
         .store_block(locked_block.clone())
@@ -10135,7 +10151,7 @@ async fn precommit_qc_drops_when_conflicts_with_locked_chain() {
     });
     super::status::set_locked_qc(1, 0, Some(locked_block.hash()));
 
-    let conflicting_block = sample_block(1, 1, None);
+    let conflicting_block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 1, None);
     let pending = PendingBlock::new(conflicting_block.clone(), Hash::prehashed([0x42; 32]), 1, 1);
     actor
         .pending
@@ -10221,8 +10237,8 @@ async fn precommit_vote_allows_when_block_extends_locked_chain() {
 
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let epoch = actor.epoch_manager.as_ref().map_or(0, EpochManager::epoch);
-    let block1 = sample_block(1, 0, None);
-    let block2 = sample_block(2, 0, Some(block1.hash()));
+    let block1 = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
+    let block2 = nonempty_block_for_actor(actor, &harness.key_pairs, 2, 0, Some(block1.hash()));
 
     actor
         .kura
@@ -10306,8 +10322,8 @@ async fn try_form_qc_from_votes_skips_when_conflicts_locked_chain() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
-    let locked_block = sample_block(1, 0, None);
-    let conflicting_block = sample_block(2, 0, None);
+    let locked_block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
+    let conflicting_block = nonempty_block_for_actor(actor, &harness.key_pairs, 2, 0, None);
     actor
         .kura
         .store_block(locked_block.clone())
@@ -11136,7 +11152,7 @@ async fn prune_precommit_votes_conflicting_with_lock_drops_known_conflicts() {
     let mut harness = test_actor_harness(2).await;
     let actor = &mut harness.actor;
 
-    let locked_block = sample_block(1, 0, None);
+    let locked_block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
     actor
         .kura
         .store_block(locked_block.clone())
@@ -11242,7 +11258,7 @@ async fn handle_precommit_vote_uses_roster_snapshot_after_topology_change() {
 
     let height = 2u64;
     let view = 0u64;
-    let block = sample_block(height, view, None);
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, None);
     let block_hash = block.hash();
 
     let roster = actor.effective_commit_topology();
@@ -11427,7 +11443,7 @@ async fn handle_qc_uses_roster_snapshot_after_topology_change() {
 
     let height = 2u64;
     let view = 0u64;
-    let block = sample_block(height, view, None);
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, None);
     let block_hash = block.hash();
 
     let roster = actor.effective_commit_topology();
@@ -11677,6 +11693,61 @@ async fn handle_qc_records_commit_qc_for_committed_block() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn handle_qc_drops_empty_block_payload() {
+    let _guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    let height = 1_u64;
+    let view = 0_u64;
+    let block = empty_block(height, view, None);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
+
+    let epoch = actor.epoch_for_height(height);
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        vec![0x01],
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+
+    actor.handle_qc(qc).expect("handle qc");
+
+    let key = (Phase::Commit, block_hash, height, view, epoch);
+    assert!(
+        !actor.qc_cache.contains_key(&key),
+        "empty-block QC should be dropped before caching"
+    );
+    assert!(actor.locked_qc.is_none(), "empty-block QC must not update locks");
+
+    let entries = super::status::snapshot().consensus_message_handling.entries;
+    let entry = entries
+        .iter()
+        .find(|entry| {
+            entry.kind == super::status::ConsensusMessageKind::Qc
+                && entry.outcome == super::status::ConsensusMessageOutcome::Dropped
+                && entry.reason == super::status::ConsensusMessageReason::InvalidPayload
+        })
+        .expect("empty QC drop should be recorded");
+    assert_eq!(entry.total, 1);
+
+    super::status::reset_message_handling_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn handle_qc_marks_pending_with_commit_qc() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
@@ -11687,7 +11758,7 @@ async fn handle_qc_marks_pending_with_commit_qc() {
     let height = 2_u64;
     let view = 0_u64;
     let view_index = view;
-    let block = sample_block(height, view_index, None);
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view_index, None);
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     actor.pending.pending_blocks.insert(
@@ -11695,7 +11766,13 @@ async fn handle_qc_marks_pending_with_commit_qc() {
         PendingBlock::new(block, payload_hash, height, view),
     );
 
-    let inflight_block = sample_block(height + 1, view_index, Some(block_hash));
+    let inflight_block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        height + 1,
+        view_index,
+        Some(block_hash),
+    );
     let inflight_hash = inflight_block.hash();
     let inflight_payload_hash = Hash::new(super::proposals::block_payload_bytes(&inflight_block));
     let inflight_pending =
@@ -11766,7 +11843,7 @@ async fn handle_precommit_vote_accepts_stale_view_when_block_pending() {
 
     let height = 2u64;
     let view = 0u64;
-    let block = sample_block(height, view, None);
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, None);
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     actor.pending.pending_blocks.insert(
@@ -11817,7 +11894,7 @@ async fn handle_precommit_vote_accepts_stale_view_when_block_unknown_with_da() {
 
     let height = 2u64;
     let view = 0u64;
-    let block = sample_block(height, view, None);
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, None);
     let block_hash = block.hash();
 
     let now = Instant::now();
@@ -11980,7 +12057,7 @@ async fn block_created_applies_cached_precommit_qc() {
 
     let height = 2u64;
     let view = 0u64;
-    let block = sample_block(height, view, None);
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, None);
     let block_hash = block.hash();
 
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
@@ -12042,7 +12119,7 @@ async fn handle_qc_missing_block_fetch_falls_back_after_signer_attempts() {
 
     let height = 2u64;
     let view = 0u64;
-    let block = sample_block(height, view, None);
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, None);
     let block_hash = block.hash();
 
     let now = Instant::now();
@@ -18002,6 +18079,25 @@ async fn stale_pending_block_requeues_transactions() {
     )
     .expect("actor init");
 
+    let locked = actor
+        .locked_qc
+        .as_ref()
+        .expect("locked QC seeded from committed tip");
+    let highest = actor
+        .highest_qc
+        .as_ref()
+        .expect("highest QC seeded from committed tip");
+    assert_eq!(locked, highest, "initial QCs should match");
+    assert_eq!(
+        locked.height,
+        committed.header().height().get(),
+        "locked QC height should reflect the committed tip"
+    );
+    assert_eq!(
+        locked.subject_block_hash, committed_hash,
+        "locked QC should track the committed tip hash"
+    );
+
     let pending_parent = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xBB; 32]));
     let pending_tx = sample_transaction();
     let pending_block = block_with_txs(2, 0, Some(pending_parent), vec![pending_tx]);
@@ -18533,7 +18629,7 @@ fn block_sync_selection_prefers_matching_commit_qc_history() {
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD0; Hash::LENGTH]));
     let block_sig = BlockSignature::new(0, SignatureOf::from_hash(me_kp.private_key(), block_hash));
     let mut signers = BTreeSet::new();
-    signers.insert(ValidatorIndex::try_from(0).expect("signer index fits"));
+    signers.insert(ValidatorIndex::try_from(0_u32).expect("signer index fits"));
     let signers_bitmap = super::build_signers_bitmap(&signers, 1);
     let topology = super::network_topology::Topology::new(vec![me_peer.id().clone()]);
     let cert = qc_with_bitmap(
@@ -24629,13 +24725,19 @@ async fn record_phase_sample_updates_view_change_index_and_install() {
 fn pacemaker_defers_under_backpressure() {
     let start = Instant::now();
     let mut pacemaker = Pacemaker::with_interval(Duration::from_millis(10), start);
-    let mut backpressure = PacemakerBackpressure::new();
+    let mut tracker = PacemakerBackpressure::new();
     let state = BackpressureState::Saturated {
         queued: 5,
         capacity: NonZeroUsize::new(5).expect("non-zero"),
     };
+    let backpressure = ProposalBackpressure {
+        queue_state: state,
+        active_pending: false,
+        rbc_backlog: false,
+        relay_backpressure: false,
+    };
     let (log_initial, log_fire, should_attempt) =
-        Actor::evaluate_pacemaker(&mut pacemaker, &mut backpressure, state, start, true);
+        Actor::evaluate_pacemaker(&mut pacemaker, &mut tracker, backpressure, start);
     assert!(log_initial);
     assert!(log_fire);
     assert!(!should_attempt);
@@ -25053,7 +25155,7 @@ async fn force_view_change_if_idle_skips_when_rbc_backlog() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn should_defer_proposal_when_rbc_backlog_unresolved() {
+async fn proposal_backpressure_ignores_inactive_rbc_sessions() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -25067,9 +25169,11 @@ async fn should_defer_proposal_when_rbc_backlog_unresolved() {
         .sessions
         .insert(session_key, session);
 
+    let backpressure = actor.proposal_backpressure();
+    assert!(!backpressure.rbc_backlog);
     assert!(
-        actor.should_defer_proposal(),
-        "proposal assembly should defer while unresolved RBC sessions are present"
+        !backpressure.should_defer(),
+        "proposal assembly should ignore inactive RBC sessions"
     );
 
     harness.shutdown.send();
@@ -25106,9 +25210,66 @@ async fn should_defer_proposal_when_active_pending_rbc_session_not_delivered() {
         .sessions
         .insert(session_key, session);
 
+    let backpressure = actor.proposal_backpressure();
+    assert!(backpressure.active_pending);
     assert!(
-        actor.should_defer_proposal(),
+        backpressure.should_defer(),
         "proposal assembly should defer while pending RBC sessions are unresolved"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_backpressure_allows_rescheduled_pending_blocks() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let key = insert_active_pending_block(actor, 0);
+    let now = Instant::now();
+    actor
+        .pending
+        .pending_blocks
+        .get_mut(&key.0)
+        .expect("pending block exists")
+        .mark_quorum_reschedule(now);
+
+    let backpressure = actor.proposal_backpressure();
+    assert!(
+        !backpressure.active_pending,
+        "rescheduled pending blocks should not block proposal assembly"
+    );
+    assert!(
+        !backpressure.should_defer(),
+        "rescheduled pending blocks should allow proposal assembly"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_backpressure_blocks_commit_qc_pending_after_reschedule() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let key = insert_active_pending_block(actor, 0);
+    let now = Instant::now();
+    let pending = actor
+        .pending
+        .pending_blocks
+        .get_mut(&key.0)
+        .expect("pending block exists");
+    pending.mark_quorum_reschedule(now);
+    pending.commit_qc_seen = true;
+
+    let backpressure = actor.proposal_backpressure();
+    assert!(
+        backpressure.active_pending,
+        "commit QC pending blocks should continue to block proposals"
+    );
+    assert!(
+        backpressure.should_defer(),
+        "commit QC pending blocks should defer proposal assembly"
     );
 
     harness.shutdown.send();
@@ -25125,8 +25286,10 @@ async fn should_defer_proposal_when_relay_backpressure_active() {
         1,
     );
 
+    let backpressure = actor.proposal_backpressure();
+    assert!(backpressure.relay_backpressure);
     assert!(
-        actor.should_defer_proposal(),
+        backpressure.should_defer(),
         "proposal assembly should defer when relay backpressure is active"
     );
 
@@ -25172,8 +25335,10 @@ async fn should_override_relay_backpressure_after_liveness_timeout() {
         1,
     );
 
+    let backpressure = actor.proposal_backpressure();
+    assert!(!backpressure.relay_backpressure);
     assert!(
-        !actor.should_defer_proposal(),
+        !backpressure.should_defer(),
         "proposal assembly should override relay backpressure after quorum timeout"
     );
 
@@ -25221,8 +25386,10 @@ async fn should_override_backpressure_after_idle_timeout_without_proposal() {
         1,
     );
 
+    let backpressure = actor.proposal_backpressure();
+    assert!(backpressure.relay_backpressure);
     assert!(
-        actor.should_defer_proposal(),
+        backpressure.should_defer(),
         "proposal assembly should still defer before idle timeout"
     );
 
@@ -25233,8 +25400,9 @@ async fn should_override_backpressure_after_idle_timeout_without_proposal() {
         .phase_tracker
         .on_view_change(height, current_view, start);
 
+    let backpressure = actor.proposal_backpressure();
     assert!(
-        !actor.should_defer_proposal(),
+        !backpressure.should_defer(),
         "proposal assembly should override backpressure after idle timeout"
     );
 
@@ -26754,7 +26922,7 @@ async fn handle_qc_rejects_new_view_highest_view_mismatch_when_parent_known() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
 
-    let parent_block = sample_block(1, 0, None);
+    let parent_block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
     actor
         .kura
         .store_block(parent_block.clone())
@@ -28289,8 +28457,8 @@ async fn vote_roster_empty_when_parent_hash_known_but_history_mismatched() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
-    let block1 = sample_block(1, 0, None);
-    let block2 = sample_block(2, 0, Some(block1.hash()));
+    let block1 = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
+    let block2 = nonempty_block_for_actor(actor, &harness.key_pairs, 2, 0, Some(block1.hash()));
     let block3 = sample_block(3, 0, Some(block2.hash()));
     actor
         .kura
@@ -29464,7 +29632,7 @@ async fn assemble_proposal_allows_missing_highest_qc_hash() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
-    let locked_block = sample_block(1, 0, None);
+    let locked_block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
     let locked_hash = locked_block.hash();
     actor
         .kura
@@ -31800,7 +31968,8 @@ async fn stale_block_created_keeps_committed_qcs() {
     let key = (Phase::Commit, block2.hash(), 2, 0, 0);
     actor.qc_cache.insert(key, qc);
 
-    let stale_block = sample_block(2, 1, Some(block1.hash()));
+    let stale_block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, 2, 1, Some(block1.hash()));
     actor
         .handle_block_created(super::message::BlockCreated { block: stale_block }, None)
         .expect("handle stale BlockCreated");
@@ -31818,7 +31987,7 @@ async fn stale_block_created_accepted_under_da() {
 
     let height = 2u64;
     let view = 0u64;
-    let block = sample_block(height, view, None);
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, None);
     let block_hash = block.hash();
 
     let now = Instant::now();
@@ -31843,6 +32012,105 @@ async fn stale_block_created_accepted_under_da() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn block_created_drops_empty_payload() {
+    let _guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    let height = 1_u64;
+    let view = 0_u64;
+    let block = empty_block(height, view, None);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block.clone(), payload_hash, height, view),
+    );
+
+    let now = Instant::now();
+    let retry_window = Duration::from_secs(1);
+    actor.pending.missing_block_requests.insert(
+        block_hash,
+        MissingBlockRequest {
+            height,
+            view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window,
+            view_change_window: None,
+            first_seen: now,
+            last_requested: now,
+            view_change_triggered_view: None,
+            attempts: 0,
+        },
+    );
+
+    let epoch = actor.epoch_for_height(height);
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        vec![0x01],
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let key = (Phase::Commit, block_hash, height, view, epoch);
+    actor.qc_cache.insert(key, qc);
+    let mut signers = BTreeSet::new();
+    signers.insert(ValidatorIndex::try_from(0).expect("signer index fits"));
+    actor.qc_signer_tally.insert(
+        key,
+        super::QcSignerTally {
+            voting_signers: signers,
+            present_signers: 1,
+        },
+    );
+
+    actor
+        .handle_block_created(super::message::BlockCreated { block }, None)
+        .expect("handle BlockCreated");
+
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&block_hash),
+        "empty BlockCreated should be dropped"
+    );
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&block_hash),
+        "empty BlockCreated should clear missing-block request"
+    );
+    assert!(
+        !actor.qc_cache.contains_key(&key),
+        "empty BlockCreated should clear cached QCs"
+    );
+    assert!(
+        !actor.qc_signer_tally.contains_key(&key),
+        "empty BlockCreated should clear QC signer tallies"
+    );
+
+    let entries = super::status::snapshot().consensus_message_handling.entries;
+    let entry = entries
+        .iter()
+        .find(|entry| {
+            entry.kind == super::status::ConsensusMessageKind::BlockCreated
+                && entry.outcome == super::status::ConsensusMessageOutcome::Dropped
+                && entry.reason == super::status::ConsensusMessageReason::InvalidPayload
+        })
+        .expect("empty block drop should be recorded");
+    assert_eq!(entry.total, 1);
+
+    super::status::reset_message_handling_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn block_created_revives_aborted_pending() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -31850,7 +32118,7 @@ async fn block_created_revives_aborted_pending() {
     let height = 2u64;
     let view = 0u64;
     let parent = actor.state.view().latest_block_hash();
-    let block = sample_block(height, view, parent);
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, parent);
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     let mut pending = PendingBlock::new(block.clone(), payload_hash, height, view);
@@ -31904,7 +32172,7 @@ async fn block_created_clears_missing_request_on_duplicate() {
     let height = 2u64;
     let view = 0u64;
     let parent = actor.state.view().latest_block_hash();
-    let block = sample_block(height, view, parent);
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, parent);
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     actor.pending.pending_blocks.insert(
@@ -31953,7 +32221,13 @@ async fn block_created_clears_missing_request_when_processing_or_inflight() {
     let parent = actor.state.view().latest_block_hash();
     let height_processing = 2u64;
     let view_processing = 0u64;
-    let block_processing = sample_block(height_processing, view_processing, parent);
+    let block_processing = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        height_processing,
+        view_processing,
+        parent,
+    );
     let hash_processing = block_processing.hash();
     actor.pending.pending_processing.set(Some(hash_processing));
     actor
@@ -32001,7 +32275,13 @@ async fn block_created_clears_missing_request_when_processing_or_inflight() {
 
     let height_inflight = 3u64;
     let view_inflight = 0u64;
-    let block_inflight = sample_block(height_inflight, view_inflight, parent);
+    let block_inflight = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        height_inflight,
+        view_inflight,
+        parent,
+    );
     let hash_inflight = block_inflight.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block_inflight));
     let pending = PendingBlock::new(
@@ -32081,7 +32361,8 @@ async fn block_created_updates_locked_status_when_lock_missing() {
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH]));
     let height = 2u64;
     let view = 0u64;
-    let block = sample_block(height, view, Some(parent_hash));
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
     let block_hash = block.hash();
 
     let epoch = actor.epoch_for_height(height.saturating_sub(1));
@@ -32149,7 +32430,8 @@ async fn block_created_uses_cached_proposal_when_lock_missing() {
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH]));
     let height = 2u64;
     let view = 0u64;
-    let block = sample_block(height, view, Some(parent_hash));
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
     let block_hash = block.hash();
 
     let epoch = actor.epoch_for_height(height.saturating_sub(1));
@@ -32216,7 +32498,7 @@ async fn block_created_accepts_when_hint_highest_missing() {
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
-    let locked_block = sample_block(1, 0, None);
+    let locked_block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
     let locked_hash = locked_block.hash();
     actor
         .kura
@@ -32243,7 +32525,8 @@ async fn block_created_accepts_when_hint_highest_missing() {
     );
     let height = 2u64;
     let view = 0u64;
-    let block = sample_block(height, view, Some(missing_hash));
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(missing_hash));
     let block_hash = block.hash();
     let hint_highest = QcHeaderRef {
         height: 1,
@@ -32312,7 +32595,7 @@ async fn block_created_without_hint_rejects_conflicting_lock() {
 
     let conflicting_parent =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAD; 32]));
-    let block = sample_block(2, 0, Some(conflicting_parent));
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, 2, 0, Some(conflicting_parent));
     let block_hash = block.hash();
 
     actor
@@ -32333,7 +32616,7 @@ async fn block_created_without_hint_accepts_extending_lock() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
-    let locked_block = sample_block(1, 0, None);
+    let locked_block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
     actor
         .kura
         .store_block(locked_block.clone())
@@ -32416,7 +32699,7 @@ async fn block_created_without_hint_accepts_unknown_locked_ancestry() {
     super::status::set_locked_qc(1, 0, Some(locked_block.hash()));
 
     let unknown_parent = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAC; 32]));
-    let block = sample_block(3, 0, Some(unknown_parent));
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, 3, 0, Some(unknown_parent));
     let block_hash = block.hash();
 
     actor
@@ -33371,7 +33654,7 @@ async fn block_created_skips_pending_insert_while_processing() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
-    let block = sample_block(1, 0, None);
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
     let block_hash = block.hash();
     actor.pending.pending_processing.set(Some(block_hash));
     actor
@@ -33406,7 +33689,13 @@ async fn block_created_requests_missing_parent_on_height_gap() {
         missing_parent =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x46; Hash::LENGTH]));
     }
-    let block = sample_block(block_height, 0, Some(missing_parent));
+    let block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        block_height,
+        0,
+        Some(missing_parent),
+    );
     let block_hash = block.hash();
 
     actor
@@ -33455,7 +33744,13 @@ async fn block_created_uses_snapshot_roster_for_missing_parent_when_active_empty
         missing_parent =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x62; Hash::LENGTH]));
     }
-    let block = sample_block(block_height, 0, Some(missing_parent));
+    let block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        block_height,
+        0,
+        Some(missing_parent),
+    );
     let block_hash = block.hash();
     let roster = vec![actor.common_config.peer.id().clone()];
     let topology = super::network_topology::Topology::new(roster.clone());
@@ -41602,7 +41897,7 @@ fn session_key() -> SessionKey {
     )
 }
 
-fn sample_block(height: u64, view: u64, parent: Option<HashOf<BlockHeader>>) -> SignedBlock {
+fn empty_block(height: u64, view: u64, parent: Option<HashOf<BlockHeader>>) -> SignedBlock {
     let header = BlockHeader {
         height: NonZeroU64::new(height).expect("block height must be non-zero"),
         prev_block_hash: parent,
@@ -41620,6 +41915,38 @@ fn sample_block(height: u64, view: u64, parent: Option<HashOf<BlockHeader>>) -> 
     let signature = SignatureOf::from_hash(&private_key, header.hash());
     let block_signature = BlockSignature::new(0, signature);
     SignedBlock::presigned(block_signature, header, Vec::<SignedTransaction>::new())
+}
+
+fn sample_block(height: u64, view: u64, parent: Option<HashOf<BlockHeader>>) -> SignedBlock {
+    let chain: ChainId = "test-chain".parse().expect("chain id");
+    let tx_params = TransactionParameters::default();
+    let start_ms = height.saturating_sub(1);
+    let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(start_ms));
+    let heartbeat = crate::tx::build_heartbeat_transaction_with_time_source(
+        chain,
+        &ALICE_KEYPAIR,
+        &tx_params,
+        height,
+        &time_source,
+    );
+    time_handle.advance(Duration::from_millis(1));
+    let creation_time_ms =
+        u64::try_from(time_source.get_unix_time().as_millis()).expect("creation time fits in u64");
+    let header = BlockHeader {
+        height: NonZeroU64::new(height).expect("block height must be non-zero"),
+        prev_block_hash: parent,
+        merkle_root: None,
+        result_merkle_root: None,
+        da_proof_policies_hash: None,
+        da_commitments_hash: None,
+        da_pin_intents_hash: None,
+        creation_time_ms,
+        view_change_index: view,
+        confidential_features: None,
+    };
+    let mut builder = BlockBuilder::new(header);
+    builder.push_transaction(heartbeat);
+    builder.build_with_signature(0, ALICE_KEYPAIR.private_key())
 }
 
 fn insert_pending_block(actor: &mut Actor, height: u64, view: u64) -> SessionKey {
@@ -41718,6 +42045,27 @@ fn heartbeat_block_for_state(
     builder.push_transaction(heartbeat);
     builder.set_da_proof_policies(Some(policies));
     builder.build_with_signature(signer_idx, signer_kp.private_key())
+}
+
+fn nonempty_block_for_actor(
+    actor: &Actor,
+    key_pairs: &[KeyPair],
+    height: u64,
+    view: u64,
+    parent: Option<HashOf<BlockHeader>>,
+) -> SignedBlock {
+    let signer_kp = key_pairs
+        .first()
+        .expect("test harness requires at least one signer key");
+    heartbeat_block_for_state(
+        actor.state.as_ref(),
+        &actor.common_config.chain,
+        height,
+        view,
+        parent,
+        signer_kp,
+        0,
+    )
 }
 
 #[test]
@@ -44205,8 +44553,14 @@ fn pacemaker_respects_refreshed_backpressure_state() {
 
     let should_defer = gate.should_defer();
     let state = gate.state();
+    let backpressure = ProposalBackpressure {
+        queue_state: state,
+        active_pending: false,
+        rbc_backlog: false,
+        relay_backpressure: false,
+    };
     let (log_first, log_fire, attempt) =
-        Actor::evaluate_pacemaker(&mut pacemaker, &mut tracker, state, start, should_defer);
+        Actor::evaluate_pacemaker(&mut pacemaker, &mut tracker, backpressure, start);
 
     assert!(should_defer, "gate should report saturation");
     assert!(state.is_saturated(), "state snapshot must reflect refresh");
@@ -44228,21 +44582,27 @@ fn evaluate_pacemaker_continues_under_saturation() {
         queued: 4,
         capacity,
     };
+    let backpressure = ProposalBackpressure {
+        queue_state: state,
+        active_pending: false,
+        rbc_backlog: false,
+        relay_backpressure: false,
+    };
     let now = Instant::now();
     let mut pacemaker = super::Pacemaker::with_interval(Duration::from_millis(5), now);
     let mut tracker = super::PacemakerBackpressure::new();
 
     let (log_first, log_fire, should_attempt) =
-        Actor::evaluate_pacemaker(&mut pacemaker, &mut tracker, state, now, true);
+        Actor::evaluate_pacemaker(&mut pacemaker, &mut tracker, backpressure, now);
 
     assert!(
         !should_attempt,
-        "pacemaker should defer proposal while saturated when defer_on_fire is enabled"
+        "pacemaker should defer proposal while saturated before the deadline"
     );
     assert!(log_first, "initial saturation should trigger deferral log");
     assert!(
         log_fire,
-        "defer_on_fire should request deferral logging when saturated"
+        "saturation should request deferral logging when deferring"
     );
 }
 
@@ -44253,15 +44613,21 @@ fn evaluate_pacemaker_defers_and_recovers_after_backoff() {
         queued: 3,
         capacity,
     };
+    let saturated_backpressure = ProposalBackpressure {
+        queue_state: saturated,
+        active_pending: false,
+        rbc_backlog: false,
+        relay_backpressure: false,
+    };
     let start = Instant::now();
     let mut pacemaker = super::Pacemaker::with_interval(Duration::from_millis(5), start);
     let mut tracker = super::PacemakerBackpressure::new();
 
     // First firing while saturated should defer and log.
     let (log_first, log_fire, attempt) =
-        Actor::evaluate_pacemaker(&mut pacemaker, &mut tracker, saturated, start, true);
+        Actor::evaluate_pacemaker(&mut pacemaker, &mut tracker, saturated_backpressure, start);
     assert!(log_first, "first saturation should be logged");
-    assert!(log_fire, "defer_on_fire must request deferral logging");
+    assert!(log_fire, "saturation must request deferral logging");
     assert!(
         !attempt,
         "proposal assembly should be deferred while saturated"
@@ -44271,9 +44637,8 @@ fn evaluate_pacemaker_defers_and_recovers_after_backoff() {
     let (log_repeat, log_fire_repeat, attempt_repeat) = Actor::evaluate_pacemaker(
         &mut pacemaker,
         &mut tracker,
-        saturated,
+        saturated_backpressure,
         start + Duration::from_millis(2),
-        true,
     );
     assert!(!log_repeat);
     assert!(!log_fire_repeat);
@@ -44284,12 +44649,17 @@ fn evaluate_pacemaker_defers_and_recovers_after_backoff() {
         queued: 0,
         capacity,
     };
+    let healthy_backpressure = ProposalBackpressure {
+        queue_state: healthy,
+        active_pending: false,
+        rbc_backlog: false,
+        relay_backpressure: false,
+    };
     let (log_recovered, log_fire_recovered, attempt_recovered) = Actor::evaluate_pacemaker(
         &mut pacemaker,
         &mut tracker,
-        healthy,
+        healthy_backpressure,
         start + Duration::from_millis(6),
-        true,
     );
     assert!(!log_recovered);
     assert!(!log_fire_recovered);
@@ -44306,6 +44676,12 @@ fn evaluate_pacemaker_fires_after_deadline_even_when_saturated() {
         queued: 2,
         capacity,
     };
+    let backpressure = ProposalBackpressure {
+        queue_state: saturated,
+        active_pending: false,
+        rbc_backlog: false,
+        relay_backpressure: false,
+    };
     let start = Instant::now();
     let mut pacemaker = super::Pacemaker::with_interval(Duration::from_millis(5), start);
     let mut tracker = super::PacemakerBackpressure::new();
@@ -44314,9 +44690,8 @@ fn evaluate_pacemaker_fires_after_deadline_even_when_saturated() {
     let (log_first, log_fire, attempt) = Actor::evaluate_pacemaker(
         &mut pacemaker,
         &mut tracker,
-        saturated,
+        backpressure,
         start + Duration::from_millis(6),
-        true,
     );
 
     assert!(log_first, "first saturation window should be logged");
@@ -44331,41 +44706,84 @@ fn evaluate_pacemaker_fires_after_deadline_even_when_saturated() {
 }
 
 #[test]
-fn evaluate_pacemaker_fires_without_defer_flag() {
+fn evaluate_pacemaker_defers_for_non_queue_backpressure() {
     let capacity = NonZeroUsize::new(2).expect("non-zero");
-    let saturated = BackpressureState::Saturated {
-        queued: 2,
+    let healthy = BackpressureState::Healthy {
+        queued: 0,
         capacity,
     };
     let start = Instant::now();
     let mut pacemaker = super::Pacemaker::with_interval(Duration::from_millis(5), start);
     let mut tracker = super::PacemakerBackpressure::new();
 
-    // Without defer_on_fire, saturation only logs once and still respects the deadline.
+    // Non-queue backpressure should keep proposals deferred even after the deadline.
+    let backpressure = ProposalBackpressure {
+        queue_state: healthy,
+        active_pending: false,
+        rbc_backlog: true,
+        relay_backpressure: false,
+    };
     let (log_first, log_fire, attempt) =
-        Actor::evaluate_pacemaker(&mut pacemaker, &mut tracker, saturated, start, false);
-    assert!(log_first);
-    assert!(!log_fire, "no deferral log when not deferring on fire");
+        Actor::evaluate_pacemaker(&mut pacemaker, &mut tracker, backpressure, start);
+    assert!(log_first, "first deferral should be logged");
+    assert!(!log_fire, "no deadline deferral log before the fire");
     assert!(
         !attempt,
-        "pacemaker should not attempt before the deadline even without deferral"
+        "pacemaker should not attempt before the deadline under non-queue backpressure"
     );
 
     let (log_after, log_fire_after, attempt_after) = Actor::evaluate_pacemaker(
         &mut pacemaker,
         &mut tracker,
-        saturated,
+        backpressure,
         start + Duration::from_millis(6),
-        false,
+    );
+    assert!(!log_after);
+    assert!(
+        log_fire_after,
+        "deadline deferral should request logging under non-queue backpressure"
     );
     assert!(
-        !log_after,
-        "subsequent calls in the same saturation window should not log again"
+        !attempt_after,
+        "pacemaker should not attempt after the deadline under non-queue backpressure"
     );
+}
+
+#[test]
+fn evaluate_pacemaker_fires_without_backpressure() {
+    let capacity = NonZeroUsize::new(2).expect("non-zero");
+    let healthy = BackpressureState::Healthy {
+        queued: 0,
+        capacity,
+    };
+    let backpressure = ProposalBackpressure {
+        queue_state: healthy,
+        active_pending: false,
+        rbc_backlog: false,
+        relay_backpressure: false,
+    };
+    let start = Instant::now();
+    let mut pacemaker = super::Pacemaker::with_interval(Duration::from_millis(5), start);
+    let mut tracker = super::PacemakerBackpressure::new();
+
+    // Without backpressure, the pacemaker respects the deadline and attempts on fire.
+    let (log_first, log_fire, attempt) =
+        Actor::evaluate_pacemaker(&mut pacemaker, &mut tracker, backpressure, start);
+    assert!(!log_first);
+    assert!(!log_fire);
     assert!(
-        !log_fire_after,
-        "defer_on_fire is false so no deferral fire log should be requested"
+        !attempt,
+        "pacemaker should not attempt before the deadline without backpressure"
     );
+
+    let (log_after, log_fire_after, attempt_after) = Actor::evaluate_pacemaker(
+        &mut pacemaker,
+        &mut tracker,
+        backpressure,
+        start + Duration::from_millis(6),
+    );
+    assert!(!log_after);
+    assert!(!log_fire_after);
     assert!(
         attempt_after,
         "deadline should still trigger a proposal attempt"

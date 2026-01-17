@@ -9,6 +9,57 @@ Overview
 - K‑collector mode: per height, the topology designates K collectors deterministically as a contiguous slice starting at `proxy_tail_index()` (inclusive), without wraparound; the leader is never included. Setting K=1 keeps the proxy tail as the primary collector, but commit-vote routing still falls back to the full topology when collector fan-out is below quorum.
 - Commit certificates: validators sign the block header and send a `CommitVote` to the deterministic collector set (proxy tail + Set B slice), with fallback to the full commit topology when collector fan-out is below quorum. Any collector that reaches quorum (2f+1 in permissioned mode, or ≥2/3 total stake in NPoS) gossips a `CommitCertificate`; peers commit on the certificate + payload. Prepare/NewView certificates and availability evidence remain for pacemaker/telemetry but do not gate commit.
 
+### Safety and Liveness (Proof Sketch)
+
+This is a proof sketch for the current v1 implementation (not a formal proof).
+It summarizes the invariants enforced by the code paths in
+`crates/iroha_core/src/sumeragi/main_loop/{proposal_handlers,commit,qc,votes}.rs`.
+
+Assumptions (both modes)
+- Partial synchrony after GST (eventual bounded message delays).
+- Cryptography is secure (BLS signatures unforgeable; hash functions collision resistant).
+- Deterministic roster selection and view alignment are consistent across honest peers.
+- Payload dissemination eventually succeeds (BlockCreated + block sync and/or RBC).
+
+Safety (permissioned)
+- Quorum intersection: for `n = 3f+1`, the commit quorum is `2f+1`; any two quorums intersect
+  in at least `f+1` validators, so at least one honest validator is in the intersection.
+- Single-vote rule: a validator records at most one commit vote per `(height, view, epoch)` and
+  will not sign a conflicting block at the same height/view (see `emit_precommit_vote`).
+- Locked-QC rule: a validator only accepts proposals and emits votes that extend the locked
+  QC (`qc_extends_locked_with_lookup`), preventing honest validators from signing conflicting
+  chains once they are locked.
+- Therefore, two conflicting commit certificates at the same height would require an honest
+  validator to sign both branches, which is excluded by the single-vote + locked-QC rules.
+
+Safety (NPoS)
+- Quorum is defined by stake: a commit QC requires ≥2/3 of total stake in the active roster
+  (`stake_quorum_reached_for_peers`).
+- If <1/3 of stake is Byzantine, any two ≥2/3 stake quorums intersect in >1/3 stake that must
+  include honest validators.
+- The same single-vote and locked-QC rules apply, so honest stake will not sign conflicting
+  branches at the same height/view, ruling out two conflicting commit certificates.
+
+Liveness (permissioned)
+- The pacemaker advances views on timeouts and missing-payload/validation failures; view
+  changes are monotonically increasing for a height (see `trigger_view_change_with_cause`).
+- Once the network is synchronous and an honest leader is selected for a view, proposals and
+  commit votes propagate to collectors/topology; `2f+1` votes produce a commit QC and the
+  block is committed when the payload is available.
+- If payloads are missing, block sync/RBC recovery retries; persistent failure triggers a view
+  change, ensuring the protocol does not stall on a single leader or payload.
+
+Liveness (NPoS)
+- The pacemaker logic is the same, but commit QCs require ≥2/3 stake; liveness holds when
+  ≥2/3 of stake (by the active roster) is online and able to exchange votes.
+- Deterministic PRF leader selection plus view changes ensure that an honest leader is
+  eventually chosen after GST, allowing a commit QC to form.
+
+DA/RBC note
+- Data availability is tracked and recovered (RBC + block sync), but commit does not wait for
+  DA evidence. This avoids circular waits between availability and commit and preserves
+  liveness at the consensus layer; missing payloads are handled by retries and view changes.
+
 ### NPoS mode configuration (operators)
 
 2. **Choose the roster source.** `sumeragi.use_stake_snapshot_roster = true` tells the validator to hydrate the epoch roster from the staking snapshot provider (required for production NPoS). Leaving it `false` continues to mirror `trusted_peers` so small devnets can stage upgrades without the staking sidecar. When stake records are missing for some roster peers, NPoS assigns the minimum self-bond (or 1 when unset) to the missing entries; if no public-lane stake records exist, every roster peer receives the same fallback stake for quorum checks. If the commit topology omits active validators, the epoch roster widens to include the active set before filtering so validator elections and quorum checks retain the full active roster.
@@ -105,7 +156,7 @@ accepts traffic:
   - `sumeragi_rbc_deliver_defer_{ready,chunks}_total` and the `/v1/sumeragi/status.pending_rbc` + `rbc_backlog` snapshots expose READY quorum vs chunk-gate stalls, stash totals by reason (`pending_rbc.stash_*`), stash age/drops, and pending session counts so dashboards can alarm on stuck RBC sessions before DA/commit stalls.
   - `sumeragi_rbc_mismatch_total{peer,kind}` and `/v1/sumeragi/status.rbc_mismatch` track per-peer chunk digest/payload hash/chunk root mismatches; mismatched payloads are dropped (no penalties) and logs are throttled per peer/kind to keep behavior deterministic.
   - `sumeragi_consensus_message_handling_total{kind,outcome,reason}` and `/v1/sumeragi/status.consensus_message_handling` capture drop/deferral reasons for BlockCreated, BlockSyncUpdate, ProposalHint, Proposal, QcVote, Qc, VrfCommit, VrfReveal, ExecWitness, RbcInit, RbcChunk, RbcReady, RbcDeliver, FetchPendingBlock, and Evidence to triage missing-payload warnings and backpressure drops.
-- Block-sync roster telemetry: `/v1/sumeragi/status.block_sync_roster` (Norito) and `/v1/sumeragi/status.block_sync.roster` (JSON) expose drop counters (`drop_missing_total`, `drop_unsolicited_share_blocks_total`) plus source gauges (`commit_roster_journal`, `roster_sidecar`, paired `commit+checkpoint` hints, single cert/checkpoint history). Prometheus mirrors the same labels via `sumeragi_block_sync_roster_source_total{source}` and `sumeragi_block_sync_roster_drop_total{reason}`, and counts dropped unsolicited ShareBlocks via `sumeragi_block_sync_share_blocks_unsolicited_total`. Roster selection orders persisted snapshots (journal → sidecar) ahead of hints/history, and rejects `BlockSyncUpdate` payloads unless they carry a certified roster (commit certificate and/or validator checkpoint). Validator checkpoints embed the view index plus parent/post state roots in the signed preimage, so they validate without requiring commit-QC history. In NPoS, commit-certificate validation prefers a matching stake snapshot; when one is missing it derives a deterministic snapshot from local stake records (falling back to the minimum self-bond for missing peers) and only drops hints on roster or snapshot mismatch. Cached precommit signer records carry the stake snapshot so locally derived block-sync QCs still satisfy stake quorum. Block-sync share responses now propagate roster metadata so fresh peers can verify updates without waiting on local snapshots. Missing-block payload hydration uses `BlockCreated` replies instead of block-sync updates, removing the need for uncertified roster sources. When PoP maps are incomplete, quorum guards warn and rebuild a PoP-aware roster that still includes the local peer when allowed.
+- Block-sync roster telemetry: `/v1/sumeragi/status.block_sync_roster` (Norito) and `/v1/sumeragi/status.block_sync.roster` (JSON) expose drop counters (`drop_missing_total`, `drop_unsolicited_share_blocks_total`) plus source gauges (`commit_roster_journal`, `roster_sidecar`, paired `commit+checkpoint` hints, single cert/checkpoint history). Prometheus mirrors the same labels via `sumeragi_block_sync_roster_source_total{source}` and `sumeragi_block_sync_roster_drop_total{reason}`, and counts dropped unsolicited ShareBlocks via `sumeragi_block_sync_share_blocks_unsolicited_total`. Roster selection orders persisted snapshots (journal → sidecar) ahead of hints/history, and rejects `BlockSyncUpdate` payloads unless they carry a certified roster (commit certificate and/or validator checkpoint). Validator checkpoints embed the view index plus parent/post state roots in the signed preimage, so they validate without requiring commit-QC history. In NPoS, commit-certificate validation prefers a matching stake snapshot; when one is missing it derives a deterministic snapshot from local stake records (falling back to the minimum self-bond for missing peers) and only drops hints on roster or snapshot mismatch. Cached precommit signer records carry the stake snapshot so locally derived block-sync QCs still satisfy stake quorum. Block-sync share responses now propagate roster metadata so fresh peers can verify updates without waiting on local snapshots. Missing-block payload hydration uses `BlockCreated` replies instead of block-sync updates, removing the need for uncertified roster sources. Config parsing rejects incomplete PoP maps; if a mismatch still slips through, PoP filtering is skipped and the BLS baseline roster is used to avoid divergent topologies.
 - View-change causes: `/v1/sumeragi/status.view_change_causes` reports per-cause counters (commit failure/quorum timeout/stake quorum timeout/censorship evidence/missing payload/missing commit certificate (`missing_qc_total`)/validation reject; DA availability is reserved for compatibility) and the last labeled timestamp to help operators triage view changes; Prometheus mirrors these timestamps in `sumeragi_view_change_cause_last_timestamp_ms{cause}`.
 - Pending-block replay: after a view change installs, the leader rebroadcasts the highest pending `BlockCreated` payload on a cadence derived from `block_time` (with a small floor, 2x base multiplier, and an additional 2x payload multiplier) so peers missing the payload hydrate without waiting for hints/sidecars.
 - View-change pruning: once a higher view is installed for a height, stale pending blocks/RBC sessions/missing-block requests for lower views of that height are dropped to prevent rebroadcast storms; missing payloads are re-requested only for the active view.
@@ -155,13 +206,13 @@ Node Roles (config)
   - Note: Set B validators remain in the topology and are full validators; they are not the `observer` role.
 
 Validator Key Requirements
-- Validators must use BLS-Normal public keys and present a proof-of-possession (PoP). In NPoS, the consensus roster is filtered to the active public-lane validator set whenever stake records are available (including after commit-topology updates); if the commit topology omits active validators, the roster is widened with the active set before PoP filtering so the full validator set participates. When no active validators are present it falls back to `trusted_peers` after filtering out peers without BLS-Normal keys or with missing/invalid PoP (the legacy `trusted_peers_bls` mapping no longer exists). If PoP filtering would drop below quorum, the bootstrap roster falls back to the BLS baseline with a warning to avoid deadlocks. Non-BLS or missing-PoP peers are excluded from the consensus set. The node’s `public_key`/`private_key` must be BLS-Normal and is used for both transport and consensus.
+- Validators must use BLS-Normal public keys and present a proof-of-possession (PoP). In NPoS, the consensus roster is filtered to the active public-lane validator set whenever stake records are available (including after commit-topology updates); if the commit topology omits active validators, the roster is widened with the active set before PoP filtering so the full validator set participates. When no active validators are present it falls back to `trusted_peers` after filtering out peers without BLS-Normal keys (the legacy `trusted_peers_bls` mapping no longer exists). `trusted_peers_pop` must cover the full validator roster and is validated at config parse time; incomplete or invalid PoP maps are rejected, and runtime roster derivation falls back to the BLS baseline only as a safety net. If PoP filtering would drop below quorum, the bootstrap roster falls back to the BLS baseline with a warning to avoid deadlocks. Non-BLS peers are always excluded; peers with missing/invalid PoP are excluded only when PoP filtering is enforced. The node’s `public_key`/`private_key` must be BLS-Normal and is used for both transport and consensus.
 - Commit certificates carry a mandatory BLS aggregate signature over same-message signatures, along with a compact signer bitmap. Receivers verify the aggregate signature against the signer set and reject certificates with mismatched aggregates or out-of-range bitmap bits. Explicit votes remain the source of truth for quorum accounting and evidence, but aggregates are no longer advisory.
 - Transaction admission uses `crypto.allowed_signing`/`allowed_curve_ids`; consensus vote signatures do not. Leaving `allowed_signing` at the Ed25519/secp defaults is fine for BLS validators—add `bls_normal` only if you intend to accept BLS-signed transactions. The BLS feature must be compiled in (`--features bls`) and `signature_batch_max_bls` kept > 0 for validator nodes.
 
 Message Flow (steady state)
 - Leader: when a block is expected (transactions queued) and the deadline elapses, the leader sends `BlockCreated` to the commit topology (validators); when there is no queued work the pacemaker stays idle (no heartbeat proposals).
-- Proposal assembly defers when relay backpressure is active, when unresolved RBC sessions exist for the active tip, or when pending blocks extend the tip; if no proposal is observed, the liveness override uses `min(commit_quorum_timeout, 4 * propose_interval)` to allow proposals/view changes, and once a proposal is seen it waits the full commit quorum timeout before overriding backlog. Idle view-change fallbacks pause while a commit is inflight so local execution cannot be preempted by a new view.
+- Proposal assembly defers when relay backpressure is active, when unresolved RBC sessions exist for the active tip, or when pending blocks extend the tip and have not been quorum-rescheduled; if no proposal is observed, the liveness override uses `min(commit_quorum_timeout, 4 * propose_interval)` to allow proposals/view changes, and once a proposal is seen it waits the full commit quorum timeout before overriding backlog. Idle view-change fallbacks pause while a commit is inflight so local execution cannot be preempted by a new view.
 - Validators: validate, emit Availability votes, and send `CommitVote` (block header signature) to the deterministic collector set; if collector fan-out is below quorum, votes fall back to the full commit topology. Prepare/NewView certificates remain for pacemaker/telemetry but do not gate commit. On local timeout in view 0, the node may fan out to additional collectors up to `r`.
 - Proxy tail / collectors: collectors aggregate `CommitVote` signatures and gossip a `CommitCertificate` once quorum is reached; the proxy tail is the primary collector but not the only one. Collectors may still aggregate availability evidence and prepare/new-view certificates for view-change hints.
 - Set B validators: vote/sign under the same rules as Set A; routing/collection still prioritizes Set A for throughput, but any quorum of validators is accepted.
@@ -578,7 +629,7 @@ Operators can pull deterministic telemetry snapshots over Torii or via the CLI.
 
 | Metric | Meaning | Operator action |
 |--------|---------|-----------------|
-| `sumeragi_pacemaker_backpressure_deferrals_total` | Pacemaker skipped a proposal because the transaction queue or RBC backlog is saturated. | Inspect `iroha sumeragi status --summary` for `rbc_store.pressure_level`, drain gossip/RBC queues, and consider temporarily raising the per-queue caps (especially `msg_channel_cap_rbc_chunks`/`msg_channel_cap_block_payload`) or reducing incoming traffic before resuming. |
+| `sumeragi_pacemaker_backpressure_deferrals_total` | Pacemaker skipped a proposal because the transaction queue is saturated, relay/RBC backpressure is active, or a pending block still blocks proposal assembly. | Inspect `iroha sumeragi status --summary` for `rbc_store.pressure_level`, drain gossip/RBC queues, and consider temporarily raising the per-queue caps (especially `msg_channel_cap_rbc_chunks`/`msg_channel_cap_block_payload`) or reducing incoming traffic before resuming. |
 | `sumeragi_commit_pipeline_tick_total{mode,outcome}` | Pacemaker tick invoked the commit pipeline (`outcome="active"` when pending blocks existed, `"idle"` when empty). | Pair with `status_snapshot().commit_pipeline_tick_total` to prove timer-driven commits on quiet networks; alert if `idle` climbs while transactions are queued, or if `active` climbs without matching inbound votes. |
 | `sumeragi_pacemaker_backoff_ms` / `sumeragi_pacemaker_view_timeout_target_ms` | Current view timeout vs. target window derived from on-chain `sumeragi.block_time_ms`. Sustained values far above the block time indicate repeated view changes or retries. | Run `iroha sumeragi pacemaker --summary`, compare with the on-chain block time, and audit `p2p_*_throttled_total` plus RBC backlog metrics to find which stage is stretching the view timer. |
 | `sumeragi_phase_latency_ema_ms{phase="collect_da_ms",…}` / `sumeragi_phase_total_ema_ms` | EMA latency per phase and across the full pipeline as rendered by `iroha sumeragi phases --summary`. | Trigger alerts when EMA totals exceed the configured view timeout, then correlate the offending phase with Torii/RBC logs to determine whether DA, witness, or aggregator legs are stalling. |

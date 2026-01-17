@@ -151,15 +151,8 @@ async fn submit_proof_and_query_record() -> Result<()> {
     let isi = iroha_data_model::isi::zk::VerifyProof::new(attachment);
 
     // Submit as a transaction with a single instruction
-    let submit = client.submit(isi);
+    let submit = client.submit_blocking(isi);
     let Some(_hash) = sandbox::handle_result(submit, "submit_proof_and_query_record::submit")?
-    else {
-        return Ok(());
-    };
-
-    // Wait for the block to commit
-    let ensure = network.ensure_blocks(1).await.map(|_| ());
-    let Some(()) = sandbox::handle_result(ensure, "submit_proof_and_query_record::ensure_blocks")?
     else {
         return Ok(());
     };

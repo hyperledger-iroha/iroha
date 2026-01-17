@@ -40,6 +40,8 @@ pub struct LocalnetOptions {
     pub build_line: BuildLine,
     /// Optional Sora profile selector (multi-lane / dataspace defaults).
     pub sora_profile: Option<SoraProfile>,
+    /// Optional localnet performance profile (throughput presets).
+    pub perf_profile: Option<LocalnetPerfProfile>,
     /// Number of peers to create (deterministic ordering).
     pub peers: NonZeroU16,
     /// Optional seed to make key/port generation reproducible.
@@ -195,6 +197,50 @@ impl SoraProfile {
     }
 }
 
+/// Localnet performance profiles for 10k TPS / 1s finality runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalnetPerfProfile {
+    /// 10k TPS / 1s finality baseline for permissioned mode.
+    Throughput10kPermissioned,
+    /// 10k TPS / 1s finality baseline for NPoS mode.
+    Throughput10kNpos,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LocalnetPerfProfileSpec {
+    consensus_mode: SumeragiConsensusMode,
+    block_time_ms: u64,
+    commit_time_ms: u64,
+    collectors_k: u16,
+    redundant_send_r: u8,
+    block_max_transactions: u64,
+    stake_amount: u64,
+}
+
+impl LocalnetPerfProfile {
+    fn spec(self) -> LocalnetPerfProfileSpec {
+        let consensus_mode = match self {
+            LocalnetPerfProfile::Throughput10kPermissioned => {
+                SumeragiConsensusMode::Permissioned
+            }
+            LocalnetPerfProfile::Throughput10kNpos => SumeragiConsensusMode::Npos,
+        };
+        LocalnetPerfProfileSpec {
+            consensus_mode,
+            block_time_ms: 1_000,
+            commit_time_ms: 1_000,
+            collectors_k: 3,
+            redundant_send_r: 2,
+            block_max_transactions: LOCALNET_BLOCK_MAX_TRANSACTIONS,
+            stake_amount: LOCALNET_STAKE_AMOUNT,
+        }
+    }
+
+    fn consensus_mode(self) -> SumeragiConsensusMode {
+        self.spec().consensus_mode
+    }
+}
+
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SoraProfileArg {
     #[value(alias = "dataspaces")]
@@ -208,6 +254,25 @@ impl From<SoraProfileArg> for SoraProfile {
         match value {
             SoraProfileArg::Dataspace => SoraProfile::Dataspace,
             SoraProfileArg::Nexus => SoraProfile::Nexus,
+        }
+    }
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LocalnetPerfProfileArg {
+    #[value(name = "10k-permissioned", alias = "throughput-10k-permissioned")]
+    Throughput10kPermissioned,
+    #[value(name = "10k-npos", alias = "throughput-10k-npos")]
+    Throughput10kNpos,
+}
+
+impl From<LocalnetPerfProfileArg> for LocalnetPerfProfile {
+    fn from(value: LocalnetPerfProfileArg) -> Self {
+        match value {
+            LocalnetPerfProfileArg::Throughput10kPermissioned => {
+                LocalnetPerfProfile::Throughput10kPermissioned
+            }
+            LocalnetPerfProfileArg::Throughput10kNpos => LocalnetPerfProfile::Throughput10kNpos,
         }
     }
 }
@@ -311,7 +376,7 @@ const LOCALNET_SORA_MIN_PEERS: u16 = 4;
 const LOCALNET_NPOS_AGGREGATOR_DIVISOR: u64 = 1;
 /// Default max transactions per block for localnet (targets 10k TPS).
 const LOCALNET_BLOCK_MAX_TRANSACTIONS: u64 = 10_000;
-/// Default stake bonded per localnet validator (must exceed min_self_bond).
+/// Default stake bonded per localnet validator (raised to meet min_self_bond).
 const LOCALNET_STAKE_AMOUNT: u64 = 10_000;
 const LOCALNET_NEXUS_DOMAIN: &str = "nexus";
 const LOCALNET_IVM_DOMAIN: &str = "ivm";
@@ -353,6 +418,9 @@ pub struct Args {
     /// Requires `--build-line iroha3` and at least 4 peers.
     #[arg(long, value_enum, value_name = "PROFILE")]
     sora_profile: Option<SoraProfileArg>,
+    /// Apply a localnet performance profile (10k TPS / 1s finality presets).
+    #[arg(long, value_enum, value_name = "PROFILE")]
+    perf_profile: Option<LocalnetPerfProfileArg>,
     /// Host to bind P2P and Torii listeners to (host/IP only, no port).
     #[arg(long, default_value = DEFAULT_BIND_HOST, value_name = "HOST")]
     bind_host: String,
@@ -404,8 +472,12 @@ impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         let build_line = BuildLine::from(self.build_line);
         let sora_profile = self.sora_profile.map(SoraProfile::from);
+        let perf_profile = self.perf_profile.map(LocalnetPerfProfile::from);
         let consensus_mode = self.consensus_mode.map_or_else(
             || {
+                if let Some(perf_profile) = perf_profile {
+                    return perf_profile.consensus_mode();
+                }
                 if build_line.is_iroha3() {
                     SumeragiConsensusMode::Npos
                 } else {
@@ -417,6 +489,7 @@ impl<T: Write> RunArgs<T> for Args {
         let opts = LocalnetOptions {
             build_line,
             sora_profile,
+            perf_profile,
             peers: self.peers,
             seed: self.seed,
             bind_host: self.bind_host,
@@ -527,6 +600,40 @@ fn validate_localnet_options(opts: &LocalnetOptions) -> Result<ResolvedHosts> {
             ));
         }
     }
+    if let Some(perf_spec) = opts.perf_profile.map(LocalnetPerfProfile::spec) {
+        if !opts.build_line.is_iroha3() {
+            return Err(eyre!(
+                "`--perf-profile` requires `--build-line iroha3` for 1s finality presets"
+            ));
+        }
+        if opts.peers.get() < LOCALNET_SORA_MIN_PEERS {
+            return Err(eyre!(
+                "`--perf-profile` requires at least {LOCALNET_SORA_MIN_PEERS} peers"
+            ));
+        }
+        if perf_spec.collectors_k > opts.peers.get() {
+            return Err(eyre!(
+                "`--perf-profile` collectors_k ({}) exceeds peer count ({})",
+                perf_spec.collectors_k,
+                opts.peers.get()
+            ));
+        }
+        if opts.consensus_mode != perf_spec.consensus_mode {
+            return Err(eyre!(
+                "`--perf-profile` {:?} requires `--consensus-mode {}`",
+                opts.perf_profile.expect("perf profile present"),
+                match perf_spec.consensus_mode {
+                    SumeragiConsensusMode::Permissioned => "permissioned",
+                    SumeragiConsensusMode::Npos => "npos",
+                }
+            ));
+        }
+        if opts.sora_profile.is_some() && perf_spec.consensus_mode != SumeragiConsensusMode::Npos {
+            return Err(eyre!(
+                "`--perf-profile` permissioned preset cannot be combined with `--sora-profile`"
+            ));
+        }
+    }
     if opts.sora_profile.is_some() && opts.consensus_mode != SumeragiConsensusMode::Npos {
         return Err(eyre!(
             "`--sora-profile` localnets require `--consensus-mode npos` because the global merge ledger is NPoS; use permissioned mode without `--sora-profile`"
@@ -556,14 +663,8 @@ fn localnet_uses_npos(
         || matches!(next_consensus_mode, Some(SumeragiConsensusMode::Npos))
 }
 
-fn localnet_should_enable_nexus(
-    sora_profile: Option<SoraProfile>,
-    consensus_mode: SumeragiConsensusMode,
-) -> bool {
-    if sora_profile.is_some() {
-        return true;
-    }
-    matches!(consensus_mode, SumeragiConsensusMode::Npos)
+fn localnet_should_enable_nexus(sora_profile: Option<SoraProfile>, npos_bootstrap: bool) -> bool {
+    sora_profile.is_some() || npos_bootstrap
 }
 
 fn localnet_gas_account_id(genesis_public_key: &iroha_crypto::PublicKey) -> Result<AccountId> {
@@ -609,13 +710,29 @@ fn generate_localnet_with_line<T: Write>(
     tui::status("Generating genesis manifest");
     let da_rbc_enabled = build_line.is_iroha3();
     let npos_bootstrap = localnet_uses_npos(opts.consensus_mode, opts.next_consensus_mode);
-    // Nexus stays enabled for Sora profiles and active NPoS (staged cutovers keep it off).
-    let nexus_enabled = localnet_should_enable_nexus(opts.sora_profile, opts.consensus_mode);
+    let perf_spec = opts.perf_profile.map(LocalnetPerfProfile::spec);
+    // Nexus stays enabled for Sora profiles and whenever NPoS bootstrap is requested.
+    let nexus_enabled = localnet_should_enable_nexus(opts.sora_profile, npos_bootstrap);
     let dataspace_fault_tolerance =
         nexus_enabled.then(|| localnet_dataspace_fault_tolerance(opts.peers));
+    let block_time_override = opts
+        .block_time_ms
+        .or(perf_spec.map(|spec| spec.block_time_ms));
+    let commit_time_override = opts
+        .commit_time_ms
+        .or(perf_spec.map(|spec| spec.commit_time_ms));
     let (block_time_ms, commit_time_ms) =
-        resolve_localnet_pipeline_times(opts.block_time_ms, opts.commit_time_ms);
-    let redundant_send_r = resolve_localnet_redundant_send_r(opts.redundant_send_r, da_rbc_enabled);
+        resolve_localnet_pipeline_times(block_time_override, commit_time_override);
+    let redundant_send_r = resolve_localnet_redundant_send_r(
+        opts.redundant_send_r
+            .or(perf_spec.map(|spec| spec.redundant_send_r)),
+        da_rbc_enabled,
+    );
+    let collectors_k = perf_spec.map(|spec| spec.collectors_k);
+    let block_max_transactions = perf_spec
+        .map(|spec| spec.block_max_transactions)
+        .unwrap_or(LOCALNET_BLOCK_MAX_TRANSACTIONS);
+    let requested_stake_amount = perf_spec.map(|spec| spec.stake_amount);
     let commit_inflight_timeout_ms =
         localnet_commit_inflight_timeout_ms(block_time_ms, commit_time_ms);
     let (genesis_public_key, genesis_private) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
@@ -639,6 +756,8 @@ fn generate_localnet_with_line<T: Write>(
         block_time_ms,
         commit_time_ms,
         redundant_send_r,
+        collectors_k,
+        block_max_transactions,
         opts.consensus_mode,
         opts.next_consensus_mode,
     );
@@ -647,7 +766,9 @@ fn generate_localnet_with_line<T: Write>(
         let gas_account_id = gas_account_id
             .as_ref()
             .expect("gas account id required for NPoS bootstrap");
-        genesis = append_localnet_npos_bootstrap(genesis, &peers, gas_account_id)?;
+        let stake_amount =
+            localnet_npos_stake_amount(&genesis.effective_parameters(), requested_stake_amount);
+        genesis = append_localnet_npos_bootstrap(genesis, &peers, gas_account_id, stake_amount)?;
     }
     genesis = apply_localnet_crypto_overrides(genesis, npos_bootstrap);
     let genesis_json_path = out_dir.join("genesis.json");
@@ -701,6 +822,7 @@ fn generate_localnet_with_line<T: Write>(
             gas_account_id.as_deref(),
             da_rbc_enabled,
             redundant_send_r,
+            collectors_k,
             commit_inflight_timeout_ms,
         );
         let path = out_dir.join(format!("peer{idx}.toml"));
@@ -710,12 +832,7 @@ fn generate_localnet_with_line<T: Write>(
     tui::success("Peer configs written");
 
     tui::status("Writing start/stop scripts");
-    write_scripts(
-        &out_dir,
-        opts.peers.get(),
-        build_line,
-        opts.sora_profile.is_some(),
-    )?;
+    write_scripts(&out_dir, opts.peers.get(), build_line, nexus_enabled)?;
 
     tui::status("Copying rANS tables");
     copy_rans_tables(&out_dir)?;
@@ -886,6 +1003,7 @@ fn render_peer_config(
     gas_account_id: Option<&str>,
     da_rbc_enabled: bool,
     redundant_send_r: Option<u8>,
+    collectors_k: Option<u16>,
     commit_inflight_timeout_ms: u64,
 ) -> String {
     use toml::{Table, Value};
@@ -1057,6 +1175,12 @@ fn render_peer_config(
         "control_msg_channel_cap".into(),
         Value::Integer(control_msg_channel_cap),
     );
+    if let Some(collectors_k) = collectors_k {
+        sumeragi.insert(
+            "collectors_k".into(),
+            Value::Integer(i64::from(collectors_k)),
+        );
+    }
     if let Some(redundant_send_r) = redundant_send_r {
         sumeragi.insert(
             "collectors_redundant_send_r".into(),
@@ -1334,7 +1458,11 @@ fn extend_genesis(
     Ok(builder.build_raw())
 }
 
-fn apply_localnet_npos_overrides(parameters: &mut Parameters, redundant_send_r: Option<u8>) {
+fn apply_localnet_npos_overrides(
+    parameters: &mut Parameters,
+    redundant_send_r: Option<u8>,
+    collectors_k: Option<u16>,
+) {
     let block_time_ms = parameters.sumeragi.block_time_ms;
     let commit_time_ms = parameters.sumeragi.commit_time_ms.max(block_time_ms);
     let base_ms = commit_time_ms.max(block_time_ms);
@@ -1355,8 +1483,22 @@ fn apply_localnet_npos_overrides(parameters: &mut Parameters, redundant_send_r: 
     if let Some(redundant_send_r) = redundant_send_r {
         npos.redundant_send_r = redundant_send_r;
     }
+    if let Some(collectors_k) = collectors_k {
+        npos.k_aggregators = collectors_k;
+    }
 
     parameters.set_parameter(Parameter::Custom(npos.into_custom_parameter()));
+}
+
+fn localnet_npos_stake_amount(parameters: &Parameters, requested: Option<u64>) -> u64 {
+    let requested = requested.unwrap_or(LOCALNET_STAKE_AMOUNT);
+    let min_self_bond = parameters
+        .custom()
+        .get(&SumeragiNposParameters::parameter_id())
+        .and_then(SumeragiNposParameters::from_custom_parameter)
+        .map(|params| params.min_self_bond)
+        .unwrap_or(requested);
+    requested.max(min_self_bond).max(1)
 }
 
 fn apply_parameter_overrides(
@@ -1364,17 +1506,20 @@ fn apply_parameter_overrides(
     block_time_ms: Option<u64>,
     commit_time_ms: Option<u64>,
     redundant_send_r: Option<u8>,
+    collectors_k: Option<u16>,
+    block_max_transactions: u64,
     consensus_mode: SumeragiConsensusMode,
     next_consensus_mode: Option<SumeragiConsensusMode>,
 ) -> RawGenesisTransaction {
     let include_npos = matches!(consensus_mode, SumeragiConsensusMode::Npos)
         || matches!(next_consensus_mode, Some(SumeragiConsensusMode::Npos));
     let mut parameters = genesis.effective_parameters();
-    let block_max_transactions = NonZeroU64::new(LOCALNET_BLOCK_MAX_TRANSACTIONS)
-        .expect("LOCALNET_BLOCK_MAX_TRANSACTIONS must be non-zero");
+    let block_max_transactions = NonZeroU64::new(block_max_transactions)
+        .expect("block_max_transactions must be non-zero");
     let should_update = block_time_ms.is_some()
         || commit_time_ms.is_some()
         || redundant_send_r.is_some()
+        || collectors_k.is_some()
         || include_npos
         || parameters.block.max_transactions != block_max_transactions;
     if !should_update {
@@ -1391,8 +1536,11 @@ fn apply_parameter_overrides(
     if let Some(redundant_send_r) = redundant_send_r {
         parameters.sumeragi.collectors_redundant_send_r = redundant_send_r;
     }
+    if let Some(collectors_k) = collectors_k {
+        parameters.sumeragi.collectors_k = collectors_k;
+    }
     if include_npos {
-        apply_localnet_npos_overrides(&mut parameters, redundant_send_r);
+        apply_localnet_npos_overrides(&mut parameters, redundant_send_r, collectors_k);
     }
 
     // Use structured parameters so overrides land in the manifest parameters block.
@@ -1468,6 +1616,7 @@ fn append_localnet_npos_bootstrap(
     genesis: RawGenesisTransaction,
     peers: &[Peer],
     gas_account_id: &AccountId,
+    stake_amount: u64,
 ) -> Result<RawGenesisTransaction> {
     let nexus_domain: DomainId = LOCALNET_NEXUS_DOMAIN.parse()?;
     let ivm_domain: DomainId = LOCALNET_IVM_DOMAIN.parse()?;
@@ -1486,14 +1635,19 @@ fn append_localnet_npos_bootstrap(
         let validator_id = AccountId::new(nexus_domain.clone(), peer.public_key.clone());
         builder = builder.append_instruction(Register::account(Account::new(validator_id.clone())));
         builder = builder.append_instruction(Mint::asset_numeric(
-            LOCALNET_STAKE_AMOUNT,
+            stake_amount,
             AssetId::new(stake_asset_id.clone(), validator_id.clone()),
         ));
+    }
+
+    let mut builder = builder.next_transaction();
+    for peer in peers {
+        let validator_id = AccountId::new(nexus_domain.clone(), peer.public_key.clone());
         builder = builder.append_instruction(RegisterPublicLaneValidator {
             lane_id: LaneId::SINGLE,
             validator: validator_id.clone(),
             stake_account: validator_id.clone(),
-            initial_stake: Numeric::from(LOCALNET_STAKE_AMOUNT),
+            initial_stake: Numeric::from(stake_amount),
             metadata: Metadata::default(),
         });
         builder = builder.append_instruction(ActivatePublicLaneValidator {
@@ -1621,17 +1775,12 @@ fn default_irohad_bin_paths() -> (PathBuf, PathBuf) {
     )
 }
 
-fn write_scripts(
-    out_dir: &Path,
-    peers: u16,
-    build_line: BuildLine,
-    sora_profile_enabled: bool,
-) -> Result<()> {
+fn write_scripts(out_dir: &Path, peers: u16, build_line: BuildLine, sora_mode: bool) -> Result<()> {
     let start = out_dir.join("start.sh");
     let stop = out_dir.join("stop.sh");
     let (default_irohad_debug, default_irohad_release) = default_irohad_bin_paths();
     let mut start_file = BufWriter::new(File::create(&start)?);
-    let sora_flag = if sora_profile_enabled { "--sora " } else { "" };
+    let sora_flag = if sora_mode { "--sora " } else { "" };
     writeln!(start_file, "#!/usr/bin/env bash")?;
     writeln!(start_file, "set -euo pipefail")?;
     writeln!(start_file, "DIR=$(cd \"$(dirname \"$0\")\" && pwd)")?;
@@ -1792,7 +1941,7 @@ mod tests {
     use std::{
         env, fs,
         io::BufWriter,
-        num::NonZeroU32,
+        num::{NonZeroU32, NonZeroU64},
         path::{Path, PathBuf},
         time::Duration,
     };
@@ -1823,8 +1972,25 @@ mod tests {
         );
         let da_rbc_enabled = opts.build_line.is_iroha3();
         let npos_bootstrap = localnet_uses_npos(opts.consensus_mode, opts.next_consensus_mode);
-        let redundant_send_r =
-            resolve_localnet_redundant_send_r(opts.redundant_send_r, da_rbc_enabled);
+        let perf_spec = opts.perf_profile.map(LocalnetPerfProfile::spec);
+        let redundant_send_r = resolve_localnet_redundant_send_r(
+            opts.redundant_send_r
+                .or(perf_spec.map(|spec| spec.redundant_send_r)),
+            da_rbc_enabled,
+        );
+        let block_time_override = opts
+            .block_time_ms
+            .or(perf_spec.map(|spec| spec.block_time_ms));
+        let commit_time_override = opts
+            .commit_time_ms
+            .or(perf_spec.map(|spec| spec.commit_time_ms));
+        let (block_time_ms, commit_time_ms) =
+            resolve_localnet_pipeline_times(block_time_override, commit_time_override);
+        let collectors_k = perf_spec.map(|spec| spec.collectors_k);
+        let block_max_transactions = perf_spec
+            .map(|spec| spec.block_max_transactions)
+            .unwrap_or(LOCALNET_BLOCK_MAX_TRANSACTIONS);
+        let requested_stake_amount = perf_spec.map(|spec| spec.stake_amount);
         let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
         let mut genesis = generate_raw_genesis(
             genesis_public_key.clone(),
@@ -1840,9 +2006,11 @@ mod tests {
         }
         genesis = apply_parameter_overrides(
             genesis,
-            opts.block_time_ms,
-            opts.commit_time_ms,
+            block_time_ms,
+            commit_time_ms,
             redundant_send_r,
+            collectors_k,
+            block_max_transactions,
             opts.consensus_mode,
             opts.next_consensus_mode,
         );
@@ -1850,8 +2018,11 @@ mod tests {
         if npos_bootstrap {
             let gas_account_id = localnet_gas_account_id(&genesis_public_key)
                 .expect("gas account id required for NPoS bootstrap");
-            genesis = append_localnet_npos_bootstrap(genesis, &peers, &gas_account_id)
-                .expect("append localnet NPoS bootstrap");
+            let stake_amount =
+                localnet_npos_stake_amount(&genesis.effective_parameters(), requested_stake_amount);
+            genesis =
+                append_localnet_npos_bootstrap(genesis, &peers, &gas_account_id, stake_amount)
+                    .expect("append localnet NPoS bootstrap");
         }
         apply_localnet_crypto_overrides(genesis, npos_bootstrap)
     }
@@ -1862,6 +2033,7 @@ mod tests {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
+            perf_profile: None,
             peers: NonZeroU16::new(2).expect("non-zero"),
             seed: Some("kagami-config-compat".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -1892,6 +2064,7 @@ mod tests {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
+            perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
             seed: Some("Iroha".to_owned()),
             bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
@@ -1926,6 +2099,7 @@ mod tests {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
+            perf_profile: None,
             peers: NonZeroU16::new(2).expect("non-zero"),
             seed: Some("kagami-addr-literals".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -1992,6 +2166,7 @@ mod tests {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
+            perf_profile: None,
             peers: NonZeroU16::new(2).expect("non-zero"),
             seed: Some("kagami-crypto-allow".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -2036,6 +2211,7 @@ mod tests {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
+            perf_profile: None,
             peers: NonZeroU16::new(2).expect("non-zero"),
             seed: Some("kagami-genesis-crypto".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -2080,6 +2256,7 @@ mod tests {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
+            perf_profile: None,
             peers: NonZeroU16::new(2).expect("non-zero"),
             seed: Some("kagami-peer-telemetry".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -2150,6 +2327,7 @@ mod tests {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
+            perf_profile: None,
             peers: NonZeroU16::new(2).expect("non-zero"),
             seed: Some("kagami-channel-caps".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -2366,6 +2544,132 @@ mod tests {
     }
 
     #[test]
+    fn perf_profile_permissioned_applies_collectors_and_pipeline() {
+        let temp = tempfile::tempdir().expect("tmp dir");
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
+            perf_profile: Some(LocalnetPerfProfile::Throughput10kPermissioned),
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: Some("perf-profile-permissioned".to_owned()),
+            bind_host: DEFAULT_BIND_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 48080,
+            base_p2p_port: 48337,
+            out_dir: temp.path().to_path_buf(),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
+
+        let source =
+            TomlSource::from_file(temp.path().join("peer0.toml")).expect("read config");
+        let parsed = actual::Root::from_toml_source(source).expect("config should parse");
+        assert_eq!(parsed.sumeragi.collectors_k, 3);
+        assert_eq!(parsed.sumeragi.collectors_redundant_send_r, 2);
+
+        let genesis_path = temp.path().join("genesis.json");
+        let genesis_contents = fs::read_to_string(&genesis_path).expect("read genesis");
+        let manifest: iroha_genesis::RawGenesisTransaction =
+            norito::json::from_str(&genesis_contents).expect("parse genesis manifest");
+        let params = manifest.effective_parameters();
+        assert_eq!(params.sumeragi().block_time_ms(), 1_000);
+        assert_eq!(params.sumeragi().commit_time_ms(), 1_000);
+        assert_eq!(params.sumeragi().collectors_k(), 3);
+        assert_eq!(params.sumeragi().collectors_redundant_send_r(), 2);
+        assert_eq!(
+            params
+                .block
+                .max_transactions
+                .map(NonZeroU64::get)
+                .unwrap_or_default(),
+            LOCALNET_BLOCK_MAX_TRANSACTIONS
+        );
+    }
+
+    #[test]
+    fn perf_profile_npos_applies_k_aggregators() {
+        let temp = tempfile::tempdir().expect("tmp dir");
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
+            perf_profile: Some(LocalnetPerfProfile::Throughput10kNpos),
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: Some("perf-profile-npos".to_owned()),
+            bind_host: DEFAULT_BIND_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 58080,
+            base_p2p_port: 58337,
+            out_dir: temp.path().to_path_buf(),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Npos,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
+
+        let genesis_path = temp.path().join("genesis.json");
+        let genesis_contents = fs::read_to_string(&genesis_path).expect("read genesis");
+        let manifest: iroha_genesis::RawGenesisTransaction =
+            norito::json::from_str(&genesis_contents).expect("parse genesis manifest");
+        let params = manifest.effective_parameters();
+        assert_eq!(params.sumeragi().collectors_k(), 3);
+        assert_eq!(params.sumeragi().collectors_redundant_send_r(), 2);
+
+        let npos = params
+            .custom()
+            .get(&SumeragiNposParameters::parameter_id())
+            .and_then(SumeragiNposParameters::from_custom_parameter)
+            .expect("npos parameters must be present");
+        assert_eq!(npos.k_aggregators(), 3);
+        assert_eq!(npos.redundant_send_r(), 2);
+        assert_eq!(npos.block_time_ms(), 1_000);
+        assert_eq!(npos.timeout_commit_ms(), 1_000);
+    }
+
+    #[test]
+    fn validate_localnet_options_rejects_perf_profile_mismatch() {
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
+            perf_profile: Some(LocalnetPerfProfile::Throughput10kNpos),
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: None,
+            bind_host: DEFAULT_BIND_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 68080,
+            base_p2p_port: 68337,
+            out_dir: PathBuf::from("localnet"),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        let err = validate_localnet_options(&opts).expect_err("mismatch should fail");
+        assert!(
+            err.to_string().contains("perf-profile"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn genesis_key_defaults_to_real_keypair_when_unseeded() {
         let (public_key, _) = generate_genesis_key_pair(None, GENESIS_SEED);
         assert_eq!(
@@ -2395,6 +2699,7 @@ mod tests {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
+            perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
             seed: Some("Iroha".to_owned()),
             bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
@@ -2458,6 +2763,7 @@ mod tests {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
+            perf_profile: None,
             peers: NonZeroU16::new(2).expect("non-zero"),
             seed: Some("localnet-da-enabled".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -2496,6 +2802,7 @@ mod tests {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
+            perf_profile: None,
             peers: NonZeroU16::new(2).expect("non-zero"),
             seed: Some("default-pipeline-time".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -2532,6 +2839,7 @@ mod tests {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
+            perf_profile: None,
             peers: NonZeroU16::new(2).expect("non-zero"),
             seed: Some("localnet-block-max".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -2568,6 +2876,7 @@ mod tests {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
+            perf_profile: None,
             peers: NonZeroU16::new(2).expect("non-zero"),
             seed: Some("localnet-npos-stake".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -2614,10 +2923,16 @@ mod tests {
             validators.len(),
             "expected one activation per public-lane validator"
         );
+        let params = manifest.effective_parameters();
+        let expected_stake_amount =
+            localnet_npos_stake_amount(&params, opts.perf_profile.map(|spec| spec.stake_amount));
         for register in &validators {
             assert_eq!(register.lane_id, LaneId::SINGLE);
             assert_eq!(register.validator, register.stake_account);
-            assert_eq!(register.initial_stake, Numeric::from(LOCALNET_STAKE_AMOUNT));
+            assert_eq!(
+                register.initial_stake,
+                Numeric::from(expected_stake_amount)
+            );
         }
         for activate in &activations {
             assert_eq!(activate.lane_id, LaneId::SINGLE);
@@ -2650,6 +2965,17 @@ mod tests {
     }
 
     #[test]
+    fn localnet_npos_stake_amount_respects_min_self_bond() {
+        let mut params = Parameters::default();
+        let mut npos = SumeragiNposParameters::default();
+        npos.min_self_bond = LOCALNET_STAKE_AMOUNT + 1;
+        params.set_parameter(Parameter::Custom(npos.into_custom_parameter()));
+
+        let stake_amount = localnet_npos_stake_amount(&params, Some(LOCALNET_STAKE_AMOUNT));
+        assert_eq!(stake_amount, npos.min_self_bond);
+    }
+
+    #[test]
     fn localnet_npos_validator_roster_and_quorum_match_peer_count() {
         use std::collections::BTreeSet;
 
@@ -2658,6 +2984,7 @@ mod tests {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
+            perf_profile: None,
             peers: peer_count,
             seed: Some("localnet-npos-quorum".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -2749,6 +3076,7 @@ mod tests {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
+            perf_profile: None,
             peers: NonZeroU16::new(2).expect("non-zero"),
             seed: Some("block-time-commit-default".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -2784,6 +3112,7 @@ mod tests {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
+            perf_profile: None,
             peers: NonZeroU16::new(2).expect("non-zero"),
             seed: Some("npos-timeouts".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -2833,6 +3162,7 @@ mod tests {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha2,
             sora_profile: None,
+            perf_profile: None,
             peers: NonZeroU16::new(3).expect("non-zero"),
             seed: Some("npos-localnet".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -2891,6 +3221,7 @@ mod tests {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha2,
             sora_profile: None,
+            perf_profile: None,
             peers: NonZeroU16::new(3).expect("non-zero"),
             seed: Some("localnet-staged-cutover".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -2931,6 +3262,53 @@ mod tests {
             params.sumeragi().mode_activation_height(),
             Some(7),
             "manifest should preserve mode_activation_height"
+        );
+    }
+
+    #[test]
+    fn staged_cutover_enables_nexus_in_peer_config() {
+        let temp = tempfile::tempdir().expect("tmp dir");
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha2,
+            sora_profile: None,
+            perf_profile: None,
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: Some("localnet-staged-nexus".to_owned()),
+            bind_host: DEFAULT_BIND_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 28080,
+            base_p2p_port: 27337,
+            out_dir: temp.path().to_path_buf(),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+            next_consensus_mode: Some(SumeragiConsensusMode::Npos),
+            mode_activation_height: Some(9),
+        };
+
+        generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
+            .expect("generate staged localnet");
+
+        let peer_cfg: toml::Value = toml::from_str(
+            &fs::read_to_string(temp.path().join("peer0.toml"))
+                .expect("read generated peer config"),
+        )
+        .expect("parse peer config");
+        let nexus = peer_cfg
+            .get("nexus")
+            .and_then(toml::Value::as_table)
+            .expect("nexus table");
+        assert_eq!(
+            nexus.get("enabled").and_then(toml::Value::as_bool),
+            Some(true),
+            "staged NPoS cutover should enable Nexus in peer config"
+        );
+        assert!(
+            nexus.get("staking").is_some(),
+            "staged NPoS cutover should configure Nexus staking"
         );
     }
 
@@ -3018,6 +3396,7 @@ mod tests {
             let opts = LocalnetOptions {
                 build_line,
                 sora_profile: None,
+                perf_profile: None,
                 peers: NonZeroU16::new(2).expect("non-zero"),
                 seed: Some(format!("da-rbc-{build_line:?}")),
                 bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -3098,6 +3477,7 @@ mod tests {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
+            perf_profile: None,
             peers: NonZeroU16::new(3).unwrap(),
             seed: None,
             bind_host: DEFAULT_BIND_HOST.to_string(),
@@ -3127,6 +3507,7 @@ mod tests {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
+            perf_profile: None,
             peers: NonZeroU16::new(2).unwrap(),
             seed: None,
             bind_host: DEFAULT_BIND_HOST.to_string(),
@@ -3156,6 +3537,7 @@ mod tests {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
+            perf_profile: None,
             peers: NonZeroU16::new(1).unwrap(),
             seed: None,
             bind_host: DEFAULT_BIND_HOST.to_string(),
@@ -3185,6 +3567,7 @@ mod tests {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha2,
             sora_profile: None,
+            perf_profile: None,
             peers: NonZeroU16::new(1).unwrap(),
             seed: None,
             bind_host: DEFAULT_BIND_HOST.to_string(),
@@ -3213,6 +3596,7 @@ mod tests {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
+            perf_profile: None,
             peers: NonZeroU16::new(1).unwrap(),
             seed: None,
             bind_host: DEFAULT_BIND_HOST.to_string(),
@@ -3241,6 +3625,7 @@ mod tests {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
+            perf_profile: None,
             peers: NonZeroU16::new(1).unwrap(),
             seed: None,
             bind_host: DEFAULT_BIND_HOST.to_string(),
@@ -3269,6 +3654,7 @@ mod tests {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha2,
             sora_profile: Some(SoraProfile::Dataspace),
+            perf_profile: None,
             peers: NonZeroU16::new(4).unwrap(),
             seed: None,
             bind_host: DEFAULT_BIND_HOST.to_string(),
@@ -3297,6 +3683,7 @@ mod tests {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: Some(SoraProfile::Dataspace),
+            perf_profile: None,
             peers: NonZeroU16::new(3).unwrap(),
             seed: None,
             bind_host: DEFAULT_BIND_HOST.to_string(),
@@ -3326,6 +3713,7 @@ mod tests {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: Some(SoraProfile::Nexus),
+            perf_profile: None,
             peers: NonZeroU16::new(4).unwrap(),
             seed: None,
             bind_host: DEFAULT_BIND_HOST.to_string(),
@@ -3354,6 +3742,7 @@ mod tests {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: Some(SoraProfile::Dataspace),
+            perf_profile: None,
             peers: NonZeroU16::new(4).unwrap(),
             seed: None,
             bind_host: DEFAULT_BIND_HOST.to_string(),
@@ -3382,6 +3771,7 @@ mod tests {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
+            perf_profile: None,
             peers: NonZeroU16::new(1).unwrap(),
             seed: None,
             bind_host: DEFAULT_BIND_HOST.to_string(),
@@ -3407,6 +3797,7 @@ mod tests {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
+            perf_profile: None,
             peers: NonZeroU16::new(1).unwrap(),
             seed: Some("permissioned-iroha3".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_string(),
@@ -3450,6 +3841,7 @@ mod tests {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
+            perf_profile: None,
             peers: NonZeroU16::new(1).unwrap(),
             seed: Some("npos-iroha3".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_string(),
@@ -3545,6 +3937,7 @@ mod tests {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
+            perf_profile: None,
             peers: NonZeroU16::new(1).unwrap(),
             seed: None,
             bind_host: DEFAULT_BIND_HOST.to_string(),
@@ -3589,6 +3982,7 @@ mod tests {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
+            perf_profile: None,
             peers: NonZeroU16::new(1).unwrap(),
             seed: Some("absolute-paths".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),

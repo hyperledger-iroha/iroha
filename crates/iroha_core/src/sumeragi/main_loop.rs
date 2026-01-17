@@ -3145,6 +3145,22 @@ impl Actor {
         })
     }
 
+    fn has_blocking_pending_blocks(&self) -> bool {
+        let view = self.state.view();
+        let tip_height = view.height();
+        let tip_hash = view.latest_block_hash();
+        self.pending.pending_blocks.values().any(|pending| {
+            !pending.aborted
+                && pending_extends_tip(
+                    pending.height,
+                    pending.block.header().prev_block_hash(),
+                    tip_height,
+                    tip_hash,
+                )
+                && (pending.commit_qc_seen || pending.last_quorum_reschedule.is_none())
+        })
+    }
+
     fn rbc_rebroadcast_active_with_tip(
         &self,
         key: super::rbc_store::SessionKey,
@@ -6816,6 +6832,35 @@ impl Actor {
             }
         }
         actor.refresh_commit_topology_state(&actor.effective_commit_topology());
+        if let Some(committed_qc) = actor.latest_committed_qc() {
+            actor.highest_qc = Some(committed_qc);
+            actor.locked_qc = Some(committed_qc);
+            super::status::set_highest_qc(committed_qc.height, committed_qc.view);
+            super::status::set_highest_qc_hash(committed_qc.subject_block_hash);
+            super::status::set_locked_qc(
+                committed_qc.height,
+                committed_qc.view,
+                Some(committed_qc.subject_block_hash),
+            );
+            #[cfg(feature = "telemetry")]
+            {
+                actor.telemetry.set_highest_qc_height(committed_qc.height);
+                actor.telemetry.set_locked_qc_height(committed_qc.height);
+                actor.telemetry.set_locked_qc_view(committed_qc.view);
+            }
+        } else {
+            super::status::set_highest_qc(0, 0);
+            super::status::set_highest_qc_hash(HashOf::from_untyped_unchecked(Hash::prehashed(
+                [0; Hash::LENGTH],
+            )));
+            super::status::set_locked_qc(0, 0, None);
+            #[cfg(feature = "telemetry")]
+            {
+                actor.telemetry.set_highest_qc_height(0);
+                actor.telemetry.set_locked_qc_height(0);
+                actor.telemetry.set_locked_qc_view(0);
+            }
+        }
         // Publish initial status so operator endpoints are populated even before the
         // first tick, and to make stalled actor detection easier in tests.
         super::status::set_tx_queue_backpressure(
@@ -7530,10 +7575,6 @@ impl Actor {
         let rbc_persist_progress = self.poll_rbc_persist_results_inner();
         let now = tick_start;
         let queue_len = self.queue.active_len();
-        let queue_ready = queue_len > 0 && self.active_pending_blocks_len() == 0;
-        if queue_ready {
-            self.subsystems.propose.pacemaker.next_deadline = now;
-        }
         let adaptive_progress = self.apply_adaptive_observability(now);
         let (refresh_progress, refresh_cost) = {
             let step_start = Instant::now();
@@ -7587,7 +7628,14 @@ impl Actor {
             commit_pipeline_cost = pipeline_start.elapsed();
             progress = true;
         }
-        if queue_ready && !self.should_defer_proposal() && self.subsystems.commit.inflight.is_none()
+        let proposal_backpressure = self.proposal_backpressure_at(now);
+        let queue_ready = queue_len > 0 && !proposal_backpressure.active_pending;
+        if queue_ready {
+            self.subsystems.propose.pacemaker.next_deadline = now;
+        }
+        if queue_ready
+            && !proposal_backpressure.should_defer()
+            && self.subsystems.commit.inflight.is_none()
         {
             let propose_start = Instant::now();
             if self.on_pacemaker_propose_ready(now) {
@@ -7595,18 +7643,14 @@ impl Actor {
             }
             propose_cost = propose_cost.saturating_add(propose_start.elapsed());
         }
-        // Refresh backpressure before computing the snapshot we pass to the pacemaker so
-        // both the gating decision and the tracker see the same state.
-        let should_defer = self.should_defer_proposal();
-        let state = self.subsystems.propose.backpressure_gate.state();
+        let state = proposal_backpressure.queue_state;
         let pacemaker_eval_start = Instant::now();
         let (log_initial_deferral, log_fire_deferral, should_attempt_proposal) =
             Self::evaluate_pacemaker(
                 &mut self.subsystems.propose.pacemaker,
                 &mut self.subsystems.propose.pacemaker_backpressure,
-                state,
+                proposal_backpressure,
                 now,
-                should_defer,
             );
         let pacemaker_eval_cost = pacemaker_eval_start.elapsed();
         if log_initial_deferral || log_fire_deferral {
