@@ -16,6 +16,7 @@ pub mod cmpext;
 pub mod const_vec;
 #[cfg(not(feature = "ffi_import"))]
 pub mod conststr;
+pub mod erasure;
 pub mod json;
 pub mod must_use;
 pub mod numeric;

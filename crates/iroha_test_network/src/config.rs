@@ -1,14 +1,18 @@
 //! Sample configuration builders
 
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+};
 
 use color_eyre::{Report, eyre::eyre};
 use iroha_config::base::toml::WriteExt;
+use iroha_config::parameters::actual::Nexus as ActualNexus;
 use iroha_core::{
     block::ValidBlock,
     kura::Kura,
     query::store::LiveQueryStore,
-    state::{State, World},
+    state::{State, StateReadOnly, World},
     sumeragi::network_topology::Topology as CoreTopology,
     telemetry::StateTelemetry,
 };
@@ -165,6 +169,7 @@ pub fn genesis_with_keypair_and_post_topology(
         topology_entries,
         genesis_key_pair,
         None,
+        None,
     )
 }
 
@@ -175,6 +180,7 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies(
     topology_entries: Vec<GenesisTopologyEntry>,
     genesis_key_pair: KeyPair,
     da_proof_policies: Option<DaProofPolicyBundle>,
+    nexus_config: Option<ActualNexus>,
 ) -> GenesisBlock {
     init_instruction_registry();
     build_minimal_genesis_with_post_topology(
@@ -184,6 +190,7 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies(
         topology_entries,
         genesis_key_pair,
         da_proof_policies,
+        nexus_config,
     )
 }
 
@@ -200,6 +207,7 @@ fn build_minimal_genesis(
         topology_entries,
         genesis_key_pair,
         None,
+        None,
     )
 }
 
@@ -210,6 +218,7 @@ fn build_minimal_genesis_with_post_topology(
     topology_entries: Vec<GenesisTopologyEntry>,
     genesis_key_pair: KeyPair,
     da_proof_policies: Option<DaProofPolicyBundle>,
+    nexus_config: Option<ActualNexus>,
 ) -> GenesisBlock {
     let (mut block, genesis_account, topology_vec, genesis_key_pair) =
         build_minimal_genesis_unexecuted_with_post_topology(
@@ -225,6 +234,7 @@ fn build_minimal_genesis_with_post_topology(
         &genesis_account,
         &topology_vec,
         &genesis_key_pair,
+        nexus_config.as_ref(),
     );
     block
 }
@@ -523,6 +533,7 @@ pub(crate) fn ensure_genesis_results(
     genesis_account: &AccountId,
     topology: &[PeerId],
     genesis_key_pair: &KeyPair,
+    nexus_config: Option<&ActualNexus>,
 ) {
     let tx_count = block.0.transactions_vec().len();
     let result_count = block.0.results().count();
@@ -530,7 +541,13 @@ pub(crate) fn ensure_genesis_results(
         return;
     }
 
-    match populate_genesis_results(block, genesis_account, topology, genesis_key_pair) {
+    match populate_genesis_results(
+        block,
+        genesis_account,
+        topology,
+        genesis_key_pair,
+        nexus_config,
+    ) {
         Ok(new_block) => block.0 = new_block,
         Err(err) => {
             warn!(
@@ -547,6 +564,7 @@ fn populate_genesis_results(
     genesis_account: &AccountId,
     topology: &[PeerId],
     genesis_key_pair: &KeyPair,
+    nexus_config: Option<&ActualNexus>,
 ) -> Result<iroha_data_model::block::SignedBlock, Report> {
     if topology.is_empty() {
         return Err(eyre!("genesis topology is empty"));
@@ -566,7 +584,12 @@ fn populate_genesis_results(
         Vec::<iroha_data_model::asset::AssetDefinition>::new(),
     );
     let mut state = State::with_telemetry(world, kura, query_handle, StateTelemetry::default());
-    apply_preexec_nexus_overrides(&mut state, genesis_key_pair)?;
+    apply_preexec_nexus_overrides(
+        &mut state,
+        genesis_key_pair,
+        nexus_config,
+        block.0.da_proof_policies(),
+    )?;
     let core_topology = CoreTopology::new(topology.to_vec());
     let chain = block
         .0
@@ -603,12 +626,73 @@ fn populate_genesis_results(
 fn apply_preexec_nexus_overrides(
     state: &mut State,
     genesis_key_pair: &KeyPair,
+    nexus_config: Option<&ActualNexus>,
+    block_policies: Option<&DaProofPolicyBundle>,
 ) -> Result<(), Report> {
     let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
     let gas_account_id = AccountId::new(ivm_domain, genesis_key_pair.public_key().clone());
     let gas_account = gas_account_id.to_string();
 
-    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    let mut nexus = nexus_config.cloned().unwrap_or_default();
+    if let Some(policies) = block_policies {
+        if !policies.policies.is_empty() {
+            let mut lanes = Vec::with_capacity(policies.policies.len());
+            let mut dataspace_ids = BTreeSet::new();
+            let mut max_lane = 0u32;
+            for policy in &policies.policies {
+                max_lane = max_lane.max(policy.lane_id.as_u32());
+                dataspace_ids.insert(policy.dataspace_id);
+                lanes.push(iroha_data_model::nexus::LaneConfig {
+                    id: policy.lane_id,
+                    dataspace_id: policy.dataspace_id,
+                    alias: policy.alias.clone(),
+                    proof_scheme: policy.proof_scheme,
+                    ..iroha_data_model::nexus::LaneConfig::default()
+                });
+            }
+            let lane_count = std::num::NonZeroU32::new(max_lane.saturating_add(1))
+                .ok_or_else(|| eyre!("proof policies must include at least one lane"))?;
+            let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(lane_count, lanes)
+                .map_err(|err| {
+                    Report::new(err).wrap_err("build lane catalog from proof policies")
+                })?;
+
+            let mut dataspace_entries = nexus.dataspace_catalog.entries().to_vec();
+            let mut existing_ids: BTreeSet<_> =
+                dataspace_entries.iter().map(|entry| entry.id).collect();
+            let mut existing_aliases: BTreeSet<_> = dataspace_entries
+                .iter()
+                .map(|entry| entry.alias.clone())
+                .collect();
+            for dataspace_id in dataspace_ids {
+                if existing_ids.insert(dataspace_id) {
+                    let base_alias = format!("policy-ds-{}", u64::from(dataspace_id));
+                    let mut alias = base_alias.clone();
+                    let mut idx = 1u32;
+                    while existing_aliases.contains(&alias) {
+                        alias = format!("{base_alias}-{idx}");
+                        idx = idx.saturating_add(1);
+                    }
+                    existing_aliases.insert(alias.clone());
+                    dataspace_entries.push(iroha_data_model::nexus::DataSpaceMetadata {
+                        id: dataspace_id,
+                        alias,
+                        description: None,
+                        fault_tolerance: 1,
+                    });
+                }
+            }
+            let dataspace_catalog =
+                iroha_data_model::nexus::DataSpaceCatalog::new(dataspace_entries).map_err(
+                    |err| Report::new(err).wrap_err("build dataspace catalog from proof policies"),
+                )?;
+
+            nexus.lane_catalog = lane_catalog;
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+            nexus.dataspace_catalog = dataspace_catalog;
+        }
+    }
     nexus.staking.stake_escrow_account_id = gas_account.clone();
     nexus.staking.slash_sink_account_id = gas_account;
 
@@ -1003,6 +1087,7 @@ mod tests {
             &genesis_account,
             &topology_vec,
             &genesis_key_pair,
+            None,
         );
         assert!(
             block.0.has_results(),
@@ -1042,12 +1127,138 @@ mod tests {
             &genesis_account,
             &topology_vec,
             &genesis_key_pair,
+            None,
         )
         .expect("genesis pre-execution should succeed");
         assert!(
             executed.results().all(|result| result.as_ref().is_ok()),
             "pre-executed genesis should not carry errors when HSM bindings are optional"
         );
+    }
+
+    #[test]
+    fn populate_genesis_results_accepts_block_proof_policies() {
+        use std::num::NonZeroU32;
+
+        use iroha_data_model::nexus::{LaneCatalog, LaneConfig, LaneId};
+
+        init_instruction_registry();
+        let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer_id = PeerId::new(bls.public_key().clone());
+        let topology = [peer_id.clone()].into_iter().collect();
+        let entry = GenesisTopologyEntry::new(
+            PeerId::new(bls.public_key().clone()),
+            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
+        );
+        let lane_count = NonZeroU32::new(2).expect("non-zero lane count");
+        let lane0 = LaneConfig {
+            id: LaneId::from_lane_index(0, lane_count).expect("lane 0 id"),
+            alias: "alpha".to_string(),
+            ..LaneConfig::default()
+        };
+        let lane1 = LaneConfig {
+            id: LaneId::from_lane_index(1, lane_count).expect("lane 1 id"),
+            alias: "beta".to_string(),
+            ..LaneConfig::default()
+        };
+        let catalog =
+            LaneCatalog::new(lane_count, vec![lane0, lane1]).expect("lane catalog should validate");
+
+        let mut nexus = ActualNexus::default();
+        nexus.enabled = true;
+        nexus.lane_catalog = catalog.clone();
+        nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog);
+        let policies = iroha_core::da::proof_policy_bundle(&nexus.lane_config);
+
+        let (block, genesis_account, topology_vec, genesis_key_pair) =
+            super::build_minimal_genesis_unexecuted_with_post_topology(
+                Vec::new(),
+                Vec::new(),
+                topology,
+                vec![entry],
+                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
+                Some(policies),
+            );
+        let executed = super::populate_genesis_results(
+            &block,
+            &genesis_account,
+            &topology_vec,
+            &genesis_key_pair,
+            None,
+        )
+        .expect("genesis pre-execution should accept proof-policy-derived catalogs");
+        assert!(
+            executed.results().all(|result| result.as_ref().is_ok()),
+            "pre-executed genesis should succeed with custom lane config"
+        );
+    }
+
+    #[test]
+    fn preexec_overrides_recompute_lane_config_from_policies() {
+        use std::num::NonZeroU32;
+
+        use iroha_data_model::{
+            da::commitment::{DaProofPolicy, DaProofPolicyBundle, DaProofScheme},
+            nexus::{DataSpaceId, LaneId},
+        };
+
+        let genesis_key_pair = SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone();
+        let genesis_account = AccountId::new(
+            iroha_genesis::GENESIS_DOMAIN_ID.clone(),
+            genesis_key_pair.public_key().clone(),
+        );
+        let genesis_account_entry = Account {
+            id: genesis_account,
+            metadata: Metadata::default(),
+            label: None,
+            uaid: None,
+        };
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let world = World::with(
+            Vec::<iroha_data_model::domain::Domain>::new(),
+            vec![genesis_account_entry],
+            Vec::<iroha_data_model::asset::AssetDefinition>::new(),
+        );
+        let mut state = State::with_telemetry(world, kura, query_handle, StateTelemetry::default());
+
+        let lane_count = NonZeroU32::new(2).expect("non-zero lane count");
+        let policy0 = DaProofPolicy {
+            lane_id: LaneId::from_lane_index(0, lane_count).expect("lane 0 id"),
+            dataspace_id: DataSpaceId::GLOBAL,
+            alias: "alpha".to_string(),
+            proof_scheme: DaProofScheme::MerkleSha256,
+        };
+        let policy1 = DaProofPolicy {
+            lane_id: LaneId::from_lane_index(1, lane_count).expect("lane 1 id"),
+            dataspace_id: DataSpaceId::new(7),
+            alias: "beta".to_string(),
+            proof_scheme: DaProofScheme::KzgBls12_381,
+        };
+        let bundle = DaProofPolicyBundle::new(vec![policy0, policy1]);
+
+        super::apply_preexec_nexus_overrides(&mut state, &genesis_key_pair, None, Some(&bundle))
+            .expect("preexec should apply proof policy overrides");
+
+        let nexus = state.view().nexus();
+        let expected =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        assert_eq!(
+            nexus.lane_config.entries().len(),
+            expected.entries().len(),
+            "lane config must match updated lane catalog"
+        );
+        for (actual, expected) in nexus
+            .lane_config
+            .entries()
+            .iter()
+            .zip(expected.entries().iter())
+        {
+            assert_eq!(actual.lane_id, expected.lane_id);
+            assert_eq!(actual.dataspace_id, expected.dataspace_id);
+            assert_eq!(actual.proof_scheme, expected.proof_scheme);
+            assert_eq!(actual.alias, expected.alias);
+        }
     }
 
     #[test]
@@ -1066,7 +1277,7 @@ mod tests {
             0,
             "freshly built genesis block should lack transaction results"
         );
-        super::ensure_genesis_results(&mut block, &genesis_account, &[], &genesis_key_pair);
+        super::ensure_genesis_results(&mut block, &genesis_account, &[], &genesis_key_pair, None);
         assert!(
             block.0.has_results(),
             "fallback path must still populate synthetic results"

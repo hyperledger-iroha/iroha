@@ -71,7 +71,7 @@ translator: manual
 - 生成されたブロックは `sumeragi` を介して検証者／コレクターへ配布されます。
 
 ### 7. 投票と commit certificate
-- バリデータは受信した提案に対し再度ステートレス／ステートフル検証を実施し、可用性投票（Availability）、Prevote、Precommit を指定コレクターに送信。
+- バリデータは受信した提案に対し再度ステートレス／ステートフル検証を実施し、可用性投票（Availability）、Prevote、Precommit を PRF で決定論的に選ばれたコレクター集合（リーダー除外）へ送信。PRF シードがない場合は `proxy_tail_index()` からの連続スライスにフォールバックし、コレクタ数がクォーラム未満ならコミットトポロジ全体へフォールバック。
 - コレクターは投票を集約し、commit certificate を生成してブロードキャスト。
 - `First-commit-certificate-wins` により、同じ `(height, hash)` の Precommit phase commit certificate は最初に届いた正当なものが採用されます。
 

@@ -11479,10 +11479,6 @@ async fn handler_status_tail_v2(
 // -------------- Runtime handlers (removed AppState-based; use closures in router) --------------
 // (re-exports consolidated above)
 mod da;
-#[path = "da/commitments.rs"]
-mod da_commitments;
-#[path = "da/pin_intents.rs"]
-mod da_pin_intents;
 pub use self::da::compute_taikai_ingest_tags;
 mod stream;
 #[cfg(feature = "app_api")]
@@ -12106,35 +12102,35 @@ impl Torii {
                 )
                 .route(
                     "/v1/da/proof_policies",
-                    get(da_commitments::handler_list_proof_policies),
+                    get(da::commitments::handler_list_proof_policies),
                 )
                 .route(
                     "/v1/da/proof_policy_snapshot",
-                    get(da_commitments::handler_proof_policy_bundle),
+                    get(da::commitments::handler_proof_policy_bundle),
                 )
                 .route(
                     "/v1/da/commitments",
-                    post(da_commitments::handler_list_commitments),
+                    post(da::commitments::handler_list_commitments),
                 )
                 .route(
                     "/v1/da/commitments/prove",
-                    post(da_commitments::handler_prove_commitment),
+                    post(da::commitments::handler_prove_commitment),
                 )
                 .route(
                     "/v1/da/commitments/verify",
-                    post(da_commitments::handler_verify_commitment),
+                    post(da::commitments::handler_verify_commitment),
                 )
                 .route(
                     "/v1/da/pin_intents",
-                    post(da_pin_intents::handler_list_pin_intents),
+                    post(da::pin_intents::handler_list_pin_intents),
                 )
                 .route(
                     "/v1/da/pin_intents/prove",
-                    post(da_pin_intents::handler_prove_pin_intent),
+                    post(da::pin_intents::handler_prove_pin_intent),
                 )
                 .route(
                     "/v1/da/pin_intents/verify",
-                    post(da_pin_intents::handler_verify_pin_intent),
+                    post(da::pin_intents::handler_verify_pin_intent),
                 )
         });
     }
@@ -15668,9 +15664,12 @@ pub(crate) mod tests_runtime_handlers {
             keypair.public_key().clone(),
         );
         let chain = (*app.chain_id).clone();
-        let tx1 =
-            TransactionBuilder::new(chain.clone(), authority.clone()).sign(keypair.private_key());
-        let tx2 = TransactionBuilder::new(chain, authority).sign(keypair.private_key());
+        let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_instructions([Log::new(Level::INFO, "rate-limit-1".to_string())])
+            .sign(keypair.private_key());
+        let tx2 = TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(Level::INFO, "rate-limit-2".to_string())])
+            .sign(keypair.private_key());
         let headers = HeaderMap::new();
 
         let ok = super::handler_post_transaction(
@@ -16331,8 +16330,8 @@ pub(crate) mod tests_runtime_handlers {
         assert!(stored.rejection.is_none());
     }
 
-    #[test]
-    fn pipeline_status_cache_records_block_event() {
+    #[tokio::test]
+    async fn pipeline_status_cache_records_block_event() {
         let app = mk_app_state_for_tests();
         let (block, _) = make_signed_block(1, None);
         let header = block.header();
@@ -16351,8 +16350,8 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(stored.block_height, Some(height));
     }
 
-    #[test]
-    fn pipeline_status_cache_refreshes_pending_block() {
+    #[tokio::test]
+    async fn pipeline_status_cache_refreshes_pending_block() {
         let app = mk_app_state_for_tests();
         let (block, _) = make_signed_block(1, None);
         let header = block.header();

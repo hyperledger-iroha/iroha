@@ -3489,6 +3489,8 @@ mod tests {
             );
             stx.world.governance_locks_mut().insert(rid.clone(), locks);
             stx.apply();
+            let iroha_core::state::StateBlock { world, .. } = sblock;
+            world.commit();
         }
 
         let res = handle_gov_get_tally(Arc::new(state), axum::extract::Path(rid))

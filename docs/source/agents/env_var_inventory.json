@@ -975,8 +975,8 @@
         },
         {
           "context": "let base = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../fixtures/da/ingest\");",
-          "line": 7659,
-          "path": "crates/iroha_torii/src/da.rs",
+          "line": 3490,
+          "path": "crates/iroha_torii/src/da/tests.rs",
           "scope": "test"
         },
         {

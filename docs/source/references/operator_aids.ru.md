@@ -25,11 +25,11 @@ translation_last_reviewed: 2026-01-01
     - `curl -Ns http://127.0.0.1:8080/v1/sumeragi/new_view/sse`
 - Метрики: gauge `sumeragi_new_view_receipts_by_hv{height,view}` отражают эти счётчики.
 - GET `/v1/sumeragi/status`
-  - Снимок индекса лидера, Highest/Locked commit certificates (`highest_qc`/`locked_qc`, высоты, view, хэши subject), счётчики collector/VRF, отсрочки pacemaker, глубина очереди транзакций и здоровье хранилища RBC (`rbc_store.{sessions,bytes,pressure_level,evictions_total,recent_evictions[...]}`).
+  - Снимок индекса лидера, Highest/Locked QCs (`highest_qc`/`locked_qc`, высоты, view, хэши subject), счётчики collector/VRF, отсрочки pacemaker, глубина очереди транзакций и здоровье хранилища RBC (`rbc_store.{sessions,bytes,pressure_level,persist_drops_total,evictions_total,recent_evictions[...]}`).
 - GET `/v1/sumeragi/status/sse`
   - Поток SSE (≈1 с) того же payload, что и `/v1/sumeragi/status`, для живых дашбордов.
 - GET `/v1/sumeragi/qc`
-  - Снимок highest/locked commit certificates; включает `subject_block_hash` для highest commit certificate, если известно.
+  - Снимок highest/locked QCs; включает `subject_block_hash` для highest QC, если известно.
 - GET `/v1/sumeragi/pacemaker`
   - Таймеры/конфигурация pacemaker: `{ backoff_ms, rtt_floor_ms, jitter_ms, backoff_multiplier, rtt_floor_multiplier, max_backoff_ms, jitter_frac_permille }`.
 - GET `/v1/sumeragi/leader`

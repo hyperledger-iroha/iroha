@@ -112,7 +112,7 @@ _اخر مراجعة: 2026-01-19 -- المراجعة القادمة المجدو
   يحفظ high-water marks على القرص، ويرفض التكرار/اعادة التشغيل القديمة؛
   harnesses property وfuzz تغطي fingerprints مختلفة وارسال خارج الترتيب.
   [crates/iroha_core/src/da/replay_cache.rs:1]
-  [fuzz/da_replay_cache.rs:1] [crates/iroha_torii/src/da.rs:1]
+  [fuzz/da_replay_cache.rs:1] [crates/iroha_torii/src/da/ingest.rs:1]
 
 **الثغرات المتبقية**
 - يجب ان يمر Torii ingest replay cache في مسار القبول ويحفظ مؤشرات sequence عبر
@@ -221,7 +221,7 @@ whitelist لمزودين خبيثين، او يخفي التنبيهات.
 
 - replay cache واستمرار المؤشرات تم انجازهما في DA-2. راجع التنفيذ في
   `crates/iroha_core/src/da/replay_cache.rs` (منطق cache) وتكامل Torii في
-  `crates/iroha_torii/src/da.rs` الذي يمرر checks fingerprint عبر `/v1/da/ingest`.
+  `crates/iroha_torii/src/da/ingest.rs` الذي يمرر checks fingerprint عبر `/v1/da/ingest`.
 - محاكاة streaming PDP/PoTR تمارس عبر harness proof-stream في
   `crates/sorafs_car/tests/sorafs_cli.rs`، وتغطي تدفقات طلب PoR/PDP/PoTR وسيناريوهات
   الفشل المشار اليها في نموذج التهديدات.

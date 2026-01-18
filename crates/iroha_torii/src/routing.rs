@@ -4795,6 +4795,13 @@ mod evidence_submit_tests {
     #[test]
     fn decode_and_validate_evidence_uses_subject_height_seed() {
         let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
+        let (prev_mode, prev_staged, prev_activation, _) =
+            iroha_core::sumeragi::status::mode_tags();
+        iroha_core::sumeragi::status::set_mode_tags(
+            iroha_core::sumeragi::consensus::NPOS_TAG,
+            None,
+            None,
+        );
         let keypair0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let keypair1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let peer0 = PeerId::new(keypair0.public_key().clone());
@@ -4900,7 +4907,8 @@ mod evidence_submit_tests {
         }
 
         let mode_tag = iroha_core::sumeragi::consensus::NPOS_TAG;
-        let signer_index = u32::try_from(leader_epoch0).expect("leader index fits in vote signer");
+        // NPoS rotates the PRF leader to index 0 for signature validation.
+        let signer_index = 0;
         let mut v1 = make_vote(&chain_id, mode_tag, signer_keypair, height, view, 0x11);
         v1.signer = signer_index;
         let mut v2 = make_vote(&chain_id, mode_tag, signer_keypair, height, view, 0x22);
@@ -4913,6 +4921,12 @@ mod evidence_submit_tests {
         let decoded = decode_and_validate_evidence(&encoded, &state, &chain_id)
             .expect("evidence should validate with subject-height seed");
         assert_eq!(decoded.kind, EvidenceKind::DoublePrepare);
+
+        iroha_core::sumeragi::status::set_mode_tags(
+            &prev_mode,
+            prev_staged.as_deref(),
+            prev_activation,
+        );
     }
 }
 
@@ -13813,7 +13827,6 @@ pub async fn handle_v1_parameters(state: Arc<CoreState>) -> Result<impl IntoResp
 mod sse_filter_tests {
     use iroha_crypto::Hash;
     use iroha_data_model::{
-        account::AccountId,
         asset::AssetDefinitionId,
         block::BlockHeader,
         events::{
@@ -13828,6 +13841,7 @@ mod sse_filter_tests {
         offline::OfflinePlatformTokenSnapshot,
     };
     use iroha_primitives::numeric::Numeric;
+    use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID};
     use nonzero_ext::nonzero;
 
     use super::*;
@@ -14336,18 +14350,9 @@ mod sse_filter_tests {
     }
 
     fn sample_offline_event(policy: AndroidIntegrityPolicy) -> EventBox {
-        let controller: AccountId =
-            "ed0120aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@wonderland"
-                .parse()
-                .unwrap();
-        let receiver: AccountId =
-            "ed0120bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb@wonderland"
-                .parse()
-                .unwrap();
-        let deposit: AccountId =
-            "ed0120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc@wonderland"
-                .parse()
-                .unwrap();
+        let controller = ALICE_ID.clone();
+        let receiver = BOB_ID.clone();
+        let deposit = CARPENTER_ID.clone();
         let asset_definition: AssetDefinitionId = "rose#wonderland".parse().unwrap();
         let bundled = OfflineTransferSettled {
             bundle_id: Hash::new(b"bundle"),
@@ -14707,6 +14712,10 @@ mod tx_query_integration_smoke {
         String::from_utf8(bytes).ok()
     }
 
+    fn log_instruction() -> dm::InstructionBox {
+        dm::Log::new(dm::Level::INFO, "test".to_string()).into()
+    }
+
     #[tokio::test]
     async fn handle_v1_account_transactions_returns_empty_on_blank_state() {
         // Minimal in-memory state: no blocks yet
@@ -14926,14 +14935,14 @@ mod tx_query_integration_smoke {
         let mut bldr_a = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
         bldr_a.set_creation_time(core::time::Duration::from_millis(1000));
         let tx_a = bldr_a
-            .with_instructions::<dm::InstructionBox>([])
+            .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_a.private_key());
         let tx_a = AcceptedTransaction::new_unchecked(Cow::Owned(tx_a));
         // tx_b: authority acc_b at t=2000ms
         let mut bldr_b = dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone());
         bldr_b.set_creation_time(core::time::Duration::from_millis(2000));
         let signed_b = bldr_b
-            .with_instructions::<dm::InstructionBox>([])
+            .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_b.private_key());
         let _entry_b_str = format!("{}", signed_b.hash_as_entrypoint());
         let tx_b = AcceptedTransaction::new_unchecked(Cow::Owned(signed_b));
@@ -14942,7 +14951,7 @@ mod tx_query_integration_smoke {
         let mut bldr_c = dm::TransactionBuilder::new(chain_id.clone(), acc_c.clone());
         bldr_c.set_creation_time(core::time::Duration::from_millis(2000));
         let signed_c = bldr_c
-            .with_instructions::<dm::InstructionBox>([])
+            .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_c.private_key());
         let _entry_c_str = format!("{}", signed_c.hash_as_entrypoint());
         let tx_c = AcceptedTransaction::new_unchecked(Cow::Owned(signed_c));
@@ -14963,9 +14972,13 @@ mod tx_query_integration_smoke {
         crate::test_utils::finalize_committed_block(&state, st_block1, committed);
 
         // Now query via handler with sorting by timestamp_ms ascending, tie-break by entrypoint_hash asc
+        let timestamp_filter = crate::filter::FilterExpr::Gte(
+            crate::filter::FieldPath("timestamp_ms".into()),
+            norito::json::Value::from(1000u64),
+        );
         let env = crate::filter::QueryEnvelope {
             query: None,
-            filter: None,
+            filter: Some(timestamp_filter.clone()),
             select: None,
             sort: vec![
                 crate::filter::SortKey {
@@ -15010,7 +15023,7 @@ mod tx_query_integration_smoke {
         // Pagination: fetch only the second item
         let env2 = crate::filter::QueryEnvelope {
             query: None,
-            filter: None,
+            filter: Some(timestamp_filter),
             select: None,
             sort: vec![
                 crate::filter::SortKey {
@@ -15105,7 +15118,7 @@ mod tx_query_integration_smoke {
             let mut builder = dm::TransactionBuilder::new(chain_id.clone(), actor_id.clone());
             builder.set_creation_time(core::time::Duration::from_millis(1_000 + i * 250));
             let signed = builder
-                .with_instructions::<dm::InstructionBox>([])
+                .with_instructions::<dm::InstructionBox>([log_instruction()])
                 .sign(kp_actor.private_key());
             accepted.push(AcceptedTransaction::new_unchecked(Cow::Owned(signed)));
         }
@@ -15171,6 +15184,11 @@ mod tx_query_integration_smoke {
         ));
 
         // Ensure domain and accounts exist before committing txs
+        let dom_id: dm::DomainId = "wonderland".parse().unwrap();
+        let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
+        let kp_b = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
+        let acc_a = dm::AccountId::new(dom_id.clone(), kp_a.public_key().clone());
+        let acc_b = dm::AccountId::new(dom_id.clone(), kp_b.public_key().clone());
         let leader0 = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
         let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
@@ -15179,12 +15197,20 @@ mod tx_query_integration_smoke {
             .unpack(|_| {});
         let mut st_block0 = state.block(unverified0.header());
         let mut stx0 = st_block0.transaction();
-        let dom_id: dm::DomainId = "wonderland".parse().unwrap();
         let kp_seed = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let exec_id = dm::AccountId::new(dom_id.clone(), kp_seed.public_key().clone());
         dm::Register::domain(dm::Domain::new(dom_id.clone()))
             .execute(&exec_id, &mut stx0)
-            .ok();
+            .unwrap();
+        dm::Register::account(dm::Account::new(exec_id.clone()))
+            .execute(&exec_id, &mut stx0)
+            .unwrap();
+        dm::Register::account(dm::Account::new(acc_a.clone()))
+            .execute(&exec_id, &mut stx0)
+            .unwrap();
+        dm::Register::account(dm::Account::new(acc_b.clone()))
+            .execute(&exec_id, &mut stx0)
+            .unwrap();
         stx0.apply();
         let valid0 = unverified0
             .clone()
@@ -15194,12 +15220,6 @@ mod tx_query_integration_smoke {
         crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
 
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
-        let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-        let kp_b = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-        let dom: dm::DomainId = "wonderland".parse().unwrap();
-        let acc_a = dm::AccountId::new(dom.clone(), kp_a.public_key().clone());
-        let acc_b = dm::AccountId::new(dom.clone(), kp_b.public_key().clone());
-
         let (_max_clock_drift, _tx_limits) = {
             let v = state.view();
             let p = v.world().parameters();
@@ -15210,7 +15230,7 @@ mod tx_query_integration_smoke {
         let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a);
         b1.set_creation_time(core::time::Duration::from_millis(1000));
         let signed1 = b1
-            .with_instructions::<dm::InstructionBox>([])
+            .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_a.private_key());
         let entry_hash1_str = format!("{}", signed1.hash_as_entrypoint());
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(signed1));
@@ -15218,7 +15238,7 @@ mod tx_query_integration_smoke {
         let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_b);
         b2.set_creation_time(core::time::Duration::from_millis(2000));
         let signed2 = b2
-            .with_instructions::<dm::InstructionBox>([])
+            .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_b.private_key());
         let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(signed2));
 
@@ -15327,7 +15347,7 @@ mod tx_query_integration_smoke {
         let mut builder = dm::TransactionBuilder::new(chain_id.clone(), account.clone());
         builder.set_creation_time(core::time::Duration::from_millis(1000));
         let signed = builder
-            .with_instructions::<dm::InstructionBox>([])
+            .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp.private_key());
         let tx = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
 
@@ -15415,7 +15435,7 @@ mod tx_query_integration_smoke {
         let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a);
         b1.set_creation_time(core::time::Duration::from_millis(1000));
         let signed_a = b1
-            .with_instructions::<dm::InstructionBox>([])
+            .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_a.private_key());
         let _entry_hash_a = format!("{}", signed_a.hash_as_entrypoint());
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(signed_a));
@@ -15423,7 +15443,7 @@ mod tx_query_integration_smoke {
         let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone());
         b2.set_creation_time(core::time::Duration::from_millis(2000));
         let signed2 = b2
-            .with_instructions::<dm::InstructionBox>([])
+            .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_b.private_key());
         let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(signed2.clone()));
 
@@ -15526,14 +15546,14 @@ mod tx_query_integration_smoke {
         let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a);
         b1.set_creation_time(core::time::Duration::from_millis(1500));
         let tx1 = b1
-            .with_instructions::<dm::InstructionBox>([])
+            .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_a.private_key());
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(tx1));
 
         let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_b);
         b2.set_creation_time(core::time::Duration::from_millis(900));
         let tx2 = b2
-            .with_instructions::<dm::InstructionBox>([])
+            .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_b.private_key());
         let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(tx2));
 
@@ -15637,14 +15657,14 @@ mod tx_query_integration_smoke {
         let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a);
         b1.set_creation_time(core::time::Duration::from_millis(1000));
         let signed_a = b1
-            .with_instructions::<dm::InstructionBox>([])
+            .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_a.private_key());
         let entry_hash_a = format!("{}", signed_a.hash_as_entrypoint());
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(signed_a));
         let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_b);
         b2.set_creation_time(core::time::Duration::from_millis(2000));
         let tx2 = b2
-            .with_instructions::<dm::InstructionBox>([])
+            .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_b.private_key());
         let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(tx2));
 
@@ -15737,14 +15757,14 @@ mod tx_query_integration_smoke {
         let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
         b1.set_creation_time(core::time::Duration::from_millis(1000));
         let tx1 = b1
-            .with_instructions::<dm::InstructionBox>([])
+            .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_a.private_key());
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(tx1));
 
         let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone());
         b2.set_creation_time(core::time::Duration::from_millis(2000));
         let tx2 = b2
-            .with_instructions::<dm::InstructionBox>([])
+            .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_b.private_key());
         let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(tx2));
 
@@ -15889,21 +15909,21 @@ mod tx_query_integration_smoke {
         let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a);
         b1.set_creation_time(core::time::Duration::from_millis(1));
         let tx1 = b1
-            .with_instructions::<dm::InstructionBox>([])
+            .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_a.private_key());
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(tx1));
 
         let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_b);
         b2.set_creation_time(core::time::Duration::from_millis(2));
         let tx2 = b2
-            .with_instructions::<dm::InstructionBox>([])
+            .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_b.private_key());
         let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(tx2));
 
         let mut b3 = dm::TransactionBuilder::new(chain_id.clone(), acc_c);
         b3.set_creation_time(core::time::Duration::from_millis(3));
         let tx3 = b3
-            .with_instructions::<dm::InstructionBox>([])
+            .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_c.private_key());
         let tx3 = AcceptedTransaction::new_unchecked(Cow::Owned(tx3));
 
@@ -16092,7 +16112,7 @@ mod tx_query_integration_smoke {
         let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a);
         b1.set_creation_time(core::time::Duration::from_millis(10));
         let signed1 = b1
-            .with_instructions::<dm::InstructionBox>([])
+            .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_a.private_key());
         let entry1 = format!("{}", signed1.hash_as_entrypoint());
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(signed1));
@@ -16100,7 +16120,7 @@ mod tx_query_integration_smoke {
         let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_b);
         b2.set_creation_time(core::time::Duration::from_millis(20));
         let signed2 = b2
-            .with_instructions::<dm::InstructionBox>([])
+            .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_b.private_key());
         let entry2 = format!("{}", signed2.hash_as_entrypoint());
         let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(signed2));
@@ -16319,7 +16339,7 @@ mod tx_query_integration_smoke {
         let mut b1 = dm::transaction::signed::TransactionBuilder::new(chain_id.clone(), acc_a);
         b1.set_creation_time(core::time::Duration::from_millis(100));
         let tx1 = b1
-            .with_instructions::<dm::InstructionBox>([])
+            .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_a.private_key());
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(tx1));
 
@@ -16561,7 +16581,7 @@ mod tx_query_integration_smoke {
         let mut success_builder = dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone());
         success_builder.set_creation_time(core::time::Duration::from_millis(1500));
         let signed_success = success_builder
-            .with_instructions::<dm::InstructionBox>([])
+            .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_b.private_key());
         let tx_success = AcceptedTransaction::new_unchecked(Cow::Owned(signed_success));
         // tx_fail_c: authority == C, failure due to missing account
@@ -16608,14 +16628,20 @@ mod tx_query_integration_smoke {
         // Filter: (result_ok == true) OR (result_ok == false) → all transactions, used to
         // exercise multi-key sorting (result flag + entrypoint hash).
         // Sort: result_ok desc, then entrypoint_hash asc (all timestamps identical)
-        let expr = crate::filter::FilterExpr::Or(vec![
-            crate::filter::FilterExpr::Eq(
-                crate::filter::FieldPath("result_ok".into()),
-                norito::json::Value::Bool(true),
-            ),
-            crate::filter::FilterExpr::Eq(
-                crate::filter::FieldPath("result_ok".into()),
-                norito::json::Value::Bool(false),
+        let expr = crate::filter::FilterExpr::And(vec![
+            crate::filter::FilterExpr::Or(vec![
+                crate::filter::FilterExpr::Eq(
+                    crate::filter::FieldPath("result_ok".into()),
+                    norito::json::Value::Bool(true),
+                ),
+                crate::filter::FilterExpr::Eq(
+                    crate::filter::FieldPath("result_ok".into()),
+                    norito::json::Value::Bool(false),
+                ),
+            ]),
+            crate::filter::FilterExpr::Gte(
+                crate::filter::FieldPath("timestamp_ms".into()),
+                norito::json::Value::from(1500u64),
             ),
         ]);
         let env = crate::filter::QueryEnvelope {
@@ -16744,7 +16770,7 @@ mod tx_query_integration_smoke {
         let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a);
         b1.set_creation_time(core::time::Duration::from_millis(1000));
         let signed_a = b1
-            .with_instructions::<dm::InstructionBox>([])
+            .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_a.private_key());
         let entry_hash_a = format!("{}", signed_a.hash_as_entrypoint());
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(signed_a));
@@ -16788,7 +16814,10 @@ mod tx_query_integration_smoke {
         // Sort by 4 keys: result_ok desc, timestamp_ms asc, entrypoint_hash asc, authority asc
         let env = crate::filter::QueryEnvelope {
             query: None,
-            filter: None,
+            filter: Some(crate::filter::FilterExpr::Gte(
+                crate::filter::FieldPath("timestamp_ms".into()),
+                norito::json::Value::from(1000u64),
+            )),
             select: None,
             sort: vec![
                 crate::filter::SortKey {
@@ -20605,6 +20634,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "backpressure_deferrals_total",
             snap.rbc_store_backpressure_deferrals_total,
         ),
+        json_entry("persist_drops_total", snap.rbc_store_persist_drops_total),
         json_entry("evictions_total", snap.rbc_store_evictions_total),
         json_entry("recent_evictions", recent_evictions),
     ]);
@@ -21839,6 +21869,7 @@ mod status_tests {
             rbc_store_sessions: 1,
             rbc_store_bytes: 512,
             rbc_store_pressure_level: 2,
+            rbc_store_persist_drops_total: 7,
             rbc_store_evictions_total: 1,
             rbc_store_recent_evictions: vec![evicted.clone()],
             ..Default::default()
@@ -21852,6 +21883,10 @@ mod status_tests {
             .get("recent_evictions")
             .and_then(Value::as_array)
             .expect("recent evictions array");
+        assert_eq!(
+            rbc.get("persist_drops_total").and_then(Value::as_u64),
+            Some(7)
+        );
         assert_eq!(recent.len(), 1);
         let entry = recent.first().and_then(Value::as_object).unwrap();
         assert_eq!(
@@ -22493,6 +22528,7 @@ pub async fn handle_v1_sumeragi_status(
                 bytes: snap.rbc_store_bytes,
                 pressure_level: snap.rbc_store_pressure_level,
                 backpressure_deferrals_total: snap.rbc_store_backpressure_deferrals_total,
+                persist_drops_total: snap.rbc_store_persist_drops_total,
                 evictions_total: snap.rbc_store_evictions_total,
                 recent_evictions: snap
                     .rbc_store_recent_evictions
@@ -25524,15 +25560,13 @@ fn tx_projections_to_json(
 #[cfg(all(test, feature = "app_api"))]
 mod tx_projection_display_tests {
     use iroha_data_model::account::AccountId;
+    use iroha_test_samples::{ALICE_ID, BOB_ID};
 
     use super::*;
 
     #[test]
     fn projections_emit_compressed_authority_when_requested() {
-        let account: AccountId =
-            "ed0120aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@wonderland"
-                .parse()
-                .expect("valid account id");
+        let account: AccountId = ALICE_ID.clone();
         let compressed = account
             .to_account_address()
             .and_then(|addr| addr.to_compressed_sora())
@@ -25554,10 +25588,7 @@ mod tx_projection_display_tests {
 
     #[test]
     fn projections_preserve_ih58_literals_by_default() {
-        let account: AccountId =
-            "ed0120bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb@wonderland"
-                .parse()
-                .expect("valid account id");
+        let account: AccountId = BOB_ID.clone();
         let projection = TxProjection {
             authority: Some(account.to_string()),
             timestamp_ms: None,
@@ -37179,7 +37210,7 @@ mod subscription_api_tests {
         .await
         .expect("usage ok")
         .into_response();
-        assert_eq!(queue.queued_len(), 5);
+        assert_eq!(queue.queued_len(), 6);
         assert_action_ok(resp, &active_id).await;
     }
 }

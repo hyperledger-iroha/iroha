@@ -1001,6 +1001,7 @@ fn rng_rbc_store(rng: &mut DeterministicRng) -> SumeragiRbcStoreStatus {
         bytes: rng.next_u64(),
         pressure_level: rng.next_u8(),
         backpressure_deferrals_total: rng.next_u64(),
+        persist_drops_total: rng.next_u64(),
         evictions_total: rng.next_u64(),
         recent_evictions,
     }
@@ -1402,6 +1403,7 @@ fn sumeragi_wire_status_roundtrip() {
             bytes: 1024,
             pressure_level: 2,
             backpressure_deferrals_total: 1,
+            persist_drops_total: 2,
             evictions_total: 3,
             recent_evictions: vec![SumeragiRbcEvictedSession {
                 block_hash: sample_block_hash(0x77),

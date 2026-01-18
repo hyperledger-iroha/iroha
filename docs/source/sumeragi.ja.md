@@ -13,9 +13,9 @@ translator: manual
 残りの移行タスクを詳細に把握したい場合は、[`sumeragi_npos_task_breakdown.md`](sumeragi_npos_task_breakdown.md) を参照してください。
 
 ### 概要
-- **役割とローテーション**: ソート済みトポロジはピアを `Leader`、`ValidatingPeer`、`ProxyTail`、`SetBValidator` の役割に分割します。各コミット後、集合 A（`min_votes_for_commit()` で決まる先頭ピア群）は `hash(prev_block_hash) mod min_votes_for_commit()` だけ左に回転します。ビュー変更ではリーダーを進めるためトポロジ全体を回転させます。`network_topology.rs` の `rotated_for_prev_block_hash(prev_hash)` が前ブロックハッシュに基づく監査しやすい決定論的ローテーションを定義しています。
-- **K コレクターモード**: 各高さに対し、トポロジは `proxy_tail_index()`（含む）から始まる連続領域として K 個のコレクターを決定論的に選びます（巻き戻りなし）。リーダーは決して含まれません。K=1 にすると従来の単一コレクター（プロキシテール）構成と一致します。
-- **First-commit-certificate-wins**: 指定コレクター（プロキシテールを含む）が正当な Precommit phase commit certificate を組み立てた場合、それを公表できます。ピアは同じ `(height, hash)` に対して最初に受信した正当な commit certificate を採用し、遅れて届いた重複は破棄します。ブロックコミットはこれらの commit certificate だけで判断されます。
+- **役割とローテーション**: ソート済みトポロジはピアを `Leader`、`ValidatingPeer`、`ProxyTail`、`SetBValidator` の役割に分割します。リーダー選出前にロスターは PeerId でソートされ、各ノードで決定論的になります。Permissioned ではエポックの PRF/VRF シードを使った PRF(seed, height) により高さごとにロスターを決定論的にシャッフルし、ビュー変更でシャッフル済みトポロジを回転してリーダーを進めます。前ブロックハッシュに基づくローテーションはリーダー選出には使いません。NPoS ではアクティブロスターをソートしてから PRF でリーダーを選び、ビューに合わせたトポロジを回転して署名者インデックスを一致させます。`network_topology.rs` の `rotated_for_prev_block_hash(prev_hash)` はレガシーの決定論的補助関数として残っています。
+- **K コレクターモード**: 各高さ/ビューに対し、PRF でリーダーを除外した K 個のコレクターを決定論的に選びます。PRF シードがない場合は `proxy_tail_index()`（含む）から始まる連続領域にフォールバックします（巻き戻りなし）。K=1 は単一の PRF コレクターを選び、PRF がない場合はプロキシテール単独に収束します。
+- **First-commit-certificate-wins**: PRF で選ばれた指定コレクター（リーダー除外）が正当な Precommit phase commit certificate を組み立てた場合、それを公表できます。ピアは同じ `(height, hash)` に対して最初に受信した正当な commit certificate を採用し、遅れて届いた重複は破棄します。ブロックコミットはこれらの commit certificate だけで判断されます。
 
 ### ノード役割（設定）
 - `validator`（既定）: 現在のトポロジ上の役割に従って合意に参加します。
@@ -31,10 +31,10 @@ translator: manual
 - **バリデータ**: ブロックを検証し、可用性投票を発行し、指定コレクターへ Prevote/Precommit 投票を送ります。ビュー 0 でローカルタイムアウトした場合、ノードは最大 `r` 個まで追加コレクターに投票をファンアウトできます。
 - **コレクター**: 投票を集約し、Availability/Prevote/Precommit の各 commit certificate を公表します。`(height, hash)` ごとに最初の正当な Precommit phase commit certificate が勝者となり、遅い commit certificate は無視されます。
 - **観測ピア**: ビュー 0 では投票しません。後続ビューでは投票する場合があります。ブロック本体と一致する Precommit phase commit certificate が揃った時点で決定論的にコミットします。
-- **受信側**: commit certificate を検証し、Highest/Locked commit certificate の追跡を更新し、対応する Precommit phase commit certificate とブロック本体が揃ったらコミットを試みます。
+- **受信側**: commit certificate を検証し、Highest/Locked QC の追跡を更新し、対応する Precommit phase commit certificate とブロック本体が揃ったらコミットを試みます。
 
 ### コミット規則（2 commit certificate パイプライン）
-- 各バリデータは 2 種の commit certificate を追跡します。最新の `highest_qc`（通常は子高さ）、安全性を守る `locked_qc` です。`highest_qc` が `locked_qc` を拡張しなければ提案は生成されず、NEW_VIEW のクォーラムがあっても破棄されます。
+- 各バリデータは Highest/Locked の証明書参照（`highest_qc`/`locked_qc`）を追跡します。`highest_qc` は Prepare または Commit の証明書（通常は子高さ）で、`locked_qc` は安全性を守ります。`highest_qc` が `locked_qc` を拡張しなければ提案は生成されず、NEW_VIEW のクォーラムがあっても破棄されます。
 - 高さ `h` のブロックは、高さ `h + 1` の commit certificate の親ハッシュが高さ `h` でロックされた commit certificate と一致した時点で最終化されます。この「2 段」条件によりパイプラインを維持しつつ、競合チェーンがコミットを得ることを防ぎます。`h` の実行を進めながら `h + 1` の投票を集められます。
 - この規則により、追加の最終化メッセージが不要になります。子 commit certificate が届けば親ブロックは安全であり、ブロックと 2 つの commit certificate を持つ全ノードが決定論的にコミットできます。最初の commit certificate を見逃したノードはゴシップ／RBC 経由でブロックと commit certificate を取得するだけで同じ決定に到達します。
 - 任意の時点で開いている高さは 2 連続までのため、コレクター・RBC・テレメトリはフォークの危険なくパイプライン処理できます。`sumeragi::main_loop` 内の不変条件でこれを保証しており、`ensure_locked_qc_allows` が提案生成をガードし、保留ブロックはインメモリで追跡され、コミット経路では互換子 commit certificate を観測した後にのみ `locked_qc` を退役させます。
@@ -49,7 +49,7 @@ translator: manual
 
 ### トポロジ原則
 - トポロジ生成は PoP マップがロスター全体をカバーしている場合のみ BLS PoP を持つバリデータで実施し、不完全な PoP マップは設定パースで拒否されます。不整合が残る場合の安全策として BLS 基準ロスターを使います。`leader_index()` と `proxy_tail_index()` は余り演算を使わず、監査しやすい決定論的な `TopologySegment` を返します。
-- `Topology::collectors_for(height)` は高さごとに決定論的なコレクター集合を返し、`CollectingPeerSet` 型で表現します。K=1 の場合はプロキシテール単独となり、従来の Sumeragi と互換です。
+- `deterministic_collectors(topology, mode, k, seed, height, view)` は `(height, view)` と PRF シードに基づく決定論的なコレクター集合を返します。PRF シードがない場合は `proxy_tail_index()` からの連続領域にフォールバックし、K=1 で従来のプロキシテール構成になります。
 - `Topology::role_at(index)` で任意ピアの役割を取得し、`is_validator(idx)` でその高さにおけるバリデータかどうかを判定します。
 
 ### API サーフェス
@@ -121,20 +121,20 @@ translator: manual
 
 ### トポロジ
 - `Topology` 構造体は ordered ピアリストと役割算出ロジックを保持します。
-- `Topology::rotated_for_prev_block_hash` は前ブロックハッシュに基づく決定論的ローテーションを提供し、監査と再現性を保証します。
+- `Topology::rotated_for_prev_block_hash` は前ブロックハッシュに基づく決定論的ローテーションを提供するレガシー補助で、現行の permissioned リーダー選出では使用しません。
 - `TopologySegment` は特定レンジのピアをイテレータ形式で扱える軽量ビューです。
 
 ### コレクター選定
-- `collectors_for(height)` は高さ別に `CollectingPeerSet` を返します。K の設定に応じて集約戦略が変わります。
+- `deterministic_collectors(topology, mode, k, seed, height, view)` は `(height, view)` と PRF シードに基づくコレクター順序（`Vec<PeerId>`）を返します。K の設定に応じて集約戦略が変わります。
 - 冗長送信 `r` が設定されている場合、バリデータは `collectors.extend_for_redundancy(r)` で追加コレクターへ投票を送れます。
 
 ### View / Epoch の管理
 - ビュー変更は `Pacemaker` がトリガーし、`ViewChange` メッセージが全ピアに伝播します。
 - `Epoch` はガバナンスイベントやトポロジ変更を区切る単位であり、`FetchedTopology` が参照するスナップショットを更新します。
 
-### Highest / Locked commit certificate
+### Highest / Locked QC
 - `HighestQc` と `LockedQc` はそれぞれ最新 commit certificate と安全性を担保する commit certificate を保持します。
-- `update_highest_qc` は高さ・ビューを比較し、より新しい commit certificate のみ受け入れます。
+- `update_highest_qc` は高さ・ビューを比較し、より新しい QC（Prepare/Commit）のみ受け入れます。
 - `ensure_locked_qc_allows` が提案時に安全条件を確認し、違反した場合は提案を破棄しエビデンスを生成します。
 
 ### RBC
@@ -175,7 +175,7 @@ translator: manual
 - `sumeragi_phase_latency_ms{phase="collect_aggregator"}` — 冗長送信の遅延。`sumeragi_gossip_fallback_total`、`block_created_dropped_by_lock_total`、`block_created_hint_mismatch_total`、`block_created_proposal_mismatch_total`、`pacemaker_backpressure_deferrals_total` と合わせてファンアウト不足やバックプレッシャを判別。
 - `sumeragi_phase_latency_ema_ms{phase="propose|collect_da|collect_prevote|collect_precommit|commit"}`
   — 各フェーズの平滑化レイテンシ（EMA）。生値との乖離で異常を検出。
-- `/v1/sumeragi/telemetry`（または `iroha_cli sumeragi status --summary`） — コレクター別の投票数、commit certificate レイテンシ、RBC backlog、最新 Highest/Locked commit certificate ハッシュを含む軽量スナップショット。
+- `/v1/sumeragi/telemetry`（または `iroha_cli sumeragi status --summary`） — コレクター別の投票数、commit certificate レイテンシ、RBC backlog、最新 Highest/Locked QC ハッシュを含む軽量スナップショット。
 - `/v1/sumeragi/status/sse` — 1 秒周期程度の SSE ストリームでライブ観測。
 - `/v1/sumeragi/phases` / `iroha_cli sumeragi phases --summary` — `{propose_ms, collect_da_ms, collect_prevote_ms, collect_precommit_ms, collect_aggregator_ms, commit_ms, pipeline_total_ms}` と `ema_ms` を併記したフェーズ別タイムライン。
 - `docs/source/grafana_sumeragi_overview.json` — commit certificate 高さの乖離、BlockCreated ドロップ、VRF 参加状況を可視化する Grafana ダッシュボード。
@@ -193,7 +193,7 @@ translator: manual
 2. `/v1/sumeragi/telemetry` を見て `votes_ingested` が伸びていないコレクター index を特定。単一コレクターだけ停滞しているなら一時的に `collectors_redundant_send_r` を増やし、票を次順位へ回す。
 3. `sumeragi_bg_post_queue_depth` と `p2p_*_throttled_total` でキューやトランスポートの逼迫を診断。
 4. FASTPQ プローバ遅延が疑われる場合は `/v1/torii/zk/prover/reports` と Torii ログでプローバの失敗を調べ、必要に応じて再起動。
-5. 両コレクターが停止しているなら RBC backlog を確認。`sumeragi_rbc_store_evictions_total` のスパイクや `/v1/sumeragi/status` の `rbc_store.recent_evictions` を手掛かりにボトルネックとなるペイロードやエポックを特定。
+5. 両コレクターが停止しているなら RBC backlog を確認。`sumeragi_rbc_store_evictions_total` と `sumeragi_rbc_persist_drops_total` のスパイク、または `/v1/sumeragi/status` の `rbc_store.recent_evictions` を手掛かりにボトルネックとなるペイロードやエポックを特定。
    さらに `iroha_cli sumeragi status --summary` は `lane_governance_sealed_total` / `lane_governance_sealed_aliases` を併記するため、未だ封止されたレーンを GUI を介さずに確認できます。ローンチ／ロールバック手順や CI では `iroha_cli nexus lane-report --only-missing --fail-on-sealed` を合わせて実行し、マニフェストが未展開のまま進行しないようガードしてください。
 6. 復旧後はインシデントを記録し、冗長送信やコレクターパラメータを通常値へ戻す。
 

@@ -128,7 +128,7 @@ truth for the commitment bundler. The Torii test
 `manifest_fixtures_cover_all_blob_classes` regenerates manifests for every
 `BlobClass` variant and refuses to compile until new classes gain fixtures,
 ensuring the encoded manifest hash inside each `DaCommitmentRecord` matches the
-golden Norito/JSON pair.【crates/iroha_torii/src/da.rs:4543】
+golden Norito/JSON pair.【crates/iroha_torii/src/da/tests.rs:2902】
 
 If block creation fails the receipts remain in the queue so the next block
 attempt can pick them up; the builder records the last included `sequence` per

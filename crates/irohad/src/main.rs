@@ -85,6 +85,7 @@ use iroha_genesis::{
 use iroha_logger::actor::LoggerHandle;
 use iroha_p2p::ClassifyTopic;
 use iroha_primitives::addr::SocketAddr;
+use iroha_primitives::erasure::rs16;
 use iroha_primitives::json::Json;
 use iroha_primitives::time::TimeSource;
 use mv::storage::StorageReadOnly;
@@ -4868,6 +4869,7 @@ pub fn read_config_and_genesis(
     // available hardware; config can cap GPUs or disable specific backends. This does not
     // change outputs, only performance characteristics.
     apply_ivm_acceleration_config(&config.accel);
+    rs16::set_simd_enabled(config.accel.enable_simd);
 
     iroha_data_model::account::address::set_default_domain_name(
         config.common.default_account_domain_label.value().clone(),

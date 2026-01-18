@@ -30,6 +30,7 @@ trybuild-tests = []
 # Recognize `packed-struct` used in derives from norito/norito_derive to silence
 # unexpected-cfg warnings during check-cfg linting. No behavior change.
 packed-struct = []
+simd-accel = []
 
 [dependencies]
 norito = {workspace = true}

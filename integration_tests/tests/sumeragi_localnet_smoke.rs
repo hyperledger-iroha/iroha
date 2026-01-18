@@ -343,6 +343,12 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
         ensure!(!peers.is_empty(), "network must have at least one peer");
         let peer_count = peers.len();
         let sequence_key = Name::from_str("tx_sequence").expect("tx_sequence metadata key");
+        let timeout = scale_duration(network.pipeline_time(), target_blocks.saturating_mul(3))
+            .saturating_add(Duration::from_secs(30));
+        let per_block_timeout =
+            scale_duration(network.pipeline_time(), 3).saturating_add(Duration::from_secs(2));
+        let start = Instant::now();
+        let mut next_height = baseline_height;
         for idx in 0..target_blocks {
             let peer = &peers[usize::try_from(idx).unwrap_or(0) % peer_count];
             let message = format!("localnet block {idx} via {}", peer.mnemonic());
@@ -359,12 +365,16 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
                         peer.mnemonic()
                     )
                 })?;
+            next_height = next_height.saturating_add(1);
+            let remaining = timeout.saturating_sub(start.elapsed());
+            let block_timeout = if remaining < per_block_timeout {
+                remaining
+            } else {
+                per_block_timeout
+            };
+            wait_for_converged_height(&network, next_height, block_timeout).await?;
         }
 
-        let timeout = scale_duration(network.pipeline_time(), target_blocks)
-            .saturating_add(Duration::from_secs(30));
-        let start = Instant::now();
-        wait_for_converged_height(&network, target_height, timeout).await?;
         let elapsed = start.elapsed();
         ensure!(
             elapsed <= timeout,

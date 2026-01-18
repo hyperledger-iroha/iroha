@@ -2281,8 +2281,8 @@ pub mod message {
         state_view: &StateView<'_>,
         block_height: u64,
     ) -> Option<[u8; 32]> {
-        (mode_tag == NPOS_TAG)
-            .then(|| crate::sumeragi::npos_seed_for_height(state_view, block_height))
+        (mode_tag == NPOS_TAG || mode_tag == PERMISSIONED_TAG)
+            .then(|| crate::sumeragi::prf_seed_for_height(state_view, block_height))
     }
 
     fn consensus_mode_for_block_sync(

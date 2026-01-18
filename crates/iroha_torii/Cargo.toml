@@ -79,7 +79,7 @@ zk-tests = ["iroha_core/zk-tests"]
 norito = { workspace = true }
 iroha_core = { workspace = true, features = ["app_api", "iroha-core-tests", "zk-tests", "zk-halo2", "zk-halo2-ipa", "circuit-params"] }
 iroha_config = { workspace = true }
-iroha_primitives = { workspace = true }
+iroha_primitives = { workspace = true, features = ["simd-accel"] }
 iroha_logger = { workspace = true }
 iroha_data_model = { workspace = true, features = ["http", "json", "bridge"] }
 iroha_executor_data_model = { workspace = true }
