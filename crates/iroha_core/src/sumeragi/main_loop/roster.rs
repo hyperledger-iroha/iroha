@@ -23,6 +23,17 @@ pub(super) fn canonicalize_roster(roster: Vec<PeerId>) -> Vec<PeerId> {
     roster
 }
 
+pub(super) fn canonicalize_roster_for_mode(
+    roster: Vec<PeerId>,
+    consensus_mode: ConsensusMode,
+) -> Vec<PeerId> {
+    if matches!(consensus_mode, ConsensusMode::Npos) {
+        canonicalize_roster(roster)
+    } else {
+        roster
+    }
+}
+
 #[allow(dead_code)]
 pub(super) fn compute_roster_indices_from_state(
     state: &State,

@@ -383,7 +383,7 @@ async fn start_network_under_relay(
     relay: &P2pRelay,
     genesis_peer: GenesisPeer,
 ) -> Result<()> {
-    let _guard = sandbox::serial_guard();
+    // Callers already hold the serial guard via SerializedNetwork.
     // Iroha refuses to start on empty storage without a genesis file, so hand the
     // canonical genesis block to every peer up front.
     let genesis_block = genesis_factory(

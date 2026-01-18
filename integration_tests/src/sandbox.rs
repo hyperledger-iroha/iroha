@@ -15,7 +15,7 @@ use crate::sync::get_status_with_retry;
 
 /// Optional guard that limits concurrent integration tests which spin up a network.
 ///
-/// Defaults to CPU-scaled parallelism (cores / 4). Set `IROHA_TEST_NETWORK_PARALLELISM=<N>`
+/// Defaults to CPU-scaled parallelism (cores / 16). Set `IROHA_TEST_NETWORK_PARALLELISM=<N>`
 /// to override or `IROHA_TEST_SERIALIZE_NETWORKS=1` to force serialization explicitly.
 #[must_use]
 pub struct SerialGuard {
@@ -130,17 +130,13 @@ impl Deref for SerializedNetwork {
     type Target = Network;
 
     fn deref(&self) -> &Self::Target {
-        self.network
-            .as_ref()
-            .expect("serialized network missing")
+        self.network.as_ref().expect("serialized network missing")
     }
 }
 
 impl DerefMut for SerializedNetwork {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.network
-            .as_mut()
-            .expect("serialized network missing")
+        self.network.as_mut().expect("serialized network missing")
     }
 }
 
@@ -194,7 +190,7 @@ impl Drop for NetworkPermit {
 const SERIAL_GUARD_LOG_INTERVAL: Duration = Duration::from_secs(60);
 const SERIAL_GUARD_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const MIN_NETWORK_PEERS: usize = 4; // DA-enabled consensus can stall with fewer peers.
-const DEFAULT_NETWORK_PARALLELISM_PEERS: usize = 4; // Match iroha_test_network default.
+const DEFAULT_NETWORK_PARALLELISM_PEERS: usize = 16; // Match iroha_test_network default.
 const SERIALIZE_NETWORKS_ENV: &str = "IROHA_TEST_SERIALIZE_NETWORKS";
 const NETWORK_PARALLELISM_ENV: &str = "IROHA_TEST_NETWORK_PARALLELISM";
 

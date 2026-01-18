@@ -1523,8 +1523,7 @@ impl Kura {
                 start_height_u64,
                 &blocks_to_be_written,
                 kura.max_disk_usage_bytes,
-            )
-            {
+            ) {
                 error!(?error, "Failed to store block batch");
                 panic!("Kura has encountered a fatal IO error.");
             }
@@ -5022,14 +5021,13 @@ impl BlockStore {
             loop {
                 let entry = self.read_block_index(idx)?;
                 if !entry.is_evicted() {
-                    break entry
-                        .start
-                        .checked_add(entry.length)
-                        .ok_or(Error::CorruptedBlockRange {
+                    break entry.start.checked_add(entry.length).ok_or(
+                        Error::CorruptedBlockRange {
                             start: entry.start,
                             length: entry.length,
                             data_len: entry.start,
-                        })?;
+                        },
+                    )?;
                 }
                 if idx == 0 {
                     break 0;
@@ -6247,7 +6245,9 @@ mod tests {
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
         let used = kura.kura_disk_usage_bytes().expect("baseline usage");
         let overhead = BlockIndex::SIZE.saturating_add(SIZE_OF_BLOCK_HASH);
-        let budget_limit = used.saturating_add(overhead.saturating_mul(2)).saturating_add(1);
+        let budget_limit = used
+            .saturating_add(overhead.saturating_mul(2))
+            .saturating_add(1);
         Arc::get_mut(&mut kura)
             .expect("exclusive kura handle")
             .max_disk_usage_bytes = budget_limit;
@@ -6257,8 +6257,7 @@ mod tests {
             Kura::start(kura.clone(), ShutdownSignal::new())
         };
 
-        let make_block =
-            |message: &str, prev: Option<&SignedBlock>| -> Arc<SignedBlock> {
+        let make_block = |message: &str, prev: Option<&SignedBlock>| -> Arc<SignedBlock> {
             let tx = TransactionBuilder::new(
                 ChainId::from("test"),
                 SAMPLE_GENESIS_ACCOUNT_ID.to_owned(),
@@ -6292,7 +6291,10 @@ mod tests {
 
         let (index, da_path) = {
             let mut store = kura.block_store.lock();
-            (store.read_block_index(0).expect("block index"), store.da_block_path(1))
+            (
+                store.read_block_index(0).expect("block index"),
+                store.da_block_path(1),
+            )
         };
         assert!(index.is_evicted());
         assert!(da_path.exists(), "expected DA payload for block1");
@@ -6366,7 +6368,10 @@ mod tests {
         wait_for_block_hash(&kura, 1, large_block.hash());
         let (index, da_path) = {
             let mut store = kura.block_store.lock();
-            (store.read_block_index(0).expect("block index"), store.da_block_path(1))
+            (
+                store.read_block_index(0).expect("block index"),
+                store.da_block_path(1),
+            )
         };
         assert!(index.is_evicted());
         assert!(da_path.exists(), "expected DA payload for evicted block");

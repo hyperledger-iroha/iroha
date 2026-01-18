@@ -1254,15 +1254,11 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
             env_dir.display()
         ))?;
         if expected_after_transfer.is_zero() {
-            wait_for_asset_absent(
-                &mut clients,
-                &asset_id,
-                "integer transfer source purge",
-            )
-            .wrap_err(format!(
-                "final balance check; torii={torii}, env_dir={}",
-                env_dir.display()
-            ))?;
+            wait_for_asset_absent(&mut clients, &asset_id, "integer transfer source purge")
+                .wrap_err(format!(
+                    "final balance check; torii={torii}, env_dir={}",
+                    env_dir.display()
+                ))?;
         } else {
             wait_for_asset_value(
                 &mut clients,
