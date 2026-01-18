@@ -63,7 +63,9 @@ fn npos_network_produces_blocks() -> Result<()> {
         }
 
         let observed_heights = rt
-            .block_on(async { wait_for_converged_heights(&network, target_height, sync_timeout).await })
+            .block_on(async {
+                wait_for_converged_heights(&network, target_height, sync_timeout).await
+            })
             .wrap_err("heights did not converge")?;
 
         // All peers should have advanced to the same height.

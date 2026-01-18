@@ -359,6 +359,15 @@ impl Topology {
         }
         self.1 = 0;
     }
+
+    /// Canonicalize the internal peer ordering without changing the view index.
+    pub(crate) fn canonicalize_order(&mut self) {
+        if self.0.is_empty() {
+            return;
+        }
+        self.0.sort();
+        self.0.dedup();
+    }
 }
 
 /// Compute the commit quorum size for a topology of the given length.
@@ -1302,6 +1311,23 @@ mod tests {
         expected.sort();
         expected.dedup();
         assert_eq!(topo.as_ref(), expected.as_slice());
+    }
+
+    #[test]
+    fn canonicalize_order_sorts_without_resetting_view() {
+        let mut peers = test_peers(4);
+        peers.reverse();
+        let mut topo = Topology::new(peers.clone());
+        topo.nth_rotation(2);
+        let view_index = topo.view_change_index();
+
+        topo.canonicalize_order();
+
+        let mut expected = peers;
+        expected.sort();
+        expected.dedup();
+        assert_eq!(topo.as_ref(), expected.as_slice());
+        assert_eq!(topo.view_change_index(), view_index);
     }
 
     #[test]

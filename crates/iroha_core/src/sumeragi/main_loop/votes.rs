@@ -834,7 +834,8 @@ impl Actor {
                 record_drop(super::status::VoteValidationDropReason::EpochMismatch);
                 return false;
             }
-            if highest.phase != Phase::Commit {
+            let valid_phase = matches!(highest.phase, Phase::Commit) || matches!(highest.phase, Phase::Prepare);
+            if !valid_phase {
                 debug!(
                     height = vote.height,
                     view = vote.view,
@@ -842,7 +843,7 @@ impl Actor {
                     highest_height = highest.height,
                     highest_view = highest.view,
                     phase = ?highest.phase,
-                    "dropping NEW_VIEW vote with non-commit highest certificate"
+                    "dropping NEW_VIEW vote with invalid highest certificate phase"
                 );
                 self.record_consensus_message_handling(
                     super::status::ConsensusMessageKind::QcVote,
@@ -869,7 +870,11 @@ impl Actor {
                 record_drop(super::status::VoteValidationDropReason::HighestQcMismatch);
                 return false;
             }
-            let expected_height = highest.height.saturating_add(1);
+            let expected_height = if highest.phase == Phase::Commit {
+                highest.height.saturating_add(1)
+            } else {
+                highest.height
+            };
             if vote.height != expected_height {
                 warn!(
                     height = vote.height,

@@ -523,9 +523,35 @@ fn build_nexus_layer(nexus: &ActualNexus, sumeragi: &ActualSumeragi) -> Table {
                     Value::String(description.clone()),
                 );
             }
+            entry.insert(
+                "visibility".to_string(),
+                Value::String(lane.visibility.as_str().to_string()),
+            );
+            entry.insert(
+                "storage".to_string(),
+                Value::String(lane.storage.as_str().to_string()),
+            );
+            entry.insert(
+                "proof_scheme".to_string(),
+                Value::String(lane.proof_scheme.as_str().to_string()),
+            );
+            if let Some(lane_type) = &lane.lane_type {
+                entry.insert("lane_type".to_string(), Value::String(lane_type.clone()));
+            }
+            if let Some(governance) = &lane.governance {
+                entry.insert("governance".to_string(), Value::String(governance.clone()));
+            }
+            if let Some(settlement) = &lane.settlement {
+                entry.insert("settlement".to_string(), Value::String(settlement.clone()));
+            }
             if let Some(dataspace) = dataspace_aliases.get(&lane.dataspace_id) {
                 entry.insert("dataspace".to_string(), Value::String(dataspace.clone()));
             }
+            let mut metadata = Table::new();
+            for (key, value) in &lane.metadata {
+                metadata.insert(key.clone(), Value::String(value.clone()));
+            }
+            entry.insert("metadata".to_string(), Value::Table(metadata));
             Value::Table(entry)
         })
         .collect();

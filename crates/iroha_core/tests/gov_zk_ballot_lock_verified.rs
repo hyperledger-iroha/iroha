@@ -15,14 +15,15 @@ fn zk_ballot_creates_and_extends_lock_on_verified_proof() {
     use core::num::NonZeroU64;
 
     use iroha_core::{
-        block::ValidBlock, executor::Executor, kura::Kura, query::store::LiveQueryStore,
-        smartcontracts::Execute, state::State,
+        executor::Executor, kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute,
+        state::State,
     };
     use iroha_data_model::{
+        block::BlockHeader,
         events::data::{DataEvent, governance::GovernanceEvent},
         isi::{governance::CastZkBallot, verifying_keys, zk::CreateElection},
         permission::Permission,
-        prelude::{Grant, InstructionBox, PeerId},
+        prelude::{Grant, InstructionBox},
     };
     use iroha_executor_data_model::permission::governance::{
         CanManageParliament, CanSubmitGovernanceBallot,
@@ -47,15 +48,8 @@ fn zk_ballot_creates_and_extends_lock_on_verified_proof() {
     state.set_gov(gov_cfg);
 
     // Begin a transaction context
-    let (pk, sk) = iroha_crypto::KeyPair::random().into_parts();
-    let topo = iroha_core::sumeragi::network_topology::Topology::new(vec![PeerId::new(pk)]);
-    let block = ValidBlock::new_dummy_and_modify_header(&sk, |h| {
-        h.set_height(NonZeroU64::new(1).unwrap());
-    })
-    .commit(&topo)
-    .unpack(|_| {})
-    .unwrap();
-    let mut sblock = state.block(block.as_ref().header());
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
 
     let vk_id = bundle1.vk_id.clone();
@@ -80,16 +74,16 @@ fn zk_ballot_creates_and_extends_lock_on_verified_proof() {
         .expect("grant CanSubmitGovernanceBallot");
 
     // Create election with vk refs
-    let create = CreateElection::new(
-        "ref-zk-lock".to_string(),
-        1,
-        bundle1.root_bytes(),
-        0,
-        0,
-        vk_id.clone(),
-        vk_id.clone(),
-        "gov:ballot:v1".to_string(),
-    );
+    let create = CreateElection {
+        election_id: "ref-zk-lock".to_string(),
+        options: 1,
+        eligible_root: bundle1.root_bytes(),
+        start_ts: 0,
+        end_ts: 0,
+        vk_ballot: vk_id.clone(),
+        vk_tally: vk_id.clone(),
+        domain_tag: "gov:ballot:v1".to_string(),
+    };
     create.execute(&ALICE_ID, &mut stx).expect("create ok");
     stx.world.governance_referenda_mut().insert(
         "ref-zk-lock".to_string(),

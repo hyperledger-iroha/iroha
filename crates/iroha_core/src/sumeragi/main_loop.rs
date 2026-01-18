@@ -1176,6 +1176,7 @@ fn rotate_topology_for_mode(
             topology.nth_rotation(view);
         }
         NPOS_TAG => {
+            topology.canonicalize_order();
             if let Some(seed) = prf_seed {
                 let leader = topology.leader_index_prf(seed, height, view);
                 topology.rotate_preserve_view_to_front(leader);
@@ -1723,13 +1724,20 @@ fn validate_new_view_qc_highest(
     let Some(highest) = qc.highest_qc else {
         return Err(QcValidationError::HighestQcMismatch);
     };
-    if highest.phase != crate::sumeragi::consensus::Phase::Commit {
+    let valid_phase = matches!(highest.phase, crate::sumeragi::consensus::Phase::Commit)
+        || matches!(highest.phase, crate::sumeragi::consensus::Phase::Prepare);
+    if !valid_phase {
         return Err(QcValidationError::HighestQcMismatch);
     }
     if highest.subject_block_hash != qc.subject_block_hash {
         return Err(QcValidationError::HighestQcMismatch);
     }
-    if qc.height != highest.height.saturating_add(1) {
+    let expected_height = if highest.phase == crate::sumeragi::consensus::Phase::Commit {
+        highest.height.saturating_add(1)
+    } else {
+        highest.height
+    };
+    if qc.height != expected_height {
         return Err(QcValidationError::HighestQcMismatch);
     }
     if highest.epoch > qc.epoch {
@@ -6944,21 +6952,19 @@ impl Actor {
         height: u64,
         view: u64,
     ) -> Result<usize> {
-        let (consensus_mode, _, prf_seed) = self.consensus_context_for_height(height);
-        match consensus_mode {
-            ConsensusMode::Permissioned => {
-                topology.nth_rotation(view);
-                Ok(topology.leader_index())
-            }
-            ConsensusMode::Npos => {
-                let seed = prf_seed.ok_or_else(|| {
-                    eyre!("missing NPoS PRF seed for height {height} in leader selection")
-                })?;
-                let leader = topology.leader_index_prf(seed, height, view);
-                topology.rotate_preserve_view_to_front(leader);
-                Ok(topology.leader_index())
-            }
+        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
+        if matches!(consensus_mode, ConsensusMode::Npos) && prf_seed.is_none() {
+            return Err(eyre!("missing NPoS PRF seed for height {height} in leader selection"));
         }
+        rotate_topology_for_mode(
+            topology,
+            height,
+            view,
+            mode_tag,
+            prf_seed,
+            "leader selection",
+        );
+        Ok(topology.leader_index())
     }
 
     fn collector_plan_params(&self) -> (usize, u8) {
@@ -10379,7 +10385,11 @@ impl Actor {
         record_view_change_cause_with_telemetry(cause, self.telemetry_handle());
         let committed_qc = self.latest_committed_qc();
         if let Some(mut highest_qc) = self.highest_qc.or(committed_qc) {
-            if highest_qc.phase != crate::sumeragi::consensus::Phase::Commit {
+            let usable = matches!(highest_qc.phase, crate::sumeragi::consensus::Phase::Commit)
+                || (matches!(highest_qc.phase, crate::sumeragi::consensus::Phase::Prepare)
+                    && highest_qc.height == height);
+
+            if !usable {
                 if let Some(committed) = committed_qc {
                     highest_qc = committed;
                 } else {
@@ -10387,12 +10397,14 @@ impl Actor {
                         height,
                         view = next_view,
                         phase = ?highest_qc.phase,
-                        "skipping NEW_VIEW vote: highest certificate is not commit"
+                        "skipping NEW_VIEW vote: highest certificate is not commit or matching prepare"
                     );
                 }
             }
-            if highest_qc.phase == crate::sumeragi::consensus::Phase::Commit
-                && height == highest_qc.height.saturating_add(1)
+            if (highest_qc.phase == crate::sumeragi::consensus::Phase::Commit
+                && height == highest_qc.height.saturating_add(1))
+                || (highest_qc.phase == crate::sumeragi::consensus::Phase::Prepare
+                    && height == highest_qc.height)
             {
                 let (consensus_mode, _, _) = self.consensus_context_for_height(height);
                 let roster = self.roster_for_new_view_with_mode(
