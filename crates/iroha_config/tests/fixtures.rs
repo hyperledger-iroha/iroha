@@ -1000,6 +1000,7 @@ fn minimal_config_snapshot() {
                 rbc_chunk_fanout: None,
                 rbc_pending_max_chunks: 128,
                 rbc_pending_max_bytes: 8388608,
+                rbc_pending_session_limit: 256,
                 rbc_pending_ttl: 30s,
                 rbc_session_ttl: 120s,
                 rbc_rebroadcast_sessions_per_tick: 8,

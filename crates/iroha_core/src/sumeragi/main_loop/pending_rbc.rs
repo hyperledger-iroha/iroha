@@ -352,7 +352,7 @@ impl Actor {
     pub(super) fn pending_rbc_slot(&mut self, key: SessionKey) -> Option<&mut PendingRbcMessages> {
         let now = Instant::now();
         let ttl = self.config.rbc_pending_ttl;
-        let session_cap = PENDING_RBC_STASH_LIMIT;
+        let session_cap = self.config.rbc_pending_session_limit;
         let evictions = Self::apply_pending_rbc_housekeeping(
             &mut self.subsystems.da_rbc.rbc.pending,
             Some(&self.subsystems.da_rbc.rbc.sessions),
@@ -367,7 +367,7 @@ impl Actor {
                 match eviction.reason {
                     PendingRbcDropReason::SessionLimit => warn!(
                         ?eviction.key,
-                        limit = PENDING_RBC_STASH_LIMIT,
+                        limit = session_cap,
                         pending_chunks = eviction.removed.pending_chunks(),
                         pending_bytes = eviction.removed.pending_bytes(),
                         "dropping oldest pending RBC stash to enforce limit"
@@ -492,10 +492,6 @@ pub(super) fn rbc_deliver_stash_bytes(deliver: &RbcDeliver) -> usize {
         .saturating_add(std::mem::size_of::<u64>() * 3)
         .saturating_add(std::mem::size_of::<u32>())
 }
-
-/// Hard cap on how many pending RBC stashes we buffer; active-session stashes are retained,
-/// and new sessions are rejected once the cap is reached.
-pub(super) const PENDING_RBC_STASH_LIMIT: usize = 256;
 
 #[cfg(test)]
 mod tests {

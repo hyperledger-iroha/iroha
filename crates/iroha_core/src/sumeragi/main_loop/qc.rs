@@ -844,7 +844,12 @@ impl Actor {
                 let Some(candidate) = vote.highest_qc else {
                     continue;
                 };
-                if candidate.phase != crate::sumeragi::consensus::Phase::Commit {
+                let valid_phase = matches!(
+                    candidate.phase,
+                    crate::sumeragi::consensus::Phase::Commit
+                        | crate::sumeragi::consensus::Phase::Prepare
+                );
+                if !valid_phase {
                     continue;
                 }
                 selected = Some(selected.map_or(candidate, |current| {

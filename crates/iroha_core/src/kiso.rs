@@ -1020,6 +1020,8 @@ mod tests {
                     iroha_config::parameters::defaults::sumeragi::RBC_PENDING_MAX_CHUNKS,
                 rbc_pending_max_bytes:
                     iroha_config::parameters::defaults::sumeragi::RBC_PENDING_MAX_BYTES,
+                rbc_pending_session_limit:
+                    iroha_config::parameters::defaults::sumeragi::RBC_PENDING_SESSION_LIMIT,
                 rbc_pending_ttl: std::time::Duration::from_millis(
                     iroha_config::parameters::defaults::sumeragi::RBC_PENDING_TTL_MS,
                 ),

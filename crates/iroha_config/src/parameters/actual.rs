@@ -3631,6 +3631,8 @@ pub struct Sumeragi {
     pub rbc_pending_max_chunks: usize,
     /// Maximum pending RBC bytes per session before INIT.
     pub rbc_pending_max_bytes: usize,
+    /// Maximum pending RBC sessions stashed before INIT.
+    pub rbc_pending_session_limit: usize,
     /// TTL for pending RBC messages awaiting INIT.
     pub rbc_pending_ttl: Duration,
     /// RBC session TTL for pruning inactive sessions.

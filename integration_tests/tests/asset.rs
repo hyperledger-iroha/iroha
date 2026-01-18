@@ -28,6 +28,7 @@ use iroha_test_samples::{ALICE_ID, gen_account_in};
 use toml::Value as TomlValue;
 
 static GENESIS_STATUS: OnceLock<std::result::Result<(), ()>> = OnceLock::new();
+static SERIAL_NETWORK_GUARD: OnceLock<sandbox::NetworkParallelismGuard> = OnceLock::new();
 const QUERY_RETRIES: usize = 240;
 const QUERY_RETRY_DELAY: Duration = Duration::from_millis(500);
 const NON_EMPTY_BLOCK_TIMEOUT: Duration = Duration::from_secs(600);
@@ -350,6 +351,7 @@ fn start_test_network_with_builder(
         eprintln!("Skipping test: missing IVM build profile");
         return None;
     }
+    SERIAL_NETWORK_GUARD.get_or_init(|| sandbox::override_network_parallelism(Some(true), None));
 
     if matches!(GENESIS_STATUS.get(), Some(Err(()))) {
         eprintln!("Skipping test: failed to start network (cached)");

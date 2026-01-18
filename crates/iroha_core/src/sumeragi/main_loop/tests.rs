@@ -1025,6 +1025,8 @@ fn test_sumeragi_config() -> SumeragiConfig {
         rbc_pending_max_chunks:
             iroha_config::parameters::defaults::sumeragi::RBC_PENDING_MAX_CHUNKS,
         rbc_pending_max_bytes: iroha_config::parameters::defaults::sumeragi::RBC_PENDING_MAX_BYTES,
+        rbc_pending_session_limit:
+            iroha_config::parameters::defaults::sumeragi::RBC_PENDING_SESSION_LIMIT,
         rbc_pending_ttl: Duration::from_millis(
             iroha_config::parameters::defaults::sumeragi::RBC_PENDING_TTL_MS,
         ),
@@ -1906,7 +1908,7 @@ async fn actor_next_tick_deadline_tracks_pending_quorum_timeout() {
     let now = Instant::now();
     let quorum_timeout = super::commit_quorum_timeout_for_config(&actor.config);
     let tip_hash = actor.state.view().latest_block_hash();
-    let height = 2;
+    let height = 1;
     let block = sample_block(height, 0, tip_hash);
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     let mut pending = PendingBlock::new(block, payload_hash, height, 0);
@@ -1958,7 +1960,7 @@ async fn actor_next_tick_deadline_tracks_aborted_retention() {
     let aborted_retention = quorum_reschedule_cooldown.saturating_mul(retention_factor);
 
     let tip_hash = actor.state.view().latest_block_hash();
-    let height = 2;
+    let height = 1;
     let block = sample_block(height, 0, tip_hash);
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     let mut pending = PendingBlock::new(block, payload_hash, height, 0);
@@ -2808,6 +2810,43 @@ async fn rbc_persist_worker_does_not_block_on_full_wake_channel() {
     if let Err(err) = worker_join.join() {
         panic!("persist worker panicked: {err:?}");
     }
+}
+
+#[cfg(feature = "telemetry")]
+#[tokio::test(flavor = "current_thread")]
+async fn rbc_persist_queue_full_increments_metric() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+    let telemetry = actor.telemetry_handle().expect("telemetry enabled").clone();
+    let metrics = telemetry.metrics().await;
+    let before = metrics.sumeragi_rbc_persist_drops_total.get();
+
+    let (persist_tx, _persist_rx) = mpsc::sync_channel(0);
+    actor.subsystems.da_rbc.rbc.persist_tx = Some(persist_tx);
+
+    let key: SessionKey = (
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x15; 32])),
+        6,
+        0,
+    );
+    let payload = b"persist-drop".to_vec();
+    let payload_hash = Hash::new(&payload);
+    let session = Actor::build_rbc_session_from_payload(
+        &payload,
+        payload_hash,
+        actor.config.rbc_chunk_max_bytes,
+        actor.epoch_for_height(key.1),
+    )
+    .expect("session");
+    let roster = actor.effective_commit_topology();
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session.clone());
+    actor.persist_rbc_session(key, &session);
+
+    let after = metrics.sumeragi_rbc_persist_drops_total.get();
+    assert_eq!(after, before + 1);
+
+    harness.shutdown.send();
 }
 
 fn lane_config_with_manifest_policy(policy: DaManifestPolicy) -> LaneConfigSnapshot {
@@ -10336,6 +10375,64 @@ async fn precommit_vote_rejects_older_view_after_newer_vote() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn try_form_qc_from_votes_accepts_prepare_highest_for_new_view() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    let height = 2;
+    let view = 0;
+    let epoch = actor.epoch_for_height(height);
+    let block = sample_block(height, view, None);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let pending = PendingBlock::new(block, payload_hash, height, view);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let highest = QcHeaderRef {
+        phase: Phase::Prepare,
+        subject_block_hash: block_hash,
+        height,
+        view,
+        epoch,
+    };
+    let signer = ValidatorIndex::try_from(0).expect("signer index fits");
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::NewView,
+        block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view,
+        epoch,
+        highest_qc: Some(highest),
+        signer,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view(
+        &mut vote,
+        &actor.common_config.chain,
+        &topology,
+        &harness.key_pairs,
+    );
+    actor
+        .vote_log
+        .insert((Phase::NewView, height, view, epoch, signer), vote);
+    actor.try_form_qc_from_votes(Phase::NewView, block_hash, height, view, epoch, &topology);
+
+    let qc = actor
+        .qc_cache
+        .get(&(Phase::NewView, block_hash, height, view, epoch))
+        .expect("NEW_VIEW QC should be aggregated");
+    let qc_highest = qc.highest_qc.expect("highest QC should be recorded");
+    assert_eq!(qc_highest.phase, Phase::Prepare);
+    assert_eq!(qc_highest.height, height);
+    assert_eq!(qc_highest.view, view);
+    assert_eq!(qc_highest.subject_block_hash, block_hash);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn try_form_qc_from_votes_skips_when_conflicts_locked_chain() {
     let _guard = super::status::qc_status_test_guard();
     let mut harness = test_actor_harness(4).await;
@@ -14670,11 +14767,11 @@ async fn handle_rbc_init_caches_vote_roster() {
 
     let height = 5u64;
     let view = 0u64;
-    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC1; 32]));
     let epoch = actor.epoch_for_height(height);
     let roster = actor.effective_commit_topology();
     let (block_header, leader_signature) =
         rbc_header_and_signature(actor, &roster, height, view, &harness.key_pairs);
+    let block_hash = block_header.hash();
     let digests = vec![[0x55; 32]];
     let chunk_root = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(digests.clone())
         .root()
@@ -15510,6 +15607,8 @@ async fn hydrate_rbc_session_from_block_attributes_mismatch_to_sender() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn handle_rbc_ready_rejects_chunk_root_mismatch() {
+    let _guard = super::status::rbc_status_test_guard();
+    super::status::reset_rbc_mismatch_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -15580,6 +15679,13 @@ async fn handle_rbc_ready_rejects_chunk_root_mismatch() {
         !stored.is_invalid(),
         "mismatched chunk root should not invalidate the session"
     );
+    let mismatch_snapshot = super::status::rbc_mismatch_snapshot();
+    let entry = mismatch_snapshot
+        .entries
+        .iter()
+        .find(|entry| entry.peer_id == signer_peer)
+        .expect("mismatch entry");
+    assert_eq!(entry.chunk_root_mismatch_total, 1);
 
     harness.shutdown.send();
 }
@@ -23799,6 +23905,69 @@ fn interleave_lane_indices_handles_single_lane() {
     ];
     let order = super::interleave_lane_indices(&routing);
     assert_eq!(order, vec![0, 1]);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn derive_rbc_allocations_splits_chunks_across_lanes() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let chain: ChainId = "rbc-alloc".parse().expect("chain id");
+    let key_pair = KeyPair::random();
+    let (_, private_key) = key_pair.clone().into_parts();
+    let authority = AccountId::new(
+        "alloc".parse().expect("domain id"),
+        key_pair.public_key().clone(),
+    );
+    let build_tx = |count: u32| {
+        let instructions = (0..count).map(|idx| {
+            let domain_id: DomainId = format!("alloc{idx}").parse().expect("domain id");
+            let domain = Domain::new(domain_id);
+            InstructionBox::from(Register::domain(domain))
+        });
+        TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_instructions(instructions)
+            .sign(&private_key)
+    };
+
+    let txs = vec![
+        AcceptedTransaction::new_unchecked(Cow::Owned(build_tx(1))),
+        AcceptedTransaction::new_unchecked(Cow::Owned(build_tx(3))),
+    ];
+    let routing = vec![
+        RoutingDecision::new(LaneId::new(1), DataSpaceId::new(10)),
+        RoutingDecision::new(LaneId::new(2), DataSpaceId::new(20)),
+    ];
+
+    let total_chunks = 4;
+    let (lane_alloc, dataspace_alloc) = actor
+        .derive_rbc_allocations(&txs, &routing, total_chunks)
+        .expect("allocations");
+
+    assert_eq!(lane_alloc.len(), 2);
+    assert_eq!(dataspace_alloc.len(), 2);
+    let assigned: u32 = lane_alloc.iter().map(|alloc| alloc.total_chunks).sum();
+    assert_eq!(assigned, total_chunks);
+
+    let mut lane_totals = BTreeMap::new();
+    for alloc in &lane_alloc {
+        lane_totals.insert(alloc.lane_id, alloc.total_chunks);
+    }
+    for lane_id in [LaneId::new(1), LaneId::new(2)] {
+        let lane_total = lane_totals.get(&lane_id).copied().unwrap_or(0);
+        let dataspace_total: u32 = dataspace_alloc
+            .iter()
+            .filter(|alloc| alloc.lane_id == lane_id)
+            .map(|alloc| alloc.total_chunks)
+            .sum();
+        assert_eq!(dataspace_total, lane_total);
+        assert!(
+            lane_total > 0,
+            "each lane with traffic should receive chunk allocations"
+        );
+    }
+
+    harness.shutdown.send();
 }
 
 #[test]
@@ -45325,6 +45494,36 @@ fn pending_rbc_slot_does_not_evict_active_sessions_on_cap() {
     assert_eq!(pending.len(), 2);
     assert!(pending.contains_key(&key_a));
     assert!(pending.contains_key(&key_b));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pending_rbc_slot_respects_config_session_limit() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.config.rbc_pending_session_limit = 1;
+
+    let key_a = session_key();
+    let key_b = (
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x22; 32])),
+        key_a.1,
+        key_a.2.saturating_add(1),
+    );
+    let session = RbcSession::test_new(1, None, None, actor.epoch_for_height(key_a.1));
+    actor.subsystems.da_rbc.rbc.sessions.insert(key_a, session);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .pending
+        .insert(key_a, PendingRbcMessages::new(Instant::now()));
+
+    let pending = actor.pending_rbc_slot(key_b);
+    assert!(
+        pending.is_none(),
+        "pending slot should be rejected when active sessions fill the cap"
+    );
+
+    harness.shutdown.send();
 }
 
 #[test]

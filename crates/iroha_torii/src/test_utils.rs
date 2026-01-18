@@ -651,6 +651,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             collectors_redundant_send_r: 1,
             rbc_pending_max_chunks: defaults::sumeragi::RBC_PENDING_MAX_CHUNKS,
             rbc_pending_max_bytes: defaults::sumeragi::RBC_PENDING_MAX_BYTES,
+            rbc_pending_session_limit: defaults::sumeragi::RBC_PENDING_SESSION_LIMIT,
             rbc_pending_ttl: Duration::from_millis(defaults::sumeragi::RBC_PENDING_TTL_MS),
             block_max_transactions: defaults::sumeragi::BLOCK_MAX_TRANSACTIONS,
             block_max_payload_bytes: defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES,
