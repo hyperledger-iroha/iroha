@@ -14675,6 +14675,11 @@ async fn handle_rbc_init_caches_vote_roster() {
     let roster = actor.effective_commit_topology();
     let (block_header, leader_signature) =
         rbc_header_and_signature(actor, &roster, height, view, &harness.key_pairs);
+    let digests = vec![[0x55; 32]];
+    let chunk_root = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(digests.clone())
+        .root()
+        .map(Hash::from)
+        .expect("chunk root");
     let init = crate::sumeragi::consensus::RbcInit {
         block_hash,
         height,
@@ -14682,10 +14687,10 @@ async fn handle_rbc_init_caches_vote_roster() {
         epoch,
         roster: roster.clone(),
         roster_hash: roster_hash(&roster),
-        total_chunks: 1,
-        chunk_digests: vec![[0x55; 32]],
+        total_chunks: u32::try_from(digests.len()).expect("chunk count fits u32"),
+        chunk_digests: digests,
         payload_hash: Hash::prehashed([0x44; 32]),
-        chunk_root: Hash::prehashed([0x55; 32]),
+        chunk_root,
         block_header,
         leader_signature,
     };

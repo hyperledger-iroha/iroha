@@ -475,6 +475,11 @@ pub fn rotated_for_prev_block_hash(
     peers: impl IntoIterator<Item = PeerId>,
     prev_block_hash: HashOf<BlockHeader>,
 ) -> Topology {
+    // Canonicalize ordering to keep topology deterministic across nodes and restarts.
+    let mut peers: Vec<PeerId> = peers.into_iter().collect();
+    peers.sort();
+    peers.dedup();
+
     let mut topology = Topology::new(peers);
     let rotate_at = topology.min_votes_for_commit();
     let k = rotation_offset_for_prev_hash(&prev_block_hash, rotate_at);
