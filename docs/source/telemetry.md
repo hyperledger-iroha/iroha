@@ -105,6 +105,7 @@ cookie
 jwt
 bearer
 api_key
+api_key_hash
 apikey
 private_key
 privkey
