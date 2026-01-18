@@ -906,6 +906,7 @@ impl Actor {
             );
         }
         let expected_height = committed_height.saturating_add(1);
+        let is_active_height = height == expected_height;
         if height > expected_height {
             let active_commit_topology = self.effective_commit_topology();
             let (consensus_mode, _, _) = self.consensus_context_for_height(height);
@@ -1397,6 +1398,9 @@ impl Actor {
             Entry::Vacant(vac) => {
                 vac.insert(PendingBlock::new(block, payload_hash, height, view));
             }
+        }
+        if is_active_height {
+            self.note_view_change_from_block(height, view);
         }
         if let Some(qc) = qc_cache_for_subject(&self.qc_cache, block_hash)
             .filter(|qc| {

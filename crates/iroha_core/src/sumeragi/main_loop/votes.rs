@@ -1006,6 +1006,8 @@ impl Actor {
         if roster.is_empty() {
             return;
         }
+        let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+        let roster = super::roster::canonicalize_roster_for_mode(roster, consensus_mode);
         let entry = VoteRosterCacheEntry {
             roster,
             height,
@@ -1345,7 +1347,8 @@ impl Actor {
     }
 
     #[allow(clippy::unused_self)]
-    fn roster_from_commit_qc_history(&self, height: u64) -> Option<Vec<PeerId>> {
+    pub(super) fn roster_from_commit_qc_history(&self, height: u64) -> Option<Vec<PeerId>> {
+        let (consensus_mode, _, _) = self.consensus_context_for_height(height);
         let parent_height = height.checked_sub(1)?;
         let cert = super::status::commit_qc_history()
             .into_iter()
@@ -1358,12 +1361,12 @@ impl Actor {
         }
         let mut topology = super::network_topology::Topology::new(cert.validator_set.clone());
         topology.block_committed(cert.validator_set.clone(), cert.subject_block_hash);
-        let roster = topology.as_ref().to_vec();
+        let mut roster = topology.as_ref().to_vec();
         if roster.is_empty() {
-            None
-        } else {
-            Some(roster)
+            return None;
         }
+        roster = super::roster::canonicalize_roster_for_mode(roster, consensus_mode);
+        Some(roster)
     }
 
     pub(super) fn roster_from_commit_qc_history_roll_forward(
@@ -1371,6 +1374,7 @@ impl Actor {
         height: u64,
         target_parent_hash: Option<HashOf<BlockHeader>>,
     ) -> Option<Vec<PeerId>> {
+        let (consensus_mode, _, _) = self.consensus_context_for_height(height);
         let target_parent = height.checked_sub(1)?;
         let view = self.state.view();
         let committed_height = u64::try_from(view.height()).unwrap_or(0);
@@ -1454,7 +1458,11 @@ impl Actor {
             roster = topology.as_ref().to_vec();
             current_height = current_height.saturating_add(1);
             if current_height == height {
-                return (!roster.is_empty()).then_some(roster);
+                if roster.is_empty() {
+                    return None;
+                }
+                roster = super::roster::canonicalize_roster_for_mode(roster, consensus_mode);
+                return Some(roster);
             }
             current_hash = hash_for_height(current_height)?;
         }
@@ -1469,9 +1477,11 @@ impl Actor {
         view: u64,
         consensus_mode: ConsensusMode,
     ) -> Vec<PeerId> {
+        let canonicalize =
+            |roster| super::roster::canonicalize_roster_for_mode(roster, consensus_mode);
         if let Some(cached) = self.vote_roster_cache.get(&block_hash) {
             if !cached.roster.is_empty() {
-                return cached.roster.clone();
+                return canonicalize(cached.roster.clone());
             }
         }
         let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
@@ -1510,14 +1520,14 @@ impl Actor {
         if height <= committed_height {
             if let Some(selection) = roster_selection() {
                 if !selection.roster.is_empty() {
-                    return selection.roster;
+                    return canonicalize(selection.roster);
                 }
             }
             if height == committed_height {
                 let view = self.state.view();
                 let prev: Vec<_> = view.prev_commit_topology().iter().cloned().collect();
                 if !prev.is_empty() {
-                    return prev;
+                    return canonicalize(prev);
                 }
             }
         }
@@ -1532,14 +1542,14 @@ impl Actor {
         if height <= committed_height.saturating_add(1) && !active.is_empty() {
             if let Some(selection) = roster_selection() {
                 if !selection.roster.is_empty() {
-                    return selection.roster;
+                    return canonicalize(selection.roster);
                 }
             }
-            return active;
+            return canonicalize(active);
         }
         if let Some(selection) = roster_selection() {
             if !selection.roster.is_empty() {
-                return selection.roster;
+                return canonicalize(selection.roster);
             }
         }
         if height > committed_height.saturating_add(1) {
@@ -1551,17 +1561,17 @@ impl Actor {
             if let Some(roster) =
                 self.roster_from_commit_qc_history_roll_forward(height, parent_hash)
             {
-                return roster;
+                return canonicalize(roster);
             }
             if parent_hash.is_some() {
                 return Vec::new();
             }
             if let Some(roster) = self.roster_from_commit_qc_history(height) {
-                return roster;
+                return canonicalize(roster);
             }
             return Vec::new();
         }
-        active
+        canonicalize(active)
     }
 
     pub(super) fn roster_for_new_view_with_mode(
@@ -1571,24 +1581,26 @@ impl Actor {
         view: u64,
         consensus_mode: ConsensusMode,
     ) -> Vec<PeerId> {
+        let canonicalize =
+            |roster| super::roster::canonicalize_roster_for_mode(roster, consensus_mode);
         let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
         if height <= committed_height {
             return self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
         }
         let active = self.effective_commit_topology();
         if height == committed_height.saturating_add(1) && !active.is_empty() {
-            return active;
+            return canonicalize(active);
         }
         if let Some(roster) =
             self.roster_from_commit_qc_history_roll_forward(height, Some(block_hash))
         {
-            return roster;
+            return canonicalize(roster);
         }
         if height > committed_height.saturating_add(1) {
             return Vec::new();
         }
         if !active.is_empty() {
-            return active;
+            return canonicalize(active);
         }
         self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode)
     }

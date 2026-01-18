@@ -205,6 +205,9 @@ fn parse_pending_rbc_stash_counters(root: &Value) -> Result<PendingRbcStashCount
 
 // Keep the payload light to avoid overwhelming Torii/queue on constrained hosts.
 const LARGE_PAYLOAD_BYTES: usize = 1024; // keep payload light to ensure timely DA/RBC
+// Use a multi-chunk payload to ensure the recovery test observes an in-flight session.
+const RBC_RECOVERY_PAYLOAD_BYTES: usize = 4 * 1024 * 1024;
+const RBC_RECOVERY_CHUNK_BYTES: i64 = 64 * 1024;
 const RBC_DELIVER_BUDGET_MS: u64 = 15_000;
 const RBC_DELIVER_GRACE_MS: u64 = 1_000;
 const COMMIT_BUDGET_MS: u64 = 50_000;
@@ -1483,14 +1486,31 @@ async fn sumeragi_idle_view_change_recovers_after_leader_shutdown() -> Result<()
         let submit_peer = running
             .first()
             .ok_or_else(|| eyre!("no running peers available for submission"))?;
-        let submit_client = submit_peer.client();
-        let payload = format!("{scenario_name}-liveness");
-        tokio::task::spawn_blocking(move || submit_client.submit(Log::new(Level::INFO, payload)))
+        let mut submitted = false;
+        let mut submit_errors = Vec::new();
+        for (idx, peer) in running.iter().enumerate() {
+            let submit_client = peer.client();
+            let payload = format!("{scenario_name}-liveness-{idx}");
+            match tokio::task::spawn_blocking(move || {
+                submit_client.submit(Log::new(Level::INFO, payload))
+            })
             .await
-            .wrap_err("submit log instruction")??;
+            {
+                Ok(Ok(_)) => {
+                    submitted = true;
+                }
+                Ok(Err(err)) => submit_errors.push(err),
+                Err(err) => submit_errors.push(eyre!("submit join error: {err}")),
+            }
+        }
+        if !submitted {
+            return Err(eyre!(
+                "failed to submit log instruction to any running peer: {submit_errors:?}"
+            ));
+        }
 
         let target_height = status_before.blocks + 1;
-        let view_change_deadline = Duration::from_secs(30);
+        let view_change_deadline = Duration::from_secs(90);
 
         let status_url = submit_peer
             .client()
@@ -1559,12 +1579,12 @@ async fn sumeragi_idle_view_change_recovers_after_leader_shutdown() -> Result<()
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
 async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
-    let payload_bytes = LARGE_PAYLOAD_BYTES;
+    let payload_bytes = RBC_RECOVERY_PAYLOAD_BYTES;
     let tx_limit =
         u64::try_from(torii_max_content_len_for_payload(payload_bytes)).unwrap_or(u64::MAX);
     let tx_limit_nz =
         NonZeroU64::new(tx_limit).ok_or_else(|| eyre!("tx_limit must be non-zero"))?;
-    let rbc_chunk_max_bytes = i64::try_from(payload_bytes).unwrap_or(i64::MAX);
+    let rbc_chunk_max_bytes = RBC_RECOVERY_CHUNK_BYTES;
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()

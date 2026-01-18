@@ -113,7 +113,7 @@ const NETWORK_PERMIT_DIR_ENV: &str = "IROHA_TEST_NETWORK_PERMIT_DIR";
 const NETWORK_PERMIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const NETWORK_PERMIT_LOG_INTERVAL: Duration = Duration::from_secs(60);
 const NETWORK_PERMIT_STALE_TTL: Duration = Duration::from_secs(60 * 60 * 12);
-const DEFAULT_NETWORK_PARALLELISM_PEERS: usize = 4;
+const DEFAULT_NETWORK_PARALLELISM_PEERS: usize = 16;
 const TEST_CONCURRENCY_OVERSUBSCRIPTION: usize = 2;
 const TEST_CONCURRENCY_MIN_THREADS: usize = 4;
 const PERMISSIONED_BLS_DOMAIN: &str = "bls-iroha2:permissioned-sumeragi:v1";
@@ -7755,18 +7755,13 @@ exit 0
             merge_tables(&mut merged, layer.as_ref());
         }
 
-        let stake_escrow = get_nested_value(
-            &merged,
-            &["nexus", "staking", "stake_escrow_account_id"],
-        )
-        .and_then(Value::as_str)
-        .expect("stake_escrow_account_id should be present");
-        let slash_sink = get_nested_value(
-            &merged,
-            &["nexus", "staking", "slash_sink_account_id"],
-        )
-        .and_then(Value::as_str)
-        .expect("slash_sink_account_id should be present");
+        let stake_escrow =
+            get_nested_value(&merged, &["nexus", "staking", "stake_escrow_account_id"])
+                .and_then(Value::as_str)
+                .expect("stake_escrow_account_id should be present");
+        let slash_sink = get_nested_value(&merged, &["nexus", "staking", "slash_sink_account_id"])
+            .and_then(Value::as_str)
+            .expect("slash_sink_account_id should be present");
 
         assert!(
             stake_escrow.parse::<AccountId>().is_ok(),
