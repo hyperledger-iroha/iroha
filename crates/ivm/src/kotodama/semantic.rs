@@ -1891,8 +1891,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         });
                     }
                     match &arg_typed[0].ty {
-                        Type::Map(k, v) if is_int_like(k) && is_int_like(v) => {
-                        }
+                        Type::Map(k, v) if is_int_like(k) && is_int_like(v) => {}
                         other => {
                             return Err(SemanticError {
                                 message: format!(
@@ -2043,8 +2042,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         });
                     }
                     match &arg_typed[0].ty {
-                        Type::Map(k, v) if is_int_like(k) && is_int_like(v) => {
-                        }
+                        Type::Map(k, v) if is_int_like(k) && is_int_like(v) => {}
                         other => {
                             return Err(SemanticError {
                                 message: format!(
@@ -2075,8 +2073,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         });
                     }
                     match &arg_typed[0].ty {
-                        Type::Map(k, v) if is_int_like(k) && is_int_like(v) => {
-                        }
+                        Type::Map(k, v) if is_int_like(k) && is_int_like(v) => {}
                         other => {
                             return Err(SemanticError {
                                 message: format!(
@@ -3541,10 +3538,7 @@ fn ensure_assignable(expected: &Type, actual: &Type) -> Result<(), SemanticError
         return Ok(());
     }
     if let (Some(exp_kind), Some(act_kind)) = (numeric_kind(&expected), numeric_kind(&actual)) {
-        if exp_kind == act_kind
-            || exp_kind == NumericKind::Int
-            || act_kind == NumericKind::Int
-        {
+        if exp_kind == act_kind || exp_kind == NumericKind::Int || act_kind == NumericKind::Int {
             return Ok(());
         }
     }

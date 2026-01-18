@@ -6126,7 +6126,13 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
         binding: Option<&crate::state::ZkAssetVerifierBinding>,
         attachment: &iroha_data_model::proof::ProofAttachment,
-    ) -> Result<(iroha_data_model::proof::VerifyingKeyBox, Option<VerifyingKeyRecord>), Error> {
+    ) -> Result<
+        (
+            iroha_data_model::proof::VerifyingKeyBox,
+            Option<VerifyingKeyRecord>,
+        ),
+        Error,
+    > {
         if attachment.vk_ref.is_none() && attachment.vk_inline.is_none() {
             return Err(InstructionExecutionError::InvariantViolation(
                 "proof missing verifying key reference or inline key".into(),

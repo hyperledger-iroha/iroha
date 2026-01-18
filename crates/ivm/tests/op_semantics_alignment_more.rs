@@ -26,8 +26,7 @@ fn classic_store(rs1: u8, rs2: u8, imm12: i16, funct3: u8) -> u32 {
 
 #[test]
 fn wide_load_store_alignment() {
-    let addi_base = ivm::kotodama::compiler::encode_addi(2, 2, 0)
-        .expect("encode addi");
+    let addi_base = ivm::kotodama::compiler::encode_addi(2, 2, 0).expect("encode addi");
     let store64 = encoding::wide::encode_store(instruction::wide::memory::STORE64, 2, 3, 0);
     let load64 = encoding::wide::encode_load(instruction::wide::memory::LOAD64, 4, 2, 0);
     let halt = encoding::wide::encode_halt();
@@ -84,8 +83,7 @@ fn wide_load_store_alignment() {
 
 #[test]
 fn classic_halfword_ops_rejected() {
-    let addi_base = ivm::kotodama::compiler::encode_addi(2, 2, 0)
-        .expect("encode addi");
+    let addi_base = ivm::kotodama::compiler::encode_addi(2, 2, 0).expect("encode addi");
     let sh = classic_store(2, 3, 2, 0x1);
     let lh = classic_load(4, 2, 2, 0x1);
     let lhu = classic_load(5, 2, 2, 0x5);
@@ -102,8 +100,7 @@ fn classic_halfword_ops_rejected() {
 
 #[test]
 fn classic_byte_ops_rejected() {
-    let addi_base = ivm::kotodama::compiler::encode_addi(2, 2, 0)
-        .expect("encode addi");
+    let addi_base = ivm::kotodama::compiler::encode_addi(2, 2, 0).expect("encode addi");
     let lb = classic_load(3, 2, 0, 0x0);
     let lbu = classic_load(4, 2, 0, 0x4);
     let mut bytes = ProgramMetadata::default().encode();
@@ -119,8 +116,7 @@ fn classic_byte_ops_rejected() {
 
 #[test]
 fn classic_misaligned_halfword_ops_rejected() {
-    let addi_base = ivm::kotodama::compiler::encode_addi(2, 2, 0)
-        .expect("encode addi");
+    let addi_base = ivm::kotodama::compiler::encode_addi(2, 2, 0).expect("encode addi");
     let lh_mis = classic_load(4, 2, 1, 0x1);
     let lhu_mis = classic_load(5, 2, 1, 0x5);
     let mut bytes = ProgramMetadata::default().encode();

@@ -8992,9 +8992,7 @@ mod streaming_soranet_tests {
                 defaults::streaming::soranet::EXIT_MULTIADDR.to_string(),
             ),
             padding_budget_ms: WithOrigin::inline(defaults::streaming::soranet::padding_budget_ms()),
-            access_kind: WithOrigin::inline(
-                defaults::streaming::soranet::ACCESS_KIND.to_string(),
-            ),
+            access_kind: WithOrigin::inline(defaults::streaming::soranet::ACCESS_KIND.to_string()),
             channel_salt: None,
             provision_spool_dir: WithOrigin::inline(PathBuf::from(
                 defaults::streaming::soranet::PROVISION_SPOOL_DIR,
@@ -9028,9 +9026,7 @@ mod streaming_soranet_tests {
                 defaults::streaming::soranet::EXIT_MULTIADDR.to_string(),
             ),
             padding_budget_ms: WithOrigin::inline(defaults::streaming::soranet::padding_budget_ms()),
-            access_kind: WithOrigin::inline(
-                defaults::streaming::soranet::ACCESS_KIND.to_string(),
-            ),
+            access_kind: WithOrigin::inline(defaults::streaming::soranet::ACCESS_KIND.to_string()),
             channel_salt: None,
             provision_spool_dir: WithOrigin::inline(PathBuf::from(
                 defaults::streaming::soranet::PROVISION_SPOOL_DIR,

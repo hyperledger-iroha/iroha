@@ -1381,12 +1381,10 @@ impl<'a> FastFromJson<'a> for SoranetStreamingSummary {
                 .ok_or_else(|| NoritoError::Message("missing channel_salt".into()))?,
             provision_spool_dir: provision_spool_dir
                 .ok_or_else(|| NoritoError::Message("missing provision_spool_dir".into()))?,
-            provision_window_segments: provision_window_segments.ok_or_else(|| {
-                NoritoError::Message("missing provision_window_segments".into())
-            })?,
-            provision_queue_capacity: provision_queue_capacity.ok_or_else(|| {
-                NoritoError::Message("missing provision_queue_capacity".into())
-            })?,
+            provision_window_segments: provision_window_segments
+                .ok_or_else(|| NoritoError::Message("missing provision_window_segments".into()))?,
+            provision_queue_capacity: provision_queue_capacity
+                .ok_or_else(|| NoritoError::Message("missing provision_queue_capacity".into()))?,
         })
     }
 }

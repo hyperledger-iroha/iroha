@@ -2169,6 +2169,10 @@ mod tests {
         fn main() {}
         "#;
         let prog = parse(src).expect("parse kotoba block");
-        assert!(prog.items.iter().any(|item| matches!(item, Item::Function(_))));
+        assert!(
+            prog.items
+                .iter()
+                .any(|item| matches!(item, Item::Function(_)))
+        );
     }
 }
