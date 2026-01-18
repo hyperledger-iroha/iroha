@@ -561,6 +561,20 @@ if #available(iOS 15.0, macOS 12.0, *) {
 queue sections along with `confidential_gas` when present. When the node has not enabled
 confidential proofs yet the helper simply returns `nil`, mirroring the Python/JS DTOs.
 
+### Configuration snapshots
+
+`getConfiguration()` returns the typed snapshot, including transport defaults for streaming:
+
+```swift
+if #available(iOS 15.0, macOS 12.0, *) {
+    let snapshot = try await sdk.getConfiguration()
+    if let soranet = snapshot.transport?.streaming?.soranet {
+        print("SoraNet exit:", soranet.exitMultiaddr)
+        print("Provision queue cap:", soranet.provisionQueueCapacity)
+    }
+}
+```
+
 ### Shield transaction builder
 
 `ShieldRequest` wires encrypted payloads into a `zk::Shield` instruction:
