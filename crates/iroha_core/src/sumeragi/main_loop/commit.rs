@@ -3965,15 +3965,21 @@ impl Actor {
     ) {
         let (cfg, epoch_params, seed_for_height, epoch_schedule) = {
             let view = self.state.view();
-            let cfg = super::load_npos_collector_config(&view)
-                .or(self.npos_collectors)
-                .unwrap_or(NposCollectorConfig {
-                    seed,
-                    k: self.config.npos.k_aggregators,
-                    redundant_send_r: self.config.npos.redundant_send_r,
-                });
+            let cfg = if matches!(self.consensus_mode, ConsensusMode::Npos) {
+                Some(
+                    super::load_npos_collector_config(&view)
+                        .or(self.npos_collectors)
+                        .unwrap_or(NposCollectorConfig {
+                            seed,
+                            k: self.config.npos.k_aggregators,
+                            redundant_send_r: self.config.npos.redundant_send_r,
+                        }),
+                )
+            } else {
+                None
+            };
             let epoch_params = super::load_npos_epoch_params(&view, &self.config);
-            let seed_for_height = super::npos_seed_for_height(&view, height);
+            let seed_for_height = super::prf_seed_for_height(&view, height);
             let epoch_schedule = super::EpochScheduleSnapshot::from_world_with_fallback(
                 view.world(),
                 epoch_params.epoch_length_blocks,
@@ -3981,7 +3987,6 @@ impl Actor {
             (cfg, epoch_params, seed_for_height, epoch_schedule)
         };
         let mut next_seed = seed;
-        self.npos_collectors = Some(cfg);
         if let Some(manager) = self.epoch_manager.as_mut() {
             manager.set_params(
                 epoch_params.epoch_length_blocks,
@@ -4013,8 +4018,13 @@ impl Actor {
                 manager.reveal_window_end(),
             );
         }
-        if let Some(cfg) = self.npos_collectors.as_mut() {
-            cfg.seed = next_seed;
+        if let Some(cfg) = cfg {
+            self.npos_collectors = Some(cfg);
+            if let Some(cfg) = self.npos_collectors.as_mut() {
+                cfg.seed = next_seed;
+            }
+        } else {
+            self.npos_collectors = None;
         }
     }
 
@@ -4156,7 +4166,10 @@ impl Actor {
                 );
             }
         }
-        if !matches!(self.consensus_mode, ConsensusMode::Npos) {
+        if !matches!(
+            self.consensus_mode,
+            ConsensusMode::Permissioned | ConsensusMode::Npos
+        ) {
             return Ok(());
         }
         let local_signer = {
@@ -4195,9 +4208,18 @@ impl Actor {
             (seed, snapshot)
         };
 
-        let election_outcome = if let Some(snapshot) = snapshot.as_ref() {
-            let epoch_to_service = snapshot.epoch.saturating_add(1);
-            Some(self.run_validator_election(epoch_to_service, height, seed, roster_len_hint)?)
+        let election_outcome = if matches!(self.consensus_mode, ConsensusMode::Npos) {
+            if let Some(snapshot) = snapshot.as_ref() {
+                let epoch_to_service = snapshot.epoch.saturating_add(1);
+                Some(self.run_validator_election(
+                    epoch_to_service,
+                    height,
+                    seed,
+                    roster_len_hint,
+                )?)
+            } else {
+                None
+            }
         } else {
             None
         };

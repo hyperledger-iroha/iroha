@@ -62,15 +62,11 @@ impl Actor {
             ConsensusMode::Permissioned => super::consensus::PERMISSIONED_TAG,
             ConsensusMode::Npos => super::consensus::NPOS_TAG,
         };
-        let prf_seed = if matches!(consensus_mode, ConsensusMode::Npos) {
-            Some(super::npos_seed_for_height_from_world(
-                &world,
-                &self.chain_id,
-                height,
-            ))
-        } else {
-            None
-        };
+        let prf_seed = Some(super::prf_seed_for_height_from_world(
+            &world,
+            &self.chain_id,
+            height,
+        ));
         drop(world);
         (consensus_mode, mode_tag, prf_seed)
     }
@@ -867,11 +863,7 @@ impl Actor {
                 record_drop(super::status::VoteValidationDropReason::HighestQcMismatch);
                 return false;
             }
-            let expected_height = if highest.phase == Phase::Commit {
-                highest.height.saturating_add(1)
-            } else {
-                highest.height
-            };
+            let expected_height = highest.height.saturating_add(1);
             if vote.height != expected_height {
                 warn!(
                     height = vote.height,

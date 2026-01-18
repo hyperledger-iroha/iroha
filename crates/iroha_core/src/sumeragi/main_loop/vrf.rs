@@ -120,7 +120,10 @@ impl VrfActor {
         consensus_mode: ConsensusMode,
         epoch: u64,
     ) -> Option<&mut VrfLocalState> {
-        if !matches!(consensus_mode, ConsensusMode::Npos) {
+        if !matches!(
+            consensus_mode,
+            ConsensusMode::Permissioned | ConsensusMode::Npos
+        ) {
             return None;
         }
         let state = self.local.get_or_insert_with(|| VrfLocalState::new(epoch));
@@ -614,7 +617,10 @@ impl Actor {
         &mut self,
         commit: crate::sumeragi::consensus::VrfCommit,
     ) -> Result<()> {
-        if !matches!(self.consensus_mode, ConsensusMode::Npos) {
+        if !matches!(
+            self.consensus_mode,
+            ConsensusMode::Permissioned | ConsensusMode::Npos
+        ) {
             self.record_consensus_message_handling(
                 super::status::ConsensusMessageKind::VrfCommit,
                 super::status::ConsensusMessageOutcome::Dropped,
@@ -654,7 +660,10 @@ impl Actor {
         &mut self,
         reveal: crate::sumeragi::consensus::VrfReveal,
     ) -> Result<()> {
-        if !matches!(self.consensus_mode, ConsensusMode::Npos) {
+        if !matches!(
+            self.consensus_mode,
+            ConsensusMode::Permissioned | ConsensusMode::Npos
+        ) {
             self.record_consensus_message_handling(
                 super::status::ConsensusMessageKind::VrfReveal,
                 super::status::ConsensusMessageOutcome::Dropped,

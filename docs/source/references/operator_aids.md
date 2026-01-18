@@ -16,11 +16,11 @@ Consensus (Sumeragi)
     - `curl -Ns http://127.0.0.1:8080/v1/sumeragi/new_view/sse`
 - Metrics: `sumeragi_new_view_receipts_by_hv{height,view}` gauges mirror the counts.
 - GET `/v1/sumeragi/status`
-- Snapshot of leader index, highest/locked commit certificates (`highest_qc`/`locked_qc`, heights, views, subject hashes), collector/VRF counters, pacemaker deferrals, tx queue depth, and RBC store health (`rbc_store.{sessions,bytes,pressure_level,evictions_total,recent_evictions[...]}`).
+- Snapshot of leader index, highest/locked QCs (`highest_qc`/`locked_qc`, heights, views, subject hashes), collector/VRF counters, pacemaker deferrals, tx queue depth, and RBC store health (`rbc_store.{sessions,bytes,pressure_level,persist_drops_total,evictions_total,recent_evictions[...]}`).
 - GET `/v1/sumeragi/status/sse`
   - SSE stream (≈1s) of the same payload as `/v1/sumeragi/status` for live dashboards.
 - GET `/v1/sumeragi/qc`
-- Snapshot of highest/locked commit certificates; includes `subject_block_hash` for the highest commit certificate when known.
+- Snapshot of highest/locked QCs; includes `subject_block_hash` for the highest QC when known.
 - GET `/v1/sumeragi/pacemaker`
   - Pacemaker timers/config: `{ backoff_ms, rtt_floor_ms, jitter_ms, backoff_multiplier, rtt_floor_multiplier, max_backoff_ms, jitter_frac_permille }`.
 - GET `/v1/sumeragi/leader`

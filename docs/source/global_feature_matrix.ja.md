@@ -18,14 +18,14 @@ translator: manual
 |------|------|------|-------------|
 | 複数コレクター K/r サポート & first-commit-certificate-wins | ◉ | 決定論的コレクター選定、冗長ファンアウト、オンチェーンの K/r パラメータ、最初の commit certificate 採用がテスト付きで出荷済み。 | status.md:255; status.md:314 |
 | ペースメーカーのバックオフ／RTT 下限／決定論的ジッタ | ◉ | コンフィグで制御可能なタイマにジッタ帯域を実装し、テレメトリとドキュメントを整備。 | status.md:251 |
-| NEW_VIEW ゲーティング & Highest commit certificate 追跡 | ◉ | NEW_VIEW / Evidence を伝搬し、Highest commit certificate は単調増加で採用。ハンドシェイクがフィンガープリントを保護。 | status.md:210 |
+| NEW_VIEW ゲーティング & Highest QC 追跡 | ◉ | NEW_VIEW / Evidence を伝搬し、Highest QC は単調増加で採用。ハンドシェイクがフィンガープリントを保護。 | status.md:210 |
 | availability evidence ゲーティング | ○ | `da_enabled=true` で Availability 投票 / availability evidence を発行しコミットを制御。追加の磨き込みは継続。 | status.md:190 |
 | 信頼できるブロードキャスト（DA ペイロード輸送） | ◉ | `da_enabled=true` で RBC (Init/Chunk/Ready/Deliver) が有効化され、ペイロード配布/欠落回復に利用。コミットは availability evidence でゲート（ローカルの `DELIVER` は条件ではありません）。 | status.md:283-284 |
 | Commit QC 状態ルート束縛 | ◉ | Commit QC が parent/post state roots を保持し、execution QC ゲートは廃止。 | status.md:latest |
 | エビデンス伝搬 & 監査エンドポイント | ◉ | `ControlFlow::Evidence`、Torii エビデンス API、ネガティブテストを実装。 | status.md:176; status.md:760-761 |
 | RBC テレメトリ、準備／DELIVER メトリクス | ◉ | `/v1/sumeragi/rbc*` エンドポイントとテレメトリカウンタ／ヒストグラムを提供。 | status.md:283-284; status.md:772 |
 | コンセンサスパラメータ広告 & トポロジ検証 | ◉ | ノードが `(collectors_k, redundant_send_r)` をブロードキャストし、ピア間の一致を検証。 | status.md:255 |
-| 前ブロックハッシュでのローテーション | ◉ | `rotated_for_prev_block_hash` が決定論的にローテーションを提供し、テスト済み。 | status.md:259 |
+| Permissioned の PRF ローテーション | ◉ | Permissioned のリーダー/コレクター選出は PRF seed と height/view を用いたカノニカルロスター上の順序を使用し、前ブロックハッシュローテーションはレガシー補助として残る。 | status.md:latest |
 
 ## パイプライン／Kura／状態
 

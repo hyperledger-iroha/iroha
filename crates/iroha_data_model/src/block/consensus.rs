@@ -828,6 +828,9 @@ pub struct SumeragiRbcStoreStatus {
     /// Most recent RBC sessions evicted due to TTL or capacity enforcement (bounded list).
     #[norito(default)]
     pub recent_evictions: Vec<SumeragiRbcEvictedSession>,
+    /// Total number of RBC persist requests dropped due to full async queues.
+    #[norito(default)]
+    pub persist_drops_total: u64,
 }
 
 /// Per-peer RBC payload mismatch counters.

@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use eyre::Result;
 use iroha_config::parameters::actual::{ConsensusMode, Sumeragi as SumeragiConfig};
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::{
     block::consensus::{Evidence, EvidencePayload, EvidenceRecord},
     consensus::{Qc, ValidatorSetCheckpoint, VrfEpochRecord},
@@ -62,6 +62,36 @@ impl<'a> PenaltyApplier<'a> {
         }
     }
 
+    fn build_validator_locator_map(&self) -> BTreeMap<PublicKey, ValidatorLocator> {
+        let view = self.state.view();
+        let mut candidates_map: BTreeMap<PublicKey, Vec<ValidatorLocator>> = BTreeMap::new();
+
+        for ((lane_id, validator_id), record) in view.world.public_lane_validators().iter() {
+            if let Some(pk) = record.validator.try_signatory() {
+                candidates_map
+                    .entry(pk.clone())
+                    .or_default()
+                    .push(ValidatorLocator {
+                        lane_id: *lane_id,
+                        validator: validator_id.clone(),
+                    });
+            }
+        }
+
+        let mut result = BTreeMap::new();
+        for (pk, mut locators) in candidates_map {
+            locators.sort_by(|lhs, rhs| {
+                lhs.lane_id
+                    .cmp(&rhs.lane_id)
+                    .then_with(|| lhs.validator.cmp(&rhs.validator))
+            });
+            if let Some(best) = locators.into_iter().next() {
+                result.insert(pk, best);
+            }
+        }
+        result
+    }
+
     pub(crate) fn apply_vrf_penalties(&self, current_height: u64) -> PenaltyOutcome {
         let mut outcome = PenaltyOutcome::default();
         let activation_lag = {
@@ -82,7 +112,12 @@ impl<'a> PenaltyApplier<'a> {
         }
         drop(view);
 
+        if due_records.is_empty() {
+            return outcome;
+        }
+
         let lane_config = self.state.nexus_snapshot().lane_config.clone();
+        let validator_map = self.build_validator_locator_map();
 
         for record in due_records {
             let offenders: BTreeSet<u32> = record
@@ -96,7 +131,7 @@ impl<'a> PenaltyApplier<'a> {
             let mut unmapped_offenders = false;
             let mut locators = Vec::new();
             for signer in offenders {
-                if let Some(locator) = self.locate_validator(signer) {
+                if let Some(locator) = self.locate_validator_cached(signer, &validator_map) {
                     locators.push(locator);
                 } else {
                     unmapped_offenders = true;
@@ -184,6 +219,7 @@ impl<'a> PenaltyApplier<'a> {
         };
 
         let lane_config = self.state.nexus_snapshot().lane_config.clone();
+        let validator_map = self.build_validator_locator_map();
 
         let commit_certs = crate::sumeragi::status::commit_qc_history();
         let checkpoints = crate::sumeragi::status::validator_checkpoint_history();
@@ -244,7 +280,9 @@ impl<'a> PenaltyApplier<'a> {
             }
             let mut locators = Vec::new();
             for signer in offenders {
-                if let Some(locator) = self.locate_validator_in_roster(signer, roster) {
+                if let Some(locator) =
+                    self.locate_validator_in_roster_cached(signer, roster, &validator_map)
+                {
                     locators.push(locator);
                 }
             }
@@ -293,66 +331,26 @@ impl<'a> PenaltyApplier<'a> {
         Ok(outcome)
     }
 
-    fn locate_validator(&self, signer: ValidatorIndex) -> Option<ValidatorLocator> {
+    fn locate_validator_cached(
+        &self,
+        signer: ValidatorIndex,
+        map: &BTreeMap<PublicKey, ValidatorLocator>,
+    ) -> Option<ValidatorLocator> {
         let signer_idx = usize::try_from(signer).ok()?;
         let view = self.state.view();
-        let peer = view.commit_topology().get().get(signer_idx)?.clone();
-        let target_key = peer.public_key.clone();
-        let mut candidates: Vec<ValidatorLocator> = view
-            .world
-            .public_lane_validators()
-            .iter()
-            .filter_map(|((lane_id, validator_id), record)| {
-                let pk = record.validator.try_signatory()?;
-                if pk == &target_key {
-                    Some(ValidatorLocator {
-                        lane_id: *lane_id,
-                        validator: validator_id.clone(),
-                    })
-                } else {
-                    None
-                }
-            })
-            .collect();
-        candidates.sort_by(|lhs, rhs| {
-            lhs.lane_id
-                .cmp(&rhs.lane_id)
-                .then_with(|| lhs.validator.cmp(&rhs.validator))
-        });
-        candidates.into_iter().next()
+        let peer = view.commit_topology().get().get(signer_idx)?;
+        map.get(peer.public_key()).cloned()
     }
 
-    fn locate_validator_in_roster(
+    fn locate_validator_in_roster_cached(
         &self,
         signer: ValidatorIndex,
         roster: &[PeerId],
+        map: &BTreeMap<PublicKey, ValidatorLocator>,
     ) -> Option<ValidatorLocator> {
         let signer_idx = usize::try_from(signer).ok()?;
-        let peer = roster.get(signer_idx)?.clone();
-        let target_key = peer.public_key.clone();
-        let view = self.state.view();
-        let mut candidates: Vec<ValidatorLocator> = view
-            .world
-            .public_lane_validators()
-            .iter()
-            .filter_map(|((lane_id, validator_id), record)| {
-                let pk = record.validator.try_signatory()?;
-                if pk == &target_key {
-                    Some(ValidatorLocator {
-                        lane_id: *lane_id,
-                        validator: validator_id.clone(),
-                    })
-                } else {
-                    None
-                }
-            })
-            .collect();
-        candidates.sort_by(|lhs, rhs| {
-            lhs.lane_id
-                .cmp(&rhs.lane_id)
-                .then_with(|| lhs.validator.cmp(&rhs.validator))
-        });
-        candidates.into_iter().next()
+        let peer = roster.get(signer_idx)?;
+        map.get(peer.public_key()).cloned()
     }
 }
 
@@ -1713,8 +1711,9 @@ mod tests {
             #[cfg(not(feature = "telemetry"))]
             None,
         );
+        let map = applier.build_validator_locator_map();
         let locator = applier
-            .locate_validator_in_roster(0, &[peer])
+            .locate_validator_in_roster_cached(0, &[peer], &map)
             .expect("locator resolved");
         assert_eq!(locator.lane_id, LaneId::new(1));
         assert_eq!(locator.validator, validator);

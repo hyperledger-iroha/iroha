@@ -5999,6 +5999,13 @@ impl Telemetry {
         }
     }
 
+    /// Observe the latency of DA chunking performed by Torii.
+    pub fn observe_da_chunking_seconds(&self, seconds: f64) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.observe_da_chunking_seconds(seconds);
+        }
+    }
+
     /// Record the result of a DA receipt ingestion attempt.
     pub fn record_da_receipt_outcome(
         &self,
@@ -8823,6 +8830,16 @@ mod tests {
         assert_eq!(metrics.sumeragi_commit_signatures_counted.get(), 3);
         assert_eq!(metrics.sumeragi_commit_signatures_set_b.get(), 2);
         assert_eq!(metrics.sumeragi_commit_signatures_required.get(), 4);
+    }
+
+    #[test]
+    fn da_chunking_latency_metrics_updated() {
+        let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
+        let telemetry = Telemetry::new(metrics.clone(), true);
+
+        telemetry.observe_da_chunking_seconds(0.25);
+
+        assert_eq!(metrics.torii_da_chunking_seconds.get_sample_count(), 1);
     }
 
     #[test]

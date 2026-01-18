@@ -172,6 +172,10 @@ fn summarize_status(value: &Value) -> String {
         .and_then(|o| o.get("evictions_total"))
         .and_then(norito::json::Value::as_u64)
         .unwrap_or(0);
+    let rbc_persist_drops = rbc
+        .and_then(|o| o.get("persist_drops_total"))
+        .and_then(norito::json::Value::as_u64)
+        .unwrap_or(0);
     let da_gate = value.get("da_gate").and_then(|v| v.as_object());
     let da_reason = da_gate
         .and_then(|o| o.get("reason"))
@@ -276,7 +280,7 @@ fn summarize_status(value: &Value) -> String {
     let dvp = summarize_settlement_phase(settlement.and_then(|o| o.get("dvp")));
     let pvp = summarize_settlement_phase(settlement.and_then(|o| o.get("pvp")));
     format!(
-        "leader={leader} hqc={hqc_height}/{hqc_view} subj={subj} lqc={lqc_height}/{lqc_view} subj={lqc_subject} gossip={gossip} drop={dropped} hint={hint} proposal={proposal} da_resched={da_resched} da_gate={da_gate_summary} epoch_len={epoch_length} epoch_commit={epoch_commit_offset} epoch_reveal={epoch_reveal_offset} vrf_epoch={vrf_epoch} vrf_late={vrf_late} vrf_non_reveal={vrf_non_reveal} vrf_no_part={vrf_no_participation} membership={membership_height}/{membership_view}/{membership_epoch} hash={membership_hash} rbc_sessions={rbc_sessions} rbc_bytes={rbc_bytes} rbc_evictions={rbc_evictions} rbc_pressure={rbc_pressure} rbc_last={rbc_last_hash}@{rbc_last_height}/{rbc_last_view} sealed={sealed_total} aliases=[{aliases}] dvp={dvp} pvp={pvp}"
+        "leader={leader} hqc={hqc_height}/{hqc_view} subj={subj} lqc={lqc_height}/{lqc_view} subj={lqc_subject} gossip={gossip} drop={dropped} hint={hint} proposal={proposal} da_resched={da_resched} da_gate={da_gate_summary} epoch_len={epoch_length} epoch_commit={epoch_commit_offset} epoch_reveal={epoch_reveal_offset} vrf_epoch={vrf_epoch} vrf_late={vrf_late} vrf_non_reveal={vrf_non_reveal} vrf_no_part={vrf_no_participation} membership={membership_height}/{membership_view}/{membership_epoch} hash={membership_hash} rbc_sessions={rbc_sessions} rbc_bytes={rbc_bytes} rbc_evictions={rbc_evictions} rbc_persist_drops={rbc_persist_drops} rbc_pressure={rbc_pressure} rbc_last={rbc_last_hash}@{rbc_last_height}/{rbc_last_view} sealed={sealed_total} aliases=[{aliases}] dvp={dvp} pvp={pvp}"
     )
 }
 
@@ -458,6 +462,7 @@ mod tests {
             },
             "rbc_store": {
                 "evictions_total": 1,
+                "persist_drops_total": 3,
                 "sessions": 2,
                 "bytes": 3,
                 "pressure_level": 4,
@@ -478,7 +483,7 @@ mod tests {
         });
         assert_eq!(
             summarize_status(&value),
-            "leader=4 hqc=7/3 subj=0xABCDEF lqc=5/2 subj=- gossip=8 drop=9 hint=6 proposal=5 da_resched=0 da_gate=none(last=none;missing=0) epoch_len=0 epoch_commit=0 epoch_reveal=0 vrf_epoch=12 vrf_late=15 vrf_non_reveal=13 vrf_no_part=14 membership=0/0/0 hash=- rbc_sessions=2 rbc_bytes=3 rbc_evictions=1 rbc_pressure=4 rbc_last=feedface@10/11 sealed=0 aliases=[-] dvp=none pvp=none"
+            "leader=4 hqc=7/3 subj=0xABCDEF lqc=5/2 subj=- gossip=8 drop=9 hint=6 proposal=5 da_resched=0 da_gate=none(last=none;missing=0) epoch_len=0 epoch_commit=0 epoch_reveal=0 vrf_epoch=12 vrf_late=15 vrf_non_reveal=13 vrf_no_part=14 membership=0/0/0 hash=- rbc_sessions=2 rbc_bytes=3 rbc_evictions=1 rbc_persist_drops=3 rbc_pressure=4 rbc_last=feedface@10/11 sealed=0 aliases=[-] dvp=none pvp=none"
         );
     }
 

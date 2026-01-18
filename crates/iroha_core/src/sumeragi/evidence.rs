@@ -598,6 +598,7 @@ mod tests {
     struct EvidenceTestContext {
         chain_id: ChainId,
         mode_tag: &'static str,
+        prf_seed: [u8; 32],
         keypairs: Vec<KeyPair>,
         topology: super::super::network_topology::Topology,
     }
@@ -614,6 +615,7 @@ mod tests {
             Self {
                 chain_id: ChainId::from("test"),
                 mode_tag: super::super::consensus::PERMISSIONED_TAG,
+                prf_seed: [0x11; 32],
                 keypairs,
                 topology,
             }
@@ -624,7 +626,7 @@ mod tests {
                 topology: &self.topology,
                 chain_id: &self.chain_id,
                 mode_tag: self.mode_tag,
-                prf_seed: None,
+                prf_seed: Some(self.prf_seed),
             }
         }
 
@@ -635,7 +637,7 @@ mod tests {
                 height,
                 view,
                 self.mode_tag,
-                None,
+                Some(self.prf_seed),
             );
             let peer = rotated
                 .as_ref()

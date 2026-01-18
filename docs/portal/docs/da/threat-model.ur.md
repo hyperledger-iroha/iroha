@@ -118,7 +118,7 @@ Impact scale: **Critical** ledger safety/liveness توڑتا ہے؛ **High** DA 
   کرتا ہے، high-water marks disk پر persist کرتا ہے، اور duplicates/stale replays
   reject کرتا ہے؛ property اور fuzz harnesses divergent fingerprints اور out-of-order
   submissions cover کرتے ہیں۔ [crates/iroha_core/src/da/replay_cache.rs:1]
-  [fuzz/da_replay_cache.rs:1] [crates/iroha_torii/src/da.rs:1]
+  [fuzz/da_replay_cache.rs:1] [crates/iroha_torii/src/da/ingest.rs:1]
 
 **Residual gaps**
 - Torii ingest کو replay cache admission میں thread کرنا اور sequence cursors
@@ -234,7 +234,7 @@ malicious providers کو whitelist کرتا ہے، یا alerts suppress کرتا
 
 - DA-2 میں replay cache اور cursor persistence آچکی ہے۔ Implementation دیکھیں
   `crates/iroha_core/src/da/replay_cache.rs` (cache logic) اور Torii integration
-  `crates/iroha_torii/src/da.rs` میں، جو `/v1/da/ingest` کے ذریعے fingerprint
+  `crates/iroha_torii/src/da/ingest.rs` میں، جو `/v1/da/ingest` کے ذریعے fingerprint
   checks thread کرتا ہے۔
 - PDP/PoTR streaming simulations proof-stream harness کے ذریعے چلتی ہیں:
   `crates/sorafs_car/tests/sorafs_cli.rs`۔ یہ PoR/PDP/PoTR request flows اور

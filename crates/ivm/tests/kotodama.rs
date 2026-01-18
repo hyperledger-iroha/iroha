@@ -1913,7 +1913,7 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
 }
 
 #[test]
-fn manifest_omits_hints_when_isi_targets_are_opaque() {
+fn manifest_emits_wildcard_hints_when_isi_targets_are_opaque() {
     let src = r#"
         fn main() {
             transfer_domain(
@@ -1926,17 +1926,18 @@ fn manifest_omits_hints_when_isi_targets_are_opaque() {
     let (_code, manifest) = Compiler::new()
         .compile_source_with_manifest(src)
         .expect("compile manifest with opaque ISI");
-    assert!(
-        manifest.access_set_hints.is_none(),
-        "opaque ISI targets must drop manifest access hints"
-    );
+    let hints = manifest
+        .access_set_hints
+        .expect("opaque ISI targets should emit wildcard hints");
+    assert_eq!(hints.read_keys, vec!["*".to_string()]);
+    assert_eq!(hints.write_keys, vec!["*".to_string()]);
     let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
     let main = entrypoints
         .iter()
         .find(|entry| entry.name == "main")
         .expect("main entrypoint");
-    assert!(main.read_keys.is_empty());
-    assert!(main.write_keys.is_empty());
+    assert_eq!(main.read_keys, vec!["*".to_string()]);
+    assert_eq!(main.write_keys, vec!["*".to_string()]);
 }
 
 #[test]

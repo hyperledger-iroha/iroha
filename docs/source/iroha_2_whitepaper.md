@@ -138,8 +138,8 @@ The `iroha_data_model` crate defines all ledger objects, instructions, queries, 
 6. **Proposal sealing:** When block limits are reached or timeouts expire, the leader emits a Norito-encoded
    `BlockCreated` message.
 7. **Validation:** Peers in the validating set re-run stateless/stateful checks. Successful peers sign
-   `BlockSigned` messages and forward them to the proxy tail.
-8. **Commit:** The proxy tail assembles a commit certificate once it collects the canonical signature set,
+   `BlockSigned` messages and forward them to the deterministic collector set.
+8. **Commit:** A collector assembles a commit certificate once it collects the canonical signature set,
    broadcasts `BlockCommitted`, and finalises the block locally.
 9. **Application:** All peers record the block in Kura, apply state updates, emit telemetry/events, purge
    committed transactions from the mempool, and rotate topology roles.

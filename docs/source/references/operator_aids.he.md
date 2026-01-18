@@ -27,11 +27,11 @@ translator: manual
   - דוגמה: `curl -Ns http://127.0.0.1:8080/v1/sumeragi/new_view/sse`
 - מדדים: מדדי `sumeragi_new_view_receipts_by_hv{height,view}` משקפים את הספירות.
 - `GET /v1/sumeragi/status`
-  - צילום מצב של אינדקס המוביל, Highest/Locked commit certificates (`highest_qc`/`locked_qc`, גובה/תצוגה/hash), מוני אספנים/VRF, דחיות פייסמייקר, עומק תור טרנזקציות ובריאות חנות ה-RBC (`rbc_store.{sessions,bytes,pressure_level,evictions_total,recent_evictions[...]}`).
+  - צילום מצב של אינדקס המוביל, Highest/Locked QCs (`highest_qc`/`locked_qc`, גובה/תצוגה/hash), מוני אספנים/VRF, דחיות פייסמייקר, עומק תור טרנזקציות ובריאות חנות ה-RBC (`rbc_store.{sessions,bytes,pressure_level,persist_drops_total,evictions_total,recent_evictions[...]}`).
 - `GET /v1/sumeragi/status/sse`
   - זרם SSE (≈שנייה) של אותו מטען כמו `/v1/sumeragi/status` למעקב בזמן אמת.
 - `GET /v1/sumeragi/qc`
-  - צילום מצב של highest/locked commit certificates; כולל `subject_block_hash` עבור highest commit certificate אם ידוע.
+  - צילום מצב של highest/locked QCs; כולל `subject_block_hash` עבור highest QC אם ידוע.
 - `GET /v1/sumeragi/pacemaker`
   - טיימרים והגדרות פייסמייקר: `{ backoff_ms, rtt_floor_ms, jitter_ms, backoff_multiplier, rtt_floor_multiplier, max_backoff_ms, jitter_frac_permille }`.
 - `GET /v1/sumeragi/leader`

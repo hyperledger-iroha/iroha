@@ -57,6 +57,24 @@ impl Actor {
         self.schedule_background(BackgroundRequest::Post { peer, msg });
     }
 
+    fn send_fetch_pending_block_rbc_init(&mut self, peer: PeerId, block: &SignedBlock) {
+        if !self.runtime_da_enabled() {
+            return;
+        }
+        let block_hash = block.hash();
+        let height = block.header().height().get();
+        let view = block.header().view_change_index();
+        let key = Self::session_key(&block_hash, height, view);
+        let init = self
+            .rebuild_rbc_init(key)
+            .or_else(|| self.rebuild_rbc_init_from_block(block, key));
+        let Some(init) = init else {
+            return;
+        };
+        // Send RBC INIT alongside missing-block responses so peers can process READY/DELIVER.
+        self.send_fetch_pending_block_response(peer, BlockMessage::RbcInit(init));
+    }
+
     pub(super) fn should_drop_future_block_sync_update(
         &self,
         block_hash: &HashOf<BlockHeader>,
@@ -212,8 +230,7 @@ impl Actor {
                 ConsensusMode::Permissioned => PERMISSIONED_TAG,
                 ConsensusMode::Npos => NPOS_TAG,
             };
-            let prf_seed = matches!(consensus_mode, ConsensusMode::Npos)
-                .then(|| super::npos_seed_for_height(&view, block_height));
+            let prf_seed = Some(super::prf_seed_for_height(&view, block_height));
             let local_height = u64::try_from(view.height()).unwrap_or(u64::MAX);
             (consensus_mode, mode_tag, prf_seed, local_height)
         };
@@ -1218,7 +1235,7 @@ impl Actor {
         let peer = request.requester;
         let mut responded = false;
 
-        if let Some(inflight) = self
+        let inflight_response = if let Some(inflight) = self
             .subsystems
             .commit
             .inflight
@@ -1233,13 +1250,14 @@ impl Actor {
                     hash = %block_hash,
                     "skipping fetch response for invalid inflight pending block"
                 );
+                None
             } else {
-                let block = &inflight.pending.block;
+                let block = inflight.pending.block.clone();
                 let block_hash = block.hash();
                 let block_height = block.header().height().get();
                 let block_view = block.header().view_change_index();
                 let update = super::block_sync_update_with_roster(
-                    block,
+                    &block,
                     self.state.as_ref(),
                     self.kura.as_ref(),
                     self.config.consensus_mode,
@@ -1263,33 +1281,37 @@ impl Actor {
                 let (consensus_mode, _, _) = self.consensus_context_for_height(block_height);
                 let has_roster = super::block_sync_update_has_roster(&update, consensus_mode);
                 let has_cached_qc = update.commit_qc.is_some() || !update.commit_votes.is_empty();
-                if !has_roster && !has_cached_qc {
-                    let msg = BlockMessage::BlockCreated(super::message::BlockCreated::from(block));
-                    self.send_fetch_pending_block_response(peer.clone(), msg);
+                let msg = if !has_roster && !has_cached_qc {
+                    BlockMessage::BlockCreated(super::message::BlockCreated::from(&block))
                 } else {
-                    self.send_fetch_pending_block_response(
-                        peer.clone(),
-                        BlockMessage::BlockSyncUpdate(update),
-                    );
-                }
-                responded = true;
-                return Ok(());
+                    BlockMessage::BlockSyncUpdate(update)
+                };
+                Some((block, msg))
             }
+        } else {
+            None
+        };
+        if let Some((block, msg)) = inflight_response {
+            self.send_fetch_pending_block_response(peer.clone(), msg);
+            self.send_fetch_pending_block_rbc_init(peer.clone(), &block);
+            responded = true;
+            return Ok(());
         }
 
-        if let Some(pending) = self.pending.pending_blocks.get(&block_hash) {
+        let pending_response = if let Some(pending) = self.pending.pending_blocks.get(&block_hash) {
             if matches!(pending.validation_status, ValidationStatus::Invalid) {
                 debug!(
                     hash = %block_hash,
                     "skipping fetch response for invalid pending block"
                 );
+                None
             } else {
-                let block = &pending.block;
+                let block = pending.block.clone();
                 let block_hash = block.hash();
                 let block_height = block.header().height().get();
                 let block_view = block.header().view_change_index();
                 let update = super::block_sync_update_with_roster(
-                    block,
+                    &block,
                     self.state.as_ref(),
                     self.kura.as_ref(),
                     self.config.consensus_mode,
@@ -1313,18 +1335,21 @@ impl Actor {
                 let (consensus_mode, _, _) = self.consensus_context_for_height(block_height);
                 let has_roster = super::block_sync_update_has_roster(&update, consensus_mode);
                 let has_cached_qc = update.commit_qc.is_some() || !update.commit_votes.is_empty();
-                if !has_roster && !has_cached_qc {
-                    let msg = BlockMessage::BlockCreated(super::message::BlockCreated::from(block));
-                    self.send_fetch_pending_block_response(peer.clone(), msg);
+                let msg = if !has_roster && !has_cached_qc {
+                    BlockMessage::BlockCreated(super::message::BlockCreated::from(&block))
                 } else {
-                    self.send_fetch_pending_block_response(
-                        peer.clone(),
-                        BlockMessage::BlockSyncUpdate(update),
-                    );
-                }
-                responded = true;
-                return Ok(());
+                    BlockMessage::BlockSyncUpdate(update)
+                };
+                Some((block, msg))
             }
+        } else {
+            None
+        };
+        if let Some((block, msg)) = pending_response {
+            self.send_fetch_pending_block_response(peer.clone(), msg);
+            self.send_fetch_pending_block_rbc_init(peer.clone(), &block);
+            responded = true;
+            return Ok(());
         }
 
         if let Some(height) = self.kura.get_block_height_by_hash(block_hash) {
@@ -1364,6 +1389,7 @@ impl Actor {
                     BlockMessage::BlockSyncUpdate(update)
                 };
                 self.send_fetch_pending_block_response(peer.clone(), msg);
+                self.send_fetch_pending_block_rbc_init(peer.clone(), block);
                 responded = true;
             }
         }

@@ -13,7 +13,7 @@ Paths for reference:
 
 ## Summary
 - The current implementation parses and lowers both free and contract functions (including `seiyaku`, `kotoage`, `hajimari`, and `kaizen` items), performs type checking for ints/bools/strings/pointer-ABI handles/structs/maps, and emits full multi-function IVM bytecode with durable `state` overlays when ABI v1 is selected. ✔
-- Metadata and manifest wiring now surface `meta { features: ["zk","simd"] }` toggles plus per-entrypoint permission/read/write hints. Static ISI keys (including literal `create_trigger` specs), literal map keys (including hashed pointer keys), and explicit `#[access(read=..., write=...)]` annotations are included in access hints; non-literal trigger specs and state-map keys are linted, but opaque host-driven reads still require fallback analysis. ⚠
+- Metadata and manifest wiring now surface `meta { features: ["zk","simd"] }` toggles plus per-entrypoint permission/read/write hints. Static ISI keys (including literal `create_trigger` specs), literal map keys (including hashed pointer keys), and explicit `#[access(read=..., write=...)]` annotations are included in access hints; non-literal trigger specs and state-map keys are linted, and dynamic map keys/opaque host-driven reads now emit wildcard access hints with compiler diagnostics. ✔
 - The compiler scans emitted bytecode for ZK/vector opcodes, auto-enables header bits, and rejects `meta` feature requests that do not match actual opcode usage. ✔
 - Numeric aliases (`fixed_u128`, `Amount`, `Balance`) are distinct numeric types with 64-bit scalar semantics; arithmetic preserves the alias and mixing aliases is rejected unless routed through an `int` binding. Trigger declarations (`register_trigger`) now parse time/execute filters and attach metadata to entrypoint manifests; data/pipeline filters and authority overrides remain pending. ⚠
 
@@ -49,7 +49,7 @@ Note: Kotodama compiles to Iroha Virtual Machine (IVM) bytecode (`.to`). It does
   - Emitted bytecode is scanned for ZK/vector opcodes; header bits are auto-enabled and mismatched `meta` requests are rejected.
 - Missing:
   - Trigger declarations are manifest-only metadata; cross-contract callback wiring (`call domain::fn`) is recorded but not yet consumed by runtime tooling.
-- Access-set hints now include static ISI WSV keys (including literal `create_trigger` specs), literal map keys, and explicit `#[access]` annotations; non-literal trigger specs and state-map keys emit lints, but dynamic map keys and opaque helper syscalls remain unhinted.
+- Access-set hints now include static ISI WSV keys (including literal `create_trigger` specs), literal map keys, and explicit `#[access]` annotations; non-literal trigger specs and state-map keys emit lints, and dynamic map keys/opaque helper syscalls emit wildcard hints with diagnostics.
 
 ## Samples vs. Implementation
 Modern samples compile, but the following grammar-level expectations remain unmet:
@@ -61,8 +61,7 @@ Modern samples compile, but the following grammar-level expectations remain unme
 Short-to-mid term steps to align implementation with the designed grammar and safety goals:
 
 1) Metadata + manifest parity
-- Extend the current best-effort read/write hints beyond static ISI targets to cover dynamic map key patterns and host-driven reads so schedulers can do conflict analysis directly from manifests.
-- Provide coverage reporting beyond the current lints (non-literal trigger specs and state-map keys) when access hints are skipped due to dynamic keys or opaque host reads.
+- Done: dynamic map keys and opaque host-driven reads now emit wildcard access hints (`state:<map>[*]`, `state:*`, `*`) with compiler diagnostics.
 
 2) Permission and trigger plumbing
 - Extend trigger DSL support beyond time/execute filters (data/pipeline) and add explicit authority overrides.
@@ -73,18 +72,17 @@ Short-to-mid term steps to align implementation with the designed grammar and sa
 - Teach the type checker how to reason about Norito pointer wrappers (`Json`, `Blob`, `NoritoBytes`) beyond simple assignment so builders from the grammar work without manual casts.
 
 4) Access hints and host integration
-- Make read/write hints precise for dynamic maps (e.g., hashed keys, per-field cardinality) and include host-driven reads so schedulers can safely preplan execution.
-- Surface when `create_trigger` specs are non-literal and access hints are skipped (lint now warns for non-literal trigger specs).
+- Refine wildcard access hints into precise per-key coverage for dynamic maps and host-driven reads so schedulers can safely preplan execution.
+- Keep warning when `create_trigger` specs cannot be decoded for access hints (lint already covers non-literal trigger specs).
 
 5) Tooling separation
 - Extract the Kotodama compiler into `crates/kotodama_lang` once dependencies are untangled.
 
 ## Quick Wins (Low Risk, High Impact)
-- Promote the access-hint emitter to log when dynamic map keys or host-driven reads are encountered so authors understand the remaining blind spots (lints already cover non-literal trigger specs and state-map keys).
-- Emit a compiler hint when literal trigger specs cannot be decoded for access hints.
+- Keep access-hint diagnostics surfaced when dynamic map keys or opaque host reads force wildcard fallbacks.
 
 ## Known Limitations to Call Out in Docs
-- Access hints cover static ISI targets (including literal trigger specs), literal map keys, and explicit `#[access]` annotations but still miss dynamic map keys and opaque helper syscalls, so schedulers need fallback analysis for complex contracts.
+- Access hints cover static ISI targets, literal map keys, and explicit `#[access]` annotations; dynamic map keys and opaque helper syscalls now emit wildcard hints, which are conservative and may reduce parallelism.
 - Meta feature flags (`zk`, `vector`, `features`) are validated against emitted opcodes; requesting features that are unused now fails compilation.
 - Numeric aliases (e.g., `fixed_u128`) are distinct types with 64-bit semantics; true 128-bit or fixed-point math still requires dedicated helpers.
 - `permission(...)` annotations are enforced by compiler diagnostics and written into manifests; runtime enforcement depends on consuming the metadata.

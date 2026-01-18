@@ -579,6 +579,7 @@ const RBC_MISMATCH_LOG_RETENTION: Duration = Duration::from_secs(30);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum InvalidSigKind {
     Vote,
+    RbcInit,
     RbcReady,
     RbcDeliver,
 }
@@ -587,6 +588,7 @@ impl InvalidSigKind {
     fn as_str(self) -> &'static str {
         match self {
             Self::Vote => "vote",
+            Self::RbcInit => "rbc_init",
             Self::RbcReady => "rbc_ready",
             Self::RbcDeliver => "rbc_deliver",
         }
@@ -1030,6 +1032,48 @@ fn normalize_signer_indices_to_canonical(
     normalized
 }
 
+fn compute_topology_rotation_offset(
+    base: &super::network_topology::Topology,
+    rotated: &super::network_topology::Topology,
+) -> Option<usize> {
+    if base.as_ref().is_empty() || rotated.as_ref().is_empty() {
+        return Some(0);
+    }
+    // Assumes rotated is a rotation of base.
+    // Find where rotated[0] is in base.
+    let leader = &rotated.as_ref()[0];
+    base.position(leader.public_key())
+}
+
+fn map_canonical_to_view_index(
+    canonical_idx: ValidatorIndex,
+    rotation_offset: usize,
+    topology_len: usize,
+) -> Option<ValidatorIndex> {
+    let c = usize::try_from(canonical_idx).ok()?;
+    if c >= topology_len {
+        return None;
+    }
+    // rotated left by offset.
+    // view_idx = (c + len - offset) % len
+    let v = (c + topology_len - rotation_offset) % topology_len;
+    ValidatorIndex::try_from(v).ok()
+}
+
+#[cfg(test)]
+fn view_index_for_canonical_signer(
+    canonical_idx: ValidatorIndex,
+    signature_topology: &super::network_topology::Topology,
+    canonical_topology: &super::network_topology::Topology,
+) -> Option<ValidatorIndex> {
+    let roster_len = canonical_topology.as_ref().len();
+    if roster_len == 0 {
+        return None;
+    }
+    let offset = compute_topology_rotation_offset(canonical_topology, signature_topology)?;
+    map_canonical_to_view_index(canonical_idx, offset, roster_len)
+}
+
 fn normalize_signer_indices_to_view(
     signers: &BTreeSet<ValidatorIndex>,
     signature_topology: &super::network_topology::Topology,
@@ -1038,26 +1082,74 @@ fn normalize_signer_indices_to_view(
     if signers.is_empty() {
         return BTreeSet::new();
     }
+    let roster_len = canonical_topology.as_ref().len();
+    if roster_len == 0 {
+        return BTreeSet::new();
+    }
+    let offset = match compute_topology_rotation_offset(canonical_topology, signature_topology) {
+        Some(offset) => offset,
+        None => return BTreeSet::new(),
+    };
     let mut normalized = BTreeSet::new();
     for signer in signers {
-        if let Some(view_idx) =
-            view_index_for_canonical_signer(*signer, signature_topology, canonical_topology)
-        {
+        if let Some(view_idx) = map_canonical_to_view_index(*signer, offset, roster_len) {
             normalized.insert(view_idx);
         }
     }
     normalized
 }
 
-fn view_index_for_canonical_signer(
-    signer: ValidatorIndex,
-    signature_topology: &super::network_topology::Topology,
-    canonical_topology: &super::network_topology::Topology,
-) -> Option<ValidatorIndex> {
-    let idx = usize::try_from(signer).ok()?;
-    let peer = canonical_topology.as_ref().get(idx)?;
-    let view_idx = signature_topology.as_ref().iter().position(|p| p == peer)?;
-    ValidatorIndex::try_from(view_idx).ok()
+fn select_new_view_highest_qc_from_votes(
+    vote_log: &BTreeMap<
+        (
+            crate::sumeragi::consensus::Phase,
+            u64,
+            u64,
+            u64,
+            crate::sumeragi::consensus::ValidatorIndex,
+        ),
+        crate::sumeragi::consensus::Vote,
+    >,
+    signers: &BTreeSet<ValidatorIndex>,
+    height: u64,
+    view: u64,
+    epoch: u64,
+) -> Option<crate::sumeragi::consensus::QcRef> {
+    let mut selected: Option<crate::sumeragi::consensus::QcRef> = None;
+    for signer in signers {
+        let Some(vote) = vote_log.get(&(
+            crate::sumeragi::consensus::Phase::NewView,
+            height,
+            view,
+            epoch,
+            *signer,
+        )) else {
+            continue;
+        };
+        let Some(candidate) = vote.highest_qc else {
+            continue;
+        };
+        let valid_phase = matches!(
+            candidate.phase,
+            crate::sumeragi::consensus::Phase::Commit | crate::sumeragi::consensus::Phase::Prepare
+        );
+        if !valid_phase {
+            continue;
+        }
+        selected = Some(selected.map_or(candidate, |current| {
+            let incoming = (candidate.height, candidate.view);
+            let existing = (current.height, current.view);
+            let promotes_phase = incoming == existing
+                && candidate.phase == crate::sumeragi::consensus::Phase::Commit
+                && current.phase != crate::sumeragi::consensus::Phase::Commit;
+            if incoming > existing || promotes_phase {
+                candidate
+            } else {
+                current
+            }
+        }));
+    }
+    selected
 }
 
 fn qc_bls_preimage(
@@ -1173,6 +1265,15 @@ fn rotate_topology_for_mode(
 ) {
     match mode_tag {
         PERMISSIONED_TAG => {
+            topology.canonicalize_order();
+            if let Some(seed) = prf_seed {
+                topology.shuffle_prf(seed, height);
+            } else {
+                warn!(
+                    height,
+                    view, "skipping PRF shuffle for {context}: missing seed"
+                );
+            }
             topology.nth_rotation(view);
         }
         NPOS_TAG => {
@@ -1732,11 +1833,7 @@ fn validate_new_view_qc_highest(
     if highest.subject_block_hash != qc.subject_block_hash {
         return Err(QcValidationError::HighestQcMismatch);
     }
-    let expected_height = if highest.phase == crate::sumeragi::consensus::Phase::Commit {
-        highest.height.saturating_add(1)
-    } else {
-        highest.height
-    };
+    let expected_height = highest.height.saturating_add(1);
     if qc.height != expected_height {
         return Err(QcValidationError::HighestQcMismatch);
     }
@@ -1812,9 +1909,11 @@ fn validate_qc_against_votes(
         return Err(QcValidationError::AggregateMismatch);
     }
     let mut missing = 0usize;
+    let rotation_offset =
+        compute_topology_rotation_offset(topology, &signature_topology).unwrap_or(0);
+
     for signer in &parsed_signers.voting {
-        let Some(view_signer) =
-            view_index_for_canonical_signer(*signer, &signature_topology, topology)
+        let Some(view_signer) = map_canonical_to_view_index(*signer, rotation_offset, roster_len)
         else {
             let signer = usize::try_from(*signer).unwrap_or(usize::MAX);
             return Err(QcValidationError::SignerOutOfBounds {
@@ -6458,20 +6557,15 @@ impl Actor {
             } else {
                 None
             };
-            let epoch_params = matches!(mode, ConsensusMode::Npos)
-                .then(|| super::load_npos_epoch_params(&view, &config));
+            let epoch_params = super::load_npos_epoch_params(&view, &config);
             let height = view.height() as u64;
-            let (epoch_seed_for_height, target_epoch, record_for_target_epoch) =
-                epoch_params.as_ref().map_or((None, 0, None), |params| {
-                    let schedule = super::EpochScheduleSnapshot::from_world_with_fallback(
-                        view.world(),
-                        params.epoch_length_blocks,
-                    );
-                    let target_epoch = schedule.epoch_for_height(height);
-                    let seed = super::npos_seed_for_height(&view, height);
-                    let record = view.world().vrf_epochs().get(&target_epoch).cloned();
-                    (Some(seed), target_epoch, record)
-                });
+            let schedule = super::EpochScheduleSnapshot::from_world_with_fallback(
+                view.world(),
+                epoch_params.epoch_length_blocks,
+            );
+            let target_epoch = schedule.epoch_for_height(height);
+            let epoch_seed_for_height = super::prf_seed_for_height(&view, height);
+            let record_for_target_epoch = view.world().vrf_epochs().get(&target_epoch).cloned();
             let last_epoch_record = view
                 .world()
                 .vrf_epochs()
@@ -6484,25 +6578,21 @@ impl Actor {
                 &commit_topology,
                 epoch_roster_provider.as_ref(),
             );
-            let manager = if matches!(mode, ConsensusMode::Npos) {
-                let epoch_params =
-                    epoch_params.expect("epoch params should be available in NPoS mode");
-                let mut em = EpochManager::new_from_chain(&common_config.chain);
-                em.set_params(
-                    epoch_params.epoch_length_blocks,
-                    epoch_params.commit_deadline_offset,
-                    epoch_params.reveal_deadline_offset,
-                );
-                if let Some(record) = record_for_target_epoch.as_ref() {
-                    em.restore_from_record(record);
-                } else {
-                    let seed =
-                        epoch_seed_for_height.expect("seed available in NPoS mode initialization");
-                    em.set_epoch_seed(seed);
-                    em.set_epoch(target_epoch);
-                }
-                apply_roster_indices_to_manager(&mut em, roster_len, initial_indices);
-                let seed = em.seed();
+            let mut em = EpochManager::new_from_chain(&common_config.chain);
+            em.set_params(
+                epoch_params.epoch_length_blocks,
+                epoch_params.commit_deadline_offset,
+                epoch_params.reveal_deadline_offset,
+            );
+            if let Some(record) = record_for_target_epoch.as_ref() {
+                em.restore_from_record(record);
+            } else {
+                em.set_epoch_seed(epoch_seed_for_height);
+                em.set_epoch(target_epoch);
+            }
+            apply_roster_indices_to_manager(&mut em, roster_len, initial_indices);
+            let seed = em.seed();
+            if matches!(mode, ConsensusMode::Npos) {
                 if let Some(record) = last_epoch_record.as_ref() {
                     if let Some((activate_at, roster, apply_now)) =
                         Self::activation_plan_from_vrf_record(block_count.0 as u64, record)
@@ -6523,15 +6613,13 @@ impl Actor {
                         redundant_send_r: config.npos.redundant_send_r,
                     });
                 }
-                Some(em)
-            } else {
-                None
-            };
+            }
+            let manager = Some(em);
             (
                 mode,
                 collectors,
                 manager,
-                epoch_params,
+                Some(epoch_params),
                 pacemaker_timeouts,
                 pacemaker_block_time,
             )
@@ -8105,7 +8193,7 @@ impl Actor {
                 self.handle_exec_witness(witness);
                 Ok(())
             }
-            BlockMessage::RbcInit(init) => self.handle_rbc_init(init),
+            BlockMessage::RbcInit(init) => self.handle_rbc_init(init, sender),
             BlockMessage::RbcChunk(chunk) => self.handle_rbc_chunk(chunk, sender),
             BlockMessage::RbcReady(ready) => self.handle_rbc_ready(ready),
             BlockMessage::RbcDeliver(deliver) => self.handle_rbc_deliver(deliver),
@@ -8985,6 +9073,73 @@ impl Actor {
             height: key.1,
             view: key.2,
             epoch: session.epoch,
+            roster,
+            roster_hash,
+            total_chunks: session.total_chunks(),
+            chunk_digests,
+            payload_hash,
+            chunk_root,
+            block_header,
+            leader_signature,
+        })
+    }
+
+    fn rebuild_rbc_init_from_block(
+        &self,
+        block: &SignedBlock,
+        key: super::rbc_store::SessionKey,
+    ) -> Option<RbcInit> {
+        let roster = self.rbc_roster_for_session(key);
+        if roster.is_empty() {
+            return None;
+        }
+        let payload_bytes = self::proposals::block_payload_bytes(block);
+        let payload_hash = Hash::new(&payload_bytes);
+        let epoch = self.epoch_for_height(key.1);
+        let session = match Self::build_rbc_session_from_payload(
+            &payload_bytes,
+            payload_hash,
+            self.config.rbc_chunk_max_bytes,
+            epoch,
+        ) {
+            Ok(session) => session,
+            Err(err) => {
+                debug!(
+                    height = key.1,
+                    view = key.2,
+                    error = %err,
+                    "failed to rebuild RBC INIT from block payload"
+                );
+                return None;
+            }
+        };
+        let chunk_digests = session.expected_chunk_digests.clone()?;
+        let chunk_root = session.expected_chunk_root?;
+        let roster_hash = rbc::rbc_roster_hash(&roster);
+        let mut topology = super::network_topology::Topology::new(roster.clone());
+        let leader_index = match self.leader_index_for(&mut topology, key.1, key.2) {
+            Ok(idx) => idx,
+            Err(err) => {
+                debug!(
+                    ?err,
+                    height = key.1,
+                    view = key.2,
+                    "failed to rebuild RBC INIT: leader index unavailable"
+                );
+                return None;
+            }
+        };
+        let leader_index = u64::try_from(leader_index).ok()?;
+        let leader_signature = block
+            .signatures()
+            .find(|signature| signature.index() == leader_index)?
+            .clone();
+        let block_header = block.header();
+        Some(RbcInit {
+            block_hash: key.0,
+            height: key.1,
+            view: key.2,
+            epoch,
             roster,
             roster_hash,
             total_chunks: session.total_chunks(),
@@ -10410,11 +10565,13 @@ impl Actor {
         record_view_change_cause_with_telemetry(cause, self.telemetry_handle());
         let committed_qc = self.latest_committed_qc();
         if let Some(mut highest_qc) = self.highest_qc.or(committed_qc) {
-            let usable = matches!(highest_qc.phase, crate::sumeragi::consensus::Phase::Commit)
-                || (matches!(highest_qc.phase, crate::sumeragi::consensus::Phase::Prepare)
-                    && highest_qc.height == height);
-
-            if !usable {
+            let valid_phase = matches!(
+                highest_qc.phase,
+                crate::sumeragi::consensus::Phase::Commit
+                    | crate::sumeragi::consensus::Phase::Prepare
+            );
+            let expected_height = highest_qc.height.saturating_add(1);
+            if !valid_phase || height != expected_height {
                 if let Some(committed) = committed_qc {
                     highest_qc = committed;
                 } else {
@@ -10422,15 +10579,18 @@ impl Actor {
                         height,
                         view = next_view,
                         phase = ?highest_qc.phase,
-                        "skipping NEW_VIEW vote: highest certificate is not commit or matching prepare"
+                        expected_height,
+                        "skipping NEW_VIEW vote: highest certificate does not align with target height"
                     );
                 }
             }
-            if (highest_qc.phase == crate::sumeragi::consensus::Phase::Commit
-                && height == highest_qc.height.saturating_add(1))
-                || (highest_qc.phase == crate::sumeragi::consensus::Phase::Prepare
-                    && height == highest_qc.height)
-            {
+            let valid_phase = matches!(
+                highest_qc.phase,
+                crate::sumeragi::consensus::Phase::Commit
+                    | crate::sumeragi::consensus::Phase::Prepare
+            );
+            let expected_height = highest_qc.height.saturating_add(1);
+            if valid_phase && height == expected_height {
                 let (consensus_mode, _, _) = self.consensus_context_for_height(height);
                 let roster = self.roster_for_new_view_with_mode(
                     highest_qc.subject_block_hash,
@@ -10637,10 +10797,20 @@ fn active_round_height(
     committed_qc: Option<crate::sumeragi::consensus::QcHeaderRef>,
     committed_height: u64,
 ) -> u64 {
-    // NEW_VIEW accepts commit or same-height prepare QCs, but round height should advance on commit.
-    let highest_precommit =
-        highest_qc.filter(|qc| qc.phase == crate::sumeragi::consensus::Phase::Commit);
-    highest_precommit.or(committed_qc).map_or_else(
+    // NEW_VIEW advances from the highest QC (prepare/commit) or the latest committed height.
+    let candidate = match (highest_qc, committed_qc) {
+        (Some(highest), Some(committed)) => {
+            if (highest.height, highest.view) >= (committed.height, committed.view) {
+                Some(highest)
+            } else {
+                Some(committed)
+            }
+        }
+        (Some(highest), None) => Some(highest),
+        (None, Some(committed)) => Some(committed),
+        (None, None) => None,
+    };
+    candidate.map_or_else(
         || committed_height.saturating_add(1),
         |qc| qc.height.saturating_add(1),
     )

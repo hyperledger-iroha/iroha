@@ -478,6 +478,11 @@ pub fn npos_seed_for_height(view: &StateView<'_>, height: u64) -> [u8; 32] {
     npos_seed_for_height_from_world(&view.world, view.chain_id(), height)
 }
 
+/// Resolve the PRF seed for the epoch containing `height`.
+pub fn prf_seed_for_height(view: &StateView<'_>, height: u64) -> [u8; 32] {
+    prf_seed_for_height_from_world(&view.world, view.chain_id(), height)
+}
+
 /// Resolve the `NPoS` PRF seed for the epoch containing `height` from any world snapshot.
 pub(crate) fn npos_seed_for_height_from_world(
     world: &impl WorldReadOnly,
@@ -499,6 +504,15 @@ pub(crate) fn npos_seed_for_height_from_world(
         return params.epoch_seed();
     }
     latest_epoch_seed_from_world(world, chain_id)
+}
+
+/// Resolve the PRF seed for the epoch containing `height` from any world snapshot.
+pub(crate) fn prf_seed_for_height_from_world(
+    world: &impl WorldReadOnly,
+    chain_id: &ChainId,
+    height: u64,
+) -> [u8; 32] {
+    npos_seed_for_height_from_world(world, chain_id, height)
 }
 
 #[cfg(test)]

@@ -68,6 +68,54 @@ impl Actor {
         Ok(Some(seed))
     }
 
+    #[allow(clippy::unnecessary_wraps)]
+    fn rebuild_permissioned_prf_state(&mut self) -> Result<Option<[u8; 32]>> {
+        let view = self.state.view();
+        let epoch_params = super::load_npos_epoch_params(&view, &self.config);
+        let height = view.height() as u64;
+        let schedule = super::EpochScheduleSnapshot::from_world_with_fallback(
+            view.world(),
+            epoch_params.epoch_length_blocks,
+        );
+        let target_epoch = schedule.epoch_for_height(height);
+        let record_for_target_epoch = view.world().vrf_epochs().get(&target_epoch).cloned();
+        let mut manager = EpochManager::new_from_chain(&self.common_config.chain);
+        manager.set_params(
+            epoch_params.epoch_length_blocks,
+            epoch_params.commit_deadline_offset,
+            epoch_params.reveal_deadline_offset,
+        );
+        if let Some(record) = record_for_target_epoch.as_ref() {
+            manager.restore_from_record(record);
+        } else {
+            let seed = super::prf_seed_for_height(&view, height);
+            manager.set_epoch_seed(seed);
+            manager.set_epoch(target_epoch);
+        }
+        let roster_len = self.effective_commit_topology().len();
+        let indices = compute_roster_indices_from_topology(
+            &self.effective_commit_topology(),
+            self.epoch_roster_provider.as_ref(),
+        );
+        apply_roster_indices_to_manager(&mut manager, roster_len, indices);
+        let seed = manager.seed();
+        drop(view);
+        self.epoch_manager = Some(manager);
+        self.npos_collectors = None;
+        super::status::set_epoch_parameters(
+            epoch_params.epoch_length_blocks,
+            epoch_params.commit_deadline_offset,
+            epoch_params.reveal_deadline_offset,
+        );
+        #[cfg(feature = "telemetry")]
+        self.telemetry.set_epoch_parameters(
+            epoch_params.epoch_length_blocks,
+            epoch_params.commit_deadline_offset,
+            epoch_params.reveal_deadline_offset,
+        );
+        Ok(Some(seed))
+    }
+
     pub(super) fn apply_mode_flip(&mut self, target: ConsensusMode) -> Result<()> {
         if target == self.consensus_mode {
             self.pending_mode_flip = None;
@@ -189,15 +237,16 @@ impl Actor {
     fn apply_mode_specific_state(&mut self, target: ConsensusMode) -> Result<()> {
         match target {
             ConsensusMode::Permissioned => {
-                self.npos_collectors = None;
-                self.epoch_manager = None;
+                let seed = self.rebuild_permissioned_prf_state()?;
                 let height = {
                     let view = self.state.view();
                     view.height() as u64
                 };
-                super::status::set_prf_context([0; 32], height, 0);
-                #[cfg(feature = "telemetry")]
-                self.telemetry.set_prf_context(None, height, 0);
+                if let Some(seed) = seed {
+                    super::status::set_prf_context(seed, height, 0);
+                    #[cfg(feature = "telemetry")]
+                    self.telemetry.set_prf_context(Some(seed), height, 0);
+                }
             }
             ConsensusMode::Npos => {
                 let seed = self.rebuild_npos_state()?;

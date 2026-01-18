@@ -313,6 +313,9 @@ fn select_entrypoint(entrypoints: &[EntrypointDescriptor]) -> Option<&Entrypoint
 /// Normalize manifest/entrypoint hint keys into canonical WSV keys plus state keys.
 #[allow(clippy::too_many_lines)]
 fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Option<AccessSet> {
+    if read_keys.iter().any(|key| key == "*") || write_keys.iter().any(|key| key == "*") {
+        return Some(AccessSet::global());
+    }
     let mut advisory = StateAccessSetAdvisory::default();
     let mut state_reads: BTreeSet<String> = BTreeSet::new();
     let mut state_writes: BTreeSet<String> = BTreeSet::new();
@@ -1346,6 +1349,14 @@ mod tests {
     fn access_set_hints_reject_unknown_keys() {
         let reads = vec!["perm.account:alice@wonderland:can_transfer".to_owned()];
         assert!(access_set_from_hint_keys(&reads, &[]).is_none());
+    }
+
+    #[test]
+    fn access_set_hints_accept_global_wildcard() {
+        let reads = vec!["*".to_owned()];
+        let set = access_set_from_hint_keys(&reads, &[]).expect("expected global access set");
+        assert!(set.read_keys.is_empty());
+        assert!(set.write_keys.contains("*"));
     }
 
     #[test]

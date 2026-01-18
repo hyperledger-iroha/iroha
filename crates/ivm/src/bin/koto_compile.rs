@@ -11,6 +11,7 @@
 
 use std::{env, fs, path::PathBuf};
 
+use ivm::kotodama::compiler::AccessHintDiagnostics;
 use ivm::{KotodamaCompiler, ProgramMetadata, kotodama};
 
 const EXPLAIN_ENTRIES: &[(&str, &str)] = &[
@@ -56,6 +57,24 @@ fn print_explain_and_exit(code: &str) -> ! {
 fn run_lint_pass(src: &str) -> Result<Vec<kotodama::lint::LintWarning>, String> {
     let program = kotodama::parser::parse(src).map_err(|e| format!("lint parse error: {e}"))?;
     Ok(kotodama::lint::lint_program(&program))
+}
+
+fn print_access_hint_diagnostics(diag: &AccessHintDiagnostics) {
+    if diag.is_empty() {
+        return;
+    }
+    if diag.state_wildcards > 0 {
+        eprintln!(
+            "access-hint: {} state accesses used dynamic keys; emitted '{}' wildcards",
+            diag.state_wildcards, "state:*"
+        );
+    }
+    if diag.isi_wildcards > 0 {
+        eprintln!(
+            "access-hint: {} ISI instructions used opaque or non-literal targets; emitted '{}' wildcards",
+            diag.isi_wildcards, "*"
+        );
+    }
 }
 
 /// Serialize a manifest to pretty JSON using Norito’s JSON helpers.
@@ -283,24 +302,16 @@ fn main() {
         }
     }
     let compiler = KotodamaCompiler::new_with_options(opts);
-    // If manifest is requested, compile once and extract both code and manifest.
-    let (code, manifest_opt) = if manifest_out.is_some() {
-        match compiler.compile_source_with_manifest(&source) {
-            Ok((code, manifest)) => (code, Some(manifest)),
+    let (code, manifest, hint_diag) =
+        match compiler.compile_source_with_manifest_and_diagnostics(&source) {
+            Ok(result) => result,
             Err(e) => {
                 eprintln!("compile error: {e}");
                 std::process::exit(1);
             }
-        }
-    } else {
-        match compiler.compile_source(&source) {
-            Ok(c) => (c, None),
-            Err(e) => {
-                eprintln!("compile error: {e}");
-                std::process::exit(1);
-            }
-        }
-    };
+        };
+    print_access_hint_diagnostics(&hint_diag);
+    let manifest_opt = manifest_out.is_some().then_some(manifest);
 
     // Pick output path
     let output_path = match out {

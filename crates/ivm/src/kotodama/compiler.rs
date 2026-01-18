@@ -56,6 +56,8 @@ const LITERAL_SHIFT_REG: u8 = 26;
 const FEATURE_BIT_ZK: u64 = 1 << 0;
 const FEATURE_BIT_VECTOR: u64 = 1 << 1;
 const DEFAULT_MAX_CYCLES: u64 = 1_000_000;
+const GLOBAL_WILDCARD_KEY: &str = "*";
+const STATE_WILDCARD_KEY: &str = "state:*";
 
 #[derive(Clone)]
 struct AccessSets {
@@ -91,6 +93,24 @@ struct CompilationArtifacts {
     bytes: Vec<u8>,
     entrypoints: Vec<EntrypointDescriptor>,
     access_set_hints: Option<AccessSetHints>,
+    access_hint_diagnostics: AccessHintDiagnostics,
+}
+
+/// Diagnostics emitted when access hints fall back to wildcards.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AccessHintDiagnostics {
+    /// Number of state accesses that fell back to `state:*`.
+    pub state_wildcards: usize,
+    /// Number of ISI instructions that fell back to global `*` hints.
+    pub isi_wildcards: usize,
+}
+
+impl AccessHintDiagnostics {
+    /// Whether any access-hint fallback occurred.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.state_wildcards == 0 && self.isi_wildcards == 0
+    }
 }
 
 fn push_word(code: &mut Vec<u8>, word: u32) {
@@ -507,9 +527,9 @@ impl Default for CompilerOptions {
 #[cfg(test)]
 mod tests {
     use super::{
-        Compiler, CompilerOptions, ContractFeature, DEFAULT_MAX_CYCLES, WIDE_IMM_MAX, emit_addi,
-        emit_load64, emit_store64, patch_pointer_literal_stub, pointer_type_for_kind,
-        reserve_pointer_literal_stub, stack_slot_offset_bytes,
+        Compiler, CompilerOptions, ContractFeature, DEFAULT_MAX_CYCLES, GLOBAL_WILDCARD_KEY,
+        WIDE_IMM_MAX, emit_addi, emit_load64, emit_store64, patch_pointer_literal_stub,
+        pointer_type_for_kind, reserve_pointer_literal_stub, stack_slot_offset_bytes,
     };
     use crate::kotodama::ast::ContractMeta;
     use crate::{IVM, ProgramMetadata, encoding, instruction, pointer_abi::PointerType};
@@ -845,7 +865,28 @@ seiyaku Test {
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(src)
             .expect("compile manifest");
-        assert!(manifest.access_set_hints.is_none());
+        let hints = manifest
+            .access_set_hints
+            .expect("expected access_set_hints");
+        assert_eq!(hints.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert_eq!(hints.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+    }
+
+    #[test]
+    fn access_hint_diagnostics_report_isi_wildcards() {
+        let src = r#"
+seiyaku Test {
+  kotoage fn move(from: AccountId, to: AccountId, asset: AssetDefinitionId, amount: int) permission(Admin) {
+    transfer_asset(from, to, asset, amount);
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        let (_bytes, _manifest, diag) = compiler
+            .compile_source_with_manifest_and_diagnostics(src)
+            .expect("compile manifest");
+        assert!(diag.isi_wildcards > 0);
+        assert!(diag.state_wildcards == 0);
     }
 
     #[test]
@@ -1242,6 +1283,7 @@ impl Compiler {
         let mut dataref_kind_map: HashMap<(usize, ir::Temp), ir::DataRefKind> = HashMap::new();
         let mut state_path_hints: HashMap<(usize, ir::Temp), StatePathHint> = HashMap::new();
         let mut access_sets: Vec<AccessSets> = vec![AccessSets::default(); ir_prog.functions.len()];
+        let mut hint_diagnostics = AccessHintDiagnostics::default();
         let mut uses_isi = false;
         use super::ir::DataRefKind as DRK;
         for (func_idx, func) in ir_prog.functions.iter().enumerate() {
@@ -1370,6 +1412,12 @@ impl Compiler {
                                 render_state_hint(state_path_hints.get(&(func_idx, *path)))
                             {
                                 access_sets[func_idx].reads.insert(key);
+                            } else {
+                                hint_diagnostics.state_wildcards =
+                                    hint_diagnostics.state_wildcards.saturating_add(1);
+                                access_sets[func_idx]
+                                    .reads
+                                    .insert(STATE_WILDCARD_KEY.to_string());
                             }
                         }
                         ir::Instr::StateSet { path, .. } | ir::Instr::StateDel { path } => {
@@ -1377,6 +1425,12 @@ impl Compiler {
                                 render_state_hint(state_path_hints.get(&(func_idx, *path)))
                             {
                                 access_sets[func_idx].writes.insert(key);
+                            } else {
+                                hint_diagnostics.state_wildcards =
+                                    hint_diagnostics.state_wildcards.saturating_add(1);
+                                access_sets[func_idx]
+                                    .writes
+                                    .insert(STATE_WILDCARD_KEY.to_string());
                             }
                         }
                         _ => {}
@@ -1492,12 +1546,21 @@ impl Compiler {
             }
         }
 
-        let isi_hints_complete = if uses_isi {
-            derive_isi_access_hints(&ir_prog, &string_map, &dataref_kind_map, &mut access_sets)
+        let _isi_hints_complete = if uses_isi {
+            derive_isi_access_hints(
+                &ir_prog,
+                &string_map,
+                &dataref_kind_map,
+                &mut access_sets,
+                &mut hint_diagnostics,
+            )
         } else {
             true
         };
-        let include_hints = isi_hints_complete || explicit_hints_present;
+        let has_any_hints = access_sets
+            .iter()
+            .any(|set| !set.reads.is_empty() || !set.writes.is_empty());
+        let include_hints = explicit_hints_present || has_any_hints;
 
         // Data section builder and fixups.
         // Norito blobs for AccountId/AssetDefinitionId placed in data section
@@ -5030,6 +5093,7 @@ impl Compiler {
             bytes: out,
             entrypoints: entrypoint_descriptors,
             access_set_hints,
+            access_hint_diagnostics: hint_diagnostics,
         })
     }
 
@@ -5045,6 +5109,22 @@ impl Compiler {
         (
             Vec<u8>,
             iroha_data_model::smart_contract::manifest::ContractManifest,
+        ),
+        String,
+    > {
+        let (bytes, manifest, _diag) = self.compile_source_with_manifest_and_diagnostics(src)?;
+        Ok((bytes, manifest))
+    }
+
+    /// Compile source and produce a manifest plus access-hint diagnostics.
+    pub fn compile_source_with_manifest_and_diagnostics(
+        &self,
+        src: &str,
+    ) -> Result<
+        (
+            Vec<u8>,
+            iroha_data_model::smart_contract::manifest::ContractManifest,
+            AccessHintDiagnostics,
         ),
         String,
     > {
@@ -5078,7 +5158,7 @@ impl Compiler {
             entrypoints: (!artifacts.entrypoints.is_empty()).then_some(artifacts.entrypoints),
             provenance: None,
         };
-        Ok((bytes, manifest))
+        Ok((bytes, manifest, artifacts.access_hint_diagnostics))
     }
 }
 
@@ -5156,28 +5236,29 @@ fn derive_isi_access_hints(
     string_map: &HashMap<(usize, ir::Temp), String>,
     dataref_kind_map: &HashMap<(usize, ir::Temp), ir::DataRefKind>,
     access_sets: &mut [AccessSets],
+    hint_diagnostics: &mut AccessHintDiagnostics,
 ) -> bool {
+    let mut complete = true;
     for (func_idx, func) in ir_prog.functions.iter().enumerate() {
         for bb in &func.blocks {
             for instr in &bb.instrs {
                 if !instr_queues_isi(instr) {
                     continue;
                 }
-                if record_isi_access(
+                if !record_isi_access(
                     instr,
                     func_idx,
                     string_map,
                     dataref_kind_map,
                     &mut access_sets[func_idx],
-                )
-                .is_none()
-                {
-                    return false;
+                    hint_diagnostics,
+                ) {
+                    complete = false;
                 }
             }
         }
     }
-    true
+    complete
 }
 
 fn record_isi_access(
@@ -5186,106 +5267,154 @@ fn record_isi_access(
     string_map: &HashMap<(usize, ir::Temp), String>,
     dataref_kind_map: &HashMap<(usize, ir::Temp), ir::DataRefKind>,
     access_set: &mut AccessSets,
-) -> Option<()> {
+    hint_diagnostics: &mut AccessHintDiagnostics,
+) -> bool {
+    let mut fallback = || {
+        hint_diagnostics.isi_wildcards = hint_diagnostics.isi_wildcards.saturating_add(1);
+        access_set.writes.insert(GLOBAL_WILDCARD_KEY.to_string());
+        false
+    };
     match instr {
-        ir::Instr::TransferBatchBegin | ir::Instr::TransferBatchEnd => Some(()),
+        ir::Instr::TransferBatchBegin | ir::Instr::TransferBatchEnd => true,
         ir::Instr::TransferAsset {
             from, to, asset, ..
         } => {
-            let from: AccountId = parse_temp(string_map, func_idx, *from)?;
-            let to: AccountId = parse_temp(string_map, func_idx, *to)?;
-            let asset_def: AssetDefinitionId = parse_temp(string_map, func_idx, *asset)?;
+            let (Some(from), Some(to), Some(asset_def)) = (
+                parse_temp::<AccountId>(string_map, func_idx, *from),
+                parse_temp::<AccountId>(string_map, func_idx, *to),
+                parse_temp::<AssetDefinitionId>(string_map, func_idx, *asset),
+            ) else {
+                return fallback();
+            };
             let src = AssetId::of(asset_def.clone(), from);
             let dst = AssetId::of(asset_def, to);
             add_asset_rw(access_set, &src);
             add_asset_rw(access_set, &dst);
-            Some(())
+            true
         }
         ir::Instr::MintAsset { account, asset, .. }
         | ir::Instr::BurnAsset { account, asset, .. } => {
-            let account: AccountId = parse_temp(string_map, func_idx, *account)?;
-            let asset_def: AssetDefinitionId = parse_temp(string_map, func_idx, *asset)?;
+            let (Some(account), Some(asset_def)) = (
+                parse_temp::<AccountId>(string_map, func_idx, *account),
+                parse_temp::<AssetDefinitionId>(string_map, func_idx, *asset),
+            ) else {
+                return fallback();
+            };
             let asset_id = AssetId::of(asset_def.clone(), account);
             add_asset_rw(access_set, &asset_id);
             add_asset_def_rw(access_set, &asset_def);
-            Some(())
+            true
         }
         ir::Instr::RegisterDomain { domain } | ir::Instr::UnregisterDomain { domain } => {
-            let id: DomainId = parse_temp(string_map, func_idx, *domain)?;
+            let Some(id) = parse_temp(string_map, func_idx, *domain) else {
+                return fallback();
+            };
             add_domain_rw(access_set, &id);
-            Some(())
+            true
         }
         ir::Instr::RegisterAccount { account } | ir::Instr::UnregisterAccount { account } => {
-            let id: AccountId = parse_temp(string_map, func_idx, *account)?;
+            let Some(id) = parse_temp::<AccountId>(string_map, func_idx, *account) else {
+                return fallback();
+            };
             add_domain_r(access_set, id.domain());
             add_account_rw(access_set, &id);
-            Some(())
+            true
         }
         ir::Instr::UnregisterAsset { asset } => {
-            let id: AssetDefinitionId = parse_temp(string_map, func_idx, *asset)?;
+            let Some(id) = parse_temp::<AssetDefinitionId>(string_map, func_idx, *asset) else {
+                return fallback();
+            };
             add_domain_r(access_set, id.domain());
             add_asset_def_rw(access_set, &id);
-            Some(())
+            true
         }
         ir::Instr::SetAccountDetail { account, key, .. } => {
-            let id: AccountId = parse_temp(string_map, func_idx, *account)?;
-            let key: Name = parse_temp(string_map, func_idx, *key)?;
+            let (Some(id), Some(key)) = (
+                parse_temp(string_map, func_idx, *account),
+                parse_temp(string_map, func_idx, *key),
+            ) else {
+                return fallback();
+            };
             add_account_detail_rw(access_set, &id, &key);
-            Some(())
+            true
         }
         ir::Instr::CreateNft { nft, .. } | ir::Instr::BurnNft { nft } => {
-            let id: NftId = parse_temp(string_map, func_idx, *nft)?;
+            let Some(id) = parse_temp(string_map, func_idx, *nft) else {
+                return fallback();
+            };
             add_nft_rw(access_set, &id);
-            Some(())
+            true
         }
         ir::Instr::TransferNft { from, nft, to } => {
-            let from: AccountId = parse_temp(string_map, func_idx, *from)?;
-            let to: AccountId = parse_temp(string_map, func_idx, *to)?;
-            let id: NftId = parse_temp(string_map, func_idx, *nft)?;
+            let (Some(from), Some(to), Some(id)) = (
+                parse_temp(string_map, func_idx, *from),
+                parse_temp(string_map, func_idx, *to),
+                parse_temp(string_map, func_idx, *nft),
+            ) else {
+                return fallback();
+            };
             add_account_r(access_set, &from);
             add_account_r(access_set, &to);
             add_nft_rw(access_set, &id);
-            Some(())
+            true
         }
         ir::Instr::RemoveTrigger { name } | ir::Instr::SetTriggerEnabled { name, .. } => {
-            let id: TriggerId = parse_temp(string_map, func_idx, *name)?;
+            let Some(id) = parse_temp(string_map, func_idx, *name) else {
+                return fallback();
+            };
             add_trigger_rw(access_set, &id);
-            Some(())
+            true
         }
         ir::Instr::CreateRole { name, .. } | ir::Instr::DeleteRole { name } => {
-            let id: RoleId = parse_temp(string_map, func_idx, *name)?;
+            let Some(id) = parse_temp(string_map, func_idx, *name) else {
+                return fallback();
+            };
             add_role_rw(access_set, &id);
-            Some(())
+            true
         }
         ir::Instr::GrantRole { account, name } | ir::Instr::RevokeRole { account, name } => {
-            let account: AccountId = parse_temp(string_map, func_idx, *account)?;
-            let role: RoleId = parse_temp(string_map, func_idx, *name)?;
+            let (Some(account), Some(role)) = (
+                parse_temp(string_map, func_idx, *account),
+                parse_temp(string_map, func_idx, *name),
+            ) else {
+                return fallback();
+            };
             add_account_rw(access_set, &account);
             add_role_r(access_set, &role);
             add_role_binding_w(access_set, &account, &role);
-            Some(())
+            true
         }
         ir::Instr::GrantPermission { account, token }
         | ir::Instr::RevokePermission { account, token } => {
-            let account: AccountId = parse_temp(string_map, func_idx, *account)?;
-            let perm = permission_name_from_token(string_map, dataref_kind_map, func_idx, *token)?;
+            let Some(account) = parse_temp(string_map, func_idx, *account) else {
+                return fallback();
+            };
+            let Some(perm) =
+                permission_name_from_token(string_map, dataref_kind_map, func_idx, *token)
+            else {
+                return fallback();
+            };
             add_account_rw(access_set, &account);
             add_permission_account_w(access_set, &account, &perm);
-            Some(())
+            true
         }
-        // TODO: resolve asset-definition construction for register/create-new asset helpers before emitting hints.
-        ir::Instr::RegisterAsset { .. } | ir::Instr::CreateNewAsset { .. } => None,
+        // Asset-definition construction is opaque; emit a conservative wildcard.
+        ir::Instr::RegisterAsset { .. } | ir::Instr::CreateNewAsset { .. } => fallback(),
         ir::Instr::CreateTrigger { json } => {
-            let raw = string_map.get(&(func_idx, *json))?;
-            let id = trigger_id_from_json(raw)?;
+            let Some(raw) = string_map.get(&(func_idx, *json)) else {
+                return fallback();
+            };
+            let Some(id) = trigger_id_from_json(raw) else {
+                return fallback();
+            };
             add_trigger_rw(access_set, &id);
-            Some(())
+            true
         }
-        // TODO: entrypoint hints do not yet model TransferDomain authority reads.
-        ir::Instr::TransferDomain { .. } => None,
-        // TODO: SetNftData lacks a metadata key in IR; skip hints until key is modeled.
-        ir::Instr::SetNftData { .. } => None,
-        // TODO: Vendor execution and AXT/ZK helpers carry opaque payloads; skip hints for now.
+        // TransferDomain authority reads are opaque; use a conservative wildcard.
+        ir::Instr::TransferDomain { .. } => fallback(),
+        // SetNftData lacks a metadata key in IR; use a conservative wildcard.
+        ir::Instr::SetNftData { .. } => fallback(),
+        // Vendor execution and AXT/ZK helpers carry opaque payloads; emit a wildcard.
         ir::Instr::RegisterPeer { .. }
         | ir::Instr::UnregisterPeer { .. }
         | ir::Instr::VendorExecuteInstruction { .. }
@@ -5298,8 +5427,8 @@ fn record_isi_access(
         | ir::Instr::AxtTouch { .. }
         | ir::Instr::VerifyDsProof { .. }
         | ir::Instr::UseAssetHandle { .. }
-        | ir::Instr::AxtCommit => None,
-        _ => None,
+        | ir::Instr::AxtCommit => fallback(),
+        _ => fallback(),
     }
 }
 

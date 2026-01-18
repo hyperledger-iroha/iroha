@@ -3905,6 +3905,9 @@ pub struct SumeragiConsensusStatus {
     pub rbc_store_pressure_level: u8,
     /// Total number of times proposal assembly was deferred due to RBC store pressure.
     pub rbc_store_backpressure_deferrals_total: u64,
+    /// Total number of RBC persist requests dropped due to full async queues.
+    #[norito(default)]
+    pub rbc_store_persist_drops_total: u64,
     /// Total number of RBC sessions evicted due to TTL or capacity enforcement.
     pub rbc_store_evictions_total: u64,
     /// Total view-change proofs accepted (advanced the proof chain).
@@ -3994,6 +3997,7 @@ struct SumeragiConsensusStatusPayload {
     rbc_store_bytes: u64,
     rbc_store_pressure_level: u8,
     rbc_store_backpressure_deferrals_total: u64,
+    rbc_store_persist_drops_total: u64,
     rbc_store_evictions_total: u64,
     prf_epoch_seed: Option<String>,
     prf_height: u64,
@@ -4051,29 +4055,39 @@ fn decode_prf_fields(
 fn decode_rbc_fields(
     bytes: &[u8],
     used: &mut usize,
-) -> Result<(u64, u64, u64, u64, u64, u8, u64, u64), norito::core::Error> {
+) -> Result<(u64, u64, u64, u64, u64, u8, u64, u64, u64), norito::core::Error> {
     if *used >= bytes.len() {
-        return Ok((0, 0, 0, 0, 0, 0, 0, 0));
+        return Ok((0, 0, 0, 0, 0, 0, 0, 0, 0));
     }
 
     let reschedules = decode_field::<u64>(bytes, used)?;
     if *used >= bytes.len() {
-        return Ok((reschedules, 0, 0, 0, 0, 0, 0, 0));
+        return Ok((reschedules, 0, 0, 0, 0, 0, 0, 0, 0));
     }
 
     let defer_ready = decode_field::<u64>(bytes, used)?;
     if *used >= bytes.len() {
-        return Ok((reschedules, defer_ready, 0, 0, 0, 0, 0, 0));
+        return Ok((reschedules, defer_ready, 0, 0, 0, 0, 0, 0, 0));
     }
 
     let defer_chunks = decode_field::<u64>(bytes, used)?;
     if *used >= bytes.len() {
-        return Ok((reschedules, defer_ready, defer_chunks, 0, 0, 0, 0, 0));
+        return Ok((reschedules, defer_ready, defer_chunks, 0, 0, 0, 0, 0, 0));
     }
 
     let sessions = decode_field::<u64>(bytes, used)?;
     if *used >= bytes.len() {
-        return Ok((reschedules, defer_ready, defer_chunks, sessions, 0, 0, 0, 0));
+        return Ok((
+            reschedules,
+            defer_ready,
+            defer_chunks,
+            sessions,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ));
     }
 
     let bytes_total = decode_field::<u64>(bytes, used)?;
@@ -4084,6 +4098,7 @@ fn decode_rbc_fields(
             defer_chunks,
             sessions,
             bytes_total,
+            0,
             0,
             0,
             0,
@@ -4101,6 +4116,7 @@ fn decode_rbc_fields(
             level,
             0,
             0,
+            0,
         ));
     }
 
@@ -4115,6 +4131,22 @@ fn decode_rbc_fields(
             level,
             deferrals,
             0,
+            0,
+        ));
+    }
+
+    let persist_drops = decode_field::<u64>(bytes, used)?;
+    if *used >= bytes.len() {
+        return Ok((
+            reschedules,
+            defer_ready,
+            defer_chunks,
+            sessions,
+            bytes_total,
+            level,
+            deferrals,
+            persist_drops,
+            0,
         ));
     }
 
@@ -4127,6 +4159,7 @@ fn decode_rbc_fields(
         bytes_total,
         level,
         deferrals,
+        persist_drops,
         evictions,
     ))
 }
@@ -4328,6 +4361,7 @@ impl<'a> DecodeFromSlice<'a> for SumeragiConsensusStatusPayload {
             rbc_store_bytes,
             rbc_store_pressure_level,
             rbc_store_backpressure_deferrals_total,
+            rbc_store_persist_drops_total,
             rbc_store_evictions_total,
         ) = decode_rbc_fields(bytes, &mut used)?;
         let (prf_epoch_seed, prf_height, prf_view) = decode_prf_fields(bytes, &mut used)?;
@@ -4387,6 +4421,7 @@ impl<'a> DecodeFromSlice<'a> for SumeragiConsensusStatusPayload {
                 rbc_store_bytes,
                 rbc_store_pressure_level,
                 rbc_store_backpressure_deferrals_total,
+                rbc_store_persist_drops_total,
                 rbc_store_evictions_total,
                 prf_epoch_seed,
                 prf_height,
@@ -4440,6 +4475,7 @@ impl From<&SumeragiConsensusStatus> for SumeragiConsensusStatusPayload {
             rbc_store_bytes: status.rbc_store_bytes,
             rbc_store_pressure_level: status.rbc_store_pressure_level,
             rbc_store_backpressure_deferrals_total: status.rbc_store_backpressure_deferrals_total,
+            rbc_store_persist_drops_total: status.rbc_store_persist_drops_total,
             rbc_store_evictions_total: status.rbc_store_evictions_total,
             prf_epoch_seed: status.prf_epoch_seed.clone(),
             prf_height: status.prf_height,
@@ -4492,6 +4528,7 @@ impl From<SumeragiConsensusStatusPayload> for SumeragiConsensusStatus {
             rbc_store_bytes: payload.rbc_store_bytes,
             rbc_store_pressure_level: payload.rbc_store_pressure_level,
             rbc_store_backpressure_deferrals_total: payload.rbc_store_backpressure_deferrals_total,
+            rbc_store_persist_drops_total: payload.rbc_store_persist_drops_total,
             rbc_store_evictions_total: payload.rbc_store_evictions_total,
             prf_epoch_seed: payload.prf_epoch_seed,
             prf_height: payload.prf_height,
@@ -5471,6 +5508,7 @@ fn build_sumeragi_status(metrics: &Metrics) -> SumeragiConsensusStatus {
         rbc_store_backpressure_deferrals_total: metrics
             .sumeragi_rbc_backpressure_deferrals_total
             .get(),
+        rbc_store_persist_drops_total: metrics.sumeragi_rbc_persist_drops_total.get(),
         rbc_deliver_defer_ready_total: metrics.sumeragi_rbc_deliver_defer_ready_total.get(),
         rbc_deliver_defer_chunks_total: metrics.sumeragi_rbc_deliver_defer_chunks_total.get(),
         rbc_store_evictions_total: metrics.sumeragi_rbc_store_evictions_total.get(),
@@ -6992,6 +7030,8 @@ pub struct Metrics {
     pub torii_da_receipts_total: IntCounterVec,
     /// Highest DA receipt sequence observed per (lane, epoch).
     pub torii_da_receipt_highest_sequence: GenericGaugeVec<AtomicU64>,
+    /// DA chunking + erasure coding duration (seconds).
+    pub torii_da_chunking_seconds: Histogram,
     /// DA shard cursor events grouped by outcome/lane/shard.
     pub da_shard_cursor_events_total: IntCounterVec,
     /// Latest block height recorded for each shard cursor advance.
@@ -11741,6 +11781,16 @@ impl Default for Metrics {
             &["lane", "epoch"],
         )
         .expect("Infallible");
+        let torii_da_chunking_seconds = Histogram::with_opts(
+            HistogramOpts::new(
+                "torii_da_chunking_seconds",
+                "DA chunking and erasure coding duration (seconds)",
+            )
+            .buckets(vec![
+                0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+            ]),
+        )
+        .expect("Infallible");
         let da_shard_cursor_events_total = IntCounterVec::new(
             Opts::new(
                 "da_shard_cursor_events_total",
@@ -12048,6 +12098,7 @@ impl Default for Metrics {
         register_guarded(&registry, &torii_da_potr_bonus_micro_total);
         register_guarded(&registry, &torii_da_receipts_total);
         register_guarded(&registry, &torii_da_receipt_highest_sequence);
+        register_guarded(&registry, &torii_da_chunking_seconds);
         register_guarded(&registry, &da_shard_cursor_events_total);
         register_guarded(&registry, &da_shard_cursor_height);
         register_guarded(&registry, &da_shard_cursor_lag_blocks);
@@ -13632,6 +13683,7 @@ impl Default for Metrics {
             torii_da_potr_bonus_micro_total,
             torii_da_receipts_total,
             torii_da_receipt_highest_sequence,
+            torii_da_chunking_seconds,
             da_shard_cursor_events_total,
             da_shard_cursor_height,
             da_shard_cursor_lag_blocks,
@@ -13978,6 +14030,11 @@ impl Metrics {
         if cursor_advanced {
             self.set_da_receipt_cursor(lane_id, epoch, sequence);
         }
+    }
+
+    /// Observe DA chunking + erasure coding duration in seconds.
+    pub fn observe_da_chunking_seconds(&self, seconds: f64) {
+        self.torii_da_chunking_seconds.observe(seconds);
     }
 
     /// Update the highest-seen DA receipt sequence for a lane/epoch.
@@ -15959,6 +16016,14 @@ mod test {
     }
 
     #[test]
+    fn records_da_chunking_latency() {
+        let metrics = Metrics::default();
+        metrics.observe_da_chunking_seconds(0.125);
+        let samples = metrics.torii_da_chunking_seconds.get_sample_count();
+        assert_eq!(samples, 1);
+    }
+
+    #[test]
     fn records_operator_auth_metrics() {
         let metrics = Metrics::default();
         metrics.inc_torii_operator_auth("gate", "allowed", "session");
@@ -16614,6 +16679,7 @@ mod test {
                 rbc_store_bytes: 8192,
                 rbc_store_pressure_level: 1,
                 rbc_store_backpressure_deferrals_total: 4,
+                rbc_store_persist_drops_total: 3,
                 rbc_store_evictions_total: 2,
                 prf_epoch_seed: Some("cafebabe42".to_string()),
                 prf_height: 11,
@@ -16782,6 +16848,7 @@ mod test {
                 "rbc_store_bytes": 8192,
                 "rbc_store_pressure_level": 1,
                 "rbc_store_backpressure_deferrals_total": 4,
+                "rbc_store_persist_drops_total": 3,
                 "rbc_store_evictions_total": 2,
                 "view_change_proof_accepted_total": 4,
                 "view_change_proof_stale_total": 1,
@@ -16937,6 +17004,7 @@ mod test {
                 "rbc_store_bytes": 8192,
                 "rbc_store_pressure_level": 1,
                 "rbc_store_backpressure_deferrals_total": 4,
+                "rbc_store_persist_drops_total": 3,
                 "rbc_store_evictions_total": 2,
                 "view_change_proof_accepted_total": 4,
                 "view_change_proof_stale_total": 1,

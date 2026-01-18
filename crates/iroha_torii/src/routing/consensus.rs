@@ -2470,6 +2470,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "backpressure_deferrals_total",
             snap.rbc_store_backpressure_deferrals_total,
         ),
+        json_entry("persist_drops_total", snap.rbc_store_persist_drops_total),
         json_entry("evictions_total", snap.rbc_store_evictions_total),
         json_entry("recent_evictions", recent_evictions),
     ]);
@@ -3176,6 +3177,7 @@ mod status_tests {
             rbc_store_sessions: 1,
             rbc_store_bytes: 512,
             rbc_store_pressure_level: 2,
+            rbc_store_persist_drops_total: 7,
             rbc_store_evictions_total: 1,
             rbc_store_recent_evictions: vec![evicted.clone()],
             ..Default::default()
@@ -3189,6 +3191,10 @@ mod status_tests {
             .get("recent_evictions")
             .and_then(Value::as_array)
             .expect("recent evictions array");
+        assert_eq!(
+            rbc.get("persist_drops_total").and_then(Value::as_u64),
+            Some(7)
+        );
         assert_eq!(recent.len(), 1);
         let entry = recent[0].as_object().expect("eviction entry object");
         assert_eq!(
@@ -3908,6 +3914,7 @@ pub async fn handle_v1_sumeragi_status(
                 bytes: snap.rbc_store_bytes,
                 pressure_level: snap.rbc_store_pressure_level,
                 backpressure_deferrals_total: snap.rbc_store_backpressure_deferrals_total,
+                persist_drops_total: snap.rbc_store_persist_drops_total,
                 evictions_total: snap.rbc_store_evictions_total,
                 recent_evictions: snap
                     .rbc_store_recent_evictions

@@ -1931,7 +1931,7 @@ impl Actor {
     }
 
     #[allow(clippy::too_many_lines)]
-    pub(super) fn handle_rbc_init(&mut self, init: RbcInit) -> Result<()> {
+    pub(super) fn handle_rbc_init(&mut self, init: RbcInit, sender: Option<PeerId>) -> Result<()> {
         if self.should_drop_stale_rbc_message(init.height, init.view, &init.block_hash, "RbcInit") {
             self.record_consensus_message_handling(
                 super::status::ConsensusMessageKind::RbcInit,
@@ -2275,12 +2275,46 @@ impl Actor {
             .verify_hash(leader_peer.public_key(), header_hash)
             .is_err()
         {
-            warn!(
-                height = init.height,
-                view = init.view,
-                block = %init.block_hash,
-                "rejecting RBC init: leader signature invalid"
-            );
+            if let Some(sender) = sender {
+                // If the leader signature is invalid, penalize the sender (who might be the leader, or relaying bad data).
+                // Note: If the sender != leader, they are relaying bad data which is also penalizable (spam).
+                let sender_index = signature_topology
+                    .position(sender.public_key())
+                    .and_then(|idx| u64::try_from(idx).ok())
+                    .unwrap_or(u64::MAX);
+                let outcome = self.record_invalid_signature(
+                    InvalidSigKind::RbcInit,
+                    init.height,
+                    init.view,
+                    sender_index,
+                );
+                if matches!(outcome, InvalidSigOutcome::Logged) {
+                    warn!(
+                        height = init.height,
+                        view = init.view,
+                        block = %init.block_hash,
+                        sender = %sender,
+                        sender_index,
+                        "rejecting RBC init: leader signature invalid"
+                    );
+                } else {
+                    debug!(
+                        height = init.height,
+                        view = init.view,
+                        block = %init.block_hash,
+                        sender = %sender,
+                        sender_index,
+                        "suppressing repeated invalid RBC init signature log"
+                    );
+                }
+            } else {
+                warn!(
+                    height = init.height,
+                    view = init.view,
+                    block = %init.block_hash,
+                    "rejecting RBC init: leader signature invalid (unknown sender)"
+                );
+            }
             self.record_consensus_message_handling(
                 super::status::ConsensusMessageKind::RbcInit,
                 super::status::ConsensusMessageOutcome::Dropped,

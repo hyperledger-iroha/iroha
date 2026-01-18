@@ -232,7 +232,7 @@ pub(super) fn derive_active_topology_from_views(
     };
 
     roster = if use_commit {
-        // Commit topology is already deterministic (sorted + hash-rotated); keep its order.
+        // Commit topology is already canonicalized; PRF-based ordering happens at selection time.
         dedup_preserving_order(roster)
     } else {
         canonicalize_roster(roster)

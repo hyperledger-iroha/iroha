@@ -25,6 +25,9 @@ variable that overrides each key.
 | `prefer_cpu_sha2_max_leaves_aarch64` | `ACCEL_PREFER_CPU_SHA2_MAX_AARCH64` | `0` (32 768 internally) | Caps the tree size where ARMv8 SHA-2 instructions should win over GPU hashing. `0` keeps the compiled-in default of `32_768` leaves (`crates/ivm/src/byte_merkle_tree.rs:59`). |
 | `prefer_cpu_sha2_max_leaves_x86` | `ACCEL_PREFER_CPU_SHA2_MAX_X86` | `0` (32 768 internally) | Same as above but for x86/x86_64 hosts using SHA-NI (`crates/ivm/src/byte_merkle_tree.rs:63`). |
 
+`enable_simd` also controls RS16 erasure coding (Torii DA ingest + tooling). Disable it to
+force scalar parity generation while keeping outputs deterministic across hardware.
+
 Example configuration:
 
 ```toml
