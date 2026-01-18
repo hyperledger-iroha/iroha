@@ -5744,6 +5744,10 @@ pub struct StreamingSoranet {
     pub provision_spool_dir: PathBuf,
     /// Maximum on-disk footprint for the SoraNet provision spool (0 = unlimited).
     pub provision_spool_max_bytes: Bytes<u64>,
+    /// Segment window (inclusive) used when provisioning privacy routes.
+    pub provision_window_segments: u64,
+    /// Maximum number of queued privacy-route provisioning jobs.
+    pub provision_queue_capacity: u64,
 }
 
 impl StreamingSoranet {
@@ -5760,6 +5764,8 @@ impl StreamingSoranet {
             channel_salt: defaults::streaming::soranet::CHANNEL_SALT.to_owned(),
             provision_spool_dir: PathBuf::from(defaults::streaming::soranet::PROVISION_SPOOL_DIR),
             provision_spool_max_bytes: defaults::streaming::soranet::PROVISION_SPOOL_MAX_BYTES,
+            provision_window_segments: defaults::streaming::soranet::PROVISION_WINDOW_SEGMENTS,
+            provision_queue_capacity: defaults::streaming::soranet::PROVISION_QUEUE_CAPACITY,
         }
     }
 }

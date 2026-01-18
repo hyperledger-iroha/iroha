@@ -4681,6 +4681,23 @@ impl StreamingTelemetry {
         }
     }
 
+    /// Record a SoraNet provisioning failure.
+    pub fn inc_soranet_provision_failure(&self) {
+        if self.is_enabled() {
+            self.metrics.streaming_soranet_provision_fail_total.inc();
+        }
+    }
+
+    /// Record a SoraNet provisioning queue drop with the provided reason.
+    pub fn inc_soranet_provision_queue_drop(&self, reason: &'static str) {
+        if self.is_enabled() {
+            self.metrics
+                .streaming_soranet_provision_queue_drop_total
+                .with_label_values(&[reason])
+                .inc();
+        }
+    }
+
     /// Record a privacy redaction failure event.
     pub fn inc_privacy_redaction_failure(&self) {
         if self.is_enabled() {
@@ -10760,6 +10777,9 @@ mod tests {
 
         telemetry.record_storage_budget_usage("soranet_spool", 64, 128);
         telemetry.inc_storage_budget_exceeded("soranet_spool");
+        telemetry.inc_soranet_provision_failure();
+        telemetry.inc_soranet_provision_queue_drop("full");
+        telemetry.inc_soranet_provision_queue_drop("disconnected");
         assert_eq!(
             metrics
                 .storage_budget_bytes_used
@@ -10778,6 +10798,21 @@ mod tests {
             metrics
                 .storage_budget_exceeded_total
                 .with_label_values(&["soranet_spool"])
+                .get(),
+            1
+        );
+        assert_eq!(metrics.streaming_soranet_provision_fail_total.get(), 1);
+        assert_eq!(
+            metrics
+                .streaming_soranet_provision_queue_drop_total
+                .with_label_values(&["full"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .streaming_soranet_provision_queue_drop_total
+                .with_label_values(&["disconnected"])
                 .get(),
             1
         );

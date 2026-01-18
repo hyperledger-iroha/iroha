@@ -55,8 +55,10 @@ operators and SDK authors need alongside the configuration touch points.
 - **SoraNet routes.** `streaming.soranet.*` controls anonymous transport:
   `exit_multiaddr` (default `/dns/torii/udp/9443/quic`), `padding_budget_ms`
   (default 25 ms), `access_kind` (`authenticated` vs `read-only`), optional
-  `channel_salt`, and `provision_spool_dir` (default
-  `./storage/streaming/soranet_routes`).
+  `channel_salt`, `provision_spool_dir` (default
+  `./storage/streaming/soranet_routes`), `provision_spool_max_bytes` (default 0,
+  unlimited), `provision_window_segments` (default 4), and
+  `provision_queue_capacity` (default 256).
 - **Sync gate.** `streaming.sync` toggles drift enforcement for audiovisual
   streams: `enabled`, `observe_only`, `ewma_threshold_ms`, and `hard_cap_ms`
   govern when segments are rejected for timing drift.

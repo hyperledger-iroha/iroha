@@ -1683,6 +1683,28 @@ final class ToriiClientTests: XCTestCase {
             "per_nullifier":4,
             "per_commitment":5
           },
+          "transport": {
+            "norito_rpc": {
+              "enabled": true,
+              "stage": "ga",
+              "require_mtls": false,
+              "canary_allowlist_size": 2
+            },
+            "streaming": {
+              "soranet": {
+                "enabled": true,
+                "stream_tag": "norito",
+                "exit_multiaddr": "/dns/torii/udp/9443/quic",
+                "padding_budget_ms": 25,
+                "access_kind": "authenticated",
+                "gar_category": "soranet-auth",
+                "channel_salt": "salt-123",
+                "provision_spool_dir": "./storage/streaming/soranet_routes",
+                "provision_window_segments": 4,
+                "provision_queue_capacity": 256
+              }
+            }
+          },
           "nexus": {
             "axt": {
               "slot_length_ms": 1000,
@@ -1713,6 +1735,23 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(gas.perProofByte, 3)
         XCTAssertEqual(gas.perNullifier, 4)
         XCTAssertEqual(gas.perCommitment, 5)
+        let transport = try XCTUnwrap(snapshot.transport)
+        let noritoRpc = try XCTUnwrap(transport.noritoRpc)
+        XCTAssertTrue(noritoRpc.enabled)
+        XCTAssertEqual(noritoRpc.stage, "ga")
+        XCTAssertFalse(noritoRpc.requireMtls)
+        XCTAssertEqual(noritoRpc.canaryAllowlistSize, 2)
+        let soranet = try XCTUnwrap(transport.streaming?.soranet)
+        XCTAssertTrue(soranet.enabled)
+        XCTAssertEqual(soranet.streamTag, "norito")
+        XCTAssertEqual(soranet.exitMultiaddr, "/dns/torii/udp/9443/quic")
+        XCTAssertEqual(soranet.paddingBudgetMs, 25)
+        XCTAssertEqual(soranet.accessKind, "authenticated")
+        XCTAssertEqual(soranet.garCategory, "soranet-auth")
+        XCTAssertEqual(soranet.channelSalt, "salt-123")
+        XCTAssertEqual(soranet.provisionSpoolDir, "./storage/streaming/soranet_routes")
+        XCTAssertEqual(soranet.provisionWindowSegments, 4)
+        XCTAssertEqual(soranet.provisionQueueCapacity, 256)
         let axt = try XCTUnwrap(snapshot.nexus?.axt)
         XCTAssertEqual(axt.slotLengthMs, 1_000)
         XCTAssertEqual(axt.maxClockSkewMs, 250)

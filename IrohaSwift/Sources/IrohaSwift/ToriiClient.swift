@@ -2655,12 +2655,67 @@ public struct ToriiNexusConfig: Decodable, Sendable {
     public let axt: ToriiNexusAxtConfig?
 }
 
+public struct ToriiConfigurationTransport: Decodable, Sendable {
+    public let noritoRpc: ToriiConfigurationTransportNoritoRpc?
+    public let streaming: ToriiConfigurationStreaming?
+
+    private enum CodingKeys: String, CodingKey {
+        case noritoRpc = "norito_rpc"
+        case streaming
+    }
+}
+
+public struct ToriiConfigurationTransportNoritoRpc: Decodable, Sendable {
+    public let enabled: Bool
+    public let stage: String
+    public let requireMtls: Bool
+    public let canaryAllowlistSize: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case enabled
+        case stage
+        case requireMtls = "require_mtls"
+        case canaryAllowlistSize = "canary_allowlist_size"
+    }
+}
+
+public struct ToriiConfigurationStreaming: Decodable, Sendable {
+    public let soranet: ToriiConfigurationStreamingSoranet?
+}
+
+public struct ToriiConfigurationStreamingSoranet: Decodable, Sendable {
+    public let enabled: Bool
+    public let streamTag: String
+    public let exitMultiaddr: String
+    public let paddingBudgetMs: UInt16?
+    public let accessKind: String
+    public let garCategory: String
+    public let channelSalt: String
+    public let provisionSpoolDir: String
+    public let provisionWindowSegments: UInt64
+    public let provisionQueueCapacity: UInt64
+
+    private enum CodingKeys: String, CodingKey {
+        case enabled
+        case streamTag = "stream_tag"
+        case exitMultiaddr = "exit_multiaddr"
+        case paddingBudgetMs = "padding_budget_ms"
+        case accessKind = "access_kind"
+        case garCategory = "gar_category"
+        case channelSalt = "channel_salt"
+        case provisionSpoolDir = "provision_spool_dir"
+        case provisionWindowSegments = "provision_window_segments"
+        case provisionQueueCapacity = "provision_queue_capacity"
+    }
+}
+
 public struct ToriiConfigurationSnapshot: Decodable, Sendable {
     public let publicKeyHex: String
     public let logger: ToriiLoggerConfig
     public let network: ToriiNetworkConfig
     public let queue: ToriiQueueConfig?
     public let confidentialGas: ToriiConfidentialGasSchedule?
+    public let transport: ToriiConfigurationTransport?
     public let nexus: ToriiNexusConfig?
 
     private enum CodingKeys: String, CodingKey {
@@ -2669,6 +2724,7 @@ public struct ToriiConfigurationSnapshot: Decodable, Sendable {
         case network
         case queue
         case confidentialGas = "confidential_gas"
+        case transport
         case nexus
     }
 }

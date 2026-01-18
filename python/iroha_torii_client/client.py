@@ -504,6 +504,163 @@ class ConfidentialGasSchedule:
 
 
 @dataclass(frozen=True)
+class TransportNoritoRpcConfig:
+    """Norito-RPC transport summary exposed via ``/v1/configuration``."""
+
+    enabled: bool
+    stage: str
+    require_mtls: bool
+    canary_allowlist_size: int
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "TransportNoritoRpcConfig":
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("transport.norito_rpc section must be an object")
+        enabled = payload.get("enabled")
+        if not isinstance(enabled, bool):
+            raise RuntimeError("transport.norito_rpc section missing `enabled`")
+        stage = payload.get("stage")
+        if not isinstance(stage, str) or not stage:
+            raise RuntimeError("transport.norito_rpc section missing `stage`")
+        require_mtls = payload.get("require_mtls")
+        if not isinstance(require_mtls, bool):
+            raise RuntimeError("transport.norito_rpc section missing `require_mtls`")
+        try:
+            canary_allowlist_size = int(payload["canary_allowlist_size"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError(
+                "transport.norito_rpc section missing numeric `canary_allowlist_size`"
+            ) from exc
+        return cls(
+            enabled=enabled,
+            stage=stage,
+            require_mtls=require_mtls,
+            canary_allowlist_size=canary_allowlist_size,
+        )
+
+
+@dataclass(frozen=True)
+class StreamingSoranetConfig:
+    """SoraNet streaming defaults exposed via ``/v1/configuration``."""
+
+    enabled: bool
+    stream_tag: str
+    exit_multiaddr: str
+    padding_budget_ms: Optional[int]
+    access_kind: str
+    gar_category: str
+    channel_salt: str
+    provision_spool_dir: str
+    provision_window_segments: int
+    provision_queue_capacity: int
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "StreamingSoranetConfig":
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("transport.streaming.soranet section must be an object")
+        enabled = payload.get("enabled")
+        if not isinstance(enabled, bool):
+            raise RuntimeError("transport.streaming.soranet section missing `enabled`")
+        stream_tag = payload.get("stream_tag")
+        if not isinstance(stream_tag, str) or not stream_tag:
+            raise RuntimeError("transport.streaming.soranet section missing `stream_tag`")
+        exit_multiaddr = payload.get("exit_multiaddr")
+        if not isinstance(exit_multiaddr, str) or not exit_multiaddr:
+            raise RuntimeError("transport.streaming.soranet section missing `exit_multiaddr`")
+        padding_value = payload.get("padding_budget_ms")
+        if padding_value is None:
+            padding_budget_ms = None
+        else:
+            try:
+                padding_budget_ms = int(padding_value)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    "transport.streaming.soranet section `padding_budget_ms` must be numeric"
+                ) from exc
+        access_kind = payload.get("access_kind")
+        if not isinstance(access_kind, str) or not access_kind:
+            raise RuntimeError("transport.streaming.soranet section missing `access_kind`")
+        gar_category = payload.get("gar_category")
+        if not isinstance(gar_category, str) or not gar_category:
+            raise RuntimeError("transport.streaming.soranet section missing `gar_category`")
+        channel_salt = payload.get("channel_salt")
+        if not isinstance(channel_salt, str):
+            raise RuntimeError("transport.streaming.soranet section missing `channel_salt`")
+        provision_spool_dir = payload.get("provision_spool_dir")
+        if not isinstance(provision_spool_dir, str) or not provision_spool_dir:
+            raise RuntimeError("transport.streaming.soranet section missing `provision_spool_dir`")
+        try:
+            provision_window_segments = int(payload["provision_window_segments"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError(
+                "transport.streaming.soranet section missing numeric `provision_window_segments`"
+            ) from exc
+        try:
+            provision_queue_capacity = int(payload["provision_queue_capacity"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError(
+                "transport.streaming.soranet section missing numeric `provision_queue_capacity`"
+            ) from exc
+        return cls(
+            enabled=enabled,
+            stream_tag=stream_tag,
+            exit_multiaddr=exit_multiaddr,
+            padding_budget_ms=padding_budget_ms,
+            access_kind=access_kind,
+            gar_category=gar_category,
+            channel_salt=channel_salt,
+            provision_spool_dir=provision_spool_dir,
+            provision_window_segments=provision_window_segments,
+            provision_queue_capacity=provision_queue_capacity,
+        )
+
+
+@dataclass(frozen=True)
+class StreamingTransportConfig:
+    """Streaming transport configuration exposed via ``/v1/configuration``."""
+
+    soranet: Optional[StreamingSoranetConfig]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "StreamingTransportConfig":
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("transport.streaming section must be an object")
+        soranet_section = payload.get("soranet")
+        soranet = (
+            StreamingSoranetConfig.from_payload(soranet_section)
+            if isinstance(soranet_section, Mapping)
+            else None
+        )
+        return cls(soranet=soranet)
+
+
+@dataclass(frozen=True)
+class TransportConfig:
+    """Transport configuration exposed via ``/v1/configuration``."""
+
+    norito_rpc: Optional[TransportNoritoRpcConfig]
+    streaming: Optional[StreamingTransportConfig]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "TransportConfig":
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("transport section must be an object")
+        norito_section = payload.get("norito_rpc")
+        norito_rpc = (
+            TransportNoritoRpcConfig.from_payload(norito_section)
+            if isinstance(norito_section, Mapping)
+            else None
+        )
+        streaming_section = payload.get("streaming")
+        streaming = (
+            StreamingTransportConfig.from_payload(streaming_section)
+            if isinstance(streaming_section, Mapping)
+            else None
+        )
+        return cls(norito_rpc=norito_rpc, streaming=streaming)
+
+
+@dataclass(frozen=True)
 class ConfigurationSnapshot:
     """Typed configuration payload returned by ``GET /v1/configuration``."""
 
@@ -512,6 +669,7 @@ class ConfigurationSnapshot:
     network: NetworkConfig
     queue: Optional[QueueConfig]
     confidential_gas: Optional[ConfidentialGasSchedule]
+    transport: Optional[TransportConfig]
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "ConfigurationSnapshot":
@@ -530,12 +688,19 @@ class ConfigurationSnapshot:
             if isinstance(gas_section, Mapping)
             else None
         )
+        transport_section = payload.get("transport")
+        transport = (
+            TransportConfig.from_payload(transport_section)
+            if isinstance(transport_section, Mapping)
+            else None
+        )
         return cls(
             public_key_hex=public_key,
             logger=logger,
             network=network,
             queue=queue,
             confidential_gas=confidential_gas,
+            transport=transport,
         )
 
 

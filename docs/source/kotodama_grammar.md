@@ -51,7 +51,8 @@ Operators and punctuation
 
 Literals
 - Integer: decimal (`123`), hex (`0x2A`), binary (`0b1010`). All integers are signed 64-bit at runtime; literals without suffix are typed via inference or as `int` by default.
-- String: double-quoted with `\` escapes; UTF‑8.
+- String: double-quoted with escapes (`\n`, `\r`, `\t`, `\0`, `\xNN`, `\u{...}`, `\"`, `\\`); UTF‑8. Raw strings `r"..."` or `r#"..."#` disable escapes and allow newlines.
+- Bytes: `b"..."` with escapes, or raw `br"..."` / `rb"..."`; yields a `bytes` literal.
 - Boolean: `true`, `false`.
 
 ## Types and Literals
@@ -82,6 +83,7 @@ Top-level items
 
 Visibility
 - `kotoage fn` denotes a public entrypoint; visibility affects dispatcher permissions, not codegen.
+- Optional access hints: `#[access(read=..., write=...)]` can precede `fn`/`kotoage fn` to supply manifest read/write keys.
 
 ## Contract Container and Metadata
 
@@ -128,6 +130,7 @@ Parameters and returns
 
 - Variable bindings: `let x = expr;`, `let mut x = expr;` (mutability is a compile-time check; runtime mutation is allowed for locals only).
 - Assignment: `x = expr;` and compound forms `x += 1;` etc. Targets must be variables or map indices; tuple/struct fields are immutable.
+- Numeric aliases (`fixed_u128`, `Amount`, `Balance`) are distinct types with 64-bit int semantics; arithmetic preserves the alias and mixing aliases requires converting through an `int` binding.
 - Control: `if (cond) { ... } else { ... }`, `while (cond) { ... }`, C-style `for (init; cond; step) { ... }`.
   - `for` initializers and steps must be simple `let name = expr` or expression statements; complex destructuring is rejected (`E0005`, `E0006`).
   - `for` scoping: bindings from the init clause are visible in the loop and after it; bindings created in the body or step do not escape the loop.
@@ -157,7 +160,8 @@ Calls and tuples
 - Tuple destructuring requires tuple/struct types with matching arity; mismatches are rejected.
 
 Strings and bytes
-- Strings are UTF‑8; functions that require raw bytes accept `Blob` pointers via constructors (see Builtins).
+- Strings are UTF‑8; raw string and byte literal forms are accepted in source.
+- Byte literals (`b"..."`, `br"..."`, `rb"..."`) lower to `bytes` (Blob) pointers; wrap with `norito_bytes(...)` when a syscall expects NoritoBytes TLV payloads.
 
 ## Builtins and Pointer-ABI Constructors
 

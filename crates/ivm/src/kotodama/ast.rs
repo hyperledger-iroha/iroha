@@ -40,6 +40,10 @@ pub struct FunctionModifiers {
     pub visibility: FunctionVisibility,
     pub kind: FunctionKind,
     pub permission: Option<String>,
+    /// Optional explicit read access hints for this function.
+    pub access_reads: Vec<String>,
+    /// Optional explicit write access hints for this function.
+    pub access_writes: Vec<String>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -231,6 +235,7 @@ pub enum Expr {
     Bool(bool),
     Number(i64),
     String(String),
+    Bytes(Vec<u8>),
     Ident(String),
 }
 

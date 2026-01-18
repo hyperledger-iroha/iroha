@@ -95,7 +95,174 @@ pub fn lint_program(program: &Program) -> Vec<LintWarning> {
     lint_unused_parameters(program, &mut warnings);
     lint_unreachable_after_return(program, &mut warnings);
     lint_pointer_constructor_usage(program, &mut warnings);
+    lint_nonliteral_trigger_specs(program, &mut warnings);
+    lint_nonliteral_state_map_keys(program, &mut warnings);
     warnings
+}
+
+fn lint_nonliteral_state_map_keys(program: &Program, warnings: &mut Vec<LintWarning>) {
+    let mut state_maps = HashSet::new();
+    for item in &program.items {
+        if let Item::State(state) = item
+            && matches!(state.ty, super::ast::TypeExpr::Generic { ref base, .. } if base == "Map")
+        {
+            state_maps.insert(state.name.clone());
+        }
+    }
+    if state_maps.is_empty() {
+        return;
+    }
+    for item in &program.items {
+        if let Item::Function(func) = item {
+            lint_block_map_keys(&func.body, &state_maps, warnings);
+        }
+    }
+}
+
+fn lint_block_map_keys(
+    block: &Block,
+    state_maps: &HashSet<String>,
+    warnings: &mut Vec<LintWarning>,
+) {
+    for stmt in &block.statements {
+        lint_stmt_map_keys(stmt, state_maps, warnings);
+    }
+}
+
+fn lint_stmt_map_keys(
+    stmt: &Statement,
+    state_maps: &HashSet<String>,
+    warnings: &mut Vec<LintWarning>,
+) {
+    match stmt {
+        Statement::Let { value, .. } => lint_expr_map_keys(value, state_maps, warnings),
+        Statement::Assign { value, .. } => lint_expr_map_keys(value, state_maps, warnings),
+        Statement::AssignExpr { target, value, .. } => {
+            lint_expr_map_keys(target, state_maps, warnings);
+            lint_expr_map_keys(value, state_maps, warnings);
+        }
+        Statement::Expr(expr) => lint_expr_map_keys(expr, state_maps, warnings),
+        Statement::Return(Some(expr)) => lint_expr_map_keys(expr, state_maps, warnings),
+        Statement::Return(None) | Statement::Break | Statement::Continue => {}
+        Statement::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
+            lint_expr_map_keys(cond, state_maps, warnings);
+            lint_block_map_keys(then_branch, state_maps, warnings);
+            if let Some(else_block) = else_branch {
+                lint_block_map_keys(else_block, state_maps, warnings);
+            }
+        }
+        Statement::While { cond, body } => {
+            lint_expr_map_keys(cond, state_maps, warnings);
+            lint_block_map_keys(body, state_maps, warnings);
+        }
+        Statement::For {
+            init,
+            cond,
+            step,
+            body,
+            ..
+        } => {
+            if let Some(init_stmt) = init {
+                lint_stmt_map_keys(init_stmt, state_maps, warnings);
+            }
+            if let Some(cond_expr) = cond {
+                lint_expr_map_keys(cond_expr, state_maps, warnings);
+            }
+            if let Some(step_stmt) = step {
+                lint_stmt_map_keys(step_stmt, state_maps, warnings);
+            }
+            lint_block_map_keys(body, state_maps, warnings);
+        }
+        Statement::ForEachMap { map, body, .. } => {
+            lint_expr_map_keys(map, state_maps, warnings);
+            lint_block_map_keys(body, state_maps, warnings);
+        }
+    }
+}
+
+fn lint_expr_map_keys(expr: &Expr, state_maps: &HashSet<String>, warnings: &mut Vec<LintWarning>) {
+    match expr {
+        Expr::Index { target, index } => {
+            if let Expr::Ident(name) = &**target
+                && state_maps.contains(name)
+                && !is_literal_state_key(index)
+            {
+                warnings.push(LintWarning {
+                    code: "nonliteral-state-map-key",
+                    message: LintMessage::Custom {
+                        message: format!(
+                            "state map `{name}` uses a non-literal key; access hints will use a wildcard"
+                        ),
+                    },
+                });
+            }
+            lint_expr_map_keys(target, state_maps, warnings);
+            lint_expr_map_keys(index, state_maps, warnings);
+        }
+        Expr::Binary { left, right, .. } => {
+            lint_expr_map_keys(left, state_maps, warnings);
+            lint_expr_map_keys(right, state_maps, warnings);
+        }
+        Expr::Unary { expr, .. } => lint_expr_map_keys(expr, state_maps, warnings),
+        Expr::Conditional {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            lint_expr_map_keys(cond, state_maps, warnings);
+            lint_expr_map_keys(then_expr, state_maps, warnings);
+            lint_expr_map_keys(else_expr, state_maps, warnings);
+        }
+        Expr::Call { args, .. } | Expr::Tuple(args) => {
+            for arg in args {
+                lint_expr_map_keys(arg, state_maps, warnings);
+            }
+        }
+        Expr::Member { object, .. } => lint_expr_map_keys(object, state_maps, warnings),
+        Expr::Number(_)
+        | Expr::Bool(_)
+        | Expr::String(_)
+        | Expr::Bytes(_)
+        | Expr::Ident(_) => {}
+    }
+}
+
+fn is_literal_state_key(expr: &Expr) -> bool {
+    match expr {
+        Expr::Number(_) | Expr::String(_) | Expr::Bytes(_) => true,
+        Expr::Call { name, args } => {
+            let literal_arg = matches!(
+                args.first(),
+                Some(Expr::String(_)) | Some(Expr::Bytes(_))
+            );
+            if !literal_arg || args.len() != 1 {
+                return false;
+            }
+            matches!(
+                name.as_str(),
+                "account_id"
+                    | "account"
+                    | "asset_definition"
+                    | "asset_id"
+                    | "nft_id"
+                    | "domain"
+                    | "domain_id"
+                    | "name"
+                    | "json"
+                    | "blob"
+                    | "norito_bytes"
+                    | "dataspace_id"
+                    | "axt_descriptor"
+                    | "asset_handle"
+                    | "proof_blob"
+            )
+        }
+        _ => false,
+    }
 }
 
 fn lint_unused_state(program: &Program, warnings: &mut Vec<LintWarning>) {
@@ -539,7 +706,7 @@ fn record_expr_idents(expr: &Expr, state_lookup: &HashSet<String>, hits: &mut Ha
                 stack.push(target);
                 stack.push(index);
             }
-            Expr::Bool(_) | Expr::Number(_) | Expr::String(_) => {}
+            Expr::Bool(_) | Expr::Number(_) | Expr::String(_) | Expr::Bytes(_) => {}
         }
     }
 }
@@ -579,6 +746,134 @@ fn lint_pointer_constructor_usage(program: &Program, warnings: &mut Vec<LintWarn
                 },
             });
         }
+    }
+}
+
+fn lint_nonliteral_trigger_specs(program: &Program, warnings: &mut Vec<LintWarning>) {
+    for item in &program.items {
+        if let Item::Function(func) = item {
+            lint_trigger_specs_in_block(&func.body, &func.name, warnings);
+        }
+    }
+}
+
+fn lint_trigger_specs_in_block(block: &Block, func_name: &str, warnings: &mut Vec<LintWarning>) {
+    for stmt in &block.statements {
+        lint_trigger_specs_in_stmt(stmt, func_name, warnings);
+    }
+}
+
+fn lint_trigger_specs_in_stmt(stmt: &Statement, func_name: &str, warnings: &mut Vec<LintWarning>) {
+    match stmt {
+        Statement::Let { value, .. }
+        | Statement::Assign { value, .. }
+        | Statement::Expr(value)
+        | Statement::Return(Some(value)) => {
+            lint_trigger_specs_in_expr(value, func_name, warnings);
+        }
+        Statement::AssignExpr { target, value, .. } => {
+            lint_trigger_specs_in_expr(target, func_name, warnings);
+            lint_trigger_specs_in_expr(value, func_name, warnings);
+        }
+        Statement::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
+            lint_trigger_specs_in_expr(cond, func_name, warnings);
+            lint_trigger_specs_in_block(then_branch, func_name, warnings);
+            if let Some(else_block) = else_branch {
+                lint_trigger_specs_in_block(else_block, func_name, warnings);
+            }
+        }
+        Statement::While { cond, body } => {
+            lint_trigger_specs_in_expr(cond, func_name, warnings);
+            lint_trigger_specs_in_block(body, func_name, warnings);
+        }
+        Statement::For {
+            init,
+            cond,
+            step,
+            body,
+            ..
+        } => {
+            if let Some(init_stmt) = init {
+                lint_trigger_specs_in_stmt(init_stmt, func_name, warnings);
+            }
+            if let Some(cond_expr) = cond {
+                lint_trigger_specs_in_expr(cond_expr, func_name, warnings);
+            }
+            if let Some(step_stmt) = step {
+                lint_trigger_specs_in_stmt(step_stmt, func_name, warnings);
+            }
+            lint_trigger_specs_in_block(body, func_name, warnings);
+        }
+        Statement::ForEachMap { map, body, .. } => {
+            lint_trigger_specs_in_expr(map, func_name, warnings);
+            lint_trigger_specs_in_block(body, func_name, warnings);
+        }
+        Statement::Return(None) | Statement::Break | Statement::Continue => {}
+    }
+}
+
+fn lint_trigger_specs_in_expr(expr: &Expr, func_name: &str, warnings: &mut Vec<LintWarning>) {
+    match expr {
+        Expr::Call { name, args } => {
+            if matches!(name.as_str(), "create_trigger" | "register_trigger") {
+                let literal = args.first().map_or(false, is_literal_trigger_spec);
+                if !literal {
+                    warnings.push(LintWarning {
+                        code: "nonliteral-trigger-spec",
+                        message: LintMessage::Custom {
+                            message: format!(
+                                "trigger spec in `{func_name}` is non-literal; access hints may be skipped (use json!(...) or json(\"...\") for literals)"
+                            ),
+                        },
+                    });
+                }
+            }
+            for arg in args {
+                lint_trigger_specs_in_expr(arg, func_name, warnings);
+            }
+        }
+        Expr::Binary { left, right, .. } => {
+            lint_trigger_specs_in_expr(left, func_name, warnings);
+            lint_trigger_specs_in_expr(right, func_name, warnings);
+        }
+        Expr::Unary { expr, .. } => lint_trigger_specs_in_expr(expr, func_name, warnings),
+        Expr::Conditional {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            lint_trigger_specs_in_expr(cond, func_name, warnings);
+            lint_trigger_specs_in_expr(then_expr, func_name, warnings);
+            lint_trigger_specs_in_expr(else_expr, func_name, warnings);
+        }
+        Expr::Tuple(values) => {
+            for value in values {
+                lint_trigger_specs_in_expr(value, func_name, warnings);
+            }
+        }
+        Expr::Member { object, .. } => lint_trigger_specs_in_expr(object, func_name, warnings),
+        Expr::Index { target, index } => {
+            lint_trigger_specs_in_expr(target, func_name, warnings);
+            lint_trigger_specs_in_expr(index, func_name, warnings);
+        }
+        Expr::Bool(_)
+        | Expr::Number(_)
+        | Expr::String(_)
+        | Expr::Bytes(_)
+        | Expr::Ident(_) => {}
+    }
+}
+
+fn is_literal_trigger_spec(expr: &Expr) -> bool {
+    match expr {
+        Expr::Call { name, args } if name == "json" => {
+            matches!(args.first(), Some(Expr::String(_)))
+        }
+        _ => false,
     }
 }
 
@@ -697,7 +992,7 @@ fn collect_pointer_literals_from_expr(
                 collect_pointer_literals_from_expr(value, constructors, counts);
             }
         }
-        Expr::Bool(_) | Expr::Number(_) | Expr::String(_) | Expr::Ident(_) => {}
+        Expr::Bool(_) | Expr::Number(_) | Expr::String(_) | Expr::Bytes(_) | Expr::Ident(_) => {}
     }
 }
 
@@ -887,6 +1182,57 @@ mod tests {
             warnings
                 .iter()
                 .any(|w| w.code == "unused-pointer-constructor")
+        );
+    }
+
+    #[test]
+    fn lint_nonliteral_trigger_spec_warns() {
+        let program = parse("fn main() { let spec = json(\"{}\"); create_trigger(spec); }")
+            .expect("parse trigger");
+        let warnings = lint_program(&program);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.code == "nonliteral-trigger-spec")
+        );
+    }
+
+    #[test]
+    fn lint_literal_trigger_spec_is_silent() {
+        let program =
+            parse("fn main() { create_trigger(json(\"{}\")); }").expect("parse trigger");
+        let warnings = lint_program(&program);
+        assert!(
+            !warnings
+                .iter()
+                .any(|w| w.code == "nonliteral-trigger-spec")
+        );
+    }
+
+    #[test]
+    fn lint_nonliteral_state_map_key_warns() {
+        let program = parse(
+            "state Foo: Map<int, int>; fn main() { let k = 1; let _x = Foo[k]; }",
+        )
+        .expect("parse map");
+        let warnings = lint_program(&program);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.code == "nonliteral-state-map-key")
+        );
+    }
+
+    #[test]
+    fn lint_literal_state_map_key_is_silent() {
+        let program =
+            parse("state Foo: Map<int, int>; fn main() { let _x = Foo[1]; }")
+                .expect("parse map");
+        let warnings = lint_program(&program);
+        assert!(
+            !warnings
+                .iter()
+                .any(|w| w.code == "nonliteral-state-map-key")
         );
     }
 }

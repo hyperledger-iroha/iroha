@@ -34,6 +34,7 @@ pub enum TokenKind {
     Ident(String),
     Number(u64),
     String(String),
+    Bytes(Vec<u8>),
     Plus,
     PlusPlus,
     PlusEqual,
@@ -117,6 +118,10 @@ impl<'a> Lexer<'a> {
         self.src.get(self.pos).copied()
     }
 
+    fn peek_n(&self, n: usize) -> Option<char> {
+        self.src.get(self.pos + n).copied()
+    }
+
     fn bump(&mut self) -> Option<char> {
         let ch = self.src.get(self.pos).copied();
         if let Some(c) = ch {
@@ -145,6 +150,11 @@ impl<'a> Lexer<'a> {
                 });
             }
         };
+        if matches!(ch, 'r' | 'b') {
+            if let Some(tok) = self.lex_prefixed_string()? {
+                return Ok(tok);
+            }
+        }
         match ch {
             c if c.is_alphabetic() || c == '_' => self.lex_ident_or_keyword(),
             c if c.is_ascii_digit() => self.lex_number(),
@@ -643,6 +653,148 @@ impl<'a> Lexer<'a> {
         })
     }
 
+    fn lex_prefixed_string(&mut self) -> Result<Option<Token>, String> {
+        match self.peek() {
+            Some('r') => {
+                if self.peek_n(1) == Some('b') && matches!(self.peek_n(2), Some('"' | '#')) {
+                    return self
+                        .lex_raw_string(true, 2)
+                        .map(Some)
+                        .map_err(|e| format!("{e}"));
+                }
+                if matches!(self.peek_n(1), Some('"' | '#')) {
+                    return self
+                        .lex_raw_string(false, 1)
+                        .map(Some)
+                        .map_err(|e| format!("{e}"));
+                }
+            }
+            Some('b') => {
+                if self.peek_n(1) == Some('r') && matches!(self.peek_n(2), Some('"' | '#')) {
+                    return self
+                        .lex_raw_string(true, 2)
+                        .map(Some)
+                        .map_err(|e| format!("{e}"));
+                }
+                if self.peek_n(1) == Some('"') {
+                    return self
+                        .lex_byte_string()
+                        .map(Some)
+                        .map_err(|e| format!("{e}"));
+                }
+            }
+            _ => {}
+        }
+        // Not a prefixed literal; return None so caller can lex identifier.
+        Ok(None)
+    }
+
+    fn lex_raw_string(&mut self, is_bytes: bool, prefix_len: usize) -> Result<Token, String> {
+        let line = self.line;
+        let col = self.col;
+        for _ in 0..prefix_len {
+            self.bump();
+        }
+        let mut hashes = 0usize;
+        while self.peek() == Some('#') {
+            self.bump();
+            hashes += 1;
+        }
+        if self.peek() != Some('"') {
+            return Err(format!("expected '\"' after raw string prefix at {line}:{col}"));
+        }
+        self.bump(); // opening quote
+        let mut out = String::new();
+        loop {
+            match self.peek() {
+                None => {
+                    return Err(format!(
+                        "unterminated raw string literal at {line}:{col}: missing closing delimiter"
+                    ));
+                }
+                Some('"') => {
+                    if self.is_raw_terminator(hashes) {
+                        self.bump(); // closing quote
+                        for _ in 0..hashes {
+                            self.bump();
+                        }
+                        break;
+                    }
+                    out.push('"');
+                    self.bump();
+                }
+                Some(c) => {
+                    out.push(c);
+                    self.bump();
+                }
+            }
+        }
+        let kind = if is_bytes {
+            TokenKind::Bytes(out.into_bytes())
+        } else {
+            TokenKind::String(out)
+        };
+        Ok(Token {
+            kind,
+            line,
+            column: col,
+        })
+    }
+
+    fn is_raw_terminator(&self, hashes: usize) -> bool {
+        if hashes == 0 {
+            return true;
+        }
+        for idx in 1..=hashes {
+            if self.peek_n(idx) != Some('#') {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn lex_byte_string(&mut self) -> Result<Token, String> {
+        let line = self.line;
+        let col = self.col;
+        self.bump(); // 'b'
+        self.bump(); // opening quote
+        let mut bytes = Vec::new();
+        let mut terminated = false;
+        while let Some(c) = self.peek() {
+            match c {
+                '"' => {
+                    self.bump();
+                    terminated = true;
+                    break;
+                }
+                '\n' => {
+                    return Err(format!(
+                        "unterminated byte string literal at {line}:{col}: newline before closing quote"
+                    ));
+                }
+                '\\' => {
+                    self.bump(); // consume '\\'
+                    let escaped = self.read_escape_bytes(line, col)?;
+                    bytes.extend_from_slice(&escaped);
+                }
+                ch => {
+                    bytes.extend_from_slice(ch.encode_utf8(&mut [0u8; 4]).as_bytes());
+                    self.bump();
+                }
+            }
+        }
+        if !terminated {
+            return Err(format!(
+                "unterminated byte string literal at {line}:{col}: missing closing quote"
+            ));
+        }
+        Ok(Token {
+            kind: TokenKind::Bytes(bytes),
+            line,
+            column: col,
+        })
+    }
+
     fn lex_string(&mut self) -> Result<Token, String> {
         let line = self.line;
         let col = self.col;
@@ -662,32 +814,9 @@ impl<'a> Lexer<'a> {
                     ));
                 }
                 '\\' => {
-                    // Minimal escape support: \n, \t, \" and \\
                     self.bump(); // consume '\\'
-                    match self.peek() {
-                        Some('n') => {
-                            s.push('\n');
-                            self.bump();
-                        }
-                        Some('t') => {
-                            s.push('\t');
-                            self.bump();
-                        }
-                        Some('"') => {
-                            s.push('"');
-                            self.bump();
-                        }
-                        Some('\\') => {
-                            s.push('\\');
-                            self.bump();
-                        }
-                        Some(other) => {
-                            // Unknown escape: treat as literal character
-                            s.push(other);
-                            self.bump();
-                        }
-                        None => break,
-                    }
+                    let escaped = self.read_escape_char(line, col)?;
+                    s.push(escaped);
                 }
                 ch => {
                     s.push(ch);
@@ -705,6 +834,107 @@ impl<'a> Lexer<'a> {
             line,
             column: col,
         })
+    }
+
+    fn read_escape_char(&mut self, line: usize, col: usize) -> Result<char, String> {
+        let Some(esc) = self.bump() else {
+            return Err(format!("unterminated escape at {line}:{col}"));
+        };
+        match esc {
+            'n' => Ok('\n'),
+            'r' => Ok('\r'),
+            't' => Ok('\t'),
+            '0' => Ok('\0'),
+            '"' => Ok('"'),
+            '\\' => Ok('\\'),
+            'x' => {
+                let byte = self.read_hex_escape(line, col, 2)?;
+                Ok(byte as char)
+            }
+            'u' => self.read_unicode_escape(line, col),
+            other => Err(format!("unknown escape \\{other} at {line}:{col}")),
+        }
+    }
+
+    fn read_escape_bytes(&mut self, line: usize, col: usize) -> Result<Vec<u8>, String> {
+        let Some(esc) = self.bump() else {
+            return Err(format!("unterminated escape at {line}:{col}"));
+        };
+        match esc {
+            'n' => Ok(vec![b'\n']),
+            'r' => Ok(vec![b'\r']),
+            't' => Ok(vec![b'\t']),
+            '0' => Ok(vec![0]),
+            '"' => Ok(vec![b'"']),
+            '\\' => Ok(vec![b'\\']),
+            'x' => Ok(vec![self.read_hex_escape(line, col, 2)?]),
+            'u' => {
+                let ch = self.read_unicode_escape(line, col)?;
+                let mut buf = [0u8; 4];
+                let encoded = ch.encode_utf8(&mut buf);
+                Ok(encoded.as_bytes().to_vec())
+            }
+            other => Err(format!("unknown escape \\{other} at {line}:{col}")),
+        }
+    }
+
+    fn read_hex_escape(&mut self, line: usize, col: usize, digits: usize) -> Result<u8, String> {
+        let mut value: u32 = 0;
+        for _ in 0..digits {
+            let Some(c) = self.bump() else {
+                return Err(format!("incomplete hex escape at {line}:{col}"));
+            };
+            let digit = c.to_digit(16).ok_or_else(|| {
+                format!("invalid hex digit '{c}' in escape at {line}:{col}")
+            })?;
+            value = value
+                .checked_mul(16)
+                .and_then(|v| v.checked_add(digit))
+                .ok_or_else(|| format!("hex escape overflow at {line}:{col}"))?;
+        }
+        Ok(value as u8)
+    }
+
+    fn read_unicode_escape(&mut self, line: usize, col: usize) -> Result<char, String> {
+        let Some(open) = self.bump() else {
+            return Err(format!("incomplete unicode escape at {line}:{col}"));
+        };
+        if open != '{' {
+            return Err(format!(
+                "unicode escape at {line}:{col} must start with '{{'"
+            ));
+        }
+        let mut value: u32 = 0;
+        let mut digits = 0usize;
+        loop {
+            let Some(c) = self.peek() else {
+                return Err(format!("unterminated unicode escape at {line}:{col}"));
+            };
+            if c == '}' {
+                self.bump();
+                break;
+            }
+            let digit = c
+                .to_digit(16)
+                .ok_or_else(|| format!("invalid hex digit '{c}' in unicode escape at {line}:{col}"))?;
+            value = value
+                .checked_mul(16)
+                .and_then(|v| v.checked_add(digit))
+                .ok_or_else(|| format!("unicode escape overflow at {line}:{col}"))?;
+            digits += 1;
+            if digits > 6 {
+                return Err(format!("unicode escape too long at {line}:{col}"));
+            }
+            self.bump();
+        }
+        if digits == 0 {
+            return Err(format!("empty unicode escape at {line}:{col}"));
+        }
+        if value > 0x10FFFF || (0xD800..=0xDFFF).contains(&value) {
+            return Err(format!("invalid unicode scalar value at {line}:{col}"));
+        }
+        char::from_u32(value)
+            .ok_or_else(|| format!("invalid unicode scalar value at {line}:{col}"))
     }
 }
 
@@ -759,5 +989,67 @@ mod tests {
     fn newline_in_string_is_rejected() {
         let err = lex("\"hello\nworld\"").unwrap_err();
         assert!(err.contains("newline"));
+    }
+
+    #[test]
+    fn string_hex_and_unicode_escapes_are_parsed() {
+        let tokens = lex("\"A\\x42\\u{43}\"").expect("lex");
+        assert!(
+            matches!(tokens[0].kind, TokenKind::String(ref s) if s == "ABC"),
+            "expected ABC, got {:?}",
+            tokens[0].kind
+        );
+    }
+
+    #[test]
+    fn raw_string_preserves_backslashes() {
+        let tokens = lex(r#"r"hello\n""#).expect("lex");
+        assert!(
+            matches!(tokens[0].kind, TokenKind::String(ref s) if s == "hello\\n"),
+            "expected raw string literal, got {:?}",
+            tokens[0].kind
+        );
+    }
+
+    #[test]
+    fn raw_string_with_hashes_allows_quotes() {
+        let tokens = lex(r##"r#"a "quote""#"##).expect("lex");
+        assert!(
+            matches!(tokens[0].kind, TokenKind::String(ref s) if s == "a \"quote\""),
+            "expected raw string with quotes, got {:?}",
+            tokens[0].kind
+        );
+    }
+
+    #[test]
+    fn byte_string_parses_escapes() {
+        let tokens = lex("b\"ab\\x41\"").expect("lex");
+        assert!(
+            matches!(tokens[0].kind, TokenKind::Bytes(ref b) if b == b"abA"),
+            "expected byte literal, got {:?}",
+            tokens[0].kind
+        );
+    }
+
+    #[test]
+    fn raw_byte_string_ignores_escapes() {
+        let tokens = lex(r#"br"ab\n""#).expect("lex");
+        assert!(
+            matches!(tokens[0].kind, TokenKind::Bytes(ref b) if b == b"ab\\n"),
+            "expected raw byte literal, got {:?}",
+            tokens[0].kind
+        );
+    }
+
+    #[test]
+    fn invalid_hex_escape_reports_error() {
+        let err = lex("\"\\xG1\"").unwrap_err();
+        assert!(err.contains("invalid hex digit"));
+    }
+
+    #[test]
+    fn invalid_unicode_escape_reports_error() {
+        let err = lex("\"\\u{}\"").unwrap_err();
+        assert!(err.contains("empty unicode escape"));
     }
 }

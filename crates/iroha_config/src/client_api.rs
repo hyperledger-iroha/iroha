@@ -862,6 +862,10 @@ pub struct SoranetStreamingSummary {
     pub channel_salt: String,
     /// Filesystem spool where privacy-route updates are staged for exit relays.
     pub provision_spool_dir: String,
+    /// Segment window (inclusive) used when provisioning privacy routes.
+    pub provision_window_segments: u64,
+    /// Maximum number of queued privacy-route provisioning jobs.
+    pub provision_queue_capacity: u64,
 }
 
 impl From<&'_ base::Root> for ConfigGetDTO {
@@ -947,6 +951,8 @@ impl From<&'_ base::StreamingSoranet> for SoranetStreamingSummary {
             gar_category,
             channel_salt: value.channel_salt.clone(),
             provision_spool_dir: value.provision_spool_dir.to_string_lossy().into_owned(),
+            provision_window_segments: value.provision_window_segments,
+            provision_queue_capacity: value.provision_queue_capacity,
         }
     }
 }
@@ -1103,6 +1109,12 @@ impl FastJsonWrite for SoranetStreamingSummary {
         out.push_str("\"provision_spool_dir\":\"");
         out.push_str(&self.provision_spool_dir);
         out.push('"');
+        out.push(',');
+        out.push_str("\"provision_window_segments\":");
+        let _ = write!(out, "{}", self.provision_window_segments);
+        out.push(',');
+        out.push_str("\"provision_queue_capacity\":");
+        let _ = write!(out, "{}", self.provision_queue_capacity);
         out.push('}');
     }
 }
@@ -1281,6 +1293,8 @@ impl<'a> FastFromJson<'a> for SoranetStreamingSummary {
         let kh_gar = norito::json::key_hash_const("gar_category");
         let kh_salt = norito::json::key_hash_const("channel_salt");
         let kh_spool = norito::json::key_hash_const("provision_spool_dir");
+        let kh_window = norito::json::key_hash_const("provision_window_segments");
+        let kh_queue = norito::json::key_hash_const("provision_queue_capacity");
         let mut enabled: Option<bool> = None;
         let mut stream_tag: Option<String> = None;
         let mut exit_multiaddr: Option<String> = None;
@@ -1289,6 +1303,8 @@ impl<'a> FastFromJson<'a> for SoranetStreamingSummary {
         let mut gar_category: Option<String> = None;
         let mut channel_salt: Option<String> = None;
         let mut provision_spool_dir: Option<String> = None;
+        let mut provision_window_segments: Option<u64> = None;
+        let mut provision_queue_capacity: Option<u64> = None;
         while !w.peek_object_end()? {
             let kh = w.read_key_hash()?;
             w.expect_colon_resync()?;
@@ -1335,6 +1351,12 @@ impl<'a> FastFromJson<'a> for SoranetStreamingSummary {
                     let sref = w.parse_string_ref_inline(arena)?;
                     provision_spool_dir = Some(sref.to_string());
                 }
+                x if x == kh_window && w.last_key() == "provision_window_segments" => {
+                    provision_window_segments = Some(w.parse_u64_inline()?);
+                }
+                x if x == kh_queue && w.last_key() == "provision_queue_capacity" => {
+                    provision_queue_capacity = Some(w.parse_u64_inline()?);
+                }
                 _ => w.skip_value()?,
             }
             let _ = w.consume_comma_if_present()?;
@@ -1356,6 +1378,12 @@ impl<'a> FastFromJson<'a> for SoranetStreamingSummary {
                 .ok_or_else(|| NoritoError::Message("missing channel_salt".into()))?,
             provision_spool_dir: provision_spool_dir
                 .ok_or_else(|| NoritoError::Message("missing provision_spool_dir".into()))?,
+            provision_window_segments: provision_window_segments.ok_or_else(|| {
+                NoritoError::Message("missing provision_window_segments".into())
+            })?,
+            provision_queue_capacity: provision_queue_capacity.ok_or_else(|| {
+                NoritoError::Message("missing provision_queue_capacity".into())
+            })?,
         })
     }
 }
@@ -3459,7 +3487,9 @@ mod test {
                     "access_kind": "authenticated",
                     "gar_category": "stream.norito.authenticated",
                     "channel_salt": "iroha.soranet.channel.seed.v1",
-                    "provision_spool_dir": "./storage/streaming/soranet_routes"
+                    "provision_spool_dir": "./storage/streaming/soranet_routes",
+                    "provision_window_segments": 4,
+                    "provision_queue_capacity": 256
                   }
                 }
               },

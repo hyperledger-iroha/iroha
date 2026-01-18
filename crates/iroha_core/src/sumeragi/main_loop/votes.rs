@@ -194,7 +194,11 @@ impl Actor {
                     return;
                 };
                 self.observe_new_view_highest_qc(highest);
-                crate::sumeragi::new_view_stats::note_receipt(vote.height, vote.view, signer_peer);
+                crate::sumeragi::new_view_stats::note_receipt(
+                    vote.height,
+                    vote.view,
+                    &signer_peer,
+                );
                 if let Some(local_view) = stale_view {
                     debug!(
                         height = vote.height,
