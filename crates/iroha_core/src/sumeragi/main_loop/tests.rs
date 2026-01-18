@@ -46591,6 +46591,7 @@ fn pending_rbc_snapshot_includes_entry_drop_counts() {
         &pending,
         (1, 4),
         Duration::from_secs(1),
+        16,
         None,
     );
 

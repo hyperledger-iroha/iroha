@@ -64,7 +64,7 @@ fn shield_and_transfer_emit_audit_roots_and_commitments() {
         owner.clone(),
         100u128,
         cm,
-        vec![],
+        iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
     );
     stx.world
         .executor()

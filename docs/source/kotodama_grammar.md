@@ -114,6 +114,28 @@ Semantics
 - Durable state maps currently support `int` and pointer-ABI key types only; other key types are rejected at compile time.
 - Durable state fields must be `int`, `bool`, `Json`, `Blob`/`bytes`, or pointer-ABI types (including structs/tuples composed of these fields); `string` is not supported for durable state.
 
+## Trigger Declarations
+
+Trigger declarations attach scheduling metadata to entrypoint manifests so deployment tooling can
+register triggers without emitting bytecode. They are parsed inside a `seiyaku` block.
+
+Syntax
+```
+register_trigger wake {
+  call run;
+  on time pre_commit;
+  repeats 2;
+  metadata { tag: "alpha"; count: 1; enabled: true; }
+}
+```
+
+Notes
+- `call` must reference a public `kotoage fn` entrypoint in the same contract; an optional
+  `namespace::entrypoint` is recorded in the manifest for future cross-contract wiring.
+- Supported filters: `time pre_commit` and `time schedule(start_ms, period_ms?)`, plus
+  `execute trigger <name>` for by-call triggers. Data/pipeline filters are not yet supported.
+- Metadata values must be JSON literals (`string`, `number`, `bool`, `null`) or `json!(...)`.
+
 ## Functions and Parameters
 
 Syntax

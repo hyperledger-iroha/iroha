@@ -943,7 +943,7 @@ impl Actor {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn derive_rbc_allocations(
+    pub(super) fn derive_rbc_allocations(
         &self,
         transactions: &[AcceptedTransaction<'static>],
         routing: &[RoutingDecision],
@@ -4445,11 +4445,13 @@ impl Actor {
         let telemetry_ref = self.telemetry_handle();
         let caps = self.pending_rbc_caps();
         let ttl = self.config.rbc_pending_ttl;
+        let session_limit = self.config.rbc_pending_session_limit;
         Self::update_rbc_backlog_snapshot(
             &self.subsystems.da_rbc.rbc.sessions,
             &self.subsystems.da_rbc.rbc.pending,
             caps,
             ttl,
+            session_limit,
             telemetry_ref,
         );
     }
@@ -4460,6 +4462,7 @@ impl Actor {
         pending: &BTreeMap<SessionKey, PendingRbcMessages>,
         pending_caps: (usize, usize),
         pending_ttl: Duration,
+        pending_session_limit: usize,
         telemetry: Option<&crate::telemetry::Telemetry>,
     ) {
         let mut total_missing = 0u64;
@@ -4548,7 +4551,7 @@ impl Actor {
         let mut pending_snapshot = status::pending_rbc_snapshot();
         pending_snapshot.sessions = pending_stash_sessions;
         pending_snapshot.session_cap =
-            u64::try_from(self.config.rbc_pending_session_limit).unwrap_or(u64::MAX);
+            u64::try_from(pending_session_limit).unwrap_or(u64::MAX);
         pending_snapshot.chunks = pending_stash_chunks;
         pending_snapshot.bytes = pending_stash_bytes;
         pending_snapshot.max_chunks_per_session =

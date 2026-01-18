@@ -12,17 +12,18 @@ fn zk_finalize_verifies_with_inline_vk_public_input() {
     use core::num::NonZeroU64;
 
     use iroha_core::{
-        block::ValidBlock, kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute,
-        state::State, zk::test_utils::halo2_fixture_envelope,
+        kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute, state::State,
+        zk::test_utils::halo2_fixture_envelope,
     };
     use iroha_data_model::{
+        block::BlockHeader,
         confidential::ConfidentialStatus,
         isi::{
             verifying_keys,
             zk::{CreateElection, FinalizeElection},
         },
         permission::Permission,
-        prelude::{Grant, PeerId},
+        prelude::Grant,
         proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
         zk::BackendTag,
     };
@@ -34,14 +35,8 @@ fn zk_finalize_verifies_with_inline_vk_public_input() {
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(iroha_core::state::World::default(), kura, query);
 
-    let (pk, sk) = iroha_crypto::KeyPair::random().into_parts();
-    let topo = iroha_core::sumeragi::network_topology::Topology::new(vec![PeerId::new(pk)]);
-    let block =
-        ValidBlock::new_dummy_and_modify_header(&sk, |h| h.set_height(NonZeroU64::new(1).unwrap()))
-            .commit(&topo)
-            .unpack(|_| {})
-            .unwrap();
-    let mut sblock = state.block(block.as_ref().header());
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
 
     let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-public-v1", [0u8; 32]);
@@ -77,16 +72,16 @@ fn zk_finalize_verifies_with_inline_vk_public_input() {
     .expect("register vk");
 
     // Create election with 1 option.
-    let create = CreateElection::new(
-        "ref-final".to_string(),
-        1,
-        [0u8; 32],
-        0,
-        0,
-        vk_id.clone(),
-        vk_id.clone(),
-        "gov:ballot:v1".to_string(),
-    );
+    let create = CreateElection {
+        election_id: "ref-final".to_string(),
+        options: 1,
+        eligible_root: [0u8; 32],
+        start_ts: 0,
+        end_ts: 0,
+        vk_ballot: vk_id.clone(),
+        vk_tally: vk_id.clone(),
+        domain_tag: "gov:ballot:v1".to_string(),
+    };
     create.execute(&ALICE_ID, &mut stx).expect("create ok");
 
     // Finalize with tally [4] and inline VK
@@ -98,7 +93,7 @@ fn zk_finalize_verifies_with_inline_vk_public_input() {
     // Assert finalized
     let st = stx
         .world
-        .elections
+        .elections()
         .get(&"ref-final".to_string())
         .cloned()
         .unwrap();

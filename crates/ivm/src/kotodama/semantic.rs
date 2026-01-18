@@ -1,6 +1,21 @@
-use std::{cell::RefCell, collections::HashMap};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+};
 
 use indexmap::{IndexMap, IndexSet};
+use iroha_data_model::{
+    events::{
+        EventFilterBox,
+        execute_trigger::ExecuteTriggerEventFilter,
+        time::{ExecutionTime, Schedule, TimeEventFilter},
+    },
+    metadata::Metadata,
+    prelude::Name,
+    trigger::{TriggerId, action::Repeats},
+};
+use iroha_primitives::json::Json;
+use norito::json::{self, native::Number as JsonNumber};
 
 use super::ast::*;
 
@@ -99,6 +114,7 @@ pub struct SemanticError {
 #[derive(Debug, PartialEq)]
 pub struct TypedProgram {
     pub items: Vec<TypedItem>,
+    pub triggers: Vec<TypedTrigger>,
     pub contract_meta: Option<ContractMeta>,
 }
 
@@ -147,6 +163,7 @@ pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
     let mut structs: HashMap<String, Vec<(String, Type)>> = HashMap::new();
     let mut state_decls: Vec<(String, TypeExpr)> = Vec::new();
     let mut fn_returns: HashMap<String, Type> = HashMap::new();
+    let mut fn_modifiers: HashMap<String, FunctionModifiers> = HashMap::new();
     FUNCTION_SUMMARY.with(|map| map.borrow_mut().clear());
     for item in &program.items {
         match item {
@@ -167,7 +184,9 @@ pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
                     Type::Unit
                 };
                 fn_returns.insert(f.name.clone(), ret);
+                fn_modifiers.insert(f.name.clone(), f.modifiers.clone());
             }
+            Item::Trigger(_) => {}
         }
     }
     STRUCT_ENV.with(|env| env.replace(structs));
@@ -185,16 +204,27 @@ pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
     FUNCTION_RETURNS.with(|env| env.replace(fn_returns));
 
     let mut items = Vec::new();
+    let mut triggers = Vec::new();
+    let mut trigger_names: HashSet<String> = HashSet::new();
     for item in &program.items {
         match item {
             Item::Function(f) => items.push(TypedItem::Function(analyze_function(f)?)),
             Item::Struct(_) => {}
             Item::State(_) => {}
+            Item::Trigger(trigger) => {
+                if !trigger_names.insert(trigger.name.clone()) {
+                    return Err(SemanticError {
+                        message: format!("duplicate trigger `{}`", trigger.name),
+                    });
+                }
+                triggers.push(analyze_trigger(trigger, &fn_modifiers)?);
+            }
         }
     }
     enforce_permission_requirements(&items)?;
     Ok(TypedProgram {
         items,
+        triggers,
         contract_meta: program.contract_meta.clone(),
     })
 }
@@ -229,6 +259,137 @@ fn type_name(ty: &Type) -> String {
         Type::Struct { name, .. } => format!("struct {name}"),
         Type::Opaque(s) => s.clone(),
     }
+}
+
+fn analyze_trigger(
+    trigger: &TriggerDecl,
+    fn_modifiers: &HashMap<String, FunctionModifiers>,
+) -> Result<TypedTrigger, SemanticError> {
+    let name =
+        <Name as std::str::FromStr>::from_str(&trigger.name).map_err(|err| SemanticError {
+            message: format!("invalid trigger name `{}`: {}", trigger.name, err),
+        })?;
+    let id = TriggerId::new(name);
+
+    let entry = &trigger.call.entrypoint;
+    let modifiers = fn_modifiers.get(entry).ok_or_else(|| SemanticError {
+        message: format!(
+            "trigger `{}` targets unknown entrypoint `{entry}`",
+            trigger.name
+        ),
+    })?;
+    if modifiers.visibility != FunctionVisibility::Public {
+        return Err(SemanticError {
+            message: format!(
+                "trigger `{}` must call public entrypoint `{entry}`",
+                trigger.name
+            ),
+        });
+    }
+
+    let filter = match &trigger.filter {
+        TriggerFilter::Time(time) => {
+            let execution = match time {
+                TriggerTimeFilter::PreCommit => ExecutionTime::PreCommit,
+                TriggerTimeFilter::Schedule {
+                    start_ms,
+                    period_ms,
+                } => {
+                    if let Some(period) = period_ms
+                        && *period == 0
+                    {
+                        return Err(SemanticError {
+                            message: format!(
+                                "trigger `{}` schedule period_ms must be non-zero",
+                                trigger.name
+                            ),
+                        });
+                    }
+                    ExecutionTime::Schedule(Schedule {
+                        start_ms: *start_ms,
+                        period_ms: *period_ms,
+                    })
+                }
+            };
+            EventFilterBox::Time(TimeEventFilter(execution))
+        }
+        TriggerFilter::Execute { trigger_id } => {
+            let target =
+                <Name as std::str::FromStr>::from_str(trigger_id).map_err(|err| SemanticError {
+                    message: format!("invalid execute trigger id `{trigger_id}`: {err}"),
+                })?;
+            let id = TriggerId::new(target);
+            EventFilterBox::ExecuteTrigger(ExecuteTriggerEventFilter::new().for_trigger(id))
+        }
+    };
+
+    let repeats = match trigger
+        .repeats
+        .clone()
+        .unwrap_or(TriggerRepeats::Indefinitely)
+    {
+        TriggerRepeats::Indefinitely => Repeats::Indefinitely,
+        TriggerRepeats::Exactly(count) => Repeats::Exactly(count),
+    };
+
+    let metadata = trigger_metadata_from_entries(&trigger.metadata)?;
+
+    Ok(TypedTrigger {
+        id,
+        call: trigger.call.clone(),
+        filter,
+        repeats,
+        metadata,
+    })
+}
+
+fn trigger_metadata_from_entries(
+    entries: &[TriggerMetadataEntry],
+) -> Result<Metadata, SemanticError> {
+    let mut metadata = Metadata::default();
+    for entry in entries {
+        let key =
+            <Name as std::str::FromStr>::from_str(&entry.key).map_err(|err| SemanticError {
+                message: format!("invalid trigger metadata key `{}`: {err}", entry.key),
+            })?;
+        let json = json_from_expr(&entry.value)?;
+        if metadata.insert(key, json).is_some() {
+            return Err(SemanticError {
+                message: format!("duplicate trigger metadata key `{}`", entry.key),
+            });
+        }
+    }
+    Ok(metadata)
+}
+
+fn json_from_expr(expr: &Expr) -> Result<Json, SemanticError> {
+    let value = match expr {
+        Expr::String(s) => json::Value::String(s.clone()),
+        Expr::Number(n) => json::Value::Number(JsonNumber::I64(*n)),
+        Expr::Bool(b) => json::Value::Bool(*b),
+        Expr::Ident(ident) if ident == "null" => json::Value::Null,
+        Expr::Call { name, args } if name == "json" => {
+            let raw = match args.as_slice() {
+                [Expr::String(raw)] => raw,
+                _ => {
+                    return Err(SemanticError {
+                        message: "json(...) metadata values must be a string literal".into(),
+                    });
+                }
+            };
+            json::parse_value(raw).map_err(|err| SemanticError {
+                message: format!("invalid json metadata literal: {err}"),
+            })?
+        }
+        _ => {
+            return Err(SemanticError {
+                message: "trigger metadata values must be JSON literals".into(),
+            });
+        }
+    };
+    Json::from_norito_value_ref(&value).map_err(|err| SemanticError {
+        message: format!("invalid trigger metadata value: {err}"),
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3776,6 +3937,15 @@ pub enum TypedItem {
     Function(TypedFunction),
 }
 
+#[derive(Debug, PartialEq, Clone)]
+pub struct TypedTrigger {
+    pub id: TriggerId,
+    pub call: TriggerCall,
+    pub filter: EventFilterBox,
+    pub repeats: Repeats,
+    pub metadata: Metadata,
+}
+
 #[derive(Debug, PartialEq)]
 pub struct TypedFunction {
     pub name: String,
@@ -4885,5 +5055,48 @@ mod tests {
         )
         .expect("parse trigger aliases");
         analyze(&program).expect("analyze trigger aliases");
+    }
+
+    #[test]
+    fn trigger_decl_builds_typed_metadata() {
+        let program = parse(
+            r#"
+            seiyaku C {
+                kotoage fn run() {}
+                register_trigger wake {
+                    call run;
+                    on time pre_commit;
+                    repeats 2;
+                    metadata { tag: "alpha"; count: 1; enabled: true; }
+                }
+            }
+            "#,
+        )
+        .expect("parse trigger decl");
+        let typed = analyze(&program).expect("analyze trigger decl");
+        assert_eq!(typed.triggers.len(), 1);
+        let trigger = &typed.triggers[0];
+        assert_eq!(trigger.id.to_string(), "wake");
+        assert!(matches!(trigger.filter, EventFilterBox::Time(_)));
+        assert_eq!(trigger.repeats, Repeats::Exactly(2));
+        assert!(!trigger.metadata.is_empty());
+    }
+
+    #[test]
+    fn trigger_decl_requires_public_entrypoint() {
+        let program = parse(
+            r#"
+            seiyaku C {
+                fn run() {}
+                register_trigger wake {
+                    call run;
+                    on time pre_commit;
+                }
+            }
+            "#,
+        )
+        .expect("parse trigger decl");
+        let err = analyze(&program).expect_err("non-public entrypoint should error");
+        assert!(err.message.contains("public entrypoint"));
     }
 }

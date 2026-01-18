@@ -1,9 +1,10 @@
-"""Torii client helpers for subscriptions, attachments, and prover reports.
+"""Torii client helpers for configuration, subscriptions, attachments, and prover reports.
 
 The API mirrors the app-facing endpoints exposed by Torii:
 
 * `/v1/subscriptions` and `/v1/subscriptions/plans` for subscription
   management and billing triggers.
+* `/v1/configuration` for configuration snapshots and updates.
 * `/v1/zk/attachments` for uploading, listing, fetching, and deleting
   proof attachments stored on the node.
 * `/v1/zk/prover/reports` for querying background prover results.

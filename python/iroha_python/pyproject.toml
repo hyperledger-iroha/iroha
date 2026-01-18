@@ -13,6 +13,7 @@ requires-python = ">=3.9"
 dependencies = [
   "iroha-norito>=0.1.0",
   "requests>=2.31",
+  "urllib3<2",
 ]
 keywords = ["iroha", "sdk", "blockchain", "norito"]
 classifiers = [
