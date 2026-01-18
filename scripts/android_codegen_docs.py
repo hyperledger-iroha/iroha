@@ -326,7 +326,66 @@ MANIFEST_TYPE_TABLES: dict[str, dict] = {
                 "type": "Vec<String>",
                 "description": "Advisory write set scoped to the entrypoint.",
             },
+            {
+                "name": "triggers",
+                "type": "Vec<TriggerDescriptor>",
+                "description": "Trigger declarations that call this entrypoint.",
+            },
         ],
+        "dependencies": ["TriggerDescriptor"],
+    },
+    "TriggerCallback": {
+        "kind": "struct",
+        "description": "Entrypoint callback target referenced by a trigger declaration.",
+        "fields": [
+            {
+                "name": "namespace",
+                "type": "Option<String>",
+                "description": "Optional contract namespace for cross-contract callbacks.",
+            },
+            {
+                "name": "entrypoint",
+                "type": "String",
+                "description": "Entrypoint name to invoke.",
+            },
+        ],
+    },
+    "TriggerDescriptor": {
+        "kind": "struct",
+        "description": "Declarative trigger metadata attached to an entrypoint.",
+        "fields": [
+            {
+                "name": "id",
+                "type": "TriggerId",
+                "description": "Trigger identifier.",
+            },
+            {
+                "name": "repeats",
+                "type": "Repeats",
+                "description": "Repeat policy for the trigger action.",
+            },
+            {
+                "name": "filter",
+                "type": "EventFilterBox",
+                "description": "Event filter that drives execution.",
+            },
+            {
+                "name": "authority",
+                "type": "Option<AccountId>",
+                "description": "Optional explicit authority override.",
+            },
+            {
+                "name": "metadata",
+                "type": "Metadata",
+                "description": "Trigger metadata payload (JSON map).",
+            },
+            {
+                "name": "callback",
+                "type": "TriggerCallback",
+                "description": "Callback target for this trigger.",
+            },
+        ],
+        "dependencies": ["TriggerCallback"],
     },
     "ChunkerProfileHandle": {
         "kind": "struct",

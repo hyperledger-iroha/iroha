@@ -28,12 +28,12 @@ async fn zk_lane_emits_warning_on_rejected_trace() {
     let _ = zk_lane::start(&cfg);
 
     // Build a task whose constraint fails: gpr[0] = 1 but requires zero at cycle 0
-    let mut gpr = [0u64; 512];
+    let mut gpr = [0u64; 256];
     gpr[0] = 1;
     let trace = vec![ivm::zk::RegisterState {
         pc: 0,
         gpr,
-        tags: [false; 512],
+        tags: [false; 256],
     }];
     let constraints = vec![ivm::zk::Constraint::Zero { reg: 0, cycle: 0 }];
     let job = zk_lane::ZkTask {
@@ -85,8 +85,8 @@ async fn zk_lane_emits_warning_on_rejected_trace() {
 fn zk_task_digest_reflects_transport_metadata() {
     let trace = vec![ivm::zk::RegisterState {
         pc: 0,
-        gpr: [0u64; 512],
-        tags: [false; 512],
+        gpr: [0u64; 256],
+        tags: [false; 256],
     }];
     let mut base = zk_lane::ZkTask {
         tx_hash: None,

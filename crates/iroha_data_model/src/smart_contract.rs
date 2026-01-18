@@ -61,6 +61,13 @@ pub mod manifest {
     #[cfg(feature = "json")]
     use norito::json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize};
 
+    use crate::{
+        account::AccountId,
+        events::EventFilterBox,
+        metadata::Metadata,
+        trigger::{TriggerId, action::Repeats},
+    };
+
     /// Well-known metadata key used to attach a contract manifest.
     pub const MANIFEST_METADATA_KEY: &str = "contract_manifest";
 
@@ -229,6 +236,58 @@ pub mod manifest {
         /// Advisory write keys for this entrypoint.
         #[norito(default)]
         pub write_keys: Vec<String>,
+        /// Trigger declarations that call this entrypoint.
+        #[norito(default)]
+        pub triggers: Vec<TriggerDescriptor>,
+    }
+
+    /// Entrypoint callback target referenced by a trigger declaration.
+    #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
+    #[cfg_attr(
+        feature = "json",
+        derive(
+            crate::DeriveFastJson,
+            crate::DeriveJsonSerialize,
+            crate::DeriveJsonDeserialize
+        )
+    )]
+    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    pub struct TriggerCallback {
+        /// Optional contract namespace for cross-contract callbacks.
+        #[norito(default)]
+        pub namespace: Option<String>,
+        /// Entrypoint name to invoke.
+        pub entrypoint: String,
+    }
+
+    /// Declarative trigger metadata attached to an entrypoint.
+    #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
+    #[cfg_attr(
+        feature = "json",
+        derive(
+            crate::DeriveFastJson,
+            crate::DeriveJsonSerialize,
+            crate::DeriveJsonDeserialize
+        )
+    )]
+    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    pub struct TriggerDescriptor {
+        /// Trigger identifier.
+        pub id: TriggerId,
+        /// Repeat policy for the trigger action.
+        pub repeats: Repeats,
+        /// Event filter that drives execution.
+        pub filter: EventFilterBox,
+        /// Optional explicit authority override.
+        #[norito(default)]
+        pub authority: Option<AccountId>,
+        /// Trigger metadata payload (JSON map).
+        #[norito(default)]
+        pub metadata: Metadata,
+        /// Callback target for this trigger.
+        pub callback: TriggerCallback,
     }
 
     /// Entry point category advertised by Kotodama.
@@ -342,6 +401,42 @@ pub mod manifest {
             let decoded: AccessSetHints = norito::json::from_str(&json).expect("deserialize hints");
             assert_eq!(decoded.read_keys, hints.read_keys);
             assert_eq!(decoded.write_keys, hints.write_keys);
+        }
+
+        #[test]
+        fn entrypoint_descriptor_includes_triggers() {
+            use crate::{
+                events::EventFilterBox,
+                trigger::action::Repeats,
+            };
+
+            let trigger = TriggerDescriptor {
+                id: "wake".parse().expect("trigger id"),
+                repeats: Repeats::Indefinitely,
+                filter: EventFilterBox::Time(crate::events::time::TimeEventFilter(
+                    crate::events::time::ExecutionTime::PreCommit,
+                )),
+                authority: None,
+                metadata: Metadata::default(),
+                callback: TriggerCallback {
+                    namespace: None,
+                    entrypoint: "run".to_string(),
+                },
+            };
+            let entrypoint = EntrypointDescriptor {
+                name: "run".to_string(),
+                kind: EntryPointKind::Public,
+                permission: None,
+                read_keys: Vec::new(),
+                write_keys: Vec::new(),
+                triggers: vec![trigger],
+            };
+            let json = norito::json::to_json(&entrypoint).expect("serialize entrypoint");
+            assert!(json.contains("\"triggers\""));
+            let decoded: EntrypointDescriptor =
+                norito::json::from_str(&json).expect("deserialize entrypoint");
+            assert_eq!(decoded.triggers.len(), 1);
+            assert_eq!(decoded.triggers[0].callback.entrypoint, "run");
         }
 
         #[test]

@@ -15,7 +15,7 @@ Paths for reference:
 - The current implementation parses and lowers both free and contract functions (including `seiyaku`, `kotoage`, `hajimari`, and `kaizen` items), performs type checking for ints/bools/strings/pointer-ABI handles/structs/maps, and emits full multi-function IVM bytecode with durable `state` overlays when ABI v1 is selected. ✔
 - Metadata and manifest wiring now surface `meta { features: ["zk","simd"] }` toggles plus per-entrypoint permission/read/write hints. Static ISI keys (including literal `create_trigger` specs), literal map keys (including hashed pointer keys), and explicit `#[access(read=..., write=...)]` annotations are included in access hints; non-literal trigger specs and state-map keys are linted, but opaque host-driven reads still require fallback analysis. ⚠
 - The compiler scans emitted bytecode for ZK/vector opcodes, auto-enables header bits, and rejects `meta` feature requests that do not match actual opcode usage. ✔
-- Numeric aliases (`fixed_u128`, `Amount`, `Balance`) are distinct numeric types with 64-bit scalar semantics; arithmetic preserves the alias and mixing aliases is rejected unless routed through an `int` binding. Trigger registration is wired via `register_trigger`/`create_trigger`, while higher-level trigger declaration syntax remains pending. ⏳
+- Numeric aliases (`fixed_u128`, `Amount`, `Balance`) are distinct numeric types with 64-bit scalar semantics; arithmetic preserves the alias and mixing aliases is rejected unless routed through an `int` binding. Trigger declarations (`register_trigger`) now parse time/execute filters and attach metadata to entrypoint manifests; data/pipeline filters and authority overrides remain pending. ⚠
 
 Note: Kotodama compiles to Iroha Virtual Machine (IVM) bytecode (`.to`). It does not target “risc5”/RISC‑V as a standalone ISA. Any RISC‑V–like encodings mentioned in the compiler are IVM’s mixed instruction format and an implementation detail.
 
@@ -30,7 +30,6 @@ Note: Kotodama compiles to Iroha Virtual Machine (IVM) bytecode (`.to`). It does
   - Parameter grammar accepts `Type name`, `name: Type`, or bare identifiers everywhere; return types (`fn foo() -> Type`) are recorded; tuple destructuring, assignments, compound assignments, `return/break/continue`, ternary `cond ? a : b`, and `call foo()` sugar are available.
   - `permission(Role)` markers, `#[bounded(N)]` attributes, and `meta { key: value; features: ["zk","simd"] }` blocks are parsed and stored.
 - Missing or partial:
-  - No dedicated trigger declaration syntax exists yet; trigger registration uses `register_trigger`/`create_trigger` builtins.
   - Contract-level localization (`kotoba { ... }`) is accepted as a no-op stub.
 
 ### Semantic Analysis (Typing)
@@ -49,13 +48,13 @@ Note: Kotodama compiles to Iroha Virtual Machine (IVM) bytecode (`.to`). It does
   - Pointer literals propagate across calls, durable `state` accesses turn into `STATE_GET/SET/DEL` syscalls when ABI v1 is requested, string/data sections are deduplicated, and manifests supply code/ABI hashes.
   - Emitted bytecode is scanned for ZK/vector opcodes; header bits are auto-enabled and mismatched `meta` requests are rejected.
 - Missing:
-  - Trigger declaration syntax and scheduler callbacks referenced in the DSL (`register_trigger` blocks, `call domain::fn`, etc.) do not exist in IR/codegen.
+  - Trigger declarations are manifest-only metadata; cross-contract callback wiring (`call domain::fn`) is recorded but not yet consumed by runtime tooling.
 - Access-set hints now include static ISI WSV keys (including literal `create_trigger` specs), literal map keys, and explicit `#[access]` annotations; non-literal trigger specs and state-map keys emit lints, but dynamic map keys and opaque helper syscalls remain unhinted.
 
 ## Samples vs. Implementation
 Modern samples compile, but the following grammar-level expectations remain unmet:
 - `permission(Role)` metadata now reaches manifests; end-to-end enforcement still depends on node admission wiring.
-- Trigger registration works via `register_trigger`/`create_trigger`; DSL trigger declarations remain pending.
+- Trigger registration works via `register_trigger`/`create_trigger`; DSL trigger declarations now emit manifest metadata but still require deploy-time tooling to register triggers.
 - Cross-contract calls and dynamic entrypoint dispatch are only described conceptually; the compiler only knows about intra-program calls.
 
 ## Recommended Roadmap (Implementation Targets)
@@ -66,8 +65,8 @@ Short-to-mid term steps to align implementation with the designed grammar and sa
 - Provide coverage reporting beyond the current lints (non-literal trigger specs and state-map keys) when access hints are skipped due to dynamic keys or opaque host reads.
 
 2) Permission and trigger plumbing
-- Introduce DSL trigger declarations/scheduler callbacks on top of the existing `register_trigger`/`unregister_trigger` builtins.
-- Extend manifest entrypoint descriptors with trigger metadata once the runtime semantics are finalized.
+- Extend trigger DSL support beyond time/execute filters (data/pipeline) and add explicit authority overrides.
+- Wire manifest trigger descriptors into deployment tooling/runtime registration.
 
 3) Type system extensions
 - Replace numeric aliases (`fixed_u128`, `Amount`, `Balance`) with deterministic fixed-point/128-bit semantics where needed.
@@ -89,5 +88,6 @@ Short-to-mid term steps to align implementation with the designed grammar and sa
 - Meta feature flags (`zk`, `vector`, `features`) are validated against emitted opcodes; requesting features that are unused now fails compilation.
 - Numeric aliases (e.g., `fixed_u128`) are distinct types with 64-bit semantics; true 128-bit or fixed-point math still requires dedicated helpers.
 - `permission(...)` annotations are enforced by compiler diagnostics and written into manifests; runtime enforcement depends on consuming the metadata.
+- Trigger declarations currently support time/execute filters only; data/pipeline filters and explicit authority overrides remain pending.
 
 Keeping these limitations explicit helps set expectations and aids contributors in targeting the most valuable next steps.

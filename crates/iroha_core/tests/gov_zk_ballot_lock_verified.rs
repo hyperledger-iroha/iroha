@@ -116,8 +116,8 @@ fn zk_ballot_creates_and_extends_lock_on_verified_proof() {
             norito::json::to_value(&200u64).expect("serialize duration"),
         ),
     ])
-    .expect("serialize zk public inputs")
-    .to_string();
+    .expect("serialize zk public inputs");
+    let pub_inputs = norito::json::to_json(&pub_inputs).expect("serialize zk public inputs");
     let cast = CastZkBallot {
         election_id: "ref-zk-lock".to_string(),
         proof_b64: proof_b64.clone(),
@@ -128,7 +128,7 @@ fn zk_ballot_creates_and_extends_lock_on_verified_proof() {
     let rid = "ref-zk-lock".to_string();
     let locks = stx
         .world
-        .governance_locks
+        .governance_locks()
         .get(&rid)
         .cloned()
         .expect("locks present");
@@ -158,8 +158,8 @@ fn zk_ballot_creates_and_extends_lock_on_verified_proof() {
             norito::json::to_value(&400u64).expect("serialize duration"),
         ),
     ])
-    .expect("serialize zk public inputs")
-    .to_string();
+    .expect("serialize zk public inputs");
+    let pub_inputs2 = norito::json::to_json(&pub_inputs2).expect("serialize zk public inputs");
     let cast2 = CastZkBallot {
         election_id: "ref-zk-lock".to_string(),
         proof_b64: bundle2.proof_b64.clone(),
@@ -191,8 +191,8 @@ fn zk_ballot_creates_and_extends_lock_on_verified_proof() {
             norito::json::to_value(&250u64).expect("serialize duration"),
         ),
     ])
-    .expect("serialize shrink inputs")
-    .to_string();
+    .expect("serialize shrink inputs");
+    let shrink_inputs = norito::json::to_json(&shrink_inputs).expect("serialize shrink inputs");
     let shrink = CastZkBallot {
         election_id: "ref-zk-lock".to_string(),
         proof_b64: bundle3.proof_b64.clone(),

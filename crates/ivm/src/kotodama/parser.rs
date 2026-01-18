@@ -402,6 +402,14 @@ impl<'a> Parser<'a> {
                     ));
                 }
                 items.push(self.parse_state_decl()?);
+            } else if self.peek_ident_n(0, "register_trigger") || self.peek_ident_n(0, "trigger") {
+                if !access_hints.is_empty() {
+                    return Err(self.error(
+                        self.tokens[self.pos].clone(),
+                        "access attributes must precede a function",
+                    ));
+                }
+                items.push(self.parse_trigger_decl()?);
             } else if self.peek(TokenKind::Fn) {
                 self.bump();
                 items.push(self.parse_fn_loose(
@@ -492,6 +500,210 @@ impl<'a> Parser<'a> {
             }
         }
         Ok(())
+    }
+
+    fn parse_trigger_decl(&mut self) -> ParseResult<Item> {
+        let tok = self.bump();
+        let keyword = if let TokenKind::Ident(name) = tok.kind.clone() {
+            name
+        } else {
+            return Err(self.error(tok, "register_trigger"));
+        };
+        if keyword != "register_trigger" && keyword != "trigger" {
+            return Err(self.error(tok, "register_trigger"));
+        }
+        let name = self.expect_ident()?;
+        self.expect(TokenKind::LBrace)?;
+        let mut call: Option<TriggerCall> = None;
+        let mut filter: Option<TriggerFilter> = None;
+        let mut repeats: Option<TriggerRepeats> = None;
+        let mut metadata: Vec<TriggerMetadataEntry> = Vec::new();
+        while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
+            let field_tok = self.bump();
+            let field_name = if let TokenKind::Ident(name) = field_tok.kind.clone() {
+                name
+            } else {
+                return Err(self.error(field_tok, "trigger field"));
+            };
+            match field_name.as_str() {
+                "call" => {
+                    if call.is_some() {
+                        return Err(self.error(field_tok, "duplicate `call` field"));
+                    }
+                    call = Some(self.parse_trigger_call()?);
+                    self.expect(TokenKind::Semicolon)?;
+                }
+                "on" => {
+                    if filter.is_some() {
+                        return Err(self.error(field_tok, "duplicate `on` field"));
+                    }
+                    filter = Some(self.parse_trigger_filter()?);
+                    self.expect(TokenKind::Semicolon)?;
+                }
+                "repeats" => {
+                    if repeats.is_some() {
+                        return Err(self.error(field_tok, "duplicate `repeats` field"));
+                    }
+                    repeats = Some(self.parse_trigger_repeats()?);
+                    self.expect(TokenKind::Semicolon)?;
+                }
+                "metadata" => {
+                    metadata = self.parse_trigger_metadata_block()?;
+                    if self.peek(TokenKind::Semicolon) {
+                        self.bump();
+                    }
+                }
+                _ => {
+                    return Err(self.error(
+                        field_tok,
+                        "trigger field (`call`, `on`, `repeats`, `metadata`)",
+                    ));
+                }
+            }
+        }
+        self.expect(TokenKind::RBrace)?;
+        let call = call.ok_or_else(|| self.error(tok.clone(), "trigger `call` field"))?;
+        let filter = filter.ok_or_else(|| self.error(tok, "trigger `on` field"))?;
+        Ok(Item::Trigger(TriggerDecl {
+            name,
+            call,
+            filter,
+            repeats,
+            metadata,
+        }))
+    }
+
+    fn parse_trigger_call(&mut self) -> ParseResult<TriggerCall> {
+        let first = self.expect_ident()?;
+        if self.peek(TokenKind::Colon) && self.peek_n(1, TokenKind::Colon) {
+            self.bump();
+            self.bump();
+            let entrypoint = self.expect_ident()?;
+            Ok(TriggerCall {
+                namespace: Some(first),
+                entrypoint,
+            })
+        } else {
+            Ok(TriggerCall {
+                namespace: None,
+                entrypoint: first,
+            })
+        }
+    }
+
+    fn parse_trigger_filter(&mut self) -> ParseResult<TriggerFilter> {
+        let kind = self.expect_ident()?;
+        // TODO: support data/pipeline trigger filters and explicit authorities in trigger DSL.
+        match kind.as_str() {
+            "time" => Ok(TriggerFilter::Time(self.parse_trigger_time_filter()?)),
+            "execute" => {
+                let next = self.expect_ident()?;
+                if next != "trigger" {
+                    return Err(self.error(
+                        self.tokens[self.pos.saturating_sub(1)].clone(),
+                        "execute trigger <name>",
+                    ));
+                }
+                let trigger_id = self.expect_ident_or_string()?;
+                Ok(TriggerFilter::Execute { trigger_id })
+            }
+            _ => Err(self.error(
+                self.tokens[self.pos.saturating_sub(1)].clone(),
+                "trigger filter (`time` or `execute`)",
+            )),
+        }
+    }
+
+    fn parse_trigger_time_filter(&mut self) -> ParseResult<TriggerTimeFilter> {
+        let kind = self.expect_ident()?;
+        match kind.as_str() {
+            "pre_commit" => Ok(TriggerTimeFilter::PreCommit),
+            "schedule" => {
+                self.expect(TokenKind::LParen)?;
+                let start_ms = self.parse_u64_literal("schedule start_ms")?;
+                let period_ms = if self.peek(TokenKind::Comma) {
+                    self.bump();
+                    Some(self.parse_u64_literal("schedule period_ms")?)
+                } else {
+                    None
+                };
+                self.expect(TokenKind::RParen)?;
+                Ok(TriggerTimeFilter::Schedule {
+                    start_ms,
+                    period_ms,
+                })
+            }
+            _ => Err(self.error(
+                self.tokens[self.pos.saturating_sub(1)].clone(),
+                "time filter (`pre_commit` or `schedule`)",
+            )),
+        }
+    }
+
+    fn parse_trigger_repeats(&mut self) -> ParseResult<TriggerRepeats> {
+        if self.peek_ident_n(0, "indefinitely") {
+            self.bump();
+            return Ok(TriggerRepeats::Indefinitely);
+        }
+        let value = self.parse_u64_literal("repeats")?;
+        let count = u32::try_from(value).map_err(|_| {
+            self.range_error(
+                &self.tokens[self.pos.saturating_sub(1)],
+                "repeats integer literal out of range".to_string(),
+            )
+        })?;
+        Ok(TriggerRepeats::Exactly(count))
+    }
+
+    fn parse_trigger_metadata_block(&mut self) -> ParseResult<Vec<TriggerMetadataEntry>> {
+        self.expect(TokenKind::LBrace)?;
+        let mut entries = Vec::new();
+        while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
+            let key_tok = self.bump();
+            let key = match key_tok.kind {
+                TokenKind::Ident(ref s) => s.clone(),
+                TokenKind::String(ref s) => s.clone(),
+                _ => {
+                    return Err(self.error(
+                        key_tok,
+                        "metadata key (identifier or string literal)",
+                    ));
+                }
+            };
+            self.expect(TokenKind::Colon)?;
+            let value = self.parse_expr()?;
+            self.expect(TokenKind::Semicolon)?;
+            entries.push(TriggerMetadataEntry { key, value });
+        }
+        self.expect(TokenKind::RBrace)?;
+        Ok(entries)
+    }
+
+    fn parse_u64_literal(&mut self, context: &str) -> ParseResult<u64> {
+        let tok = self.bump();
+        match tok.kind.clone() {
+            TokenKind::Number(n) => {
+                self.consume_integer_suffix()?;
+                Ok(n)
+            }
+            TokenKind::Minus => Err(self.error(
+                tok,
+                &format!("{context} expects a non-negative integer literal"),
+            )),
+            _ => Err(self.error(
+                tok,
+                &format!("{context} expects a non-negative integer literal"),
+            )),
+        }
+    }
+
+    fn expect_ident_or_string(&mut self) -> ParseResult<String> {
+        let tok = self.bump();
+        match tok.kind.clone() {
+            TokenKind::Ident(s) => Ok(s),
+            TokenKind::String(s) => Ok(s),
+            _ => Err(self.error(tok, "identifier or string literal")),
+        }
     }
 
     fn parse_access_attributes(&mut self) -> ParseResult<AccessHints> {
@@ -2170,5 +2382,33 @@ mod tests {
         "#;
         let prog = parse(src).expect("parse kotoba block");
         assert!(prog.items.iter().any(|item| matches!(item, Item::Function(_))));
+    }
+
+    #[test]
+    fn parse_trigger_decl() {
+        let src = r#"
+        seiyaku C {
+            kotoage fn run() {}
+            register_trigger wake {
+                call run;
+                on time pre_commit;
+                repeats 3;
+                metadata { tag: "alpha"; count: 1; enabled: true; }
+            }
+        }
+        "#;
+        let prog = parse(src).expect("parse trigger decl");
+        let trigger = prog
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Trigger(t) => Some(t),
+                _ => None,
+            })
+            .expect("trigger present");
+        assert_eq!(trigger.name, "wake");
+        assert_eq!(trigger.call.entrypoint, "run");
+        assert!(matches!(trigger.filter, TriggerFilter::Time(_)));
+        assert_eq!(trigger.metadata.len(), 3);
     }
 }
