@@ -101,49 +101,51 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
         0,
     );
     let mut sblock = state.block(header);
-    let mut stx = sblock.transaction();
-    // Grant permissions to ALICE to propose and submit ballots
-    let p1: Permission = CanProposeContractDeployment {
-        contract_id: "demo.contract".to_string(),
+    {
+        let mut stx = sblock.transaction();
+        // Grant permissions to ALICE to propose and submit ballots
+        let p1: Permission = CanProposeContractDeployment {
+            contract_id: "demo.contract".to_string(),
+        }
+        .into();
+        Grant::account_permission(p1, alice_id.clone())
+            .execute(&alice_id, &mut stx)
+            .expect("grant propose");
+        let p2: Permission = CanSubmitGovernanceBallot {
+            referendum_id: "any".to_string(),
+        }
+        .into();
+        Grant::account_permission(p2, alice_id.clone())
+            .execute(&alice_id, &mut stx)
+            .expect("grant ballot");
+        let manage_vk = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
+        Grant::account_permission(manage_vk, alice_id.clone())
+            .execute(&alice_id, &mut stx)
+            .expect("grant manage vk");
+        let manage_parliament: Permission = CanManageParliament.into();
+        Grant::account_permission(manage_parliament, alice_id.clone())
+            .execute(&alice_id, &mut stx)
+            .expect("grant manage parliament");
+        iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
+            id: bundle.vk_id.clone(),
+            record: bundle.vk_record.clone(),
+        }
+        .execute(&alice_id, &mut stx)
+        .expect("register vk");
+        // Propose a Zk-mode referendum (explicit or default)
+        let prop = ProposeDeployContract {
+            namespace: "apps".to_string(),
+            contract_id: "demo.contract".to_string(),
+            code_hash_hex: "aa".repeat(32),
+            abi_hash_hex: canonical_abi_hex(),
+            abi_version: "1".to_string(),
+            window: None,
+            mode: Some(VotingMode::Zk),
+            manifest_provenance: None,
+        };
+        prop.execute(&alice_id, &mut stx).expect("propose");
+        stx.apply();
     }
-    .into();
-    Grant::account_permission(p1, alice_id.clone())
-        .execute(&alice_id, &mut stx)
-        .expect("grant propose");
-    let p2: Permission = CanSubmitGovernanceBallot {
-        referendum_id: "any".to_string(),
-    }
-    .into();
-    Grant::account_permission(p2, alice_id.clone())
-        .execute(&alice_id, &mut stx)
-        .expect("grant ballot");
-    let manage_vk = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
-    Grant::account_permission(manage_vk, alice_id.clone())
-        .execute(&alice_id, &mut stx)
-        .expect("grant manage vk");
-    let manage_parliament: Permission = CanManageParliament.into();
-    Grant::account_permission(manage_parliament, alice_id.clone())
-        .execute(&alice_id, &mut stx)
-        .expect("grant manage parliament");
-    iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
-        id: bundle.vk_id.clone(),
-        record: bundle.vk_record.clone(),
-    }
-    .execute(&alice_id, &mut stx)
-    .expect("register vk");
-    // Propose a Zk-mode referendum (explicit or default)
-    let prop = ProposeDeployContract {
-        namespace: "apps".to_string(),
-        contract_id: "demo.contract".to_string(),
-        code_hash_hex: "aa".repeat(32),
-        abi_hash_hex: canonical_abi_hex(),
-        abi_version: "1".to_string(),
-        window: None,
-        mode: Some(VotingMode::Zk),
-        manifest_provenance: None,
-    };
-    prop.execute(&alice_id, &mut stx).expect("propose");
-    stx.apply();
     // Discover the referendum id (rid) created by proposal
     let view = state.view();
     let rid = view
@@ -163,9 +165,13 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
         vk_tally: bundle.vk_id.clone(),
         domain_tag: "gov:ballot:v1".to_string(),
     };
-    create
-        .execute(&alice_id, &mut stx)
-        .expect("create election");
+    {
+        let mut stx = sblock.transaction();
+        create
+            .execute(&alice_id, &mut stx)
+            .expect("create election");
+        stx.apply();
+    }
 
     let proof_b64 = bundle.proof_b64.clone();
     let root_hint = hex::encode(bundle.root_bytes());
@@ -193,11 +199,13 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
         proof_b64: proof_b64.clone(),
         public_inputs_json: norito::json::to_json(&public).unwrap(),
     };
-    let mut stx1 = sblock.transaction();
-    instr1
-        .execute(&alice_id, &mut stx1)
-        .expect("first ballot ok");
-    stx1.apply();
+    {
+        let mut stx1 = sblock.transaction();
+        instr1
+            .execute(&alice_id, &mut stx1)
+            .expect("first ballot ok");
+        stx1.apply();
+    }
 
     // Re-submit with the same commit → duplicate nullifier rejection
     let instr2 = CastZkBallot {
@@ -205,11 +213,13 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
         proof_b64: proof_b64.clone(),
         public_inputs_json: norito::json::to_json(&public).unwrap(),
     };
-    let mut stx2 = sblock.transaction();
-    let e = instr2.execute(&alice_id, &mut stx2).unwrap_err();
-    let s = format!("{e}");
-    assert!(s.contains("duplicate ballot nullifier"));
-    stx2.apply();
+    {
+        let mut stx2 = sblock.transaction();
+        let e = instr2.execute(&alice_id, &mut stx2).unwrap_err();
+        let s = format!("{e}");
+        assert!(s.contains("duplicate ballot nullifier"));
+        stx2.apply();
+    }
     let locks_after = sblock
         .world
         .governance_locks()
@@ -237,16 +247,20 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
     );
     let escrow_asset_id = AssetId::new(def_id.clone(), escrow_id.clone());
     let receiver_asset_id = AssetId::new(def_id.clone(), receiver_id.clone());
-    let escrow_balance = **sblock
+    let escrow_balance = sblock
         .world
         .assets()
         .get(&escrow_asset_id)
-        .expect("escrow asset after slash");
-    let receiver_balance = **sblock
+        .expect("escrow asset after slash")
+        .clone()
+        .0;
+    let receiver_balance = sblock
         .world
         .assets()
         .get(&receiver_asset_id)
-        .expect("receiver asset after slash");
+        .expect("receiver asset after slash")
+        .clone()
+        .0;
     assert_eq!(escrow_balance, Numeric::new(75, 0));
     assert_eq!(receiver_balance, Numeric::new(25, 0));
 
@@ -267,11 +281,13 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
         proof_b64: bundle_alt.proof_b64.clone(),
         public_inputs_json: norito::json::to_json(&public2).unwrap(),
     };
-    let mut stx3 = sblock.transaction();
-    instr3
-        .execute(&alice_id, &mut stx3)
-        .expect("second ballot ok");
-    stx3.apply();
+    {
+        let mut stx3 = sblock.transaction();
+        instr3
+            .execute(&alice_id, &mut stx3)
+            .expect("second ballot ok");
+        stx3.apply();
+    }
 
     // Check that we saw a BallotAccepted and a BallotRejected among events
     let events = sblock.world.take_external_events();

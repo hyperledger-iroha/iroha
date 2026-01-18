@@ -32,7 +32,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 
 0. **KOTODAMA-LANG-PARITY — Close remaining Kotodama gaps** (IVM/Kotodama, Line: Shared, Owner: IVM WG, Priority: Medium, Status: 🈺 In Progress, target TBD)
  - [x] Add access-list attributes and wire permission/read/write hints into entrypoint manifests.
- - [ ] Add DSL trigger declarations and wire trigger metadata into entrypoint manifests.
+ - [x] Add DSL trigger declarations and wire trigger metadata into entrypoint manifests.
  - [x] Treat numeric aliases (`fixed_u128`, `Amount`, `Balance`) as distinct 64-bit scalar types with alias-preserving arithmetic.
  - [ ] Implement deterministic `fixed_u128`/`Amount` semantics beyond 64-bit (fixed-point/128-bit) with stable arithmetic helpers.
  - [x] Include literal map keys (including pointer-keyed entries) and literal trigger specs in access hints; lint on non-literal trigger specs and state-map keys.

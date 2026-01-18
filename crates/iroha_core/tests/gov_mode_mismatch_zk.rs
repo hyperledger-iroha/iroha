@@ -121,7 +121,8 @@ fn zk_ballot_rejected_on_plain_referendum() {
         .map_or_else(|| "rid-plain".to_string(), |(k, _)| k.clone());
     // Valid proof bundle reused from TinyAdd helper
     let proof_b64 = bundle.proof_b64.clone();
-    stx.world.elections().insert(
+    let mut stx2 = sblock.transaction();
+    stx2.world.elections_mut().insert(
         rid.clone(),
         iroha_core::state::ElectionState {
             options: 1,
@@ -145,7 +146,6 @@ fn zk_ballot_rejected_on_plain_referendum() {
         proof_b64,
         public_inputs_json: public_inputs,
     };
-    let mut stx2 = sblock.transaction();
     let err = instr.execute(&ALICE_ID, &mut stx2).unwrap_err();
     let s = format!("{err}");
     assert!(s.contains("referendum mode mismatch"));

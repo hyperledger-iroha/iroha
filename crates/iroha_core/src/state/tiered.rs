@@ -1987,6 +1987,7 @@ mod measured_bytes_impls {
         confidential::ConfidentialStatus,
         consensus::{CertPhase, Qc, QcAggregate, QcRef},
         domain::{Domain, DomainId},
+        events::EventFilterBox,
         governance::types::{
             AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal,
             ParliamentBodies, ParliamentBody, ParliamentRoster, ProposalKind,
@@ -2023,8 +2024,9 @@ mod measured_bytes_impls {
         },
         smart_contract::manifest::{
             AccessSetHints, ContractManifest, EntryPointKind, EntrypointDescriptor,
-            ManifestProvenance,
+            ManifestProvenance, TriggerCallback, TriggerDescriptor,
         },
+        trigger::{TriggerId, action::Repeats},
         zk::BackendTag,
     };
     use iroha_primitives::{
@@ -2107,6 +2109,7 @@ mod measured_bytes_impls {
         ParliamentBody,
         ProofStatus,
         QcRef,
+        Repeats,
         RuntimeUpgradeId,
         RuntimeUpgradeStatus,
         ZkAssetMode,
@@ -2305,6 +2308,12 @@ mod measured_bytes_impls {
         }
     }
 
+    impl MeasuredBytes for TriggerId {
+        fn measured_bytes(&self) -> usize {
+            size_of::<TriggerId>().saturating_add(self.name.measured_bytes_extra())
+        }
+    }
+
     impl MeasuredBytes for IpfsPath {
         fn measured_bytes(&self) -> usize {
             size_of::<IpfsPath>().saturating_add(self.as_ref().len())
@@ -2410,6 +2419,12 @@ mod measured_bytes_impls {
                 total = total.saturating_add(value.measured_bytes_extra());
             }
             total
+        }
+    }
+
+    impl MeasuredBytes for EventFilterBox {
+        fn measured_bytes(&self) -> usize {
+            size_of::<EventFilterBox>()
         }
     }
 
@@ -2679,6 +2694,28 @@ mod measured_bytes_impls {
         }
     }
 
+    impl MeasuredBytes for TriggerCallback {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<TriggerCallback>();
+            total = total.saturating_add(self.namespace.measured_bytes_extra());
+            total = total.saturating_add(self.entrypoint.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for TriggerDescriptor {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<TriggerDescriptor>();
+            total = total.saturating_add(self.id.measured_bytes_extra());
+            total = total.saturating_add(self.repeats.measured_bytes_extra());
+            total = total.saturating_add(self.filter.measured_bytes_extra());
+            total = total.saturating_add(self.authority.measured_bytes_extra());
+            total = total.saturating_add(self.metadata.measured_bytes_extra());
+            total = total.saturating_add(self.callback.measured_bytes_extra());
+            total
+        }
+    }
+
     impl MeasuredBytes for EntrypointDescriptor {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<EntrypointDescriptor>();
@@ -2687,6 +2724,7 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.permission.measured_bytes_extra());
             total = total.saturating_add(self.read_keys.measured_bytes_extra());
             total = total.saturating_add(self.write_keys.measured_bytes_extra());
+            total = total.saturating_add(self.triggers.measured_bytes_extra());
             total
         }
     }
@@ -3806,6 +3844,22 @@ mod tests {
         );
         let updated_bytes = approvals.measured_bytes();
         assert!(updated_bytes >= base_bytes);
+    }
+
+    #[test]
+    fn measured_bytes_cover_trigger_filters() {
+        use iroha_data_model::{
+            events::{EventFilterBox, data::DataEventFilter},
+            trigger::{TriggerId, action::Repeats},
+        };
+
+        let trigger_id: TriggerId = "audit_trigger".parse().expect("trigger id");
+        let repeats = Repeats::Exactly(1);
+        let filter = EventFilterBox::Data(DataEventFilter::Any);
+
+        assert!(trigger_id.measured_bytes() >= std::mem::size_of::<TriggerId>());
+        assert_eq!(repeats.measured_bytes(), std::mem::size_of::<Repeats>());
+        assert!(filter.measured_bytes() >= std::mem::size_of::<EventFilterBox>());
     }
 
     fn dummy_qc(seed: u8) -> Qc {

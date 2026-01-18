@@ -6693,6 +6693,7 @@ impl Actor {
             &BTreeMap::new(),
             pending_caps,
             config.rbc_pending_ttl,
+            config.rbc_pending_session_limit,
             telemetry_option,
         );
 

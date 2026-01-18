@@ -24,6 +24,7 @@ Legend: ✅ Implemented, 🟨 Parsed, 💤 Planned
 | Upgrade hook `kaizen`/`改善` + `permission` |  🟨    | parsed; governance/dispatch enforced by runtime |
 | `kotoba {…}` translations                    |  🟨    | accepted; ignored by codegen |
 | Access hints `#[access(read=..., write=...)]`|  ✅    | collected into manifest/entrypoint hints |
+| Trigger declarations `register_trigger {…}`  |  ✅    | time/execute trigger DSL; metadata recorded in entrypoint manifests |
 | `state Type name;`                           |  ✅    | host-backed durable overlays (Norito TLV persistence + checkpoint/restore rollback) |
 | `struct Name { … }`                          |  ✅    | lowered to tuple layout; field access compiled |
 | `let name[: Type] = expr;`                   |  ✅    | optional type annotation |
@@ -87,6 +88,7 @@ Contract   = "seiyaku" Ident "{" { ContractItem } "}" ;
 ContractItem = StructDef                                            // [Parsed]
              | StateDecl                                            // [Parsed]
              | MetaBlock                                            // [Implemented]
+             | TriggerDecl                                          // [Implemented]
              | KotobaBlock                                          // [Parsed]
              | [AccessAttr] ( "fn" | "kotoage" "fn" ) FunctionSignature [ Permission ] Block // [Parsed]
              | "hajimari" "(" ")" Block                            // [Parsed]
@@ -104,10 +106,21 @@ MetaEntry  = ( "abi_version" | "abi" ) ":" Number
            | "zk" ":" ( "true" | "false" )
            | "vector" ":" ( "true" | "false" ) ;
 
+TriggerDecl = ("register_trigger" | "trigger") Ident "{" { TriggerField } "}" ;
+TriggerField = "call" CallTarget ";"                         // callback target
+             | "on" TriggerFilter ";"                        // event filter
+             | "repeats" Repeats ";"                         // repetition policy
+             | "metadata" "{" { MetadataEntry ";" } "}" [ ";" ] ;
+CallTarget = Ident [ "::" Ident ] ;
+TriggerFilter = "time" ("pre_commit" | "schedule" "(" Number [ "," Number ] ")")
+              | "execute" "trigger" (Ident | String) ;
+Repeats = "indefinitely" | Number ;
+MetadataEntry = (Ident | String) ":" Literal ;               // JSON literal (string/number/bool/null/json!)
+
 FunctionSignature = Ident "(" [ ParamList ] ")" ;                  // see Parameters
 ```
 
-Contract‑level forms and `kotoage fn` are parsed. Contract metadata declared via `meta {}` influences IVM header fields (ABI version, vector length, max cycles) and mode bits (ZK/VECTOR). Free functions are fully compiled end‑to‑end today. See Gap Analysis for details.
+Contract‑level forms and `kotoage fn` are parsed. Contract metadata declared via `meta {}` influences IVM header fields (ABI version, vector length, max cycles) and mode bits (ZK/VECTOR). Trigger declarations attach metadata to entrypoint manifests and are expected to be registered by the deployment pipeline rather than emitted as bytecode. Free functions are fully compiled end‑to‑end today. See Gap Analysis for details.
 
 ### Parameters & Returns [Parsed/Enforced]
 ```

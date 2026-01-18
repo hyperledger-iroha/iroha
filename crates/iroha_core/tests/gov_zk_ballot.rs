@@ -12,7 +12,7 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
-    state::{State, World},
+    state::{State, World, WorldReadOnly},
 };
 use iroha_data_model::{
     block::BlockHeader,
@@ -26,6 +26,7 @@ use iroha_executor_data_model::permission::governance::{
 };
 use iroha_primitives::json::Json;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
+use mv::storage::StorageReadOnly;
 
 fn derive_ballot_nullifier(
     domain_tag: &str,
@@ -38,15 +39,15 @@ fn derive_ballot_nullifier(
     let mut input = Vec::with_capacity(
         domain_tag.len() + chain_id.as_str().len() + election_id.len() + commit.len() + 24,
     );
-    let mut push_len = |len: usize| {
+    let mut push_len = |buf: &mut Vec<u8>, len: usize| {
         let len_u64 = len as u64;
-        input.extend_from_slice(&len_u64.to_le_bytes());
+        buf.extend_from_slice(&len_u64.to_le_bytes());
     };
-    push_len(domain_tag.len());
+    push_len(&mut input, domain_tag.len());
     input.extend_from_slice(domain_tag.as_bytes());
-    push_len(chain_id.as_str().len());
+    push_len(&mut input, chain_id.as_str().len());
     input.extend_from_slice(chain_id.as_str().as_bytes());
-    push_len(election_id.len());
+    push_len(&mut input, election_id.len());
     input.extend_from_slice(election_id.as_bytes());
     input.extend_from_slice(commit);
     let digest = Blake2b512::digest(&input);
@@ -306,7 +307,7 @@ fn zk_ballot_accepts_direction_hint_without_lock_hints_when_bond_disabled() {
         Some(DataEvent::Governance(GovernanceEvent::BallotAccepted(_)))
     )));
     assert!(
-        stx.world.governance_locks.get(&election_id).is_none(),
+        stx.world.governance_locks().get(&election_id).is_none(),
         "direction-only hints must not create a lock"
     );
 }
@@ -551,7 +552,9 @@ fn zk_ballot_rejects_owner_mismatch_without_recording() {
     let duration = stx.gov.conviction_step_blocks.max(1u64);
     let public_inputs = format!(
         "{{\"owner\":\"{}\",\"amount\":{},\"duration_blocks\":{}}}",
-        BOB_ID, amount, duration
+        BOB_ID.as_ref(),
+        amount,
+        duration
     );
 
     let err = CastZkBallot {
@@ -566,7 +569,7 @@ fn zk_ballot_rejects_owner_mismatch_without_recording() {
 
     let st_after = stx
         .world
-        .elections
+        .elections()
         .get(&election_id)
         .expect("election exists");
     assert!(st_after.ballot_nullifiers.is_empty());

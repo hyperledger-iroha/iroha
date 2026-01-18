@@ -55,6 +55,8 @@ pub enum Item {
     /// these to ephemeral allocations per run; durable host-backed storage is
     /// pending and tracked in the roadmap/docs.
     State(StateDecl),
+    /// Contract-level trigger declaration (manifest-only metadata).
+    Trigger(TriggerDecl),
 }
 
 /// Metadata declared at the `seiyaku` contract level.
@@ -125,6 +127,54 @@ pub struct StructDef {
 pub struct StateDecl {
     pub name: String,
     pub ty: TypeExpr,
+}
+
+/// Contract-level trigger declaration.
+#[derive(Debug, PartialEq, Clone)]
+pub struct TriggerDecl {
+    pub name: String,
+    pub call: TriggerCall,
+    pub filter: TriggerFilter,
+    pub repeats: Option<TriggerRepeats>,
+    pub metadata: Vec<TriggerMetadataEntry>,
+}
+
+/// Trigger callback target.
+#[derive(Debug, PartialEq, Clone)]
+pub struct TriggerCall {
+    pub namespace: Option<String>,
+    pub entrypoint: String,
+}
+
+/// Trigger filter definition.
+#[derive(Debug, PartialEq, Clone)]
+pub enum TriggerFilter {
+    Time(TriggerTimeFilter),
+    Execute { trigger_id: String },
+}
+
+/// Time trigger filter variants.
+#[derive(Debug, PartialEq, Clone)]
+pub enum TriggerTimeFilter {
+    PreCommit,
+    Schedule {
+        start_ms: u64,
+        period_ms: Option<u64>,
+    },
+}
+
+/// Trigger repeat policy.
+#[derive(Debug, PartialEq, Clone)]
+pub enum TriggerRepeats {
+    Indefinitely,
+    Exactly(u32),
+}
+
+/// Trigger metadata entry (literal JSON values only).
+#[derive(Debug, PartialEq, Clone)]
+pub struct TriggerMetadataEntry {
+    pub key: String,
+    pub value: Expr,
 }
 
 #[derive(Debug, PartialEq, Clone)]

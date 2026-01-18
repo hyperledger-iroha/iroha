@@ -914,6 +914,29 @@ Metadata emitted per Kotodama entrypoint.
 | `permission` | `Option<String>` | Optional dispatcher permission required before invocation. |
 | `read_keys` | `Vec<String>` | Advisory read set scoped to the entrypoint. |
 | `write_keys` | `Vec<String>` | Advisory write set scoped to the entrypoint. |
+| `triggers` | `Vec<TriggerDescriptor>` | Trigger declarations that call this entrypoint. |
+
+#### TriggerCallback fields
+
+Entrypoint callback target referenced by a trigger declaration.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `namespace` | `Option<String>` | Optional contract namespace for cross-contract callbacks. |
+| `entrypoint` | `String` | Entrypoint name to invoke. |
+
+#### TriggerDescriptor fields
+
+Declarative trigger metadata attached to an entrypoint.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `TriggerId` | Trigger identifier. |
+| `repeats` | `Repeats` | Repeat policy for the trigger action. |
+| `filter` | `EventFilterBox` | Event filter that drives execution. |
+| `authority` | `Option<AccountId>` | Optional explicit authority override. |
+| `metadata` | `Metadata` | Trigger metadata payload (JSON map). |
+| `callback` | `TriggerCallback` | Callback target for this trigger. |
 
 **Smart-contract notes:**
 
