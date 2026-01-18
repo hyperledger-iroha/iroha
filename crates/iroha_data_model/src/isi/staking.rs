@@ -104,11 +104,17 @@ isi! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::prelude::AccountId;
+    use crate::prelude::{AccountId, Algorithm, DomainId, KeyPair};
+
+    fn sample_account() -> AccountId {
+        let domain: DomainId = "wonderland".parse().expect("domain id");
+        let key_pair = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
+        AccountId::new(domain, key_pair.public_key().clone())
+    }
 
     #[test]
     fn activate_public_lane_validator_new_sets_fields() {
-        let validator: AccountId = "validator@nexus".parse().expect("account id");
+        let validator = sample_account();
         let instruction = ActivatePublicLaneValidator::new(LaneId::SINGLE, validator.clone());
 
         assert_eq!(*instruction.lane_id(), LaneId::SINGLE);
@@ -117,7 +123,7 @@ mod tests {
 
     #[test]
     fn register_public_lane_validator_new_sets_fields() {
-        let validator: AccountId = "validator@nexus".parse().expect("account id");
+        let validator = sample_account();
         let metadata = Metadata::default();
         let instruction = RegisterPublicLaneValidator::new(
             LaneId::SINGLE,
