@@ -7817,6 +7817,34 @@ impl Actor {
         }
     }
 
+    fn note_view_change_from_block(&mut self, height: u64, view: u64) {
+        let prev_height = self.phase_tracker.round_height;
+        let prev_view = self.phase_tracker.round_view;
+        if let Some(prev_height) = prev_height {
+            if height < prev_height {
+                return;
+            }
+            if height == prev_height && view < prev_view {
+                return;
+            }
+        }
+        let advanced = match prev_height {
+            Some(prev_height) if prev_height == height => view > prev_view,
+            _ => view > 0,
+        };
+        if prev_height != Some(height) || view > prev_view {
+            self.phase_tracker
+                .on_view_change(height, view, Instant::now());
+        }
+        super::status::set_view_change_index(view);
+        if advanced {
+            super::status::inc_view_change_install();
+            if let Some(telemetry) = self.telemetry_handle() {
+                telemetry.inc_view_change_install();
+            }
+        }
+    }
+
     fn update_phase_metrics(&mut self, phase: PipelinePhase, duration: Duration) {
         let ms = u64::try_from(duration.as_millis().min(u128::from(u64::MAX))).unwrap_or(u64::MAX);
         let ema_ms = round_duration_ms(
@@ -8962,17 +8990,17 @@ impl Actor {
                 );
                 return Ok(None);
             }
-        let roster_source = self
-            .rbc_session_roster_source(key)
-            .unwrap_or(RbcRosterSource::Init);
-        let allow_unverified = self.allow_unverified_rbc_roster(key);
-        if !roster_source.is_authoritative() && !allow_unverified {
-            debug!(
-                height = key.1,
-                view = key.2,
-                "deferring RBC READY until commit roster is verified"
-            );
-            return Ok(None);
+            let roster_source = self
+                .rbc_session_roster_source(key)
+                .unwrap_or(RbcRosterSource::Init);
+            let allow_unverified = self.allow_unverified_rbc_roster(key);
+            if !roster_source.is_authoritative() && !allow_unverified {
+                debug!(
+                    height = key.1,
+                    view = key.2,
+                    "deferring RBC READY until commit roster is verified"
+                );
+                return Ok(None);
             }
 
             let total = session.total_chunks();

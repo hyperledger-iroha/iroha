@@ -626,6 +626,7 @@ impl Actor {
                 state_events,
             } => {
                 let mut pending = pending_opt.take().expect("pending present");
+                self.note_view_change_from_block(pending_height, pending_view);
                 crate::sumeragi::status::record_kura_stage(
                     pending_height,
                     pending_view,
@@ -4072,6 +4073,7 @@ impl Actor {
             .and_then(|nz| self.kura.get_block(nz));
         if let Some(block) = committed_block.as_ref() {
             self.prune_descendants_not_on_tip(height, block.hash());
+            self.note_view_change_from_block(height, block.header().view_change_index());
         }
         if let Some(committed_qc) = self.latest_committed_qc() {
             let promote_highest = self

@@ -7533,8 +7533,11 @@ mod pointer_abi_tests {
         let mut vm = ivm::IVM::new(1_000);
         let authority = ALICE_ID.clone();
         let args = Json::new(norito::json!({"val": 42}));
-        let mut host: CoreHost =
-            CoreHostImpl::with_accounts_and_args(authority.clone(), Arc::new(vec![authority.clone()]), args);
+        let mut host: CoreHost = CoreHostImpl::with_accounts_and_args(
+            authority.clone(),
+            Arc::new(vec![authority.clone()]),
+            args,
+        );
         vm.load_program(&ivm::ProgramMetadata::default().encode())
             .expect("load header");
 
@@ -7557,12 +7560,10 @@ mod pointer_abi_tests {
             .expect("mint syscall");
         let asset_id = AssetId::of(asset_def, authority);
         let isi = Mint::asset_numeric(42u64, asset_id);
-        let expected = crate::gas::meter_instruction(&InstructionBox::from(MintBox::from(isi.clone())));
+        let expected =
+            crate::gas::meter_instruction(&InstructionBox::from(MintBox::from(isi.clone())));
         assert_eq!(gas, expected);
-        assert_eq!(
-            host.queued,
-            vec![InstructionBox::from(MintBox::from(isi))]
-        );
+        assert_eq!(host.queued, vec![InstructionBox::from(MintBox::from(isi))]);
     }
 
     #[test]
