@@ -1,6 +1,26 @@
 # Status
 
 ## Latest Updates
+- Governance ZK ballot: tighten error assertions, keep referendum window active for VK-commitment mismatch test, and disable per-tx verify-call cap in alias checks. Tests: `cargo test -p iroha_core --test gov_zk_ballot --features "zk-tests halo2-dev-tests" -- --nocapture` (pass; warnings: norito dead_code helpers, existing iroha_core unused warnings).
+- Kotodama: suppress opaque-access lint warnings for literal `execute_instruction`/`execute_query` payloads that decode into hintable InstructionBox/QueryRequest; add lint coverage.
+- Tests: not run (not requested).
+- ZK: wire Kaigi usage backend into Halo2 verifier dispatch and restore `Identifiable` import for Kotodama register access-hint paths.
+- Tests: `cargo test -p iroha_core --tests --features "zk-tests halo2-dev-tests" zk` (timed out after 1800s while running `gov_auto_close_zk_requires_tally`; ZK unit tests passed, including `kaigi_usage_backend_accepts_valid_proof`).
+- Roadmap: add governance flow tasks for repair escalation/slash proposals under no-admin launch invariants.
+- Tests: not run (docs-only change).
+- Kotodama: decode literal `execute_query` NoritoBytes payloads (`QueryRequest::FindAssetById`) to derive access hints and add compiler coverage; update docs/roadmap.
+- Tests: not run (not requested).
+- Kotodama: decode literal `execute_instruction` NoritoBytes payloads (InstructionBox) to derive access hints, including detail-key coverage for domain/asset/NFT/trigger metadata; add regression coverage and update docs/roadmap.
+- Tests: not run (not requested).
+- Kotodama: emit map-level access hints for dynamic state-map keys and include map base keys alongside literal entries; update tests/docs.
+- Tests: not run (not requested).
+- Kotodama: add per-entrypoint access hint coverage reporting (`access_hints_complete`/`access_hints_skipped`), update tests and Android manifest docs.
+- Tests: not run (not requested).
+- Tests: `cargo test -p iroha_core --tests --features "zk-tests halo2-dev-tests"` (timed out after 300s while running 2820 tests; build completed).
+- Kotodama: skip access hints for dynamic state paths/opaque host calls, gate entrypoint hints per-function, and add lints for nonliteral state paths + opaque access; tests/docs updated.
+- Tests: `cargo test -p ivm` (failed: `iso20022::tests::msg_sign_and_verify_roundtrip_secp256k1`).
+- Kotodama: allow `call` keyword in trigger DSL fields, permit bool arithmetic with int, and fix create_trigger access-hint tests (permissions + valid account id).
+- Tests: `cargo test -p ivm` (failed: `iso20022::tests::msg_sign_and_verify_roundtrip_secp256k1`).
 - Kotodama: add `register_trigger` DSL (time/execute filters, metadata), emit trigger descriptors in entrypoint manifests, update manifest/docs coverage.
 - Tests: not run (not requested).
 - Python SDK: pin `urllib3<2` to avoid LibreSSL warnings on macOS when using `requests`.

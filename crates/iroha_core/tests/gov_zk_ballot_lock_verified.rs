@@ -136,7 +136,7 @@ fn zk_ballot_creates_and_extends_lock_on_verified_proof() {
         .get(&rid)
         .cloned()
         .expect("locks present");
-    assert!(locks.locks.contains_key(&ALICE_ID));
+    assert!(locks.locks.contains_key(&*ALICE_ID));
     let created_events = stx.world.take_external_events();
     assert!(created_events.iter().any(|event| matches!(
         event.as_data_event(),

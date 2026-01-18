@@ -222,18 +222,16 @@ fn commit_qc_from_cache_or_history(
     if let Some(qc) = qc_cache.get(&key) {
         return Some(qc.clone());
     }
-    super::status::commit_qc_history()
-        .into_iter()
-        .find(|qc| {
-            qc.phase == crate::sumeragi::consensus::Phase::Commit
-                && qc.subject_block_hash == block_hash
-                && qc.height == height
-                && qc.view == view
-                && qc.epoch == epoch
-                && qc.mode_tag == mode_tag
-                && qc.validator_set.as_slice() == commit_topology
-                && !qc.aggregate.bls_aggregate_signature.is_empty()
-        })
+    super::status::commit_qc_history().into_iter().find(|qc| {
+        qc.phase == crate::sumeragi::consensus::Phase::Commit
+            && qc.subject_block_hash == block_hash
+            && qc.height == height
+            && qc.view == view
+            && qc.epoch == epoch
+            && qc.mode_tag == mode_tag
+            && qc.validator_set.as_slice() == commit_topology
+            && !qc.aggregate.bls_aggregate_signature.is_empty()
+    })
 }
 
 impl Actor {

@@ -14,9 +14,13 @@ use halo2_proofs::{
         ff::PrimeField as _,
         pasta::{EqAffine as Curve, Fp as Scalar},
     },
-    plonk::{ProvingKey, VerifyingKey, create_proof, keygen_pk, keygen_vk},
-    poly::{commitment::ParamsProver, ipa::commitment::ParamsIPA},
-    transcript::{Blake2bWrite, Challenge255},
+    plonk::{VerifyingKey, create_proof, keygen_pk, keygen_vk},
+    poly::commitment::ParamsProver,
+    poly::ipa::{
+        commitment::{IPACommitmentScheme, ParamsIPA},
+        multiopen::ProverIPA,
+    },
+    transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer},
 };
 use iroha_config::parameters::actual::VerifyingKeyRef;
 #[cfg(feature = "telemetry")]
@@ -52,7 +56,7 @@ use kaigi_zk::{
     compute_usage_commitment, compute_usage_commitment_bytes, empty_roster_root_hash,
     roster_root_limbs,
 };
-use rand::rngs::OsRng;
+use rand_core_06::OsRng;
 
 const ROSTER_VK_NAME: &str = "kaigi_roster_v1";
 const USAGE_VK_NAME: &str = "kaigi_usage_v1";
@@ -274,8 +278,8 @@ fn build_roster_envelope(
     let inst_refs: Vec<&[Scalar]> = inst_cols.iter().map(Vec::as_slice).collect();
     let proof_instances = vec![inst_refs.as_slice()];
 
-    let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(Vec::new());
-    create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+    let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(Vec::new());
+    create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
         params,
         &pk,
         &[circuit],
@@ -322,8 +326,8 @@ fn build_usage_envelope(
     let inst_refs: Vec<&[Scalar]> = inst_cols.iter().map(Vec::as_slice).collect();
     let proof_instances = vec![inst_refs.as_slice()];
 
-    let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(Vec::new());
-    create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+    let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(Vec::new());
+    create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
         params,
         &pk,
         &[circuit],
