@@ -1,7 +1,7 @@
 # Status
 
 ## Latest Updates
-- SDK docs: add Python/Swift configuration snapshot examples for streaming transport defaults and re-export transport config DTOs from the Python package.
+- SDK docs: add Python/Swift configuration snapshot examples for streaming transport defaults and re-export transport config DTOs from the Python SDKs (`iroha_python`, `iroha_torii_client`).
 - Merge: resolve conflict markers in Kotodama compiler lowering, IVM prebuild/test harnesses, Sumeragi NEW_VIEW tracking, and config snapshots/docs.
 - ZK tests: fix ProofAttachment lane-privacy init, un-nest zk transfer inline-commitment test, and use governance accessors in ZK governance integration tests.
 - Tests: `cargo test -p iroha_core --test zk_asset_vk_enforcement --features "zk-tests halo2-dev-tests"` (pass; warning: unused `parse_item` in `crates/ivm/src/kotodama/parser.rs`).

@@ -1,4 +1,4 @@
-"""Lightweight Torii HTTP client for subscriptions, attachments, prover, and governance endpoints."""
+"""Lightweight Torii HTTP client for subscriptions, attachments, config, and governance endpoints."""
 
 from .client import (
     BallotSubmitResult,
@@ -14,6 +14,15 @@ from .client import (
     GovernanceReferendumStatus,
     GovernanceTallySummary,
     GovernanceUnlockStats,
+    ConfigurationSnapshot,
+    ConfidentialGasSchedule,
+    LoggerConfig,
+    NetworkConfig,
+    QueueConfig,
+    TransportConfig,
+    TransportNoritoRpcConfig,
+    StreamingTransportConfig,
+    StreamingSoranetConfig,
     NetworkTimeRttBucket,
     NetworkTimeSample,
     NetworkTimeSnapshot,
@@ -68,6 +77,15 @@ __all__ = [
     "GovernanceReferendumStatus",
     "GovernanceTallySummary",
     "GovernanceUnlockStats",
+    "ConfigurationSnapshot",
+    "ConfidentialGasSchedule",
+    "LoggerConfig",
+    "NetworkConfig",
+    "QueueConfig",
+    "TransportConfig",
+    "TransportNoritoRpcConfig",
+    "StreamingTransportConfig",
+    "StreamingSoranetConfig",
     "NetworkTimeSnapshot",
     "NetworkTimeSample",
     "NetworkTimeRttBucket",
