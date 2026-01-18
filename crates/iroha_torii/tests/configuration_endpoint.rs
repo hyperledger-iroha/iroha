@@ -104,6 +104,16 @@ async fn configuration_endpoint_includes_transport_summary() {
             .as_ref(),
         "spool directory must be exposed to clients"
     );
+    assert_eq!(
+        streaming.provision_window_segments,
+        cfg.streaming.soranet.provision_window_segments,
+        "provision window segments should be exposed to clients"
+    );
+    assert_eq!(
+        streaming.provision_queue_capacity,
+        cfg.streaming.soranet.provision_queue_capacity,
+        "provision queue capacity should be exposed to clients"
+    );
     let expected_mode = match cfg.sumeragi.consensus_mode {
         ConsensusMode::Permissioned => "permissioned",
         ConsensusMode::Npos => "npos",

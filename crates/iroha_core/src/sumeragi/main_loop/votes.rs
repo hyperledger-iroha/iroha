@@ -287,7 +287,7 @@ impl Actor {
                 crate::sumeragi::new_view_stats::note_receipt(
                     vote.height,
                     vote.view,
-                    signer_peer.clone(),
+                    &signer_peer,
                 );
                 if let Some(local_view) = stale_view {
                     debug!(

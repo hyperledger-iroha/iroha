@@ -22,7 +22,8 @@ Legend: ✅ Implemented, 🟨 Parsed, 💤 Planned
 | Initializer `hajimari`/`始まり`             |  ✅    | compiled as function; runtime may call on deploy |
 | Public function `kotoage fn`/`言挙げ fn`     |  ✅    | compiled as function; “public” enforced by runtime |
 | Upgrade hook `kaizen`/`改善` + `permission` |  🟨    | parsed; governance/dispatch enforced by runtime |
-| `kotoba {…}` translations                    |  🟨    | parsed; ignored by codegen |
+| `kotoba {…}` translations                    |  🟨    | accepted; ignored by codegen |
+| Access hints `#[access(read=..., write=...)]`|  ✅    | collected into manifest/entrypoint hints |
 | `state Type name;`                           |  ✅    | host-backed durable overlays (Norito TLV persistence + checkpoint/restore rollback) |
 | `struct Name { … }`                          |  ✅    | lowered to tuple layout; field access compiled |
 | `let name[: Type] = expr;`                   |  ✅    | optional type annotation |
@@ -52,7 +53,9 @@ See examples under `crates/ivm/docs/examples`.
 ## Lexical Elements [Implemented]
 - Identifiers: ASCII letters, digits, underscore; must not start with a digit.
 - Numbers: signed 64-bit decimal integers (no hex/float yet).
-- Strings: double-quoted without escape sequences (temporary limitation).
+- Strings: double-quoted with escapes (`\\n`, `\\r`, `\\t`, `\\0`, `\\xNN`, `\\u{...}`, `\\"`, `\\\\`).
+- Raw strings: `r"..."` or `r#"..."#` (no escapes, multiline allowed).
+- Byte strings: `b"..."` with escapes, or raw `br"..."` / `rb"..."`; yield `bytes` literals.
 - Comments: `//` to end of line.
 - Whitespace: ignored except for tracking line/column in diagnostics.
 - Keywords: `fn`, `let`, `if`, `else`, `while`, `for`, `seiyaku`/`誓約`, `hajimari`/`始まり`, `kaizen`/`改善`, `kotoage`/`言挙げ`.
@@ -74,14 +77,18 @@ Item      = FreeFunction               // [Implemented]
 FreeFunction = "fn" Ident "(" [ NameList ] ")" Block ;          // params are names only
 NameList     = Ident { "," Ident } ;
 
-PublicFunctionShortcut = "kotoage" "fn" FunctionSignature Block ; // outside any contract
+AccessAttr = "#[" "access" "(" AccessList ")" "]" ;
+AccessList = AccessEntry { "," AccessEntry } ;
+AccessEntry = ("read" | "write") "=" (String | "[" StringList "]") ;
+
+PublicFunctionShortcut = [AccessAttr] "kotoage" "fn" FunctionSignature Block ; // outside any contract
 
 Contract   = "seiyaku" Ident "{" { ContractItem } "}" ;
 ContractItem = StructDef                                            // [Parsed]
              | StateDecl                                            // [Parsed]
              | MetaBlock                                            // [Implemented]
              | KotobaBlock                                          // [Parsed]
-             | ( "fn" | "kotoage" "fn" ) FunctionSignature [ Permission ] Block // [Parsed]
+             | [AccessAttr] ( "fn" | "kotoage" "fn" ) FunctionSignature [ Permission ] Block // [Parsed]
              | "hajimari" "(" ")" Block                            // [Parsed]
              | "kaizen"   "(" [ ParamList ] ")" [ Permission ] Block ; // [Parsed]
 
@@ -115,7 +122,7 @@ ReturnTy   = "->" Type ;
 - If a function declares a non-`unit` return type, all control‑flow paths must return a value. [Enforced]
 - If a function omits a return type, `return expr;` is rejected — declaring an explicit return type is required to return a value. [Enforced]
 - Parameter typing:
-  - Recognized primitives: `int`/`i64`/`number`, `bool`, `string` are enforced in expressions.
+  - Recognized primitives: `int`/`i64`/`number`, `bool`, `string`, and numeric aliases (`fixed_u128`, `Amount`, `Balance`) are enforced in expressions. Numeric aliases are distinct types with 64‑bit int semantics; arithmetic preserves the alias and mixing alias types requires converting through an `int` binding.
   - Unknown identifiers (e.g., `AccountId`, `Asset`) are treated as opaque handle types; they cannot be used in arithmetic but can be compared for equality. [Enforced]
 
 ## Blocks and Statements [Implemented]
@@ -186,6 +193,7 @@ ArgList = Expr { "," Expr } ;
 Built-in calls recognized by the semantic layer (arity and types enforced):
 - ZK/crypto: `poseidon2(a, b)`, `poseidon6(a,b,c,d,e,f)`, `pubkgen(s)`, `valcom(v, r)`, `assert_eq(x, y)`.
 - Iroha syscalls: `mint_asset(acc, asset, amount)`, `burn_asset(acc, asset, amount)`, `transfer_asset(from, to, asset, amount)`, `register_asset(name, symbol, quantity, mintable)`, `create_new_asset(name, symbol, quantity, account, mintable)`, `nft_mint_asset(id, owner)`, `nft_transfer_asset(from, id, to)`, `nft_set_metadata(id, json)`, `nft_burn_asset(id)`.
+- Trigger syscalls: `create_trigger(json)`, `register_trigger(json)` (alias), `remove_trigger(name)`/`unregister_trigger(name)`, `set_trigger_enabled(name, enabled)`.
  - Iroha helpers (samples/dev): `create_nfts_for_all_users()`, `set_execution_depth(value)`, `set_account_detail(account, key, value)`.
  - Durable state helpers (host): `host::state_get(name_path) -> Blob`, `host::state_set(name_path, norito_bytes_value)`, `host::state_del(name_path)`.
  - Encoding helpers (WIP): `encode_int(int) -> Blob`, `decode_int(Blob) -> int`.
@@ -240,7 +248,7 @@ seiyaku MyDex {
 ```
 
 ## Notes on the Compiler/IR
-- Source is type-checked into a small set of types (int, bool, string, unit) and lowered to a simple three-address-code IR with basic blocks.
+- Source is type-checked into a small set of types (int, bool, string, unit, plus numeric aliases `fixed_u128`/`Amount`/`Balance` that behave as distinct 64-bit scalars) and lowered to a simple three-address-code IR with basic blocks.
 - Code generation currently covers arithmetic (incl. `%`), control-flow (`if`/`while`/`for` with `break`/`continue`), structs/tuples, and the host-backed durable state/syscall surface. Remaining gaps are tracked in `status.md`.
 
 See also: docs/kotodama_gap_analysis.md for an up-to-date gap analysis and roadmap items.

@@ -26,7 +26,7 @@ Norito Streaming задает формат на проводе, управляю
 ## Конфигурация рантайма
 
 - **Ключевой материал.** Задайте выделенные ключи через `streaming.identity_public_key`/`streaming.identity_private_key` (Ed25519 multihash) и опциональный материал Kyber через `streaming.kyber_public_key`/`streaming.kyber_secret_key`. При переопределении дефолтов должны присутствовать все четыре; `streaming.kyber_suite` принимает `mlkem512|mlkem768|mlkem1024` (алиасы `kyber512/768/1024`, по умолчанию `mlkem768`).
-- **Маршруты SoraNet.** `streaming.soranet.*` управляет анонимным транспортом: `exit_multiaddr` (дефолт `/dns/torii/udp/9443/quic`), `padding_budget_ms` (дефолт 25 ms), `access_kind` (`authenticated` vs `read-only`), опциональный `channel_salt` и `provision_spool_dir` (дефолт `./storage/streaming/soranet_routes`).
+- **Маршруты SoraNet.** `streaming.soranet.*` управляет анонимным транспортом: `exit_multiaddr` (дефолт `/dns/torii/udp/9443/quic`), `padding_budget_ms` (дефолт 25 ms), `access_kind` (`authenticated` vs `read-only`), опциональный `channel_salt`, `provision_spool_dir` (дефолт `./storage/streaming/soranet_routes`), `provision_spool_max_bytes` (дефолт 0, без лимита), `provision_window_segments` (дефолт 4) и `provision_queue_capacity` (дефолт 256).
 - **Sync gate.** `streaming.sync` включает контроль дрейфа для аудиовизуальных потоков: `enabled`, `observe_only`, `ewma_threshold_ms` и `hard_cap_ms` определяют, когда сегменты отклоняются из-за таймингового дрейфа.
 
 ## Валидация и фикстуры

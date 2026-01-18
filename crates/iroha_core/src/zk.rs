@@ -77,6 +77,12 @@ use halo2_proofs::{
     SerdeFormat, poly::VerificationStrategy, poly::commitment::Params as _,
     transcript::TranscriptReadBuffer,
 };
+#[cfg(all(
+    test,
+    feature = "zk-halo2-ipa-poseidon",
+    any(feature = "zk-halo2", feature = "zk-halo2-ipa")
+))]
+use halo2_proofs::poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA};
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)]
@@ -3114,7 +3120,7 @@ fn halo2_verify_with_instance_noncanonical_ipa() {
         poly::{Rotation, commitment::Params as _},
         transcript::{Blake2bWrite, Challenge255},
     };
-    use rand::rngs::OsRng;
+    use rand_core_06::OsRng;
 
     #[derive(Clone, Default)]
     struct TinyAddPublic;
@@ -3195,7 +3201,7 @@ fn halo2_verify_with_instance_noncanonical_ipa() {
     let inst_proofs: Vec<&[&[Scalar]]> = vec![inst_cols.as_slice()];
 
     let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-    halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+    halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
         &params,
         &pk,
         &[TinyAddPublic::default()],
@@ -3242,7 +3248,7 @@ fn ipa_vote_bool_commit_zk1() {
         poly::Rotation,
         transcript::{Blake2bWrite, Challenge255},
     };
-    use rand::rngs::OsRng;
+    use rand_core_06::OsRng;
 
     // Build circuit and params
     let k = 5u32;
@@ -3278,7 +3284,7 @@ fn ipa_vote_bool_commit_zk1() {
     let inst_cols: Vec<&[Scalar]> = vec![inst_col.as_slice()];
     let inst_proofs: Vec<&[&[Scalar]]> = vec![inst_cols.as_slice()];
     let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-    halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+    halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
         &params,
         &pk,
         &[pasta_tiny::VoteBoolCommit::default()],
@@ -3315,7 +3321,7 @@ fn halo2_verify_rejects_vk_without_bytes() {
         poly::commitment::Params as _,
         transcript::{Blake2bWrite, Challenge255},
     };
-    use rand::rngs::OsRng;
+    use rand_core_06::OsRng;
 
     let k = 5u32;
     let params: PastaParams = pasta_params_new(k);
@@ -3350,7 +3356,7 @@ fn halo2_verify_rejects_vk_without_bytes() {
     let inst_cols: Vec<&[Scalar]> = vec![inst_col.as_slice()];
     let inst_proofs: Vec<&[&[Scalar]]> = vec![inst_cols.as_slice()];
     let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-    halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+    halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
         &params,
         &pk,
         &[pasta_tiny::VoteBoolCommit::default()],
@@ -3401,7 +3407,7 @@ fn ipa_anon_transfer_commit_zk1() {
         poly::commitment::Params as _,
         transcript::{Blake2bWrite, Challenge255},
     };
-    use rand::rngs::OsRng;
+    use rand_core_06::OsRng;
 
     let k = 5u32;
     let params: PastaParams = pasta_params_new(k);
@@ -3449,7 +3455,7 @@ fn ipa_anon_transfer_commit_zk1() {
     let inst_proofs: Vec<&[&[Scalar]]> = vec![inst_cols.as_slice()];
 
     let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-    halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+    halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
         &params,
         &pk,
         &[pasta_tiny::AnonTransfer2x2Commit::default()],
@@ -3494,7 +3500,7 @@ fn ipa_vote_bool_commit_merkle2_zk1() {
         poly::commitment::Params as _,
         transcript::{Blake2bWrite, Challenge255},
     };
-    use rand::rngs::OsRng;
+    use rand_core_06::OsRng;
 
     let k = 6u32;
     let params: PastaParams = pasta_params_new(k);
@@ -3529,7 +3535,7 @@ fn ipa_vote_bool_commit_merkle2_zk1() {
     // Make proof with public instances [commit, root]
     let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
     let insts: [&[&[Scalar]]; 1] = [&[&[commit, root]]];
-    halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+    halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
         &params,
         &pk,
         &[pasta_tiny::VoteBoolCommitMerkle2::default()],
@@ -8210,12 +8216,12 @@ mod tests {
     #[cfg(feature = "zk-halo2")]
     use halo2_proofs::transcript::TranscriptWriterBuffer;
     #[cfg(feature = "zk-halo2")]
-    use rand::rngs::OsRng;
+    use rand_core_06::OsRng;
 
     use super::*;
     #[cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
     use crate::zk::pasta_tiny::{
-        VoteBoolCommitMerkle8, poseidon_compress2_native, vote_bool_commit_merkle8_sample_inputs,
+        VoteBoolCommitMerkle8, vote_bool_commit_merkle8_sample_inputs,
         vote_bool_commit_merkle8_witnesses,
     };
 
@@ -8377,7 +8383,7 @@ mod tests {
             poly::Rotation,
             transcript::{Blake2bRead, Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         #[derive(Clone, Default)]
         struct TinyAddPublic;
@@ -8457,7 +8463,7 @@ mod tests {
         let inst_proofs: Vec<&[&[Scalar]]> = vec![inst_cols.as_slice()];
 
         let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[TinyAddPublic::default()],
@@ -8524,7 +8530,7 @@ mod tests {
         let proof_instances = vec![inst_refs.as_slice()];
 
         let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[circuit],
@@ -8579,7 +8585,7 @@ mod tests {
         let proof_instances = vec![inst_refs.as_slice()];
 
         let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[circuit],
@@ -8636,21 +8642,21 @@ mod tests {
         let mut d = DedupCache::new();
         let p = ProofBox::new("halo2/pasta".into(), vec![1]);
         assert_eq!(
-            preverify_with_budget(&p, None, &mut d, 100, None),
+            preverify_with_budget(&p, None, &mut d, 100, None, None, true),
             PreverifyResult::Accepted
         );
         assert_eq!(
-            preverify_with_budget(&p, None, &mut d, 100, None),
+            preverify_with_budget(&p, None, &mut d, 100, None, None, true),
             PreverifyResult::Duplicate
         );
         // Different commitment should allow same proof bytes
         let p2 = ProofBox::new("halo2/pasta".into(), vec![1]);
         assert_eq!(
-            preverify_with_budget(&p2, None, &mut d, 100, Some([1u8; 32])),
+            preverify_with_budget(&p2, None, &mut d, 100, Some([1u8; 32]), None, true),
             PreverifyResult::Accepted
         );
         assert_eq!(
-            preverify_with_budget(&p2, None, &mut d, 100, Some([1u8; 32])),
+            preverify_with_budget(&p2, None, &mut d, 100, Some([1u8; 32]), None, true),
             PreverifyResult::Duplicate
         );
     }
@@ -8684,7 +8690,7 @@ mod tests {
             poly::Rotation,
             transcript::{Blake2bRead, Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         // A tiny circuit with no public inputs: enforce 2 + 2 = 4
         #[derive(Clone, Default)]
@@ -8764,7 +8770,7 @@ mod tests {
 
         // Create proof (no public inputs)
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[Tiny::default()],
@@ -8805,7 +8811,7 @@ mod tests {
             poly::Rotation,
             transcript::{Blake2bRead, Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         #[derive(Clone, Default)]
         struct TinyAddPublic;
@@ -8888,7 +8894,7 @@ mod tests {
 
         // Create proof
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[TinyAddPublic::default()],
@@ -8928,7 +8934,7 @@ mod tests {
             poly::{Rotation, commitment::Params as _},
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         #[derive(Clone, Default)]
         struct Add2Rows;
@@ -9025,7 +9031,7 @@ mod tests {
         let pk = keygen_pk(&params, vk_h2.clone(), &Add2Rows::default()).expect("pk");
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[Add2Rows::default()],
@@ -9061,7 +9067,7 @@ mod tests {
             poly::{Rotation, commitment::Params as _},
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         #[derive(Clone, Default)]
         struct IdPub;
@@ -9122,7 +9128,7 @@ mod tests {
         let inst_cols: Vec<&[Scalar]> = vec![&inst_binding[..]];
         let inst_proofs: Vec<&[&[Scalar]]> = vec![inst_cols.as_slice()];
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[IdPub::default()],
@@ -9173,7 +9179,7 @@ mod tests {
             poly::{Rotation, commitment::Params as _},
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         // Tiny add (no INST)
         #[derive(Clone, Default)]
@@ -9297,7 +9303,7 @@ mod tests {
         let vk_add: VerifyingKey<Curve> = keygen_vk(&params, &TinyAdd::default()).expect("vk");
         let pk_add = keygen_pk(&params, vk_add.clone(), &TinyAdd::default()).expect("pk");
         let mut t_add = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk_add,
             &[TinyAdd::default()],
@@ -9312,7 +9318,7 @@ mod tests {
         let vk_id: VerifyingKey<Curve> = keygen_vk(&params, &IdPub::default()).expect("vk");
         let pk_id = keygen_pk(&params, vk_id.clone(), &IdPub::default()).expect("pk");
         let mut t_id = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk_id,
             &[IdPub::default()],
@@ -9365,7 +9371,7 @@ mod tests {
             poly::{Rotation, commitment::Params as _},
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         #[derive(Clone, Default)]
         struct AddTwoRows;
@@ -9462,7 +9468,7 @@ mod tests {
         let pk = keygen_pk(&params, vk_h2.clone(), &AddTwoRows::default()).expect("pk");
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[AddTwoRows::default()],
@@ -9503,7 +9509,7 @@ mod tests {
             poly::{Rotation, commitment::Params as _},
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         #[derive(Clone, Default)]
         struct AddThree;
@@ -9586,7 +9592,7 @@ mod tests {
         let pk = keygen_pk(&params, vk_h2.clone(), &AddThree::default()).expect("pk");
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[AddThree::default()],
@@ -9626,7 +9632,7 @@ mod tests {
             poly::commitment::Params as _,
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         // Params
         let k = 6u32;
@@ -9664,7 +9670,7 @@ mod tests {
             s0_v
         }][..]]];
 
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[pasta_tiny::poseidon::CommitOpenPoseidon::default()],
@@ -9704,7 +9710,7 @@ mod tests {
             poly::commitment::Params as _,
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         let k = 6u32;
         let params: PastaParams = pasta_params_new(k);
@@ -9723,7 +9729,7 @@ mod tests {
         let insts: [&[&[Scalar]]; 1] = [&[&[root][..]]];
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[pasta_tiny::poseidon::Merkle2Poseidon::default()],
@@ -9763,7 +9769,7 @@ mod tests {
             poly::commitment::Params as _,
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         let k = 6u32;
         let params: PastaParams = pasta_params_new(k);
@@ -9811,7 +9817,7 @@ mod tests {
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
         let insts: [&[&[Scalar]]; 1] = [&[&[commit, root]]];
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[depth::VoteBoolCommitMerkle::<8>::default()],
@@ -9850,7 +9856,7 @@ mod tests {
             poly::commitment::Params as _,
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         let k = 7u32;
         let params: PastaParams = pasta_params_new(k);
@@ -9911,7 +9917,7 @@ mod tests {
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
         let insts: [&[&[Scalar]]; 1] = [&[&[cm_in0, cm_in1, cm_out0, cm_out1, nf, root]]];
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[depth::AnonTransfer2x2CommitMerkle::<8>::default()],
@@ -9958,7 +9964,7 @@ mod tests {
             poly::commitment::Params as _,
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         let k = 6u32;
         let params: PastaParams = pasta_params_new(k);
@@ -10007,7 +10013,7 @@ mod tests {
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
         let insts: [&[&[Scalar]]; 1] = [&[&[commit, root]]];
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[poseidon_depth::VoteBoolCommitMerklePoseidon::<8>::default()],
@@ -10046,7 +10052,7 @@ mod tests {
             poly::commitment::Params as _,
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         #[derive(Clone, Copy)]
         enum Step2 {
@@ -10104,7 +10110,7 @@ mod tests {
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
         let insts: [&[&[Scalar]]; 1] = [&[&[commit, root]]];
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[poseidon_depth::VoteBoolCommitMerklePoseidon::<8>::default()],
@@ -10203,7 +10209,7 @@ mod tests {
             poly::commitment::Params as _,
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         let k = 6u32;
         let params: PastaParams = pasta_params_new(k);
@@ -10221,7 +10227,7 @@ mod tests {
 
         // Produce a valid proof with no instances for malformed INST test
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[poseidon_depth::VoteBoolCommitMerklePoseidon::<8>::default()],
@@ -10262,7 +10268,7 @@ mod tests {
             poly::commitment::Params as _,
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         let k = 6u32;
         let params: PastaParams = pasta_params_new(k);
@@ -10278,7 +10284,7 @@ mod tests {
         )
         .expect("pk");
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[poseidon_depth::VoteBoolCommitMerklePoseidon::<8>::default()],
@@ -10318,7 +10324,7 @@ mod tests {
             poly::commitment::Params as _,
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         let k = 6u32;
         let params: PastaParams = pasta_params_new(k);
@@ -10368,7 +10374,7 @@ mod tests {
         // Create proof
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
         let insts: [&[&[Scalar]]; 1] = [&[&[commit, root]]];
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[poseidon_depth::VoteBoolCommitMerklePoseidon::<16>::default()],
@@ -10407,7 +10413,7 @@ mod tests {
             poly::commitment::Params as _,
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         let k = 7u32;
         let params: PastaParams = pasta_params_new(k);
@@ -10468,7 +10474,7 @@ mod tests {
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
         let insts: [&[&[Scalar]]; 1] = [&[&[cm_in0, cm_in1, cm_out0, cm_out1, nf, root]]];
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[poseidon_depth::AnonTransfer2x2CommitMerklePoseidon::<16>::default()],
@@ -10514,7 +10520,7 @@ mod tests {
             poly::commitment::Params as _,
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         let k = 6u32;
         let params: PastaParams = pasta_params_new(k);
@@ -10532,7 +10538,7 @@ mod tests {
 
         // Produce a valid proof (instances irrelevant for malformed INST test)
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[poseidon_depth::VoteBoolCommitMerklePoseidon::<16>::default()],
@@ -10575,7 +10581,7 @@ mod tests {
             poly::commitment::Params as _,
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         let k = 6u32;
         let params: PastaParams = pasta_params_new(k);
@@ -10591,7 +10597,7 @@ mod tests {
         )
         .expect("pk");
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[poseidon_depth::VoteBoolCommitMerklePoseidon::<16>::default()],
@@ -10634,7 +10640,7 @@ mod tests {
             poly::commitment::Params as _,
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         let k = 7u32;
         let params: PastaParams = pasta_params_new(k);
@@ -10652,7 +10658,7 @@ mod tests {
 
         // Produce a valid proof
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[poseidon_depth::AnonTransfer2x2CommitMerklePoseidon::<16>::default()],
@@ -10698,7 +10704,7 @@ mod tests {
             poly::commitment::Params as _,
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         let k = 7u32;
         let params: PastaParams = pasta_params_new(k);
@@ -10714,7 +10720,7 @@ mod tests {
         )
         .expect("pk");
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[poseidon_depth::AnonTransfer2x2CommitMerklePoseidon::<16>::default()],
@@ -10755,7 +10761,7 @@ mod tests {
             poly::commitment::Params as _,
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         #[derive(Clone, Copy)]
         enum Step6 {
@@ -10825,7 +10831,7 @@ mod tests {
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
         let insts: [&[&[Scalar]]; 1] = [&[&[cm_in0, cm_in1, cm_out0, cm_out1, nf, root]]];
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[poseidon_depth::AnonTransfer2x2CommitMerklePoseidon::<8>::default()],
@@ -10932,7 +10938,7 @@ mod tests {
             poly::commitment::Params as _,
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         #[derive(Clone, Copy)]
         enum S {
@@ -10990,7 +10996,7 @@ mod tests {
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
         let insts: [&[&[Scalar]]; 1] = [&[&[commit, root]]];
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[poseidon_depth::VoteBoolCommitMerklePoseidon::<16>::default()],
@@ -11067,7 +11073,7 @@ mod tests {
             poly::commitment::Params as _,
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         #[derive(Clone, Copy)]
         enum S6 {
@@ -11139,7 +11145,7 @@ mod tests {
         // Build proof
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
         let insts: [&[&[Scalar]]; 1] = [&[&[cm_in0, cm_in1, cm_out0, cm_out1, nf, root]]];
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[poseidon_depth::AnonTransfer2x2CommitMerklePoseidon::<16>::default()],
@@ -11222,7 +11228,7 @@ mod tests {
             poly::commitment::Params as _,
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         let k = 7u32;
         let params: PastaParams = pasta_params_new(k);
@@ -11240,7 +11246,7 @@ mod tests {
 
         // Valid proof
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[poseidon_depth::AnonTransfer2x2CommitMerklePoseidon::<8>::default()],
@@ -11285,7 +11291,7 @@ mod tests {
             poly::commitment::Params as _,
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         let k = 7u32;
         let params: PastaParams = pasta_params_new(k);
@@ -11301,7 +11307,7 @@ mod tests {
         )
         .expect("pk");
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[poseidon_depth::AnonTransfer2x2CommitMerklePoseidon::<8>::default()],
@@ -11343,7 +11349,7 @@ mod tests {
             poly::commitment::Params as _,
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         let k = 6u32;
         let params: PastaParams = pasta_params_new(k);
@@ -11360,7 +11366,7 @@ mod tests {
         .expect("pk");
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[pasta_tiny::poseidon::CommitOpenPoseidon::default()],
@@ -11400,7 +11406,7 @@ mod tests {
             poly::commitment::Params as _,
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         let k = 6u32;
         let params: PastaParams = pasta_params_new(k);
@@ -11414,7 +11420,7 @@ mod tests {
         .expect("pk");
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[pasta_tiny::poseidon::Merkle2Poseidon::default()],
@@ -11469,7 +11475,7 @@ mod tests {
             poly::commitment::Params as _,
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         let k = 6u32;
         let params: PastaParams = pasta_params_new(k);
@@ -11501,7 +11507,7 @@ mod tests {
             let t1_5 = t1_4 * t1;
             Scalar::from(2u64) * t0_5 + Scalar::from(3u64) * t1_5
         }][..]]];
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[pasta_tiny::poseidon::CommitOpenPoseidon::default()],
@@ -11540,7 +11546,7 @@ mod tests {
             poly::commitment::Params as _,
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         let k = 6u32;
         let params: PastaParams = pasta_params_new(k);
@@ -11556,7 +11562,7 @@ mod tests {
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
         let root = pasta_tiny::poseidon::merkle2_poseidon_sample_root();
         let insts: [&[&[Scalar]]; 1] = [&[&[root]]];
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[pasta_tiny::poseidon::Merkle2Poseidon::default()],
@@ -11595,7 +11601,7 @@ mod tests {
             poly::commitment::Params as _,
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         let k = 6u32;
         let params: PastaParams = pasta_params_new(k);
@@ -11626,7 +11632,7 @@ mod tests {
             let t1_5 = t1_4 * t1;
             Scalar::from(2u64) * t0_5 + Scalar::from(3u64) * t1_5
         }][..]]];
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[pasta_tiny::poseidon::CommitOpenPoseidon::default()],
@@ -11676,7 +11682,7 @@ mod tests {
             poly::commitment::Params as _,
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         let k = 6u32;
         let params: PastaParams = pasta_params_new(k);
@@ -11707,7 +11713,7 @@ mod tests {
             let t1_5 = t1_4 * t1;
             Scalar::from(2u64) * t0_5 + Scalar::from(3u64) * t1_5
         }][..]]];
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[pasta_tiny::poseidon::CommitOpenPoseidon::default()],
@@ -11768,7 +11774,7 @@ mod tests {
             poly::commitment::Params as _,
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         let k = 6u32;
         let params: PastaParams = pasta_params_new(k);
@@ -11800,7 +11806,7 @@ mod tests {
             Scalar::from(2u64) * t0_5 + Scalar::from(3u64) * t1_5
         };
         let insts: [&[&[Scalar]]; 1] = [&[&[commit]]];
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[pasta_tiny::poseidon::CommitOpenPoseidon::default()],
@@ -11842,7 +11848,7 @@ mod tests {
             poly::commitment::Params as _,
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         let k = 6u32;
         let params: PastaParams = pasta_params_new(k);
@@ -11872,7 +11878,7 @@ mod tests {
             Scalar::from(2u64) * t0_5 + Scalar::from(3u64) * t1_5
         };
         let insts: [&[&[Scalar]]; 1] = [&[&[commit]]];
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[pasta_tiny::poseidon::CommitOpenPoseidon::default()],
@@ -11914,7 +11920,7 @@ mod tests {
             poly::commitment::Params as _,
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         let k = 6u32;
         let params: PastaParams = pasta_params_new(k);
@@ -11946,7 +11952,7 @@ mod tests {
             Scalar::from(2u64) * t0_5 + Scalar::from(3u64) * t1_5
         };
         let insts: [&[&[Scalar]]; 1] = [&[&[commit]]];
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[pasta_tiny::poseidon::CommitOpenPoseidon::default()],
@@ -12007,7 +12013,7 @@ mod tests {
             poly::commitment::Params as _,
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         #[derive(Clone, Copy)]
         enum Step {
@@ -12050,7 +12056,7 @@ mod tests {
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
         let insts: [&[&[Scalar]]; 1] = [&[&[commit]]];
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[pasta_tiny::poseidon::CommitOpenPoseidon::default()],
@@ -12181,7 +12187,7 @@ mod tests {
             poly::{Rotation, commitment::Params as _},
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         #[derive(Clone, Default)]
         struct AddTwoInstPublic;
@@ -12265,7 +12271,7 @@ mod tests {
         let pk = keygen_pk(&params, vk_h2.clone(), &AddTwoInstPublic::default()).expect("pk");
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[AddTwoInstPublic::default()],
@@ -12307,7 +12313,7 @@ mod tests {
             poly::{Rotation, commitment::Params as _},
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         #[derive(Clone, Default)]
         struct AT;
@@ -12390,7 +12396,7 @@ mod tests {
         let pk = keygen_pk(&params, vk_h2.clone(), &AT::default()).expect("pk");
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[AT::default()],
@@ -12430,7 +12436,7 @@ mod tests {
             poly::{Rotation, commitment::Params as _},
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         #[derive(Clone, Default)]
         struct VoteBool;
@@ -12484,7 +12490,7 @@ mod tests {
         let pk = keygen_pk(&params, vk_h2.clone(), &VoteBool::default()).expect("pk");
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[VoteBool::default()],
@@ -12524,7 +12530,7 @@ mod tests {
             poly::{Rotation, commitment::Params as _},
             transcript::{Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         #[derive(Clone, Default)]
         struct IdPub;
@@ -12580,7 +12586,7 @@ mod tests {
         let pk = keygen_pk(&params, vk_h2.clone(), &IdPub::default()).expect("pk");
 
         let mut t = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[IdPub::default()],
@@ -12631,7 +12637,7 @@ mod tests {
             poly::Rotation,
             transcript::{Blake2bRead, Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         #[derive(Clone, Default)]
         struct TinyAddPublic;
@@ -12712,7 +12718,7 @@ mod tests {
         let inst_proofs: Vec<&[&[Scalar]]> = vec![inst_cols.as_slice()];
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[TinyAddPublic::default()],
@@ -12750,7 +12756,7 @@ mod tests {
             poly::{Rotation, commitment::Params as _},
             transcript::{Blake2bRead, Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         #[derive(Clone, Default)]
         struct TinyMulPublic;
@@ -12833,7 +12839,7 @@ mod tests {
 
         // Create proof
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[TinyMulPublic::default()],
@@ -12875,7 +12881,7 @@ mod tests {
             poly::{Rotation, commitment::Params as _},
             transcript::{Blake2bRead, Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         #[derive(Clone, Default)]
         struct TinyAddPublic;
@@ -12955,7 +12961,7 @@ mod tests {
         let inst_proofs: Vec<&[&[Scalar]]> = vec![inst_cols.as_slice()];
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[TinyAddPublic::default()],
@@ -12999,7 +13005,7 @@ mod tests {
             poly::{Rotation, commitment::Params as _},
             transcript::{Blake2bRead, Blake2bWrite, Challenge255},
         };
-        use rand::rngs::OsRng;
+        use rand_core_06::OsRng;
 
         #[derive(Clone, Default)]
         struct TinyAddPublic;
@@ -13079,7 +13085,7 @@ mod tests {
         let inst_proofs: Vec<&[&[Scalar]]> = vec![inst_cols.as_slice()];
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
+        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
             &params,
             &pk,
             &[TinyAddPublic::default()],

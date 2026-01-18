@@ -5,7 +5,8 @@ fn simple_prog(nops: usize) -> Vec<u8> {
     let mut bytes = meta;
     for _ in 0..nops {
         // encode a cheap arithmetic op (wide `ADDI x1, x1, 0`)
-        let addi = ivm::kotodama::compiler::encode_addi(1, 1, 0);
+        let addi = ivm::kotodama::compiler::encode_addi(1, 1, 0)
+            .expect("encode addi");
         bytes.extend_from_slice(&addi.to_le_bytes());
     }
     bytes.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());

@@ -10,10 +10,10 @@ fn backward_branch_negative_offset_loop() {
     // 3: addi x5,x5,-1  ; counter--
     // 4: bne  x5,x0,-8  ; if counter != 0, jump back 2 instructions (8 bytes)
     // 5: halt
-    let a_cnt = ivm::kotodama::compiler::encode_addi(5, 0, 3);
-    let a_acc0 = ivm::kotodama::compiler::encode_addi(1, 0, 0);
-    let a_inc = ivm::kotodama::compiler::encode_addi(1, 1, 1);
-    let a_dec = ivm::kotodama::compiler::encode_addi(5, 5, -1);
+    let a_cnt = ivm::kotodama::compiler::encode_addi(5, 0, 3).expect("encode addi");
+    let a_acc0 = ivm::kotodama::compiler::encode_addi(1, 0, 0).expect("encode addi");
+    let a_inc = ivm::kotodama::compiler::encode_addi(1, 1, 1).expect("encode addi");
+    let a_dec = ivm::kotodama::compiler::encode_addi(5, 5, -1).expect("encode addi");
     let bne_back =
         kwide::encode_branch_checked(instruction::wide::control::BNE, 5, 0, -2).expect("loop back");
     let halt = encoding::wide::encode_halt();
@@ -42,11 +42,11 @@ fn backward_branch_beq_to_nonzero_sentinel() {
     // 4: addi x5,x5,-1   ; counter--
     // 5: beq  x5,x6,-8   ; when counter==2, jump back to inc/dec once more
     // 6: halt
-    let a_cnt = ivm::kotodama::compiler::encode_addi(5, 0, 3);
-    let a_sen = ivm::kotodama::compiler::encode_addi(6, 0, 2);
-    let a_acc0 = ivm::kotodama::compiler::encode_addi(1, 0, 0);
-    let a_inc = ivm::kotodama::compiler::encode_addi(1, 1, 1);
-    let a_dec = ivm::kotodama::compiler::encode_addi(5, 5, -1);
+    let a_cnt = ivm::kotodama::compiler::encode_addi(5, 0, 3).expect("encode addi");
+    let a_sen = ivm::kotodama::compiler::encode_addi(6, 0, 2).expect("encode addi");
+    let a_acc0 = ivm::kotodama::compiler::encode_addi(1, 0, 0).expect("encode addi");
+    let a_inc = ivm::kotodama::compiler::encode_addi(1, 1, 1).expect("encode addi");
+    let a_dec = ivm::kotodama::compiler::encode_addi(5, 5, -1).expect("encode addi");
     let beq_back = kwide::encode_branch_checked(instruction::wide::control::BEQ, 5, 6, -2)
         .expect("branch back");
     let halt = encoding::wide::encode_halt();
@@ -71,17 +71,17 @@ fn forward_beq_skips_block() {
     // Case 2 (not taken): x5!=x6 => execute both adds (5 and 6) plus final add (+1).
 
     // Common prologue: x1=0
-    let a_acc0 = ivm::kotodama::compiler::encode_addi(1, 0, 0);
-    let inc5 = ivm::kotodama::compiler::encode_addi(1, 1, 5);
-    let inc6 = ivm::kotodama::compiler::encode_addi(1, 1, 6);
-    let inc1 = ivm::kotodama::compiler::encode_addi(1, 1, 1);
+    let a_acc0 = ivm::kotodama::compiler::encode_addi(1, 0, 0).expect("encode addi");
+    let inc5 = ivm::kotodama::compiler::encode_addi(1, 1, 5).expect("encode addi");
+    let inc6 = ivm::kotodama::compiler::encode_addi(1, 1, 6).expect("encode addi");
+    let inc1 = ivm::kotodama::compiler::encode_addi(1, 1, 1).expect("encode addi");
     let halt = encoding::wide::encode_halt();
 
     // Taken: x5=7, x6=7, beq x5,x6, +12 (skip two 32-bit instructions)
     // High-8 branch immediates are relative to the current PC (not fallthrough),
     // so skipping two 32-bit words requires +12 bytes.
-    let a5_7 = ivm::kotodama::compiler::encode_addi(5, 0, 7);
-    let a6_7 = ivm::kotodama::compiler::encode_addi(6, 0, 7);
+    let a5_7 = ivm::kotodama::compiler::encode_addi(5, 0, 7).expect("encode addi");
+    let a6_7 = ivm::kotodama::compiler::encode_addi(6, 0, 7).expect("encode addi");
     let beq_skip = kwide::encode_branch_checked(instruction::wide::control::BEQ, 5, 6, 3)
         .expect("forward branch");
     let mut bytes = ProgramMetadata::default().encode();
@@ -95,8 +95,8 @@ fn forward_beq_skips_block() {
     assert_eq!(vm.register(1), 1, "branch taken should skip +5 and +6");
 
     // Not taken: x5=7, x6=6 -> branch not taken, so +5 and +6 execute, then +1 → total 12
-    let a5_7 = ivm::kotodama::compiler::encode_addi(5, 0, 7);
-    let a6_6 = ivm::kotodama::compiler::encode_addi(6, 0, 6);
+    let a5_7 = ivm::kotodama::compiler::encode_addi(5, 0, 7).expect("encode addi");
+    let a6_6 = ivm::kotodama::compiler::encode_addi(6, 0, 6).expect("encode addi");
     let mut bytes2 = ProgramMetadata::default().encode();
     for w in [a_acc0, a5_7, a6_6, beq_skip, inc5, inc6, inc1, halt] {
         bytes2.extend_from_slice(&w.to_le_bytes());

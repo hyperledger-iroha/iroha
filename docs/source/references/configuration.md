@@ -101,6 +101,8 @@ Defaults first: configuration values are curated for typical Iroha blockchain de
     - `padding_budget_ms` (default: `25`): Low-latency padding allowance in milliseconds applied to the circuit; `null` disables extra padding.
     - `access_kind` (default: `authenticated`): Exit posture enforced when bridging (`authenticated` or `read-only`).
     - `channel_salt` (default: `iroha.soranet.channel.seed.v1`): Domain string hashed with the stream/route identifiers to derive blinded channel IDs.
+    - `provision_window_segments` (default: `4`): Inclusive segment window used when auto-provisioning privacy routes; windows align to multiples of this size.
+    - `provision_queue_capacity` (default: `256`): Maximum number of privacy-route provisioning jobs buffered before backpressure is applied.
   - `soravpn`: Local SoraVPN provisioning spool settings for streaming routes.
     - `provision_spool_dir` (default: `./storage/streaming/soravpn_routes`): Filesystem spool directory used to stage SoraVPN route updates for local VPN nodes.
     - `provision_spool_max_bytes` (default: `0`, unlimited): Maximum on-disk footprint for the SoraVPN provision spool.

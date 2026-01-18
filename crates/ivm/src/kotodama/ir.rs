@@ -686,7 +686,7 @@ fn lower_map_key_eq(ctx: &mut LowerCtx, key_ty: &Type, left: Temp, right: Temp) 
 
 fn key_codec_for_type(ty: &Type) -> Option<KeyCodec> {
     match semantic::resolve_struct_type(ty) {
-        Type::Int => Some(KeyCodec::Int),
+        ty if semantic::is_numeric_type(&ty) => Some(KeyCodec::Int),
         Type::String => Some(KeyCodec::Pointer),
         other if semantic::is_pointer_type(&other) => Some(KeyCodec::Pointer),
         _ => None,
@@ -695,7 +695,8 @@ fn key_codec_for_type(ty: &Type) -> Option<KeyCodec> {
 
 fn value_codec_for_type(ty: &Type) -> Option<ValueCodec> {
     match semantic::resolve_struct_type(ty) {
-        Type::Int | Type::Bool => Some(ValueCodec::Int),
+        ty if semantic::is_numeric_type(&ty) => Some(ValueCodec::Int),
+        Type::Bool => Some(ValueCodec::Int),
         Type::Json => Some(ValueCodec::Json),
         other if semantic::is_pointer_type(&other) => {
             pointer_kind_for_type(&other).map(ValueCodec::Pointer)
@@ -722,23 +723,21 @@ pub enum Terminator {
 }
 
 /// Lower a semantically checked program into IR.
-pub fn lower(program: &TypedProgram) -> Program {
+pub fn lower(program: &TypedProgram) -> Result<Program, String> {
     lower_with_cap(program, 2)
 }
 
 /// Lower with a specific dynamic-iteration cap used for feature-gated dynamic bounds.
-pub fn lower_with_cap(program: &TypedProgram, dyn_iter_cap: usize) -> Program {
-    let functions = program
-        .items
-        .iter()
-        .map(|item| match item {
-            TypedItem::Function(f) => lower_function(f, dyn_iter_cap),
-        })
-        .collect();
-    Program { functions }
+pub fn lower_with_cap(program: &TypedProgram, dyn_iter_cap: usize) -> Result<Program, String> {
+    let mut functions = Vec::new();
+    for item in &program.items {
+        let TypedItem::Function(f) = item;
+        functions.push(lower_function(f, dyn_iter_cap)?);
+    }
+    Ok(Program { functions })
 }
 
-fn lower_function(func: &TypedFunction, dyn_iter_cap: usize) -> Function {
+fn lower_function(func: &TypedFunction, dyn_iter_cap: usize) -> Result<Function, String> {
     let mut ctx = LowerCtx::new(dyn_iter_cap);
     let entry = ctx.new_label();
     ctx.start_block(entry);
@@ -764,11 +763,16 @@ fn lower_function(func: &TypedFunction, dyn_iter_cap: usize) -> Function {
     lower_block(&mut ctx, &func.body, &mut vars);
     ctx.finish_current(Terminator::Return(None));
 
-    Function {
+    let function = Function {
         name: func.name.clone(),
         params: func.params.clone(),
         blocks: ctx.blocks,
         entry,
+    };
+    if let Some(err) = ctx.error {
+        Err(err)
+    } else {
+        Ok(function)
     }
 }
 
@@ -1466,6 +1470,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             });
             t
         }
+        semantic::ExprKind::Bytes(bytes) => {
+            let t = ctx.new_temp();
+            let hex = hex::encode(bytes);
+            ctx.current_instr(Instr::DataRef {
+                dest: t,
+                kind: DataRefKind::Blob,
+                value: format!("0x{hex}"),
+            });
+            t
+        }
         semantic::ExprKind::Ident(name) => {
             if let Some(literal) = ctx.state_name_literals.get(name).cloned()
                 && !ctx.loaded_state_fields.contains(name)
@@ -1475,9 +1489,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 vars.insert(name.clone(), value);
                 return value;
             }
-            *vars
-                .get(name)
-                .unwrap_or_else(|| panic!("undefined var {name}"))
+            if let Some(temp) = vars.get(name) {
+                *temp
+            } else {
+                ctx.record_error(format!("undefined variable {name}"));
+                let t = ctx.new_temp();
+                ctx.current_instr(Instr::Const { dest: t, value: 0 });
+                t
+            }
         }
         semantic::ExprKind::Unary { op, expr: inner } => {
             let v = lower_expr(ctx, inner, vars);
@@ -1712,6 +1731,18 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                         });
                         return dest;
                     }
+                    if name == "norito_bytes" {
+                        if let semantic::ExprKind::Bytes(bytes) = &arg.expr {
+                            let dest = ctx.new_temp();
+                            let hex = hex::encode(bytes);
+                            ctx.current_instr(Instr::DataRef {
+                                dest,
+                                kind: DataRefKind::NoritoBytes,
+                                value: format!("0x{hex}"),
+                            });
+                            return dest;
+                        }
+                    }
                     let src = lower_expr(ctx, arg, vars);
                     let resolved_arg = semantic::resolve_struct_type(&arg.ty);
                     match (target_ty.clone(), resolved_arg.clone()) {
@@ -1766,7 +1797,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     u
                 }
                 "info" => {
-                    let msg = if args[0].ty == Type::Int {
+                    let msg = if semantic::is_numeric_type(&args[0].ty) {
                         let value = lower_expr(ctx, &args[0], vars);
                         let encoded = ctx.new_temp();
                         ctx.current_instr(Instr::EncodeInt {
@@ -2807,14 +2838,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     ctx.current_instr(Instr::Const { dest: t, value: 0 });
                     t
                 }
-                "create_trigger" => {
+                "create_trigger" | "register_trigger" => {
                     let j = lower_expr(ctx, &args[0], vars);
                     ctx.current_instr(Instr::CreateTrigger { json: j });
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::Const { dest: t, value: 0 });
                     t
                 }
-                "remove_trigger" => {
+                "remove_trigger" | "unregister_trigger" => {
                     let n = lower_expr(ctx, &args[0], vars);
                     ctx.current_instr(Instr::RemoveTrigger { name: n });
                     let t = ctx.new_temp();
@@ -3128,7 +3159,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
 fn lower_state_field(ctx: &mut LowerCtx, literal: &str, ty: &Type) -> Option<Temp> {
     let resolved = semantic::resolve_struct_type(ty);
     match resolved {
-        Type::Int => {
+        ty if semantic::is_numeric_type(&ty) => {
             let blob = state_get_blob(ctx, literal);
             let dest = ctx.new_temp();
             ctx.current_instr(Instr::DecodeInt { dest, blob });
@@ -3219,6 +3250,7 @@ struct LowerCtx {
     loaded_state_fields: std::collections::HashSet<String>,
     /// Dynamic iteration cap for feature-gated dynamic bounds.
     _dyn_iter_cap: usize,
+    error: Option<String>,
 }
 
 impl LowerCtx {
@@ -3233,6 +3265,7 @@ impl LowerCtx {
             state_name_literals: Default::default(),
             loaded_state_fields: Default::default(),
             _dyn_iter_cap: dyn_iter_cap,
+            error: None,
         }
     }
 
@@ -3250,7 +3283,8 @@ impl LowerCtx {
 
     fn start_block(&mut self, label: Label) {
         if self.current.is_some() {
-            panic!("current block not finished");
+            self.record_error("internal error: current block not finished".to_string());
+            self.current = None;
         }
         self.current = Some(BasicBlock {
             label,
@@ -3266,7 +3300,10 @@ impl LowerCtx {
     }
 
     fn finish_current(&mut self, term: Terminator) {
-        let mut bb = self.current.take().expect("no current block");
+        let Some(mut bb) = self.current.take() else {
+            self.record_error("internal error: no current block".to_string());
+            return;
+        };
         bb.terminator = term;
         self.blocks.push(bb);
     }
@@ -3281,6 +3318,12 @@ impl LowerCtx {
 
     fn pop_loop(&mut self) {
         self.loop_stack.pop();
+    }
+
+    fn record_error(&mut self, message: String) {
+        if self.error.is_none() {
+            self.error = Some(message);
+        }
     }
 
     fn loop_targets(&self) -> Option<(Label, Label)> {
@@ -3418,7 +3461,7 @@ mod tests {
         let src = "fn add(a, b) { let c = a + b; }";
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
-        let ir = lower(&typed);
+        let ir = lower(&typed).expect("lower");
         assert_eq!(ir.functions.len(), 1);
         let f = &ir.functions[0];
         assert_eq!(f.blocks.len(), 1); // only entry block
@@ -3427,21 +3470,21 @@ mod tests {
     #[test]
     fn lower_if() {
         let src = "fn f(a, b) { if a == b { let c = a; } else { let c = b; } }";
-        let ir = lower(&analyze(&parse(src).unwrap()).unwrap());
+        let ir = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower");
         assert_eq!(ir.functions[0].blocks.len(), 4); // entry, then, else, end
     }
 
     #[test]
     fn lower_while() {
         let src = "fn f() { while 1 < 2 { let a = 2; } }";
-        let ir = lower(&analyze(&parse(src).unwrap()).unwrap());
+        let ir = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower");
         assert_eq!(ir.functions[0].blocks.len(), 4); // entry, cond, body, end
     }
 
     #[test]
     fn lower_return() {
         let src = "fn f() -> int { return 1; let x = 2; }";
-        let ir = lower(&analyze(&parse(src).unwrap()).unwrap());
+        let ir = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower");
         // Expect at least a Return terminator in one block, and a following unreachable block
         let f = &ir.functions[0];
         assert!(
@@ -3462,7 +3505,7 @@ mod tests {
         "#;
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
-        let ir = lower(&typed);
+        let ir = lower(&typed).expect("lower");
         let f = &ir.functions[0];
         // Expect DataRef instructions for each constructor
         let mut saw_name = false;
@@ -3487,6 +3530,70 @@ mod tests {
     }
 
     #[test]
+    fn lower_bytes_literal_to_dataref() {
+        let src = r#"fn main() { let _b: bytes = b"ab"; }"#;
+        let prog = parse(src).unwrap();
+        let typed = analyze(&prog).unwrap();
+        let ir = lower(&typed).expect("lower");
+        let f = &ir.functions[0];
+        let mut saw_blob = false;
+        for bb in &f.blocks {
+            for instr in &bb.instrs {
+                if let Instr::DataRef { kind, value, .. } = instr {
+                    if *kind == DataRefKind::Blob && value == "0x6162" {
+                        saw_blob = true;
+                    }
+                }
+            }
+        }
+        assert!(saw_blob, "expected blob dataref for bytes literal");
+    }
+
+    #[test]
+    fn lower_norito_bytes_literal_to_dataref() {
+        let src = r#"fn main() { let _b = norito_bytes(b"ab"); }"#;
+        let prog = parse(src).unwrap();
+        let typed = analyze(&prog).unwrap();
+        let ir = lower(&typed).expect("lower");
+        let f = &ir.functions[0];
+        let mut saw_norito = false;
+        for bb in &f.blocks {
+            for instr in &bb.instrs {
+                if let Instr::DataRef { kind, value, .. } = instr {
+                    if *kind == DataRefKind::NoritoBytes && value == "0x6162" {
+                        saw_norito = true;
+                    }
+                }
+            }
+        }
+        assert!(saw_norito, "expected NoritoBytes dataref for bytes literal");
+    }
+
+    #[test]
+    fn lower_trigger_aliases() {
+        let src = r#"
+            fn main() {
+                register_trigger(json("{}"));
+                unregister_trigger(name("wake"));
+            }
+        "#;
+        let ir = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower");
+        let f = &ir.functions[0];
+        let mut saw_create = false;
+        let mut saw_remove = false;
+        for bb in &f.blocks {
+            for instr in &bb.instrs {
+                match instr {
+                    Instr::CreateTrigger { .. } => saw_create = true,
+                    Instr::RemoveTrigger { .. } => saw_remove = true,
+                    _ => {}
+                }
+            }
+        }
+        assert!(saw_create && saw_remove);
+    }
+
+    #[test]
     fn lower_struct_fields_for_transfer_domain() {
         let src = r#"
             seiyaku C {
@@ -3499,7 +3606,7 @@ mod tests {
         "#;
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
-        let ir = lower(&typed);
+        let ir = lower(&typed).expect("lower");
         let f = ir.functions.iter().find(|f| f.name == "main").unwrap();
         let mut saw_transfer = false;
         for bb in &f.blocks {
@@ -3517,7 +3624,7 @@ mod tests {
         let src = "fn f() { info(7); }";
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
-        let ir = lower(&typed);
+        let ir = lower(&typed).expect("lower");
         let f = &ir.functions[0];
         let mut saw_encode = false;
         let mut saw_info = false;
@@ -3539,7 +3646,7 @@ mod tests {
         let src = "fn f() { let _b = encode_int(7); }";
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
-        let ir = lower(&typed);
+        let ir = lower(&typed).expect("lower");
         let f = &ir.functions[0];
         let mut saw_encode = false;
         let mut saw_literal = false;
@@ -3568,7 +3675,7 @@ mod tests {
         let src = "fn f() { let a = blob(\"hi\"); let b = blob(\"hi\"); let _x = a == b; }";
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
-        let ir = lower(&typed);
+        let ir = lower(&typed).expect("lower");
         let f = &ir.functions[0];
         let mut saw_pointer_eq = false;
         let mut saw_binary_eq = false;
@@ -3595,7 +3702,7 @@ mod tests {
         let src = "fn f() { let m: Map<Name, int> = Map::new(); let k = name(\"alice\"); let _v = m[k]; }";
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
-        let ir = lower(&typed);
+        let ir = lower(&typed).expect("lower");
         let f = &ir.functions[0];
         let mut saw_pointer_eq = false;
         let mut saw_map_get = false;
@@ -3635,7 +3742,7 @@ mod tests {
         "#;
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
-        let ir = lower(&typed);
+        let ir = lower(&typed).expect("lower");
         let main_fn = ir.functions.iter().find(|f| f.name == "main").unwrap();
 
         let mut saw_counter_path = false;

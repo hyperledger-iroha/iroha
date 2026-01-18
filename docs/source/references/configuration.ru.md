@@ -78,6 +78,8 @@ translation_last_reviewed: 2025-12-28
     - `padding_budget_ms` (по умолчанию: `25`): бюджет низколатентного padding в миллисекундах на цепочку; `null` отключает дополнительный padding.
     - `access_kind` (по умолчанию: `authenticated`): выходная политика (`authenticated` или `read-only`).
     - `channel_salt` (по умолчанию: `iroha.soranet.channel.seed.v1`): доменная строка, хэшируемая с идентификаторами stream/route для получения слепых channel‑IDs.
+    - `provision_window_segments` (по умолчанию: `4`): окно сегментов (включительно) для auto‑provision privacy‑маршрутов; окна выравниваются по кратным этой величине.
+    - `provision_queue_capacity` (по умолчанию: `256`): максимальное число задач auto‑provision privacy‑маршрутов в очереди перед применением backpressure.
   - `soravpn`: настройки локального provisioning spool SoraVPN для streaming маршрутов.
     - `provision_spool_dir` (по умолчанию: `./storage/streaming/soravpn_routes`): каталог spool для подготовки обновлений маршрутов SoraVPN для локальных VPN узлов.
     - `provision_spool_max_bytes` (по умолчанию: `0`, без ограничения): максимальный объём на диске для provisioning spool SoraVPN.

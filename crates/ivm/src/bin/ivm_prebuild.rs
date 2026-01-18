@@ -167,9 +167,9 @@ fn build_program_mint_rose_for_authority() -> Vec<u8> {
         &encoding::wide::encode_sys(wide::system::SCALL, ivm_sys::SYSCALL_GET_AUTHORITY as u8)
             .to_le_bytes(),
     );
-    code.extend_from_slice(&encode_addi(13, 10, 0).to_le_bytes()); // save account pointer
+    code.extend_from_slice(&encode_addi(13, 10, 0).expect("encode addi").to_le_bytes()); // save account pointer
     // r10 <- &AssetDefinitionId (literal TLV)
-    code.extend_from_slice(&encode_addi(10, 0, LITERAL_DATA_START).to_le_bytes());
+    code.extend_from_slice(&encode_addi(10, 0, LITERAL_DATA_START).expect("encode addi").to_le_bytes());
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             wide::system::SCALL,
@@ -177,9 +177,9 @@ fn build_program_mint_rose_for_authority() -> Vec<u8> {
         )
         .to_le_bytes(),
     );
-    code.extend_from_slice(&encode_addi(11, 10, 0).to_le_bytes()); // r11 = asset ptr
-    code.extend_from_slice(&encode_addi(10, 13, 0).to_le_bytes()); // r10 = account ptr
-    code.extend_from_slice(&encode_addi(12, 0, 1).to_le_bytes()); // amount = 1
+    code.extend_from_slice(&encode_addi(11, 10, 0).expect("encode addi").to_le_bytes()); // r11 = asset ptr
+    code.extend_from_slice(&encode_addi(10, 13, 0).expect("encode addi").to_le_bytes()); // r10 = account ptr
+    code.extend_from_slice(&encode_addi(12, 0, 1).expect("encode addi").to_le_bytes()); // amount = 1
     code.extend_from_slice(
         &encoding::wide::encode_sys(wide::system::SCALL, ivm_sys::SYSCALL_MINT_ASSET as u8)
             .to_le_bytes(),
@@ -213,7 +213,11 @@ fn build_program_create_nft_for_authority() -> Vec<u8> {
 fn build_program_set_sc_exec_depth(depth: u8) -> Vec<u8> {
     use ivm::{encoding, instruction::wide, kotodama::compiler::encode_addi, syscalls as ivm_sys};
     let mut code = Vec::new();
-    code.extend_from_slice(&encode_addi(10, 0, depth.into()).to_le_bytes());
+    code.extend_from_slice(
+        &encode_addi(10, 0, depth.into())
+            .expect("encode addi")
+            .to_le_bytes(),
+    );
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             wide::system::SCALL,
@@ -259,9 +263,9 @@ fn build_program_set_account_detail_defaults() -> Vec<u8> {
         &encoding::wide::encode_sys(wide::system::SCALL, ivm_sys::SYSCALL_GET_AUTHORITY as u8)
             .to_le_bytes(),
     );
-    code.extend_from_slice(&encode_addi(13, 10, 0).to_le_bytes()); // save account pointer
+    code.extend_from_slice(&encode_addi(13, 10, 0).expect("encode addi").to_le_bytes()); // save account pointer
     // r10 <- &Name("cursor")
-    code.extend_from_slice(&encode_addi(10, 0, LITERAL_DATA_START).to_le_bytes());
+    code.extend_from_slice(&encode_addi(10, 0, LITERAL_DATA_START).expect("encode addi").to_le_bytes());
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             wide::system::SCALL,
@@ -269,9 +273,9 @@ fn build_program_set_account_detail_defaults() -> Vec<u8> {
         )
         .to_le_bytes(),
     );
-    code.extend_from_slice(&encode_addi(11, 10, 0).to_le_bytes()); // r11 = key ptr
+    code.extend_from_slice(&encode_addi(11, 10, 0).expect("encode addi").to_le_bytes()); // r11 = key ptr
     // r10 <- &Json(cursor)
-    code.extend_from_slice(&encode_addi(10, 0, value_ptr).to_le_bytes());
+    code.extend_from_slice(&encode_addi(10, 0, value_ptr).expect("encode addi").to_le_bytes());
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             wide::system::SCALL,
@@ -279,8 +283,8 @@ fn build_program_set_account_detail_defaults() -> Vec<u8> {
         )
         .to_le_bytes(),
     );
-    code.extend_from_slice(&encode_addi(12, 10, 0).to_le_bytes()); // r12 = value ptr
-    code.extend_from_slice(&encode_addi(10, 13, 0).to_le_bytes()); // r10 = account ptr
+    code.extend_from_slice(&encode_addi(12, 10, 0).expect("encode addi").to_le_bytes()); // r12 = value ptr
+    code.extend_from_slice(&encode_addi(10, 13, 0).expect("encode addi").to_le_bytes()); // r10 = account ptr
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             wide::system::SCALL,

@@ -78,6 +78,8 @@ Primero los valores por defecto: los valores de configuración están preparados
     - `padding_budget_ms` (por defecto: `25`): margen de padding de baja latencia en milisegundos aplicado al circuito; `null` desactiva padding extra.
     - `access_kind` (por defecto: `authenticated`): postura de salida aplicada al hacer el puente (`authenticated` o `read-only`).
     - `channel_salt` (por defecto: `iroha.soranet.channel.seed.v1`): cadena de dominio con hash junto con los identificadores de stream/ruta para derivar IDs de canal cegados.
+    - `provision_window_segments` (por defecto: `4`): ventana de segmentos (inclusiva) usada al aprovisionar rutas de privacidad automaticamente; las ventanas se alinean a multiplos de este tamano.
+    - `provision_queue_capacity` (por defecto: `256`): numero maximo de trabajos de aprovisionamiento de rutas de privacidad en cola antes de aplicar backpressure.
   - `soravpn`: ajustes del spool de aprovisionamiento local de SoraVPN para rutas de streaming.
     - `provision_spool_dir` (por defecto: `./storage/streaming/soravpn_routes`): directorio del spool usado para preparar actualizaciones de rutas SoraVPN para nodos VPN locales.
     - `provision_spool_max_bytes` (por defecto: `0`, ilimitado): tamaño máximo en disco del spool de aprovisionamiento SoraVPN.

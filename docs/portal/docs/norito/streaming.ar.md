@@ -30,7 +30,7 @@ translation_last_reviewed: 2025-12-30
 
 - **مادة المفاتيح.** وفر مفاتيح مخصصة عبر `streaming.identity_public_key`/`streaming.identity_private_key` (multihash Ed25519) ومادة Kyber اختيارية عبر `streaming.kyber_public_key`/`streaming.kyber_secret_key`. يجب توفر الاربعة عند تجاوز الافتراضات؛ `streaming.kyber_suite` يقبل `mlkem512|mlkem768|mlkem1024` (الاسماء البديلة `kyber512/768/1024`، الافتراضي `mlkem768`).
 - **حواجز codec.** يبقى CABAC معطلا ما لم تفعله عملية البناء؛ rANS المجمع يتطلب `ENABLE_RANS_BUNDLES=1`. يتم فرض ذلك عبر `streaming.codec.{entropy_mode,bundle_width,bundle_accel}` و `streaming.codec.rans_tables_path` الاختيارية عند تقديم جداول مخصصة. يجب ان يكون `bundle_width` المجمع بين 2 و 3 (شامل)؛ العرض 1 مخصص للارث.
-- **مسارات SoraNet.** `streaming.soranet.*` يتحكم بالنقل المجهول: `exit_multiaddr` (الافتراضي `/dns/torii/udp/9443/quic`)، `padding_budget_ms` (الافتراضي 25 ms)، `access_kind` (`authenticated` مقابل `read-only`)، و `channel_salt` الاختياري، و `provision_spool_dir` (الافتراضي `./storage/streaming/soranet_routes`).
+- **مسارات SoraNet.** `streaming.soranet.*` يتحكم بالنقل المجهول: `exit_multiaddr` (الافتراضي `/dns/torii/udp/9443/quic`)، `padding_budget_ms` (الافتراضي 25 ms)، `access_kind` (`authenticated` مقابل `read-only`)، و `channel_salt` الاختياري، و `provision_spool_dir` (الافتراضي `./storage/streaming/soranet_routes`)، و `provision_spool_max_bytes` (الافتراضي 0، غير محدود)، و `provision_window_segments` (الافتراضي 4)، و `provision_queue_capacity` (الافتراضي 256).
 - **بوابة المزامنة.** `streaming.sync` تبدل فرض الانحراف لتدفقات الصوت/الصورة: `enabled` و `observe_only` و `ewma_threshold_ms` و `hard_cap_ms` تحكم متى ترفض القطاعات بسبب انحراف التوقيت.
 
 ## التحقق وال fixtures

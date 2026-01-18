@@ -7,6 +7,19 @@
 - Soak: `IROHA_SOAK_TARGET_BLOCKS=200 IROHA_TEST_NETWORK_KEEP_DIRS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-roadmap-target IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) cargo test -p integration_tests --test sumeragi_localnet_smoke permissioned_localnet_soak_thousands -- --ignored --nocapture --test-threads=1` (failed: stalled at min_non_empty=3/target 201 after 40s; logs in `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_QIrHw7`).
 - Integration test: `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test sumeragi_localnet_smoke permissioned_localnet_reaches_100_blocks -- --nocapture` (failed: height stalled at 2/101 after 230s; logs in `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_rQaNqe`; `trusted_peers_pop` missing PoPs warnings during profile scan).
 - Integration tests: `cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` (failed: `permissioned_localnet_reaches_100_blocks`; `permissioned_localnet_produces_blocks_within_bound` passed; `trusted_peers_pop` warnings during profile scan, Torii HTTP not reachable at initial snapshot).
+- SDK docs: add Python/Swift configuration snapshot examples for streaming transport defaults and re-export transport config DTOs from the Python package.
+- Merge: resolve conflict markers in Kotodama compiler lowering, IVM prebuild/test harnesses, Sumeragi NEW_VIEW tracking, and config snapshots/docs.
+- ZK tests: fix ProofAttachment lane-privacy init, un-nest zk transfer inline-commitment test, and use governance accessors in ZK governance integration tests.
+- Tests: `cargo test -p iroha_core --test zk_asset_vk_enforcement --features "zk-tests halo2-dev-tests"` (pass; warning: unused `parse_item` in `crates/ivm/src/kotodama/parser.rs`).
+- Kotodama: harden IR lowering to return errors instead of panicking, include literal pointer map keys in access hints with new non-literal map-key linting, and treat numeric aliases (`fixed_u128`, `Amount`, `Balance`) as distinct 64-bit numeric types; update gap analysis/docs.
+- Core: drop `Debug` derive from `SoranetProvisionJob` to avoid trait-object debug requirements; clone `signer_peer` before NEW_VIEW receipt tracking.
+- Tests: `cargo test --workspace` (timed out after 120s; blocked on build directory lock).
+- Confidential assets: verify Unshield/ZkTransfer proofs during instruction execution (with key resolution, size/timeout enforcement), add invalid-proof coverage, and document the verification step.
+- Tests: `cargo test --workspace` (failed: `crates/ivm/src/kotodama/compiler.rs` missing `ContractMeta` import and `?` used in closures that return `()`).
+- Kotodama: add register/unregister trigger aliases, decode literal trigger specs for access hints, enforce meta feature usage diagnostics, and treat numeric aliases (`fixed_u128`, `Amount`, `Balance`) as int; update docs.
+- Tests: not run (not requested).
+- Streaming: queue SoraNet provisioning off the manifest announce path, ignore revoked-route race updates, auto-provision privacy routes, and add `streaming.soranet.provision_window_segments` with config/docs coverage.
+- Tests: not run (not requested).
 - NPoS roster: canonicalize commit-QC and cached roster ordering in NPoS vote/new-view selection to prevent validator-set mismatches; unit coverage expanded.
 - Tests: `cargo test -p iroha_core npos_commit_qc_roster_roll_forward_canonicalizes_order -- --nocapture`, `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test sumeragi_da sumeragi_da_eviction_rehydrates_block_bodies -- --nocapture` (pass).
 - Sumeragi: record view-change installs when a committed block or BlockCreated advances the active view, and add coverage for commit-path view-change tracking (`note_view_change_from_block`, `on_block_commit`, `apply_commit_outcome`).
@@ -2787,6 +2800,8 @@
 - Tests: `cargo test -p integration_tests trigger_completion_failure_reports_error -- --nocapture` (timed out after 600s; compile finished; test `events::notification::trigger_completion_failure_reports_error` still running).
 - Sumeragi NEW_VIEW quorum selection now filters senders against the active roster (only counts local if it is in-roster), with coverage for non-roster senders.
 - Sumeragi now rejects NEW_VIEW votes with mismatched highest QC hashes/heights before recording, with regressions for invalid highest fields.
+- Streaming SoraNet provisioning now uses a bounded background queue with backpressure and telemetry counters; `streaming.soranet.provision_queue_capacity` defaults to 256 and the prepare path no longer performs transport I/O.
+- SDKs now surface streaming transport configuration (including SoraNet provisioning knobs) in Python and Swift configuration snapshots with updated tests.
 - Suppressed idle view-change timeouts while a commit is inflight so local execution does not trigger spurious view rotations; added coverage for the inflight guard.
 - Tests: `cargo test -p iroha_core force_view_change_if_idle_skips_when_commit_inflight -- --nocapture` (failed: fastpq API mismatches in `crates/iroha_core/src/fastpq/*` and `crates/iroha_core/src/state.rs`).
 - Tests: `cargo test -p iroha_core force_view_change_if_idle_skips_when_commit_inflight -- --nocapture` (pass; warnings about unused `norito` helpers and an unused `commit_vote_quorum_status_for_block` method).

@@ -78,6 +78,8 @@ Primeiro os padrões: os valores de configuração são selecionados para implan
     - `padding_budget_ms` (padrão: `25`): orçamento de padding de baixa latência em milissegundos aplicado ao circuito; `null` desativa padding extra.
     - `access_kind` (padrão: `authenticated`): postura de saída aplicada no bridge (`authenticated` ou `read-only`).
     - `channel_salt` (padrão: `iroha.soranet.channel.seed.v1`): string de domínio hashada com os identificadores de stream/rota para derivar IDs de canal cegos.
+    - `provision_window_segments` (padrao: `4`): janela de segmentos (inclusiva) usada no provisionamento automatico de rotas de privacidade; as janelas se alinham a multiplos deste tamanho.
+    - `provision_queue_capacity` (padrao: `256`): numero maximo de jobs de provisionamento de rotas de privacidade enfileirados antes de aplicar backpressure.
   - `soravpn`: ajustes do spool de provisionamento local SoraVPN para rotas de streaming.
     - `provision_spool_dir` (padrão: `./storage/streaming/soravpn_routes`): diretório do spool usado para preparar atualizações de rotas SoraVPN para nós VPN locais.
     - `provision_spool_max_bytes` (padrão: `0`, ilimitado): limite máximo em disco do spool de provisionamento SoraVPN.

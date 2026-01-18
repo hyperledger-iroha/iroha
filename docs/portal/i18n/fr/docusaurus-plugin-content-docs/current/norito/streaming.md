@@ -26,7 +26,7 @@ Norito Streaming definit le format on-wire, les frames de controle et le codec d
 ## Configuration runtime
 
 - **Materiau de cle.** Fournissez des cles dediees via `streaming.identity_public_key`/`streaming.identity_private_key` (multihash Ed25519) et du materiel Kyber optionnel via `streaming.kyber_public_key`/`streaming.kyber_secret_key`. Les quatre doivent etre presentes lors d'un override ; `streaming.kyber_suite` accepte `mlkem512|mlkem768|mlkem1024` (aliases `kyber512/768/1024`, par defaut `mlkem768`).
-- **Routes SoraNet.** `streaming.soranet.*` controle le transport anonyme : `exit_multiaddr` (par defaut `/dns/torii/udp/9443/quic`), `padding_budget_ms` (par defaut 25 ms), `access_kind` (`authenticated` vs `read-only`), `channel_salt` optionnel, et `provision_spool_dir` (par defaut `./storage/streaming/soranet_routes`).
+- **Routes SoraNet.** `streaming.soranet.*` controle le transport anonyme : `exit_multiaddr` (par defaut `/dns/torii/udp/9443/quic`), `padding_budget_ms` (par defaut 25 ms), `access_kind` (`authenticated` vs `read-only`), `channel_salt` optionnel, `provision_spool_dir` (par defaut `./storage/streaming/soranet_routes`), `provision_spool_max_bytes` (par defaut 0, illimite), `provision_window_segments` (par defaut 4) et `provision_queue_capacity` (par defaut 256).
 - **Gate de synchronisation.** `streaming.sync` active le controle de derive pour les flux audiovisuels : `enabled`, `observe_only`, `ewma_threshold_ms` et `hard_cap_ms` gouvernent quand des segments sont rejetes pour derive temporelle.
 
 ## Validation et fixtures
