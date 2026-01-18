@@ -174,6 +174,7 @@ pub fn impl_derive_visit(emitter: &mut Emitter, input: &syn::DeriveInput) -> Tok
         "fn visit_upgrade(operation: &Upgrade)",
         "fn visit_log(operation: &Log)",
         "fn visit_custom_instruction(operation: &CustomInstruction)",
+        "fn visit_register_public_lane_validator(operation: &RegisterPublicLaneValidator)",
         "fn visit_set_lane_relay_emergency_validators(operation: &SetLaneRelayEmergencyValidators)",
     ]
     .into_iter()

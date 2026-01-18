@@ -1,6 +1,7 @@
 # Status
 
 ## Latest Updates
+- Tests (user-reported): `cargo test -p integration_tests --test mod mint_asset_after_3_sec -- --nocapture --test-threads=1` (pass; 1 test, 205.87s).
 - IVM host: add mint syscall unit coverage for zero-amount trigger args using `CoreHostImpl::with_accounts_and_args`, `norito::json!`, and `ALICE_ID` to avoid alias parsing.
 - Triggers: `mint_asset_after_3_sec` test returns early when the schedule fires immediately because block time already passed the schedule.
 - Integration tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-target CARGO_BUILD_JOBS=1 IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_KEEP_DIRS=1 RUST_BACKTRACE=1 cargo test -p integration_tests --test mod call_execute_trigger_with_args -- --nocapture --test-threads=1` (pass) and `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-target CARGO_BUILD_JOBS=1 IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_KEEP_DIRS=1 RUST_BACKTRACE=1 cargo test -p integration_tests --test mod mint_asset_after_3_sec -- --nocapture --test-threads=1` (pass; warnings: `norito` dead_code helpers).

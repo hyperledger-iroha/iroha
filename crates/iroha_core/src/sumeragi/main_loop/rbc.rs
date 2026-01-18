@@ -2849,7 +2849,8 @@ impl Actor {
             )?;
             return Ok(());
         }
-        if !roster_source.is_authoritative() {
+        let allow_unverified = self.allow_unverified_rbc_roster(key);
+        if !roster_source.is_authoritative() && !allow_unverified {
             stash_ready(
                 self,
                 key,
@@ -3524,7 +3525,8 @@ impl Actor {
             )?;
             return Ok(());
         }
-        if !roster_source.is_authoritative() {
+        let allow_unverified = self.allow_unverified_rbc_roster(key);
+        if !roster_source.is_authoritative() && !allow_unverified {
             stash_deliver(
                 self,
                 key,
