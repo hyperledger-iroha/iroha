@@ -160,7 +160,11 @@ impl Checker {
                 self.visit_expr(target, origin);
                 self.visit_expr(index, origin);
             }
-            ExprKind::Number(_) | ExprKind::Bool(_) | ExprKind::String(_) | ExprKind::Ident(_) => {}
+            ExprKind::Number(_)
+            | ExprKind::Bool(_)
+            | ExprKind::String(_)
+            | ExprKind::Bytes(_)
+            | ExprKind::Ident(_) => {}
         }
     }
 
@@ -206,6 +210,9 @@ fn is_allowed_map_key_type(ty: &Type) -> bool {
     matches!(
         semantic::resolve_struct_type(ty),
         Type::Int
+            | Type::FixedU128
+            | Type::Amount
+            | Type::Balance
             | Type::AccountId
             | Type::AssetDefinitionId
             | Type::AssetId
@@ -222,6 +229,9 @@ fn is_allowed_map_key_type(ty: &Type) -> bool {
 fn display_type(ty: &Type) -> String {
     match semantic::resolve_struct_type(ty) {
         Type::Int => "int".to_string(),
+        Type::FixedU128 => "fixed_u128".to_string(),
+        Type::Amount => "Amount".to_string(),
+        Type::Balance => "Balance".to_string(),
         Type::Bool => "bool".to_string(),
         Type::String => "string".to_string(),
         Type::Blob => "Blob".to_string(),

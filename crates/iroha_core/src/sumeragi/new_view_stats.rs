@@ -25,12 +25,12 @@ fn global() -> &'static Mutex<Store> {
 }
 
 /// Note a `NEW_VIEW` receipt from `sender` for (height, view). Returns the current count.
-pub fn note_receipt(height: u64, view: u64, sender: PeerId) -> u64 {
+pub fn note_receipt(height: u64, view: u64, sender: &PeerId) -> u64 {
     let mut g = global().lock().unwrap();
     let key = (height, view);
     {
         let set = g.by_hv.entry(key).or_default();
-        set.insert(sender);
+        set.insert(sender.clone());
     }
     while g.by_hv.len() > NEW_VIEW_STATS_CAP {
         g.by_hv.pop_first();
@@ -74,9 +74,9 @@ mod tests {
 
         let peer_a = PeerId::new(KeyPair::random().public_key().clone());
         let peer_b = PeerId::new(KeyPair::random().public_key().clone());
-        assert_eq!(note_receipt(10, 0, peer_a.clone()), 1);
-        assert_eq!(note_receipt(10, 0, peer_a.clone()), 1);
-        assert_eq!(note_receipt(10, 0, peer_b), 2);
+        assert_eq!(note_receipt(10, 0, &peer_a), 1);
+        assert_eq!(note_receipt(10, 0, &peer_a), 1);
+        assert_eq!(note_receipt(10, 0, &peer_b), 2);
     }
 
     #[test]
@@ -87,7 +87,7 @@ mod tests {
         let peer = PeerId::new(KeyPair::random().public_key().clone());
         let total = NEW_VIEW_STATS_CAP + 4;
         for view in 0..total {
-            note_receipt(7, view as u64, peer.clone());
+            note_receipt(7, view as u64, &peer);
         }
 
         let snapshot = snapshot_counts();

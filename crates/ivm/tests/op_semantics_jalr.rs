@@ -66,10 +66,18 @@ fn compressed_forms_are_rejected() {
 fn jal_skips_next_instruction() {
     // addi r7, r0, 1; jal x0, +2; addi r7, r0, 2; halt
     let mut prog = ProgramMetadata::default().encode();
-    prog.extend_from_slice(&ivm::kotodama::compiler::encode_addi(7, 0, 1).to_le_bytes());
+    prog.extend_from_slice(
+        &ivm::kotodama::compiler::encode_addi(7, 0, 1)
+            .expect("encode addi")
+            .to_le_bytes(),
+    );
     let jal = encoding::wide::encode_jump(instruction::wide::control::JAL, 0, 2);
     prog.extend_from_slice(&jal.to_le_bytes());
-    prog.extend_from_slice(&ivm::kotodama::compiler::encode_addi(7, 0, 2).to_le_bytes());
+    prog.extend_from_slice(
+        &ivm::kotodama::compiler::encode_addi(7, 0, 2)
+            .expect("encode addi")
+            .to_le_bytes(),
+    );
     prog.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let mut vm = IVM::new(100);
     vm.load_program(&prog).unwrap();
@@ -81,10 +89,18 @@ fn jal_skips_next_instruction() {
 fn jal_link_register_saved_correctly() {
     // addi r2,r0,0; jal r5,+2; addi r2,r0,7; halt
     let mut prog = ProgramMetadata::default().encode();
-    prog.extend_from_slice(&ivm::kotodama::compiler::encode_addi(2, 0, 0).to_le_bytes());
+    prog.extend_from_slice(
+        &ivm::kotodama::compiler::encode_addi(2, 0, 0)
+            .expect("encode addi")
+            .to_le_bytes(),
+    );
     let jal = encoding::wide::encode_jump(instruction::wide::control::JAL, 5, 2);
     prog.extend_from_slice(&jal.to_le_bytes());
-    prog.extend_from_slice(&ivm::kotodama::compiler::encode_addi(2, 0, 7).to_le_bytes());
+    prog.extend_from_slice(
+        &ivm::kotodama::compiler::encode_addi(2, 0, 7)
+            .expect("encode addi")
+            .to_le_bytes(),
+    );
     prog.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let mut vm = IVM::new(100);
     vm.load_program(&prog).unwrap();

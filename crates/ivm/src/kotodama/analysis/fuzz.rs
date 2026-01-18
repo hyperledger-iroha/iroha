@@ -210,6 +210,9 @@ fn convert_type_expr(expr: &TypeExpr) -> Result<Type, String> {
     Ok(match expr {
         TypeExpr::Path(name) => match name.as_str() {
             "int" | "i64" | "number" => Type::Int,
+            "fixed_u128" => Type::FixedU128,
+            "Amount" => Type::Amount,
+            "Balance" => Type::Balance,
             "bool" => Type::Bool,
             "unit" | "()" => Type::Unit,
             other => Type::Opaque(other.to_string()),
@@ -244,7 +247,7 @@ fn build_samples(param_specs: &[ParamSpec]) -> Option<Vec<Vec<Value>>> {
 
 fn supported_type_samples(ty: &Type) -> Option<Vec<Value>> {
     match ty {
-        Type::Int => Some(vec![
+        Type::Int | Type::FixedU128 | Type::Amount | Type::Balance => Some(vec![
             Value::Int(-2),
             Value::Int(-1),
             Value::Int(0),
@@ -471,7 +474,9 @@ impl<'a> Evaluator<'a> {
         match &expr.expr {
             ExprKind::Number(n) => Ok(Value::Int(*n)),
             ExprKind::Bool(b) => Ok(Value::Bool(*b)),
-            ExprKind::String(_) => Err(EvalError::UnsupportedFeature("string literal")),
+            ExprKind::String(_) | ExprKind::Bytes(_) => {
+                Err(EvalError::UnsupportedFeature("string literal"))
+            }
             ExprKind::Ident(name) => locals
                 .get(name)
                 .cloned()

@@ -212,7 +212,7 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
     stx2.apply();
     let locks_after = sblock
         .world
-        .governance_locks
+        .governance_locks()
         .get(&rid)
         .cloned()
         .expect("locks after slash");
@@ -224,7 +224,7 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
     assert_eq!(rec.slashed, 25);
     let ledger = sblock
         .world
-        .governance_slashes
+        .governance_slashes()
         .get(&rid)
         .cloned()
         .expect("slash ledger");
@@ -239,12 +239,12 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
     let receiver_asset_id = AssetId::new(def_id.clone(), receiver_id.clone());
     let escrow_balance = **sblock
         .world
-        .assets
+        .assets()
         .get(&escrow_asset_id)
         .expect("escrow asset after slash");
     let receiver_balance = **sblock
         .world
-        .assets
+        .assets()
         .get(&receiver_asset_id)
         .expect("receiver asset after slash");
     assert_eq!(escrow_balance, Numeric::new(75, 0));

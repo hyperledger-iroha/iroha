@@ -57,9 +57,9 @@ fn build_program_mint_rose_for_authority() -> Vec<u8> {
 
     // Assemble: set a0=0 (authority sentinel), a1=0 (rose#wonderland sentinel), a2=1; SCALL MINT_ASSET; HALT
     let mut code = Vec::new();
-    code.extend_from_slice(&encode_addi(10, 0, 0).to_le_bytes()); // a0 = 0 => authority
-    code.extend_from_slice(&encode_addi(11, 0, 0).to_le_bytes()); // a1 = 0 => rose#wonderland
-    code.extend_from_slice(&encode_addi(12, 0, 1).to_le_bytes()); // a2 = 1 (amount)
+    code.extend_from_slice(&encode_addi(10, 0, 0).expect("encode addi").to_le_bytes()); // a0 = 0 => authority
+    code.extend_from_slice(&encode_addi(11, 0, 0).expect("encode addi").to_le_bytes()); // a1 = 0 => rose#wonderland
+    code.extend_from_slice(&encode_addi(12, 0, 1).expect("encode addi").to_le_bytes()); // a2 = 1 (amount)
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             wide::system::SCALL,
@@ -84,8 +84,8 @@ fn build_program_create_nft_for_authority() -> Vec<u8> {
 
     // Assemble: create NFTs for all users convenience syscall
     let mut code = Vec::new();
-    code.extend_from_slice(&encode_addi(10, 0, 0).to_le_bytes()); // unused
-    code.extend_from_slice(&encode_addi(11, 0, 0).to_le_bytes()); // unused
+    code.extend_from_slice(&encode_addi(10, 0, 0).expect("encode addi").to_le_bytes()); // unused
+    code.extend_from_slice(&encode_addi(11, 0, 0).expect("encode addi").to_le_bytes()); // unused
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             wide::system::SCALL,
@@ -110,9 +110,9 @@ fn build_program_set_account_detail_defaults() -> Vec<u8> {
     // Leverage host sentinels: zeroed pointers target the authority account,
     // "cursor" key, and a ForwardCursor {"sc_dummy", 1}.
     let mut code = Vec::new();
-    code.extend_from_slice(&encode_addi(10, 0, 0).to_le_bytes()); // account ptr = 0 (authority)
-    code.extend_from_slice(&encode_addi(11, 0, 0).to_le_bytes()); // key ptr = 0 ("cursor")
-    code.extend_from_slice(&encode_addi(12, 0, 0).to_le_bytes()); // value ptr = 0 (ForwardCursor)
+    code.extend_from_slice(&encode_addi(10, 0, 0).expect("encode addi").to_le_bytes()); // account ptr = 0 (authority)
+    code.extend_from_slice(&encode_addi(11, 0, 0).expect("encode addi").to_le_bytes()); // key ptr = 0 ("cursor")
+    code.extend_from_slice(&encode_addi(12, 0, 0).expect("encode addi").to_le_bytes()); // value ptr = 0 (ForwardCursor)
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             wide::system::SCALL,
@@ -241,7 +241,7 @@ fn main() {
                     };
                     let mut code = Vec::new();
                     // x10 = 111
-                    code.extend_from_slice(&encode_addi(10, 0, 111).to_le_bytes());
+                    code.extend_from_slice(&encode_addi(10, 0, 111).expect("encode addi").to_le_bytes());
                     code.extend_from_slice(
                         &encoding::wide::encode_sys(
                             wide::system::SCALL,

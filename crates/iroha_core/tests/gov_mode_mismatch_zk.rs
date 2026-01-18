@@ -121,7 +121,7 @@ fn zk_ballot_rejected_on_plain_referendum() {
         .map_or_else(|| "rid-plain".to_string(), |(k, _)| k.clone());
     // Valid proof bundle reused from TinyAdd helper
     let proof_b64 = bundle.proof_b64.clone();
-    stx.world.elections.insert(
+    stx.world.elections().insert(
         rid.clone(),
         iroha_core::state::ElectionState {
             options: 1,

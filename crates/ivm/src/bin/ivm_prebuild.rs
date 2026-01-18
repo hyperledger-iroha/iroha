@@ -121,11 +121,23 @@ fn build_program_mint_rose_for_authority() -> Vec<u8> {
     use ivm::{encoding, instruction::wide, kotodama::compiler::encode_addi, syscalls as ivm_sys};
     let mut code = Vec::new();
     // a0 (x10) = 0 => authority sentinel
-    code.extend_from_slice(&encode_addi(10, 0, 0).to_le_bytes());
+    code.extend_from_slice(
+        &encode_addi(10, 0, 0)
+            .expect("encode addi")
+            .to_le_bytes(),
+    );
     // a1 (x11) = 0 => asset_def sentinel (rose#wonderland)
-    code.extend_from_slice(&encode_addi(11, 0, 0).to_le_bytes());
+    code.extend_from_slice(
+        &encode_addi(11, 0, 0)
+            .expect("encode addi")
+            .to_le_bytes(),
+    );
     // a2 (x12) = 1 => amount
-    code.extend_from_slice(&encode_addi(12, 0, 1).to_le_bytes());
+    code.extend_from_slice(
+        &encode_addi(12, 0, 1)
+            .expect("encode addi")
+            .to_le_bytes(),
+    );
     code.extend_from_slice(
         &encoding::wide::encode_sys(wide::system::SCALL, ivm_sys::SYSCALL_MINT_ASSET as u8)
             .to_le_bytes(),
@@ -165,7 +177,11 @@ fn build_program_create_nft_for_authority() -> Vec<u8> {
 fn build_program_set_sc_exec_depth(depth: u8) -> Vec<u8> {
     use ivm::{encoding, instruction::wide, kotodama::compiler::encode_addi, syscalls as ivm_sys};
     let mut code = Vec::new();
-    code.extend_from_slice(&encode_addi(10, 0, depth.into()).to_le_bytes());
+    code.extend_from_slice(
+        &encode_addi(10, 0, depth.into())
+            .expect("encode addi")
+            .to_le_bytes(),
+    );
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             wide::system::SCALL,
@@ -190,9 +206,21 @@ fn build_program_set_account_detail_defaults() -> Vec<u8> {
     // Use host-provided sentinels for authority/key/value to enqueue a
     // SetKeyValue instruction storing ForwardCursor{"sc_dummy",1}.
     let mut code = Vec::new();
-    code.extend_from_slice(&encode_addi(10, 0, 0).to_le_bytes());
-    code.extend_from_slice(&encode_addi(11, 0, 0).to_le_bytes());
-    code.extend_from_slice(&encode_addi(12, 0, 0).to_le_bytes());
+    code.extend_from_slice(
+        &encode_addi(10, 0, 0)
+            .expect("encode addi")
+            .to_le_bytes(),
+    );
+    code.extend_from_slice(
+        &encode_addi(11, 0, 0)
+            .expect("encode addi")
+            .to_le_bytes(),
+    );
+    code.extend_from_slice(
+        &encode_addi(12, 0, 0)
+            .expect("encode addi")
+            .to_le_bytes(),
+    );
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             wide::system::SCALL,

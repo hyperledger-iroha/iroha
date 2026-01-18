@@ -12,7 +12,7 @@ fn lower_call_tuple_return_emits_callmulti_and_tuplepack() {
     "#;
     let prog = parse(src).expect("parse");
     let typed = analyze(&prog).expect("analyze");
-    let irp = ir::lower(&typed);
+    let irp = ir::lower(&typed).expect("lower");
     // Find f
     let f = irp
         .functions
@@ -44,7 +44,7 @@ fn lower_return_tuple_emits_returnn() {
     "#;
     let prog = parse(src).expect("parse");
     let typed = analyze(&prog).expect("analyze");
-    let irp = ir::lower(&typed);
+    let irp = ir::lower(&typed).expect("lower");
     let h = irp
         .functions
         .iter()

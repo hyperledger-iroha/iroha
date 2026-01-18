@@ -3,9 +3,7 @@ use std::collections::HashSet;
 use super::{AnalysisCategory, AnalysisFinding};
 use crate::kotodama::{
     ast::{Block, Expr, Item, Program, Statement},
-    semantic::{
-        self, ExprKind, Type, TypedBlock, TypedExpr, TypedFunction, TypedProgram, TypedStatement,
-    },
+    semantic::{self, ExprKind, TypedBlock, TypedExpr, TypedFunction, TypedProgram, TypedStatement},
 };
 
 /// Run static analysis on a parsed Kotodama program using the associated typed
@@ -35,7 +33,7 @@ fn detect_literal_overflow(typed: &TypedProgram, findings: &mut Vec<AnalysisFind
     for item in &typed.items {
         let semantic::TypedItem::Function(func) = item;
         visit_exprs(func, &mut |func_name, expr| {
-            if !matches!(expr.ty, Type::Int) {
+            if !semantic::is_numeric_type(&expr.ty) {
                 return;
             }
             if let ExprKind::Binary { op, left, right } = &expr.expr {
@@ -95,7 +93,7 @@ fn detect_division_by_zero(typed: &TypedProgram, findings: &mut Vec<AnalysisFind
     for item in &typed.items {
         let semantic::TypedItem::Function(func) = item;
         visit_exprs(func, &mut |func_name, expr| {
-            if !matches!(expr.ty, Type::Int) {
+            if !semantic::is_numeric_type(&expr.ty) {
                 return;
             }
             if let ExprKind::Binary { op, right, .. } = &expr.expr
@@ -306,7 +304,7 @@ fn visit_expr_for_host_calls(
                 visit_expr_for_host_calls(item, state_before, func_name, findings);
             }
         }
-        Expr::Bool(_) | Expr::Number(_) | Expr::String(_) | Expr::Ident(_) => {}
+        Expr::Bool(_) | Expr::Number(_) | Expr::String(_) | Expr::Bytes(_) | Expr::Ident(_) => {}
     }
 }
 
@@ -325,7 +323,8 @@ fn expr_targets_state(expr: &Expr, state_names: &HashSet<String>) -> bool {
         | Expr::Conditional { .. }
         | Expr::Bool(_)
         | Expr::Number(_)
-        | Expr::String(_) => false,
+        | Expr::String(_)
+        | Expr::Bytes(_) => false,
     }
 }
 
@@ -564,7 +563,11 @@ where
             visitor(func_name, index);
             visit_expr_children(index, func_name, visitor);
         }
-        ExprKind::Number(_) | ExprKind::Bool(_) | ExprKind::String(_) | ExprKind::Ident(_) => {}
+        ExprKind::Number(_)
+        | ExprKind::Bool(_)
+        | ExprKind::String(_)
+        | ExprKind::Bytes(_)
+        | ExprKind::Ident(_) => {}
     }
 }
 

@@ -6,6 +6,7 @@ use iroha_core::{
     query::store::LiveQueryStore,
     smartcontracts::Execute,
     state::{State, WorldReadOnly},
+    zk::test_utils::halo2_fixture_envelope,
 };
 use iroha_crypto::KeyPair;
 use iroha_data_model::{
@@ -18,13 +19,18 @@ use iroha_data_model::{
     },
     permission::Permission,
     prelude::*,
-    proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
+    proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
     zk::BackendTag,
 };
 use iroha_primitives::json::Json;
 use nonzero_ext::nonzero;
 
 const BACKEND: &str = "halo2/ipa";
+const FIXTURE_CIRCUIT: &str = "halo2/ipa:tiny-add-v1";
+
+fn proof_fixture() -> iroha_core::zk::test_utils::FixtureEnvelope {
+    halo2_fixture_envelope(FIXTURE_CIRCUIT, [0u8; 32])
+}
 
 fn prepare_state() -> (
     State,
@@ -87,9 +93,16 @@ fn prepare_state() -> (
                 .execute(&owner, &mut stx)
                 .expect("grant manage vk");
 
-            let vk_transfer_id = VerifyingKeyId::new(BACKEND, "vk_transfer");
-            let vk_transfer_box = VerifyingKeyBox::new(BACKEND.into(), vec![1, 2, 3, 4]);
-            fn make_record(name: &str, vk_box: VerifyingKeyBox) -> VerifyingKeyRecord {
+            let fixture = halo2_fixture_envelope(FIXTURE_CIRCUIT, [0u8; 32]);
+            let fixture_vk = fixture
+                .vk_box(BACKEND)
+                .expect("fixture verifying key");
+            let schema_hash = fixture.schema_hash;
+            fn make_record(
+                name: &str,
+                vk_box: VerifyingKeyBox,
+                schema_hash: [u8; 32],
+            ) -> VerifyingKeyRecord {
                 let commitment = iroha_core::zk::hash_vk(&vk_box);
                 let vk_len = vk_box.bytes.len() as u32;
                 let mut rec = VerifyingKeyRecord::new(
@@ -97,7 +110,7 @@ fn prepare_state() -> (
                     format!("{BACKEND}:{name}"),
                     BackendTag::Halo2IpaPasta,
                     "pallas",
-                    [0x22; 32],
+                    schema_hash,
                     commitment,
                 );
                 rec.vk_len = vk_len;
@@ -106,7 +119,8 @@ fn prepare_state() -> (
                 rec.gas_schedule_id = Some("halo2_default".into());
                 rec
             }
-            let vk_transfer_rec = make_record("vk_transfer", vk_transfer_box);
+            let vk_transfer_id = VerifyingKeyId::new(BACKEND, "vk_transfer");
+            let vk_transfer_rec = make_record("vk_transfer", fixture_vk.clone(), schema_hash);
             executor
                 .clone()
                 .execute_instruction(
@@ -121,8 +135,7 @@ fn prepare_state() -> (
                 .expect("register vk_transfer");
 
             let vk_unshield_id = VerifyingKeyId::new(BACKEND, "vk_unshield");
-            let vk_unshield_box = VerifyingKeyBox::new(BACKEND.into(), vec![4, 3, 2, 1]);
-            let vk_unshield_rec = make_record("vk_unshield", vk_unshield_box);
+            let vk_unshield_rec = make_record("vk_unshield", fixture_vk.clone(), schema_hash);
             executor
                 .clone()
                 .execute_instruction(
@@ -137,8 +150,7 @@ fn prepare_state() -> (
                 .expect("register vk_unshield");
 
             let vk_other_id = VerifyingKeyId::new(BACKEND, "vk_other");
-            let vk_other_box = VerifyingKeyBox::new(BACKEND.into(), vec![9, 9, 9, 9]);
-            let vk_other_rec = make_record("vk_other", vk_other_box);
+            let vk_other_rec = make_record("vk_other", fixture_vk, schema_hash);
             executor
                 .clone()
                 .execute_instruction(
@@ -201,7 +213,8 @@ fn zk_transfer_accepts_expected_verifying_key() {
     let mut stx = block.transaction();
     let executor = stx.world.executor().clone();
 
-    let proof = ProofBox::new(BACKEND.into(), vec![0xAA]);
+    let fixture = proof_fixture();
+    let proof = fixture.proof_box(BACKEND);
     let attachment = ProofAttachment::new_ref(BACKEND.into(), proof, vk_transfer_id.clone());
     let transfer = ZkTransfer::new(
         asset_def_id.clone(),
@@ -226,9 +239,9 @@ fn zk_transfer_accepts_inline_verifying_key() {
     let mut stx = block.transaction();
     let executor = stx.world.executor().clone();
 
-    // Matches the verifying key registered in prepare_state (bytes = [1,2,3,4]).
-    let vk_inline = VerifyingKeyBox::new(BACKEND.into(), vec![1, 2, 3, 4]);
-    let proof = ProofBox::new(BACKEND.into(), vec![0xCC]);
+    let fixture = proof_fixture();
+    let vk_inline = fixture.vk_box(BACKEND).expect("fixture verifying key");
+    let proof = fixture.proof_box(BACKEND);
     let attachment = ProofAttachment::new_inline(BACKEND.into(), proof, vk_inline);
     let transfer = ZkTransfer::new(
         asset_def_id.clone(),
@@ -253,7 +266,8 @@ fn zk_transfer_rejects_mismatched_verifying_key() {
     let mut stx = block.transaction();
     let executor = stx.world.executor().clone();
 
-    let proof = ProofBox::new(BACKEND.into(), vec![0xBB]);
+    let fixture = proof_fixture();
+    let proof = fixture.proof_box(BACKEND);
     let attachment = ProofAttachment::new_ref(BACKEND.into(), proof, vk_other_id.clone());
     let transfer = ZkTransfer::new(
         asset_def_id.clone(),
@@ -278,39 +292,40 @@ fn zk_transfer_rejects_mismatched_verifying_key() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
+}
 
-    #[test]
-    fn zk_transfer_rejects_inline_commitment_mismatch() {
-        let (state, owner, asset_def_id, _, _, _) = prepare_state();
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut stx = block.transaction();
-        let executor = stx.world.executor().clone();
+#[test]
+fn zk_transfer_rejects_inline_commitment_mismatch() {
+    let (state, owner, asset_def_id, _, _, _) = prepare_state();
+    let header =
+        iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    let executor = stx.world.executor().clone();
 
-        let vk_inline = VerifyingKeyBox::new(BACKEND.into(), vec![0xDE, 0xAD, 0xBE, 0xEF]);
-        let proof = ProofBox::new(BACKEND.into(), vec![0xCD]);
-        let attachment = ProofAttachment::new_inline(BACKEND.into(), proof, vk_inline);
-        let transfer = ZkTransfer::new(
-            asset_def_id.clone(),
-            vec![],
-            vec![[4u8; 32]],
-            attachment,
-            None,
-        );
+    let fixture = proof_fixture();
+    let vk_inline = VerifyingKeyBox::new(BACKEND.into(), vec![0xDE, 0xAD, 0xBE, 0xEF]);
+    let proof = fixture.proof_box(BACKEND);
+    let attachment = ProofAttachment::new_inline(BACKEND.into(), proof, vk_inline);
+    let transfer = ZkTransfer::new(
+        asset_def_id.clone(),
+        vec![],
+        vec![[4u8; 32]],
+        attachment,
+        None,
+    );
 
-        let err = executor
-            .clone()
-            .execute_instruction(&mut stx, &owner, transfer.into())
-            .expect_err("inline commitment mismatch must fail");
-        match err {
-            iroha_data_model::ValidationFail::InstructionFailed(
-                iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(msg),
-            ) => {
-                assert!(msg.contains("inline verifying key commitment mismatch"));
-            }
-            other => panic!("unexpected error: {other:?}"),
+    let err = executor
+        .clone()
+        .execute_instruction(&mut stx, &owner, transfer.into())
+        .expect_err("inline commitment mismatch must fail");
+    match err {
+        iroha_data_model::ValidationFail::InstructionFailed(
+            iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(msg),
+        ) => {
+            assert!(msg.contains("inline verifying key commitment mismatch"));
         }
+        other => panic!("unexpected error: {other:?}"),
     }
 }
 
@@ -322,7 +337,8 @@ fn zk_transfer_rejects_missing_verifying_key() {
     let mut stx = block.transaction();
     let executor = stx.world.executor().clone();
 
-    let proof = ProofBox::new(BACKEND.into(), vec![0xEF]);
+    let fixture = proof_fixture();
+    let proof = fixture.proof_box(BACKEND);
     let attachment = ProofAttachment {
         backend: BACKEND.into(),
         proof,
@@ -330,6 +346,7 @@ fn zk_transfer_rejects_missing_verifying_key() {
         vk_inline: None,
         vk_commitment: None,
         envelope_hash: None,
+        lane_privacy: None,
     };
     let transfer = ZkTransfer::new(
         asset_def_id.clone(),
@@ -354,6 +371,39 @@ fn zk_transfer_rejects_missing_verifying_key() {
 }
 
 #[test]
+fn zk_transfer_rejects_invalid_proof() {
+    let (state, owner, asset_def_id, vk_transfer_id, _, _) = prepare_state();
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    let executor = stx.world.executor().clone();
+
+    let mut proof = proof_fixture().proof_box(BACKEND);
+    proof.bytes.clear();
+    let attachment = ProofAttachment::new_ref(BACKEND.into(), proof, vk_transfer_id.clone());
+    let transfer = ZkTransfer::new(
+        asset_def_id.clone(),
+        vec![[7u8; 32]],
+        vec![[8u8; 32]],
+        attachment,
+        None,
+    );
+
+    let err = executor
+        .clone()
+        .execute_instruction(&mut stx, &owner, transfer.into())
+        .expect_err("invalid proof must fail");
+    match err {
+        iroha_data_model::ValidationFail::InstructionFailed(
+            iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(msg),
+        ) => {
+            assert!(msg.contains("invalid transfer proof"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 fn unshield_accepts_expected_verifying_key() {
     let (state, owner, asset_def_id, _, vk_unshield_id, _) = prepare_state();
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
@@ -361,7 +411,8 @@ fn unshield_accepts_expected_verifying_key() {
     let mut stx = block.transaction();
     let executor = stx.world.executor().clone();
 
-    let proof = ProofBox::new(BACKEND.into(), vec![0x21]);
+    let fixture = proof_fixture();
+    let proof = fixture.proof_box(BACKEND);
     let attachment = ProofAttachment::new_ref(BACKEND.into(), proof, vk_unshield_id.clone());
     let unshield = Unshield::new(
         asset_def_id.clone(),
@@ -380,6 +431,40 @@ fn unshield_accepts_expected_verifying_key() {
 }
 
 #[test]
+fn unshield_rejects_invalid_proof() {
+    let (state, owner, asset_def_id, _, vk_unshield_id, _) = prepare_state();
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    let executor = stx.world.executor().clone();
+
+    let mut proof = proof_fixture().proof_box(BACKEND);
+    proof.bytes.clear();
+    let attachment = ProofAttachment::new_ref(BACKEND.into(), proof, vk_unshield_id.clone());
+    let unshield = Unshield::new(
+        asset_def_id.clone(),
+        owner.clone(),
+        1u128,
+        vec![[0u8; 32]],
+        attachment,
+        None,
+    );
+
+    let err = executor
+        .clone()
+        .execute_instruction(&mut stx, &owner, unshield.into())
+        .expect_err("invalid proof must fail");
+    match err {
+        iroha_data_model::ValidationFail::InstructionFailed(
+            iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(msg),
+        ) => {
+            assert!(msg.contains("invalid unshield proof"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 fn unshield_rejects_mismatched_verifying_key() {
     let (state, owner, asset_def_id, _, _vk_unshield_id, vk_other_id) = prepare_state();
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
@@ -387,7 +472,8 @@ fn unshield_rejects_mismatched_verifying_key() {
     let mut stx = block.transaction();
     let executor = stx.world.executor().clone();
 
-    let proof = ProofBox::new(BACKEND.into(), vec![0x22]);
+    let fixture = proof_fixture();
+    let proof = fixture.proof_box(BACKEND);
     let attachment = ProofAttachment::new_ref(BACKEND.into(), proof, vk_other_id.clone());
     let unshield = Unshield::new(
         asset_def_id.clone(),
@@ -414,14 +500,15 @@ fn unshield_rejects_mismatched_verifying_key() {
 
 #[test]
 fn unshield_accepts_inline_verifying_key() {
-    let (state, owner, asset_def_id, _, vk_unshield_id, _) = prepare_state();
+    let (state, owner, asset_def_id, _, _vk_unshield_id, _) = prepare_state();
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let executor = stx.world.executor().clone();
 
-    let vk_inline = VerifyingKeyBox::new(BACKEND.into(), vec![4, 3, 2, 1]);
-    let proof = ProofBox::new(BACKEND.into(), vec![0x23]);
+    let fixture = proof_fixture();
+    let vk_inline = fixture.vk_box(BACKEND).expect("fixture verifying key");
+    let proof = fixture.proof_box(BACKEND);
     let attachment = ProofAttachment::new_inline(BACKEND.into(), proof, vk_inline);
     let unshield = Unshield::new(
         asset_def_id.clone(),
@@ -441,14 +528,15 @@ fn unshield_accepts_inline_verifying_key() {
 
 #[test]
 fn unshield_rejects_inline_commitment_mismatch() {
-    let (state, owner, asset_def_id, _, vk_unshield_id, _) = prepare_state();
+    let (state, owner, asset_def_id, _, _vk_unshield_id, _) = prepare_state();
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let executor = stx.world.executor().clone();
 
+    let fixture = proof_fixture();
     let vk_inline = VerifyingKeyBox::new(BACKEND.into(), vec![0xDE, 0xAD, 0xBE, 0xEF]);
-    let proof = ProofBox::new(BACKEND.into(), vec![0x24]);
+    let proof = fixture.proof_box(BACKEND);
     let attachment = ProofAttachment::new_inline(BACKEND.into(), proof, vk_inline);
     let unshield = Unshield::new(
         asset_def_id.clone(),

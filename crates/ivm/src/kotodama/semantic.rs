@@ -13,6 +13,9 @@ struct FunctionSummary {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     Int,
+    FixedU128,
+    Amount,
+    Balance,
     Bool,
     String,
     /// Pointer-ABI raw bytes blob
@@ -84,6 +87,7 @@ pub enum ExprKind {
     Number(i64),
     Bool(bool),
     String(String),
+    Bytes(Vec<u8>),
     Ident(String),
 }
 
@@ -126,7 +130,9 @@ const SENSITIVE_SYSCALLS: &[&str] = &[
     "register_peer",
     "unregister_peer",
     "create_trigger",
+    "register_trigger",
     "remove_trigger",
+    "unregister_trigger",
     "set_trigger_enabled",
     "grant_permission",
     "revoke_permission",
@@ -196,6 +202,9 @@ pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
 fn type_name(ty: &Type) -> String {
     match ty {
         Type::Int => "int".into(),
+        Type::FixedU128 => "fixed_u128".into(),
+        Type::Amount => "Amount".into(),
+        Type::Balance => "Balance".into(),
         Type::Bool => "bool".into(),
         Type::String => "string".into(),
         Type::Blob => "Blob".into(),
@@ -222,9 +231,57 @@ fn type_name(ty: &Type) -> String {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NumericKind {
+    Int,
+    FixedU128,
+    Amount,
+    Balance,
+}
+
+fn numeric_kind(ty: &Type) -> Option<NumericKind> {
+    match resolve_struct_type(ty) {
+        Type::Int => Some(NumericKind::Int),
+        Type::FixedU128 => Some(NumericKind::FixedU128),
+        Type::Amount => Some(NumericKind::Amount),
+        Type::Balance => Some(NumericKind::Balance),
+        _ => None,
+    }
+}
+
+fn numeric_kind_to_type(kind: NumericKind) -> Type {
+    match kind {
+        NumericKind::Int => Type::Int,
+        NumericKind::FixedU128 => Type::FixedU128,
+        NumericKind::Amount => Type::Amount,
+        NumericKind::Balance => Type::Balance,
+    }
+}
+
+pub(crate) fn is_numeric_type(ty: &Type) -> bool {
+    numeric_kind(ty).is_some()
+}
+
+fn is_int_like(ty: &Type) -> bool {
+    is_numeric_type(ty)
+}
+
+fn numeric_result_type(lhs: &Type, rhs: &Type) -> Option<Type> {
+    let lhs_kind = numeric_kind(lhs)?;
+    let rhs_kind = numeric_kind(rhs)?;
+    let out = match (lhs_kind, rhs_kind) {
+        (NumericKind::Int, NumericKind::Int) => NumericKind::Int,
+        (NumericKind::Int, other) | (other, NumericKind::Int) => other,
+        (a, b) if a == b => a,
+        _ => return None,
+    };
+    Some(numeric_kind_to_type(out))
+}
+
 fn is_supported_durable_value_type(ty: &Type) -> bool {
     match resolve_struct_type(ty) {
-        Type::Int | Type::Bool | Type::Json | Type::Blob | Type::Bytes => true,
+        ty if is_numeric_type(&ty) => true,
+        Type::Bool | Type::Json | Type::Blob | Type::Bytes => true,
         other if is_pointer_type(&other) => true,
         _ => false,
     }
@@ -232,7 +289,8 @@ fn is_supported_durable_value_type(ty: &Type) -> bool {
 
 fn is_supported_durable_key_type(ty: &Type) -> bool {
     match resolve_struct_type(ty) {
-        Type::Int | Type::String => true,
+        ty if is_numeric_type(&ty) => true,
+        Type::String => true,
         other if is_pointer_type(&other) => true,
         _ => false,
     }
@@ -240,7 +298,8 @@ fn is_supported_durable_key_type(ty: &Type) -> bool {
 
 fn is_in_memory_map_word_type(ty: &Type) -> bool {
     match resolve_struct_type(ty) {
-        Type::Int | Type::Bool | Type::String | Type::Blob | Type::Bytes | Type::Json => true,
+        ty if is_numeric_type(&ty) => true,
+        Type::Bool | Type::String | Type::Blob | Type::Bytes | Type::Json => true,
         other if is_pointer_type(&other) => true,
         _ => false,
     }
@@ -328,7 +387,8 @@ pub(crate) fn is_blob_like(ty: &Type) -> bool {
 
 fn is_eq_comparable_type(ty: &Type) -> bool {
     match resolve_struct_type(ty) {
-        Type::Int | Type::Bool | Type::String | Type::Blob | Type::Bytes | Type::Json => true,
+        ty if is_numeric_type(&ty) => true,
+        Type::Bool | Type::String | Type::Blob | Type::Bytes | Type::Json => true,
         other if is_pointer_type(&other) => true,
         _ => false,
     }
@@ -359,7 +419,7 @@ fn is_transfer_batch_entry_tuple(ty: &Type) -> bool {
             matches!(resolve_struct_type(&fields[0]), Type::AccountId)
                 && matches!(resolve_struct_type(&fields[1]), Type::AccountId)
                 && matches!(resolve_struct_type(&fields[2]), Type::AssetDefinitionId)
-                && matches!(resolve_struct_type(&fields[3]), Type::Int)
+                && is_int_like(&fields[3])
         }
         _ => false,
     }
@@ -722,9 +782,12 @@ fn analyze_statement(
                                 }]);
                             }
                             let rhs_t = analyze_expr(value, vars)?;
-                            ensure_assignable(&Type::Int, &v)?;
-                            ensure_assignable(&Type::Int, &rhs_t.ty)?;
-                            ensure_assignable(&v, &Type::Int)?;
+                            let Some(result_ty) = numeric_result_type(&v, &rhs_t.ty) else {
+                                return Err(SemanticError {
+                                    message: format!("{op:?} expects int operands"),
+                                });
+                            };
+                            ensure_assignable(&v, &result_ty)?;
                             let mut out = Vec::new();
                             let (_key_name, key_stmt, key_ident) =
                                 bind_internal_temp(vars, "key", key_t);
@@ -752,7 +815,7 @@ fn analyze_statement(
                                     left: Box::new(map_get),
                                     right: Box::new(rhs_t),
                                 },
-                                ty: Type::Int,
+                                ty: result_ty,
                             };
                             out.push(TypedStatement::MapSet {
                                 map: map_expr,
@@ -803,9 +866,12 @@ fn analyze_statement(
                         bind_tuple_fields_rec(&mut out, vars, name, &expr, &expr.ty);
                         return Ok(out);
                     }
-                    ensure_assignable(&Type::Int, &expected)?;
-                    ensure_assignable(&Type::Int, &expr.ty)?;
-                    ensure_assignable(&expected, &Type::Int)?;
+                    let Some(result_ty) = numeric_result_type(&expected, &expr.ty) else {
+                        return Err(SemanticError {
+                            message: format!("{op:?} expects int operands"),
+                        });
+                    };
+                    ensure_assignable(&expected, &result_ty)?;
                     let left = TypedExpr {
                         expr: ExprKind::Ident(name.clone()),
                         ty: expected.clone(),
@@ -817,7 +883,7 @@ fn analyze_statement(
                             left: Box::new(left),
                             right: Box::new(expr),
                         },
-                        ty: Type::Int,
+                        ty: result_ty,
                     };
                     vars.insert(name.clone(), value_expr.ty.clone());
                     let mut out = Vec::new();
@@ -1413,6 +1479,10 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
             expr: ExprKind::String(s.clone()),
             ty: Type::String,
         }),
+        Expr::Bytes(bytes) => Ok(TypedExpr {
+            expr: ExprKind::Bytes(bytes.clone()),
+            ty: Type::Bytes,
+        }),
         Expr::Ident(name) => {
             let ty = vars.get(name).cloned().ok_or_else(|| SemanticError {
                 message: format!("undefined variable {name}"),
@@ -1426,17 +1496,17 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
             let inner_t = analyze_expr(inner, vars)?;
             match op {
                 UnaryOp::Neg => {
-                    if inner_t.ty != Type::Int {
+                    let Some(kind) = numeric_kind(&inner_t.ty) else {
                         return Err(SemanticError {
                             message: "unary '-' expects int".into(),
                         });
-                    }
+                    };
                     Ok(TypedExpr {
                         expr: ExprKind::Unary {
                             op: *op,
                             expr: Box::new(inner_t.clone()),
                         },
-                        ty: Type::Int,
+                        ty: numeric_kind_to_type(kind),
                     })
                 }
                 UnaryOp::Not => {
@@ -1600,20 +1670,18 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
             use BinaryOp::*;
             match op {
                 Add | Sub | Mul | Div | Mod => {
-                    if ensure_assignable(&Type::Int, &left_t.ty).is_err()
-                        || ensure_assignable(&Type::Int, &right_t.ty).is_err()
-                    {
+                    let Some(result_ty) = numeric_result_type(&left_t.ty, &right_t.ty) else {
                         return Err(SemanticError {
                             message: format!("{op:?} expects int operands"),
                         });
-                    }
+                    };
                     Ok(TypedExpr {
                         expr: ExprKind::Binary {
                             op: *op,
                             left: Box::new(left_t),
                             right: Box::new(right_t),
                         },
-                        ty: Type::Int,
+                        ty: result_ty,
                     })
                 }
                 And | Or => {
@@ -1632,8 +1700,10 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     })
                 }
                 Eq | Ne => {
+                    let numeric_ok = numeric_result_type(&left_t.ty, &right_t.ty).is_some();
                     if left_t.ty != right_t.ty
                         && !(is_blob_like(&left_t.ty) && is_blob_like(&right_t.ty))
+                        && !numeric_ok
                     {
                         return Err(SemanticError {
                             message: "type mismatch in equality".into(),
@@ -1657,9 +1727,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     })
                 }
                 Lt | Le | Gt | Ge => {
-                    if ensure_assignable(&Type::Int, &left_t.ty).is_err()
-                        || ensure_assignable(&Type::Int, &right_t.ty).is_err()
-                    {
+                    if numeric_result_type(&left_t.ty, &right_t.ty).is_none() {
                         return Err(SemanticError {
                             message: format!("{op:?} expects int operands"),
                         });
@@ -1725,7 +1793,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                             || !(arg_typed[0].ty == Type::AccountId
                                 && arg_typed[1].ty == Type::AccountId
                                 && arg_typed[2].ty == Type::AssetDefinitionId
-                                && arg_typed[3].ty == Type::Int)
+                                && is_int_like(&arg_typed[3].ty))
                         {
                             return Err(SemanticError {
                                 message: "transfer_asset expects (AccountId, AccountId, AssetDefinitionId, int)".into(),
@@ -1830,7 +1898,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         });
                     }
                     match &arg_typed[0].ty {
-                        Type::Map(k, v) if matches!(**k, Type::Int) && matches!(**v, Type::Int) => {
+                        Type::Map(k, v) if is_int_like(k) && is_int_like(v) => {
                         }
                         other => {
                             return Err(SemanticError {
@@ -1841,7 +1909,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                             });
                         }
                     }
-                    if arg_typed[1].ty != Type::Int || arg_typed[2].ty != Type::Int {
+                    if !is_int_like(&arg_typed[1].ty) || !is_int_like(&arg_typed[2].ty) {
                         return Err(SemanticError {
                             message: "get_or_default expects (Map<int,int>, int, int)".into(),
                         });
@@ -1982,7 +2050,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         });
                     }
                     match &arg_typed[0].ty {
-                        Type::Map(k, v) if matches!(**k, Type::Int) && matches!(**v, Type::Int) => {
+                        Type::Map(k, v) if is_int_like(k) && is_int_like(v) => {
                         }
                         other => {
                             return Err(SemanticError {
@@ -1993,7 +2061,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                             });
                         }
                     }
-                    if arg_typed[1].ty != Type::Int || arg_typed[2].ty != Type::Int {
+                    if !is_int_like(&arg_typed[1].ty) || !is_int_like(&arg_typed[2].ty) {
                         return Err(SemanticError {
                             message: format!("{name} expects (Map<int,int>, int, int)"),
                         });
@@ -2014,7 +2082,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         });
                     }
                     match &arg_typed[0].ty {
-                        Type::Map(k, v) if matches!(**k, Type::Int) && matches!(**v, Type::Int) => {
+                        Type::Map(k, v) if is_int_like(k) && is_int_like(v) => {
                         }
                         other => {
                             return Err(SemanticError {
@@ -2025,7 +2093,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                             });
                         }
                     }
-                    if arg_typed[1].ty != Type::Int || arg_typed[2].ty != Type::Int {
+                    if !is_int_like(&arg_typed[1].ty) || !is_int_like(&arg_typed[2].ty) {
                         return Err(SemanticError {
                             message: "keys_values_take2 expects (Map<int,int>, int, int)".into(),
                         });
@@ -2086,7 +2154,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                 }
                 "path_map_key" => {
                     if arg_typed.len() != 2
-                        || !(arg_typed[0].ty == Type::Name && arg_typed[1].ty == Type::Int)
+                        || !(arg_typed[0].ty == Type::Name && is_int_like(&arg_typed[1].ty))
                     {
                         return Err(SemanticError {
                             message: "path_map_key expects (Name, int)".into(),
@@ -2194,7 +2262,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         _ => unreachable!(),
                     };
                     let ok = matches!(arg_ty, Type::String)
-                        || (allow_int && matches!(arg_ty, Type::Int))
+                        || (allow_int && is_int_like(&arg_ty))
                         || arg_ty == ty
                         || (allow_blob && is_blob_like(&arg_ty))
                         || (matches!(arg_ty, Type::Json) && matches!(ty, Type::Json))
@@ -2239,7 +2307,8 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         1 => arg_typed[0].ty == Type::Bool,
                         2 => {
                             arg_typed[0].ty == Type::Bool
-                                && matches!(arg_typed[1].ty, Type::String | Type::Int)
+                                && (arg_typed[1].ty == Type::String
+                                    || is_int_like(&arg_typed[1].ty))
                         }
                         _ => false,
                     };
@@ -2258,7 +2327,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                 }
                 "info" => {
                     if arg_typed.len() != 1
-                        || !(arg_typed[0].ty == Type::String || arg_typed[0].ty == Type::Int)
+                        || !(arg_typed[0].ty == Type::String || is_int_like(&arg_typed[0].ty))
                     {
                         return Err(SemanticError {
                             message: "info expects (string|int)".into(),
@@ -2281,8 +2350,8 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                 }),
                 "min" | "max" | "mean" => {
                     if arg_typed.len() != 2
-                        || arg_typed[0].ty != Type::Int
-                        || arg_typed[1].ty != Type::Int
+                        || !is_int_like(&arg_typed[0].ty)
+                        || !is_int_like(&arg_typed[1].ty)
                     {
                         return Err(SemanticError {
                             message: format!("{name} expects (int, int)"),
@@ -2297,7 +2366,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     })
                 }
                 "abs" => {
-                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::Int {
+                    if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
                         return Err(SemanticError {
                             message: "abs expects (int)".into(),
                         });
@@ -2312,8 +2381,8 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                 }
                 "div_ceil" => {
                     if arg_typed.len() != 2
-                        || arg_typed[0].ty != Type::Int
-                        || arg_typed[1].ty != Type::Int
+                        || !is_int_like(&arg_typed[0].ty)
+                        || !is_int_like(&arg_typed[1].ty)
                     {
                         return Err(SemanticError {
                             message: "div_ceil expects (int, int)".into(),
@@ -2329,8 +2398,8 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                 }
                 "gcd" => {
                     if arg_typed.len() != 2
-                        || arg_typed[0].ty != Type::Int
-                        || arg_typed[1].ty != Type::Int
+                        || !is_int_like(&arg_typed[0].ty)
+                        || !is_int_like(&arg_typed[1].ty)
                     {
                         return Err(SemanticError {
                             message: "gcd expects (int, int)".into(),
@@ -2345,7 +2414,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     })
                 }
                 "isqrt" => {
-                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::Int {
+                    if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
                         return Err(SemanticError {
                             message: "isqrt expects (int)".into(),
                         });
@@ -2359,7 +2428,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     })
                 }
                 "poseidon2" => {
-                    if arg_typed.len() != 2 || !arg_typed.iter().all(|t| t.ty == Type::Int) {
+                    if arg_typed.len() != 2 || !arg_typed.iter().all(|t| is_int_like(&t.ty)) {
                         return Err(SemanticError {
                             message: "poseidon2 expects two int args".into(),
                         });
@@ -2373,7 +2442,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     })
                 }
                 "poseidon6" => {
-                    if arg_typed.len() != 6 || !arg_typed.iter().all(|t| t.ty == Type::Int) {
+                    if arg_typed.len() != 6 || !arg_typed.iter().all(|t| is_int_like(&t.ty)) {
                         return Err(SemanticError {
                             message: "poseidon6 expects six int args".into(),
                         });
@@ -2467,7 +2536,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                                 .into(),
                         });
                     }
-                    if arg_typed.len() == 5 && arg_typed[4].ty != Type::Int {
+                    if arg_typed.len() == 5 && !is_int_like(&arg_typed[4].ty) {
                         return Err(SemanticError {
                             message: "sm4_ccm_seal optional tag length must be int".into(),
                         });
@@ -2492,7 +2561,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                                 .into(),
                         });
                     }
-                    if arg_typed.len() == 5 && arg_typed[4].ty != Type::Int {
+                    if arg_typed.len() == 5 && !is_int_like(&arg_typed[4].ty) {
                         return Err(SemanticError {
                             message: "sm4_ccm_open optional tag length must be int".into(),
                         });
@@ -2507,7 +2576,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                 }
                 // Encoding helpers for durable state values
                 "encode_int" => {
-                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::Int {
+                    if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
                         return Err(SemanticError {
                             message: "encode_int expects (int)".into(),
                         });
@@ -2632,7 +2701,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     })
                 }
                 "valcom" => {
-                    if arg_typed.len() != 2 || !arg_typed.iter().all(|t| t.ty == Type::Int) {
+                    if arg_typed.len() != 2 || !arg_typed.iter().all(|t| is_int_like(&t.ty)) {
                         return Err(SemanticError {
                             message: "valcom expects two int args".into(),
                         });
@@ -2646,7 +2715,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     })
                 }
                 "pubkgen" => {
-                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::Int {
+                    if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
                         return Err(SemanticError {
                             message: "pubkgen expects one int arg".into(),
                         });
@@ -2666,7 +2735,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         });
                     }
                     if arg_typed[..3].iter().any(|t| !is_blob_like(&t.ty))
-                        || arg_typed[3].ty != Type::Int
+                        || !is_int_like(&arg_typed[3].ty)
                     {
                         return Err(SemanticError {
                             message: "vrf_verify expects (Blob|bytes, Blob|bytes, Blob|bytes, int variant)".into(),
@@ -2820,7 +2889,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                 }
                 // Host helper: set SmartContract execution depth
                 "set_execution_depth" => {
-                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::Int {
+                    if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
                         return Err(SemanticError {
                             message: "set_execution_depth expects one int arg".into(),
                         });
@@ -2882,7 +2951,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     if arg_typed.len() != 7
                         || !(arg_typed[0].ty == Type::AssetDefinitionId
                             && arg_typed[1].ty == Type::AccountId
-                            && arg_typed[2].ty == Type::Int
+                            && is_int_like(&arg_typed[2].ty)
                             && is_blob_like(&arg_typed[3].ty)
                             && arg_typed[4].ty == Type::String
                             && is_blob_like(&arg_typed[5].ty)
@@ -2904,7 +2973,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     if arg_typed.len() != 3
                         || !(arg_typed[0].ty == Type::AccountId
                             && arg_typed[1].ty == Type::AssetDefinitionId
-                            && arg_typed[2].ty == Type::Int)
+                            && is_int_like(&arg_typed[2].ty))
                     {
                         return Err(SemanticError {
                             message: "mint_asset expects (AccountId, AssetDefinitionId, int)"
@@ -2923,7 +2992,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     if arg_typed.len() != 3
                         || !(arg_typed[0].ty == Type::AccountId
                             && arg_typed[1].ty == Type::AssetDefinitionId
-                            && arg_typed[2].ty == Type::Int)
+                            && is_int_like(&arg_typed[2].ty))
                     {
                         return Err(SemanticError {
                             message: "burn_asset expects (AccountId, AssetDefinitionId, int)"
@@ -2943,7 +3012,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         || !(arg_typed[0].ty == Type::AccountId
                             && arg_typed[1].ty == Type::AccountId
                             && arg_typed[2].ty == Type::AssetDefinitionId
-                            && arg_typed[3].ty == Type::Int)
+                            && is_int_like(&arg_typed[3].ty))
                     {
                         return Err(SemanticError {
                             message:
@@ -3052,8 +3121,8 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     if arg_typed.len() != 4
                         || arg_typed[0].ty != Type::String
                         || arg_typed[1].ty != Type::String
-                        || arg_typed[2].ty != Type::Int
-                        || arg_typed[3].ty != Type::Int
+                        || !is_int_like(&arg_typed[2].ty)
+                        || !is_int_like(&arg_typed[3].ty)
                     {
                         return Err(SemanticError {
                             message: "register_asset expects string, string, int, int".into(),
@@ -3071,9 +3140,9 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     if arg_typed.len() != 5
                         || arg_typed[0].ty != Type::String
                         || arg_typed[1].ty != Type::String
-                        || arg_typed[2].ty != Type::Int
-                        || arg_typed[3].ty != Type::Int
-                        || arg_typed[4].ty != Type::Int
+                        || !is_int_like(&arg_typed[2].ty)
+                        || !is_int_like(&arg_typed[3].ty)
+                        || !is_int_like(&arg_typed[4].ty)
                     {
                         return Err(SemanticError {
                             message: "create_new_asset expects string, string, int, int, int"
@@ -3089,7 +3158,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     })
                 }
                 "assert_eq" => {
-                    if arg_typed.len() != 2 || !arg_typed.iter().all(|t| t.ty == Type::Int) {
+                    if arg_typed.len() != 2 || !arg_typed.iter().all(|t| is_int_like(&t.ty)) {
                         return Err(SemanticError {
                             message: "assert_eq expects two int args".into(),
                         });
@@ -3132,10 +3201,10 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     })
                 }
                 // Triggers
-                "create_trigger" => {
+                "create_trigger" | "register_trigger" => {
                     if arg_typed.len() != 1 || arg_typed[0].ty != Type::Json {
                         return Err(SemanticError {
-                            message: "create_trigger expects (Json)".into(),
+                            message: format!("{name} expects (Json)"),
                         });
                     }
                     Ok(TypedExpr {
@@ -3146,10 +3215,10 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         ty: Type::Unit,
                     })
                 }
-                "remove_trigger" => {
+                "remove_trigger" | "unregister_trigger" => {
                     if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
                         return Err(SemanticError {
-                            message: "remove_trigger expects (Name)".into(),
+                            message: format!("{name} expects (Name)"),
                         });
                     }
                     Ok(TypedExpr {
@@ -3163,7 +3232,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                 "set_trigger_enabled" => {
                     if arg_typed.len() != 2
                         || arg_typed[0].ty != Type::Name
-                        || arg_typed[1].ty != Type::Int
+                        || !is_int_like(&arg_typed[1].ty)
                     {
                         return Err(SemanticError {
                             message: "set_trigger_enabled expects (Name, int)".into(),
@@ -3380,6 +3449,9 @@ fn convert_type_expr(ty: &TypeExpr) -> Result<Type, SemanticError> {
     Ok(match ty {
         TypeExpr::Path(s) => match s.as_str() {
             "int" | "i64" | "number" => Type::Int,
+            "fixed_u128" => Type::FixedU128,
+            "Amount" => Type::Amount,
+            "Balance" => Type::Balance,
             "bool" => Type::Bool,
             "string" | "String" => Type::String,
             "Blob" => Type::Blob,
@@ -3443,6 +3515,14 @@ fn ensure_assignable(expected: &Type, actual: &Type) -> Result<(), SemanticError
     }
     if is_blob_like(&expected) && is_blob_like(&actual) {
         return Ok(());
+    }
+    if let (Some(exp_kind), Some(act_kind)) = (numeric_kind(&expected), numeric_kind(&actual)) {
+        if exp_kind == act_kind
+            || exp_kind == NumericKind::Int
+            || act_kind == NumericKind::Int
+        {
+            return Ok(());
+        }
     }
     match (&expected, &actual) {
         (Type::Map(ek, ev), Type::Map(ak, av)) => {
@@ -3909,7 +3989,7 @@ fn collect_state_accesses_expr(expr: &TypedExpr, reads: &mut IndexSet<String>) {
                 collect_state_accesses_expr(arg, reads);
             }
         }
-        ExprKind::Bool(_) | ExprKind::Number(_) | ExprKind::String(_) => {}
+        ExprKind::Bool(_) | ExprKind::Number(_) | ExprKind::String(_) | ExprKind::Bytes(_) => {}
     }
 }
 
@@ -4017,7 +4097,11 @@ fn collect_calls_in_expr(expr: &TypedExpr, calls: &mut IndexSet<String>) {
             collect_calls_in_expr(target, calls);
             collect_calls_in_expr(index, calls);
         }
-        ExprKind::Bool(_) | ExprKind::Number(_) | ExprKind::String(_) | ExprKind::Ident(_) => {}
+        ExprKind::Bool(_)
+        | ExprKind::Number(_)
+        | ExprKind::String(_)
+        | ExprKind::Bytes(_)
+        | ExprKind::Ident(_) => {}
     }
 }
 
@@ -4025,7 +4109,7 @@ fn ensure_state_map_iter_supported(map_expr: &TypedExpr) -> Result<(), SemanticE
     if typed_map_expr_is_state(map_expr)
         && matches!(
             resolve_struct_type(&map_expr.ty),
-            Type::Map(k, _) if !matches!(resolve_struct_type(&k), Type::Int)
+        Type::Map(k, _) if !is_int_like(&k)
         )
     {
         return Err(SemanticError {
@@ -4182,7 +4266,11 @@ fn expr_contains_sensitive_syscall(expr: &TypedExpr) -> bool {
         ExprKind::Index { target, index } => {
             expr_contains_sensitive_syscall(target) || expr_contains_sensitive_syscall(index)
         }
-        ExprKind::Number(_) | ExprKind::Bool(_) | ExprKind::String(_) | ExprKind::Ident(_) => false,
+        ExprKind::Number(_)
+        | ExprKind::Bool(_)
+        | ExprKind::String(_)
+        | ExprKind::Bytes(_)
+        | ExprKind::Ident(_) => false,
     }
 }
 
@@ -4221,7 +4309,11 @@ mod tests {
             ExprKind::Index { target, index } => {
                 count_calls_expr(target, name) + count_calls_expr(index, name)
             }
-            ExprKind::Number(_) | ExprKind::Bool(_) | ExprKind::String(_) | ExprKind::Ident(_) => 0,
+            ExprKind::Number(_)
+            | ExprKind::Bool(_)
+            | ExprKind::String(_)
+            | ExprKind::Bytes(_)
+            | ExprKind::Ident(_) => 0,
         }
     }
 
@@ -4690,6 +4782,21 @@ mod tests {
     }
 
     #[test]
+    fn bytes_literal_types_as_bytes() {
+        let program = parse(r#"fn f() { let b: bytes = b"ab"; }"#).expect("parse bytes literal");
+        let typed = analyze(&program).expect("analyze bytes literal");
+        let TypedItem::Function(f) = &typed.items[0];
+        let stmt = f.body.statements.first().expect("statement present");
+        match stmt {
+            TypedStatement::Let { value, .. } => {
+                assert!(matches!(value.expr, ExprKind::Bytes(_)));
+                assert_eq!(value.ty, Type::Bytes);
+            }
+            other => panic!("expected let statement, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn state_map_key_type_is_validated() {
         let program = parse("state M: Map<bool, int>; fn f() {}").expect("parse state map");
         let err = analyze(&program).expect_err("state map key should be validated");
@@ -4722,5 +4829,43 @@ mod tests {
             parse("struct S { label: string } state S s; fn f() {}").expect("parse state struct");
         let err = analyze(&program).expect_err("unsupported state field should error");
         assert!(err.message.contains("state type `string`"));
+    }
+
+    #[test]
+    fn numeric_type_aliases_preserve_types() {
+        let program = parse(
+            "fn f(a: Amount) -> Amount { \
+                let x: Amount = a + 1; \
+                return x; \
+            }",
+        )
+        .expect("parse numeric aliases");
+        let typed = analyze(&program).expect("analyze numeric aliases");
+        let TypedItem::Function(f) = &typed.items[0];
+        assert_eq!(f.ret_ty, Some(Type::Amount));
+    }
+
+    #[test]
+    fn numeric_type_aliases_do_not_mix() {
+        let program = parse(
+            "fn f(a: Amount, b: Balance) { \
+                let _x = a + b; \
+            }",
+        )
+        .expect("parse numeric aliases");
+        let err = analyze(&program).expect_err("mixed numeric aliases should error");
+        assert!(err.message.contains("expects int operands"));
+    }
+
+    #[test]
+    fn register_trigger_aliases_type_check() {
+        let program = parse(
+            "fn f() { \
+                register_trigger(json(\"{}\")); \
+                unregister_trigger(name(\"wake\")); \
+            }",
+        )
+        .expect("parse trigger aliases");
+        analyze(&program).expect("analyze trigger aliases");
     }
 }

@@ -1715,12 +1715,43 @@ def _configuration_snapshot_to_dict(snapshot: ConfigurationSnapshot) -> Dict[str
         result["queue"] = {"capacity": snapshot.queue.capacity}
     if snapshot.confidential_gas is not None:
         result["confidential_gas"] = snapshot.confidential_gas.to_payload()
+    if snapshot.transport is not None:
+        transport_payload: Dict[str, Any] = {}
+        if snapshot.transport.norito_rpc is not None:
+            norito_rpc = snapshot.transport.norito_rpc
+            transport_payload["norito_rpc"] = {
+                "enabled": norito_rpc.enabled,
+                "stage": norito_rpc.stage,
+                "require_mtls": norito_rpc.require_mtls,
+                "canary_allowlist_size": norito_rpc.canary_allowlist_size,
+            }
+        if snapshot.transport.streaming is not None:
+            streaming_payload: Dict[str, Any] = {}
+            soranet = snapshot.transport.streaming.soranet
+            if soranet is not None:
+                streaming_payload["soranet"] = {
+                    "enabled": soranet.enabled,
+                    "stream_tag": soranet.stream_tag,
+                    "exit_multiaddr": soranet.exit_multiaddr,
+                    "padding_budget_ms": soranet.padding_budget_ms,
+                    "access_kind": soranet.access_kind,
+                    "gar_category": soranet.gar_category,
+                    "channel_salt": soranet.channel_salt,
+                    "provision_spool_dir": soranet.provision_spool_dir,
+                    "provision_window_segments": soranet.provision_window_segments,
+                    "provision_queue_capacity": soranet.provision_queue_capacity,
+                }
+            if streaming_payload:
+                transport_payload["streaming"] = streaming_payload
+        if transport_payload:
+            result["transport"] = transport_payload
     return result
 
 
 def _configuration_update_payload(snapshot: ConfigurationSnapshot) -> Dict[str, Any]:
     payload = _configuration_snapshot_to_dict(snapshot)
     payload.pop("public_key", None)
+    payload.pop("transport", None)
     return payload
 
 

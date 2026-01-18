@@ -1,6 +1,17 @@
 # Status
 
 ## Latest Updates
+- ZK tests: fix ProofAttachment lane-privacy init, un-nest zk transfer inline-commitment test, and use governance accessors in ZK governance integration tests.
+- Tests: `cargo test -p iroha_core --test zk_asset_vk_enforcement --features "zk-tests halo2-dev-tests"` (pass; warning: unused `parse_item` in `crates/ivm/src/kotodama/parser.rs`).
+- Kotodama: harden IR lowering to return errors instead of panicking, include literal pointer map keys in access hints with new non-literal map-key linting, and treat numeric aliases (`fixed_u128`, `Amount`, `Balance`) as distinct 64-bit numeric types; update gap analysis/docs.
+- Core: drop `Debug` derive from `SoranetProvisionJob` to avoid trait-object debug requirements; clone `signer_peer` before NEW_VIEW receipt tracking.
+- Tests: `cargo test --workspace` (timed out after 120s; blocked on build directory lock).
+- Confidential assets: verify Unshield/ZkTransfer proofs during instruction execution (with key resolution, size/timeout enforcement), add invalid-proof coverage, and document the verification step.
+- Tests: `cargo test --workspace` (failed: `crates/ivm/src/kotodama/compiler.rs` missing `ContractMeta` import and `?` used in closures that return `()`).
+- Kotodama: add register/unregister trigger aliases, decode literal trigger specs for access hints, enforce meta feature usage diagnostics, and treat numeric aliases (`fixed_u128`, `Amount`, `Balance`) as int; update docs.
+- Tests: not run (not requested).
+- Streaming: queue SoraNet provisioning off the manifest announce path, ignore revoked-route race updates, auto-provision privacy routes, and add `streaming.soranet.provision_window_segments` with config/docs coverage.
+- Tests: not run (not requested).
 - Sumeragi: process highest QC from stale NEW_VIEW votes without advancing view-change tracking, seed missing-block fetch, and add regression coverage.
 - Tests: not run (not requested).
 - IVM gas limits: require `gas_limit > 0` in admission and Torii contract calls, size IVM stacks from effective gas limits (tx, trigger, executor, access/overlay), and update docs/coverage.
@@ -1945,6 +1956,8 @@
 - Tests: `cargo test -p integration_tests trigger_completion_failure_reports_error -- --nocapture` (timed out after 600s; compile finished; test `events::notification::trigger_completion_failure_reports_error` still running).
 - Sumeragi NEW_VIEW quorum selection now filters senders against the active roster (only counts local if it is in-roster), with coverage for non-roster senders.
 - Sumeragi now rejects NEW_VIEW votes with mismatched highest QC hashes/heights before recording, with regressions for invalid highest fields.
+- Streaming SoraNet provisioning now uses a bounded background queue with backpressure and telemetry counters; `streaming.soranet.provision_queue_capacity` defaults to 256 and the prepare path no longer performs transport I/O.
+- SDKs now surface streaming transport configuration (including SoraNet provisioning knobs) in Python and Swift configuration snapshots with updated tests.
 - Sumeragi rejects NEW_VIEW QCs with missing/mismatched highest certificates and validates highest QC epochs in NEW_VIEW votes, with regressions covering invalid QC/vote inputs.
 - Sumeragi now blocks aggregate-based QC recovery for NEW_VIEW certificates with mismatched highest epochs (added regression coverage).
 - NEW_VIEW receipt stats now deduplicate by peer ID instead of rotated indices to avoid misleading operator counts after view changes.

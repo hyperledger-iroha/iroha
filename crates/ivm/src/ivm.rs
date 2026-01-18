@@ -5850,7 +5850,7 @@ mod tests {
         bytes.extend_from_slice(&0u32.to_le_bytes()); // no extra data payload
         bytes.extend_from_slice(&0x1122_3344_5566_7788u64.to_le_bytes());
         let literal_prefix = bytes.len() - ProgramMetadata::default().encode().len();
-        let addi = crate::kotodama::compiler::encode_addi(1, 1, 0);
+        let addi = crate::kotodama::compiler::encode_addi(1, 1, 0).expect("encode addi");
         bytes.extend_from_slice(&addi.to_le_bytes());
         bytes.extend_from_slice(&crate::encoding::encode_halt().to_le_bytes());
         (bytes, literal_prefix)

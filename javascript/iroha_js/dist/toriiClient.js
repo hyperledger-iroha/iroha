@@ -11375,6 +11375,16 @@ function normalizeConfigurationStreamingSoranet(value, context) {
       record.provision_spool_dir ?? "",
       `${context}.provision_spool_dir`,
     ),
+    provisionWindowSegments: ToriiClient._normalizeUnsignedInteger(
+      record.provision_window_segments,
+      `${context}.provision_window_segments`,
+      { allowZero: false },
+    ),
+    provisionQueueCapacity: ToriiClient._normalizeUnsignedInteger(
+      record.provision_queue_capacity,
+      `${context}.provision_queue_capacity`,
+      { allowZero: false },
+    ),
   };
 }
 
