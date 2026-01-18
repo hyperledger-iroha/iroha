@@ -2724,6 +2724,8 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.permission.measured_bytes_extra());
             total = total.saturating_add(self.read_keys.measured_bytes_extra());
             total = total.saturating_add(self.write_keys.measured_bytes_extra());
+            total = total.saturating_add(self.access_hints_complete.measured_bytes_extra());
+            total = total.saturating_add(self.access_hints_skipped.measured_bytes_extra());
             total = total.saturating_add(self.triggers.measured_bytes_extra());
             total
         }

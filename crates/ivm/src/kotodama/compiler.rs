@@ -20,9 +20,14 @@ use iroha_data_model::{
     account::AccountId,
     asset::id::{AssetDefinitionId, AssetId},
     domain::DomainId,
-    isi::BuiltInInstruction as _,
+    Identifiable,
+    isi::{
+        BuiltInInstruction as _, BurnBox, ExecuteTrigger, GrantBox, InstructionBox, Log, MintBox,
+        RegisterBox, RemoveKeyValueBox, RevokeBox, SetKeyValueBox, TransferBox, UnregisterBox,
+    },
     name::Name,
     nft::NftId,
+    query::{QueryRequest, SingularQueryBox},
     role::RoleId,
     smart_contract::manifest::{
         AccessSetHints, EntryPointKind, EntrypointDescriptor, TriggerCallback, TriggerDescriptor,
@@ -56,6 +61,8 @@ const LITERAL_SHIFT_REG: u8 = 26;
 const FEATURE_BIT_ZK: u64 = 1 << 0;
 const FEATURE_BIT_VECTOR: u64 = 1 << 1;
 const DEFAULT_MAX_CYCLES: u64 = 1_000_000;
+const HINT_SKIP_DYNAMIC_STATE_PATH: &str = "dynamic_state_path";
+const HINT_SKIP_OPAQUE_ISI: &str = "opaque_isi_access";
 
 #[derive(Clone)]
 struct AccessSets {
@@ -91,6 +98,11 @@ struct CompilationArtifacts {
     bytes: Vec<u8>,
     entrypoints: Vec<EntrypointDescriptor>,
     access_set_hints: Option<AccessSetHints>,
+}
+
+struct HintReport {
+    emitted: bool,
+    skipped_reasons: Vec<String>,
 }
 
 fn push_word(code: &mut Vec<u8>, word: u32) {
@@ -804,15 +816,60 @@ seiyaku Test {
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert_eq!(hints.read_keys, vec!["state:Foo[*]".to_string()]);
-        assert_eq!(hints.write_keys, vec!["state:Foo[*]".to_string()]);
+        assert_eq!(hints.read_keys, vec!["state:Foo".to_string()]);
+        assert_eq!(hints.write_keys, vec!["state:Foo".to_string()]);
+    }
+
+    #[test]
+    fn entrypoint_hints_include_map_base_for_dynamic_state_paths() {
+        let src = r#"
+seiyaku Test {
+  state Foo: Map<int, int>;
+
+  kotoage fn read_dyn(k: int) {
+    let _x = Foo[k];
+  }
+
+  kotoage fn read_lit() {
+    let _x = Foo[1];
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile manifest");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected access_set_hints");
+        assert!(hints.read_keys.contains(&"state:Foo".to_string()));
+        assert!(hints.read_keys.contains(&"state:Foo/1".to_string()));
+        assert!(hints.write_keys.is_empty());
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let read_dyn = entrypoints
+            .iter()
+            .find(|entry| entry.name == "read_dyn")
+            .expect("read_dyn entrypoint");
+        let read_lit = entrypoints
+            .iter()
+            .find(|entry| entry.name == "read_lit")
+            .expect("read_lit entrypoint");
+        assert_eq!(read_dyn.read_keys, vec!["state:Foo".to_string()]);
+        assert!(read_dyn.write_keys.is_empty());
+        assert_eq!(read_dyn.access_hints_complete, Some(true));
+        assert!(read_dyn.access_hints_skipped.is_empty());
+        assert!(read_lit.read_keys.contains(&"state:Foo/1".to_string()));
+        assert!(read_lit.read_keys.contains(&"state:Foo".to_string()));
+        assert!(read_lit.write_keys.is_empty());
+        assert_eq!(read_lit.access_hints_complete, Some(true));
+        assert!(read_lit.access_hints_skipped.is_empty());
     }
 
     #[test]
     fn manifest_access_set_hints_include_create_trigger_from_json() {
         let src = r#"
 seiyaku Test {
-  kotoage fn make() {
+  kotoage fn make() permission(Admin) {
     create_trigger(json("{\"id\":\"t1\"}"));
   }
 }
@@ -833,6 +890,197 @@ seiyaku Test {
     }
 
     #[test]
+    fn manifest_access_set_hints_include_execute_instruction_literal() {
+        use iroha_data_model::{
+            account::AccountId,
+            asset::id::{AssetDefinitionId, AssetId},
+            isi::{InstructionBox, Mint},
+        };
+
+        let account: AccountId =
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
+                .parse()
+                .unwrap();
+        let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_id = AssetId::of(asset_def.clone(), account.clone());
+        let isi = InstructionBox::from(Mint::asset_numeric(1u32, asset_id.clone()));
+        let bytes = norito::to_bytes(&isi).expect("encode InstructionBox");
+        let hex_payload = format!("0x{}", hex::encode(bytes));
+        let src = format!(
+            "fn main() {{ execute_instruction(norito_bytes(\"{hex_payload}\")); }}"
+        );
+
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(&src)
+            .expect("compile manifest");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected access_set_hints");
+        assert!(hints.read_keys.contains(&format!("account:{account}")));
+        assert!(
+            hints
+                .read_keys
+                .contains(&format!("domain:{}", account.domain()))
+        );
+        assert!(hints.read_keys.contains(&format!("asset_def:{asset_def}")));
+        assert!(hints.read_keys.contains(&format!("asset:{asset_id}")));
+        assert!(hints.write_keys.contains(&format!("asset_def:{asset_def}")));
+        assert!(hints.write_keys.contains(&format!("asset:{asset_id}")));
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let main = entrypoints
+            .iter()
+            .find(|entry| entry.name == "main")
+            .expect("main entrypoint");
+        assert_eq!(main.access_hints_complete, Some(true));
+        assert!(main.access_hints_skipped.is_empty());
+    }
+
+    #[test]
+    fn manifest_access_set_hints_include_execute_instruction_details() {
+        use std::str::FromStr;
+
+        use iroha_data_model::{
+            asset::id::AssetDefinitionId,
+            domain::DomainId,
+            isi::{Grant, InstructionBox, SetKeyValue},
+            name::Name,
+            nft::NftId,
+            permission::Permission,
+            role::RoleId,
+            trigger::TriggerId,
+        };
+        use iroha_primitives::json::Json;
+
+        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let nft_id: NftId = "n0$wonderland".parse().unwrap();
+        let trigger_id: TriggerId = "wake".parse().unwrap();
+        let role_id: RoleId = "auditor".parse().unwrap();
+        let key = Name::from_str("meta").unwrap();
+        let permission = Permission::new("CanManageDomains".to_string(), Json::new(1u32));
+        let instructions = [
+            InstructionBox::from(SetKeyValue::domain(
+                domain_id.clone(),
+                key.clone(),
+                Json::new(1u32),
+            )),
+            InstructionBox::from(SetKeyValue::asset_definition(
+                asset_def.clone(),
+                key.clone(),
+                Json::new(2u32),
+            )),
+            InstructionBox::from(SetKeyValue::nft(
+                nft_id.clone(),
+                key.clone(),
+                Json::new(3u32),
+            )),
+            InstructionBox::from(SetKeyValue::trigger(
+                trigger_id.clone(),
+                key.clone(),
+                Json::new(4u32),
+            )),
+            InstructionBox::from(Grant::role_permission(
+                permission.clone(),
+                role_id.clone(),
+            )),
+        ];
+
+        let mut src = String::from("fn main() {\n");
+        for isi in &instructions {
+            let bytes = norito::to_bytes(isi).expect("encode InstructionBox");
+            let hex_payload = format!("0x{}", hex::encode(bytes));
+            src.push_str(&format!(
+                "  execute_instruction(norito_bytes(\"{hex_payload}\"));\n"
+            ));
+        }
+        src.push_str("}\n");
+
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(&src)
+            .expect("compile manifest");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected access_set_hints");
+
+        let domain_detail = format!("domain.detail:{domain_id}:{key}");
+        assert!(hints.read_keys.contains(&format!("domain:{domain_id}")));
+        assert!(hints.read_keys.contains(&domain_detail));
+        assert!(hints.write_keys.contains(&domain_detail));
+
+        let asset_def_detail = format!("asset_def.detail:{asset_def}:{key}");
+        assert!(hints.read_keys.contains(&format!("asset_def:{asset_def}")));
+        assert!(hints.read_keys.contains(&asset_def_detail));
+        assert!(hints.write_keys.contains(&asset_def_detail));
+
+        let nft_detail = format!("nft.detail:{nft_id}:{key}");
+        assert!(hints.read_keys.contains(&format!("nft:{nft_id}")));
+        assert!(hints.read_keys.contains(&nft_detail));
+        assert!(hints.write_keys.contains(&nft_detail));
+
+        let trigger_detail = format!("trigger.detail:{trigger_id}:{key}");
+        assert!(hints.read_keys.contains(&format!("trigger:{trigger_id}")));
+        assert!(hints.write_keys.contains(&trigger_detail));
+
+        let perm_role = format!("perm.role:{role_id}:{}", permission.name());
+        assert!(hints.read_keys.contains(&format!("role:{role_id}")));
+        assert!(hints.write_keys.contains(&format!("role:{role_id}")));
+        assert!(hints.write_keys.contains(&perm_role));
+    }
+
+    #[test]
+    fn manifest_access_set_hints_include_execute_query_literal() {
+        use iroha_data_model::{
+            account::AccountId,
+            asset::id::{AssetDefinitionId, AssetId},
+            query::asset::FindAssetById,
+            query::{QueryRequest, SingularQueryBox},
+        };
+
+        let account: AccountId =
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
+                .parse()
+                .unwrap();
+        let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_id = AssetId::of(asset_def.clone(), account.clone());
+        let request = QueryRequest::Singular(SingularQueryBox::FindAssetById(
+            FindAssetById::new(asset_id.clone()),
+        ));
+        let bytes = norito::to_bytes(&request).expect("encode QueryRequest");
+        let hex_payload = format!("0x{}", hex::encode(bytes));
+        let src = format!(
+            "fn main() {{ execute_query(norito_bytes(\"{hex_payload}\")); }}"
+        );
+
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(&src)
+            .expect("compile manifest");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected access_set_hints");
+        assert!(hints.read_keys.contains(&format!("account:{account}")));
+        assert!(
+            hints
+                .read_keys
+                .contains(&format!("domain:{}", account.domain()))
+        );
+        assert!(hints.read_keys.contains(&format!("asset_def:{asset_def}")));
+        assert!(hints.read_keys.contains(&format!("asset:{asset_id}")));
+        assert!(hints.write_keys.is_empty());
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let main = entrypoints
+            .iter()
+            .find(|entry| entry.name == "main")
+            .expect("main entrypoint");
+        assert_eq!(main.access_hints_complete, Some(true));
+        assert!(main.access_hints_skipped.is_empty());
+    }
+
+    #[test]
     fn manifest_access_set_hints_skipped_for_isi_contract() {
         let src = r#"
 seiyaku Test {
@@ -846,6 +1094,15 @@ seiyaku Test {
             .compile_source_with_manifest(src)
             .expect("compile manifest");
         assert!(manifest.access_set_hints.is_none());
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let main = entrypoints
+            .iter()
+            .find(|entry| entry.name == "move")
+            .expect("move entrypoint");
+        assert_eq!(main.access_hints_complete, Some(false));
+        assert!(main
+            .access_hints_skipped
+            .contains(&"opaque_isi_access".to_string()));
     }
 
     #[test]
@@ -909,8 +1166,10 @@ seiyaku Test {
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert_eq!(hints.read_keys, vec!["state:Foo/1".to_string()]);
-        assert_eq!(hints.write_keys, vec!["state:Foo/1".to_string()]);
+        assert!(hints.read_keys.contains(&"state:Foo".to_string()));
+        assert!(hints.read_keys.contains(&"state:Foo/1".to_string()));
+        assert!(hints.write_keys.contains(&"state:Foo".to_string()));
+        assert!(hints.write_keys.contains(&"state:Foo/1".to_string()));
     }
 
     #[test]
@@ -937,8 +1196,10 @@ seiyaku Test {
         let raw = format!("0x{}", hex::encode(tlv));
         let path = super::state_path_for_norito_key("Foo", &raw).expect("path");
         let expected = format!("state:{path}");
-        assert_eq!(hints.read_keys, vec![expected.clone()]);
-        assert_eq!(hints.write_keys, vec![expected]);
+        assert!(hints.read_keys.contains(&expected));
+        assert!(hints.read_keys.contains(&"state:Foo".to_string()));
+        assert!(hints.write_keys.contains(&expected));
+        assert!(hints.write_keys.contains(&"state:Foo".to_string()));
     }
 
     #[test]
@@ -957,7 +1218,10 @@ seiyaku Test {
         };
 
         let trigger_id = TriggerId::new(Name::from_str("wake").expect("trigger name"));
-        let authority = AccountId::from_str("alice@wonderland").expect("authority");
+        let authority = AccountId::from_str(
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland",
+        )
+        .expect("authority");
         let filter = EventFilterBox::ExecuteTrigger(ExecuteTriggerEventFilter::new());
         let action = Action::new(
             Executable::Ivm(IvmBytecode::from_compiled(Vec::new())),
@@ -1242,6 +1506,9 @@ impl Compiler {
         let mut dataref_kind_map: HashMap<(usize, ir::Temp), ir::DataRefKind> = HashMap::new();
         let mut state_path_hints: HashMap<(usize, ir::Temp), StatePathHint> = HashMap::new();
         let mut access_sets: Vec<AccessSets> = vec![AccessSets::default(); ir_prog.functions.len()];
+        let mut state_hints_complete: Vec<bool> = vec![true; ir_prog.functions.len()];
+        let mut hint_skip_reasons: Vec<IndexSet<String>> =
+            vec![IndexSet::new(); ir_prog.functions.len()];
         let mut uses_isi = false;
         use super::ir::DataRefKind as DRK;
         for (func_idx, func) in ir_prog.functions.iter().enumerate() {
@@ -1369,14 +1636,22 @@ impl Compiler {
                             if let Some(key) =
                                 render_state_hint(state_path_hints.get(&(func_idx, *path)))
                             {
-                                access_sets[func_idx].reads.insert(key);
+                                insert_state_hint(&mut access_sets[func_idx].reads, key);
+                            } else {
+                                state_hints_complete[func_idx] = false;
+                                hint_skip_reasons[func_idx]
+                                    .insert(HINT_SKIP_DYNAMIC_STATE_PATH.to_string());
                             }
                         }
                         ir::Instr::StateSet { path, .. } | ir::Instr::StateDel { path } => {
                             if let Some(key) =
                                 render_state_hint(state_path_hints.get(&(func_idx, *path)))
                             {
-                                access_sets[func_idx].writes.insert(key);
+                                insert_state_hint(&mut access_sets[func_idx].writes, key);
+                            } else {
+                                state_hints_complete[func_idx] = false;
+                                hint_skip_reasons[func_idx]
+                                    .insert(HINT_SKIP_DYNAMIC_STATE_PATH.to_string());
                             }
                         }
                         _ => {}
@@ -1391,8 +1666,13 @@ impl Compiler {
         for (idx, func) in ir_prog.functions.iter().enumerate() {
             fn_index_by_name.insert(&func.name, idx);
         }
-        let explicit_hints_present =
-            apply_explicit_access_hints(&typed, &fn_index_by_name, &mut access_sets);
+        let mut explicit_hints_by_fn = vec![false; ir_prog.functions.len()];
+        apply_explicit_access_hints(
+            &typed,
+            &fn_index_by_name,
+            &mut access_sets,
+            &mut explicit_hints_by_fn,
+        );
         let mut literal_param_conflicts: HashSet<(usize, ir::Temp)> = HashSet::new();
         for (caller_idx, func) in ir_prog.functions.iter().enumerate() {
             for bb in &func.blocks {
@@ -1493,11 +1773,33 @@ impl Compiler {
         }
 
         let isi_hints_complete = if uses_isi {
-            derive_isi_access_hints(&ir_prog, &string_map, &dataref_kind_map, &mut access_sets)
+            derive_isi_access_hints(
+                &ir_prog,
+                &string_map,
+                &dataref_kind_map,
+                &mut access_sets,
+                &mut hint_skip_reasons,
+            )
         } else {
-            true
+            vec![true; ir_prog.functions.len()]
         };
-        let include_hints = isi_hints_complete || explicit_hints_present;
+        let mut hintable_by_fn = Vec::with_capacity(ir_prog.functions.len());
+        let mut hint_reports = Vec::with_capacity(ir_prog.functions.len());
+        for idx in 0..ir_prog.functions.len() {
+            let complete = state_hints_complete[idx] && isi_hints_complete[idx];
+            let emitted = complete || explicit_hints_by_fn[idx];
+            let skipped_reasons = if emitted {
+                Vec::new()
+            } else {
+                hint_skip_reasons[idx].iter().cloned().collect()
+            };
+            hintable_by_fn.push(emitted);
+            hint_reports.push(HintReport {
+                emitted,
+                skipped_reasons,
+            });
+        }
+        let include_hints = hintable_by_fn.iter().all(|allowed| *allowed);
 
         // Data section builder and fixups.
         // Norito blobs for AccountId/AssetDefinitionId placed in data section
@@ -5023,7 +5325,7 @@ impl Compiler {
             eprintln!("[kotodama-compile] header+lit(first64) | code(first64): {hex}");
         }
         let entrypoint_descriptors =
-            build_entrypoint_descriptors(&typed, &access_sets, &ir_prog.functions, include_hints);
+            build_entrypoint_descriptors(&typed, &access_sets, &ir_prog.functions, &hint_reports);
         let access_set_hints = build_access_set_hints(&access_sets, include_hints);
 
         Ok(CompilationArtifacts {
@@ -5085,8 +5387,24 @@ impl Compiler {
 fn render_state_hint(hint: Option<&StatePathHint>) -> Option<String> {
     match hint? {
         StatePathHint::Literal(name) => Some(format!("state:{name}")),
-        StatePathHint::Map { base } => Some(format!("state:{base}[*]")),
+        StatePathHint::Map { base } => Some(format!("state:{base}")),
     }
+}
+
+fn insert_state_hint(keys: &mut IndexSet<String>, key: String) {
+    keys.insert(key.clone());
+    if let Some(base) = map_base_from_state_key(&key) {
+        keys.insert(base);
+    }
+}
+
+fn map_base_from_state_key(key: &str) -> Option<String> {
+    let rest = key.strip_prefix("state:")?;
+    let (base, _) = rest.split_once('/')?;
+    if base.is_empty() {
+        return None;
+    }
+    Some(format!("state:{base}"))
 }
 
 fn state_path_for_norito_key(base: &str, raw: &str) -> Option<String> {
@@ -5131,6 +5449,7 @@ fn apply_explicit_access_hints(
     typed: &TypedProgram,
     fn_index_by_name: &HashMap<&str, usize>,
     access_sets: &mut [AccessSets],
+    explicit_by_fn: &mut [bool],
 ) -> bool {
     let mut saw_hint = false;
     for item in &typed.items {
@@ -5140,6 +5459,9 @@ fn apply_explicit_access_hints(
         }
         saw_hint = true;
         if let Some(&idx) = fn_index_by_name.get(func.name.as_str()) {
+            if let Some(slot) = explicit_by_fn.get_mut(idx) {
+                *slot = true;
+            }
             for read in &func.modifiers.access_reads {
                 access_sets[idx].reads.insert(read.clone());
             }
@@ -5156,7 +5478,9 @@ fn derive_isi_access_hints(
     string_map: &HashMap<(usize, ir::Temp), String>,
     dataref_kind_map: &HashMap<(usize, ir::Temp), ir::DataRefKind>,
     access_sets: &mut [AccessSets],
-) -> bool {
+    skip_reasons: &mut [IndexSet<String>],
+) -> Vec<bool> {
+    let mut complete = vec![true; access_sets.len()];
     for (func_idx, func) in ir_prog.functions.iter().enumerate() {
         for bb in &func.blocks {
             for instr in &bb.instrs {
@@ -5172,12 +5496,17 @@ fn derive_isi_access_hints(
                 )
                 .is_none()
                 {
-                    return false;
+                    if let Some(slot) = complete.get_mut(func_idx) {
+                        *slot = false;
+                    }
+                    if let Some(reasons) = skip_reasons.get_mut(func_idx) {
+                        reasons.insert(HINT_SKIP_OPAQUE_ISI.to_string());
+                    }
                 }
             }
         }
     }
-    true
+    complete
 }
 
 fn record_isi_access(
@@ -5281,15 +5610,23 @@ fn record_isi_access(
             add_trigger_rw(access_set, &id);
             Some(())
         }
+        ir::Instr::VendorExecuteInstruction { payload } => {
+            let raw = string_map.get(&(func_idx, *payload))?;
+            let isi = decode_instruction_box_literal(raw)?;
+            record_instruction_box_access(&isi, access_set)
+        }
+        ir::Instr::VendorExecuteQuery { payload, .. } => {
+            let raw = string_map.get(&(func_idx, *payload))?;
+            let request = decode_query_request_literal(raw)?;
+            record_query_request_access(&request, access_set)
+        }
         // TODO: entrypoint hints do not yet model TransferDomain authority reads.
         ir::Instr::TransferDomain { .. } => None,
         // TODO: SetNftData lacks a metadata key in IR; skip hints until key is modeled.
         ir::Instr::SetNftData { .. } => None,
-        // TODO: Vendor execution and AXT/ZK helpers carry opaque payloads; skip hints for now.
+        // TODO: Vendor execute-query and AXT/ZK helpers carry opaque payloads; skip hints for now.
         ir::Instr::RegisterPeer { .. }
         | ir::Instr::UnregisterPeer { .. }
-        | ir::Instr::VendorExecuteInstruction { .. }
-        | ir::Instr::VendorExecuteQuery { .. }
         | ir::Instr::SubscriptionBill
         | ir::Instr::SubscriptionRecordUsage
         | ir::Instr::BuildSubmitBallotInline { .. }
@@ -5299,6 +5636,249 @@ fn record_isi_access(
         | ir::Instr::VerifyDsProof { .. }
         | ir::Instr::UseAssetHandle { .. }
         | ir::Instr::AxtCommit => None,
+        _ => None,
+    }
+}
+
+fn decode_instruction_box_literal(raw: &str) -> Option<InstructionBox> {
+    let bytes = decode_hex_or_raw_bytes(raw).ok()?;
+    let payload = match crate::pointer_abi::validate_tlv_bytes(&bytes) {
+        Ok(tlv) => {
+            if tlv.type_id != PointerType::NoritoBytes {
+                return None;
+            }
+            tlv.payload.to_vec()
+        }
+        Err(_) => bytes,
+    };
+    norito::decode_from_bytes(&payload).ok()
+}
+
+fn decode_query_request_literal(raw: &str) -> Option<QueryRequest> {
+    let bytes = decode_hex_or_raw_bytes(raw).ok()?;
+    let payload = match crate::pointer_abi::validate_tlv_bytes(&bytes) {
+        Ok(tlv) => {
+            if tlv.type_id != PointerType::NoritoBytes {
+                return None;
+            }
+            tlv.payload.to_vec()
+        }
+        Err(_) => bytes,
+    };
+    norito::decode_from_bytes(&payload).ok()
+}
+
+fn record_instruction_box_access(
+    instr: &InstructionBox,
+    access_set: &mut AccessSets,
+) -> Option<()> {
+    let any = instr.as_any();
+
+    if any.downcast_ref::<Log>().is_some() {
+        return Some(());
+    }
+
+    if let Some(tb) = any.downcast_ref::<TransferBox>() {
+        match tb {
+            TransferBox::Asset(t) => {
+                let src = t.source.clone();
+                let dst = AssetId::of(t.source.definition.clone(), t.destination.clone());
+                add_asset_rw(access_set, &src);
+                add_asset_rw(access_set, &dst);
+            }
+            TransferBox::Domain(t) => {
+                add_domain_rw(access_set, &t.object);
+                add_account_r(access_set, &t.source);
+                add_account_r(access_set, &t.destination);
+            }
+            TransferBox::AssetDefinition(t) => {
+                add_asset_def_rw(access_set, &t.object);
+                add_account_r(access_set, &t.source);
+                add_account_r(access_set, &t.destination);
+            }
+            TransferBox::Nft(t) => {
+                add_nft_rw(access_set, &t.object);
+                add_account_r(access_set, &t.source);
+                add_account_r(access_set, &t.destination);
+            }
+        }
+        return Some(());
+    }
+
+    if let Some(mb) = any.downcast_ref::<MintBox>() {
+        match mb {
+            MintBox::Asset(m) => {
+                add_asset_rw(access_set, &m.destination);
+                add_asset_def_rw(access_set, m.destination.definition());
+            }
+            MintBox::TriggerRepetitions(m) => {
+                add_trigger_rw(access_set, &m.destination);
+            }
+        }
+        return Some(());
+    }
+
+    if let Some(bb) = any.downcast_ref::<BurnBox>() {
+        match bb {
+            BurnBox::Asset(b) => {
+                add_asset_rw(access_set, &b.destination);
+                add_asset_def_rw(access_set, b.destination.definition());
+            }
+            BurnBox::TriggerRepetitions(b) => {
+                add_trigger_rw(access_set, &b.destination);
+            }
+        }
+        return Some(());
+    }
+
+    if let Some(sb) = any.downcast_ref::<SetKeyValueBox>() {
+        match sb {
+            SetKeyValueBox::Account(s) => {
+                add_account_detail_rw(access_set, &s.object, &s.key);
+            }
+            SetKeyValueBox::Domain(s) => {
+                add_domain_detail_rw(access_set, &s.object, &s.key);
+            }
+            SetKeyValueBox::AssetDefinition(s) => {
+                add_asset_def_detail_rw(access_set, &s.object, &s.key);
+            }
+            SetKeyValueBox::Nft(s) => {
+                add_nft_detail_rw(access_set, &s.object, &s.key);
+            }
+            SetKeyValueBox::Trigger(s) => {
+                access_set.reads.insert(key_trigger(&s.object));
+                access_set
+                    .writes
+                    .insert(key_trigger_detail(&s.object, &s.key));
+            }
+        }
+        return Some(());
+    }
+
+    if let Some(rb) = any.downcast_ref::<RemoveKeyValueBox>() {
+        match rb {
+            RemoveKeyValueBox::Account(r) => {
+                add_account_detail_rw(access_set, &r.object, &r.key);
+            }
+            RemoveKeyValueBox::Domain(r) => {
+                add_domain_detail_rw(access_set, &r.object, &r.key);
+            }
+            RemoveKeyValueBox::AssetDefinition(r) => {
+                add_asset_def_detail_rw(access_set, &r.object, &r.key);
+            }
+            RemoveKeyValueBox::Nft(r) => {
+                add_nft_detail_rw(access_set, &r.object, &r.key);
+            }
+            RemoveKeyValueBox::Trigger(r) => {
+                access_set.reads.insert(key_trigger(&r.object));
+                access_set
+                    .writes
+                    .insert(key_trigger_detail(&r.object, &r.key));
+            }
+        }
+        return Some(());
+    }
+
+    if let Some(rb) = any.downcast_ref::<RegisterBox>() {
+        match rb {
+            RegisterBox::Domain(r) => add_domain_rw(access_set, r.object.id()),
+            RegisterBox::Account(r) => {
+                add_domain_r(access_set, r.object.id().domain());
+                add_account_rw(access_set, r.object.id());
+            }
+            RegisterBox::AssetDefinition(r) => {
+                add_domain_r(access_set, r.object.id().domain());
+                add_asset_def_rw(access_set, r.object.id());
+            }
+            RegisterBox::Nft(r) => add_nft_rw(access_set, r.object.id()),
+            RegisterBox::Peer(_) => return None,
+            RegisterBox::Trigger(r) => add_trigger_rw(access_set, r.object.id()),
+            RegisterBox::Role(r) => add_role_rw(access_set, r.object.id()),
+        }
+        return Some(());
+    }
+
+    if let Some(ub) = any.downcast_ref::<UnregisterBox>() {
+        match ub {
+            UnregisterBox::Domain(u) => add_domain_rw(access_set, &u.object),
+            UnregisterBox::Account(u) => add_account_rw(access_set, &u.object),
+            UnregisterBox::AssetDefinition(u) => add_asset_def_rw(access_set, &u.object),
+            UnregisterBox::Nft(u) => add_nft_rw(access_set, &u.object),
+            UnregisterBox::Peer(_) => return None,
+            UnregisterBox::Trigger(u) => add_trigger_rw(access_set, &u.object),
+            UnregisterBox::Role(u) => add_role_rw(access_set, &u.object),
+        }
+        return Some(());
+    }
+
+    if let Some(gb) = any.downcast_ref::<GrantBox>() {
+        match gb {
+            GrantBox::Permission(g) => {
+                add_account_rw(access_set, &g.destination);
+                add_permission_account_w(access_set, &g.destination, g.object.name());
+            }
+            GrantBox::Role(g) => {
+                add_account_rw(access_set, &g.destination);
+                add_role_r(access_set, &g.object);
+                add_role_binding_w(access_set, &g.destination, &g.object);
+            }
+            GrantBox::RolePermission(g) => {
+                add_role_rw(access_set, &g.destination);
+                add_permission_role_w(access_set, &g.destination, g.object.name());
+            }
+        }
+        return Some(());
+    }
+
+    if let Some(rb) = any.downcast_ref::<RevokeBox>() {
+        match rb {
+            RevokeBox::Permission(r) => {
+                add_account_rw(access_set, &r.destination);
+                add_permission_account_w(access_set, &r.destination, r.object.name());
+            }
+            RevokeBox::Role(r) => {
+                add_account_rw(access_set, &r.destination);
+                add_role_r(access_set, &r.object);
+                add_role_binding_w(access_set, &r.destination, &r.object);
+            }
+            RevokeBox::RolePermission(r) => {
+                add_role_rw(access_set, &r.destination);
+                add_permission_role_w(access_set, &r.destination, r.object.name());
+            }
+        }
+        return Some(());
+    }
+
+    if let Some(exe) = any.downcast_ref::<ExecuteTrigger>() {
+        access_set.reads.insert(key_trigger(&exe.trigger));
+        access_set
+            .writes
+            .insert(key_trigger_repetitions(&exe.trigger));
+        return Some(());
+    }
+
+    None
+}
+
+fn record_query_request_access(
+    request: &QueryRequest,
+    access_set: &mut AccessSets,
+) -> Option<()> {
+    match request {
+        QueryRequest::Singular(query) => record_singular_query_access(query, access_set),
+        QueryRequest::Start(_) | QueryRequest::Continue(_) => None,
+    }
+}
+
+fn record_singular_query_access(
+    query: &SingularQueryBox,
+    access_set: &mut AccessSets,
+) -> Option<()> {
+    match query {
+        SingularQueryBox::FindAssetById(q) => {
+            add_asset_r(access_set, q.asset_id());
+            Some(())
+        }
         _ => None,
     }
 }
@@ -5390,6 +5970,10 @@ fn key_perm_account(account: &AccountId, perm: &str) -> String {
     format!("perm.account:{account}:{perm}")
 }
 
+fn key_perm_role(role: &RoleId, perm: &str) -> String {
+    format!("perm.role:{role}:{perm}")
+}
+
 fn key_trigger(id: &TriggerId) -> String {
     format!("trigger:{id}")
 }
@@ -5398,8 +5982,24 @@ fn key_trigger_repetitions(id: &TriggerId) -> String {
     format!("trigger.repetitions:{id}")
 }
 
+fn key_trigger_detail(id: &TriggerId, key: &Name) -> String {
+    format!("trigger.detail:{id}:{key}")
+}
+
 fn key_account_detail(id: &AccountId, key: &Name) -> String {
     format!("account.detail:{id}:{key}")
+}
+
+fn key_domain_detail(id: &DomainId, key: &Name) -> String {
+    format!("domain.detail:{id}:{key}")
+}
+
+fn key_asset_def_detail(id: &AssetDefinitionId, key: &Name) -> String {
+    format!("asset_def.detail:{id}:{key}")
+}
+
+fn key_nft_detail(id: &NftId, key: &Name) -> String {
+    format!("nft.detail:{id}:{key}")
 }
 
 fn add_account_r(set: &mut AccessSets, id: &AccountId) {
@@ -5429,6 +6029,13 @@ fn add_domain_rw(set: &mut AccessSets, id: &DomainId) {
     set.writes.insert(key);
 }
 
+fn add_domain_detail_rw(set: &mut AccessSets, id: &DomainId, key: &Name) {
+    add_domain_r(set, id);
+    let detail = key_domain_detail(id, key);
+    set.reads.insert(detail.clone());
+    set.writes.insert(detail);
+}
+
 fn add_asset_def_rw(set: &mut AccessSets, id: &AssetDefinitionId) {
     let key = key_asset_def(id);
     set.reads.insert(key.clone());
@@ -5437,6 +6044,20 @@ fn add_asset_def_rw(set: &mut AccessSets, id: &AssetDefinitionId) {
 
 fn add_asset_def_r(set: &mut AccessSets, id: &AssetDefinitionId) {
     set.reads.insert(key_asset_def(id));
+}
+
+fn add_asset_r(set: &mut AccessSets, id: &AssetId) {
+    set.reads.insert(key_asset(id));
+    add_account_r(set, id.account());
+    add_domain_r(set, id.account().domain());
+    add_asset_def_r(set, id.definition());
+}
+
+fn add_asset_def_detail_rw(set: &mut AccessSets, id: &AssetDefinitionId, key: &Name) {
+    add_asset_def_r(set, id);
+    let detail = key_asset_def_detail(id, key);
+    set.reads.insert(detail.clone());
+    set.writes.insert(detail);
 }
 
 fn add_asset_rw(set: &mut AccessSets, id: &AssetId) {
@@ -5452,6 +6073,13 @@ fn add_nft_rw(set: &mut AccessSets, id: &NftId) {
     let key = key_nft(id);
     set.reads.insert(key.clone());
     set.writes.insert(key);
+}
+
+fn add_nft_detail_rw(set: &mut AccessSets, id: &NftId, key: &Name) {
+    add_nft_rw(set, id);
+    let detail = key_nft_detail(id, key);
+    set.reads.insert(detail.clone());
+    set.writes.insert(detail);
 }
 
 fn add_role_rw(set: &mut AccessSets, id: &RoleId) {
@@ -5470,6 +6098,10 @@ fn add_role_binding_w(set: &mut AccessSets, account: &AccountId, role: &RoleId) 
 
 fn add_permission_account_w(set: &mut AccessSets, account: &AccountId, perm: &str) {
     set.writes.insert(key_perm_account(account, perm));
+}
+
+fn add_permission_role_w(set: &mut AccessSets, role: &RoleId, perm: &str) {
+    set.writes.insert(key_perm_role(role, perm));
 }
 
 fn add_trigger_rw(set: &mut AccessSets, id: &TriggerId) {
@@ -5570,11 +6202,19 @@ fn build_entrypoint_descriptors(
     typed: &TypedProgram,
     access_sets: &[AccessSets],
     ir_functions: &[ir::Function],
-    include_hints: bool,
+    hint_reports: &[HintReport],
 ) -> Vec<EntrypointDescriptor> {
     let mut hints_by_name: HashMap<&str, (&IndexSet<String>, &IndexSet<String>)> = HashMap::new();
-    for (func, sets) in ir_functions.iter().zip(access_sets.iter()) {
+    let mut hintable_by_name: HashMap<&str, bool> = HashMap::new();
+    let mut hint_report_by_name: HashMap<&str, &HintReport> = HashMap::new();
+    for ((func, sets), report) in ir_functions
+        .iter()
+        .zip(access_sets.iter())
+        .zip(hint_reports.iter())
+    {
         hints_by_name.insert(&func.name, (&sets.reads, &sets.writes));
+        hintable_by_name.insert(&func.name, report.emitted);
+        hint_report_by_name.insert(&func.name, report);
     }
 
     let mut triggers_by_name: HashMap<String, Vec<TriggerDescriptor>> = HashMap::new();
@@ -5598,6 +6238,10 @@ fn build_entrypoint_descriptors(
 
     let build_descriptor =
         |func: &semantic::TypedFunction, kind: EntryPointKind| -> EntrypointDescriptor {
+            let include_hints = hintable_by_name
+                .get(func.name.as_str())
+                .copied()
+                .unwrap_or(false);
             let (mut reads, mut writes): (Vec<String>, Vec<String>) = if include_hints {
                 hints_by_name
                     .get(func.name.as_str())
@@ -5625,12 +6269,17 @@ fn build_entrypoint_descriptors(
                 .get(func.name.as_str())
                 .cloned()
                 .unwrap_or_default();
+            let report = hint_report_by_name.get(func.name.as_str()).copied();
             EntrypointDescriptor {
                 name: func.name.clone(),
                 kind,
                 permission: func.modifiers.permission.clone(),
                 read_keys: reads,
                 write_keys: writes,
+                access_hints_complete: report.map(|r| r.emitted),
+                access_hints_skipped: report
+                    .map(|r| r.skipped_reasons.clone())
+                    .unwrap_or_default(),
                 triggers,
             }
         };

@@ -236,6 +236,12 @@ pub mod manifest {
         /// Advisory write keys for this entrypoint.
         #[norito(default)]
         pub write_keys: Vec<String>,
+        /// Whether access-set hints are complete or explicitly provided.
+        #[norito(default)]
+        pub access_hints_complete: Option<bool>,
+        /// Reasons access hints were skipped for this entrypoint.
+        #[norito(default)]
+        pub access_hints_skipped: Vec<String>,
         /// Trigger declarations that call this entrypoint.
         #[norito(default)]
         pub triggers: Vec<TriggerDescriptor>,
@@ -426,6 +432,8 @@ pub mod manifest {
                 permission: None,
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
+                access_hints_complete: Some(true),
+                access_hints_skipped: Vec::new(),
                 triggers: vec![trigger],
             };
             let json = norito::json::to_json(&entrypoint).expect("serialize entrypoint");
