@@ -43,6 +43,7 @@ use iroha_data_model::{
         consensus::{ConsensusGenesisParams, NposGenesisParams},
     },
     confidential::{ConfidentialFeatureDigest, ConfidentialStatus},
+    da::commitment::DaProofPolicyBundle,
     isi::{
         InstructionRegistry, Register, SetParameter, register::RegisterPeerWithPop,
         set_instruction_registry, verifying_keys,
@@ -3454,6 +3455,7 @@ impl RawGenesisTransaction {
             ivm_dir: self.ivm_dir.0,
             transactions,
             crypto: self.crypto,
+            da_proof_policies: None,
             consensus_mode: self.consensus_mode,
             bls_domain: self.bls_domain,
             wire_proto_versions: self.wire_proto_versions,
@@ -3467,6 +3469,19 @@ impl RawGenesisTransaction {
     ///
     /// Fails if `RawGenesisTransaction::parse` fails.
     pub fn build_and_sign(self, genesis_key_pair: &KeyPair) -> Result<GenesisBlock> {
+        self.build_and_sign_with_da_proof_policies(genesis_key_pair, None)
+    }
+
+    /// Build and sign genesis block, overriding the embedded DA proof policies.
+    ///
+    /// # Errors
+    ///
+    /// Fails if `RawGenesisTransaction::parse` fails.
+    pub fn build_and_sign_with_da_proof_policies(
+        self,
+        genesis_key_pair: &KeyPair,
+        da_proof_policies: Option<DaProofPolicyBundle>,
+    ) -> Result<GenesisBlock> {
         let chain = self.chain.clone();
         let genesis_account = AccountId::new(
             GENESIS_DOMAIN_ID.clone(),
@@ -3499,11 +3514,12 @@ impl RawGenesisTransaction {
             let transaction = builder.sign(genesis_key_pair.private_key());
             transactions.push(transaction);
         }
-        let block = SignedBlock::genesis(
+        let block = SignedBlock::genesis_with_da_proof_policies(
             transactions,
             genesis_key_pair.private_key(),
             Some(confidential_digest),
             None,
+            da_proof_policies,
         );
 
         Ok(GenesisBlock(block))
@@ -3897,6 +3913,7 @@ pub struct GenesisBuilder {
     ivm_dir: PathBuf,
     transactions: Vec<GenesisTxBuilder>,
     crypto: ManifestCrypto,
+    da_proof_policies: Option<DaProofPolicyBundle>,
     consensus_mode: Option<iroha_data_model::parameter::system::SumeragiConsensusMode>,
     bls_domain: Option<String>,
     wire_proto_versions: Vec<u32>,
@@ -3912,6 +3929,7 @@ pub struct GenesisDomainBuilder {
     transactions: Vec<GenesisTxBuilder>,
     domain_id: DomainId,
     crypto: ManifestCrypto,
+    da_proof_policies: Option<DaProofPolicyBundle>,
     consensus_mode: Option<iroha_data_model::parameter::system::SumeragiConsensusMode>,
     bls_domain: Option<String>,
     wire_proto_versions: Vec<u32>,
@@ -3935,6 +3953,7 @@ impl GenesisBuilder {
             ivm_dir: ivm_dir.into(),
             transactions: vec![GenesisTxBuilder::default()],
             crypto: ManifestCrypto::default(),
+            da_proof_policies: None,
             consensus_mode: None,
             bls_domain: None,
             wire_proto_versions: Vec::new(),
@@ -3950,6 +3969,7 @@ impl GenesisBuilder {
             ivm_dir: ivm_dir.into(),
             transactions: vec![GenesisTxBuilder::default()],
             crypto: ManifestCrypto::default(),
+            da_proof_policies: None,
             consensus_mode: None,
             bls_domain: None,
             wire_proto_versions: Vec::new(),
@@ -3960,6 +3980,12 @@ impl GenesisBuilder {
     /// Override the cryptography snapshot advertised alongside the manifest.
     pub fn with_crypto(mut self, crypto: ManifestCrypto) -> Self {
         self.crypto = crypto;
+        self
+    }
+
+    /// Override the DA proof policy bundle embedded into genesis.
+    pub fn with_da_proof_policies(mut self, policies: DaProofPolicyBundle) -> Self {
+        self.da_proof_policies = Some(policies);
         self
     }
 
@@ -3994,6 +4020,7 @@ impl GenesisBuilder {
             transactions: self.transactions,
             domain_id,
             crypto: self.crypto,
+            da_proof_policies: self.da_proof_policies,
             consensus_mode: self.consensus_mode,
             bls_domain: self.bls_domain,
             wire_proto_versions: self.wire_proto_versions,
@@ -4066,7 +4093,9 @@ impl GenesisBuilder {
     ///
     /// Fails if internal [`RawGenesisTransaction::build_and_sign`] fails.
     pub fn build_and_sign(self, genesis_key_pair: &KeyPair) -> Result<GenesisBlock> {
-        self.build_raw().build_and_sign(genesis_key_pair)
+        let da_proof_policies = self.da_proof_policies.clone();
+        self.build_raw()
+            .build_and_sign_with_da_proof_policies(genesis_key_pair, da_proof_policies)
     }
 
     /// Finish building and produce a [`RawGenesisTransaction`].
@@ -4109,6 +4138,7 @@ impl GenesisDomainBuilder {
             ivm_dir: self.ivm_dir,
             transactions: self.transactions,
             crypto: self.crypto,
+            da_proof_policies: self.da_proof_policies,
             consensus_mode: self.consensus_mode,
             bls_domain: self.bls_domain,
             wire_proto_versions: self.wire_proto_versions,

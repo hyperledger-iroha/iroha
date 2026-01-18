@@ -200,7 +200,6 @@ fn network_permit_state() -> &'static Arc<NetworkPermitState> {
 }
 
 fn serialize_networks_enabled() -> bool {
-    #[cfg(test)]
     if let Some(value) = test_override_serialization() {
         return value;
     }
@@ -213,25 +212,23 @@ fn serialize_networks_enabled() -> bool {
     )
 }
 
-#[cfg(test)]
 #[derive(Clone, Copy, Default)]
 struct TestOverrides {
     serialize: Option<bool>,
     parallelism: Option<usize>,
 }
 
-#[cfg(test)]
-struct OverrideGuard {
+/// Guard that restores network-parallelism overrides on drop.
+#[must_use]
+pub struct NetworkParallelismGuard {
     previous: TestOverrides,
 }
 
-#[cfg(test)]
 fn test_override_state() -> &'static Mutex<TestOverrides> {
     static OVERRIDES: OnceLock<Mutex<TestOverrides>> = OnceLock::new();
     OVERRIDES.get_or_init(|| Mutex::new(TestOverrides::default()))
 }
 
-#[cfg(test)]
 fn test_override_serialization() -> Option<bool> {
     let guard = test_override_state()
         .lock()
@@ -239,7 +236,6 @@ fn test_override_serialization() -> Option<bool> {
     guard.serialize
 }
 
-#[cfg(test)]
 fn test_override_parallelism() -> Option<usize> {
     let guard = test_override_state()
         .lock()
@@ -247,19 +243,23 @@ fn test_override_parallelism() -> Option<usize> {
     guard.parallelism
 }
 
-#[cfg(test)]
-fn set_test_overrides(serialize: Option<bool>, parallelism: Option<usize>) -> OverrideGuard {
+/// Override network-parallelism limits for integration tests.
+///
+/// This is a global override; keep the returned guard alive for the duration of the override.
+pub fn override_network_parallelism(
+    serialize: Option<bool>,
+    parallelism: Option<usize>,
+) -> NetworkParallelismGuard {
     let mut guard = test_override_state()
         .lock()
         .expect("test override mutex poisoned");
     let previous = *guard;
     guard.serialize = serialize;
     guard.parallelism = parallelism;
-    OverrideGuard { previous }
+    NetworkParallelismGuard { previous }
 }
 
-#[cfg(test)]
-impl Drop for OverrideGuard {
+impl Drop for NetworkParallelismGuard {
     fn drop(&mut self) {
         let mut guard = test_override_state()
             .lock()
@@ -281,7 +281,6 @@ fn network_parallelism_limit() -> usize {
     if serialize_networks_enabled() {
         return 1;
     }
-    #[cfg(test)]
     if let Some(value) = test_override_parallelism().filter(|value| *value > 0) {
         return value;
     }
@@ -683,7 +682,7 @@ mod tests {
             return;
         }
         let _env_guard = lock_env_guard();
-        let _override_guard = set_test_overrides(Some(true), None);
+        let _override_guard = override_network_parallelism(Some(true), None);
         let guard = serial_guard();
         let network = NetworkBuilder::new().build();
         let serialized = SerializedNetwork::new(network, guard);
@@ -700,7 +699,7 @@ mod tests {
     #[test]
     fn network_permit_releases_mutex_after_acquire() {
         let _env_guard = lock_env_guard();
-        let _override_guard = set_test_overrides(None, Some(1));
+        let _override_guard = override_network_parallelism(None, Some(1));
         let permit = acquire_network_permit();
         let state = network_permit_state();
         assert!(
@@ -716,7 +715,7 @@ mod tests {
             return;
         }
         let _env_guard = lock_env_guard();
-        let _override_guard = set_test_overrides(Some(true), None);
+        let _override_guard = override_network_parallelism(Some(true), None);
         let guard = serial_guard();
         let network = NetworkBuilder::new().build();
         let serialized = SerializedNetwork::new(network, guard);
@@ -736,7 +735,7 @@ mod tests {
             return;
         }
         let _env_guard = lock_env_guard();
-        let _override_guard = set_test_overrides(Some(true), None);
+        let _override_guard = override_network_parallelism(Some(true), None);
         let guard = serial_guard();
         let network = NetworkBuilder::new().build();
         let rt = Runtime::new().expect("runtime");
@@ -785,7 +784,7 @@ mod tests {
         let _env_guard = lock_env_guard();
         let _serialize_guard = EnvRestore::remove(SERIALIZE_NETWORKS_ENV);
         let _parallelism_guard = EnvRestore::remove(NETWORK_PARALLELISM_ENV);
-        let _override_guard = set_test_overrides(Some(false), None);
+        let _override_guard = override_network_parallelism(Some(false), None);
         let expected = std::thread::available_parallelism()
             .map(std::num::NonZeroUsize::get)
             .unwrap_or(1)
@@ -807,7 +806,7 @@ mod tests {
     #[test]
     fn network_parallelism_env_override_applies() {
         let _env_guard = lock_env_guard();
-        let _override_guard = set_test_overrides(None, Some(2));
+        let _override_guard = override_network_parallelism(None, Some(2));
 
         let guard = serial_guard();
         let (limit, in_use) = network_permit_snapshot();
@@ -819,7 +818,7 @@ mod tests {
     #[test]
     fn serialization_overrides_parallelism_limit() {
         let _env_guard = lock_env_guard();
-        let _override_guard = set_test_overrides(Some(true), Some(4));
+        let _override_guard = override_network_parallelism(Some(true), Some(4));
 
         let guard = serial_guard();
         let (limit, in_use) = network_permit_snapshot();

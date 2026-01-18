@@ -1827,10 +1827,7 @@ fn manifest_includes_entrypoints_and_features() {
 
 #[test]
 fn manifest_includes_trigger_descriptors() {
-    use iroha_data_model::{
-        events::EventFilterBox,
-        trigger::action::Repeats,
-    };
+    use iroha_data_model::{events::EventFilterBox, trigger::action::Repeats};
 
     let src = r#"
         seiyaku Demo {

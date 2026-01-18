@@ -1506,4 +1506,27 @@ mod tests {
         assert_eq!(a.leader(), b.leader());
         assert_eq!(a.proxy_tail(), b.proxy_tail());
     }
+
+    #[test]
+    fn rotated_for_prev_block_hash_is_deterministic_regardless_of_input_order() {
+        let keys = (0..5).map(|_| KeyPair::random()).collect::<Vec<_>>();
+        let peers: Vec<PeerId> = keys
+            .iter()
+            .map(|k| PeerId::new(k.public_key().clone()))
+            .collect();
+        let prev_hash = HashOf::<BlockHeader>::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([0x11; iroha_crypto::Hash::LENGTH]),
+        );
+
+        let mut sorted = peers.clone();
+        sorted.sort();
+
+        let mut reversed = sorted.clone();
+        reversed.reverse();
+
+        let a = rotated_for_prev_block_hash(sorted, prev_hash);
+        let b = rotated_for_prev_block_hash(reversed, prev_hash);
+
+        assert_eq!(a.0, b.0);
+    }
 }

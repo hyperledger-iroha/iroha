@@ -95,8 +95,8 @@ fn build_minimal_program(tag: u8) -> Vec<u8> {
 fn build_program_mint_rose_for_authority() -> Vec<u8> {
     use iroha_data_model::prelude::AssetDefinitionId;
     use ivm::{
-        PointerType, encoding, instruction::wide, kotodama::compiler::encode_addi,
-        syscalls as ivm_sys,
+        PointerType, encoding, instruction::wide,
+        kotodama::wide::encode_addi_checked as encode_addi, syscalls as ivm_sys,
     };
     use norito::codec::Encode as _;
 
@@ -116,7 +116,11 @@ fn build_program_mint_rose_for_authority() -> Vec<u8> {
     );
     code.extend_from_slice(&encode_addi(13, 10, 0).expect("encode addi").to_le_bytes()); // save account pointer
     // r10 <- &AssetDefinitionId (literal TLV)
-    code.extend_from_slice(&encode_addi(10, 0, LITERAL_DATA_START).expect("encode addi").to_le_bytes());
+    code.extend_from_slice(
+        &encode_addi(10, 0, LITERAL_DATA_START)
+            .expect("encode addi")
+            .to_le_bytes(),
+    );
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             wide::system::SCALL,
@@ -137,7 +141,10 @@ fn build_program_mint_rose_for_authority() -> Vec<u8> {
 }
 
 fn build_program_create_nft_for_authority() -> Vec<u8> {
-    use ivm::{encoding, instruction::wide, kotodama::compiler::encode_addi, syscalls as ivm_sys};
+    use ivm::{
+        encoding, instruction::wide, kotodama::wide::encode_addi_checked as encode_addi,
+        syscalls as ivm_sys,
+    };
 
     // Assemble: create NFTs for all users convenience syscall
     let mut code = Vec::new();
@@ -164,8 +171,8 @@ fn build_program_create_nft_for_authority() -> Vec<u8> {
 fn build_program_set_account_detail_defaults() -> Vec<u8> {
     use iroha_data_model::{prelude::Name, query::parameters::ForwardCursor};
     use ivm::{
-        PointerType, encoding, instruction::wide, kotodama::compiler::encode_addi,
-        syscalls as ivm_sys,
+        PointerType, encoding, instruction::wide,
+        kotodama::wide::encode_addi_checked as encode_addi, syscalls as ivm_sys,
     };
     use norito::{codec::Encode as _, json};
     use std::num::NonZeroU64;
@@ -193,7 +200,11 @@ fn build_program_set_account_detail_defaults() -> Vec<u8> {
     );
     code.extend_from_slice(&encode_addi(13, 10, 0).expect("encode addi").to_le_bytes()); // save account pointer
     // r10 <- &Name("cursor")
-    code.extend_from_slice(&encode_addi(10, 0, LITERAL_DATA_START).expect("encode addi").to_le_bytes());
+    code.extend_from_slice(
+        &encode_addi(10, 0, LITERAL_DATA_START)
+            .expect("encode addi")
+            .to_le_bytes(),
+    );
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             wide::system::SCALL,
@@ -203,7 +214,11 @@ fn build_program_set_account_detail_defaults() -> Vec<u8> {
     );
     code.extend_from_slice(&encode_addi(11, 10, 0).expect("encode addi").to_le_bytes()); // r11 = key ptr
     // r10 <- &Json(cursor)
-    code.extend_from_slice(&encode_addi(10, 0, value_ptr).expect("encode addi").to_le_bytes());
+    code.extend_from_slice(
+        &encode_addi(10, 0, value_ptr)
+            .expect("encode addi")
+            .to_le_bytes(),
+    );
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             wide::system::SCALL,
@@ -333,12 +348,14 @@ fn main() {
             "trigger_cat_and_mouse" => compile_kotodama_sample(&root, "trigger_cat_and_mouse")
                 .unwrap_or_else(|| {
                     use ivm::{
-                        encoding, instruction::wide, kotodama::compiler::encode_addi,
-                        syscalls as ivm_sys,
+                        encoding, instruction::wide,
+                        kotodama::wide::encode_addi_checked as encode_addi, syscalls as ivm_sys,
                     };
                     let mut code = Vec::new();
                     // x10 = 111
-                    code.extend_from_slice(&encode_addi(10, 0, 111).expect("encode addi").to_le_bytes());
+                    code.extend_from_slice(
+                        &encode_addi(10, 0, 111).expect("encode addi").to_le_bytes(),
+                    );
                     code.extend_from_slice(
                         &encoding::wide::encode_sys(
                             wide::system::SCALL,

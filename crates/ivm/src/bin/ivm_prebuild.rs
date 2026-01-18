@@ -169,7 +169,11 @@ fn build_program_mint_rose_for_authority() -> Vec<u8> {
     );
     code.extend_from_slice(&encode_addi(13, 10, 0).expect("encode addi").to_le_bytes()); // save account pointer
     // r10 <- &AssetDefinitionId (literal TLV)
-    code.extend_from_slice(&encode_addi(10, 0, LITERAL_DATA_START).expect("encode addi").to_le_bytes());
+    code.extend_from_slice(
+        &encode_addi(10, 0, LITERAL_DATA_START)
+            .expect("encode addi")
+            .to_le_bytes(),
+    );
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             wide::system::SCALL,
@@ -265,7 +269,11 @@ fn build_program_set_account_detail_defaults() -> Vec<u8> {
     );
     code.extend_from_slice(&encode_addi(13, 10, 0).expect("encode addi").to_le_bytes()); // save account pointer
     // r10 <- &Name("cursor")
-    code.extend_from_slice(&encode_addi(10, 0, LITERAL_DATA_START).expect("encode addi").to_le_bytes());
+    code.extend_from_slice(
+        &encode_addi(10, 0, LITERAL_DATA_START)
+            .expect("encode addi")
+            .to_le_bytes(),
+    );
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             wide::system::SCALL,
@@ -275,7 +283,11 @@ fn build_program_set_account_detail_defaults() -> Vec<u8> {
     );
     code.extend_from_slice(&encode_addi(11, 10, 0).expect("encode addi").to_le_bytes()); // r11 = key ptr
     // r10 <- &Json(cursor)
-    code.extend_from_slice(&encode_addi(10, 0, value_ptr).expect("encode addi").to_le_bytes());
+    code.extend_from_slice(
+        &encode_addi(10, 0, value_ptr)
+            .expect("encode addi")
+            .to_le_bytes(),
+    );
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             wide::system::SCALL,

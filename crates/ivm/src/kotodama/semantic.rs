@@ -1,7 +1,6 @@
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
-    str::FromStr,
 };
 
 use indexmap::{IndexMap, IndexSet};
@@ -266,9 +265,10 @@ fn analyze_trigger(
     trigger: &TriggerDecl,
     fn_modifiers: &HashMap<String, FunctionModifiers>,
 ) -> Result<TypedTrigger, SemanticError> {
-    let name = <Name as std::str::FromStr>::from_str(&trigger.name).map_err(|err| SemanticError {
-        message: format!("invalid trigger name `{}`: {}", trigger.name, err),
-    })?;
+    let name =
+        <Name as std::str::FromStr>::from_str(&trigger.name).map_err(|err| SemanticError {
+            message: format!("invalid trigger name `{}`: {}", trigger.name, err),
+        })?;
     let id = TriggerId::new(name);
 
     let entry = &trigger.call.entrypoint;
@@ -314,9 +314,10 @@ fn analyze_trigger(
             EventFilterBox::Time(TimeEventFilter(execution))
         }
         TriggerFilter::Execute { trigger_id } => {
-            let target = <Name as std::str::FromStr>::from_str(trigger_id).map_err(|err| SemanticError {
-                message: format!("invalid execute trigger id `{trigger_id}`: {err}"),
-            })?;
+            let target =
+                <Name as std::str::FromStr>::from_str(trigger_id).map_err(|err| SemanticError {
+                    message: format!("invalid execute trigger id `{trigger_id}`: {err}"),
+                })?;
             let id = TriggerId::new(target);
             EventFilterBox::ExecuteTrigger(ExecuteTriggerEventFilter::new().for_trigger(id))
         }
@@ -347,9 +348,10 @@ fn trigger_metadata_from_entries(
 ) -> Result<Metadata, SemanticError> {
     let mut metadata = Metadata::default();
     for entry in entries {
-        let key = <Name as std::str::FromStr>::from_str(&entry.key).map_err(|err| SemanticError {
-            message: format!("invalid trigger metadata key `{}`: {err}", entry.key),
-        })?;
+        let key =
+            <Name as std::str::FromStr>::from_str(&entry.key).map_err(|err| SemanticError {
+                message: format!("invalid trigger metadata key `{}`: {err}", entry.key),
+            })?;
         let json = json_from_expr(&entry.value)?;
         if metadata.insert(key, json).is_some() {
             return Err(SemanticError {
@@ -2050,8 +2052,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         });
                     }
                     match &arg_typed[0].ty {
-                        Type::Map(k, v) if is_int_like(k) && is_int_like(v) => {
-                        }
+                        Type::Map(k, v) if is_int_like(k) && is_int_like(v) => {}
                         other => {
                             return Err(SemanticError {
                                 message: format!(
@@ -2202,8 +2203,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         });
                     }
                     match &arg_typed[0].ty {
-                        Type::Map(k, v) if is_int_like(k) && is_int_like(v) => {
-                        }
+                        Type::Map(k, v) if is_int_like(k) && is_int_like(v) => {}
                         other => {
                             return Err(SemanticError {
                                 message: format!(
@@ -2234,8 +2234,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         });
                     }
                     match &arg_typed[0].ty {
-                        Type::Map(k, v) if is_int_like(k) && is_int_like(v) => {
-                        }
+                        Type::Map(k, v) if is_int_like(k) && is_int_like(v) => {}
                         other => {
                             return Err(SemanticError {
                                 message: format!(
@@ -3700,10 +3699,7 @@ fn ensure_assignable(expected: &Type, actual: &Type) -> Result<(), SemanticError
         return Ok(());
     }
     if let (Some(exp_kind), Some(act_kind)) = (numeric_kind(&expected), numeric_kind(&actual)) {
-        if exp_kind == act_kind
-            || exp_kind == NumericKind::Int
-            || act_kind == NumericKind::Int
-        {
+        if exp_kind == act_kind || exp_kind == NumericKind::Int || act_kind == NumericKind::Int {
             return Ok(());
         }
     }

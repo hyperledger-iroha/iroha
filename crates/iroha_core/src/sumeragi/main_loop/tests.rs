@@ -26680,7 +26680,7 @@ fn vote_signature_check_reports_out_of_range_error() {
 }
 
 #[test]
-fn new_view_highest_qc_must_be_precommit_phase() {
+fn new_view_highest_qc_accepts_prepare_or_commit() {
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
     let validator_set = vec![PeerId::new(
@@ -26706,15 +26706,13 @@ fn new_view_highest_qc_must_be_precommit_phase() {
             bls_aggregate_signature: Vec::new(),
         },
     };
-    assert!(
-        !super::new_view_highest_qc_phase_valid(&qc),
-        "NEW_VIEW highest QC must be precommit phase"
-    );
-    let accept = crate::sumeragi::consensus::Qc {
-        phase: crate::sumeragi::consensus::Phase::Commit,
-        ..qc
-    };
-    assert!(super::new_view_highest_qc_phase_valid(&accept));
+    assert!(super::new_view_highest_qc_phase_valid(&qc));
+    let mut commit = qc.clone();
+    commit.phase = crate::sumeragi::consensus::Phase::Commit;
+    assert!(super::new_view_highest_qc_phase_valid(&commit));
+    let mut reject = qc;
+    reject.phase = crate::sumeragi::consensus::Phase::NewView;
+    assert!(!super::new_view_highest_qc_phase_valid(&reject));
 }
 
 #[test]
@@ -27209,6 +27207,71 @@ fn validate_qc_against_votes_rejects_new_view_highest_hash_mismatch() {
         None,
     );
     assert_eq!(result, Err(super::QcValidationError::HighestQcMismatch));
+}
+
+#[test]
+fn validate_qc_against_votes_accepts_new_view_prepare_highest() {
+    let chain: ChainId = "qc-new-view-prepare-highest"
+        .parse()
+        .expect("chain id parses");
+    let (keypairs, topology) = sample_bls_topology(1);
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x5A; Hash::LENGTH]));
+    let height = 2;
+    let view = 0;
+    let epoch = 0;
+    let highest_qc = QcHeaderRef {
+        subject_block_hash: block_hash,
+        height,
+        view,
+        epoch,
+        phase: Phase::Prepare,
+    };
+    let signer = ValidatorIndex::try_from(0).expect("signer index fits");
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::NewView,
+        block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view,
+        epoch,
+        highest_qc: Some(highest_qc),
+        signer,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view(&mut vote, &chain, &topology, &keypairs);
+    let mut vote_log = BTreeMap::new();
+    vote_log.insert((Phase::NewView, height, view, epoch, signer), vote);
+
+    let mut qc = qc_with_bitmap(
+        &chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        vec![0x01],
+        Phase::NewView,
+        &topology,
+        &keypairs,
+    );
+    qc.highest_qc = Some(highest_qc);
+
+    let result = validate_qc_against_votes_with_keys(
+        &vote_log,
+        &qc,
+        &topology,
+        &keypairs,
+        &chain,
+        ConsensusMode::Permissioned,
+        None,
+        super::PERMISSIONED_TAG,
+        None,
+    );
+    assert!(
+        result.is_ok(),
+        "prepare highest QC should validate NEW_VIEW QC"
+    );
 }
 
 #[test]
@@ -36643,10 +36706,14 @@ fn topology_for_view_canonicalizes_npos_roster_order() {
     }
     assert_ne!(leader, 0, "test requires non-zero PRF leader index");
 
-    let rotated =
-        super::topology_for_view(&topology, height, view, super::NPOS_TAG, Some(seed));
-    let rotated_scrambled =
-        super::topology_for_view(&scrambled_topology, height, view, super::NPOS_TAG, Some(seed));
+    let rotated = super::topology_for_view(&topology, height, view, super::NPOS_TAG, Some(seed));
+    let rotated_scrambled = super::topology_for_view(
+        &scrambled_topology,
+        height,
+        view,
+        super::NPOS_TAG,
+        Some(seed),
+    );
     assert_eq!(rotated.as_ref(), rotated_scrambled.as_ref());
 }
 
@@ -39309,6 +39376,23 @@ async fn future_consensus_view_window_drops_far_view() {
 
     assert!(!actor.should_drop_future_consensus_message(base_height, 1, "QcVote"));
     assert!(actor.should_drop_future_consensus_message(base_height, 2, "QcVote"));
+    harness.shutdown.send();
+}
+
+#[tokio::test]
+async fn future_consensus_view_window_allows_new_view_messages() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_future_height_window = 0;
+    consensus_cfg.consensus_future_view_window = 1;
+    let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 5).await;
+    let actor = &mut harness.actor;
+    let base_height = actor.last_committed_height.saturating_add(1);
+    actor
+        .phase_tracker
+        .start_new_round(base_height, Instant::now());
+
+    assert!(!actor.should_drop_future_consensus_message(base_height, 10, "NewViewVote"));
+    assert!(!actor.should_drop_future_consensus_message(base_height, 10, "NewViewCert"));
     harness.shutdown.send();
 }
 

@@ -72,17 +72,17 @@ fn pasta_params_new(k: u32) -> PastaParams {
     >::new(k)
 }
 
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-use halo2_proofs::{
-    SerdeFormat, poly::VerificationStrategy, poly::commitment::Params as _,
-    transcript::TranscriptReadBuffer,
-};
 #[cfg(all(
     test,
     feature = "zk-halo2-ipa-poseidon",
     any(feature = "zk-halo2", feature = "zk-halo2-ipa")
 ))]
 use halo2_proofs::poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA};
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+use halo2_proofs::{
+    SerdeFormat, poly::VerificationStrategy, poly::commitment::Params as _,
+    transcript::TranscriptReadBuffer,
+};
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)]
@@ -3201,7 +3201,14 @@ fn halo2_verify_with_instance_noncanonical_ipa() {
     let inst_proofs: Vec<&[&[Scalar]]> = vec![inst_cols.as_slice()];
 
     let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-    halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+    halo2_proofs::plonk::create_proof::<
+        IPACommitmentScheme<Curve>,
+        ProverIPA<'_, Curve>,
+        Challenge255<Curve>,
+        _,
+        _,
+        _,
+    >(
         &params,
         &pk,
         &[TinyAddPublic::default()],
@@ -3284,7 +3291,14 @@ fn ipa_vote_bool_commit_zk1() {
     let inst_cols: Vec<&[Scalar]> = vec![inst_col.as_slice()];
     let inst_proofs: Vec<&[&[Scalar]]> = vec![inst_cols.as_slice()];
     let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-    halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+    halo2_proofs::plonk::create_proof::<
+        IPACommitmentScheme<Curve>,
+        ProverIPA<'_, Curve>,
+        Challenge255<Curve>,
+        _,
+        _,
+        _,
+    >(
         &params,
         &pk,
         &[pasta_tiny::VoteBoolCommit::default()],
@@ -3356,7 +3370,14 @@ fn halo2_verify_rejects_vk_without_bytes() {
     let inst_cols: Vec<&[Scalar]> = vec![inst_col.as_slice()];
     let inst_proofs: Vec<&[&[Scalar]]> = vec![inst_cols.as_slice()];
     let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-    halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+    halo2_proofs::plonk::create_proof::<
+        IPACommitmentScheme<Curve>,
+        ProverIPA<'_, Curve>,
+        Challenge255<Curve>,
+        _,
+        _,
+        _,
+    >(
         &params,
         &pk,
         &[pasta_tiny::VoteBoolCommit::default()],
@@ -3455,7 +3476,14 @@ fn ipa_anon_transfer_commit_zk1() {
     let inst_proofs: Vec<&[&[Scalar]]> = vec![inst_cols.as_slice()];
 
     let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-    halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+    halo2_proofs::plonk::create_proof::<
+        IPACommitmentScheme<Curve>,
+        ProverIPA<'_, Curve>,
+        Challenge255<Curve>,
+        _,
+        _,
+        _,
+    >(
         &params,
         &pk,
         &[pasta_tiny::AnonTransfer2x2Commit::default()],
@@ -3535,7 +3563,14 @@ fn ipa_vote_bool_commit_merkle2_zk1() {
     // Make proof with public instances [commit, root]
     let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
     let insts: [&[&[Scalar]]; 1] = [&[&[commit, root]]];
-    halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+    halo2_proofs::plonk::create_proof::<
+        IPACommitmentScheme<Curve>,
+        ProverIPA<'_, Curve>,
+        Challenge255<Curve>,
+        _,
+        _,
+        _,
+    >(
         &params,
         &pk,
         &[pasta_tiny::VoteBoolCommitMerkle2::default()],
@@ -8463,7 +8498,14 @@ mod tests {
         let inst_proofs: Vec<&[&[Scalar]]> = vec![inst_cols.as_slice()];
 
         let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[TinyAddPublic::default()],
@@ -8530,7 +8572,14 @@ mod tests {
         let proof_instances = vec![inst_refs.as_slice()];
 
         let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[circuit],
@@ -8585,7 +8634,14 @@ mod tests {
         let proof_instances = vec![inst_refs.as_slice()];
 
         let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[circuit],
@@ -8770,7 +8826,14 @@ mod tests {
 
         // Create proof (no public inputs)
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[Tiny::default()],
@@ -8894,7 +8957,14 @@ mod tests {
 
         // Create proof
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[TinyAddPublic::default()],
@@ -9031,7 +9101,14 @@ mod tests {
         let pk = keygen_pk(&params, vk_h2.clone(), &Add2Rows::default()).expect("pk");
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[Add2Rows::default()],
@@ -9128,7 +9205,14 @@ mod tests {
         let inst_cols: Vec<&[Scalar]> = vec![&inst_binding[..]];
         let inst_proofs: Vec<&[&[Scalar]]> = vec![inst_cols.as_slice()];
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[IdPub::default()],
@@ -9303,7 +9387,14 @@ mod tests {
         let vk_add: VerifyingKey<Curve> = keygen_vk(&params, &TinyAdd::default()).expect("vk");
         let pk_add = keygen_pk(&params, vk_add.clone(), &TinyAdd::default()).expect("pk");
         let mut t_add = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk_add,
             &[TinyAdd::default()],
@@ -9318,7 +9409,14 @@ mod tests {
         let vk_id: VerifyingKey<Curve> = keygen_vk(&params, &IdPub::default()).expect("vk");
         let pk_id = keygen_pk(&params, vk_id.clone(), &IdPub::default()).expect("pk");
         let mut t_id = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk_id,
             &[IdPub::default()],
@@ -9468,7 +9566,14 @@ mod tests {
         let pk = keygen_pk(&params, vk_h2.clone(), &AddTwoRows::default()).expect("pk");
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[AddTwoRows::default()],
@@ -9592,7 +9697,14 @@ mod tests {
         let pk = keygen_pk(&params, vk_h2.clone(), &AddThree::default()).expect("pk");
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[AddThree::default()],
@@ -9670,7 +9782,14 @@ mod tests {
             s0_v
         }][..]]];
 
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[pasta_tiny::poseidon::CommitOpenPoseidon::default()],
@@ -9729,7 +9848,14 @@ mod tests {
         let insts: [&[&[Scalar]]; 1] = [&[&[root][..]]];
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[pasta_tiny::poseidon::Merkle2Poseidon::default()],
@@ -9817,7 +9943,14 @@ mod tests {
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
         let insts: [&[&[Scalar]]; 1] = [&[&[commit, root]]];
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[depth::VoteBoolCommitMerkle::<8>::default()],
@@ -9917,7 +10050,14 @@ mod tests {
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
         let insts: [&[&[Scalar]]; 1] = [&[&[cm_in0, cm_in1, cm_out0, cm_out1, nf, root]]];
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[depth::AnonTransfer2x2CommitMerkle::<8>::default()],
@@ -10013,7 +10153,14 @@ mod tests {
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
         let insts: [&[&[Scalar]]; 1] = [&[&[commit, root]]];
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[poseidon_depth::VoteBoolCommitMerklePoseidon::<8>::default()],
@@ -10110,7 +10257,14 @@ mod tests {
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
         let insts: [&[&[Scalar]]; 1] = [&[&[commit, root]]];
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[poseidon_depth::VoteBoolCommitMerklePoseidon::<8>::default()],
@@ -10227,7 +10381,14 @@ mod tests {
 
         // Produce a valid proof with no instances for malformed INST test
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[poseidon_depth::VoteBoolCommitMerklePoseidon::<8>::default()],
@@ -10284,7 +10445,14 @@ mod tests {
         )
         .expect("pk");
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[poseidon_depth::VoteBoolCommitMerklePoseidon::<8>::default()],
@@ -10374,7 +10542,14 @@ mod tests {
         // Create proof
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
         let insts: [&[&[Scalar]]; 1] = [&[&[commit, root]]];
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[poseidon_depth::VoteBoolCommitMerklePoseidon::<16>::default()],
@@ -10474,7 +10649,14 @@ mod tests {
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
         let insts: [&[&[Scalar]]; 1] = [&[&[cm_in0, cm_in1, cm_out0, cm_out1, nf, root]]];
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[poseidon_depth::AnonTransfer2x2CommitMerklePoseidon::<16>::default()],
@@ -10538,7 +10720,14 @@ mod tests {
 
         // Produce a valid proof (instances irrelevant for malformed INST test)
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[poseidon_depth::VoteBoolCommitMerklePoseidon::<16>::default()],
@@ -10597,7 +10786,14 @@ mod tests {
         )
         .expect("pk");
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[poseidon_depth::VoteBoolCommitMerklePoseidon::<16>::default()],
@@ -10658,7 +10854,14 @@ mod tests {
 
         // Produce a valid proof
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[poseidon_depth::AnonTransfer2x2CommitMerklePoseidon::<16>::default()],
@@ -10720,7 +10923,14 @@ mod tests {
         )
         .expect("pk");
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[poseidon_depth::AnonTransfer2x2CommitMerklePoseidon::<16>::default()],
@@ -10831,7 +11041,14 @@ mod tests {
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
         let insts: [&[&[Scalar]]; 1] = [&[&[cm_in0, cm_in1, cm_out0, cm_out1, nf, root]]];
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[poseidon_depth::AnonTransfer2x2CommitMerklePoseidon::<8>::default()],
@@ -10996,7 +11213,14 @@ mod tests {
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
         let insts: [&[&[Scalar]]; 1] = [&[&[commit, root]]];
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[poseidon_depth::VoteBoolCommitMerklePoseidon::<16>::default()],
@@ -11145,7 +11369,14 @@ mod tests {
         // Build proof
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
         let insts: [&[&[Scalar]]; 1] = [&[&[cm_in0, cm_in1, cm_out0, cm_out1, nf, root]]];
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[poseidon_depth::AnonTransfer2x2CommitMerklePoseidon::<16>::default()],
@@ -11246,7 +11477,14 @@ mod tests {
 
         // Valid proof
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[poseidon_depth::AnonTransfer2x2CommitMerklePoseidon::<8>::default()],
@@ -11307,7 +11545,14 @@ mod tests {
         )
         .expect("pk");
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[poseidon_depth::AnonTransfer2x2CommitMerklePoseidon::<8>::default()],
@@ -11366,7 +11611,14 @@ mod tests {
         .expect("pk");
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[pasta_tiny::poseidon::CommitOpenPoseidon::default()],
@@ -11420,7 +11672,14 @@ mod tests {
         .expect("pk");
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[pasta_tiny::poseidon::Merkle2Poseidon::default()],
@@ -11507,7 +11766,14 @@ mod tests {
             let t1_5 = t1_4 * t1;
             Scalar::from(2u64) * t0_5 + Scalar::from(3u64) * t1_5
         }][..]]];
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[pasta_tiny::poseidon::CommitOpenPoseidon::default()],
@@ -11562,7 +11828,14 @@ mod tests {
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
         let root = pasta_tiny::poseidon::merkle2_poseidon_sample_root();
         let insts: [&[&[Scalar]]; 1] = [&[&[root]]];
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[pasta_tiny::poseidon::Merkle2Poseidon::default()],
@@ -11632,7 +11905,14 @@ mod tests {
             let t1_5 = t1_4 * t1;
             Scalar::from(2u64) * t0_5 + Scalar::from(3u64) * t1_5
         }][..]]];
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[pasta_tiny::poseidon::CommitOpenPoseidon::default()],
@@ -11713,7 +11993,14 @@ mod tests {
             let t1_5 = t1_4 * t1;
             Scalar::from(2u64) * t0_5 + Scalar::from(3u64) * t1_5
         }][..]]];
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[pasta_tiny::poseidon::CommitOpenPoseidon::default()],
@@ -11806,7 +12093,14 @@ mod tests {
             Scalar::from(2u64) * t0_5 + Scalar::from(3u64) * t1_5
         };
         let insts: [&[&[Scalar]]; 1] = [&[&[commit]]];
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[pasta_tiny::poseidon::CommitOpenPoseidon::default()],
@@ -11878,7 +12172,14 @@ mod tests {
             Scalar::from(2u64) * t0_5 + Scalar::from(3u64) * t1_5
         };
         let insts: [&[&[Scalar]]; 1] = [&[&[commit]]];
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[pasta_tiny::poseidon::CommitOpenPoseidon::default()],
@@ -11952,7 +12253,14 @@ mod tests {
             Scalar::from(2u64) * t0_5 + Scalar::from(3u64) * t1_5
         };
         let insts: [&[&[Scalar]]; 1] = [&[&[commit]]];
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[pasta_tiny::poseidon::CommitOpenPoseidon::default()],
@@ -12056,7 +12364,14 @@ mod tests {
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
         let insts: [&[&[Scalar]]; 1] = [&[&[commit]]];
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[pasta_tiny::poseidon::CommitOpenPoseidon::default()],
@@ -12271,7 +12586,14 @@ mod tests {
         let pk = keygen_pk(&params, vk_h2.clone(), &AddTwoInstPublic::default()).expect("pk");
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[AddTwoInstPublic::default()],
@@ -12396,7 +12718,14 @@ mod tests {
         let pk = keygen_pk(&params, vk_h2.clone(), &AT::default()).expect("pk");
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[AT::default()],
@@ -12490,7 +12819,14 @@ mod tests {
         let pk = keygen_pk(&params, vk_h2.clone(), &VoteBool::default()).expect("pk");
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[VoteBool::default()],
@@ -12586,7 +12922,14 @@ mod tests {
         let pk = keygen_pk(&params, vk_h2.clone(), &IdPub::default()).expect("pk");
 
         let mut t = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[IdPub::default()],
@@ -12718,7 +13061,14 @@ mod tests {
         let inst_proofs: Vec<&[&[Scalar]]> = vec![inst_cols.as_slice()];
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[TinyAddPublic::default()],
@@ -12839,7 +13189,14 @@ mod tests {
 
         // Create proof
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[TinyMulPublic::default()],
@@ -12961,7 +13318,14 @@ mod tests {
         let inst_proofs: Vec<&[&[Scalar]]> = vec![inst_cols.as_slice()];
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[TinyAddPublic::default()],
@@ -13085,7 +13449,14 @@ mod tests {
         let inst_proofs: Vec<&[&[Scalar]]> = vec![inst_cols.as_slice()];
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        halo2_proofs::plonk::create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
             &params,
             &pk,
             &[TinyAddPublic::default()],

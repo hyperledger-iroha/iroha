@@ -94,9 +94,7 @@ fn prepare_state() -> (
                 .expect("grant manage vk");
 
             let fixture = halo2_fixture_envelope(FIXTURE_CIRCUIT, [0u8; 32]);
-            let fixture_vk = fixture
-                .vk_box(BACKEND)
-                .expect("fixture verifying key");
+            let fixture_vk = fixture.vk_box(BACKEND).expect("fixture verifying key");
             let schema_hash = fixture.schema_hash;
             fn make_record(
                 name: &str,
@@ -297,8 +295,7 @@ fn zk_transfer_rejects_mismatched_verifying_key() {
 #[test]
 fn zk_transfer_rejects_inline_commitment_mismatch() {
     let (state, owner, asset_def_id, _, _, _) = prepare_state();
-    let header =
-        iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let executor = stx.world.executor().clone();

@@ -39,8 +39,6 @@ fn npos_network_produces_blocks() -> Result<()> {
     else {
         return Ok(());
     };
-    let env_dir = network.env_dir().to_path_buf();
-
     let sync_timeout = network.sync_timeout();
     let result: Result<()> = (|| {
         rt.block_on(async { wait_for_status_responses(&network, sync_timeout).await })

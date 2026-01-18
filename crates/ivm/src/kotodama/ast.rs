@@ -157,7 +157,10 @@ pub enum TriggerFilter {
 #[derive(Debug, PartialEq, Clone)]
 pub enum TriggerTimeFilter {
     PreCommit,
-    Schedule { start_ms: u64, period_ms: Option<u64> },
+    Schedule {
+        start_ms: u64,
+        period_ms: Option<u64>,
+    },
 }
 
 /// Trigger repeat policy.

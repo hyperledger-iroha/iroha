@@ -284,11 +284,7 @@ impl Actor {
                     return;
                 };
                 self.observe_new_view_highest_qc(highest);
-                crate::sumeragi::new_view_stats::note_receipt(
-                    vote.height,
-                    vote.view,
-                    &signer_peer,
-                );
+                crate::sumeragi::new_view_stats::note_receipt(vote.height, vote.view, &signer_peer);
                 if let Some(local_view) = stale_view {
                     debug!(
                         height = vote.height,
@@ -834,7 +830,8 @@ impl Actor {
                 record_drop(super::status::VoteValidationDropReason::EpochMismatch);
                 return false;
             }
-            let valid_phase = matches!(highest.phase, Phase::Commit) || matches!(highest.phase, Phase::Prepare);
+            let valid_phase =
+                matches!(highest.phase, Phase::Commit) || matches!(highest.phase, Phase::Prepare);
             if !valid_phase {
                 debug!(
                     height = vote.height,

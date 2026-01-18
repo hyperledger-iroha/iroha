@@ -18,6 +18,7 @@ use iroha_data_model::{
     account::{Account, AccountId},
     asset::{AssetDefinitionId, id::AssetId},
     consensus::HsmBinding,
+    da::commitment::DaProofPolicyBundle,
     domain::DomainId,
     isi::{Grant, InstructionBox, Mint, register::RegisterPeerWithPop},
     metadata::Metadata,
@@ -157,6 +158,24 @@ pub fn genesis_with_keypair_and_post_topology(
     topology_entries: Vec<GenesisTopologyEntry>,
     genesis_key_pair: KeyPair,
 ) -> GenesisBlock {
+    genesis_with_keypair_and_post_topology_with_policies(
+        extra_transactions,
+        post_topology_transactions,
+        topology,
+        topology_entries,
+        genesis_key_pair,
+        None,
+    )
+}
+
+pub(crate) fn genesis_with_keypair_and_post_topology_with_policies(
+    extra_transactions: Vec<Vec<InstructionBox>>,
+    post_topology_transactions: Vec<Vec<InstructionBox>>,
+    topology: UniqueVec<PeerId>,
+    topology_entries: Vec<GenesisTopologyEntry>,
+    genesis_key_pair: KeyPair,
+    da_proof_policies: Option<DaProofPolicyBundle>,
+) -> GenesisBlock {
     init_instruction_registry();
     build_minimal_genesis_with_post_topology(
         extra_transactions,
@@ -164,6 +183,7 @@ pub fn genesis_with_keypair_and_post_topology(
         topology,
         topology_entries,
         genesis_key_pair,
+        da_proof_policies,
     )
 }
 
@@ -179,6 +199,7 @@ fn build_minimal_genesis(
         topology,
         topology_entries,
         genesis_key_pair,
+        None,
     )
 }
 
@@ -188,6 +209,7 @@ fn build_minimal_genesis_with_post_topology(
     topology: UniqueVec<PeerId>,
     topology_entries: Vec<GenesisTopologyEntry>,
     genesis_key_pair: KeyPair,
+    da_proof_policies: Option<DaProofPolicyBundle>,
 ) -> GenesisBlock {
     let (mut block, genesis_account, topology_vec, genesis_key_pair) =
         build_minimal_genesis_unexecuted_with_post_topology(
@@ -196,6 +218,7 @@ fn build_minimal_genesis_with_post_topology(
             topology,
             topology_entries,
             genesis_key_pair,
+            da_proof_policies,
         );
     ensure_genesis_results(
         &mut block,
@@ -218,6 +241,7 @@ fn build_minimal_genesis_unexecuted(
         topology,
         topology_entries,
         genesis_key_pair,
+        None,
     )
 }
 
@@ -227,6 +251,7 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     topology: UniqueVec<PeerId>,
     topology_entries: Vec<GenesisTopologyEntry>,
     genesis_key_pair: KeyPair,
+    da_proof_policies: Option<DaProofPolicyBundle>,
 ) -> (GenesisBlock, AccountId, Vec<PeerId>, KeyPair) {
     fn try_default_executor_path() -> Option<PathBuf> {
         if std::env::var("IROHA_TEST_PREBUILD_DEFAULT_EXECUTOR")
@@ -264,6 +289,9 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     } else {
         GenesisBuilder::new_without_executor(chain.clone(), ivm_dir.clone())
     };
+    if let Some(policies) = da_proof_policies {
+        builder = builder.with_da_proof_policies(policies);
+    }
 
     let wonderland_name: Name = "wonderland".parse().expect("wonderland domain");
     let rose_name: Name = "rose".parse().expect("rose asset name");

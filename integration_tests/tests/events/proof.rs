@@ -59,6 +59,7 @@ fn is_tx_confirmation_timeout(err: &eyre::Report) -> bool {
 
 #[tokio::test]
 async fn verify_proof_emits_verified_event() -> Result<()> {
+    let _override_guard = sandbox::override_network_parallelism(Some(true), None);
     let Some(network) = sandbox::start_network_async_or_skip(
         proof_network_builder(),
         stringify!(verify_proof_emits_verified_event),
@@ -135,6 +136,7 @@ async fn verify_proof_emits_verified_event() -> Result<()> {
 
 #[tokio::test]
 async fn verify_proof_emits_rejected_event() -> Result<()> {
+    let _override_guard = sandbox::override_network_parallelism(Some(true), None);
     let Some(network) = sandbox::start_network_async_or_skip(
         proof_network_builder(),
         stringify!(verify_proof_emits_rejected_event),
