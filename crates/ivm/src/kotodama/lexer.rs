@@ -677,10 +677,7 @@ impl<'a> Lexer<'a> {
                         .map_err(|e| format!("{e}"));
                 }
                 if self.peek_n(1) == Some('"') {
-                    return self
-                        .lex_byte_string()
-                        .map(Some)
-                        .map_err(|e| format!("{e}"));
+                    return self.lex_byte_string().map(Some).map_err(|e| format!("{e}"));
                 }
             }
             _ => {}
@@ -701,7 +698,9 @@ impl<'a> Lexer<'a> {
             hashes += 1;
         }
         if self.peek() != Some('"') {
-            return Err(format!("expected '\"' after raw string prefix at {line}:{col}"));
+            return Err(format!(
+                "expected '\"' after raw string prefix at {line}:{col}"
+            ));
         }
         self.bump(); // opening quote
         let mut out = String::new();
@@ -884,9 +883,9 @@ impl<'a> Lexer<'a> {
             let Some(c) = self.bump() else {
                 return Err(format!("incomplete hex escape at {line}:{col}"));
             };
-            let digit = c.to_digit(16).ok_or_else(|| {
-                format!("invalid hex digit '{c}' in escape at {line}:{col}")
-            })?;
+            let digit = c
+                .to_digit(16)
+                .ok_or_else(|| format!("invalid hex digit '{c}' in escape at {line}:{col}"))?;
             value = value
                 .checked_mul(16)
                 .and_then(|v| v.checked_add(digit))
@@ -914,9 +913,9 @@ impl<'a> Lexer<'a> {
                 self.bump();
                 break;
             }
-            let digit = c
-                .to_digit(16)
-                .ok_or_else(|| format!("invalid hex digit '{c}' in unicode escape at {line}:{col}"))?;
+            let digit = c.to_digit(16).ok_or_else(|| {
+                format!("invalid hex digit '{c}' in unicode escape at {line}:{col}")
+            })?;
             value = value
                 .checked_mul(16)
                 .and_then(|v| v.checked_add(digit))
@@ -933,8 +932,7 @@ impl<'a> Lexer<'a> {
         if value > 0x10FFFF || (0xD800..=0xDFFF).contains(&value) {
             return Err(format!("invalid unicode scalar value at {line}:{col}"));
         }
-        char::from_u32(value)
-            .ok_or_else(|| format!("invalid unicode scalar value at {line}:{col}"))
+        char::from_u32(value).ok_or_else(|| format!("invalid unicode scalar value at {line}:{col}"))
     }
 }
 

@@ -392,6 +392,26 @@ impl SignedBlock {
         confidential_features: Option<crate::confidential::ConfidentialFeatureDigest>,
         da_commitments: Option<DaCommitmentBundle>,
     ) -> SignedBlock {
+        Self::genesis_with_da_proof_policies(
+            transactions,
+            private_key,
+            confidential_features,
+            da_commitments,
+            None,
+        )
+    }
+
+    /// Creates genesis block signed with the genesis private key, overriding DA proof policies.
+    ///
+    /// `da_commitments` lets the caller embed a [`DaCommitmentBundle`] into the genesis payload once
+    /// DA receipts are available during block assembly.
+    pub fn genesis_with_da_proof_policies(
+        transactions: Vec<SignedTransaction>,
+        private_key: &iroha_crypto::PrivateKey,
+        confidential_features: Option<crate::confidential::ConfidentialFeatureDigest>,
+        da_commitments: Option<DaCommitmentBundle>,
+        da_proof_policies: Option<DaProofPolicyBundle>,
+    ) -> SignedBlock {
         use nonzero_ext::nonzero;
 
         let mut entry_merkle = MerkleTree::default();
@@ -407,13 +427,15 @@ impl SignedBlock {
             crate::confidential::DEFAULT_CONFIDENTIAL_FEATURE_DIGEST,
         ));
 
-        let default_proof_policies = DaProofPolicyBundle::new(vec![DaProofPolicy {
-            lane_id: crate::nexus::LaneId::SINGLE,
-            dataspace_id: crate::nexus::DataSpaceId::GLOBAL,
-            alias: "default".to_string(),
-            proof_scheme: DaProofScheme::MerkleSha256,
-        }]);
-        let proof_policy_hash = HashOf::new(&default_proof_policies);
+        let proof_policies = da_proof_policies.unwrap_or_else(|| {
+            DaProofPolicyBundle::new(vec![DaProofPolicy {
+                lane_id: crate::nexus::LaneId::SINGLE,
+                dataspace_id: crate::nexus::DataSpaceId::GLOBAL,
+                alias: "default".to_string(),
+                proof_scheme: DaProofScheme::MerkleSha256,
+            }])
+        });
+        let proof_policy_hash = HashOf::new(&proof_policies);
 
         let header = BlockHeader {
             height: nonzero!(1_u64),
@@ -433,7 +455,7 @@ impl SignedBlock {
             header,
             transactions,
             da_commitments: None,
-            da_proof_policies: Some(default_proof_policies),
+            da_proof_policies: Some(proof_policies),
             da_pin_intents: None,
         };
 
@@ -1890,6 +1912,49 @@ mod tests {
 
         assert_eq!(block.da_commitments().unwrap(), &bundle);
         assert!(block.header().da_commitments_hash().is_some());
+    }
+
+    #[test]
+    fn genesis_can_override_da_proof_policies() {
+        use iroha_crypto::KeyPair;
+
+        use crate::{
+            ChainId,
+            account::AccountId,
+            da::commitment::{DaProofPolicy, DaProofPolicyBundle, DaProofScheme},
+            domain::DomainId,
+            isi::InstructionBox,
+            nexus::{DataSpaceId, LaneId},
+            transaction::signed::TransactionBuilder,
+        };
+
+        let keypair = KeyPair::random();
+        let chain: ChainId = "genesis-da-proof-policies"
+            .parse()
+            .expect("chain id must parse");
+        let domain: DomainId = "genesis".parse().expect("domain id");
+        let authority = AccountId::new(domain, keypair.public_key().clone());
+        let tx = TransactionBuilder::new(chain, authority)
+            .with_instructions(core::iter::empty::<InstructionBox>())
+            .sign(keypair.private_key());
+        let bundle = DaProofPolicyBundle::new(vec![DaProofPolicy {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::GLOBAL,
+            alias: "custom".to_string(),
+            proof_scheme: DaProofScheme::KzgBls12_381,
+        }]);
+        let expected_hash = HashOf::new(&bundle);
+
+        let block = SignedBlock::genesis_with_da_proof_policies(
+            vec![tx],
+            keypair.private_key(),
+            None,
+            None,
+            Some(bundle.clone()),
+        );
+
+        assert_eq!(block.da_proof_policies(), Some(&bundle));
+        assert_eq!(block.header().da_proof_policies_hash(), Some(expected_hash));
     }
 
     #[cfg(feature = "transparent_api")]

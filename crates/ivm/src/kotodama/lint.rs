@@ -223,11 +223,7 @@ fn lint_expr_map_keys(expr: &Expr, state_maps: &HashSet<String>, warnings: &mut 
             }
         }
         Expr::Member { object, .. } => lint_expr_map_keys(object, state_maps, warnings),
-        Expr::Number(_)
-        | Expr::Bool(_)
-        | Expr::String(_)
-        | Expr::Bytes(_)
-        | Expr::Ident(_) => {}
+        Expr::Number(_) | Expr::Bool(_) | Expr::String(_) | Expr::Bytes(_) | Expr::Ident(_) => {}
     }
 }
 
@@ -235,10 +231,7 @@ fn is_literal_state_key(expr: &Expr) -> bool {
     match expr {
         Expr::Number(_) | Expr::String(_) | Expr::Bytes(_) => true,
         Expr::Call { name, args } => {
-            let literal_arg = matches!(
-                args.first(),
-                Some(Expr::String(_)) | Some(Expr::Bytes(_))
-            );
+            let literal_arg = matches!(args.first(), Some(Expr::String(_)) | Some(Expr::Bytes(_)));
             if !literal_arg || args.len() != 1 {
                 return false;
             }
@@ -860,11 +853,7 @@ fn lint_trigger_specs_in_expr(expr: &Expr, func_name: &str, warnings: &mut Vec<L
             lint_trigger_specs_in_expr(target, func_name, warnings);
             lint_trigger_specs_in_expr(index, func_name, warnings);
         }
-        Expr::Bool(_)
-        | Expr::Number(_)
-        | Expr::String(_)
-        | Expr::Bytes(_)
-        | Expr::Ident(_) => {}
+        Expr::Bool(_) | Expr::Number(_) | Expr::String(_) | Expr::Bytes(_) | Expr::Ident(_) => {}
     }
 }
 
@@ -1190,31 +1179,20 @@ mod tests {
         let program = parse("fn main() { let spec = json(\"{}\"); create_trigger(spec); }")
             .expect("parse trigger");
         let warnings = lint_program(&program);
-        assert!(
-            warnings
-                .iter()
-                .any(|w| w.code == "nonliteral-trigger-spec")
-        );
+        assert!(warnings.iter().any(|w| w.code == "nonliteral-trigger-spec"));
     }
 
     #[test]
     fn lint_literal_trigger_spec_is_silent() {
-        let program =
-            parse("fn main() { create_trigger(json(\"{}\")); }").expect("parse trigger");
+        let program = parse("fn main() { create_trigger(json(\"{}\")); }").expect("parse trigger");
         let warnings = lint_program(&program);
-        assert!(
-            !warnings
-                .iter()
-                .any(|w| w.code == "nonliteral-trigger-spec")
-        );
+        assert!(!warnings.iter().any(|w| w.code == "nonliteral-trigger-spec"));
     }
 
     #[test]
     fn lint_nonliteral_state_map_key_warns() {
-        let program = parse(
-            "state Foo: Map<int, int>; fn main() { let k = 1; let _x = Foo[k]; }",
-        )
-        .expect("parse map");
+        let program = parse("state Foo: Map<int, int>; fn main() { let k = 1; let _x = Foo[k]; }")
+            .expect("parse map");
         let warnings = lint_program(&program);
         assert!(
             warnings
@@ -1226,8 +1204,7 @@ mod tests {
     #[test]
     fn lint_literal_state_map_key_is_silent() {
         let program =
-            parse("state Foo: Map<int, int>; fn main() { let _x = Foo[1]; }")
-                .expect("parse map");
+            parse("state Foo: Map<int, int>; fn main() { let _x = Foo[1]; }").expect("parse map");
         let warnings = lint_program(&program);
         assert!(
             !warnings

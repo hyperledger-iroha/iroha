@@ -11,8 +11,9 @@ use std::{
     io::Write as _,
     path::{Path, PathBuf},
     sync::{
-        mpsc, Arc, Mutex, OnceLock, RwLock,
+        Arc, Mutex, OnceLock, RwLock,
         atomic::{AtomicU64, Ordering},
+        mpsc,
     },
     thread,
 };
@@ -1400,9 +1401,7 @@ impl StreamingHandle {
     }
 
     fn soranet_queue_capacity_from_config(capacity: u64) -> usize {
-        usize::try_from(capacity)
-            .unwrap_or(usize::MAX)
-            .max(1)
+        usize::try_from(capacity).unwrap_or(usize::MAX).max(1)
     }
 
     fn ensure_soranet_provision_queue(
