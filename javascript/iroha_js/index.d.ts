@@ -3566,6 +3566,8 @@ export interface ToriiConfigurationStreamingSoranet {
   garCategory: string;
   channelSalt: string;
   provisionSpoolDir: string;
+  provisionWindowSegments: number;
+  provisionQueueCapacity: number;
 }
 
 export interface ToriiRuntimeUpgradeManifestInput {

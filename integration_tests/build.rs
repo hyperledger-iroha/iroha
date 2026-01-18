@@ -114,9 +114,9 @@ fn build_program_mint_rose_for_authority() -> Vec<u8> {
         )
         .to_le_bytes(),
     );
-    code.extend_from_slice(&encode_addi(13, 10, 0).to_le_bytes()); // save account pointer
+    code.extend_from_slice(&encode_addi(13, 10, 0).expect("encode addi").to_le_bytes()); // save account pointer
     // r10 <- &AssetDefinitionId (literal TLV)
-    code.extend_from_slice(&encode_addi(10, 0, LITERAL_DATA_START).to_le_bytes());
+    code.extend_from_slice(&encode_addi(10, 0, LITERAL_DATA_START).expect("encode addi").to_le_bytes());
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             wide::system::SCALL,
@@ -124,9 +124,9 @@ fn build_program_mint_rose_for_authority() -> Vec<u8> {
         )
         .to_le_bytes(),
     );
-    code.extend_from_slice(&encode_addi(11, 10, 0).to_le_bytes()); // r11 = asset ptr
-    code.extend_from_slice(&encode_addi(10, 13, 0).to_le_bytes()); // r10 = account ptr
-    code.extend_from_slice(&encode_addi(12, 0, 1).to_le_bytes()); // amount = 1
+    code.extend_from_slice(&encode_addi(11, 10, 0).expect("encode addi").to_le_bytes()); // r11 = asset ptr
+    code.extend_from_slice(&encode_addi(10, 13, 0).expect("encode addi").to_le_bytes()); // r10 = account ptr
+    code.extend_from_slice(&encode_addi(12, 0, 1).expect("encode addi").to_le_bytes()); // amount = 1
     code.extend_from_slice(
         &encoding::wide::encode_sys(wide::system::SCALL, syscall_u8(ivm_sys::SYSCALL_MINT_ASSET))
             .to_le_bytes(),
@@ -141,8 +141,8 @@ fn build_program_create_nft_for_authority() -> Vec<u8> {
 
     // Assemble: create NFTs for all users convenience syscall
     let mut code = Vec::new();
-    code.extend_from_slice(&encode_addi(10, 0, 0).to_le_bytes()); // unused
-    code.extend_from_slice(&encode_addi(11, 0, 0).to_le_bytes()); // unused
+    code.extend_from_slice(&encode_addi(10, 0, 0).expect("encode addi").to_le_bytes()); // unused
+    code.extend_from_slice(&encode_addi(11, 0, 0).expect("encode addi").to_le_bytes()); // unused
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             wide::system::SCALL,
@@ -191,9 +191,9 @@ fn build_program_set_account_detail_defaults() -> Vec<u8> {
         )
         .to_le_bytes(),
     );
-    code.extend_from_slice(&encode_addi(13, 10, 0).to_le_bytes()); // save account pointer
+    code.extend_from_slice(&encode_addi(13, 10, 0).expect("encode addi").to_le_bytes()); // save account pointer
     // r10 <- &Name("cursor")
-    code.extend_from_slice(&encode_addi(10, 0, LITERAL_DATA_START).to_le_bytes());
+    code.extend_from_slice(&encode_addi(10, 0, LITERAL_DATA_START).expect("encode addi").to_le_bytes());
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             wide::system::SCALL,
@@ -201,9 +201,9 @@ fn build_program_set_account_detail_defaults() -> Vec<u8> {
         )
         .to_le_bytes(),
     );
-    code.extend_from_slice(&encode_addi(11, 10, 0).to_le_bytes()); // r11 = key ptr
+    code.extend_from_slice(&encode_addi(11, 10, 0).expect("encode addi").to_le_bytes()); // r11 = key ptr
     // r10 <- &Json(cursor)
-    code.extend_from_slice(&encode_addi(10, 0, value_ptr).to_le_bytes());
+    code.extend_from_slice(&encode_addi(10, 0, value_ptr).expect("encode addi").to_le_bytes());
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             wide::system::SCALL,
@@ -211,8 +211,8 @@ fn build_program_set_account_detail_defaults() -> Vec<u8> {
         )
         .to_le_bytes(),
     );
-    code.extend_from_slice(&encode_addi(12, 10, 0).to_le_bytes()); // r12 = value ptr
-    code.extend_from_slice(&encode_addi(10, 13, 0).to_le_bytes()); // r10 = account ptr
+    code.extend_from_slice(&encode_addi(12, 10, 0).expect("encode addi").to_le_bytes()); // r12 = value ptr
+    code.extend_from_slice(&encode_addi(10, 13, 0).expect("encode addi").to_le_bytes()); // r10 = account ptr
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             wide::system::SCALL,
@@ -338,7 +338,7 @@ fn main() {
                     };
                     let mut code = Vec::new();
                     // x10 = 111
-                    code.extend_from_slice(&encode_addi(10, 0, 111).to_le_bytes());
+                    code.extend_from_slice(&encode_addi(10, 0, 111).expect("encode addi").to_le_bytes());
                     code.extend_from_slice(
                         &encoding::wide::encode_sys(
                             wide::system::SCALL,

@@ -54,6 +54,8 @@ padding_budget_ms = 25
 access_kind = "authenticated"
 provision_spool_dir = "./storage/streaming/soranet_routes"
 provision_spool_max_bytes = 0
+provision_window_segments = 4
+provision_queue_capacity = 256
 
 [nexus]
 enabled = true

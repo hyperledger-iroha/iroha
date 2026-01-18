@@ -15,7 +15,7 @@ fn debug_contains() {
     if std::env::var_os("IVM_DEBUG_IR").is_some() {
         let ast = ivm::kotodama::parser::parse(src).expect("parse");
         let typed = ivm::kotodama::semantic::analyze(&ast).expect("analyze");
-        let ir_prog = ivm::kotodama::ir::lower(&typed);
+        let ir_prog = ivm::kotodama::ir::lower(&typed).expect("lower");
         for func in &ir_prog.functions {
             eprintln!("[IR] function {}", func.name);
             for block in &func.blocks {

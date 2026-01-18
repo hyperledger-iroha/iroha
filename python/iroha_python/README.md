@@ -818,6 +818,18 @@ Both helpers fetch the latest configuration, reuse unchanged sections for parity
 and raise `ValueError` when invalid parameters are supplied, keeping the PY6 admin-surface
 roadmap gate reproducible.
 
+Configuration snapshots also expose transport defaults so automation can pick up the
+streaming/SoraNet knobs without parsing raw JSON:
+
+```python
+snapshot = client.get_configuration_typed()
+transport = snapshot.transport
+if transport and transport.streaming and transport.streaming.soranet:
+    soranet = transport.streaming.soranet
+    print("SoraNet exit:", soranet.exit_multiaddr)
+    print("Provision queue cap:", soranet.provision_queue_capacity)
+```
+
 ## UAID portfolio & manifests (NX-16)
 
 The `NX-16` roadmap introduces UAID-level portfolio, bindings, and Space Directory manifest APIs.

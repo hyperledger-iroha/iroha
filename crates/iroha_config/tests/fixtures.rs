@@ -1966,15 +1966,13 @@ fn minimal_config_snapshot() {
                     access_kind: Authenticated,
                     channel_salt: "iroha.soranet.channel.seed.v1",
                     provision_spool_dir: "./storage/streaming/soranet_routes",
-                    provision_spool_max_bytes: Bytes(
-                        13743895347,
-                    ),
+                    provision_spool_max_bytes: Bytes(0),
+                    provision_window_segments: 4,
+                    provision_queue_capacity: 256,
                 },
                 soravpn: StreamingSoravpn {
                     provision_spool_dir: "./storage/streaming/soravpn_routes",
-                    provision_spool_max_bytes: Bytes(
-                        13743895347,
-                    ),
+                    provision_spool_max_bytes: Bytes(0),
                 },
                 sync: StreamingSync {
                     enabled: false,
@@ -2484,6 +2482,16 @@ fn streaming_soranet_overrides_apply() {
     assert_eq!(
         soranet.channel_salt, "custom.seed.v1",
         "channel salt override should propagate as provided string"
+    );
+    assert_eq!(
+        soranet.provision_window_segments,
+        defaults::streaming::soranet::PROVISION_WINDOW_SEGMENTS,
+        "provision window should default when not overridden"
+    );
+    assert_eq!(
+        soranet.provision_queue_capacity,
+        defaults::streaming::soranet::PROVISION_QUEUE_CAPACITY,
+        "provision queue capacity should default when not overridden"
     );
 }
 

@@ -807,6 +807,28 @@ def test_get_configuration_returns_snapshot() -> None:
                     "per_nullifier": 4,
                     "per_commitment": 5,
                 },
+                "transport": {
+                    "norito_rpc": {
+                        "enabled": True,
+                        "stage": "ga",
+                        "require_mtls": True,
+                        "canary_allowlist_size": 3,
+                    },
+                    "streaming": {
+                        "soranet": {
+                            "enabled": True,
+                            "stream_tag": "norito",
+                            "exit_multiaddr": "/dns/torii/udp/9443/quic",
+                            "padding_budget_ms": 25,
+                            "access_kind": "authenticated",
+                            "gar_category": "soranet-auth",
+                            "channel_salt": "salt-123",
+                            "provision_spool_dir": "./storage/streaming/soranet_routes",
+                            "provision_window_segments": 4,
+                            "provision_queue_capacity": 256,
+                        }
+                    },
+                },
             }
         )
     )
@@ -820,6 +842,15 @@ def test_get_configuration_returns_snapshot() -> None:
     assert snapshot.queue is not None and snapshot.queue.capacity == 1024
     assert snapshot.confidential_gas is not None
     assert snapshot.confidential_gas.per_nullifier == 4
+    transport = snapshot.transport
+    assert transport is not None
+    assert transport.norito_rpc is not None
+    assert transport.norito_rpc.stage == "ga"
+    assert transport.norito_rpc.canary_allowlist_size == 3
+    assert transport.streaming is not None
+    assert transport.streaming.soranet is not None
+    assert transport.streaming.soranet.padding_budget_ms == 25
+    assert transport.streaming.soranet.provision_queue_capacity == 256
 
 
 def test_update_configuration_posts_payload() -> None:

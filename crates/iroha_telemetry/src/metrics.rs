@@ -6028,6 +6028,10 @@ pub struct Metrics {
     pub streaming_fec_parity_current: GenericGaugeVec<AtomicU64>,
     /// Streaming feedback timeout events.
     pub streaming_feedback_timeout_total: IntCounter,
+    /// Streaming SoraNet privacy-route provisioning failures.
+    pub streaming_soranet_provision_fail_total: IntCounter,
+    /// Streaming SoraNet provisioning queue drops grouped by reason.
+    pub streaming_soranet_provision_queue_drop_total: IntCounterVec,
     /// Telemetry redaction events grouped by reason.
     pub telemetry_redaction_total: IntCounterVec,
     /// Telemetry redaction skips grouped by reason.
@@ -8458,6 +8462,22 @@ impl Default for Metrics {
             "Streaming feedback timeout events",
         )
         .expect("Infallible");
+        let streaming_soranet_provision_fail_total = IntCounter::new(
+            "streaming_soranet_provision_fail_total",
+            "Streaming SoraNet privacy-route provisioning failures",
+        )
+        .expect("Infallible");
+        let streaming_soranet_provision_queue_drop_total = IntCounterVec::new(
+            Opts::new(
+                "streaming_soranet_provision_queue_drop_total",
+                "Streaming SoraNet provisioning queue drops grouped by reason",
+            ),
+            &["reason"],
+        )
+        .expect("Infallible");
+        for reason in ["full", "disconnected"] {
+            let _ = streaming_soranet_provision_queue_drop_total.with_label_values(&[reason]);
+        }
         let telemetry_redaction_total = IntCounterVec::new(
             Opts::new(
                 "telemetry_redaction_total",
@@ -8764,6 +8784,7 @@ impl Default for Metrics {
         let registry = Registry::new();
         register_guarded(&registry, &streaming_hpke_rekeys_total);
         register_guarded(&registry, &streaming_fec_parity_current);
+        register_guarded(&registry, &streaming_soranet_provision_queue_drop_total);
         register_guarded(&registry, &streaming_encode_latency_ms);
         register_guarded(&registry, &streaming_encode_audio_jitter_ms);
         register_guarded(&registry, &streaming_encode_audio_max_jitter_ms);
@@ -8793,6 +8814,7 @@ impl Default for Metrics {
             streaming_quic_datagrams_sent_total,
             streaming_quic_datagrams_dropped_total,
             streaming_feedback_timeout_total,
+            streaming_soranet_provision_fail_total,
             telemetry_redaction_total,
             telemetry_redaction_skipped_total,
             telemetry_truncation_total,
@@ -13123,6 +13145,8 @@ impl Default for Metrics {
             streaming_quic_datagrams_dropped_total,
             streaming_fec_parity_current,
             streaming_feedback_timeout_total,
+            streaming_soranet_provision_fail_total,
+            streaming_soranet_provision_queue_drop_total,
             telemetry_redaction_total,
             telemetry_redaction_skipped_total,
             telemetry_truncation_total,

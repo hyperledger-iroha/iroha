@@ -8830,6 +8830,12 @@ pub struct StreamingSoranet {
     /// Maximum on-disk footprint for the SoraNet provision spool (0 = unlimited).
     #[config(default = "defaults::streaming::soranet::PROVISION_SPOOL_MAX_BYTES")]
     pub provision_spool_max_bytes: WithOrigin<Bytes<u64>>,
+    /// Segment window (inclusive) used when provisioning privacy routes.
+    #[config(default = "defaults::streaming::soranet::PROVISION_WINDOW_SEGMENTS")]
+    pub provision_window_segments: WithOrigin<u64>,
+    /// Maximum number of queued privacy-route provisioning jobs.
+    #[config(default = "defaults::streaming::soranet::PROVISION_QUEUE_CAPACITY")]
+    pub provision_queue_capacity: WithOrigin<u64>,
 }
 
 impl StreamingSoranet {
@@ -8894,6 +8900,45 @@ impl StreamingSoranet {
         config.provision_spool_dir = spool_dir;
         let (spool_max_bytes, _spool_max_origin) = self.provision_spool_max_bytes.into_tuple();
         config.provision_spool_max_bytes = spool_max_bytes;
+        let (window_segments, window_origin) = self.provision_window_segments.into_tuple();
+        if window_segments == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidStreamingConfig)
+                    .attach("streaming.soranet.provision_window_segments must be greater than zero")
+                    .attach(ConfigValueAndOrigin::new(
+                        window_segments.to_string(),
+                        window_origin,
+                    )),
+            );
+            return None;
+        }
+        config.provision_window_segments = window_segments;
+        let (queue_capacity, queue_origin) = self.provision_queue_capacity.into_tuple();
+        if queue_capacity == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidStreamingConfig)
+                    .attach("streaming.soranet.provision_queue_capacity must be greater than zero")
+                    .attach(ConfigValueAndOrigin::new(
+                        queue_capacity.to_string(),
+                        queue_origin,
+                    )),
+            );
+            return None;
+        }
+        if usize::try_from(queue_capacity).is_err() {
+            emitter.emit(
+                Report::new(ParseError::InvalidStreamingConfig)
+                    .attach(
+                        "streaming.soranet.provision_queue_capacity must fit the platform usize",
+                    )
+                    .attach(ConfigValueAndOrigin::new(
+                        queue_capacity.to_string(),
+                        queue_origin,
+                    )),
+            );
+            return None;
+        }
+        config.provision_queue_capacity = queue_capacity;
 
         Some(config)
     }
@@ -8931,6 +8976,83 @@ impl StreamingSoravpn {
         config.provision_spool_max_bytes = spool_max_bytes;
 
         Some(config)
+    }
+}
+
+#[cfg(test)]
+mod streaming_soranet_tests {
+    use super::*;
+
+    #[test]
+    fn streaming_soranet_rejects_zero_window_segments() {
+        let mut emitter = Emitter::<ParseError>::new();
+        let config = StreamingSoranet {
+            enabled: true,
+            exit_multiaddr: WithOrigin::inline(
+                defaults::streaming::soranet::EXIT_MULTIADDR.to_string(),
+            ),
+            padding_budget_ms: WithOrigin::inline(defaults::streaming::soranet::padding_budget_ms()),
+            access_kind: WithOrigin::inline(
+                defaults::streaming::soranet::ACCESS_KIND.to_string(),
+            ),
+            channel_salt: None,
+            provision_spool_dir: WithOrigin::inline(PathBuf::from(
+                defaults::streaming::soranet::PROVISION_SPOOL_DIR,
+            )),
+            provision_spool_max_bytes: WithOrigin::inline(
+                defaults::streaming::soranet::PROVISION_SPOOL_MAX_BYTES,
+            ),
+            provision_window_segments: WithOrigin::inline(0),
+            provision_queue_capacity: WithOrigin::inline(
+                defaults::streaming::soranet::PROVISION_QUEUE_CAPACITY,
+            ),
+        };
+
+        assert!(config.parse(&mut emitter).is_none());
+        let err = emitter
+            .into_result()
+            .expect_err("zero window segments must be rejected");
+        let debug = format!("{err:?}");
+        assert!(
+            debug.contains("streaming.soranet.provision_window_segments"),
+            "unexpected error payload: {debug}"
+        );
+    }
+
+    #[test]
+    fn streaming_soranet_rejects_zero_queue_capacity() {
+        let mut emitter = Emitter::<ParseError>::new();
+        let config = StreamingSoranet {
+            enabled: true,
+            exit_multiaddr: WithOrigin::inline(
+                defaults::streaming::soranet::EXIT_MULTIADDR.to_string(),
+            ),
+            padding_budget_ms: WithOrigin::inline(defaults::streaming::soranet::padding_budget_ms()),
+            access_kind: WithOrigin::inline(
+                defaults::streaming::soranet::ACCESS_KIND.to_string(),
+            ),
+            channel_salt: None,
+            provision_spool_dir: WithOrigin::inline(PathBuf::from(
+                defaults::streaming::soranet::PROVISION_SPOOL_DIR,
+            )),
+            provision_spool_max_bytes: WithOrigin::inline(
+                defaults::streaming::soranet::PROVISION_SPOOL_MAX_BYTES,
+            ),
+            provision_window_segments: WithOrigin::inline(
+                defaults::streaming::soranet::PROVISION_WINDOW_SEGMENTS,
+            ),
+            provision_queue_capacity: WithOrigin::inline(0),
+        };
+
+        assert!(config.parse(&mut emitter).is_none());
+        let err = emitter
+            .into_result()
+            .expect_err("zero queue capacity must be rejected");
+        let debug = format!("{err:?}");
+        assert!(
+            debug.contains("streaming.soranet.provision_queue_capacity"),
+            "unexpected error payload: {debug}"
+        );
     }
 }
 

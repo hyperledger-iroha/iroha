@@ -80,6 +80,8 @@ translation_last_reviewed: 2025-12-28
     - `padding_budget_ms` (افتراضي: `25`): ميزانية حشو منخفضة الكمون بالملي ثانية؛ `null` يعطّل الحشو الإضافي.
     - `access_kind` (افتراضي: `authenticated`): وضع الخروج المطبق عند التجسير (`authenticated` أو `read-only`).
     - `channel_salt` (افتراضي: `iroha.soranet.channel.seed.v1`): سلسلة نطاق تُهش مع معرفات stream/route لاشتقاق معرّفات قنوات مُعمّاة.
+    - `provision_window_segments` (افتراضي: `4`): نافذة مقاطع (شاملة) تُستخدم لتزويد مسارات الخصوصية تلقائيًا؛ تُحاذى النوافذ على مضاعفات هذا الحجم.
+    - `provision_queue_capacity` (افتراضي: `256`): الحد الأقصى لمهام تزويد مسارات الخصوصية المخزنة في الطابور قبل تطبيق ضغط الرجوع.
   - `soravpn`: إعدادات spool التزويد المحلي لـ SoraVPN لمسارات streaming.
     - `provision_spool_dir` (افتراضي: `./storage/streaming/soravpn_routes`): مجلد spool المستخدم لتهيئة تحديثات مسارات SoraVPN لعُقد VPN المحلية.
     - `provision_spool_max_bytes` (افتراضي: `0`، بلا حد): الحد الأقصى لمساحة القرص الخاصة بـ spool تزويد SoraVPN.

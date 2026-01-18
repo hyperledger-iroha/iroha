@@ -38,6 +38,18 @@ fn escape_json_string(raw: &str) -> String {
 
 type ParseResult<T> = Result<T, ParseError>;
 
+#[derive(Default)]
+struct AccessHints {
+    reads: Vec<String>,
+    writes: Vec<String>,
+}
+
+impl AccessHints {
+    fn is_empty(&self) -> bool {
+        self.reads.is_empty() && self.writes.is_empty()
+    }
+}
+
 /// Parse a KOTODAMA source string into a [`Program`].
 pub fn parse(src: &str) -> Result<Program, String> {
     let tokens = lex(src)?;
@@ -265,14 +277,43 @@ impl<'a> Parser<'a> {
     fn parse_program(&mut self) -> ParseResult<Program> {
         let mut items = Vec::new();
         while !self.peek(TokenKind::EOF) {
+            let access_hints = self.parse_access_attributes()?;
             if self.peek(TokenKind::Fn) {
-                items.push(self.parse_item()?);
+                self.bump();
+                items.push(self.parse_fn_loose(
+                    None,
+                    FunctionModifiers {
+                        visibility: FunctionVisibility::Internal,
+                        kind: FunctionKind::Free,
+                        permission: None,
+                        access_reads: access_hints.reads,
+                        access_writes: access_hints.writes,
+                    },
+                )?);
             } else if self.peek(TokenKind::Struct) {
+                if !access_hints.is_empty() {
+                    return Err(self.error(
+                        self.tokens[self.pos].clone(),
+                        "access attributes must precede a function",
+                    ));
+                }
                 items.push(self.parse_struct_def()?);
             } else if self.peek(TokenKind::Seiyaku) {
+                if !access_hints.is_empty() {
+                    return Err(self.error(
+                        self.tokens[self.pos].clone(),
+                        "access attributes must precede a function",
+                    ));
+                }
                 let mut contract_items = self.parse_contract()?;
                 items.append(&mut contract_items);
             } else if self.peek(TokenKind::State) {
+                if !access_hints.is_empty() {
+                    return Err(self.error(
+                        self.tokens[self.pos].clone(),
+                        "access attributes must precede a function",
+                    ));
+                }
                 items.push(self.parse_state_decl()?);
             } else if self.peek(TokenKind::Kotoage) && self.peek_n(1, TokenKind::Fn) {
                 self.bump(); // kotoage
@@ -283,6 +324,8 @@ impl<'a> Parser<'a> {
                         visibility: FunctionVisibility::Public,
                         kind: FunctionKind::Free,
                         permission: None,
+                        access_reads: access_hints.reads,
+                        access_writes: access_hints.writes,
                     },
                 )?);
             } else if self.peek(TokenKind::Hajimari) {
@@ -293,6 +336,8 @@ impl<'a> Parser<'a> {
                         visibility: FunctionVisibility::Internal,
                         kind: FunctionKind::Hajimari,
                         permission: None,
+                        access_reads: access_hints.reads,
+                        access_writes: access_hints.writes,
                     },
                 )?);
             } else if self.peek(TokenKind::Kaizen) {
@@ -303,8 +348,18 @@ impl<'a> Parser<'a> {
                         visibility: FunctionVisibility::Internal,
                         kind: FunctionKind::Kaizen,
                         permission: None,
+                        access_reads: access_hints.reads,
+                        access_writes: access_hints.writes,
                     },
                 )?);
+            } else if self.peek_ident_n(0, "kotoba") {
+                if !access_hints.is_empty() {
+                    return Err(self.error(
+                        self.tokens[self.pos].clone(),
+                        "access attributes must precede a function",
+                    ));
+                }
+                self.parse_kotoba_block()?;
             } else {
                 let tok = self.bump();
                 return Err(self.error(tok, "top-level item (fn, struct, state, seiyaku)"));
@@ -322,11 +377,30 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::LBrace)?;
         let mut items = Vec::new();
         while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
+            let access_hints = self.parse_access_attributes()?;
             if self.peek(TokenKind::Meta) {
+                if !access_hints.is_empty() {
+                    return Err(self.error(
+                        self.tokens[self.pos].clone(),
+                        "access attributes must precede a function",
+                    ));
+                }
                 self.parse_meta_block()?;
             } else if self.peek(TokenKind::Struct) {
+                if !access_hints.is_empty() {
+                    return Err(self.error(
+                        self.tokens[self.pos].clone(),
+                        "access attributes must precede a function",
+                    ));
+                }
                 items.push(self.parse_struct_def()?);
             } else if self.peek(TokenKind::State) {
+                if !access_hints.is_empty() {
+                    return Err(self.error(
+                        self.tokens[self.pos].clone(),
+                        "access attributes must precede a function",
+                    ));
+                }
                 items.push(self.parse_state_decl()?);
             } else if self.peek(TokenKind::Fn) {
                 self.bump();
@@ -336,6 +410,8 @@ impl<'a> Parser<'a> {
                         visibility: FunctionVisibility::Internal,
                         kind: FunctionKind::Contract,
                         permission: None,
+                        access_reads: access_hints.reads,
+                        access_writes: access_hints.writes,
                     },
                 )?);
             } else if self.peek(TokenKind::Kotoage) && self.peek_n(1, TokenKind::Fn) {
@@ -347,6 +423,8 @@ impl<'a> Parser<'a> {
                         visibility: FunctionVisibility::Public,
                         kind: FunctionKind::Contract,
                         permission: None,
+                        access_reads: access_hints.reads,
+                        access_writes: access_hints.writes,
                     },
                 )?);
             } else if self.peek(TokenKind::Hajimari) {
@@ -357,6 +435,8 @@ impl<'a> Parser<'a> {
                         visibility: FunctionVisibility::Internal,
                         kind: FunctionKind::Hajimari,
                         permission: None,
+                        access_reads: access_hints.reads,
+                        access_writes: access_hints.writes,
                     },
                 )?);
             } else if self.peek(TokenKind::Kaizen) {
@@ -367,18 +447,18 @@ impl<'a> Parser<'a> {
                         visibility: FunctionVisibility::Internal,
                         kind: FunctionKind::Kaizen,
                         permission: None,
+                        access_reads: access_hints.reads,
+                        access_writes: access_hints.writes,
                     },
                 )?);
             } else if self.peek_ident_n(0, "kotoba") {
-                // Explicitly reject kotoba blocks: no i18n in contracts.
-                let tok = self.bump();
-                return Err(ParseError {
-                    message: "kotoba blocks were removed; i18n is not part of contract source"
-                        .into(),
-                    line: tok.line,
-                    column: tok.column,
-                    snippet: String::new(),
-                });
+                if !access_hints.is_empty() {
+                    return Err(self.error(
+                        self.tokens[self.pos].clone(),
+                        "access attributes must precede a function",
+                    ));
+                }
+                self.parse_kotoba_block()?;
             } else {
                 let tok = self.bump();
                 return Err(self.error(tok, "contract item (fn, struct, state, meta)"));
@@ -386,6 +466,109 @@ impl<'a> Parser<'a> {
         }
         self.expect(TokenKind::RBrace)?;
         Ok(items)
+    }
+
+    fn parse_kotoba_block(&mut self) -> ParseResult<()> {
+        let tok = self.bump();
+        if !matches!(tok.kind, TokenKind::Ident(ref s) if s == "kotoba") {
+            return Err(self.error(tok, "kotoba"));
+        }
+        self.expect(TokenKind::LBrace)?;
+        let mut depth = 1usize;
+        while depth > 0 {
+            let tok = self.bump();
+            match tok.kind {
+                TokenKind::LBrace => depth += 1,
+                TokenKind::RBrace => depth -= 1,
+                TokenKind::EOF => {
+                    return Err(ParseError {
+                        message: "unterminated kotoba block".into(),
+                        line: tok.line,
+                        column: tok.column,
+                        snippet: String::new(),
+                    });
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn parse_access_attributes(&mut self) -> ParseResult<AccessHints> {
+        let mut hints = AccessHints::default();
+        while self.peek(TokenKind::Hash) {
+            self.bump(); // '#'
+            self.expect(TokenKind::LBracket)?;
+            let attr_tok = self.bump();
+            let attr_name = if let TokenKind::Ident(name) = attr_tok.kind.clone() {
+                name
+            } else {
+                return Err(self.error(attr_tok, "expected attribute identifier"));
+            };
+            if attr_name != "access" {
+                return Err(self.error(attr_tok, "expected attribute `access`"));
+            }
+            self.expect(TokenKind::LParen)?;
+            let mut parsed_any = false;
+            while !self.peek(TokenKind::RParen) && !self.peek(TokenKind::EOF) {
+                let key = self.expect_ident()?;
+                self.expect(TokenKind::Equal)?;
+                let mut values = self.parse_access_value_list()?;
+                match key.as_str() {
+                    "read" => hints.reads.append(&mut values),
+                    "write" => hints.writes.append(&mut values),
+                    _ => {
+                        return Err(ParseError {
+                            message: format!("unknown access list `{key}`"),
+                            line: self.tokens[self.pos.saturating_sub(1)].line,
+                            column: self.tokens[self.pos.saturating_sub(1)].column,
+                            snippet: String::new(),
+                        });
+                    }
+                }
+                parsed_any = true;
+                if self.peek(TokenKind::Comma) {
+                    self.bump();
+                }
+            }
+            if !parsed_any {
+                return Err(ParseError {
+                    message: "access attribute must include read/write entries".into(),
+                    line: self.tokens[self.pos.saturating_sub(1)].line,
+                    column: self.tokens[self.pos.saturating_sub(1)].column,
+                    snippet: String::new(),
+                });
+            }
+            self.expect(TokenKind::RParen)?;
+            self.expect(TokenKind::RBracket)?;
+        }
+        Ok(hints)
+    }
+
+    fn parse_access_value_list(&mut self) -> ParseResult<Vec<String>> {
+        if self.peek(TokenKind::LBracket) {
+            self.bump();
+            let mut values = Vec::new();
+            while !self.peek(TokenKind::RBracket) && !self.peek(TokenKind::EOF) {
+                let tok = self.bump();
+                match tok.kind {
+                    TokenKind::String(s) => values.push(s),
+                    _ => return Err(self.error(tok, "string literal")),
+                }
+                if self.peek(TokenKind::Comma) {
+                    self.bump();
+                } else {
+                    break;
+                }
+            }
+            self.expect(TokenKind::RBracket)?;
+            return Ok(values);
+        }
+        let tok = self.bump();
+        match tok.kind {
+            TokenKind::String(s) => Ok(vec![s]),
+            _ => Err(self.error(tok, "string literal")),
+        }
     }
 
     fn parse_meta_block(&mut self) -> ParseResult<()> {
@@ -1315,6 +1498,7 @@ impl<'a> Parser<'a> {
                 Ok(Expr::Number(value))
             }
             TokenKind::String(s) => Ok(Expr::String(s.clone())),
+            TokenKind::Bytes(bytes) => Ok(Expr::Bytes(bytes.clone())),
             TokenKind::Ident(name0) => {
                 let ident_token = tok.clone();
                 // Parse namespaced path: ident ('::' ident)*
@@ -1932,5 +2116,59 @@ mod tests {
             }
             other => panic!("expected compound assignment, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_bytes_literal() {
+        let src = r#"fn main() { let b = b"ab"; }"#;
+        let prog = parse(src).expect("parse bytes literal");
+        let func = prog
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Function(f) => Some(f),
+                _ => None,
+            })
+            .expect("function present");
+        let stmt = func.body.statements.first().expect("statement present");
+        match stmt {
+            Statement::Let { value, .. } => match value {
+                Expr::Bytes(bytes) => assert_eq!(bytes, b"ab"),
+                other => panic!("expected bytes literal, got {other:?}"),
+            },
+            other => panic!("expected let statement, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_access_attributes_attach_to_function() {
+        let src = r#"
+        #[access(read="state:Foo", write=["state:Foo/1", "state:Foo/2"])]
+        fn main() {}
+        "#;
+        let prog = parse(src).expect("parse access attributes");
+        let func = prog
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Function(f) => Some(f),
+                _ => None,
+            })
+            .expect("function present");
+        assert_eq!(func.modifiers.access_reads, vec!["state:Foo".to_string()]);
+        assert_eq!(
+            func.modifiers.access_writes,
+            vec!["state:Foo/1".to_string(), "state:Foo/2".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_kotoba_block_is_noop() {
+        let src = r#"
+        kotoba { nested { ignore; } }
+        fn main() {}
+        "#;
+        let prog = parse(src).expect("parse kotoba block");
+        assert!(prog.items.iter().any(|item| matches!(item, Item::Function(_))));
     }
 }

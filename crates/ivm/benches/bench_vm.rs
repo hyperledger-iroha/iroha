@@ -26,7 +26,7 @@ fn loop_transaction(code: &[u8]) -> Transaction {
 
 #[inline]
 fn encode_addi_word(rd: u8, rs1: u8, imm: i16) -> u32 {
-    ivm::kotodama::compiler::encode_addi(rd, rs1, imm)
+    ivm::kotodama::compiler::encode_addi(rd, rs1, imm).expect("encode addi")
 }
 
 fn predecoded_program() -> Vec<u8> {

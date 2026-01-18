@@ -105,7 +105,7 @@ fn kotodama_foreach_map_lowering_uses_compact_loop() {
 
     let program = parser::parse(src).expect("parse loop demo");
     let typed = semantic::analyze(&program).expect("semantic analysis");
-    let ir_prog = ir::lower(&typed);
+    let ir_prog = ir::lower(&typed).expect("lower");
     let main_fn = ir_prog
         .functions
         .iter()

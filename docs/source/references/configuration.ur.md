@@ -76,6 +76,8 @@ translation_last_reviewed: 2025-12-28
     - `padding_budget_ms` (ڈیفالٹ: `25`): low‑latency padding budget (ms)؛ `null` اضافی padding بند کرتا ہے۔
     - `access_kind` (ڈیفالٹ: `authenticated`): exit posture (`authenticated` یا `read-only`)۔
     - `channel_salt` (ڈیفالٹ: `iroha.soranet.channel.seed.v1`): domain string جو stream/route IDs کے ساتھ hash ہو کر blinded channel IDs دیتی ہے۔
+    - `provision_window_segments` (ڈیفالٹ: `4`): segment window (inclusive) جو privacy routes کی خودکار provision کے لئے استعمال ہوتا ہے؛ windows اسی سائز کے multiples پر align ہوتی ہیں۔
+    - `provision_queue_capacity` (ڈیفالٹ: `256`): privacy routes کی provisioning jobs کی زیادہ سے زیادہ تعداد جو queue میں رکھی جا سکتی ہیں؛ اس کے بعد backpressure apply ہوتا ہے۔
   - `soravpn`: streaming routes کے لئے SoraVPN local provisioning spool settings۔
     - `provision_spool_dir` (ڈیفالٹ: `./storage/streaming/soravpn_routes`): مقامی VPN nodes کیلئے SoraVPN route updates stage کرنے کا spool directory۔
     - `provision_spool_max_bytes` (ڈیفالٹ: `0`, unlimited): SoraVPN provision spool کی زیادہ سے زیادہ disk footprint۔

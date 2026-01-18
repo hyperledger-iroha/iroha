@@ -67,6 +67,7 @@ translator: manual
   - `debug_tie_break` / `debug_tx_eval` はデバッグ用 overlay トレース。
 - `[norito]`: Norito シリアライズ調整。`max_archive_len` のデフォルトは 512 MiB で、`sumeragi.rbc_store_max_bytes` と `network.max_frame_bytes` 以上にクランプして合意ペイロードのデコードを保証します。
 - `[streaming]`: Norito streaming の control‑plane 鍵設定。
+- `[streaming.soranet]`: SoraNet ブリッジ設定（`enabled`, `exit_multiaddr`, `padding_budget_ms`, `access_kind`, `channel_salt`, `provision_spool_dir`, `provision_spool_max_bytes`, `provision_window_segments`, `provision_queue_capacity`）。
 - `[streaming.soravpn]`: SoraVPN のローカルプロビジョニングスプール設定（`provision_spool_dir`, `provision_spool_max_bytes`）。
 - `[relay]` と `exit_routing.*` は上記の通り。
 ノート

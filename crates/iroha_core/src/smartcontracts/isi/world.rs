@@ -6122,6 +6122,98 @@ pub mod isi {
         Ok(())
     }
 
+    fn resolve_asset_vk(
+        state_transaction: &StateTransaction<'_, '_>,
+        binding: Option<&crate::state::ZkAssetVerifierBinding>,
+        attachment: &iroha_data_model::proof::ProofAttachment,
+    ) -> Result<(iroha_data_model::proof::VerifyingKeyBox, Option<VerifyingKeyRecord>), Error> {
+        if attachment.vk_ref.is_none() && attachment.vk_inline.is_none() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "proof missing verifying key reference or inline key".into(),
+            )
+            .into());
+        }
+        let record = if let Some(binding) = binding {
+            let record = state_transaction
+                .world
+                .verifying_keys
+                .get(&binding.id)
+                .cloned()
+                .ok_or_else(|| {
+                    FindError::Permission(Box::new(Permission::new(
+                        "VerifyingKeyMissing".into(),
+                        iroha_primitives::json::Json::from(
+                            format!("{}::{}", binding.id.backend, binding.id.name).as_str(),
+                        ),
+                    )))
+                })?;
+            if record.status != ConfidentialStatus::Active {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "verifying key is not active".into(),
+                )
+                .into());
+            }
+            if record.commitment != binding.commitment {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "verifying key commitment mismatch".into(),
+                )
+                .into());
+            }
+            Some(record)
+        } else if let Some(vk_ref) = &attachment.vk_ref {
+            let record = state_transaction
+                .world
+                .verifying_keys
+                .get(vk_ref)
+                .cloned()
+                .ok_or_else(|| {
+                    FindError::Permission(Box::new(Permission::new(
+                        "VerifyingKeyMissing".into(),
+                        iroha_primitives::json::Json::from(
+                            format!("{}::{}", vk_ref.backend, vk_ref.name).as_str(),
+                        ),
+                    )))
+                })?;
+            if record.status != ConfidentialStatus::Active {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "verifying key is not active".into(),
+                )
+                .into());
+            }
+            Some(record)
+        } else {
+            None
+        };
+        if let (Some(record), Some(inline)) = (record.as_ref(), attachment.vk_inline.as_ref()) {
+            let inline_commitment = hash_vk(inline);
+            if record.commitment != inline_commitment {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "inline verifying key commitment mismatch".into(),
+                )
+                .into());
+            }
+        }
+        let vk_box = if let Some(inline) = attachment.vk_inline.clone() {
+            inline
+        } else if let Some(record) = record.as_ref() {
+            record.key.clone().ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation("verifying key bytes missing".into())
+            })?
+        } else {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "verifying key bytes missing".into(),
+            )
+            .into());
+        };
+        if vk_box.backend != attachment.backend {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "verifying key backend mismatch".into(),
+            )
+            .into());
+        }
+        Ok((vk_box, record))
+    }
+
     #[derive(Clone)]
     struct PolicyMetadataContext {
         allow_shield: bool,
@@ -6824,8 +6916,14 @@ pub mod isi {
                 .unwrap_or_default();
             state_transaction.register_nullifiers(self.inputs().len())?;
             state_transaction.register_commitments(self.outputs().len())?;
+            let attachment = self.proof();
+            if attachment.backend != attachment.proof.backend {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "proof backend mismatch".into(),
+                ));
+            }
             if let Some(binding) = st.vk_transfer.as_ref() {
-                enforce_vk_binding(binding, self.proof())?;
+                enforce_vk_binding(binding, attachment)?;
             }
             let policy_mode = apply_policy_if_due(state_transaction, &asset_def_id)?.mode();
             if matches!(policy_mode, ConfidentialPolicyMode::TransparentOnly) {
@@ -6848,6 +6946,31 @@ pub mod isi {
                         "duplicate nullifier".into(),
                     ));
                 }
+            }
+            let (vk_box, vk_record) =
+                resolve_asset_vk(state_transaction, st.vk_transfer.as_ref(), attachment)?;
+            let proof_len = attachment.proof.bytes.len();
+            if let Some(record) = vk_record.as_ref() {
+                enforce_vk_max_proof_bytes("transfer", record, proof_len)?;
+            }
+            state_transaction.register_confidential_proof(proof_len)?;
+            let report = crate::zk::verify_backend_with_timing(
+                attachment.backend.as_str(),
+                &attachment.proof,
+                Some(&vk_box),
+            );
+            let timeout_budget = state_transaction.zk.verify_timeout;
+            if timeout_budget > Duration::ZERO && report.elapsed > timeout_budget {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "transfer proof verification exceeded timeout".into(),
+                    ),
+                ));
+            }
+            if !report.ok {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "invalid transfer proof".into(),
+                ));
             }
             for &nullifier in self.inputs() {
                 st.nullifiers.insert(nullifier);
@@ -7028,8 +7151,14 @@ pub mod isi {
                 .cloned()
                 .unwrap_or_default();
             state_transaction.register_nullifiers(self.inputs().len())?;
+            let attachment = self.proof();
+            if attachment.backend != attachment.proof.backend {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "proof backend mismatch".into(),
+                ));
+            }
             if let Some(binding) = st.vk_unshield.as_ref() {
-                enforce_vk_binding(binding, self.proof())?;
+                enforce_vk_binding(binding, attachment)?;
             }
             // If a root_hint is provided, enforce it is within the bounded recent root window.
             if let Some(root_hint) = self.root_hint() {
@@ -7038,6 +7167,31 @@ pub mod isi {
                         "stale or unknown Merkle root".into(),
                     ));
                 }
+            }
+            let (vk_box, vk_record) =
+                resolve_asset_vk(state_transaction, st.vk_unshield.as_ref(), attachment)?;
+            let proof_len = attachment.proof.bytes.len();
+            if let Some(record) = vk_record.as_ref() {
+                enforce_vk_max_proof_bytes("unshield", record, proof_len)?;
+            }
+            state_transaction.register_confidential_proof(proof_len)?;
+            let report = crate::zk::verify_backend_with_timing(
+                attachment.backend.as_str(),
+                &attachment.proof,
+                Some(&vk_box),
+            );
+            let timeout_budget = state_transaction.zk.verify_timeout;
+            if timeout_budget > Duration::ZERO && report.elapsed > timeout_budget {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "unshield proof verification exceeded timeout".into(),
+                    ),
+                ));
+            }
+            if !report.ok {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "invalid unshield proof".into(),
+                ));
             }
             for &nullifier in self.inputs() {
                 if !st.nullifiers.insert(nullifier) {

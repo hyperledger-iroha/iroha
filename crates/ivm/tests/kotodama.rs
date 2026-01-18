@@ -581,7 +581,7 @@ fn encode_helpers() {
     let add = encode_add(3, 1, 2);
     assert_eq!(add, 0x0103_0102);
 
-    let addi = encode_addi(1, 1, 7);
+    let addi = encode_addi(1, 1, 7).expect("encode addi");
     assert_eq!(addi, 0x2001_0107);
 }
 
@@ -1296,7 +1296,7 @@ fn ir_bounded_map_take_n_sets_loop_bounds() {
     let src = r#"fn f(m: Map<int, int>) { for (k, v) in m.take(1) { let z = v; } }"#;
     let prog = parse(src).expect("parse");
     let typed = analyze(&prog).expect("analyze");
-    let ir_prog = ir::lower(&typed);
+    let ir_prog = ir::lower(&typed).expect("lower");
     let func = ir_prog
         .functions
         .iter()
@@ -1350,7 +1350,7 @@ fn ir_bounded_map_range_start_is_honored() {
     let src = r#"fn f(m: Map<int, int>) { for (k, v) in m.range(0, 1) { let z = v; } }"#;
     let prog = parse(src).expect("parse");
     let typed = analyze(&prog).expect("analyze");
-    let ir_prog = ir::lower(&typed);
+    let ir_prog = ir::lower(&typed).expect("lower");
     let func = ir_prog
         .functions
         .iter()
@@ -1568,7 +1568,7 @@ fn map_get_handles_spills() {
 
     let prog = parse(&src).expect("parse spill map-get");
     let typed = analyze(&prog).expect("analyze spill map-get");
-    let ir = ivm::kotodama::ir::lower(&typed);
+    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
     let func = ir
         .functions
         .iter()
@@ -1625,7 +1625,7 @@ fn keys_take2_load64imm_executes() {
 
     let prog = parse(&src).expect("parse load64");
     let typed = analyze(&prog).expect("analyze load64");
-    let ir = ivm::kotodama::ir::lower(&typed);
+    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
     let func = ir
         .functions
         .iter()
@@ -1680,7 +1680,7 @@ fn map_load_pair_handles_spilled_map_base() {
 
     let prog = parse(&src).expect("parse spill map-load");
     let typed = analyze(&prog).expect("analyze spill map-load");
-    let ir = ivm::kotodama::ir::lower(&typed);
+    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
     let func = ir
         .functions
         .iter()
@@ -2251,7 +2251,7 @@ fn pubkgen_valcom_spills_are_handled() {
         let src = build_src(count);
         let prog = parse(&src).expect("parse valcom spill");
         let typed = analyze(&prog).expect("analyze valcom spill");
-        let ir = ivm::kotodama::ir::lower(&typed);
+        let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
         let func = ir
             .functions
             .iter()
@@ -2318,7 +2318,7 @@ fn json_encode_decode_spills_are_handled() {
         let src = build_src(count);
         let prog = parse(&src).expect("parse json spill");
         let typed = analyze(&prog).expect("analyze json spill");
-        let ir = ivm::kotodama::ir::lower(&typed);
+        let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
         let func = ir
             .functions
             .iter()
@@ -2443,7 +2443,7 @@ fn parse_control_flow() {
     let src = std::fs::read_to_string(path).expect("read failed");
     let prog = parse(&src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
-    let ir = ivm::kotodama::ir::lower(&typed);
+    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
     assert!(ir.functions[0].blocks.len() > 2);
 }
 
@@ -2456,7 +2456,7 @@ fn parse_amm_dex() {
     let src = std::fs::read_to_string(path).expect("read failed");
     let prog = parse(&src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
-    let ir = ivm::kotodama::ir::lower(&typed);
+    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
     let instrs = &ir.functions[0].blocks[0].instrs;
     assert!(instrs.iter().any(|i| matches!(
         i,
@@ -2483,7 +2483,7 @@ fn parse_dai_clone() {
     let src = std::fs::read_to_string(path).expect("read failed");
     let prog = parse(&src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
-    let ir = ivm::kotodama::ir::lower(&typed);
+    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
     let mut has_add = false;
     let mut has_sub = false;
     for block in &ir.functions[0].blocks {
@@ -2508,7 +2508,7 @@ fn parse_mint_asset_builtin() {
     let src = "fn f(a: AccountId, b: AssetDefinitionId, c: int){ mint_asset(a,b,c); }";
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
-    let ir = ivm::kotodama::ir::lower(&typed);
+    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
     let instrs = &ir.functions[0].blocks[0].instrs;
     assert!(instrs.iter().any(|i| matches!(i, Instr::MintAsset { .. })));
 }
@@ -2519,7 +2519,7 @@ fn parse_transfer_asset_builtin() {
     let src = "fn f(a: AccountId, b: AccountId, c: AssetDefinitionId, d: int){ transfer_asset(a,b,c,d); }";
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
-    let ir = ivm::kotodama::ir::lower(&typed);
+    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
     let instrs = &ir.functions[0].blocks[0].instrs;
     assert!(
         instrs
@@ -2534,7 +2534,7 @@ fn parse_transfer_batch_builtin() {
     let src = "fn f(a: AccountId, b: AccountId, c: AssetDefinitionId, d: int){ transfer_batch((a,b,c,d), (b,a,c,d)); }";
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
-    let ir = ivm::kotodama::ir::lower(&typed);
+    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
     let instrs = &ir.functions[0].blocks[0].instrs;
     let begin_idx = instrs
         .iter()
@@ -2584,7 +2584,7 @@ fn parse_burn_asset_builtin() {
     let src = "fn f(a: AccountId, b: AssetDefinitionId, c: int){ burn_asset(a,b,c); }";
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
-    let ir = ivm::kotodama::ir::lower(&typed);
+    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
     let instrs = &ir.functions[0].blocks[0].instrs;
     assert!(instrs.iter().any(|i| matches!(i, Instr::BurnAsset { .. })));
 }
@@ -2595,7 +2595,7 @@ fn parse_register_asset_builtin() {
     let src = "fn f(){ register_asset(\"x\", \"X\", 1, 0); }";
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
-    let ir = ivm::kotodama::ir::lower(&typed);
+    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
     let instrs = &ir.functions[0].blocks[0].instrs;
     assert!(
         instrs
@@ -2610,7 +2610,7 @@ fn parse_create_new_asset_builtin() {
     let src = "fn f(){ create_new_asset(\"x\", \"X\", 1, 2, 0); }";
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
-    let ir = ivm::kotodama::ir::lower(&typed);
+    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
     let instrs = &ir.functions[0].blocks[0].instrs;
     assert!(
         instrs
@@ -2628,7 +2628,7 @@ fn parse_mfc_example() {
     let src = std::fs::read_to_string(path).expect("read failed");
     let prog = parse(&src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
-    let ir = ivm::kotodama::ir::lower(&typed);
+    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
     let mut has_transfer = false;
     let mut has_branch = false;
     for block in &ir.functions[1].blocks {
@@ -2703,7 +2703,7 @@ fn ir_lower_has_alias_ephemeral() {
     let src = "fn f(m: Map<int,int>, k: int) { let x = has(m,k); }";
     let prog = parse(src).expect("parse has");
     let typed = analyze(&prog).expect("analyze has");
-    let ir = ivm::kotodama::ir::lower(&typed);
+    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
     let f = &ir.functions[0];
     let mut saw_load_pair = false;
     let mut saw_eq = false;
@@ -2724,7 +2724,7 @@ fn ir_lower_get_or_insert_default_ephemeral() {
     let src = "fn f(m: Map<int,int>, k: int) -> int { return get_or_insert_default(m, k); }";
     let prog = parse(src).expect("parse get_or_insert_default");
     let typed = analyze(&prog).expect("analyze get_or_insert_default");
-    let ir = ivm::kotodama::ir::lower(&typed);
+    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
     let f = &ir.functions[0];
     let mut saw_pair = false;
     let mut saw_set = false;
@@ -2796,7 +2796,7 @@ fn ir_lower_get_or_insert_default_pointer_variants_use_pointer_syscalls() {
         );
         let prog = parse(&src).expect("parse pointer durable map");
         let typed = analyze(&prog).expect("analyze pointer durable map");
-        let ir = ivm::kotodama::ir::lower(&typed);
+        let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
         let func = ir
             .functions
             .iter()
@@ -2833,7 +2833,7 @@ fn ir_lower_keys_values_take2_ephemeral() {
     "#;
     let prog = parse(src).expect("parse keys_take2");
     let typed = analyze(&prog).expect("analyze keys_take2");
-    let ir = ivm::kotodama::ir::lower(&typed);
+    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
     let f = &ir.functions[0];
     let mut saw_load0 = false;
     let mut saw_load8 = false;
@@ -2859,7 +2859,7 @@ fn ir_lower_keys_values_take2_tuple_access() {
     "#;
     let prog = parse(src).expect("parse keys_values_take2");
     let typed = analyze(&prog).expect("analyze keys_values_take2");
-    let ir = ivm::kotodama::ir::lower(&typed);
+    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
     let f = &ir.functions[0];
     let mut saw0 = false;
     let mut saw8 = false;
@@ -2888,7 +2888,7 @@ fn ir_tuple_pack_and_get_general() {
     "#;
     let prog = parse(src).expect("parse tuple pack/get");
     let typed = analyze(&prog).expect("analyze tuple pack/get");
-    let ir = ivm::kotodama::ir::lower(&typed);
+    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
     let f = &ir.functions[0];
     let mut saw_pack = false;
     let mut saw_get = false;

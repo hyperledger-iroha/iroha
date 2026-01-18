@@ -876,6 +876,10 @@ pub mod streaming {
         pub const PROVISION_SPOOL_DIR: &str = "./storage/streaming/soranet_routes";
         /// Maximum on-disk footprint for the SoraNet provisioning spool (0 = unlimited).
         pub const PROVISION_SPOOL_MAX_BYTES: Bytes<u64> = Bytes(0);
+        /// Default segment window (inclusive) used when provisioning privacy routes.
+        pub const PROVISION_WINDOW_SEGMENTS: u64 = 4;
+        /// Maximum number of queued privacy-route provisioning jobs.
+        pub const PROVISION_QUEUE_CAPACITY: u64 = 256;
 
         /// Convenience accessor returning the default padding budget as an `Option`.
         #[must_use]

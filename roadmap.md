@@ -30,6 +30,15 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 
 ## Current Open Work
 
+0. **KOTODAMA-LANG-PARITY — Close remaining Kotodama gaps** (IVM/Kotodama, Line: Shared, Owner: IVM WG, Priority: Medium, Status: 🈺 In Progress, target TBD)
+ - [x] Add access-list attributes and wire permission/read/write hints into entrypoint manifests.
+ - [ ] Add DSL trigger declarations and wire trigger metadata into entrypoint manifests.
+ - [x] Treat numeric aliases (`fixed_u128`, `Amount`, `Balance`) as distinct 64-bit scalar types with alias-preserving arithmetic.
+ - [ ] Implement deterministic `fixed_u128`/`Amount` semantics beyond 64-bit (fixed-point/128-bit) with stable arithmetic helpers.
+ - [x] Include literal map keys (including pointer-keyed entries) and literal trigger specs in access hints; lint on non-literal trigger specs and state-map keys.
+ - [ ] Expand access hints for dynamic map keys and opaque host-driven reads; surface skipped-hint diagnostics.
+ - [ ] Extract the Kotodama compiler into `crates/kotodama_lang` once dependencies are untangled.
+
 1. **NEXUS-LANE-RELAY-RECOVERY — Emergency validator restore for dataspaces** (Consensus/Governance, Line: Iroha 3, Owner: Nexus Core WG, Priority: Medium, Status: 🈴 Completed, target TBD)
  - [x] Define the emergency admin multisig message to add validators when a dataspace pool falls below `3f+1`.
  - [x] Implement validation/admission plumbing, telemetry, and regression tests; update operator docs/runbooks.
