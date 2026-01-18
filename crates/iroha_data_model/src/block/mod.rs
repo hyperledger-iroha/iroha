@@ -148,10 +148,7 @@ impl SignedBlock {
 
     /// Create a block with a given signature and payload.
     #[cfg(feature = "transparent_api")]
-    pub fn presigned_with_payload(
-        signature: BlockSignature,
-        payload: BlockPayload,
-    ) -> SignedBlock {
+    pub fn presigned_with_payload(signature: BlockSignature, payload: BlockPayload) -> SignedBlock {
         SignedBlock {
             signatures: [signature].into_iter().collect(),
             payload,
@@ -1291,9 +1288,8 @@ mod tests {
             da_proof_policies: None,
             da_pin_intents: None,
         };
-        let key_pair = iroha_crypto::KeyPair::random_with_algorithm(
-            iroha_crypto::Algorithm::BlsNormal,
-        );
+        let key_pair =
+            iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let signature = BlockSignature::new(
             0,
             iroha_crypto::SignatureOf::from_hash(key_pair.private_key(), payload.header.hash()),

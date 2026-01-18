@@ -1250,7 +1250,7 @@ impl Actor {
 
     pub(super) fn drop_missing_lock_if_unknown(&mut self, qc: &crate::sumeragi::consensus::Qc) {
         if let Some(lock) = self.locked_qc {
-            if !self.block_known_for_lock(lock.subject_block_hash) {
+            if !self.block_known_locally(lock.subject_block_hash) {
                 info!(
                     locked_height = lock.height,
                     locked_view = lock.view,

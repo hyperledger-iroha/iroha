@@ -19,7 +19,7 @@ translator: manual
 מימוש נוכחי: חלון בסיס המבוסס EMA, backoff, רצפת RTT ורצועת ג׳יטר קונפיגורבילית (`sumeragi.pacemaker_jitter_frac_permille`). הג׳יטר מיושם באופן דטרמיניסטי לכל צומת ולכל `(height, view)`.
 
 ## מושגים
-- **חלון בסיס**: ממוצע נע מעריכי של זמני הפאזות (propose, collect_da, collect_prevote, collect_precommit, collect_aggregator, commit). ה-EMA מאותחל מערכי `sumeragi.npos.timeouts.*`; עד הצטברות דגימות הוא דומה לערכים המוגדרים. EMA לפאזות Execution/Witness נחשף לניטור אך עדיין לא נכנס לחלון הפייסמייקר. הערכים המוחלקים זמינים כ-`sumeragi_phase_latency_ema_ms{phase=…}`.
+- **חלון בסיס**: ממוצע נע מעריכי של זמני הפאזות (propose, collect_da, collect_prevote, collect_precommit, commit). ה-EMA מאותחל מערכי `sumeragi.npos.timeouts.*`; עד הצטברות דגימות הוא דומה לערכים המוגדרים. ה-EMA של `collect_aggregator` נחשף לניטור אך אינו נכנס לחלון הפייסמייקר. הערכים המוחלקים זמינים כ-`sumeragi_phase_latency_ema_ms{phase=…}`.
 - **מקדם backoff**: ‏`sumeragi.pacemaker_backoff_multiplier` (ברירת מחדל 1). כל timeout מוסיף `base * multiplier` לחלון.
 - **רצפת RTT**: ‏`avg_rtt_ms * sumeragi.pacemaker_rtt_floor_multiplier` (ברירת מחדל 2). מונעת timeouts אגרסיביים בקישורים עתירי השהיה.
 - **תקרה**: ‏`sumeragi.pacemaker_max_backoff_ms` (ברירת מחדל ‎60 000 ms). מגבלה קשיחה לחלון.

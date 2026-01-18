@@ -113,7 +113,7 @@ translator: manual
 
 ## 実行ウィットネスイベント
 
-- `ExecVote` を組み立てる際、`PipelineEventBox::Witness` を発行し、ブロックメタデータ（ハッシュ、高さ、ビュー、エポック）と実行ウィットネス（reads/writes）を公開します。
+- 提案を検証し、コミット QC にバインドされる state roots を含む実行ウィットネスを確定した時点で、`PipelineEventBox::Witness` を発行し、ブロックメタデータ（ハッシュ、高さ、ビュー、エポック）と実行ウィットネス（reads/writes）を公開します。
 - Torii のストリーミング・JSON アダプタは read/write 件数を要約し、完全なウィットネスが必要なクライアントは Norito ストリームをデコードしてください。
 - `PipelineEventFilterBox::Witness` に `for_block_hash`、`for_height`、`for_view` などのフィルタが用意され、特定ブロックの追跡が容易です。
 - このイベントは既存のウィットネス永続化（`PipelineEvent::Merge` と Kura サイドカー）を補完し、SBV-AM 再計算の監査をリアルタイムで支援します。

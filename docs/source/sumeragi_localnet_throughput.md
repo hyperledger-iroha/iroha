@@ -98,6 +98,15 @@ IROHA_THROUGHPUT_ARTIFACT_DIR=./artifacts/localnet-throughput \
   -- --ignored --nocapture
 ```
 
+NPoS run:
+
+```bash
+IROHA_THROUGHPUT_ARTIFACT_DIR=./artifacts/localnet-throughput \
+  cargo test -p integration_tests --release \
+  --test sumeragi_localnet_smoke npos_localnet_throughput_10k_tps \
+  -- --ignored --nocapture
+```
+
 ## Artifacts
 
 When `IROHA_THROUGHPUT_ARTIFACT_DIR` is set, each run writes:

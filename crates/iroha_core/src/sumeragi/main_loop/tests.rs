@@ -7759,13 +7759,8 @@ async fn rbc_payload_rebroadcast_sends_single_init_and_respects_cooldown() {
     let mut harness = test_actor_harness(4).await;
     let key = session_key();
     let roster = harness.actor.rbc_roster_for_session(key);
-    let (block_header, leader_signature) = rbc_header_and_signature(
-        &harness.actor,
-        &roster,
-        key.1,
-        key.2,
-        &harness.key_pairs,
-    );
+    let (block_header, leader_signature) =
+        rbc_header_and_signature(&harness.actor, &roster, key.1, key.2, &harness.key_pairs);
     let init = crate::sumeragi::consensus::RbcInit {
         block_hash: key.0,
         height: key.1,
@@ -7867,13 +7862,8 @@ async fn rbc_payload_rebroadcast_sends_init_without_chunks() {
     let mut harness = test_actor_harness(4).await;
     let key = session_key();
     let roster = harness.actor.rbc_roster_for_session(key);
-    let (block_header, leader_signature) = rbc_header_and_signature(
-        &harness.actor,
-        &roster,
-        key.1,
-        key.2,
-        &harness.key_pairs,
-    );
+    let (block_header, leader_signature) =
+        rbc_header_and_signature(&harness.actor, &roster, key.1, key.2, &harness.key_pairs);
     let init = crate::sumeragi::consensus::RbcInit {
         block_hash: key.0,
         height: key.1,
@@ -12111,19 +12101,25 @@ async fn block_created_applies_cached_precommit_qc() {
         );
     }
     let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let epoch = actor.epoch_for_height(height);
     let qc = qc_with_bitmap(
         &actor.common_config.chain,
         block_hash,
         height,
         view,
-        actor.epoch_for_height(height),
+        epoch,
         signers_bitmap,
         Phase::Commit,
         &topology,
         &harness.key_pairs,
     );
-
     actor.handle_qc(qc).expect("handle qc");
+    assert!(
+        actor
+            .qc_cache
+            .contains_key(&(Phase::Commit, block_hash, height, view, epoch)),
+        "precommit QC should be cached for unknown block"
+    );
     assert!(
         actor.locked_qc.is_none(),
         "lock must remain unset for unknown blocks"
@@ -14435,7 +14431,7 @@ async fn handle_rbc_init_rejects_epoch_mismatch() {
     let expected_epoch = actor.epoch_for_height(height);
     let roster = actor.effective_commit_topology();
     let (block_header, leader_signature) =
-        rbc_header_and_signature(actor, &roster_b, height, view, &harness.key_pairs);
+        rbc_header_and_signature(actor, &roster, height, view, &harness.key_pairs);
     let init = crate::sumeragi::consensus::RbcInit {
         block_hash,
         height,
@@ -14736,7 +14732,7 @@ async fn handle_rbc_init_rejects_derived_roster_mismatch() {
 
     actor.record_rbc_session_roster(key, roster_a.clone(), super::RbcRosterSource::Derived);
     let (block_header, leader_signature) =
-        rbc_header_and_signature(actor, &roster, height, view, &harness.key_pairs);
+        rbc_header_and_signature(actor, &roster_b, height, view, &harness.key_pairs);
 
     let init = crate::sumeragi::consensus::RbcInit {
         block_hash,
@@ -42795,13 +42791,8 @@ async fn stale_view_accepts_rbc_messages_with_da() {
     let chunk_root = Hash::prehashed([0x44; 32]);
     let key = (block_hash, height, stale_view);
     let roster = actor.effective_commit_topology();
-    let (block_header, leader_signature) = rbc_header_and_signature(
-        actor,
-        &roster,
-        height,
-        stale_view,
-        &harness.key_pairs,
-    );
+    let (block_header, leader_signature) =
+        rbc_header_and_signature(actor, &roster, height, stale_view, &harness.key_pairs);
 
     let init = crate::sumeragi::consensus::RbcInit {
         block_hash,

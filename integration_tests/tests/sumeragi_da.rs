@@ -17,7 +17,9 @@ use iroha::{
         Level,
         consensus::Qc,
         isi::{Log, SetParameter, Unregister},
-        parameter::{Parameter, SumeragiParameter, TransactionParameter},
+        parameter::{
+            Parameter, SumeragiParameter, TransactionParameter, system::SumeragiNposParameters,
+        },
         prelude::QueryBuilderExt,
         query::block::prelude::FindBlocks,
         query::peer::prelude::FindPeers,
@@ -369,6 +371,7 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
     let tx_limit_nz =
         NonZeroU64::new(tx_limit).ok_or_else(|| eyre!("tx_limit must be non-zero"))?;
     let rbc_chunk_max_bytes = i64::try_from(payload_bytes).unwrap_or(i64::MAX);
+    let stake_amount = SumeragiNposParameters::default().min_self_bond();
 
     let mut config_table = toml::Table::new();
     {
@@ -401,6 +404,7 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
                 ["network", "max_frame_bytes_tx_gossip"],
                 P2P_TX_FRAME_BUDGET_BYTES,
             )
+            .write(["sumeragi", "consensus_mode"], "npos")
             .write(["sumeragi", "rbc_chunk_max_bytes"], rbc_chunk_max_bytes)
             .write(
                 ["sumeragi", "debug", "rbc", "force_deliver_quorum_one"],
@@ -474,6 +478,7 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
+        .with_npos_genesis_bootstrap(stake_amount)
         .with_data_availability_enabled(true)
         .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
             TransactionParameter::MaxTxBytes(tx_limit_nz),
@@ -1443,24 +1448,22 @@ async fn sumeragi_idle_view_change_recovers_after_leader_shutdown() -> Result<()
         let leader_idx = usize::try_from(leader_index)
             .wrap_err("leader_index does not fit into usize")?;
 
-        let mut roster: Vec<_> = peers.iter().map(NetworkPeer::id).collect();
-        roster.sort();
-        let leader_peer_id = roster.get(leader_idx).ok_or_else(|| {
+        let leader_peer = peers.get(leader_idx).cloned().ok_or_else(|| {
             eyre!(
-                "leader_index {leader_idx} out of bounds for roster size {}",
-                roster.len()
+                "leader_index {leader_idx} out of bounds for topology size {}",
+                peers.len()
             )
         })?;
-        let leader_peer = peers
-            .iter()
-            .find(|peer| peer.id() == *leader_peer_id)
-            .cloned()
-            .ok_or_else(|| eyre!("leader peer not found in network roster"))?;
 
         let mut baseline_view_changes = Vec::with_capacity(peers.len());
         for peer in peers.iter() {
             let status = peer.status().await?;
-            baseline_view_changes.push(u64::from(status.view_changes));
+            let view_changes = status
+                .sumeragi
+                .as_ref()
+                .ok_or_else(|| eyre!("status missing sumeragi snapshot"))?
+                .view_change_install_total;
+            baseline_view_changes.push(view_changes);
         }
 
         leader_peer.shutdown().await;
@@ -1486,28 +1489,58 @@ async fn sumeragi_idle_view_change_recovers_after_leader_shutdown() -> Result<()
             .await
             .wrap_err("submit log instruction")??;
 
+        let target_height = status_before.blocks + 1;
+        let view_change_deadline = Duration::from_secs(30);
+
         let status_url = submit_peer
             .client()
             .torii_url
             .join("status")
             .wrap_err("compose status URL")?;
         let start = Instant::now();
-        let elapsed = wait_for_height(reqwest::Client::new(), status_url, status_before.blocks + 1, start).await?;
+        let elapsed =
+            wait_for_height(reqwest::Client::new(), status_url, target_height, start).await?;
         ensure!(
-            elapsed <= Duration::from_secs(30),
+            elapsed <= view_change_deadline,
             "expected view change to recover within bound; elapsed={elapsed:?}"
         );
+
+        let http = reqwest::Client::new();
+        for (idx, peer) in peers.iter().enumerate() {
+            if !peer.is_running() {
+                continue;
+            }
+            let status_url = peer
+                .client()
+                .torii_url
+                .join("status")
+                .wrap_err("compose status URL")?;
+            timeout(
+                view_change_deadline,
+                wait_for_height(http.clone(), status_url, target_height, Instant::now()),
+            )
+            .await
+            .wrap_err_with(|| {
+                format!(
+                    "timed out waiting for peer {idx} to reach height {target_height}"
+                )
+            })??;
+        }
 
         for (idx, peer) in peers.iter().enumerate() {
             if !peer.is_running() {
                 continue;
             }
             let status = peer.status().await?;
+            let view_changes = status
+                .sumeragi
+                .as_ref()
+                .ok_or_else(|| eyre!("status missing sumeragi snapshot"))?
+                .view_change_install_total;
             let baseline = baseline_view_changes[idx];
             ensure!(
-                u64::from(status.view_changes) >= baseline.saturating_add(1),
-                "expected peer {idx} view_changes to advance after leader shutdown: before={baseline}, after={}",
-                status.view_changes
+                view_changes >= baseline.saturating_add(1),
+                "expected peer {idx} view_change_install_total to advance after leader shutdown: before={baseline}, after={view_changes}",
             );
         }
 
@@ -1782,6 +1815,7 @@ where
     let tx_limit_nz =
         NonZeroU64::new(tx_limit).ok_or_else(|| eyre!("tx_limit must be non-zero"))?;
     let rbc_chunk_max_bytes = i64::try_from(payload_bytes).unwrap_or(i64::MAX);
+    let stake_amount = SumeragiNposParameters::default().min_self_bond();
     let mut config_table = toml::Table::new();
     {
         let mut writer = TomlWriter::new(&mut config_table);
@@ -1813,6 +1847,7 @@ where
                 ["network", "max_frame_bytes_tx_gossip"],
                 P2P_TX_FRAME_BUDGET_BYTES,
             )
+            .write(["sumeragi", "consensus_mode"], "npos")
             .write(["sumeragi", "rbc_chunk_max_bytes"], rbc_chunk_max_bytes)
             .write(["sumeragi", "rbc_store_max_sessions"], 2_048i64)
             .write(["sumeragi", "rbc_store_soft_sessions"], 1_536i64)
@@ -1881,6 +1916,7 @@ where
     let builder = NetworkBuilder::new()
         .with_peers(peer_count)
         .with_auto_populated_trusted_peers()
+        .with_npos_genesis_bootstrap(stake_amount)
         // Enable DA (RBC + availability QC gating) in the base config so runtime parameters and
         // handshake agree.
         .with_data_availability_enabled(true)
@@ -2759,10 +2795,12 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
         u64::try_from(torii_max_content_len_for_payload(payload_bytes)).unwrap_or(u64::MAX);
     let tx_limit_nz =
         NonZeroU64::new(tx_limit).ok_or_else(|| eyre!("tx_limit must be non-zero"))?;
+    let stake_amount = SumeragiNposParameters::default().min_self_bond();
 
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
+        .with_npos_genesis_bootstrap(stake_amount)
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::DaEnabled(true),
         )))
@@ -2782,6 +2820,7 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
                     torii_max_content_len_for_payload(payload_bytes),
                 )
                 .write(["sumeragi", "da_enabled"], true)
+                .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["nexus", "enabled"], true)
                 .write(["nexus", "storage", "max_disk_usage_bytes"], 1_000_000i64)
                 .write(

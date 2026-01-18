@@ -3656,6 +3656,8 @@ export interface ToriiSumeragiStatus {
   staged_mode_activation_height?: number | null;
   mode_activation_lag_blocks?: number | null;
   consensus_caps?: ToriiConsensusCaps | null;
+  commit_qc?: ToriiSumeragiCommitQcSummary | null;
+  commit_quorum?: ToriiSumeragiCommitQuorumSummary | null;
   membership?: ToriiSumeragiMembershipSnapshot;
   lane_commitments?: ToriiLaneCommitmentSnapshot[];
   dataspace_commitments?: ToriiDataspaceCommitmentSnapshot[];
@@ -3676,6 +3678,47 @@ export interface ToriiConsensusCaps {
   rbc_store_soft_sessions: number;
   rbc_store_max_bytes: number;
   rbc_store_soft_bytes: number;
+}
+
+export interface ToriiSumeragiCommitQcSummary {
+  height: number;
+  view: number;
+  epoch: number;
+  block_hash: string | null;
+  validator_set_hash: string | null;
+  validator_set_len: number;
+  signatures_total: number;
+}
+
+export interface ToriiSumeragiCommitQcRecord {
+  subject_block_hash: string;
+  commit_qc: ToriiSumeragiCommitQc | null;
+}
+
+export interface ToriiSumeragiCommitQc {
+  phase: string;
+  parent_state_root: string;
+  post_state_root: string;
+  height: number;
+  view: number;
+  epoch: number;
+  mode_tag: string;
+  validator_set_hash: string;
+  validator_set_hash_version: number;
+  validator_set: ReadonlyArray<string>;
+  signers_bitmap: string;
+  bls_aggregate_signature: string;
+}
+
+export interface ToriiSumeragiCommitQuorumSummary {
+  height: number;
+  view: number;
+  block_hash: string | null;
+  signatures_present: number;
+  signatures_counted: number;
+  signatures_set_b: number;
+  signatures_required: number;
+  last_updated_ms: number;
 }
 
 export interface ToriiSumeragiPacemakerResponse {
@@ -3708,8 +3751,6 @@ export interface ToriiSumeragiPhasesEmaSnapshot {
   collect_prevote_ms: number;
   collect_precommit_ms: number;
   collect_aggregator_ms: number;
-  collect_exec_ms: number;
-  collect_witness_ms: number;
   commit_ms: number;
   pipeline_total_ms: number;
 }
@@ -3720,8 +3761,6 @@ export interface ToriiSumeragiPhasesSnapshot {
   collect_prevote_ms: number;
   collect_precommit_ms: number;
   collect_aggregator_ms: number;
-  collect_exec_ms: number;
-  collect_witness_ms: number;
   commit_ms: number;
   pipeline_total_ms: number;
   collect_aggregator_gossip_total: number;
@@ -6398,6 +6437,10 @@ export declare class ToriiClient {
   getSumeragiStatusTyped(options?: { signal?: AbortSignal }): Promise<ToriiSumeragiStatus>;
   getSumeragiPacemaker(options?: { signal?: AbortSignal }): Promise<ToriiSumeragiPacemakerResponse | null>;
   getSumeragiQc(options?: { signal?: AbortSignal }): Promise<ToriiSumeragiQcSnapshot>;
+  getSumeragiCommitQc(
+    blockHashHex: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiSumeragiCommitQcRecord>;
   getSumeragiPhases(options?: { signal?: AbortSignal }): Promise<ToriiSumeragiPhasesSnapshot>;
   getSumeragiBlsKeys(options?: { signal?: AbortSignal }): Promise<Record<string, string | null>>;
   getSumeragiLeader(options?: { signal?: AbortSignal }): Promise<ToriiSumeragiLeaderSnapshot>;

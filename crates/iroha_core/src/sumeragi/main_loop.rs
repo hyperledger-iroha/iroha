@@ -7833,14 +7833,6 @@ impl Actor {
                 super::status::set_phase_collect_precommit_ms(ms);
                 super::status::set_phase_collect_precommit_ema_ms(ema_ms);
             }
-            PipelinePhase::CollectExec => {
-                super::status::set_phase_collect_exec_ms(ms);
-                super::status::set_phase_collect_exec_ema_ms(ema_ms);
-            }
-            PipelinePhase::CollectWitness => {
-                super::status::set_phase_collect_witness_ms(ms);
-                super::status::set_phase_collect_witness_ema_ms(ema_ms);
-            }
             PipelinePhase::Commit => {
                 super::status::set_phase_commit_ms(ms);
                 super::status::set_phase_commit_ema_ms(ema_ms);
@@ -10780,9 +10772,6 @@ pub(super) enum PipelinePhase {
     CollectDa,
     CollectPrepare,
     CollectCommit,
-    CollectExec,
-    #[allow(dead_code)]
-    CollectWitness,
     Commit,
 }
 
@@ -10795,8 +10784,6 @@ impl PipelinePhase {
             Self::CollectDa => "collect_da",
             Self::CollectPrepare => "collect_prepare",
             Self::CollectCommit => "collect_commit",
-            Self::CollectExec => "collect_exec",
-            Self::CollectWitness => "collect_witness",
             Self::Commit => "commit",
         }
     }
@@ -10810,9 +10797,7 @@ impl PhaseRecordFlags {
     const COLLECT_DA: u8 = 1 << 1;
     const COLLECT_PREPARE: u8 = 1 << 2;
     const COLLECT_COMMIT: u8 = 1 << 3;
-    const COLLECT_EXEC: u8 = 1 << 4;
-    const COLLECT_WITNESS: u8 = 1 << 5;
-    const COMMIT: u8 = 1 << 6;
+    const COMMIT: u8 = 1 << 4;
 
     const fn new() -> Self {
         Self(0)
@@ -10828,8 +10813,6 @@ impl PhaseRecordFlags {
             PipelinePhase::CollectDa => Self::COLLECT_DA,
             PipelinePhase::CollectPrepare => Self::COLLECT_PREPARE,
             PipelinePhase::CollectCommit => Self::COLLECT_COMMIT,
-            PipelinePhase::CollectExec => Self::COLLECT_EXEC,
-            PipelinePhase::CollectWitness => Self::COLLECT_WITNESS,
             PipelinePhase::Commit => Self::COMMIT,
         }
     }
@@ -10882,8 +10865,6 @@ pub(super) struct PhaseEma {
     collect_da: Ema,
     collect_prevote: Ema,
     collect_precommit: Ema,
-    collect_exec: Ema,
-    collect_witness: Ema,
     commit: Ema,
 }
 
@@ -10898,8 +10879,6 @@ impl PhaseEma {
             collect_da: Ema::new(PACEMAKER_PHASE_EMA_ALPHA, duration_ms(timeouts.da)),
             collect_prevote: Ema::new(PACEMAKER_PHASE_EMA_ALPHA, duration_ms(timeouts.prevote)),
             collect_precommit: Ema::new(PACEMAKER_PHASE_EMA_ALPHA, duration_ms(timeouts.precommit)),
-            collect_exec: Ema::new(PACEMAKER_PHASE_EMA_ALPHA, duration_ms(timeouts.exec)),
-            collect_witness: Ema::new(PACEMAKER_PHASE_EMA_ALPHA, duration_ms(timeouts.witness)),
             commit: Ema::new(PACEMAKER_PHASE_EMA_ALPHA, duration_ms(timeouts.commit)),
         }
     }
@@ -10910,8 +10889,6 @@ impl PhaseEma {
             PipelinePhase::CollectDa => self.collect_da.update(sample_ms),
             PipelinePhase::CollectPrepare => self.collect_prevote.update(sample_ms),
             PipelinePhase::CollectCommit => self.collect_precommit.update(sample_ms),
-            PipelinePhase::CollectExec => self.collect_exec.update(sample_ms),
-            PipelinePhase::CollectWitness => self.collect_witness.update(sample_ms),
             PipelinePhase::Commit => self.commit.update(sample_ms),
         }
     }
@@ -10923,8 +10900,6 @@ impl PhaseEma {
             PipelinePhase::CollectDa => self.collect_da.current(),
             PipelinePhase::CollectPrepare => self.collect_prevote.current(),
             PipelinePhase::CollectCommit => self.collect_precommit.current(),
-            PipelinePhase::CollectExec => self.collect_exec.current(),
-            PipelinePhase::CollectWitness => self.collect_witness.current(),
             PipelinePhase::Commit => self.commit.current(),
         }
     }
@@ -10934,8 +10909,6 @@ impl PhaseEma {
             + self.collect_da.current()
             + self.collect_prevote.current()
             + self.collect_precommit.current()
-            // Execution/Witness latencies stay observability-only and remain excluded from the
-            // pacemaker control loop even though they have dedicated timeout seeds.
             + self.commit.current();
         Duration::from_millis(round_duration_ms(total_ms))
     }

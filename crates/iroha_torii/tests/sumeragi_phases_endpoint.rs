@@ -13,16 +13,12 @@ async fn sumeragi_phases_endpoint_shape() {
     iroha_core::sumeragi::status::set_phase_collect_prevote_ms(33);
     iroha_core::sumeragi::status::set_phase_collect_precommit_ms(44);
     iroha_core::sumeragi::status::set_phase_collect_aggregator_ms(49);
-    iroha_core::sumeragi::status::set_phase_collect_exec_ms(55);
-    iroha_core::sumeragi::status::set_phase_collect_witness_ms(66);
     iroha_core::sumeragi::status::set_phase_commit_ms(77);
     iroha_core::sumeragi::status::set_phase_propose_ema_ms(15);
     iroha_core::sumeragi::status::set_phase_collect_da_ema_ms(26);
     iroha_core::sumeragi::status::set_phase_collect_prevote_ema_ms(37);
     iroha_core::sumeragi::status::set_phase_collect_precommit_ema_ms(48);
     iroha_core::sumeragi::status::set_phase_collect_aggregator_ema_ms(58);
-    iroha_core::sumeragi::status::set_phase_collect_exec_ema_ms(58);
-    iroha_core::sumeragi::status::set_phase_collect_witness_ema_ms(69);
     iroha_core::sumeragi::status::set_phase_commit_ema_ms(80);
     iroha_core::sumeragi::status::set_phase_pipeline_total_ema_ms(206);
     iroha_core::sumeragi::status::inc_gossip_fallback();
@@ -61,8 +57,6 @@ async fn sumeragi_phases_endpoint_shape() {
         "collect_prevote_ms",
         "collect_precommit_ms",
         "collect_aggregator_ms",
-        "collect_exec_ms",
-        "collect_witness_ms",
         "commit_ms",
         "pipeline_total_ms",
         "collect_aggregator_gossip_total",
@@ -82,8 +76,6 @@ async fn sumeragi_phases_endpoint_shape() {
         "collect_prevote_ms",
         "collect_precommit_ms",
         "collect_aggregator_ms",
-        "collect_exec_ms",
-        "collect_witness_ms",
         "commit_ms",
         "pipeline_total_ms",
     ] {

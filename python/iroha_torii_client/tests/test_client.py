@@ -1028,8 +1028,6 @@ def test_get_sumeragi_phases_parses_snapshot() -> None:
                 "collect_prevote_ms": 3,
                 "collect_precommit_ms": 4,
                 "collect_aggregator_ms": 5,
-                "collect_exec_ms": 6,
-                "collect_witness_ms": 7,
                 "commit_ms": 8,
                 "pipeline_total_ms": 9,
                 "collect_aggregator_gossip_total": 10,
@@ -1042,8 +1040,6 @@ def test_get_sumeragi_phases_parses_snapshot() -> None:
                     "collect_prevote_ms": 16,
                     "collect_precommit_ms": 17,
                     "collect_aggregator_ms": 18,
-                    "collect_exec_ms": 19,
-                    "collect_witness_ms": 20,
                     "commit_ms": 21,
                     "pipeline_total_ms": 22,
                 },
@@ -1054,7 +1050,7 @@ def test_get_sumeragi_phases_parses_snapshot() -> None:
 
     phases = client.get_sumeragi_phases()
 
-    assert phases.collect_exec_ms == 6
+    assert phases.collect_aggregator_ms == 5
     assert phases.ema_ms.commit_ms == 21
     assert session.calls[0]["url"].endswith("/v1/sumeragi/phases")
 

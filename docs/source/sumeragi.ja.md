@@ -164,26 +164,26 @@ translator: manual
 - `iroha_cli sumeragi params` は `collectors_k`, `collectors_r`, タイムアウト、モードを含むフル Norito JSON を返します。
 - `--summary-only` を付けると CLI が整形した短い出力のみが得られます。
 
-### コレクター／ウィットネステレメトリ実務ガイド
+### コレクターテレメトリ実務ガイド
 
-停滞したコレクターやウィットネス遅延は `availability evidence` が生成されない、DA 集約が長引く、`collect_witness_ms` がスパイクする、といった形で表面化します。次の信号を監視してください。
+停滞したコレクターやコミット遅延は `availability evidence` が生成されない、DA 集約が長引く、`commit_ms`/`pipeline_total_ms` がスパイクする、といった形で表面化します。次の信号を監視してください。
 
 **主要ダッシュボード**
 - `sum(rate(sumeragi_da_votes_ingested_total[1m])) by (collector_idx)` — 投票を取り込めていないコレクターを特定。
 - `sumeragi_qc_last_latency_ms{kind="availability"}` とヒストグラム `sumeragi_qc_assembly_latency_ms{kind="availability"}` — Availability evidence 組み立ての最新／直近レイテンシ。
-- `sumeragi_phase_latency_ms{phase="collect_da"}` と `{phase="collect_witness"}` の P95（5 分窓） — 可用性票とウィットネス ACK 収集に費やした時間。
+- `sumeragi_phase_latency_ms{phase="collect_da"}` と `{phase="collect_precommit"}` の P95（5 分窓） — 可用性票と precommit QC 収集に費やした時間。
 - `sumeragi_phase_latency_ms{phase="collect_aggregator"}` — 冗長送信の遅延。`sumeragi_gossip_fallback_total`、`block_created_dropped_by_lock_total`、`block_created_hint_mismatch_total`、`block_created_proposal_mismatch_total`、`pacemaker_backpressure_deferrals_total` と合わせてファンアウト不足やバックプレッシャを判別。
-- `sumeragi_phase_latency_ema_ms{phase="…"}`
+- `sumeragi_phase_latency_ema_ms{phase="propose|collect_da|collect_prevote|collect_precommit|commit"}`
   — 各フェーズの平滑化レイテンシ（EMA）。生値との乖離で異常を検出。
 - `/v1/sumeragi/telemetry`（または `iroha_cli sumeragi status --summary`） — コレクター別の投票数、commit certificate レイテンシ、RBC backlog、最新 Highest/Locked commit certificate ハッシュを含む軽量スナップショット。
 - `/v1/sumeragi/status/sse` — 1 秒周期程度の SSE ストリームでライブ観測。
-- `/v1/sumeragi/phases` / `iroha_cli sumeragi phases --summary` — `{propose_ms, collect_da_ms, …, commit_ms, pipeline_total_ms}` と `ema_ms` を併記したフェーズ別タイムライン。
+- `/v1/sumeragi/phases` / `iroha_cli sumeragi phases --summary` — `{propose_ms, collect_da_ms, collect_prevote_ms, collect_precommit_ms, collect_aggregator_ms, commit_ms, pipeline_total_ms}` と `ema_ms` を併記したフェーズ別タイムライン。
 - `docs/source/grafana_sumeragi_overview.json` — commit certificate 高さの乖離、BlockCreated ドロップ、VRF 参加状況を可視化する Grafana ダッシュボード。
 
 **アラート閾値**
 - Availability evidence レイテンシ: `sumeragi_qc_last_latency_ms{kind="availability"}` が `0.6 * commit_time_ms` を 2 連続で超過、またはヒストグラム P95 が `0.7 * commit_time_ms` を超えたら要警告（permissioned は `CommitTimeMs`、NPoS は `timeouts.timeout_commit_ms`）。
 - 投票取り込みの停滞: `sum(rate(sumeragi_da_votes_ingested_total[2m])) == 0` かつ `sumeragi_rbc_backlog_sessions_pending > 0`（RBC は動いているのに票が集まらない）。
-- ウィットネス遅延: `collect_witness_ms` または `sumeragi_phase_latency_ms{phase="collect_witness"}` の P95 が `0.75 * commit_time_ms` を超過、あるいは新しいブロックが届いているのに 3 ラウンド以上 0 のまま（permissioned は `CommitTimeMs`、NPoS は `timeouts.timeout_commit_ms`）。
+- コミット遅延: `commit_ms` または `sumeragi_phase_latency_ms{phase="commit"}` の P95 が `0.75 * commit_time_ms` を超過、あるいは新しいブロックが届いているのに 3 ラウンド以上 0 のまま（permissioned は `CommitTimeMs`、NPoS は `timeouts.timeout_commit_ms`）。
 - コレクターファンアウト: `collect_aggregator_ms` が `0.5 * sumeragi.npos.timeouts.aggregator_ms` を 3 ラウンド連続で上回る、`sumeragi_redundant_sends_total` が一つの View で `redundant_send_r` を超える、`rate(sumeragi_gossip_fallback_total[5m]) > 0`、`increase(block_created_dropped_by_lock_total[5m]) > 0`、`increase(block_created_hint_mismatch_total[5m]) > 0`、`increase(block_created_proposal_mismatch_total[5m]) > 0`、または `increase(pacemaker_backpressure_deferrals_total[5m]) > 0` のいずれかが持続。
 
 冗長送信カウンタは DA リトライが追加コレクターへキャッシュ済み RBC ペイロードを再送したときに増えます。`npos_redundant_send_retries_update_metrics` テストでこの経路をカバーし、ダッシュボードと契約の乖離を検出します。
@@ -192,7 +192,7 @@ translator: manual
 1. `iroha_cli sumeragi collectors --summary` で担当コレクターが現行の担当に残っているか確認。
 2. `/v1/sumeragi/telemetry` を見て `votes_ingested` が伸びていないコレクター index を特定。単一コレクターだけ停滞しているなら一時的に `collectors_redundant_send_r` を増やし、票を次順位へ回す。
 3. `sumeragi_bg_post_queue_depth` と `p2p_*_throttled_total` でキューやトランスポートの逼迫を診断。
-4. ウィットネス停滞の場合は `/v1/torii/zk/prover/reports` と Torii ログでプローバの失敗を調べ、必要に応じて再起動。
+4. FASTPQ プローバ遅延が疑われる場合は `/v1/torii/zk/prover/reports` と Torii ログでプローバの失敗を調べ、必要に応じて再起動。
 5. 両コレクターが停止しているなら RBC backlog を確認。`sumeragi_rbc_store_evictions_total` のスパイクや `/v1/sumeragi/status` の `rbc_store.recent_evictions` を手掛かりにボトルネックとなるペイロードやエポックを特定。
    さらに `iroha_cli sumeragi status --summary` は `lane_governance_sealed_total` / `lane_governance_sealed_aliases` を併記するため、未だ封止されたレーンを GUI を介さずに確認できます。ローンチ／ロールバック手順や CI では `iroha_cli nexus lane-report --only-missing --fail-on-sealed` を合わせて実行し、マニフェストが未展開のまま進行しないようガードしてください。
 6. 復旧後はインシデントを記録し、冗長送信やコレクターパラメータを通常値へ戻す。

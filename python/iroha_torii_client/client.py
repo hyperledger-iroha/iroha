@@ -1137,8 +1137,6 @@ class SumeragiPhasesEma:
     collect_prevote_ms: int
     collect_precommit_ms: int
     collect_aggregator_ms: int
-    collect_exec_ms: int
-    collect_witness_ms: int
     commit_ms: int
     pipeline_total_ms: int
 
@@ -1152,8 +1150,6 @@ class SumeragiPhasesSnapshot:
     collect_prevote_ms: int
     collect_precommit_ms: int
     collect_aggregator_ms: int
-    collect_exec_ms: int
-    collect_witness_ms: int
     commit_ms: int
     pipeline_total_ms: int
     collect_aggregator_gossip_total: int
@@ -5952,8 +5948,6 @@ class ToriiClient:
             collect_prevote_ms=require_unsigned("collect_prevote_ms"),
             collect_precommit_ms=require_unsigned("collect_precommit_ms"),
             collect_aggregator_ms=require_unsigned("collect_aggregator_ms"),
-            collect_exec_ms=require_unsigned("collect_exec_ms"),
-            collect_witness_ms=require_unsigned("collect_witness_ms"),
             commit_ms=require_unsigned("commit_ms"),
             pipeline_total_ms=require_unsigned("pipeline_total_ms"),
             collect_aggregator_gossip_total=require_unsigned("collect_aggregator_gossip_total"),
@@ -5978,8 +5972,6 @@ class ToriiClient:
             collect_prevote_ms=require_unsigned("collect_prevote_ms"),
             collect_precommit_ms=require_unsigned("collect_precommit_ms"),
             collect_aggregator_ms=require_unsigned("collect_aggregator_ms"),
-            collect_exec_ms=require_unsigned("collect_exec_ms"),
-            collect_witness_ms=require_unsigned("collect_witness_ms"),
             commit_ms=require_unsigned("commit_ms"),
             pipeline_total_ms=require_unsigned("pipeline_total_ms"),
         )

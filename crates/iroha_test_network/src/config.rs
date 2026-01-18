@@ -149,15 +149,50 @@ pub fn genesis_with_keypair(
     )
 }
 
+/// Build the default genesis using a custom signing key pair and post-topology instructions.
+pub fn genesis_with_keypair_and_post_topology(
+    extra_transactions: Vec<Vec<InstructionBox>>,
+    post_topology_transactions: Vec<Vec<InstructionBox>>,
+    topology: UniqueVec<PeerId>,
+    topology_entries: Vec<GenesisTopologyEntry>,
+    genesis_key_pair: KeyPair,
+) -> GenesisBlock {
+    init_instruction_registry();
+    build_minimal_genesis_with_post_topology(
+        extra_transactions,
+        post_topology_transactions,
+        topology,
+        topology_entries,
+        genesis_key_pair,
+    )
+}
+
 fn build_minimal_genesis(
     extra_transactions: Vec<Vec<InstructionBox>>,
     topology: UniqueVec<PeerId>,
     topology_entries: Vec<GenesisTopologyEntry>,
     genesis_key_pair: KeyPair,
 ) -> GenesisBlock {
+    build_minimal_genesis_with_post_topology(
+        extra_transactions,
+        Vec::new(),
+        topology,
+        topology_entries,
+        genesis_key_pair,
+    )
+}
+
+fn build_minimal_genesis_with_post_topology(
+    extra_transactions: Vec<Vec<InstructionBox>>,
+    post_topology_transactions: Vec<Vec<InstructionBox>>,
+    topology: UniqueVec<PeerId>,
+    topology_entries: Vec<GenesisTopologyEntry>,
+    genesis_key_pair: KeyPair,
+) -> GenesisBlock {
     let (mut block, genesis_account, topology_vec, genesis_key_pair) =
-        build_minimal_genesis_unexecuted(
+        build_minimal_genesis_unexecuted_with_post_topology(
             extra_transactions,
+            post_topology_transactions,
             topology,
             topology_entries,
             genesis_key_pair,
@@ -173,6 +208,22 @@ fn build_minimal_genesis(
 
 fn build_minimal_genesis_unexecuted(
     extra_transactions: Vec<Vec<InstructionBox>>,
+    topology: UniqueVec<PeerId>,
+    topology_entries: Vec<GenesisTopologyEntry>,
+    genesis_key_pair: KeyPair,
+) -> (GenesisBlock, AccountId, Vec<PeerId>, KeyPair) {
+    build_minimal_genesis_unexecuted_with_post_topology(
+        extra_transactions,
+        Vec::new(),
+        topology,
+        topology_entries,
+        genesis_key_pair,
+    )
+}
+
+fn build_minimal_genesis_unexecuted_with_post_topology(
+    extra_transactions: Vec<Vec<InstructionBox>>,
+    post_topology_transactions: Vec<Vec<InstructionBox>>,
     topology: UniqueVec<PeerId>,
     topology_entries: Vec<GenesisTopologyEntry>,
     genesis_key_pair: KeyPair,
@@ -417,6 +468,16 @@ fn build_minimal_genesis_unexecuted(
         }
     }
 
+    for tx_instr in post_topology_transactions.into_iter() {
+        if tx_instr.is_empty() {
+            continue;
+        }
+        builder = builder.next_transaction();
+        for instruction in tx_instr {
+            builder = builder.append_instruction(instruction);
+        }
+    }
+
     let conf_param = Parameter::Custom(CustomParameter::new(
         confidential_metadata::registry_root_id(),
         Json::new(norito::json!({ "vk_set_hash": null })),
@@ -476,7 +537,8 @@ fn populate_genesis_results(
         vec![genesis_account_entry],
         Vec::<iroha_data_model::asset::AssetDefinition>::new(),
     );
-    let state = State::with_telemetry(world, kura, query_handle, StateTelemetry::default());
+    let mut state = State::with_telemetry(world, kura, query_handle, StateTelemetry::default());
+    apply_preexec_nexus_overrides(&mut state, genesis_key_pair)?;
     let core_topology = CoreTopology::new(topology.to_vec());
     let chain = block
         .0
@@ -508,6 +570,21 @@ fn populate_genesis_results(
     drop(state_block);
     let signed_block: iroha_data_model::block::SignedBlock = valid_block.into();
     Ok(rebuild_block_with_results(&signed_block, genesis_key_pair))
+}
+
+fn apply_preexec_nexus_overrides(state: &mut State, genesis_key_pair: &KeyPair) -> Result<(), Report> {
+    let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
+    let gas_account_id = AccountId::new(ivm_domain, genesis_key_pair.public_key().clone());
+    let gas_account = gas_account_id.to_string();
+
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.staking.stake_escrow_account_id = gas_account.clone();
+    nexus.staking.slash_sink_account_id = gas_account;
+
+    state
+        .set_nexus(nexus)
+        .map_err(|err| Report::new(err).wrap_err("apply nexus config for genesis pre-execution"))?;
+    Ok(())
 }
 
 fn build_placeholder_block(

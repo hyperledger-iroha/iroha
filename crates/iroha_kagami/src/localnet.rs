@@ -367,6 +367,10 @@ const LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MULTIPLIER: u64 = 10;
 const LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MIN_MS: u64 = 5_000;
 /// Upper bound for localnet commit inflight timeout to prevent long stalls.
 const LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MAX_MS: u64 = 15_000;
+/// Default localnet telemetry toggle (mirrors config defaults).
+const LOCALNET_TELEMETRY_ENABLED: bool = true;
+/// Default localnet telemetry profile (mirrors config defaults).
+const LOCALNET_TELEMETRY_PROFILE: &str = "operator";
 /// Minimum peer count for Sora profile localnets (multi-lane/dataspace defaults).
 const LOCALNET_SORA_MIN_PEERS: u16 = 4;
 /// Divisor applied to derive the localnet NPoS aggregator fallback timeout.
@@ -1039,6 +1043,14 @@ fn render_peer_config(
     );
     root.insert("trusted_peers".into(), Value::Array(trusted_list));
     root.insert("trusted_peers_pop".into(), Value::Array(pops));
+    root.insert(
+        "telemetry_enabled".into(),
+        Value::Boolean(LOCALNET_TELEMETRY_ENABLED),
+    );
+    root.insert(
+        "telemetry_profile".into(),
+        Value::String(LOCALNET_TELEMETRY_PROFILE.to_owned()),
+    );
 
     let mut kura = Table::new();
     kura.insert(
@@ -1939,7 +1951,7 @@ mod tests {
     use std::{
         env, fs,
         io::BufWriter,
-        num::{NonZeroU32, NonZeroU64},
+        num::NonZeroU32,
         path::{Path, PathBuf},
         time::Duration,
     };
@@ -2317,6 +2329,18 @@ mod tests {
             .filter_map(toml::Value::as_str)
             .collect::<Vec<_>>();
         assert_eq!(allowlist, LOCALNET_PREAUTH_ALLOW_CIDRS);
+
+        let telemetry_enabled = peer_cfg
+            .get("telemetry_enabled")
+            .and_then(toml::Value::as_bool)
+            .expect("telemetry_enabled boolean");
+        assert!(telemetry_enabled);
+
+        let telemetry_profile = peer_cfg
+            .get("telemetry_profile")
+            .and_then(toml::Value::as_str)
+            .expect("telemetry_profile string");
+        assert_eq!(telemetry_profile, LOCALNET_TELEMETRY_PROFILE);
     }
 
     #[test]
@@ -2582,11 +2606,7 @@ mod tests {
         assert_eq!(params.sumeragi().collectors_k(), 3);
         assert_eq!(params.sumeragi().collectors_redundant_send_r(), 2);
         assert_eq!(
-            params
-                .block
-                .max_transactions
-                .map(NonZeroU64::get)
-                .unwrap_or_default(),
+            params.block.max_transactions.get(),
             LOCALNET_BLOCK_MAX_TRANSACTIONS
         );
     }
@@ -2646,8 +2666,8 @@ mod tests {
             seed: None,
             bind_host: DEFAULT_BIND_HOST.to_owned(),
             public_host: DEFAULT_PUBLIC_HOST.to_owned(),
-            base_api_port: 68080,
-            base_p2p_port: 68337,
+            base_api_port: 58080,
+            base_p2p_port: 58337,
             out_dir: PathBuf::from("localnet"),
             extra_accounts: 0,
             assets: Vec::new(),
@@ -2921,8 +2941,12 @@ mod tests {
             "expected one activation per public-lane validator"
         );
         let params = manifest.effective_parameters();
-        let expected_stake_amount =
-            localnet_npos_stake_amount(&params, opts.perf_profile.map(|spec| spec.stake_amount));
+        let expected_stake_amount = localnet_npos_stake_amount(
+            &params,
+            opts.perf_profile
+                .map(LocalnetPerfProfile::spec)
+                .map(|spec| spec.stake_amount),
+        );
         for register in &validators {
             assert_eq!(register.lane_id, LaneId::SINGLE);
             assert_eq!(register.validator, register.stake_account);

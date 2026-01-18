@@ -145,9 +145,9 @@ class _MockState:
             return self._prover_delete(report_id)
         if method == "DELETE" and path == "/v1/zk/prover/reports":
             return self._prover_delete_filtered(params)
-        if method == "POST" and path == "/v1/pipeline/transactions":
+        if method == "POST" and path in {"/transaction", "/v1/pipeline/transactions", "/v1/transactions"}:
             return self._pipeline_submit(body)
-        if method == "GET" and path == "/v1/pipeline/transactions/status":
+        if method == "GET" and path in {"/v1/pipeline/transactions/status", "/v1/transactions/status"}:
             return self._pipeline_status(params)
         if method == "POST" and path == "/v1/gov/proposals/deploy-contract":
             return self._gov_propose_deploy(body)

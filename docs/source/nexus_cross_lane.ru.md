@@ -140,7 +140,7 @@ VRF-сида эпохи, связанного с `dataspace_id` и `lane_id` (с
 
 Merge ring ДОЛЖЕН выполнить следующее до принятия lane commitment:
 
-1. **Валидность lane QC.** Проверить агрегированную BLS подпись над preimage execution vote
+1. **Валидность lane QC.** Проверить агрегированную BLS подпись над preimage commit‑голоса
    (hash блока, `parent_state_root`, `post_state_root`, высота/вид/эпоха, `chain_id` и mode tag)
    против roster комитета по dataspace; убедиться, что длина bitmap подписантов соответствует
    комитету, подписанты соответствуют валидным индексам, и высота заголовка равна

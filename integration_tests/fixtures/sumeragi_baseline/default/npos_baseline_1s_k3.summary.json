@@ -49,20 +49,6 @@
       "mean": 128.6,
       "median": 126.0
     },
-    "collect_exec": {
-      "samples": 18,
-      "min": 0.0,
-      "max": 0.0,
-      "mean": 0.0,
-      "median": 0.0
-    },
-    "collect_witness": {
-      "samples": 18,
-      "min": 0.0,
-      "max": 0.0,
-      "mean": 0.0,
-      "median": 0.0
-    },
     "commit": {
       "samples": 18,
       "min": 790.0,

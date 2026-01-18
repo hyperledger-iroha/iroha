@@ -188,7 +188,8 @@ Operator access (Torii)
   `iroha_data_model` reflects the additional fields; older decoders should be
   updated to avoid silently dropping the new metadata.
 
-- After validating a proposal and assembling its `ExecVote`, Sumeragi emits a
+- After validating a proposal and capturing the execution witness (the source of
+  `parent_state_root`/`post_state_root` bound into commit QCs), Sumeragi emits a
   `PipelineEventBox::Witness` containing block metadata (`block_hash`, `height`,
   `view`, `epoch`) and the execution witness (`reads`/`writes`). Events surface
   immediately before the witness is forwarded to deterministic collectors (with

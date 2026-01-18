@@ -49,8 +49,6 @@ struct SumeragiPhasesEma {
     collect_prevote_ms: u64,
     collect_precommit_ms: u64,
     collect_aggregator_ms: u64,
-    collect_exec_ms: u64,
-    collect_witness_ms: u64,
     commit_ms: u64,
     pipeline_total_ms: u64,
 }
@@ -62,8 +60,6 @@ struct SumeragiPhasesResponse {
     collect_prevote_ms: u64,
     collect_precommit_ms: u64,
     collect_aggregator_ms: u64,
-    collect_exec_ms: u64,
-    collect_witness_ms: u64,
     commit_ms: u64,
     pipeline_total_ms: u64,
     collect_aggregator_gossip_total: u64,
@@ -630,6 +626,43 @@ pub async fn handle_v1_sumeragi_qc(accept: Option<axum::http::HeaderValue>) -> R
                 .unwrap_or(Value::Null),
         ),
     ]);
+    let commit_qc = json_object(vec![
+        json_entry("height", snap.commit_qc.height),
+        json_entry("view", snap.commit_qc.view),
+        json_entry("epoch", snap.commit_qc.epoch),
+        json_entry(
+            "block_hash",
+            snap.commit_qc
+                .block_hash
+                .map(|hash| Value::from(format!("{hash}")))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "validator_set_hash",
+            snap.commit_qc
+                .validator_set_hash
+                .map(|hash| Value::from(format!("{hash}")))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry("validator_set_len", snap.commit_qc.validator_set_len),
+        json_entry("signatures_total", snap.commit_qc.signatures_total),
+    ]);
+    let commit_quorum = json_object(vec![
+        json_entry("height", snap.commit_quorum.height),
+        json_entry("view", snap.commit_quorum.view),
+        json_entry(
+            "block_hash",
+            snap.commit_quorum
+                .block_hash
+                .map(|hash| Value::from(format!("{hash}")))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry("signatures_present", snap.commit_quorum.signatures_present),
+        json_entry("signatures_counted", snap.commit_quorum.signatures_counted),
+        json_entry("signatures_set_b", snap.commit_quorum.signatures_set_b),
+        json_entry("signatures_required", snap.commit_quorum.signatures_required),
+        json_entry("last_updated_ms", snap.commit_quorum.last_updated_ms),
+    ]);
     let payload = json_object(vec![
         json_entry("highest_qc", highest_qc),
         json_entry("locked_qc", locked_qc),
@@ -655,8 +688,6 @@ pub async fn handle_v1_sumeragi_phases(
         collect_prevote_ms: snap.collect_prevote_ms,
         collect_precommit_ms: snap.collect_precommit_ms,
         collect_aggregator_ms: snap.collect_aggregator_ms,
-        collect_exec_ms: snap.collect_exec_ms,
-        collect_witness_ms: snap.collect_witness_ms,
         commit_ms: snap.commit_ms,
         pipeline_total_ms: snap.pipeline_total_ms,
         collect_aggregator_gossip_total: snap.gossip_fallback_total,
@@ -669,8 +700,6 @@ pub async fn handle_v1_sumeragi_phases(
             collect_prevote_ms: snap.collect_prevote_ema_ms,
             collect_precommit_ms: snap.collect_precommit_ema_ms,
             collect_aggregator_ms: snap.collect_aggregator_ema_ms,
-            collect_exec_ms: snap.collect_exec_ema_ms,
-            collect_witness_ms: snap.collect_witness_ema_ms,
             commit_ms: snap.commit_ema_ms,
             pipeline_total_ms: snap.pipeline_total_ema_ms,
         },
@@ -2681,6 +2710,8 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("view_change_causes", view_change_causes),
         json_entry("highest_qc", highest_qc),
         json_entry("locked_qc", locked_qc),
+        json_entry("commit_qc", commit_qc),
+        json_entry("commit_quorum", commit_quorum),
         json_entry("tx_queue", tx_queue),
         json_entry("worker_loop", worker_loop),
         json_entry("commit_inflight", commit_inflight),
@@ -3505,6 +3536,99 @@ mod status_tests {
                 .get("drop_unsolicited_share_blocks_total")
                 .and_then(Value::as_u64),
             Some(0)
+        );
+    }
+
+    #[test]
+    fn status_snapshot_json_includes_commit_qc_and_quorum() {
+        let block_hash =
+            HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed([0x11; 32]),
+            );
+        let validator_set_hash =
+            HashOf::<Vec<iroha_data_model::peer::PeerId>>::from_untyped_unchecked(
+                Hash::prehashed([0x22; 32]),
+            );
+        let snap = sumeragi::StatusSnapshot {
+            commit_qc: status::QcSnapshot {
+                height: 12,
+                view: 3,
+                epoch: 1,
+                block_hash: Some(block_hash),
+                validator_set_hash: Some(validator_set_hash),
+                validator_set_len: 4,
+                signatures_total: 3,
+            },
+            commit_quorum: status::CommitQuorumSnapshot {
+                height: 12,
+                view: 3,
+                block_hash: Some(block_hash),
+                signatures_present: 4,
+                signatures_counted: 3,
+                signatures_set_b: 2,
+                signatures_required: 3,
+                last_updated_ms: 1234,
+            },
+            ..Default::default()
+        };
+        let payload = status_snapshot_json(&snap);
+        let commit_qc = payload
+            .get("commit_qc")
+            .and_then(Value::as_object)
+            .expect("commit_qc object");
+        let block_hash_str = format!("{block_hash}");
+        let validator_set_hash_str = format!("{validator_set_hash}");
+        assert_eq!(commit_qc.get("height").and_then(Value::as_u64), Some(12));
+        assert_eq!(commit_qc.get("view").and_then(Value::as_u64), Some(3));
+        assert_eq!(commit_qc.get("epoch").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            commit_qc.get("block_hash").and_then(Value::as_str),
+            Some(block_hash_str.as_str())
+        );
+        assert_eq!(
+            commit_qc.get("validator_set_hash").and_then(Value::as_str),
+            Some(validator_set_hash_str.as_str())
+        );
+        assert_eq!(
+            commit_qc.get("validator_set_len").and_then(Value::as_u64),
+            Some(4)
+        );
+        assert_eq!(
+            commit_qc.get("signatures_total").and_then(Value::as_u64),
+            Some(3)
+        );
+        let commit_quorum = payload
+            .get("commit_quorum")
+            .and_then(Value::as_object)
+            .expect("commit_quorum object");
+        assert_eq!(
+            commit_quorum.get("height").and_then(Value::as_u64),
+            Some(12)
+        );
+        assert_eq!(commit_quorum.get("view").and_then(Value::as_u64), Some(3));
+        assert_eq!(
+            commit_quorum.get("block_hash").and_then(Value::as_str),
+            Some(block_hash_str.as_str())
+        );
+        assert_eq!(
+            commit_quorum.get("signatures_present").and_then(Value::as_u64),
+            Some(4)
+        );
+        assert_eq!(
+            commit_quorum.get("signatures_counted").and_then(Value::as_u64),
+            Some(3)
+        );
+        assert_eq!(
+            commit_quorum.get("signatures_set_b").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            commit_quorum.get("signatures_required").and_then(Value::as_u64),
+            Some(3)
+        );
+        assert_eq!(
+            commit_quorum.get("last_updated_ms").and_then(Value::as_u64),
+            Some(1234)
         );
     }
 }

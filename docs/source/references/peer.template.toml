@@ -15,8 +15,8 @@
 # default_account_domain_label = "default"  # Override when your genesis uses a non-default domain label.
 # chain_discriminant = 0x02F1              # IH58 prefix / chain discriminant; override for dev/test networks.
 
-# telemetry_enabled = true
-# telemetry_profile = "operator"  # {disabled, operator, extended, developer, full}
+telemetry_enabled = true
+telemetry_profile = "operator"  # {disabled, operator, extended, developer, full}
 
 # trusted_peers = [
 #   # Validators must use BLS-Normal keys; non-BLS peers are ignored for consensus.
