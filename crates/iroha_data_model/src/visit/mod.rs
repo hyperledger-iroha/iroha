@@ -5,7 +5,9 @@ use iroha_primitives::numeric::Numeric;
 use crate::{
     isi::{
         Log, RegisterPeerWithPop,
-        staking::{ActivatePublicLaneValidator, ExitPublicLaneValidator, RegisterPublicLaneValidator},
+        staking::{
+            ActivatePublicLaneValidator, ExitPublicLaneValidator, RegisterPublicLaneValidator,
+        },
     },
     prelude::*,
     query::{AnyQueryBox, QueryWithParams, SingularQueryBox},

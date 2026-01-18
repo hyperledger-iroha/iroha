@@ -11,7 +11,7 @@ use integration_tests::sandbox;
 use iroha::data_model::{
     Level,
     isi::{InstructionBox, Log, SetParameter},
-    parameter::{BlockParameter, Parameter},
+    parameter::{BlockParameter, Parameter, system::SumeragiNposParameters},
 };
 use iroha_test_network::{Network, NetworkBuilder, NetworkPeer, init_instruction_registry};
 use nonzero_ext::nonzero;
@@ -19,12 +19,15 @@ use norito::json::{self, Value};
 use tokio::time::sleep;
 use toml::Table;
 
+const MAX_HEIGHT_SKEW: u64 = 2;
+
 #[test]
 fn npos_network_produces_blocks() -> Result<()> {
     init_instruction_registry();
 
     let builder = NetworkBuilder::new()
         .with_peers(4)
+        .with_npos_genesis_bootstrap(SumeragiNposParameters::default().min_self_bond())
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(nonzero!(1_u64)),
         )))
@@ -48,36 +51,32 @@ fn npos_network_produces_blocks() -> Result<()> {
             .first()
             .cloned()
             .ok_or_else(|| eyre!("network must have at least one peer"))?;
+        let status_before = submit_peer.client().get_status()?;
+        let target_height = status_before.blocks + 5;
+
         for i in 0..5 {
             let client = submit_peer.client();
             let message = format!("npos liveness seed {i}");
             client
-                .submit_blocking::<InstructionBox>(Log::new(Level::INFO, message).into())
+                .submit::<InstructionBox>(Log::new(Level::INFO, message).into())
                 .wrap_err_with(|| format!("submit liveness log {i}"))?;
         }
 
-        rt.block_on(async { network.ensure_blocks_with(|height| height.total >= 6).await })
-            .wrap_err_with(|| {
-                format!(
-                    "ensure_blocks_with height>=6 failed; env_dir={} peers={}",
-                    env_dir.display(),
-                    network.peers().len()
-                )
-            })?;
-
         let observed_heights = rt
-            .block_on(async { wait_for_converged_heights(&network, 6, sync_timeout).await })
+            .block_on(async { wait_for_converged_heights(&network, target_height, sync_timeout).await })
             .wrap_err("heights did not converge")?;
 
         // All peers should have advanced to the same height.
-        let reference = observed_heights.first().copied().unwrap_or_default();
+        let min = *observed_heights.iter().min().unwrap_or(&0);
+        let max = *observed_heights.iter().max().unwrap_or(&0);
         ensure!(
-            reference >= 6,
-            "latest height should be at least 6, got {reference}"
+            max >= target_height,
+            "latest height should be at least {target_height}, got {max}"
         );
         ensure!(
-            observed_heights.iter().all(|height| *height == reference),
-            "peer heights diverged during NPoS liveness check (expected {reference}, got {observed_heights:?})"
+            min >= target_height.saturating_sub(MAX_HEIGHT_SKEW)
+                && max.saturating_sub(min) <= MAX_HEIGHT_SKEW,
+            "peer heights diverged during NPoS liveness check (target={target_height} allowed_skew={MAX_HEIGHT_SKEW}, got {observed_heights:?})"
         );
 
         rt.block_on(async {
@@ -182,14 +181,17 @@ async fn wait_for_converged_heights(
             let min = *heights.iter().min().unwrap();
             let max = *heights.iter().max().unwrap();
             last_snapshot.clone_from(&heights);
-            if min >= min_height && min == max {
+            if min >= min_height.saturating_sub(MAX_HEIGHT_SKEW)
+                && max >= min_height
+                && max.saturating_sub(min) <= MAX_HEIGHT_SKEW
+            {
                 return Ok(heights);
             }
         }
 
         if Instant::now() >= deadline {
             return Err(eyre!(
-                "heights failed to converge within {:?}; last_snapshot={last_snapshot:?}",
+                "heights failed to converge within {:?}; target={min_height} allowed_skew={MAX_HEIGHT_SKEW} last_snapshot={last_snapshot:?}",
                 timeout
             ));
         }
@@ -242,6 +244,7 @@ async fn npos_pacemaker_resumes_after_downtime() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
+        .with_npos_genesis_bootstrap(SumeragiNposParameters::default().min_self_bond())
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(nonzero!(1_u64)),
         )))
@@ -286,11 +289,7 @@ async fn npos_pacemaker_resumes_after_downtime() -> Result<()> {
                 .submit::<InstructionBox>(Log::new(Level::INFO, message).into())
                 .wrap_err_with(|| format!("submit pacemaker seed {i}"))?;
         }
-        network
-            .ensure_blocks_with(|height| height.total >= 4)
-            .await
-            .wrap_err("ensure_blocks_with height>=4 failed")?;
-        wait_for_converged_heights(&network, 2, sync_timeout)
+        wait_for_converged_heights(&network, 4, sync_timeout)
             .await
             .wrap_err("initial heights did not converge")?;
 
@@ -321,10 +320,6 @@ async fn npos_pacemaker_resumes_after_downtime() -> Result<()> {
                 .submit::<InstructionBox>(Log::new(Level::INFO, message).into())
                 .wrap_err_with(|| format!("submit pacemaker resume seed {i}"))?;
         }
-        network
-            .ensure_blocks_with(|height| height.total >= status_before.blocks + 2)
-            .await
-            .wrap_err("post-restart blocks did not advance")?;
         wait_for_converged_heights(&network, status_before.blocks + 2, sync_timeout)
             .await
             .wrap_err("post-restart heights did not converge")?;

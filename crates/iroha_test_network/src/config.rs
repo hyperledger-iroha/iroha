@@ -572,7 +572,10 @@ fn populate_genesis_results(
     Ok(rebuild_block_with_results(&signed_block, genesis_key_pair))
 }
 
-fn apply_preexec_nexus_overrides(state: &mut State, genesis_key_pair: &KeyPair) -> Result<(), Report> {
+fn apply_preexec_nexus_overrides(
+    state: &mut State,
+    genesis_key_pair: &KeyPair,
+) -> Result<(), Report> {
     let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
     let gas_account_id = AccountId::new(ivm_domain, genesis_key_pair.public_key().clone());
     let gas_account = gas_account_id.to_string();

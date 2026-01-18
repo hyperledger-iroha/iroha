@@ -243,8 +243,8 @@ instruction_visitors!(define_instruction_visitors);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_crypto::{Algorithm, KeyPair};
     use crate::prelude::*;
+    use iroha_crypto::{Algorithm, KeyPair};
 
     struct CountingVisitor {
         logs: usize,
