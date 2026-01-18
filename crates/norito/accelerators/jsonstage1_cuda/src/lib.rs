@@ -72,23 +72,30 @@ pub unsafe extern "C" fn json_stage1_build_tape(
     0
 }
 
-fn crc64_cpu(bytes: &[u8]) -> u64 {
-    const POLY: u64 = 0x42F0_E1EB_A9EA_3693;
-    let mut crc = 0u64;
+fn crc64_raw(bytes: &[u8], init: u64) -> u64 {
+    const POLY: u64 = 0xC96C_5795_D787_0F42;
+    let mut crc = init;
     for &b in bytes {
-        crc ^= (b as u64) << 56;
+        crc ^= b as u64;
         for _ in 0..8 {
-            if (crc & 0x8000_0000_0000_0000) != 0 {
-                crc = (crc << 1) ^ POLY;
+            if (crc & 1) != 0 {
+                crc = (crc >> 1) ^ POLY;
             } else {
-                crc <<= 1;
+                crc >>= 1;
             }
         }
     }
     crc
 }
 
-/// Compute CRC64-ECMA using the CUDA helper (CPU fallback for now).
+fn crc64_cpu(bytes: &[u8]) -> u64 {
+    const INIT: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+    const XOR_OUT: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+    let crc = crc64_raw(bytes, INIT);
+    crc ^ XOR_OUT
+}
+
+/// Compute CRC64-XZ using the CUDA helper (CPU fallback for now).
 ///
 /// # Safety
 /// The caller must ensure the input and output pointers are valid for the
@@ -119,10 +126,12 @@ pub unsafe extern "C" fn norito_crc64_cuda(
 
 #[cfg(test)]
 mod tests {
-    use super::{crc64_cpu, json_stage1_build_tape, norito_crc64_cuda};
+    use super::{crc64_cpu, crc64_raw, json_stage1_build_tape, norito_crc64_cuda};
 
-    const CRC_123456789: u64 = 0x6C40_DF5F_0B49_7347;
+    const CRC_123456789: u64 = 0x995D_C9BB_DF19_39FA;
     const CHUNK_SIZE: usize = 16 * 1024;
+    const CRC64_INIT: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+    const CRC64_XOR_OUT: u64 = 0xFFFF_FFFF_FFFF_FFFF;
 
     #[test]
     fn basic_offsets() {
@@ -152,26 +161,34 @@ mod tests {
             .flat_map(|v| v.to_le_bytes())
             .collect::<Vec<u8>>();
 
-        let mut combined = 0u64;
+        let mut combined = CRC64_INIT;
         for chunk in data.chunks(CHUNK_SIZE) {
-            let part = crc64_cpu(chunk);
-            combined = crc64_combine(combined, part, chunk.len());
+            let part = crc64_raw(chunk, 0);
+            combined = crc64_combine_raw(combined, part, chunk.len());
         }
 
         let full = crc64_cpu(&data);
-        assert_eq!(combined, full);
+        assert_eq!(combined ^ CRC64_XOR_OUT, full);
     }
 
-    fn crc64_combine(mut crc1: u64, crc2: u64, len2: usize) -> u64 {
-        const POLY: u64 = 0x42F0_E1EB_A9EA_3693;
+    fn crc64_combine_raw(crc1: u64, crc2: u64, len2: usize) -> u64 {
+        let shifted = crc64_shift(crc1, len2);
+        shifted ^ crc2
+    }
+
+    fn crc64_shift(mut crc1: u64, len2: usize) -> u64 {
+        const POLY: u64 = 0xC96C_5795_D787_0F42;
         if len2 == 0 {
             return crc1;
         }
 
-        let mut odd = [0u64; 64];
-        odd[0] = POLY;
-        for (n, slot) in odd.iter_mut().enumerate().skip(1) {
-            *slot = 1u64 << (63 - n);
+        let mut mat = [0u64; 64];
+        let mut square = [0u64; 64];
+        let mut row = 1u64;
+        mat[0] = POLY;
+        for n in 1..64 {
+            mat[n] = row;
+            row <<= 1;
         }
 
         fn gf2_matrix_times(mat: &[u64; 64], mut vec: u64) -> u64 {
@@ -193,26 +210,16 @@ mod tests {
             }
         }
 
-        let mut even = [0u64; 64];
-        gf2_matrix_square(&mut even, &odd);
-
         let mut len_bits = len2 as u64 * 8;
         while len_bits != 0 {
-            gf2_matrix_square(&mut odd, &even);
             if len_bits & 1 != 0 {
-                crc1 = gf2_matrix_times(&odd, crc1);
+                crc1 = gf2_matrix_times(&mat, crc1);
             }
-            len_bits >>= 1;
-            if len_bits == 0 {
-                break;
-            }
-            gf2_matrix_square(&mut even, &odd);
-            if len_bits & 1 != 0 {
-                crc1 = gf2_matrix_times(&even, crc1);
-            }
+            gf2_matrix_square(&mut square, &mat);
+            mat = square;
             len_bits >>= 1;
         }
 
-        crc1 ^ crc2
+        crc1
     }
 }

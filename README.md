@@ -281,7 +281,7 @@ The project is composed of multiple Rust crates. Key crates include:
 - [`iroha_crypto`](crates/iroha_crypto): cryptographic primitives used across the stack
 - [`iroha_kagami`](crates/iroha_kagami): generates cryptographic keys, default genesis, configuration references, and schemas
 - [`iroha_data_model`](crates/iroha_data_model): common data models
-- [`norito`](crates/norito): deterministic serialization codec, featuring CRC64-ECMA acceleration (x86_64 CLMUL / aarch64 PMULL), slicing-by-8 fallback, optional zstd compression (CPU/GPU via feature flags), schema hashing, and streaming iterators (`StreamSeqIter`, `StreamMapIter`, finish-on-drop guards)
+- [`norito`](crates/norito): deterministic serialization codec, featuring CRC64-XZ acceleration (x86_64 CLMUL / aarch64 PMULL), slicing-by-8 fallback, optional zstd compression (CPU/GPU via feature flags), schema hashing, and streaming iterators (`StreamSeqIter`, `StreamMapIter`, finish-on-drop guards)
 - [`iroha_futures`](crates/iroha_futures): async utilities
 - [`iroha_logger`](crates/iroha_logger): logging built on `tracing`
 - [`iroha_macro`](crates/iroha_macro): convenience macros

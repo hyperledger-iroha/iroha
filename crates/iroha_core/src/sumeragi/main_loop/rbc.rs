@@ -1,8 +1,16 @@
 //! RBC planning, chunking, and hydration helpers.
+#![allow(
+    clippy::items_after_statements,
+    clippy::needless_pass_by_value,
+    clippy::too_many_lines,
+    clippy::unnecessary_wraps,
+    clippy::unused_self
+)]
 
 use std::{
     collections::{BTreeMap, BTreeSet},
     io,
+    num::NonZeroUsize,
     sync::mpsc,
     time::{Duration, Instant, SystemTime},
 };
@@ -11,11 +19,12 @@ use eyre::{Result, eyre};
 use iroha_crypto::{Hash, HashOf, MerkleTree, Signature};
 use iroha_data_model::{
     ChainId, Encode as _,
-    block::{BlockHeader, SignedBlock},
+    block::{BlockHeader, BlockPayload, SignedBlock},
     nexus::{DataSpaceId, LaneId},
     peer::PeerId,
 };
 use iroha_logger::prelude::*;
+use norito::codec::Decode;
 use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 use sha2::{Digest, Sha256};
 
@@ -62,7 +71,7 @@ const RBC_PERSIST_WORK_QUEUE_CAP: usize = 8;
 const RBC_PERSIST_RESULT_QUEUE_CAP: usize = 8;
 
 pub(super) fn rbc_roster_hash(roster: &[PeerId]) -> Hash {
-    Hash::new(&roster.to_vec().encode())
+    Hash::new(roster.to_vec().encode())
 }
 
 fn roster_has_duplicates(roster: &[PeerId]) -> bool {
@@ -96,6 +105,7 @@ pub(super) struct RbcPersistWorkerHandle {
 
 fn spawn_rbc_persist_worker(
     cfg: crate::sumeragi::RbcStoreConfig,
+    wake_tx: Option<mpsc::SyncSender<()>>,
 ) -> io::Result<RbcPersistWorkerHandle> {
     let (work_tx, work_rx) = mpsc::sync_channel::<RbcPersistWork>(RBC_PERSIST_WORK_QUEUE_CAP);
     let (result_tx, result_rx) =
@@ -116,6 +126,9 @@ fn spawn_rbc_persist_worker(
                 let outcome = store.persist_snapshot(&work.persisted);
                 if result_tx.send(RbcPersistResult { key, outcome }).is_err() {
                     break;
+                }
+                if let Some(wake) = wake_tx.as_ref() {
+                    let _ = wake.try_send(());
                 }
             }
         })?;
@@ -154,6 +167,7 @@ pub(super) struct HydrationOutcome {
     pub(super) chunk_digest_mismatch: bool,
     pub(super) layout_mismatch: bool,
     pub(super) observed_chunks: Option<u32>,
+    pub(super) observed_chunk_root: Option<Hash>,
 }
 
 pub(super) fn apply_hydrated_payload(
@@ -199,6 +213,11 @@ pub(super) fn apply_hydrated_payload(
         outcome.updated = true;
     }
 
+    outcome.observed_chunk_root =
+        MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(digests.clone())
+            .root()
+            .map(Hash::from);
+
     let dropped = session.drop_mismatched_chunks();
     if dropped > 0 {
         outcome.updated = true;
@@ -228,14 +247,15 @@ pub(super) fn apply_hydrated_payload(
         || (session.total_chunks() != 0 && session.received_chunks() == session.total_chunks());
     if all_chunks_present {
         outcome.all_chunks_present = true;
-        if let Some(computed_root) = session.chunk_root() {
+        let observed_root = outcome.observed_chunk_root.or_else(|| session.chunk_root());
+        if let Some(observed_root) = observed_root {
             if let Some(expected_root) = session.expected_chunk_root {
-                if expected_root != computed_root {
+                if expected_root != observed_root {
                     session.invalid = true;
                     outcome.chunk_root_mismatch = true;
                 }
             } else {
-                session.expected_chunk_root = Some(computed_root);
+                session.expected_chunk_root = Some(observed_root);
                 outcome.updated = true;
             }
         }
@@ -283,6 +303,102 @@ pub(super) fn compute_chunk_broadcast_order(
         order = filtered;
     }
     (order, dropped)
+}
+
+pub(super) fn rbc_chunk_target_count(roster_len: usize, fanout_cap: Option<NonZeroUsize>) -> usize {
+    let peers = roster_len.saturating_sub(1);
+    if peers == 0 {
+        return 0;
+    }
+    let commit_quorum = if roster_len > 3 {
+        ((roster_len.saturating_sub(1)) / 3).saturating_mul(2) + 1
+    } else {
+        roster_len
+    };
+    // Ensure a commit quorum of peers receives chunks even if the leader is excluded.
+    let min_targets = commit_quorum.min(peers);
+    let desired = fanout_cap.map_or(min_targets, |cap| cap.get().min(peers));
+    desired.max(min_targets)
+}
+
+pub(super) fn select_rbc_chunk_targets(
+    roster: &[PeerId],
+    local_peer_id: &PeerId,
+    seed: u64,
+    target_count: usize,
+) -> Vec<(usize, PeerId)> {
+    if target_count == 0 {
+        return Vec::new();
+    }
+    let mut candidates: Vec<(usize, PeerId)> = roster
+        .iter()
+        .enumerate()
+        .filter(|(_, peer)| *peer != local_peer_id)
+        .map(|(idx, peer)| (idx, peer.clone()))
+        .collect();
+    if candidates.is_empty() {
+        return candidates;
+    }
+    if target_count < candidates.len() {
+        let mut rng = StdRng::seed_from_u64(seed);
+        candidates.shuffle(&mut rng);
+        candidates.truncate(target_count);
+    }
+    candidates
+}
+
+#[allow(dead_code)]
+fn rbc_rebroadcasters_count(roster_len: usize) -> usize {
+    if roster_len == 0 {
+        return 0;
+    }
+    let max_faults = roster_len.saturating_sub(1) / 3;
+    max_faults.saturating_add(1).min(roster_len)
+}
+
+#[allow(dead_code)]
+fn rbc_rebroadcast_indices(roster_len: usize, seed: u64) -> Vec<usize> {
+    let rebroadcaster_count = rbc_rebroadcasters_count(roster_len);
+    if rebroadcaster_count == 0 {
+        return Vec::new();
+    }
+    if rebroadcaster_count >= roster_len {
+        return (0..roster_len).collect();
+    }
+
+    let leader_idx = 0;
+    let mut selected = Vec::with_capacity(rebroadcaster_count);
+    selected.push(leader_idx);
+
+    let mut candidates: Vec<usize> = (1..roster_len).collect();
+    let mut rng = StdRng::seed_from_u64(seed);
+    candidates.shuffle(&mut rng);
+    selected.extend(
+        candidates
+            .into_iter()
+            .take(rebroadcaster_count.saturating_sub(1)),
+    );
+    selected
+}
+
+#[allow(dead_code)]
+pub(super) fn is_payload_rebroadcaster(
+    roster: &[PeerId],
+    local_peer_id: &PeerId,
+    seed: u64,
+) -> bool {
+    let Some(local_idx) = roster.iter().position(|peer| peer == local_peer_id) else {
+        return false;
+    };
+    rbc_rebroadcast_indices(roster.len(), seed).contains(&local_idx)
+}
+
+#[allow(dead_code)]
+pub(super) fn is_ready_rebroadcaster(roster: &[PeerId], local_peer_id: &PeerId, seed: u64) -> bool {
+    let Some(local_idx) = roster.iter().position(|peer| peer == local_peer_id) else {
+        return false;
+    };
+    rbc_rebroadcast_indices(roster.len(), seed).contains(&local_idx)
 }
 
 pub(super) fn distribute_chunks(total_chunks: u32, weights: &[u128]) -> Vec<u32> {
@@ -338,6 +454,93 @@ pub(super) fn distribute_chunks(total_chunks: u32, weights: &[u128]) -> Vec<u32>
     }
 
     allocations
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::peer::PeerId;
+
+    fn sample_roster(len: usize) -> Vec<PeerId> {
+        (0..len)
+            .map(|idx| {
+                let seed = format!("rbc-roster-{idx}");
+                let keypair = KeyPair::from_seed(seed.into_bytes(), Algorithm::Ed25519);
+                PeerId::new(keypair.public_key().clone())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn rbc_chunk_target_count_respects_minimums() {
+        let roster_len: usize = 7;
+        let peers = roster_len.saturating_sub(1);
+        let commit_quorum = ((roster_len.saturating_sub(1)) / 3).saturating_mul(2) + 1;
+        let expected_min = commit_quorum.min(peers);
+        assert_eq!(rbc_chunk_target_count(roster_len, None), expected_min);
+        assert_eq!(
+            rbc_chunk_target_count(roster_len, NonZeroUsize::new(1)),
+            expected_min
+        );
+        assert_eq!(
+            rbc_chunk_target_count(roster_len, NonZeroUsize::new(32)),
+            peers
+        );
+    }
+
+    #[test]
+    fn select_rbc_chunk_targets_is_deterministic() {
+        let roster = sample_roster(5);
+        let local = roster[0].clone();
+        let targets = select_rbc_chunk_targets(&roster, &local, 42, 2);
+        let targets_repeat = select_rbc_chunk_targets(&roster, &local, 42, 2);
+        assert_eq!(targets, targets_repeat);
+        assert_eq!(targets.len(), 2);
+        assert!(targets.iter().all(|(_, peer)| peer != &local));
+    }
+
+    #[test]
+    fn rbc_rebroadcaster_count_tracks_fault_tolerance() {
+        assert_eq!(rbc_rebroadcasters_count(0), 0);
+        assert_eq!(rbc_rebroadcasters_count(1), 1);
+        assert_eq!(rbc_rebroadcasters_count(2), 1);
+        assert_eq!(rbc_rebroadcasters_count(3), 1);
+        assert_eq!(rbc_rebroadcasters_count(4), 2);
+        assert_eq!(rbc_rebroadcasters_count(7), 3);
+    }
+
+    #[test]
+    fn rbc_rebroadcast_subset_includes_leader_and_is_deterministic() {
+        let roster = sample_roster(4);
+        let seed = 99;
+        let indices = rbc_rebroadcast_indices(roster.len(), seed);
+        assert_eq!(indices.len(), rbc_rebroadcasters_count(roster.len()));
+        assert!(indices.contains(&0));
+        let repeat = rbc_rebroadcast_indices(roster.len(), seed);
+        assert_eq!(indices, repeat);
+    }
+
+    #[test]
+    fn rbc_rebroadcaster_selection_is_deterministic() {
+        let roster = sample_roster(5);
+        let local = roster[2].clone();
+        let seed = 73;
+        let first = is_payload_rebroadcaster(&roster, &local, seed);
+        let second = is_payload_rebroadcaster(&roster, &local, seed);
+        assert_eq!(first, second);
+        assert_eq!(is_ready_rebroadcaster(&roster, &local, seed), first);
+
+        let rebroadcasters = roster
+            .iter()
+            .filter(|peer| is_payload_rebroadcaster(&roster, peer, seed))
+            .count();
+        assert_eq!(rebroadcasters, rbc_rebroadcasters_count(roster.len()));
+
+        let outsider = sample_roster(1).pop().expect("sample peer");
+        assert!(!is_payload_rebroadcaster(&roster, &outsider, seed));
+        assert!(!is_ready_rebroadcaster(&roster, &outsider, seed));
+    }
 }
 
 pub(super) fn rbc_ready_signature_valid(
@@ -489,6 +692,12 @@ impl Actor {
             .ok_or_else(|| eyre!("failed to compute RBC chunk root"))?;
 
         let block_hash = signed_block.hash();
+        let leader_signature = signed_block
+            .signatures()
+            .find(|signature| signature.index() == u64::from(local_validator_index))
+            .cloned()
+            .ok_or_else(|| eyre!("missing leader signature for RBC init"))?;
+        let block_header = signed_block.header();
         let mut session = RbcSession::new(
             total_chunks,
             Some(payload_hash),
@@ -497,6 +706,8 @@ impl Actor {
             epoch,
         )
         .map_err(|err| eyre!(err))?;
+        session.block_header = Some(block_header);
+        session.leader_signature = Some(leader_signature.clone());
         for (idx, chunk) in chunk_bytes.iter().enumerate() {
             let chunk_index = u32::try_from(idx).expect("chunk index fits within a 32-bit range");
             session.ingest_chunk(chunk_index, chunk.clone(), Some(local_validator_index));
@@ -562,6 +773,8 @@ impl Actor {
             chunk_digests: digests.clone(),
             payload_hash,
             chunk_root,
+            block_header,
+            leader_signature: leader_signature.clone(),
         };
 
         let primary_plan = RbcSessionPlan {
@@ -648,6 +861,8 @@ impl Actor {
                         chunk_digests: digests.clone(),
                         payload_hash,
                         chunk_root,
+                        block_header,
+                        leader_signature: leader_signature.clone(),
                     },
                     chunks: dup_chunks,
                     roster: dup_roster.clone(),
@@ -851,22 +1066,20 @@ impl Actor {
         ready
     }
 
-    pub(super) fn schedule_rbc_chunk_broadcast(
+    pub(super) fn schedule_rbc_chunk_posts(
         &mut self,
-        chunk: crate::sumeragi::consensus::RbcChunk,
+        chunk: &crate::sumeragi::consensus::RbcChunk,
+        targets: &[(usize, PeerId)],
     ) {
-        let key = Self::session_key(&chunk.block_hash, chunk.height, chunk.view);
-        let roster = self.rbc_session_roster(key);
-        if roster.is_empty() {
+        if targets.is_empty() {
             return;
         }
         let local_peer_id = self.common_config.peer.id().clone();
-
-        for (idx, peer_id) in roster.iter().enumerate() {
+        for (idx, peer_id) in targets.iter() {
             if peer_id == &local_peer_id {
                 continue;
             }
-            let Ok(validator_idx) = u32::try_from(idx) else {
+            let Ok(validator_idx) = u32::try_from(*idx) else {
                 continue;
             };
 
@@ -917,7 +1130,7 @@ impl Actor {
             );
         }
         self.update_rbc_status_entry(key, &plan.session, false);
-        self.record_rbc_session_roster(key, plan.roster.clone(), RbcRosterSource::Network);
+        self.record_rbc_session_roster(key, plan.roster.clone(), RbcRosterSource::Derived);
         self.persist_rbc_session(key, &plan.session);
         Ok(())
     }
@@ -938,8 +1151,14 @@ impl Actor {
                 msg: BlockMessage::RbcInit(plan.init.clone()),
             });
         }
-        for chunk in plan.chunks {
-            self.schedule_rbc_chunk_broadcast(chunk);
+        let queued = self.enqueue_rbc_payload_chunks(key, plan.chunks, &topology_peers);
+        if queued {
+            self.subsystems
+                .da_rbc
+                .rbc
+                .payload_rebroadcast_last_sent
+                .insert(key, Instant::now());
+            let _ = self.flush_rbc_outbound_chunks(Instant::now());
         }
         self.maybe_emit_rbc_ready(key)?;
         Ok(())
@@ -1041,6 +1260,7 @@ impl Actor {
         key: SessionKey,
         payload_bytes: &[u8],
         payload_hash: Hash,
+        sender: Option<&PeerId>,
     ) -> Result<()> {
         let Some(mut session) = self.subsystems.da_rbc.rbc.sessions.remove(&key) else {
             return Ok(());
@@ -1059,31 +1279,74 @@ impl Actor {
         );
 
         if outcome.payload_hash_mismatch {
-            warn!(
-                height = key.1,
-                view = key.2,
-                expected = ?session.payload_hash(),
-                observed = ?payload_hash,
-                "hydrated payload hash mismatches RBC session; marking invalid"
-            );
+            let log_outcome = sender.map(|peer| {
+                self.record_rbc_mismatch(peer, status::RbcMismatchKind::PayloadHash, key.1, key.2)
+            });
+            if log_outcome.map_or(true, |outcome| outcome.should_log()) {
+                warn!(
+                    height = key.1,
+                    view = key.2,
+                    sender = ?sender,
+                    expected = ?session.payload_hash(),
+                    observed = ?payload_hash,
+                    "hydrated payload hash mismatches RBC session; marking invalid"
+                );
+            } else {
+                debug!(
+                    height = key.1,
+                    view = key.2,
+                    sender = ?sender,
+                    expected = ?session.payload_hash(),
+                    observed = ?payload_hash,
+                    "suppressing repeated hydrated payload hash mismatch log"
+                );
+            }
         }
         if outcome.chunk_digest_mismatch {
-            warn!(
-                height = key.1,
-                view = key.2,
-                "hydrated payload chunk-digest list mismatches INIT; marking invalid"
-            );
+            let log_outcome = sender.map(|peer| {
+                self.record_rbc_mismatch(peer, status::RbcMismatchKind::ChunkDigest, key.1, key.2)
+            });
+            if log_outcome.map_or(true, |outcome| outcome.should_log()) {
+                warn!(
+                    height = key.1,
+                    view = key.2,
+                    sender = ?sender,
+                    "hydrated payload chunk-digest list mismatches INIT; marking invalid"
+                );
+            } else {
+                debug!(
+                    height = key.1,
+                    view = key.2,
+                    sender = ?sender,
+                    "suppressing repeated hydrated chunk-digest mismatch log"
+                );
+            }
         }
         if outcome.chunk_root_mismatch {
+            let log_outcome = sender.map(|peer| {
+                self.record_rbc_mismatch(peer, status::RbcMismatchKind::ChunkRoot, key.1, key.2)
+            });
             let expected_root = session.expected_chunk_root;
-            let computed_root = session.chunk_root();
-            warn!(
-                height = key.1,
-                view = key.2,
-                ?expected_root,
-                ?computed_root,
-                "hydrated payload chunk-root mismatches INIT; marking invalid"
-            );
+            let observed_root = outcome.observed_chunk_root.or_else(|| session.chunk_root());
+            if log_outcome.map_or(true, |outcome| outcome.should_log()) {
+                warn!(
+                    height = key.1,
+                    view = key.2,
+                    sender = ?sender,
+                    ?expected_root,
+                    ?observed_root,
+                    "hydrated payload chunk-root mismatches INIT; marking invalid"
+                );
+            } else {
+                debug!(
+                    height = key.1,
+                    view = key.2,
+                    sender = ?sender,
+                    ?expected_root,
+                    ?observed_root,
+                    "suppressing repeated hydrated chunk-root mismatch log"
+                );
+            }
         }
         if outcome.layout_mismatch {
             warn!(
@@ -1145,9 +1408,8 @@ impl Actor {
         Some(payload)
     }
 
-    /// Request a missing `BlockCreated` once the full RBC payload is available.
-    /// The RBC payload contains canonical block payload bytes, so we still need
-    /// the signed header from peers to pass validation and vote.
+    /// Attempt to reconstruct `BlockCreated` once the full RBC payload is available.
+    /// Falls back to requesting a missing `BlockCreated` if the signed header is unavailable.
     pub(super) fn recover_block_from_rbc_session(&mut self, key: SessionKey) {
         if self.pending.pending_blocks.contains_key(&key.0) {
             return;
@@ -1185,15 +1447,87 @@ impl Actor {
             }
             self.publish_rbc_backlog_snapshot();
         }
-        let roster = self.ensure_rbc_session_roster(key);
+        if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {
+            if let (Some(block_header), Some(leader_signature)) =
+                (session.block_header, session.leader_signature.clone())
+            {
+                if block_header.hash() != key.0 {
+                    warn!(
+                        height = key.1,
+                        view = key.2,
+                        expected = ?key.0,
+                        observed = ?block_header.hash(),
+                        "skipping RBC payload recovery: block header hash mismatch"
+                    );
+                } else {
+                    match BlockPayload::decode(&mut &payload[..]) {
+                        Ok(mut payload) => {
+                            let mut expected_header = block_header;
+                            expected_header.result_merkle_root = None;
+                            if payload.header != expected_header {
+                                warn!(
+                                    height = key.1,
+                                    view = key.2,
+                                    block = %key.0,
+                                    "skipping RBC payload recovery: header mismatch"
+                                );
+                            } else {
+                                payload.header = block_header;
+                                let block =
+                                    SignedBlock::presigned_with_payload(leader_signature, payload);
+                                if let Err(err) = self.handle_block_created(
+                                    super::message::BlockCreated { block },
+                                    None,
+                                ) {
+                                    warn!(
+                                        ?err,
+                                        height = key.1,
+                                        view = key.2,
+                                        block = %key.0,
+                                        "failed to handle recovered BlockCreated from RBC payload"
+                                    );
+                                } else {
+                                    debug!(
+                                        height = key.1,
+                                        view = key.2,
+                                        block = %key.0,
+                                        "recovered BlockCreated from RBC payload"
+                                    );
+                                    return;
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            warn!(
+                                ?err,
+                                height = key.1,
+                                view = key.2,
+                                block = %key.0,
+                                "skipping RBC payload recovery: decode failed"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        let mut roster = self.ensure_rbc_session_roster(key);
         if roster.is_empty() {
+            roster = self.effective_commit_topology();
+            if roster.is_empty() {
+                debug!(
+                    height = key.1,
+                    view = key.2,
+                    block = %key.0,
+                    "skipping missing BlockCreated fetch: empty roster"
+                );
+                return;
+            }
             debug!(
                 height = key.1,
                 view = key.2,
                 block = %key.0,
-                "skipping missing BlockCreated fetch: empty roster"
+                "using fallback commit topology for missing BlockCreated fetch"
             );
-            return;
         }
         let topology = crate::sumeragi::network_topology::Topology::new(roster);
         let retry_window = self.rebroadcast_cooldown();
@@ -1226,7 +1560,9 @@ impl Actor {
             MissingBlockFetchDecision::Requested { targets, .. } => targets.len(),
             _ => 0,
         };
+        let dwell_ms = dwell.as_millis().try_into().unwrap_or(u64::MAX);
         self.note_missing_block_fetch_metrics(&decision, retry_window, targets_len, dwell);
+        super::status::record_missing_block_fetch(targets_len, dwell_ms);
 
         match decision {
             MissingBlockFetchDecision::Requested {
@@ -1259,6 +1595,173 @@ impl Actor {
         }
     }
 
+    pub(super) fn request_missing_block_after_rbc_drop(
+        &mut self,
+        key: SessionKey,
+        reason: PendingRbcDropReason,
+        context: &'static str,
+    ) {
+        self.request_missing_block_for_pending_rbc(key, context, Some(reason));
+    }
+
+    pub(super) fn request_missing_block_for_pending_rbc(
+        &mut self,
+        key: SessionKey,
+        context: &'static str,
+        reason: Option<PendingRbcDropReason>,
+    ) {
+        if self.block_payload_available_locally(key.0) {
+            return;
+        }
+        let mut roster = self.ensure_rbc_session_roster(key);
+        if roster.is_empty() {
+            roster = self.effective_commit_topology();
+            if roster.is_empty() {
+                match reason {
+                    Some(reason) => {
+                        debug!(
+                            height = key.1,
+                            view = key.2,
+                            block = %key.0,
+                            drop_reason = reason.as_str(),
+                            context,
+                            "skipping missing BlockCreated fetch after RBC drop: empty roster"
+                        );
+                    }
+                    None => {
+                        debug!(
+                            height = key.1,
+                            view = key.2,
+                            block = %key.0,
+                            context,
+                            "skipping missing BlockCreated fetch for pending RBC: empty roster"
+                        );
+                    }
+                }
+                return;
+            }
+            match reason {
+                Some(reason) => {
+                    debug!(
+                        height = key.1,
+                        view = key.2,
+                        block = %key.0,
+                        drop_reason = reason.as_str(),
+                        context,
+                        "using fallback commit topology for missing BlockCreated fetch after RBC drop"
+                    );
+                }
+                None => {
+                    debug!(
+                        height = key.1,
+                        view = key.2,
+                        block = %key.0,
+                        context,
+                        "using fallback commit topology for missing BlockCreated fetch while awaiting RBC INIT"
+                    );
+                }
+            }
+        }
+        let topology = crate::sumeragi::network_topology::Topology::new(roster);
+        let retry_window = self.rebroadcast_cooldown();
+        let view_change_window = Some(self.quorum_timeout(self.runtime_da_enabled()));
+        let now = Instant::now();
+        let signers = BTreeSet::new();
+        let mut requests = core::mem::take(&mut self.pending.missing_block_requests);
+        let decision = super::plan_missing_block_fetch(
+            &mut requests,
+            key.0,
+            key.1,
+            key.2,
+            crate::sumeragi::consensus::Phase::Commit,
+            super::MissingBlockPriority::Consensus,
+            &signers,
+            &topology,
+            now,
+            retry_window,
+            view_change_window,
+            self.config.missing_block_signer_fallback_attempts,
+        );
+        self.pending.missing_block_requests = requests;
+        let dwell = self
+            .pending
+            .missing_block_requests
+            .get(&key.0)
+            .map(|stats| now.saturating_duration_since(stats.first_seen))
+            .unwrap_or_default();
+        let targets_len = match &decision {
+            MissingBlockFetchDecision::Requested { targets, .. } => targets.len(),
+            _ => 0,
+        };
+        let dwell_ms = dwell.as_millis().try_into().unwrap_or(u64::MAX);
+        self.note_missing_block_fetch_metrics(&decision, retry_window, targets_len, dwell);
+        super::status::record_missing_block_fetch(targets_len, dwell_ms);
+
+        match decision {
+            MissingBlockFetchDecision::Requested {
+                targets,
+                target_kind,
+            } => {
+                self.request_missing_block(key.0, &targets);
+                match reason {
+                    Some(reason) => {
+                        info!(
+                            height = key.1,
+                            view = key.2,
+                            block = %key.0,
+                            drop_reason = reason.as_str(),
+                            context,
+                            targets = ?targets,
+                            target_kind = target_kind.label(),
+                            retry_window_ms = retry_window.as_millis(),
+                            dwell_ms = dwell.as_millis(),
+                            "requested missing BlockCreated after RBC drop"
+                        );
+                    }
+                    None => {
+                        info!(
+                            height = key.1,
+                            view = key.2,
+                            block = %key.0,
+                            context,
+                            targets = ?targets,
+                            target_kind = target_kind.label(),
+                            retry_window_ms = retry_window.as_millis(),
+                            dwell_ms = dwell.as_millis(),
+                            "requested missing BlockCreated while awaiting RBC INIT"
+                        );
+                    }
+                }
+            }
+            MissingBlockFetchDecision::NoTargets => match reason {
+                Some(reason) => {
+                    warn!(
+                        height = key.1,
+                        view = key.2,
+                        block = %key.0,
+                        drop_reason = reason.as_str(),
+                        context,
+                        retry_window_ms = retry_window.as_millis(),
+                        dwell_ms = dwell.as_millis(),
+                        "missing BlockCreated fetch deferred after RBC drop: no targets available"
+                    );
+                }
+                None => {
+                    warn!(
+                        height = key.1,
+                        view = key.2,
+                        block = %key.0,
+                        context,
+                        retry_window_ms = retry_window.as_millis(),
+                        dwell_ms = dwell.as_millis(),
+                        "missing BlockCreated fetch deferred while awaiting RBC INIT: no targets available"
+                    );
+                }
+            },
+            MissingBlockFetchDecision::Backoff => {}
+        }
+    }
+
     pub(super) fn should_drop_stale_rbc_message(
         &self,
         height: crate::sumeragi::consensus::Height,
@@ -1283,14 +1786,14 @@ impl Actor {
             );
             return false;
         }
-        if self.runtime_da_enabled() {
+        if self.runtime_da_enabled() && self.rbc_rebroadcast_active(key) {
             debug!(
                 height,
                 view,
                 local_view,
                 block = %block_hash,
                 kind,
-                "accepting RBC message for stale view while DA is enabled"
+                "accepting RBC message for stale view on active block"
             );
             return false;
         }
@@ -1308,6 +1811,11 @@ impl Actor {
     #[allow(clippy::too_many_lines)]
     pub(super) fn handle_rbc_init(&mut self, init: RbcInit) -> Result<()> {
         if self.should_drop_stale_rbc_message(init.height, init.view, &init.block_hash, "RbcInit") {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcInit,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::StaleView,
+            );
             return Ok(());
         }
         let expected_epoch = self.epoch_for_height(init.height);
@@ -1320,6 +1828,11 @@ impl Actor {
                 observed = init.epoch,
                 "dropping RBC INIT with mismatched epoch"
             );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcInit,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::EpochMismatch,
+            );
             return Ok(());
         }
         if self.rbc_message_stale(&init.block_hash, init.height) {
@@ -1328,6 +1841,11 @@ impl Actor {
                 view = init.view,
                 block = %init.block_hash,
                 "dropping RBC INIT for committed block"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcInit,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::Committed,
             );
             return Ok(());
         }
@@ -1339,6 +1857,11 @@ impl Actor {
                 block = %init.block_hash,
                 "rejecting RBC init with zero total chunks"
             );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcInit,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidPayload,
+            );
             return Ok(());
         }
         if init.total_chunks > RBC_MAX_TOTAL_CHUNKS {
@@ -1348,6 +1871,11 @@ impl Actor {
                 total_chunks = init.total_chunks,
                 max_chunks = RBC_MAX_TOTAL_CHUNKS,
                 "rejecting RBC init that exceeds chunk cap"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcInit,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::PayloadTooLarge,
             );
             return Ok(());
         }
@@ -1359,6 +1887,11 @@ impl Actor {
                 total_chunks = init.total_chunks,
                 digests = init.chunk_digests.len(),
                 "rejecting RBC init with mismatched chunk digest count"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcInit,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::ChunkDigestMismatch,
             );
             return Ok(());
         }
@@ -1374,6 +1907,11 @@ impl Actor {
                 observed = ?computed_root,
                 "rejecting RBC init with mismatched chunk digests root"
             );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcInit,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::ChunkRootMismatch,
+            );
             return Ok(());
         }
         if init.roster.is_empty() {
@@ -1383,6 +1921,11 @@ impl Actor {
                 block = %init.block_hash,
                 "rejecting RBC init with empty roster snapshot"
             );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcInit,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::RosterMissing,
+            );
             return Ok(());
         }
         if roster_has_duplicates(&init.roster) {
@@ -1391,6 +1934,11 @@ impl Actor {
                 view = init.view,
                 block = %init.block_hash,
                 "rejecting RBC init with duplicate roster entries"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcInit,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidPayload,
             );
             return Ok(());
         }
@@ -1404,6 +1952,115 @@ impl Actor {
                 observed = ?init.roster_hash,
                 "rejecting RBC init with mismatched roster hash"
             );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcInit,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::RosterHashMismatch,
+            );
+            return Ok(());
+        }
+        let header_hash = init.block_header.hash();
+        if header_hash != init.block_hash {
+            warn!(
+                height = init.height,
+                view = init.view,
+                block = %init.block_hash,
+                expected = ?init.block_hash,
+                observed = ?header_hash,
+                "rejecting RBC init with mismatched block header hash"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcInit,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::PayloadMismatch,
+            );
+            return Ok(());
+        }
+        if init.block_header.height().get() != init.height
+            || init.block_header.view_change_index() != init.view
+        {
+            warn!(
+                height = init.height,
+                view = init.view,
+                block = %init.block_hash,
+                "rejecting RBC init with header height/view mismatch"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcInit,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidPayload,
+            );
+            return Ok(());
+        }
+        let mut signature_topology =
+            crate::sumeragi::network_topology::Topology::new(init.roster.clone());
+        let expected_leader_index =
+            match self.leader_index_for(&mut signature_topology, init.height, init.view) {
+                Ok(idx) => idx,
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        height = init.height,
+                        view = init.view,
+                        block = %init.block_hash,
+                        "rejecting RBC init: failed to derive leader index"
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::RbcInit,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::InvalidPayload,
+                    );
+                    return Ok(());
+                }
+            };
+        let Some(leader_peer) = signature_topology.as_ref().get(expected_leader_index) else {
+            warn!(
+                height = init.height,
+                view = init.view,
+                block = %init.block_hash,
+                "rejecting RBC init: leader index out of range"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcInit,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidPayload,
+            );
+            return Ok(());
+        };
+        let expected_leader_index = u64::try_from(expected_leader_index).unwrap_or(u64::MAX);
+        if init.leader_signature.index() != expected_leader_index {
+            warn!(
+                height = init.height,
+                view = init.view,
+                block = %init.block_hash,
+                expected = expected_leader_index,
+                observed = init.leader_signature.index(),
+                "rejecting RBC init: leader signature index mismatch"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcInit,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidSignature,
+            );
+            return Ok(());
+        }
+        if init
+            .leader_signature
+            .signature()
+            .verify_hash(leader_peer.public_key(), header_hash)
+            .is_err()
+        {
+            warn!(
+                height = init.height,
+                view = init.view,
+                block = %init.block_hash,
+                "rejecting RBC init: leader signature invalid"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcInit,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidSignature,
+            );
             return Ok(());
         }
         if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {
@@ -1416,6 +2073,43 @@ impl Actor {
                         view = init.view,
                         "dropping RBC INIT that mismatches existing payload hash"
                     );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::RbcInit,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::PayloadMismatch,
+                    );
+                    return Ok(());
+                }
+            }
+            if let Some(existing) = session.block_header {
+                if existing != init.block_header {
+                    warn!(
+                        height = init.height,
+                        view = init.view,
+                        block = %init.block_hash,
+                        "dropping RBC INIT that mismatches existing block header"
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::RbcInit,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::PayloadMismatch,
+                    );
+                    return Ok(());
+                }
+            }
+            if let Some(existing) = session.leader_signature.as_ref() {
+                if existing != &init.leader_signature {
+                    warn!(
+                        height = init.height,
+                        view = init.view,
+                        block = %init.block_hash,
+                        "dropping RBC INIT that mismatches existing leader signature"
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::RbcInit,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::InvalidSignature,
+                    );
                     return Ok(());
                 }
             }
@@ -1427,6 +2121,11 @@ impl Actor {
                     observed = init.total_chunks,
                     "dropping RBC INIT that mismatches existing chunk count"
                 );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::RbcInit,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::PayloadMismatch,
+                );
                 return Ok(());
             }
             if let Some(expected) = session.expected_chunk_digests.as_ref() {
@@ -1435,6 +2134,11 @@ impl Actor {
                         height = init.height,
                         view = init.view,
                         "dropping RBC INIT that mismatches existing chunk digests"
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::RbcInit,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::ChunkDigestMismatch,
                     );
                     return Ok(());
                 }
@@ -1448,17 +2152,41 @@ impl Actor {
                         observed = ?init.chunk_root,
                         "dropping RBC INIT that mismatches existing chunk root"
                     );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::RbcInit,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::ChunkRootMismatch,
+                    );
                     return Ok(());
                 }
             }
         }
-        let mut reset_ready_state = false;
+        let derived_roster = self.rbc_roster_for_session(key);
+        if !derived_roster.is_empty() && derived_roster != init.roster {
+            warn!(
+                height = init.height,
+                view = init.view,
+                block = %init.block_hash,
+                "rejecting RBC init with roster snapshot that mismatches local commit topology"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcInit,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::RosterHashMismatch,
+            );
+            return Ok(());
+        }
+        let (roster, roster_source) = if derived_roster.is_empty() {
+            (init.roster.clone(), RbcRosterSource::Init)
+        } else {
+            (derived_roster, RbcRosterSource::Derived)
+        };
         if let Some(existing_roster) = self.subsystems.da_rbc.rbc.session_rosters.get(&key) {
             let existing_hash = rbc_roster_hash(existing_roster);
             if existing_hash != init.roster_hash {
                 let source = self
                     .rbc_session_roster_source(key)
-                    .unwrap_or(RbcRosterSource::Derived);
+                    .unwrap_or(RbcRosterSource::Init);
                 if source.is_authoritative() {
                     warn!(
                         height = init.height,
@@ -1468,56 +2196,33 @@ impl Actor {
                         observed = ?init.roster_hash,
                         "rejecting RBC init with conflicting roster snapshot"
                     );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::RbcInit,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::RosterHashMismatch,
+                    );
                     return Ok(());
                 }
-                debug!(
-                    height = init.height,
-                    view = init.view,
-                    block = %init.block_hash,
-                    expected = ?existing_hash,
-                    observed = ?init.roster_hash,
-                    "overriding derived RBC roster snapshot with init roster"
-                );
-                self.subsystems
-                    .da_rbc
-                    .rbc
-                    .session_rosters
-                    .insert(key, init.roster.clone());
-                self.subsystems
-                    .da_rbc
-                    .rbc
-                    .session_roster_sources
-                    .insert(key, RbcRosterSource::Network);
-                self.subsystems
-                    .da_rbc
-                    .rbc
-                    .persisted_full_sessions
-                    .remove(&key);
-                self.subsystems
-                    .da_rbc
-                    .rbc
-                    .payload_rebroadcast_last_sent
-                    .remove(&key);
-                self.subsystems
-                    .da_rbc
-                    .rbc
-                    .ready_rebroadcast_last_sent
-                    .remove(&key);
-                reset_ready_state = true;
-            } else {
-                self.record_rbc_session_roster(key, init.roster.clone(), RbcRosterSource::Network);
+                if !roster_source.is_authoritative() {
+                    warn!(
+                        height = init.height,
+                        view = init.view,
+                        block = %init.block_hash,
+                        expected = ?existing_hash,
+                        observed = ?init.roster_hash,
+                        "ignoring RBC init with conflicting unverified roster snapshot"
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::RbcInit,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::RosterHashMismatch,
+                    );
+                    return Ok(());
+                }
             }
-        } else {
-            self.record_rbc_session_roster(key, init.roster.clone(), RbcRosterSource::Network);
         }
+        self.record_rbc_session_roster(key, roster, roster_source);
         if let Some(mut session) = self.subsystems.da_rbc.rbc.sessions.remove(&key) {
-            if reset_ready_state {
-                session.ready_signatures.clear();
-                session.sent_ready = false;
-                session.delivered = false;
-                session.deliver_sender = None;
-                session.deliver_signature = None;
-            }
             if session.payload_hash().is_none() {
                 session.payload_hash = Some(init.payload_hash);
             }
@@ -1537,6 +2242,8 @@ impl Actor {
                 session.expected_chunk_root = Some(init.chunk_root);
             }
             session.epoch = init.epoch;
+            session.block_header = Some(init.block_header);
+            session.leader_signature = Some(init.leader_signature);
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
             self.flush_pending_rbc(key)?;
             self.maybe_emit_rbc_ready(key)?;
@@ -1563,9 +2270,17 @@ impl Actor {
                     total_chunks = init.total_chunks,
                     "failed to initialise RBC session: {err}"
                 );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::RbcInit,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::InvalidPayload,
+                );
                 return Ok(());
             }
         };
+        let mut session = session;
+        session.block_header = Some(init.block_header);
+        session.leader_signature = Some(init.leader_signature);
         if self
             .subsystems
             .da_rbc
@@ -1589,13 +2304,22 @@ impl Actor {
     }
 
     #[allow(clippy::too_many_lines)]
-    pub(super) fn handle_rbc_chunk(&mut self, chunk: RbcChunk) -> Result<()> {
+    pub(super) fn handle_rbc_chunk(
+        &mut self,
+        chunk: RbcChunk,
+        sender: Option<PeerId>,
+    ) -> Result<()> {
         if self.should_drop_stale_rbc_message(
             chunk.height,
             chunk.view,
             &chunk.block_hash,
             "RbcChunk",
         ) {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcChunk,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::StaleView,
+            );
             return Ok(());
         }
         let expected_epoch = self.epoch_for_height(chunk.height);
@@ -1607,6 +2331,11 @@ impl Actor {
                 expected = expected_epoch,
                 observed = chunk.epoch,
                 "dropping RBC chunk with mismatched epoch"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcChunk,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::EpochMismatch,
             );
             return Ok(());
         }
@@ -1620,6 +2349,11 @@ impl Actor {
                 max = max_chunk_bytes,
                 "dropping RBC chunk that exceeds configured size cap"
             );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcChunk,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::PayloadTooLarge,
+            );
             return Ok(());
         }
         if self.rbc_message_stale(&chunk.block_hash, chunk.height) {
@@ -1629,16 +2363,25 @@ impl Actor {
                 block = %chunk.block_hash,
                 "dropping RBC chunk for committed block"
             );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcChunk,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::Committed,
+            );
             return Ok(());
         }
         let key = Self::session_key(&chunk.block_hash, chunk.height, chunk.view);
+        let mut chunk_digest_mismatch = false;
         let (ready_sent_before, became_complete) = if let Some(session) =
             self.subsystems.da_rbc.rbc.sessions.get_mut(&key)
         {
             let ready_sent_before = session.sent_ready;
             let was_complete =
                 session.total_chunks() != 0 && session.received_chunks() == session.total_chunks();
-            session.ingest_chunk(chunk.idx, chunk.bytes, None);
+            let outcome = session.ingest_chunk_with_outcome(chunk.idx, chunk.bytes, None);
+            if matches!(outcome, super::ChunkIngestOutcome::DigestMismatch) {
+                chunk_digest_mismatch = true;
+            }
             let is_complete =
                 session.total_chunks() != 0 && session.received_chunks() == session.total_chunks();
             (ready_sent_before, !was_complete && is_complete)
@@ -1658,9 +2401,20 @@ impl Actor {
                     dropped_bytes,
                     "dropping pending RBC chunk: stash session limit reached"
                 );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::RbcChunk,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::StashSessionLimit,
+                );
+                self.request_missing_block_after_rbc_drop(
+                    key,
+                    PendingRbcDropReason::SessionLimit,
+                    "rbc_chunk_stash_limit",
+                );
                 return Ok(());
             };
-            let outcome = pending.push_chunk_capped(chunk, max_chunks, max_bytes, Instant::now());
+            let outcome =
+                pending.push_chunk_capped(chunk, sender, max_chunks, max_bytes, Instant::now());
             match outcome {
                 PendingChunkOutcome::Inserted {
                     pending_chunks,
@@ -1668,12 +2422,23 @@ impl Actor {
                     evicted_chunks,
                     evicted_bytes,
                 } => {
+                    status::inc_pending_rbc_stash(status::PendingRbcStashKind::Chunk, None);
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::RbcChunk,
+                        super::status::ConsensusMessageOutcome::Deferred,
+                        super::status::ConsensusMessageReason::InitMissing,
+                    );
                     if evicted_chunks > 0 {
                         Self::record_pending_drop_counts(
                             self.telemetry_handle(),
                             PendingRbcDropReason::Cap,
                             evicted_chunks,
                             evicted_bytes,
+                        );
+                        self.request_missing_block_after_rbc_drop(
+                            key,
+                            PendingRbcDropReason::Cap,
+                            "rbc_chunk_stash_evicted",
                         );
                     }
                     debug!(
@@ -1684,6 +2449,9 @@ impl Actor {
                         evicted_bytes,
                         "stashed RBC chunk until INIT arrives"
                     );
+                    if evicted_chunks == 0 {
+                        self.request_missing_block_for_pending_rbc(key, "rbc_chunk_stash", None);
+                    }
                 }
                 PendingChunkOutcome::Dropped {
                     dropped_bytes,
@@ -1707,11 +2475,55 @@ impl Actor {
                         evicted_bytes,
                         "dropping pending RBC chunk: stash limits exceeded before INIT"
                     );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::RbcChunk,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::StashCap,
+                    );
+                    self.request_missing_block_after_rbc_drop(
+                        key,
+                        PendingRbcDropReason::Cap,
+                        "rbc_chunk_stash_cap",
+                    );
                 }
             }
             self.publish_rbc_backlog_snapshot();
             return Ok(());
         };
+        if chunk_digest_mismatch {
+            let log_outcome = sender.as_ref().map(|peer| {
+                self.record_rbc_mismatch(
+                    peer,
+                    status::RbcMismatchKind::ChunkDigest,
+                    chunk.height,
+                    chunk.view,
+                )
+            });
+            if log_outcome.map_or(true, |outcome| outcome.should_log()) {
+                warn!(
+                    height = chunk.height,
+                    view = chunk.view,
+                    idx = chunk.idx,
+                    block = %chunk.block_hash,
+                    sender = ?sender,
+                    "dropping RBC chunk with mismatched digest"
+                );
+            } else {
+                debug!(
+                    height = chunk.height,
+                    view = chunk.view,
+                    idx = chunk.idx,
+                    block = %chunk.block_hash,
+                    sender = ?sender,
+                    "suppressing repeated RBC chunk digest mismatch log"
+                );
+            }
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcChunk,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::ChunkDigestMismatch,
+            );
+        }
         self.maybe_emit_rbc_ready(key)?;
         if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
             self.update_rbc_status_entry(key, &session, false);
@@ -1745,6 +2557,30 @@ impl Actor {
             &ready.block_hash,
             "RbcReady",
         ) {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcReady,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::StaleView,
+            );
+            return Ok(());
+        }
+        if self.invalid_sig_penalty.is_suppressed(
+            InvalidSigKind::RbcReady,
+            u64::from(ready.sender),
+            Instant::now(),
+        ) {
+            debug!(
+                height = ready.height,
+                view = ready.view,
+                sender = ready.sender,
+                block = %ready.block_hash,
+                "dropping RBC READY from penalized signer"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcReady,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::PenalizedSender,
+            );
             return Ok(());
         }
         let expected_epoch = self.epoch_for_height(ready.height);
@@ -1758,6 +2594,11 @@ impl Actor {
                 observed = ready.epoch,
                 "dropping RBC READY with mismatched epoch"
             );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcReady,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::EpochMismatch,
+            );
             return Ok(());
         }
         if self.rbc_message_stale(&ready.block_hash, ready.height) {
@@ -1767,6 +2608,11 @@ impl Actor {
                 block = %ready.block_hash,
                 sender = ready.sender,
                 "dropping RBC READY for committed block"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcReady,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::Committed,
             );
             return Ok(());
         }
@@ -1793,6 +2639,16 @@ impl Actor {
                         dropped_bytes,
                         "dropping pending RBC READY: stash session limit reached before INIT"
                     );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::RbcReady,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::StashSessionLimit,
+                    );
+                    self.request_missing_block_after_rbc_drop(
+                        key,
+                        PendingRbcDropReason::SessionLimit,
+                        "rbc_ready_stash_limit",
+                    );
                     return Ok(());
                 };
                 let (accepted, dropped_bytes) =
@@ -1805,6 +2661,10 @@ impl Actor {
                 )
             };
             if accepted {
+                status::inc_pending_rbc_stash(
+                    status::PendingRbcStashKind::Ready,
+                    Some(status::PendingRbcStashReason::InitMissing),
+                );
                 info!(
                     ?key,
                     pending_chunks,
@@ -1813,6 +2673,12 @@ impl Actor {
                     ready_view,
                     "stashed RBC READY until INIT arrives"
                 );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::RbcReady,
+                    super::status::ConsensusMessageOutcome::Deferred,
+                    super::status::ConsensusMessageReason::InitMissing,
+                );
+                self.request_missing_block_for_pending_rbc(key, "rbc_ready_stash", None);
             } else {
                 warn!(
                     ?key,
@@ -1824,6 +2690,16 @@ impl Actor {
                     1,
                     u64::try_from(dropped_bytes).unwrap_or(u64::MAX),
                 );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::RbcReady,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::StashCap,
+                );
+                self.request_missing_block_after_rbc_drop(
+                    key,
+                    PendingRbcDropReason::Cap,
+                    "rbc_ready_stash_cap",
+                );
             }
             self.publish_rbc_backlog_snapshot();
             return Ok(());
@@ -1831,12 +2707,13 @@ impl Actor {
         let mut topology_peers = self.rbc_session_roster(key);
         let mut roster_source = self
             .rbc_session_roster_source(key)
-            .unwrap_or(RbcRosterSource::Derived);
+            .unwrap_or(RbcRosterSource::Init);
         fn stash_ready(
             actor: &mut Actor,
             key: SessionKey,
             ready: RbcReady,
             reason: &'static str,
+            handling_reason: super::status::ConsensusMessageReason,
         ) -> Result<()> {
             let ready_sender = ready.sender;
             let ready_view = ready.view;
@@ -1860,6 +2737,16 @@ impl Actor {
                         dropped_bytes,
                         "dropping pending RBC READY: stash session limit reached"
                     );
+                    actor.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::RbcReady,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::StashSessionLimit,
+                    );
+                    actor.request_missing_block_after_rbc_drop(
+                        key,
+                        PendingRbcDropReason::SessionLimit,
+                        "rbc_ready_stash_limit",
+                    );
                     return Ok(());
                 };
                 let (accepted, dropped_bytes) =
@@ -1881,6 +2768,11 @@ impl Actor {
                     reason,
                     "stashed RBC READY while awaiting roster resolution"
                 );
+                actor.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::RbcReady,
+                    super::status::ConsensusMessageOutcome::Deferred,
+                    handling_reason,
+                );
             } else {
                 warn!(
                     ?key,
@@ -1892,6 +2784,16 @@ impl Actor {
                     1,
                     u64::try_from(dropped_bytes).unwrap_or(u64::MAX),
                 );
+                actor.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::RbcReady,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::StashCap,
+                );
+                actor.request_missing_block_after_rbc_drop(
+                    key,
+                    PendingRbcDropReason::Cap,
+                    "rbc_ready_stash_cap",
+                );
             }
             actor.publish_rbc_backlog_snapshot();
             Ok(())
@@ -1901,11 +2803,17 @@ impl Actor {
                 topology_peers = refreshed;
                 roster_source = self
                     .rbc_session_roster_source(key)
-                    .unwrap_or(RbcRosterSource::Derived);
+                    .unwrap_or(RbcRosterSource::Init);
             }
         }
         if topology_peers.is_empty() {
-            stash_ready(self, key, ready, "commit roster missing")?;
+            stash_ready(
+                self,
+                key,
+                ready,
+                "commit roster missing",
+                super::status::ConsensusMessageReason::RosterMissingDeferred,
+            )?;
             return Ok(());
         }
         let mut roster_hash = rbc_roster_hash(&topology_peers);
@@ -1925,9 +2833,32 @@ impl Actor {
                     observed = ?ready.roster_hash,
                     "dropping RBC READY: roster hash mismatch"
                 );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::RbcReady,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::RosterHashMismatch,
+                );
                 return Ok(());
             }
-            stash_ready(self, key, ready, "commit roster hash mismatch")?;
+            stash_ready(
+                self,
+                key,
+                ready,
+                "commit roster hash mismatch",
+                super::status::ConsensusMessageReason::RosterHashMismatchDeferred,
+            )?;
+            return Ok(());
+        }
+        let allow_unverified = self.allow_unverified_rbc_roster(key);
+        if !roster_source.is_authoritative() && !allow_unverified {
+            stash_ready(
+                self,
+                key,
+                ready,
+                "commit roster unverified",
+                super::status::ConsensusMessageReason::RosterUnverifiedDeferred,
+            )?;
+            self.request_missing_block_for_pending_rbc(key, "rbc_ready_unverified_roster", None);
             return Ok(());
         }
         let topology = crate::sumeragi::network_topology::Topology::new(topology_peers);
@@ -1947,6 +2878,11 @@ impl Actor {
                         view = ready.view,
                         sender = ready.sender,
                         "ignoring duplicate RBC READY with identical signature"
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::RbcReady,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::Duplicate,
                     );
                     return Ok(());
                 }
@@ -1981,6 +2917,11 @@ impl Actor {
                     "suppressing repeated invalid RBC READY signature log"
                 );
             }
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcReady,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidSignature,
+            );
             return Ok(());
         }
         let mut inferred_chunk_root: Option<Hash> = None;
@@ -1996,6 +2937,11 @@ impl Actor {
                             observed = ?ready.chunk_root,
                             "dropping RBC READY with mismatched chunk root"
                         );
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::RbcReady,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::ChunkRootMismatch,
+                        );
                         return Ok(());
                     }
                 }
@@ -2009,6 +2955,11 @@ impl Actor {
                                 ?computed,
                                 observed = ?ready.chunk_root,
                                 "dropping RBC READY with mismatched computed chunk root"
+                            );
+                            self.record_consensus_message_handling(
+                                super::status::ConsensusMessageKind::RbcReady,
+                                super::status::ConsensusMessageOutcome::Dropped,
+                                super::status::ConsensusMessageReason::ChunkRootMismatch,
                             );
                             return Ok(());
                         }
@@ -2079,7 +3030,7 @@ impl Actor {
             .sessions
             .get(&key)
             .is_some_and(|session| session.delivered);
-        self.maybe_emit_rbc_deliver(key)?;
+        self.maybe_emit_rbc_ready(key)?;
         let delivered_after = self
             .subsystems
             .da_rbc
@@ -2157,12 +3108,22 @@ impl Actor {
         session: &mut RbcSession,
         key: SessionKey,
         deliver: &crate::sumeragi::consensus::RbcDeliver,
-    ) -> (bool, bool, Option<u64>, bool, Option<String>) {
+    ) -> (
+        bool,
+        bool,
+        Option<u64>,
+        bool,
+        bool,
+        Option<String>,
+        Option<super::status::ConsensusMessageReason>,
+    ) {
         let mut ignored = false;
         let mut first_deliver = false;
         let mut delivered_bytes: Option<u64> = None;
         let mut invalidate = false;
+        let mut chunk_root_mismatch = false;
         let mut defer_reason: Option<String> = None;
+        let mut defer_kind: Option<super::status::ConsensusMessageReason> = None;
         if session.is_invalid() {
             ignored = true;
             warn!(
@@ -2176,7 +3137,9 @@ impl Actor {
                 first_deliver,
                 delivered_bytes,
                 invalidate,
+                chunk_root_mismatch,
                 defer_reason,
+                defer_kind,
             );
         }
         if session.delivered {
@@ -2201,7 +3164,9 @@ impl Actor {
                 first_deliver,
                 delivered_bytes,
                 invalidate,
+                chunk_root_mismatch,
                 defer_reason,
+                defer_kind,
             );
         }
         if !session.is_invalid() {
@@ -2214,23 +3179,20 @@ impl Actor {
                     defer_reason = Some(format!(
                         "deferring RBC DELIVER until READY quorum is satisfied (ready_count={ready_count}, required={required})"
                     ));
+                    defer_kind = Some(super::status::ConsensusMessageReason::ReadyQuorumMissing);
                 }
                 DeliverAcceptance::DeferChunks { received, total } => {
                     status::inc_rbc_deliver_defer_chunks();
                     defer_reason = Some(format!(
                         "deferring RBC DELIVER until all chunks are present (received={received}, total={total})"
                     ));
+                    defer_kind = Some(super::status::ConsensusMessageReason::ChunksMissing);
                 }
                 DeliverAcceptance::InvalidChunkRoot => {
                     session.invalid = true;
                     invalidate = true;
                     ignored = true;
-                    warn!(
-                        height = key.1,
-                        view = key.2,
-                        sender = deliver.sender,
-                        "ignoring RBC DELIVER: chunk root mismatch detected"
-                    );
+                    chunk_root_mismatch = true;
                 }
                 DeliverAcceptance::Accept => {
                     first_deliver =
@@ -2249,7 +3211,9 @@ impl Actor {
             first_deliver,
             delivered_bytes,
             invalidate,
+            chunk_root_mismatch,
             defer_reason,
+            defer_kind,
         )
     }
 
@@ -2261,6 +3225,31 @@ impl Actor {
             &deliver.block_hash,
             "RbcDeliver",
         ) {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcDeliver,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::StaleView,
+            );
+            return Ok(());
+        }
+        let now = Instant::now();
+        if self.invalid_sig_penalty.is_suppressed(
+            InvalidSigKind::RbcDeliver,
+            u64::from(deliver.sender),
+            now,
+        ) {
+            debug!(
+                height = deliver.height,
+                view = deliver.view,
+                sender = deliver.sender,
+                block = %deliver.block_hash,
+                "dropping RBC DELIVER from penalized signer"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcDeliver,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::PenalizedSender,
+            );
             return Ok(());
         }
         let expected_epoch = self.epoch_for_height(deliver.height);
@@ -2274,6 +3263,11 @@ impl Actor {
                 observed = deliver.epoch,
                 "dropping RBC DELIVER with mismatched epoch"
             );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcDeliver,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::EpochMismatch,
+            );
             return Ok(());
         }
         if self.rbc_message_stale(&deliver.block_hash, deliver.height) {
@@ -2283,6 +3277,11 @@ impl Actor {
                 block = %deliver.block_hash,
                 sender = deliver.sender,
                 "dropping RBC DELIVER for committed block"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcDeliver,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::Committed,
             );
             return Ok(());
         }
@@ -2305,6 +3304,16 @@ impl Actor {
                         dropped_bytes,
                         "dropping pending RBC DELIVER: stash session limit reached before INIT"
                     );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::RbcDeliver,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::StashSessionLimit,
+                    );
+                    self.request_missing_block_after_rbc_drop(
+                        key,
+                        PendingRbcDropReason::SessionLimit,
+                        "rbc_deliver_stash_limit",
+                    );
                     return Ok(());
                 };
                 let (accepted, dropped_bytes) =
@@ -2317,10 +3326,20 @@ impl Actor {
                 )
             };
             if accepted {
+                status::inc_pending_rbc_stash(
+                    status::PendingRbcStashKind::Deliver,
+                    Some(status::PendingRbcStashReason::InitMissing),
+                );
                 debug!(
                     ?key,
                     pending_chunks, pending_bytes, "stashed RBC DELIVER until INIT arrives"
                 );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::RbcDeliver,
+                    super::status::ConsensusMessageOutcome::Deferred,
+                    super::status::ConsensusMessageReason::InitMissing,
+                );
+                self.request_missing_block_for_pending_rbc(key, "rbc_deliver_stash", None);
             } else {
                 warn!(
                     ?key,
@@ -2332,6 +3351,16 @@ impl Actor {
                     1,
                     u64::try_from(dropped_bytes).unwrap_or(u64::MAX),
                 );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::RbcDeliver,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::StashCap,
+                );
+                self.request_missing_block_after_rbc_drop(
+                    key,
+                    PendingRbcDropReason::Cap,
+                    "rbc_deliver_stash_cap",
+                );
             }
             self.publish_rbc_backlog_snapshot();
             return Ok(());
@@ -2339,14 +3368,29 @@ impl Actor {
         let mut topology_peers = self.rbc_session_roster(key);
         let mut roster_source = self
             .rbc_session_roster_source(key)
-            .unwrap_or(RbcRosterSource::Derived);
+            .unwrap_or(RbcRosterSource::Init);
         let mut roster_updated = false;
         fn stash_deliver(
             actor: &mut Actor,
             key: SessionKey,
             deliver: RbcDeliver,
             reason: &'static str,
+            stash_reason: status::PendingRbcStashReason,
         ) -> Result<()> {
+            let handling_reason = match stash_reason {
+                status::PendingRbcStashReason::RosterMissing => {
+                    super::status::ConsensusMessageReason::RosterMissingDeferred
+                }
+                status::PendingRbcStashReason::RosterHashMismatch => {
+                    super::status::ConsensusMessageReason::RosterHashMismatchDeferred
+                }
+                status::PendingRbcStashReason::RosterUnverified => {
+                    super::status::ConsensusMessageReason::RosterUnverifiedDeferred
+                }
+                status::PendingRbcStashReason::InitMissing => {
+                    super::status::ConsensusMessageReason::InitMissing
+                }
+            };
             let max_bytes = actor.pending_rbc_caps().1;
             let deliver_bytes = rbc_deliver_stash_bytes(&deliver);
             let (accepted, dropped_bytes, pending_chunks, pending_bytes) = {
@@ -2365,6 +3409,16 @@ impl Actor {
                         dropped_bytes,
                         "dropping pending RBC DELIVER: stash session limit reached"
                     );
+                    actor.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::RbcDeliver,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::StashSessionLimit,
+                    );
+                    actor.request_missing_block_after_rbc_drop(
+                        key,
+                        PendingRbcDropReason::SessionLimit,
+                        "rbc_deliver_stash_limit",
+                    );
                     return Ok(());
                 };
                 let (accepted, dropped_bytes) =
@@ -2377,12 +3431,21 @@ impl Actor {
                 )
             };
             if accepted {
+                status::inc_pending_rbc_stash(
+                    status::PendingRbcStashKind::Deliver,
+                    Some(stash_reason),
+                );
                 debug!(
                     ?key,
                     pending_chunks,
                     pending_bytes,
                     reason,
                     "stashed RBC DELIVER while awaiting roster resolution"
+                );
+                actor.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::RbcDeliver,
+                    super::status::ConsensusMessageOutcome::Deferred,
+                    handling_reason,
                 );
             } else {
                 warn!(
@@ -2395,6 +3458,16 @@ impl Actor {
                     1,
                     u64::try_from(dropped_bytes).unwrap_or(u64::MAX),
                 );
+                actor.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::RbcDeliver,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::StashCap,
+                );
+                actor.request_missing_block_after_rbc_drop(
+                    key,
+                    PendingRbcDropReason::Cap,
+                    "rbc_deliver_stash_cap",
+                );
             }
             actor.publish_rbc_backlog_snapshot();
             Ok(())
@@ -2405,11 +3478,17 @@ impl Actor {
                 roster_updated |= updated;
                 roster_source = self
                     .rbc_session_roster_source(key)
-                    .unwrap_or(RbcRosterSource::Derived);
+                    .unwrap_or(RbcRosterSource::Init);
             }
         }
         if topology_peers.is_empty() {
-            stash_deliver(self, key, deliver, "commit roster missing")?;
+            stash_deliver(
+                self,
+                key,
+                deliver,
+                "commit roster missing",
+                status::PendingRbcStashReason::RosterMissing,
+            )?;
             return Ok(());
         }
         let mut roster_hash = rbc_roster_hash(&topology_peers);
@@ -2430,9 +3509,32 @@ impl Actor {
                     observed = ?deliver.roster_hash,
                     "dropping RBC DELIVER: roster hash mismatch"
                 );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::RbcDeliver,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::RosterHashMismatch,
+                );
                 return Ok(());
             }
-            stash_deliver(self, key, deliver, "commit roster hash mismatch")?;
+            stash_deliver(
+                self,
+                key,
+                deliver,
+                "commit roster hash mismatch",
+                status::PendingRbcStashReason::RosterHashMismatch,
+            )?;
+            return Ok(());
+        }
+        let allow_unverified = self.allow_unverified_rbc_roster(key);
+        if !roster_source.is_authoritative() && !allow_unverified {
+            stash_deliver(
+                self,
+                key,
+                deliver,
+                "commit roster unverified",
+                status::PendingRbcStashReason::RosterUnverified,
+            )?;
+            self.request_missing_block_for_pending_rbc(key, "rbc_deliver_unverified_roster", None);
             return Ok(());
         }
         let topology = crate::sumeragi::network_topology::Topology::new(topology_peers);
@@ -2483,6 +3585,11 @@ impl Actor {
                     "suppressing repeated invalid RBC DELIVER signature log"
                 );
             }
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcDeliver,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidSignature,
+            );
             return Ok(());
         }
         let mut inferred_chunk_root: Option<Hash> = None;
@@ -2498,6 +3605,11 @@ impl Actor {
                             observed = ?deliver.chunk_root,
                             "dropping RBC DELIVER with mismatched chunk root"
                         );
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::RbcDeliver,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::ChunkRootMismatch,
+                        );
                         return Ok(());
                     }
                 }
@@ -2512,6 +3624,11 @@ impl Actor {
                                 observed = ?deliver.chunk_root,
                                 "dropping RBC DELIVER with mismatched computed chunk root"
                             );
+                            self.record_consensus_message_handling(
+                                super::status::ConsensusMessageKind::RbcDeliver,
+                                super::status::ConsensusMessageOutcome::Dropped,
+                                super::status::ConsensusMessageReason::ChunkRootMismatch,
+                            );
                             return Ok(());
                         }
                         inferred_chunk_root = Some(computed);
@@ -2521,8 +3638,62 @@ impl Actor {
                 }
             }
         }
+        let mut ready_to_record: Vec<(u32, Vec<u8>)> = Vec::new();
+        let mut invalid_ready_senders: Vec<u32> = Vec::new();
+        let mut suppressed_ready_senders: Vec<u32> = Vec::new();
+        if !deliver.ready_signatures.is_empty() {
+            let max_ready = signature_topology.as_ref().len();
+            if deliver.ready_signatures.len() > max_ready {
+                debug!(
+                    height = deliver.height,
+                    view = deliver.view,
+                    sender = deliver.sender,
+                    ready_entries = deliver.ready_signatures.len(),
+                    max_ready,
+                    "truncating oversized RBC DELIVER READY bundle"
+                );
+            }
+            for entry in deliver.ready_signatures.iter().take(max_ready) {
+                let ready = RbcReady {
+                    block_hash: deliver.block_hash,
+                    height: deliver.height,
+                    view: deliver.view,
+                    epoch: deliver.epoch,
+                    roster_hash: deliver.roster_hash,
+                    chunk_root: deliver.chunk_root,
+                    sender: entry.sender,
+                    signature: entry.signature.clone(),
+                };
+                if self.invalid_sig_penalty.is_suppressed(
+                    InvalidSigKind::RbcReady,
+                    u64::from(entry.sender),
+                    now,
+                ) {
+                    suppressed_ready_senders.push(entry.sender);
+                    continue;
+                }
+                if !rbc_ready_signature_valid(
+                    &ready,
+                    &signature_topology,
+                    &self.common_config.chain,
+                    mode_tag,
+                ) {
+                    invalid_ready_senders.push(entry.sender);
+                    continue;
+                }
+                ready_to_record.push((entry.sender, entry.signature.clone()));
+            }
+        }
         let deliver_quorum = self.rbc_deliver_quorum(&topology);
-        let (ignored, first_deliver, delivered_bytes, invalidate, defer_reason) = {
+        let (
+            ignored,
+            first_deliver,
+            delivered_bytes,
+            invalidate,
+            chunk_root_mismatch,
+            defer_reason,
+            defer_kind,
+        ) = {
             let session = self
                 .subsystems
                 .da_rbc
@@ -2535,9 +3706,94 @@ impl Actor {
                     session.expected_chunk_root = Some(root);
                 }
             }
+            for (sender, signature) in ready_to_record {
+                session.record_ready(sender, signature);
+            }
             Self::evaluate_rbc_deliver_outcome(deliver_quorum, session, key, &deliver)
         };
+        if chunk_root_mismatch {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcDeliver,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::ChunkRootMismatch,
+            );
+            let peer = usize::try_from(deliver.sender)
+                .ok()
+                .and_then(|idx| signature_topology.as_ref().get(idx));
+            if let Some(peer) = peer {
+                let log_outcome = self.record_rbc_mismatch(
+                    peer,
+                    status::RbcMismatchKind::ChunkRoot,
+                    deliver.height,
+                    deliver.view,
+                );
+                if log_outcome.should_log() {
+                    warn!(
+                        height = deliver.height,
+                        view = deliver.view,
+                        sender = deliver.sender,
+                        "ignoring RBC DELIVER: chunk root mismatch detected"
+                    );
+                } else {
+                    debug!(
+                        height = deliver.height,
+                        view = deliver.view,
+                        sender = deliver.sender,
+                        "suppressing repeated RBC DELIVER chunk-root mismatch log"
+                    );
+                }
+            } else {
+                warn!(
+                    height = deliver.height,
+                    view = deliver.view,
+                    sender = deliver.sender,
+                    "ignoring RBC DELIVER: chunk root mismatch from unknown sender"
+                );
+            }
+        }
+        if !invalid_ready_senders.is_empty() {
+            for sender in invalid_ready_senders {
+                let outcome = self.record_invalid_signature(
+                    InvalidSigKind::RbcReady,
+                    deliver.height,
+                    deliver.view,
+                    u64::from(sender),
+                );
+                if matches!(outcome, InvalidSigOutcome::Logged) {
+                    warn!(
+                        height = deliver.height,
+                        view = deliver.view,
+                        sender,
+                        topology_len = signature_topology.as_ref().len(),
+                        "dropping RBC READY from DELIVER bundle with invalid signature"
+                    );
+                } else {
+                    debug!(
+                        height = deliver.height,
+                        view = deliver.view,
+                        sender,
+                        topology_len = signature_topology.as_ref().len(),
+                        "suppressing repeated invalid RBC READY signature log"
+                    );
+                }
+            }
+        }
+        if !suppressed_ready_senders.is_empty() {
+            debug!(
+                height = deliver.height,
+                view = deliver.view,
+                suppressed = suppressed_ready_senders.len(),
+                "dropping RBC READY entries from penalized senders"
+            );
+        }
         if let Some(reason) = defer_reason {
+            if let Some(defer_kind) = defer_kind {
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::RbcDeliver,
+                    super::status::ConsensusMessageOutcome::Deferred,
+                    defer_kind,
+                );
+            }
             let sender = deliver.sender;
             let max_bytes = self.pending_rbc_caps().1;
             let deliver_bytes = rbc_deliver_stash_bytes(&deliver);
@@ -2557,6 +3813,16 @@ impl Actor {
                         limit = PENDING_RBC_STASH_LIMIT,
                         dropped_bytes,
                         "dropping deferred RBC DELIVER: stash session limit reached"
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::RbcDeliver,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::StashSessionLimit,
+                    );
+                    self.request_missing_block_after_rbc_drop(
+                        key,
+                        PendingRbcDropReason::SessionLimit,
+                        "rbc_deliver_defer_limit",
                     );
                     return Ok(());
                 };
@@ -2593,6 +3859,16 @@ impl Actor {
                     1,
                     u64::try_from(dropped_bytes).unwrap_or(u64::MAX),
                 );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::RbcDeliver,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::StashCap,
+                );
+                self.request_missing_block_after_rbc_drop(
+                    key,
+                    PendingRbcDropReason::Cap,
+                    "rbc_deliver_defer_cap",
+                );
             }
             self.publish_rbc_backlog_snapshot();
             return Ok(());
@@ -2603,6 +3879,16 @@ impl Actor {
         if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
             self.update_rbc_status_entry(key, &session, false);
             self.persist_rbc_session(key, &session);
+        }
+        if self
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .get(&key)
+            .is_some_and(|session| session.delivered || session.is_invalid())
+        {
+            self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
         }
         if roster_updated && self.subsystems.da_rbc.rbc.pending.contains_key(&key) {
             self.flush_pending_rbc(key)?;
@@ -2682,7 +3968,7 @@ impl Actor {
                     for session_key in session_keys {
                         let roster_source = self
                             .rbc_session_roster_source(session_key)
-                            .unwrap_or(RbcRosterSource::Derived);
+                            .unwrap_or(RbcRosterSource::Init);
                         if !roster_source.is_authoritative() {
                             continue;
                         }
@@ -2746,7 +4032,7 @@ impl Actor {
         if cfg.max_sessions == 0 || cfg.max_bytes == 0 {
             return None;
         }
-        match spawn_rbc_persist_worker(cfg) {
+        match spawn_rbc_persist_worker(cfg, self.wake_tx.clone()) {
             Ok(handle) => {
                 self.subsystems.da_rbc.rbc.persist_tx = Some(handle.work_tx);
                 self.subsystems.da_rbc.rbc.persist_rx = Some(handle.result_rx);
@@ -2760,7 +4046,7 @@ impl Actor {
         }
     }
 
-    pub(super) fn poll_rbc_persist_results(&mut self) -> bool {
+    pub(in crate::sumeragi) fn poll_rbc_persist_results_inner(&mut self) -> bool {
         let Some(rx) = self.subsystems.da_rbc.rbc.persist_rx.as_ref() else {
             return false;
         };
@@ -2826,7 +4112,7 @@ impl Actor {
         }
         let roster_source = self
             .rbc_session_roster_source(key)
-            .unwrap_or(RbcRosterSource::Derived);
+            .unwrap_or(RbcRosterSource::Init);
         if !roster_source.is_authoritative() {
             return;
         }
@@ -2934,6 +4220,7 @@ impl Actor {
                 .rbc
                 .ready_rebroadcast_last_sent
                 .remove(key);
+            self.subsystems.da_rbc.rbc.deliver_deferral.remove(key);
             self.subsystems
                 .da_rbc
                 .rbc
@@ -2985,6 +4272,7 @@ impl Actor {
                 .rbc
                 .ready_rebroadcast_last_sent
                 .remove(key);
+            self.subsystems.da_rbc.rbc.deliver_deferral.remove(key);
             self.subsystems
                 .da_rbc
                 .rbc

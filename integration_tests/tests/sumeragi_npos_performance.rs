@@ -15,13 +15,14 @@ use iroha::data_model::{
     Level,
     isi::{Log, SetParameter},
     parameter::{
-        Parameter, SumeragiParameter,
+        BlockParameter, Parameter, SumeragiParameter,
         system::{SumeragiConsensusMode, SumeragiNposParameters},
     },
     prelude::TransactionBuilder,
 };
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+use nonzero_ext::nonzero;
 use norito::json::{self, JsonSerialize, Map, Value};
 use tokio::time::sleep;
 
@@ -189,6 +190,9 @@ async fn npos_baseline_1s_k3_captures_metrics() -> Result<()> {
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::BlockTimeMs(BLOCK_TIME_MS),
         )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Block(
+            BlockParameter::MaxTransactions(nonzero!(1_u64)),
+        )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::CollectorsK(COLLECTORS_K),
         )))
@@ -222,6 +226,17 @@ async fn npos_baseline_1s_k3_captures_metrics() -> Result<()> {
         .wrap_err("fetch initial status snapshot")?;
     let start_non_empty = status_before.blocks_non_empty;
     let target_non_empty = start_non_empty.saturating_add(SAMPLE_BLOCKS);
+    let seed_start = start_non_empty.saturating_add(1);
+    let submit_client = client.clone();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        for offset in 0..SAMPLE_BLOCKS {
+            let message = format!("npos baseline seed {}", seed_start + offset);
+            submit_client.submit(Log::new(Level::INFO, message))?;
+        }
+        Ok(())
+    })
+    .await
+    .wrap_err("submit baseline log transactions")??;
 
     let http = reqwest::Client::new();
     let metrics_url = client
@@ -235,8 +250,6 @@ async fn npos_baseline_1s_k3_captures_metrics() -> Result<()> {
         "collect_prevote",
         "collect_precommit",
         "collect_aggregator",
-        "collect_exec",
-        "collect_witness",
         "commit",
     ];
     let mut phase_samples: BTreeMap<&'static str, Vec<f64>> =
@@ -763,11 +776,18 @@ async fn npos_pacemaker_jitter_within_band() -> Result<()> {
         return Ok(());
     };
 
+    let client = network.client();
+    let status = client.get_status()?;
+    for idx in status.blocks..2 {
+        client.submit_blocking(Log::new(
+            Level::INFO,
+            format!("pacemaker jitter seed {idx}"),
+        ))?;
+    }
     network
         .ensure_blocks_with(|height| height.total >= 2)
         .await?;
 
-    let client = network.client();
     let metrics_url = client
         .torii_url
         .join("metrics")

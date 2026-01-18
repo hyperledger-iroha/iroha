@@ -21,7 +21,7 @@ Norito Iroha کی canonical serialization layer ہے۔ ہر on-wire message، on
 | **Bare payload** | hashing/موازنہ کیلئے deterministic value encoding۔ On-wire transport ہمیشہ header استعمال کرتا ہے؛ bare bytes صرف اندرونی استعمال کیلئے ہیں۔ | `norito::codec::{Encode, Decode}` |
 | **Compression** | Optional Zstd (اور experimental GPU acceleration) جو header کے compression byte کے ذریعے منتخب ہوتی ہے۔ | `norito.md`, “Compression negotiation” |
 
-layout flag registry (packed-struct, packed-seq, varint offsets, compact lengths) `norito::header::flags` میں ہے۔ V1 defaults کے طور پر flags `0x00` استعمال کرتا ہے مگر supported mask کے اندر explicit header flags قبول کرتا ہے؛ unknown bits رد کئے جاتے ہیں۔ `norito::header::Flags` اندرونی inspection اور مستقبل کی versions کیلئے رکھا جاتا ہے۔
+layout flag registry (packed-struct, packed-seq, field bitset, compact lengths) `norito::header::flags` میں ہے۔ V1 defaults کے طور پر flags `0x00` استعمال کرتا ہے مگر supported mask کے اندر explicit header flags قبول کرتا ہے؛ unknown bits رد کئے جاتے ہیں۔ `norito::header::Flags` اندرونی inspection اور مستقبل کی versions کیلئے رکھا جاتا ہے۔
 
 ## Derive support
 

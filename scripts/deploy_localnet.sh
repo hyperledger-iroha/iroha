@@ -9,6 +9,7 @@ set -euo pipefail
 #   KAGAMI_BIN       Path to the `kagami` binary (default: <target-dir>/<profile>/kagami).
 #   IROHAD_BIN       Path to the `irohad` binary (default: <IROHA_DIR>/target/<profile>/irohad).
 #   IROHA_CLI_BIN    Path to the `iroha` CLI binary (default: <IROHA_DIR>/target/<profile>/iroha).
+#   IROHA_LOCALNET_NOFILE_MIN Minimum RLIMIT_NOFILE for localnet peers (default: 4096).
 
 usage() {
   cat <<'EOF'
@@ -25,6 +26,8 @@ Options:
   --build-line <LINE>        Build line for generated configs: iroha2 or iroha3 (default: iroha3)
   --block-time-ms <MS>       Override block time (ms) in generated configs
   --commit-time-ms <MS>      Override commit time (ms) in generated configs
+  --consensus-mode <MODE>    Override consensus mode (permissioned or npos)
+  --perf-profile <NAME>      Apply Kagami localnet perf profile (10k-permissioned or 10k-npos)
   --base-api-port <PORT>     Base Torii API port (default: 29080)
   --base-p2p-port <PORT>     Base P2P port (default: 33337)
   --bind-host <HOST>         Bind host (default: 127.0.0.1)
@@ -60,6 +63,8 @@ TIMEOUT_SECS=30
 FORCE=false
 BLOCK_TIME_MS=""
 COMMIT_TIME_MS=""
+CONSENSUS_MODE=""
+PERF_PROFILE=""
 CURL_TIMEOUT_SECS=2
 
 while [[ $# -gt 0 ]]; do
@@ -90,6 +95,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --commit-time-ms)
       COMMIT_TIME_MS="$2"
+      shift 2
+      ;;
+    --consensus-mode)
+      CONSENSUS_MODE="$2"
+      shift 2
+      ;;
+    --perf-profile)
+      PERF_PROFILE="$2"
       shift 2
       ;;
     --base-api-port)
@@ -247,6 +260,12 @@ fi
 if [[ -n "$COMMIT_TIME_MS" ]]; then
   KAGAMI_ARGS+=(--commit-time-ms "$COMMIT_TIME_MS")
 fi
+if [[ -n "$CONSENSUS_MODE" ]]; then
+  KAGAMI_ARGS+=(--consensus-mode "$CONSENSUS_MODE")
+fi
+if [[ -n "$PERF_PROFILE" ]]; then
+  KAGAMI_ARGS+=(--perf-profile "$PERF_PROFILE")
+fi
 "$KAGAMI_BIN" "${KAGAMI_ARGS[@]}"
 
 if [[ -n "$TELEMETRY_PROFILE" ]]; then
@@ -279,6 +298,15 @@ fi
 echo "Starting Iroha peers..."
 cd "$OUT_DIR"
 chmod +x start.sh stop.sh
+LOCALNET_NOFILE_MIN="${IROHA_LOCALNET_NOFILE_MIN:-4096}"
+CURRENT_NOFILE="$(ulimit -n 2>/dev/null || echo 0)"
+if [[ "$CURRENT_NOFILE" -lt "$LOCALNET_NOFILE_MIN" ]]; then
+  if ulimit -n "$LOCALNET_NOFILE_MIN" 2>/dev/null; then
+    echo "Raised RLIMIT_NOFILE to ${LOCALNET_NOFILE_MIN} for localnet."
+  else
+    echo "Warning: failed to raise RLIMIT_NOFILE (current=${CURRENT_NOFILE})." >&2
+  fi
+fi
 if [[ -z "${RUST_LOG:-}" && "$PROFILE" == "debug" ]]; then
   export RUST_LOG="warn"
 fi

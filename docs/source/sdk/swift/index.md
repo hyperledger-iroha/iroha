@@ -117,6 +117,8 @@ is reused by Rust, Python, JavaScript, and Swift; CI enforces parity via
 
 - `submitAndWait` performs `POST /v1/pipeline/transactions` and polls
   `/v1/pipeline/transactions/status` until the transaction reaches a terminal state.
+- A `404` from `/v1/pipeline/transactions/status` means Torii has no cached status yet
+  (for example after a restart); the Swift SDK treats this as "pending" and keeps polling.
 - `pollPipelineStatus` monitors a hash that may have been submitted by another SDK or CLI.
 - `PipelineStatusPollOptions` configures polling interval, timeout, max attempts, and the
   typed `PipelineTransactionState` sets used to classify success/failure. Defaults treat

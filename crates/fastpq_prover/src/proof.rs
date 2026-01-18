@@ -182,7 +182,7 @@ impl Prover {
         let commitment = trace_commitment(&self.params, batch)?;
         let ordering = ordering::ordering_hash(batch)?;
         let permission_hashes = collect_permission_hashes(batch)?;
-        let public_io = build_public_io(batch, ordering, permission_hashes)?;
+        let public_io = build_public_io(batch, ordering, permission_hashes);
         let params_version = canonical_params_version(&self.params)
             .ok_or_else(|| Error::UnknownParameter(self.params.name.to_string()))?;
         let artifact = self
@@ -406,7 +406,7 @@ fn build_public_io(
     batch: &TransitionBatch,
     ordering_hash: Hash,
     permission_hashes: Vec<[u8; 32]>,
-) -> Result<PublicIO> {
+) -> PublicIO {
     let inputs = &batch.public_inputs;
     let perm_root = if is_zero_bytes(&inputs.perm_root) {
         perm_root_from_permission_hashes(&permission_hashes)
@@ -418,7 +418,7 @@ fn build_public_io(
     } else {
         inputs.tx_set_hash
     };
-    Ok(PublicIO {
+    PublicIO {
         dsid: inputs.dsid,
         slot: inputs.slot,
         old_root: inputs.old_root,
@@ -427,7 +427,7 @@ fn build_public_io(
         tx_set_hash,
         ordering_hash: hash_norito::core::to_bytes(&ordering_hash),
         permission_hashes,
-    })
+    }
 }
 
 fn is_zero_bytes(bytes: &[u8]) -> bool {
@@ -596,8 +596,7 @@ mod tests {
         batch.sort();
         let ordering = ordering::ordering_hash(&batch).expect("ordering");
         let permission_hashes = collect_permission_hashes(&batch).expect("permission hashes");
-        let public_io =
-            build_public_io(&batch, ordering, permission_hashes.clone()).expect("public io");
+        let public_io = build_public_io(&batch, ordering, permission_hashes.clone());
         assert_eq!(
             public_io.perm_root,
             perm_root_from_permission_hashes(&permission_hashes)

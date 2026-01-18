@@ -17,11 +17,11 @@ Status: janela base derivada de EMA, piso RTT, e limites configuraveis de jitter
 
 ## Conceitos
 - Janela base: media movel exponencial das fases de consenso observadas
-  (propose, collect_da, collect_prevote, collect_precommit, collect_aggregator,
-  commit). A EMA e semeada a partir de `sumeragi.npos.timeouts.*`; ate haver
-  amostras suficientes ela efetivamente corresponde aos defaults configurados.
-  As EMAs de execucao e witness sao exportadas para observabilidade mas ainda
-  nao sao incluidas na janela do pacemaker. Os valores suavizados aparecem via
+  (propose, collect_da, collect_prevote, collect_precommit, commit). A EMA e
+  semeada a partir de `sumeragi.npos.timeouts.*`; ate haver amostras suficientes
+  ela efetivamente corresponde aos defaults configurados. A EMA de
+  `collect_aggregator` e exportada para observabilidade mas nao e incluida na
+  janela do pacemaker. Os valores suavizados aparecem via
   `sumeragi_phase_latency_ema_ms{phase=...}`.
 - Multiplicador de backoff: `sumeragi.pacemaker_backoff_multiplier` (padrao 1). Cada timeout adiciona `base * multiplier` a janela atual.
 - Piso RTT: `avg_rtt_ms * sumeragi.pacemaker_rtt_floor_multiplier` (padrao 2). Evita timeouts agressivos em links de alta latencia.

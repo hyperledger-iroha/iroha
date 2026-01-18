@@ -82,18 +82,13 @@ pub struct IzanamiArgs {
 }
 
 /// Workload profiles for recipe selection.
-#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq, Default)]
 pub enum WorkloadProfile {
     /// Favor deterministic, execution-safe recipes for long runs.
+    #[default]
     Stable,
     /// Include intentionally invalid recipes for chaos coverage.
     Chaos,
-}
-
-impl Default for WorkloadProfile {
-    fn default() -> Self {
-        Self::Stable
-    }
 }
 
 pub const DEFAULT_PROGRESS_INTERVAL: Duration = Duration::from_secs(15);
@@ -282,10 +277,8 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
             return Err(eyre!("tps must be finite"));
         }
         let interval_secs = 1.0 / args.tps;
-        if !interval_secs.is_finite() || interval_secs > (u64::MAX as f64) {
-            return Err(eyre!("tps too low for timer range"));
-        }
-        let interval = Duration::from_secs_f64(interval_secs);
+        let interval = Duration::try_from_secs_f64(interval_secs)
+            .map_err(|_| eyre!("tps too low for timer range"))?;
         if interval.is_zero() {
             return Err(eyre!("tps too high for timer resolution"));
         }

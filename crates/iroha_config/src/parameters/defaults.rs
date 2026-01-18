@@ -160,6 +160,8 @@ pub mod queue {
     pub const CAPACITY_PER_USER: NonZeroUsize = nonzero!(2_usize.pow(16));
     /// Time-to-live for queued transactions before automatic eviction.
     pub const TRANSACTION_TIME_TO_LIVE: Duration = Duration::from_hours(24);
+    /// Minimum interval between expired-transaction sweeps.
+    pub const EXPIRED_CULL_INTERVAL: Duration = Duration::from_secs(1);
 }
 
 /// Transaction admission defaults enforced at pipeline ingress.
@@ -689,6 +691,8 @@ pub mod network {
 
     /// Interval between transaction gossip batches.
     pub const TRANSACTION_GOSSIP_PERIOD: Duration = Duration::from_secs(1);
+    /// Number of gossip ticks to wait before re-sending the same transactions.
+    pub const TRANSACTION_GOSSIP_RESEND_TICKS: NonZeroU32 = nonzero!(3u32);
     /// Number of transactions gossiped per batch.
     pub const TRANSACTION_GOSSIP_SIZE: NonZeroU32 = nonzero!(500u32);
     /// Drop transaction gossip for dataspaces that are missing from the lane catalog instead of
@@ -708,9 +712,13 @@ pub mod network {
     pub const TX_GOSSIP_RESTRICTED_PUBLIC_PAYLOAD: &str = "refuse";
     /// Interval between peer gossip batches.
     pub const PEER_GOSSIP_PERIOD: Duration = Duration::from_secs(1);
+    /// Maximum interval between peer gossip batches (change-driven gossip backs off toward this).
+    pub const PEER_GOSSIP_MAX_PERIOD: Duration = Duration::from_secs(30);
 
     /// Interval between block gossip batches.
     pub const BLOCK_GOSSIP_PERIOD: Duration = Duration::from_secs(10);
+    /// Maximum interval between block gossip batches (idle backoff ceiling).
+    pub const BLOCK_GOSSIP_MAX_PERIOD: Duration = Duration::from_secs(30);
     /// Number of blocks gossiped per batch.
     pub const BLOCK_GOSSIP_SIZE: NonZeroU32 = nonzero!(4u32);
 
@@ -750,6 +758,39 @@ pub mod network {
     pub const P2P_QUEUE_CAP_LOW: NonZeroUsize = nonzero!(32768_usize);
     /// Capacity for post-queue tasks (per topic).
     pub const P2P_POST_QUEUE_CAP: NonZeroUsize = nonzero!(2048_usize);
+    /// Capacity for the inbound P2P subscriber queue feeding the node relay.
+    pub const P2P_SUBSCRIBER_QUEUE_CAP: NonZeroUsize = nonzero!(8192_usize);
+
+    /// Optional per-peer consensus ingress rate (msgs/sec). When None, consensus ingress limiting is disabled.
+    ///
+    /// Defaults tuned for liveness-sensitive traffic without allowing abusive bursts.
+    pub const CONSENSUS_INGRESS_RATE_PER_SEC: Option<NonZeroU32> = Some(nonzero!(300_u32));
+    /// Optional burst for consensus ingress rate limiting (msgs). Defaults to `rate` when None.
+    pub const CONSENSUS_INGRESS_BURST: Option<NonZeroU32> = Some(nonzero!(300_u32));
+    /// Optional per-peer consensus ingress bytes/sec budget. When None, bytes limiting is disabled.
+    pub const CONSENSUS_INGRESS_BYTES_PER_SEC: Option<NonZeroU32> = Some(nonzero!(67_108_864_u32)); // 64 MiB/s
+    /// Optional burst size in bytes for consensus ingress limiting. Defaults to `bytes_per_sec` when None.
+    pub const CONSENSUS_INGRESS_BYTES_BURST: Option<NonZeroU32> = Some(nonzero!(134_217_728_u32)); // 128 MiB
+    /// Optional per-peer critical consensus ingress rate (msgs/sec). When None, critical limiting is disabled.
+    ///
+    /// Critical traffic is liveness-sensitive (votes/QCs/VRF/RBC signals) and uses a dedicated cap.
+    pub const CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC: Option<NonZeroU32> = Some(nonzero!(300_u32));
+    /// Optional burst for critical consensus ingress rate limiting (msgs). Defaults to `rate` when None.
+    pub const CONSENSUS_INGRESS_CRITICAL_BURST: Option<NonZeroU32> = Some(nonzero!(300_u32));
+    /// Optional per-peer critical consensus ingress bytes/sec budget. When None, bytes limiting is disabled.
+    pub const CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC: Option<NonZeroU32> =
+        Some(nonzero!(134_217_728_u32)); // 128 MiB/s
+    /// Optional burst size in bytes for critical consensus ingress limiting. Defaults to `bytes_per_sec` when None.
+    pub const CONSENSUS_INGRESS_CRITICAL_BYTES_BURST: Option<NonZeroU32> =
+        Some(nonzero!(268_435_456_u32)); // 256 MiB
+    /// Maximum concurrent RBC sessions accepted per peer before throttling (0 disables).
+    pub const CONSENSUS_INGRESS_RBC_SESSION_LIMIT: usize = 64;
+    /// Drop threshold (per window) before temporarily suppressing consensus ingress.
+    pub const CONSENSUS_INGRESS_PENALTY_THRESHOLD: u32 = 32;
+    /// Window size (ms) for consensus ingress penalty tracking.
+    pub const CONSENSUS_INGRESS_PENALTY_WINDOW_MS: u64 = 5_000;
+    /// Cooldown (ms) applied after consensus ingress penalties trigger.
+    pub const CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS: u64 = 10_000;
 
     // Optional DNS hostname refresh interval (None disables). Default 5 minutes.
     /// Interval between DNS resolution refreshes for peer hostnames.
@@ -762,14 +803,17 @@ pub mod network {
     pub const RELAY_TTL: u8 = 8;
 
     // Maximum allowed Norito frame size for peer messages (bytes)
-    /// Maximum Norito frame size for peer messages in bytes (1 MiB default).
-    pub const MAX_FRAME_BYTES: NonZeroUsize = nonzero!(1_048_576_usize); // 1 MiB default
+    /// Maximum Norito frame size for peer messages in bytes (16 MiB default).
+    pub const MAX_FRAME_BYTES: NonZeroUsize = nonzero!(16 * 1024 * 1024_usize); // 16 MiB default
     // Per-topic caps (defaults stricter than global except BlockSync)
-    /// Maximum frame size for consensus traffic.
-    pub const MAX_FRAME_BYTES_CONSENSUS: NonZeroUsize = MAX_FRAME_BYTES; // allow full 1 MiB frame by default
+    /// Maximum frame size for consensus control traffic.
+    ///
+    /// Consensus certificates and READY bundles can scale with validator set size, so keep
+    /// this aligned with the global frame cap to avoid dropping liveness-critical frames.
+    pub const MAX_FRAME_BYTES_CONSENSUS: NonZeroUsize = MAX_FRAME_BYTES;
     /// Maximum frame size for control-plane messages.
     pub const MAX_FRAME_BYTES_CONTROL: NonZeroUsize = nonzero!(131_072_usize);
-    /// Maximum frame size for block sync traffic.
+    /// Maximum frame size for block sync / consensus payload traffic.
     pub const MAX_FRAME_BYTES_BLOCK_SYNC: NonZeroUsize = MAX_FRAME_BYTES; // allow full frame
     /// Maximum frame size for transaction gossip.
     pub const MAX_FRAME_BYTES_TX_GOSSIP: NonZeroUsize = nonzero!(131_072_usize); // 128 KiB
@@ -1133,6 +1177,10 @@ pub mod torii {
     // Default burst capacity in tokens per authority.
     /// Maximum burst tokens accumulated per authority.
     pub const QUERY_BURST_PER_AUTHORITY: Option<u32> = Some(50);
+    /// Default steady-state transaction submission rate tokens per authority every second.
+    pub const TX_RATE_PER_AUTHORITY_PER_SEC: Option<u32> = Some(10_000);
+    /// Default transaction submission burst tokens per authority.
+    pub const TX_BURST_PER_AUTHORITY: Option<u32> = Some(20_000);
     /// Default steady-state deploy rate tokens issued per origin every second.
     pub const DEPLOY_RATE_PER_ORIGIN_PER_SEC: Option<u32> = Some(4);
     /// Maximum burst tokens accumulated per origin for deploy endpoints.
@@ -1155,6 +1203,10 @@ pub mod torii {
     pub const PROOF_CACHE_MAX_AGE_SECS: u64 = 30;
     /// Retry hint advertised when proof endpoints are throttled (seconds).
     pub const PROOF_RETRY_AFTER_SECS: u64 = 1;
+    /// Default global pre-auth connection cap (pre-RLIMIT clamp).
+    pub const PREAUTH_MAX_CONNECTIONS: Option<NonZeroUsize> = Some(nonzero!(1024usize));
+    /// Default per-IP pre-auth connection cap (None disables per-IP caps).
+    pub const PREAUTH_MAX_CONNECTIONS_PER_IP: Option<NonZeroUsize> = None;
     /// SoraNet privacy ingestion defaults (disabled until explicitly configured).
     pub mod soranet_privacy_ingest {
         use super::*;
@@ -2010,6 +2062,8 @@ pub mod pipeline {
     pub const IVM_MAX_DECODED_BYTES: u64 = 4 * 1024 * 1024;
     /// Default cursor mode for query endpoints ("ephemeral" or "stored").
     pub const QUERY_DEFAULT_CURSOR_MODE: &str = "ephemeral";
+    /// Maximum fetch size for iterable queries executed inside the IVM.
+    pub const QUERY_MAX_FETCH_SIZE: u64 = super::torii::APP_API_MAX_FETCH_SIZE as u64;
     /// Maximum number of transactions allowed in the quarantine lane per block (0 = disabled).
     pub const QUARANTINE_MAX_TXS_PER_BLOCK: usize = 0;
     /// Per-transaction cycle cap enforced for the quarantine lane (0 = unlimited).
@@ -2038,7 +2092,7 @@ pub mod tiered_state {
     pub const ENABLED: bool = false;
     /// Keep all keys hot unless explicitly configured.
     pub const HOT_RETAINED_KEYS: usize = 0;
-    /// Hot-tier byte budget based on serialized Norito JSON size (0 = unlimited).
+    /// Hot-tier byte budget based on deterministic in-memory WSV sizing (0 = unlimited).
     pub const HOT_RETAINED_BYTES: Bytes<u64> = Bytes(0);
     /// Minimum snapshots to retain newly hot entries before demotion (0 = disabled).
     pub const HOT_RETAINED_GRACE_SNAPSHOTS: u64 = 1;
@@ -2086,17 +2140,15 @@ pub mod norito {
     pub const ZSTD_LEVEL_GPU: i32 = 1;
     /// Size threshold distinguishing small vs large for CPU zstd level.
     pub const LARGE_THRESHOLD: usize = 32 * 1024;
-    /// Enable varint-coded sequence length headers up to this payload size.
-    pub const ENABLE_COMPACT_SEQ_LEN_UP_TO: usize = usize::MAX;
-    /// Enable varint-coded per-element sizes for packed sequences up to this payload size.
-    pub const ENABLE_VARINT_OFFSETS_UP_TO: usize = usize::MAX;
     /// Allow GPU compression offload when compiled and available.
     pub const ALLOW_GPU_COMPRESSION: bool = true;
     /// Hard upper bound on Norito archive length after decompression (bytes).
     ///
     /// This limit is enforced before allocations to reject decompression bombs
-    /// and other adversarial inputs that advertise extreme lengths.
-    pub const MAX_ARCHIVE_LEN: u64 = 64 * 1024 * 1024; // 64 MiB
+    /// and other adversarial inputs that advertise extreme lengths. The default
+    /// aligns with the RBC store cap to avoid rejecting persisted consensus
+    /// payloads.
+    pub const MAX_ARCHIVE_LEN: u64 = super::sumeragi::RBC_STORE_MAX_BYTES as u64; // 512 MiB
     /// Small-N threshold for AoS vs NCB adaptive selection in Norito columnar helpers.
     /// Inputs with `n <= AOS_NCB_SMALL_N` are encoded with a two-pass probe (AoS vs NCB, pick smaller).
     pub const AOS_NCB_SMALL_N: usize = 64;
@@ -2205,6 +2257,7 @@ pub mod sumeragi {
     use std::num::NonZeroUsize;
 
     use iroha_crypto::Algorithm;
+    use nonzero_ext::nonzero;
 
     /// Number of collectors to use (K). Default is 1 (single proxy tail).
     pub const COLLECTORS_K: usize = 1;
@@ -2215,6 +2268,8 @@ pub mod sumeragi {
     pub const BLOCK_MAX_TRANSACTIONS: Option<NonZeroUsize> = None;
     /// Optional cap on payload bytes per block when RBC is disabled (None = unlimited).
     pub const BLOCK_MAX_PAYLOAD_BYTES: Option<NonZeroUsize> = None;
+    /// Multiplier applied to the proposal queue scan budget (relative to max tx per block).
+    pub const PROPOSAL_QUEUE_SCAN_MULTIPLIER: NonZeroUsize = nonzero!(4_usize);
     /// Maximum DA commitments (blobs) permitted in a single block.
     pub const DA_MAX_COMMITMENTS_PER_BLOCK: usize = 16;
     /// Maximum DA proof openings permitted in a single block (aggregate cap).
@@ -2257,9 +2312,15 @@ pub mod sumeragi {
     /// Default: real BLS signing/verification enabled.
     pub const ENABLE_BLS: bool = true;
     /// Default RBC chunk maximum bytes per chunk.
-    pub const RBC_CHUNK_MAX_BYTES: usize = 64 * 1024; // 64 KiB
+    pub const RBC_CHUNK_MAX_BYTES: usize = 256 * 1024; // 256 KiB
+    /// Optional fanout cap for RBC chunk broadcasts (None = auto based on topology).
+    pub const RBC_CHUNK_FANOUT: Option<NonZeroUsize> = None;
     /// Default RBC session TTL (seconds) before pruning inactive sessions.
     pub const RBC_SESSION_TTL_SECS: u64 = 120; // 2 minutes
+    /// Maximum RBC sessions rebroadcast per tick to avoid payload storms.
+    pub const RBC_REBROADCAST_SESSIONS_PER_TICK: usize = 8;
+    /// Maximum RBC payload chunks broadcast per tick to avoid bursty floods.
+    pub const RBC_PAYLOAD_CHUNKS_PER_TICK: usize = 64;
     /// Default maximum number of persisted RBC session summaries kept on disk.
     pub const RBC_STORE_MAX_SESSIONS: usize = 1024;
     /// Default soft quota for persisted RBC sessions. Back-pressure engages beyond this.
@@ -2280,6 +2341,16 @@ pub mod sumeragi {
     pub const RBC_PENDING_TTL_MS: u64 = 30_000;
     /// Default: do not force RBC deliver quorum to 1.
     pub const DEBUG_RBC_FORCE_DELIVER_QUORUM_ONE: bool = false;
+    /// Maximum height delta accepted for inbound consensus messages (0 disables future gating).
+    pub const CONSENSUS_FUTURE_HEIGHT_WINDOW: u64 = 8;
+    /// Maximum view delta accepted for inbound consensus messages (0 disables future gating).
+    pub const CONSENSUS_FUTURE_VIEW_WINDOW: u64 = 8;
+    /// Invalid signature count before temporarily suppressing a signer (0 disables).
+    pub const INVALID_SIG_PENALTY_THRESHOLD: u32 = 3;
+    /// Window (ms) for invalid signature penalty counting.
+    pub const INVALID_SIG_PENALTY_WINDOW_MS: u64 = 5_000;
+    /// Cooldown (ms) applied after invalid signature penalties trigger.
+    pub const INVALID_SIG_PENALTY_COOLDOWN_MS: u64 = 15_000;
     /// Default cap for in-memory commit certificate history.
     pub const COMMIT_CERT_HISTORY_CAP: usize = 512;
     /// Default epoch length in blocks (NPoS).
@@ -2316,6 +2387,8 @@ pub mod sumeragi {
     pub const PACEMAKER_MAX_BACKOFF_MS: u64 = 10_000; // 10 seconds to keep localnet responsive
     /// Pacemaker jitter band size as permille of the backoff window (0..=1000). 0 disables jitter.
     pub const PACEMAKER_JITTER_FRAC_PERMILLE: u32 = 0;
+    /// Permissioned default block time (ms); keep aligned with on-chain defaults.
+    pub const BLOCK_TIME_MS: u64 = 2_000;
     /// Minimum lead time (blocks) between publishing a new consensus key and its activation.
     pub const KEY_ACTIVATION_LEAD_BLOCKS: u64 = 1;
     /// Grace/overlap window (blocks) during which both old and new keys remain valid.

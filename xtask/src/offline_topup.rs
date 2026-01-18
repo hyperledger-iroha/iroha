@@ -291,12 +291,8 @@ fn handle_allowance(
     let attestation_nonce_hex = attestation_nonce
         .as_ref()
         .map(|hash| encode_upper(hash.as_ref()));
-    if provisioned_proof.is_some() {
-        ensure_provisioned_metadata_matches(
-            label,
-            android_policy.as_ref(),
-            provisioned_proof.as_ref().unwrap(),
-        )?;
+    if let Some(proof) = provisioned_proof.as_ref() {
+        ensure_provisioned_metadata_matches(label, android_policy.as_ref(), proof)?;
     }
     let attestation_report = if let Some(proof) = provisioned_proof.as_ref() {
         to_bytes(proof).map_err(|err| {

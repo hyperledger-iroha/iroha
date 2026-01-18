@@ -183,7 +183,7 @@ COMMAND=("${CARGO_BIN}" "run" "--manifest-path" "${EXPORTER_MANIFEST}")
 if [[ "${RELEASE_FLAG}" == "1" ]]; then
   COMMAND+=("--release")
 fi
-COMMAND+=("--" "--fixtures" "${FIXTURES_JSON}" "--out-dir" "${RESOURCES_DIR}" "--manifest" "${MANIFEST_NAME}")
+COMMAND+=("--" "--fixtures" "${FIXTURES_JSON}" "--write-fixtures" "--out-dir" "${RESOURCES_DIR}" "--manifest" "${MANIFEST_NAME}")
 if [[ "${CHECK_ENCODE}" == "0" ]]; then
   COMMAND+=("--check-encoded" "false")
 fi

@@ -13,18 +13,13 @@ use std::{
     borrow::Cow,
     cell::RefCell,
     collections::{BTreeMap, HashMap},
-    io::{BufRead as _, BufReader, Write},
-    net::TcpStream,
+    io::Write,
     str::FromStr,
-    time::Duration,
 };
 
-#[cfg(feature = "ed25519")]
 use ed25519_dalek::{Signer as _, SigningKey};
-#[cfg(feature = "secp256k1")]
 use iroha_crypto::EcdsaSecp256k1Sha256;
 
-#[cfg(any(feature = "ed25519", feature = "ml-dsa", feature = "secp256k1"))]
 use crate::signature::{SignatureScheme, verify_signature};
 
 /// Extremely small ISO 20022 message representation used for testing.
@@ -3462,6 +3457,7 @@ fn parse_xml_into_current(message_type: &str, text: &str) -> Result<(), MsgError
     Ok(())
 }
 
+#[allow(dead_code)]
 struct HttpEndpoint {
     host: String,
     port: u16,
@@ -3499,29 +3495,8 @@ fn send_http(endpoint: &HttpEndpoint, payload: &[u8]) -> Result<(), MsgError> {
     {
         return override_cb(endpoint, payload);
     }
-    let mut stream = TcpStream::connect((endpoint.host.as_str(), endpoint.port))?;
-    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(10)))?;
-    let request = format!(
-        "POST {} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/xml\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        endpoint.path,
-        endpoint.host,
-        payload.len()
-    );
-    stream.write_all(request.as_bytes())?;
-    stream.write_all(payload)?;
-    stream.flush()?;
-    let mut reader = BufReader::new(stream);
-    let mut status_line = String::new();
-    reader.read_line(&mut status_line)?;
-    let mut parts = status_line.split_whitespace();
-    let _version = parts.next().ok_or(MsgError::InvalidFormat)?;
-    let status = parts.next().ok_or(MsgError::InvalidFormat)?;
-    let code: u16 = status.parse().map_err(|_| MsgError::InvalidFormat)?;
-    if !(200..=299).contains(&code) {
-        return Err(MsgError::HttpStatus(code));
-    }
-    Ok(())
+    let _ = (endpoint, payload);
+    Err(MsgError::UnsupportedChannel)
 }
 
 /// Encode a numeric amount as an ASCII string.
@@ -3829,39 +3804,35 @@ pub fn msg_validate() -> bool {
 /// Sign the current ISO 20022 message.
 ///
 /// Uses Ed25519, secp256k1, or ML-DSA (Dilithium3) depending on the key
-/// length and enabled features. The function signs the serialized message
-/// bytes and returns the signature or an empty vector if signing fails.
+/// length. The function signs the serialized message bytes and returns the
+/// signature or an empty vector if signing fails.
 #[allow(unused_variables)]
 pub fn msg_sign(key: &[u8]) -> Vec<u8> {
-    #[cfg(any(feature = "ed25519", feature = "ml-dsa", feature = "secp256k1"))]
     let msg = match msg_serialize("XML") {
         Ok(bytes) => bytes,
         Err(_) => return Vec::new(),
     };
-    #[cfg(feature = "ed25519")]
     {
         if let Ok(sk_bytes) = <[u8; 32]>::try_from(key) {
             let sk = SigningKey::from_bytes(&sk_bytes);
             return sk.sign(&msg).to_bytes().to_vec();
         }
     }
-    #[cfg(feature = "ml-dsa")]
     {
         use pqcrypto_dilithium::dilithium3 as dilithium;
         use pqcrypto_traits::sign::{DetachedSignature as _, SecretKey as _};
-        if key.len() == dilithium::secret_key_bytes() {
-            if let Ok(sk) = dilithium::SecretKey::from_bytes(key) {
-                let sig = dilithium::detached_sign(&msg, &sk);
-                return sig.as_bytes().to_vec();
-            }
+        if key.len() == dilithium::secret_key_bytes()
+            && let Ok(sk) = dilithium::SecretKey::from_bytes(key)
+        {
+            let sig = dilithium::detached_sign(&msg, &sk);
+            return sig.as_bytes().to_vec();
         }
     }
-    #[cfg(feature = "secp256k1")]
     {
-        if let Ok(sk_bytes) = <[u8; 32]>::try_from(key) {
-            if let Ok(sk) = EcdsaSecp256k1Sha256::parse_private_key(&sk_bytes) {
-                return EcdsaSecp256k1Sha256::sign(&msg, &sk);
-            }
+        if let Ok(sk_bytes) = <[u8; 32]>::try_from(key)
+            && let Ok(sk) = EcdsaSecp256k1Sha256::parse_private_key(&sk_bytes)
+        {
+            return EcdsaSecp256k1Sha256::sign(&msg, &sk);
         }
     }
     Vec::new()
@@ -3870,30 +3841,25 @@ pub fn msg_sign(key: &[u8]) -> Vec<u8> {
 /// Verify the signature on an ISO 20022 message.
 ///
 /// Uses the [`verify_signature`] helper with Ed25519, secp256k1, or ML-DSA
-/// depending on the key length and enabled features. The serialized message
-/// bytes are used as the signing payload. Secp256k1 expects a 33-byte
-/// compressed SEC1 public key.
+/// depending on the key length. The serialized message bytes are used as the
+/// signing payload. Secp256k1 expects a 33-byte compressed SEC1 public key.
 #[allow(unused_variables)]
 pub fn msg_verify_sig(sig: &[u8], key: &[u8]) -> bool {
-    #[cfg(any(feature = "ed25519", feature = "ml-dsa", feature = "secp256k1"))]
     let msg = match msg_serialize("XML") {
         Ok(bytes) => bytes,
         Err(_) => return false,
     };
-    #[cfg(feature = "ed25519")]
     {
         if key.len() == 32 {
             return verify_signature(SignatureScheme::Ed25519, &msg, sig, key);
         }
     }
-    #[cfg(feature = "ml-dsa")]
     {
         use pqcrypto_dilithium::dilithium3 as dilithium;
         if key.len() == dilithium::public_key_bytes() && sig.len() == dilithium::signature_bytes() {
             return verify_signature(SignatureScheme::MlDsa, &msg, sig, key);
         }
     }
-    #[cfg(feature = "secp256k1")]
     {
         if key.len() == 33 && sig.len() == 64 {
             return verify_signature(SignatureScheme::Secp256k1, &msg, sig, key);
@@ -3921,8 +3887,10 @@ pub fn set_msg_sender(callback: Option<MsgSendCallback>) {
 /// validation fails the function returns `false` and nothing is sent. When the
 /// message is valid it is serialised using [`msg_serialize`] and either passed
 /// to a custom backend registered via [`set_msg_sender`] or recorded in a
-/// thread‑local log for inspection. The serialised bytes are sent and the
-/// function returns `true` to indicate success.
+/// thread‑local log for inspection. HTTP channels are only supported in tests
+/// via overrides; non-test invocations return [`MsgError::UnsupportedChannel`].
+/// The serialised bytes are sent and the function returns `true` to indicate
+/// success.
 pub fn msg_send(channel: &str) -> Result<(), MsgError> {
     if !msg_validate() {
         return Err(MsgError::ValidationFailed);
@@ -3974,7 +3942,6 @@ fn set_http_sender_override(callback: Option<TestHttpSender>) {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "ed25519")]
     use ed25519_dalek::SigningKey;
     use norito::codec::{Decode, Encode};
 
@@ -5659,7 +5626,6 @@ mod tests {
         assert!(msg_validate());
     }
 
-    #[cfg(feature = "ed25519")]
     #[test]
     fn msg_sign_and_verify_roundtrip() {
         reset();
@@ -5670,7 +5636,6 @@ mod tests {
         assert!(msg_verify_sig(&sig, pk.as_bytes()));
     }
 
-    #[cfg(feature = "ml-dsa")]
     #[test]
     fn msg_sign_and_verify_roundtrip_dilithium() {
         use pqcrypto_dilithium::dilithium3 as dilithium;
@@ -5682,10 +5647,9 @@ mod tests {
         assert!(msg_verify_sig(&sig, pk.as_bytes()));
     }
 
-    #[cfg(feature = "secp256k1")]
     #[test]
     fn msg_sign_and_verify_roundtrip_secp256k1() {
-        use k256::ecdsa::{SigningKey, VerifyingKey, signature::Signer as _};
+        use k256::ecdsa::{SigningKey, VerifyingKey};
         reset();
         msg_parse("pacs.008", b"field=value").unwrap();
         let sk = SigningKey::from_bytes(&[9u8; 32].into()).expect("sk");
@@ -5841,6 +5805,18 @@ mod tests {
             assert_eq!(path, "/submit");
             assert_eq!(body, &expected);
         });
+    }
+
+    #[test]
+    fn msg_send_http_without_override_is_unsupported() {
+        reset();
+        msg_create("pacs.008");
+        populate_pacs008_minimal();
+        assert!(matches!(
+            msg_send("http://example.com/submit"),
+            Err(MsgError::UnsupportedChannel)
+        ));
+        HTTP_CALLS.with(|calls| assert!(calls.borrow().is_empty()));
     }
 
     #[test]

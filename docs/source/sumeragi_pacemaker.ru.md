@@ -17,10 +17,10 @@ translation_last_reviewed: 2026-01-01
 
 ## Концепции
 - Базовое окно: экспоненциальная скользящая средняя наблюдаемых фаз консенсуса
-  (propose, collect_da, collect_prevote, collect_precommit, collect_aggregator,
-  commit). EMA инициализируется из `sumeragi.npos.timeouts.*`; пока не набрано
-  достаточно выборок, она фактически совпадает с настроенными значениями по умолчанию.
-  EMA исполнения и witness экспортируются для наблюдаемости, но пока не включены в
+  (propose, collect_da, collect_prevote, collect_precommit, commit). EMA
+  инициализируется из `sumeragi.npos.timeouts.*`; пока не набрано достаточно
+  выборок, она фактически совпадает с настроенными значениями по умолчанию.
+  EMA `collect_aggregator` экспортируется для наблюдаемости, но не включается в
   окно pacemaker. Сглаженные значения доступны через
   `sumeragi_phase_latency_ema_ms{phase=...}`.
 - Множитель backoff: `sumeragi.pacemaker_backoff_multiplier` (по умолчанию 1). Каждый timeout добавляет `base * multiplier` к текущему окну.

@@ -151,7 +151,11 @@ impl GatewayRateLimiter {
                     let retry_after = window
                         .events
                         .front()
-                        .map(|oldest| self.config.window - now.duration_since(*oldest))
+                        .map(|oldest| {
+                            self.config
+                                .window
+                                .saturating_sub(now.duration_since(*oldest))
+                        })
                         .unwrap_or_else(|| self.config.window);
 
                     if let Some(ban_duration) = self.config.ban_duration {

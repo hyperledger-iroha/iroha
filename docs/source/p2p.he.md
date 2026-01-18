@@ -24,19 +24,21 @@ translator: manual
   - גודל התור להודעות עדיפות נמוכה (גוסיפ/סנכרון).
 - `p2p_post_queue_cap` (usize, ברירת מחדל 2048)  
   - גודל ערוץ ה-post לכל peer (מסרים יוצאים ייעודיים).
+- `p2p_subscriber_queue_cap` (usize, ברירת מחדל 8192)  
+  - גודל תור המנוי הנכנס לכל מנוי שמזין את ה-node relay.
 
 הברירות מכוילות לעומסים סביב ~20K TPS: תעבורת קונצנזוס/בקרה נשארת מגיבה בעוד לגוסיפ/סנכרון יש מרחב תמרון. התאימו לפי גודל בלוק, זמן בלוק ותנאי רשת.
 
-הערה: תורי עדיפות גבוהה משרתים תעבורת קונצנזוס/בקרה; תורי עדיפות נמוכה מטפלים בגוסיפ ובמסלולי סנכרון.
+הערה: תורי עדיפות גבוהה משרתים תעבורת קונצנזוס/בקרה; תורי עדיפות נמוכה מטפלים בגוסיפ ובמסלולי סנכרון. ה-relay רושם שני מנויים (גבוה/נמוך), כך שסך הבאפרים של ה-relay הוא `2 * p2p_subscriber_queue_cap` בתוספת מנויים נוספים (למשל bootstrap ג'נסיס, Torii Connect).
 
 ### הגבלת קצב לעדיפות נמוכה (`[network]`)
 
 - `low_priority_rate_per_sec` (אופציונלי; הודעות/שנייה)  
-  - מפעיל token-bucket פר-peer לתעבורת עדיפות נמוכה. בלתי מוגדר → כבוי.
+  - מפעיל token-bucket פר-peer לתעבורת עדיפות נמוכה (גוסיפ/סנכרון) גם בכניסה וגם ביציאה. בלתי מוגדר → כבוי.
 - `low_priority_burst` (אופציונלי; הודעות)  
   - קיבולת פרץ; ברירת מחדל לערך של `low_priority_rate_per_sec`.
 
-בעת הפעלה, הודעות post/שידור בעדיפות נמוכה נחסמות פר-peer. תעבורת עדיפות גבוהה לא מושפעת.
+בעת הפעלה, מסגרות נכנסות בעדיפות נמוכה (tx gossip, peer/trust gossip, health/time) נזרקות לפני ה-relay, והודעות post/שידור בעדיפות נמוכה נחסמות פר-peer. גם מסגרות בקרה של streaming מוגבלות כדי למנוע הצפה של control plane. תעבורת קונצנזוס/בקרה בעדיפות גבוהה לא מושפעת מעבר לכך.
 
 ### ריענון DNS (`[network]`)
 
@@ -51,6 +53,11 @@ translator: manual
 
 - `p2p_dropped_posts`: כמות הודעות post שנפלו בגלל תור מלא (מונוטוני).
 - `p2p_dropped_broadcasts`: כמות שידורים שנפלו בגלל תור מלא.
+- `p2p_subscriber_queue_full_total`: כמות הודעות נכנסות שנפלו כי תורי המנויים היו מלאים.
+- `p2p_subscriber_queue_full_by_topic_total{topic="Consensus|Control|BlockSync|TxGossip|PeerGossip|Health|Other"}`: נפילות תורי מנויים לפי נושא.
+- `p2p_subscriber_unrouted_total`: כמות הודעות נכנסות שנפלו כי אין מנוי תואם לנושא.
+- `p2p_subscriber_unrouted_by_topic_total{topic="Consensus|Control|BlockSync|TxGossip|PeerGossip|Health|Other"}`: פירוט נפילות לפי נושא ללא מנוי תואם.
+- `p2p_queue_depth{priority="High|Low"}`: עומק תור הודעות הרשת לפי עדיפות.
 - `p2p_queue_dropped_total{priority="High|Low",kind="Post|Broadcast"}`: נפילות לפי עדיפות וסוג.
 - `p2p_handshake_failures`: כשלי handshake (timeouts, שגיאות חתימה).
 - `p2p_low_post_throttled_total`: מספר הודעות post בעדיפות נמוכה שנחסמו בטוקן-באקט.
@@ -75,6 +82,22 @@ translator: manual
 # HELP p2p_dropped_posts Number of p2p post messages dropped due to backpressure
 # TYPE p2p_dropped_posts gauge
 p2p_dropped_posts 0
+
+# HELP p2p_subscriber_queue_full_total Number of inbound messages dropped because subscriber queues were full
+# TYPE p2p_subscriber_queue_full_total gauge
+p2p_subscriber_queue_full_total 3
+
+# HELP p2p_subscriber_queue_full_by_topic_total Per-topic inbound drops caused by full subscriber queues
+# TYPE p2p_subscriber_queue_full_by_topic_total gauge
+p2p_subscriber_queue_full_by_topic_total{topic="Consensus"} 2
+
+# HELP p2p_subscriber_unrouted_total Number of inbound messages dropped because no subscriber matches the topic
+# TYPE p2p_subscriber_unrouted_total gauge
+p2p_subscriber_unrouted_total 7
+
+# HELP p2p_subscriber_unrouted_by_topic_total Per-topic inbound drops caused by no matching subscriber
+# TYPE p2p_subscriber_unrouted_by_topic_total gauge
+p2p_subscriber_unrouted_by_topic_total{topic="Consensus"} 1
 ...
 ```
 
@@ -114,12 +137,22 @@ P2P_PUBLIC_ADDRESS = "peer1.example.com:1337"
 p2p_queue_cap_high = 8192     # consensus/control
 p2p_queue_cap_low  = 32768    # gossip/sync
 p2p_post_queue_cap = 2048     # per-peer post channel
+p2p_subscriber_queue_cap = 8192  # inbound relay subscriber queue
 
 # פרמטרים נוספים (להמחשה)
-block_gossip_size = 4        # תקרת פאנאאוט ל־block sync, הצבעות זמינות ו־NEW_VIEW gossip (דגימת עמיתים + עדכוני block sync)
+block_gossip_size = 4        # תקרת פאנאאוט ל־block sync והצבעות זמינות (דגימת עמיתים + עדכוני block sync)
 block_gossip_period_ms = 10000
+block_gossip_max_period_ms = 30000
+peer_gossip_period_ms = 1000
+peer_gossip_max_period_ms = 30000
 transaction_gossip_size = 500
+transaction_gossip_resend_ticks = 3
 ```
 
 - מרווחי gossip/idle מוגבלים למינימום של 100ms כדי למנוע לולאות סחרור.
+- גוסיפ כתובות עמיתים מונע ע״י שינוי עם backoff מעריכי עד `peer_gossip_max_period_ms`
+  (ומוגבל כאשר ה־relay מפיל מסרים נכנסים); דגימת block sync מבצעת backoff דומה עד
+  `block_gossip_max_period_ms` כאשר אין התקדמות.
+- גוסיפ טרנזקציות נעצר זמנית כאשר relay backpressure פעיל (נפילות בתור subscriber)
+  וחוזר אחרי `transaction_gossip_period_ms * transaction_gossip_resend_ticks` כדי למנוע הצפה.
 </div>

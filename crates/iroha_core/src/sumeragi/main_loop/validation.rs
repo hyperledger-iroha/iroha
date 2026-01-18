@@ -88,7 +88,7 @@ impl Actor {
                         );
                     }
                 }
-                self.finalize_validation_failure(hash, pending, err)
+                self.finalize_validation_failure(hash, pending, &err)
             }
         }
     }
@@ -124,7 +124,7 @@ impl Actor {
         &mut self,
         hash: HashOf<BlockHeader>,
         mut pending: PendingBlock,
-        err: BlockValidationError,
+        err: &BlockValidationError,
     ) -> ValidationGateOutcome {
         if let BlockValidationError::PrevBlockHeightMismatch { expected, actual } = &err {
             if actual > expected {
@@ -145,7 +145,7 @@ impl Actor {
         let view = pending.view;
         let parent = pending.block.header().prev_block_hash();
         let txs = pending.block.transactions_vec().clone();
-        let reason_label = validation_reject_reason_label(&err);
+        let reason_label = validation_reject_reason_label(err);
         let proposal_epoch = self.epoch_for_height(height);
         pending.validation_status = ValidationStatus::Invalid;
         pending.mark_aborted();

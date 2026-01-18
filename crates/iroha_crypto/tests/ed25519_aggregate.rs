@@ -19,9 +19,9 @@ fn ed25519_verify_aggregate_accepts_valid_signatures() {
         public_keys.push(pk_bytes.to_vec());
     }
 
-    let msg_refs: Vec<&[u8]> = messages.iter().map(|m| m.as_slice()).collect();
-    let sig_refs: Vec<&[u8]> = signatures.iter().map(|s| s.as_slice()).collect();
-    let pk_refs: Vec<&[u8]> = public_keys.iter().map(|p| p.as_slice()).collect();
+    let msg_refs: Vec<&[u8]> = messages.iter().map(Vec::as_slice).collect();
+    let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
+    let pk_refs: Vec<&[u8]> = public_keys.iter().map(Vec::as_slice).collect();
 
     assert!(ed25519_verify_aggregate(&msg_refs, &sig_refs, &pk_refs).is_ok());
 }

@@ -118,10 +118,10 @@
 
 ## `/v1/sumeragi/phases` の利用
 
-- 返却値: `{ propose_ms, collect_da_ms, collect_prevote_ms, collect_precommit_ms, collect_aggregator_ms, collect_exec_ms, collect_witness_ms, commit_ms, pipeline_total_ms, ema_ms{…} }`
+- 返却値: `{ propose_ms, collect_da_ms, collect_prevote_ms, collect_precommit_ms, collect_aggregator_ms, commit_ms, pipeline_total_ms, ema_ms{…} }`
 - `collect_aggregator_ms` は冗長コレクタへのファンアウト遅延を示す。`sumeragi_redundant_sends_*` と組み合わせてアラート設定を調整。
-- `pipeline_total_ms` は Pacemaker が制御するフェーズ（propose/collect_da/collect_prevote/collect_precommit/commit）の合計遅延を表す。監視やしきい値調整に便利な単一指標として利用できる（execution/witness フェーズは参照用のまま保持）。
-- 付随情報として `block_created_dropped_by_lock_total`, `block_created_hint_mismatch_total`, `block_created_proposal_mismatch_total`, `pacemaker_backpressure_deferrals_total` も含まれる。
+- `pipeline_total_ms` は Pacemaker が制御するフェーズ（propose/collect_da/collect_prevote/collect_precommit/commit）の合計遅延を表す。監視やしきい値調整に便利な単一指標として利用できる（`collect_aggregator_ms` はファンアウト指標として別扱い）。
+- 付随情報として `block_created_dropped_by_lock_total`, `block_created_hint_mismatch_total`, `block_created_proposal_mismatch_total` も含まれる。
 
 ## Nexus メトリクス
 
@@ -211,7 +211,7 @@ nexus_lane_configured_total != EXPECTED_LANE_COUNT
 - `increase(block_created_hint_mismatch_total[5m]) > 0`: 提案ヘッダの不整合
 - `increase(block_created_proposal_mismatch_total[5m]) > 0`: 提案ペイロードの不一致
 - `increase(block_created_dropped_by_lock_total[5m]) > 0`: Locked commit certificate によるドロップ
-- `increase(pacemaker_backpressure_deferrals_total[5m]) > 0`: キュー飽和による Pacemaker 停止
+- `increase(pacemaker_backpressure_deferrals_total[5m]) > 0`: キュー飽和・リレー/RBC バックログ・保留ブロック滞留による Pacemaker 停止
 - `increase(sumeragi_redundant_sends_total[5m])` と `rate(sumeragi_dropped_*[5m])` の同時増加は collector/チャネル設定の見直しを示唆
 - ログ相関の自動化: `python3 scripts/sumeragi_backpressure_log_scraper.py <logfile>` を実行すると、`pacemaker_backpressure_deferrals_total` のスパイクと RBC の `retry` / `abort` ログをまとめて確認できます。`journalctl -f ... | python3 scripts/sumeragi_backpressure_log_scraper.py -` のように標準入力からも扱え、`--status path/to/status.json` で `/v1/sumeragi/status` スナップショットを併せて把握できます。詳細はスクリプトの `--help` と英語版ランブックを参照してください。
 

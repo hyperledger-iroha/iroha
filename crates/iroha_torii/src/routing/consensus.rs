@@ -5,13 +5,18 @@ use iroha_core::state::StateReadOnly;
 use iroha_data_model::prelude::ChainId;
 use iroha_data_model::{
     block::consensus::{
-        SumeragiBlockSyncRosterStatus, SumeragiQcStatus, SumeragiCommitInflightStatus,
-        SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus, SumeragiDataspaceCommitment,
-        SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiMembershipMismatchStatus,
-        SumeragiMembershipStatus, SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcEntry,
-        SumeragiPendingRbcStatus, SumeragiRuntimeUpgradeHook, SumeragiStatusWire,
-        SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus, SumeragiWorkerLoopStatus,
-        SumeragiWorkerQueueDepths, SumeragiWorkerQueueDiagnostics, SumeragiWorkerQueueTotals,
+        SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus,
+        SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus,
+        SumeragiConsensusMessageHandlingEntry, SumeragiConsensusMessageHandlingStatus,
+        SumeragiDataspaceCommitment, SumeragiLaneCommitment, SumeragiLaneGovernance,
+        SumeragiMembershipMismatchStatus, SumeragiMembershipStatus, SumeragiPeerKeyPolicyStatus,
+        SumeragiPendingRbcEntry, SumeragiPendingRbcStatus, SumeragiQcStatus,
+        SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus, SumeragiRuntimeUpgradeHook,
+        SumeragiStatusWire, SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
+        SumeragiVoteValidationDropEntry, SumeragiVoteValidationDropPeerEntry,
+        SumeragiVoteValidationDropReasonCount, SumeragiVoteValidationDropStatus,
+        SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths, SumeragiWorkerQueueDiagnostics,
+        SumeragiWorkerQueueTotals,
     },
     nexus::{DataSpaceId, LaneId},
 };
@@ -44,8 +49,6 @@ struct SumeragiPhasesEma {
     collect_prevote_ms: u64,
     collect_precommit_ms: u64,
     collect_aggregator_ms: u64,
-    collect_exec_ms: u64,
-    collect_witness_ms: u64,
     commit_ms: u64,
     pipeline_total_ms: u64,
 }
@@ -57,8 +60,6 @@ struct SumeragiPhasesResponse {
     collect_prevote_ms: u64,
     collect_precommit_ms: u64,
     collect_aggregator_ms: u64,
-    collect_exec_ms: u64,
-    collect_witness_ms: u64,
     commit_ms: u64,
     pipeline_total_ms: u64,
     collect_aggregator_gossip_total: u64,
@@ -625,6 +626,43 @@ pub async fn handle_v1_sumeragi_qc(accept: Option<axum::http::HeaderValue>) -> R
                 .unwrap_or(Value::Null),
         ),
     ]);
+    let commit_qc = json_object(vec![
+        json_entry("height", snap.commit_qc.height),
+        json_entry("view", snap.commit_qc.view),
+        json_entry("epoch", snap.commit_qc.epoch),
+        json_entry(
+            "block_hash",
+            snap.commit_qc
+                .block_hash
+                .map(|hash| Value::from(format!("{hash}")))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "validator_set_hash",
+            snap.commit_qc
+                .validator_set_hash
+                .map(|hash| Value::from(format!("{hash}")))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry("validator_set_len", snap.commit_qc.validator_set_len),
+        json_entry("signatures_total", snap.commit_qc.signatures_total),
+    ]);
+    let commit_quorum = json_object(vec![
+        json_entry("height", snap.commit_quorum.height),
+        json_entry("view", snap.commit_quorum.view),
+        json_entry(
+            "block_hash",
+            snap.commit_quorum
+                .block_hash
+                .map(|hash| Value::from(format!("{hash}")))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry("signatures_present", snap.commit_quorum.signatures_present),
+        json_entry("signatures_counted", snap.commit_quorum.signatures_counted),
+        json_entry("signatures_set_b", snap.commit_quorum.signatures_set_b),
+        json_entry("signatures_required", snap.commit_quorum.signatures_required),
+        json_entry("last_updated_ms", snap.commit_quorum.last_updated_ms),
+    ]);
     let payload = json_object(vec![
         json_entry("highest_qc", highest_qc),
         json_entry("locked_qc", locked_qc),
@@ -650,8 +688,6 @@ pub async fn handle_v1_sumeragi_phases(
         collect_prevote_ms: snap.collect_prevote_ms,
         collect_precommit_ms: snap.collect_precommit_ms,
         collect_aggregator_ms: snap.collect_aggregator_ms,
-        collect_exec_ms: snap.collect_exec_ms,
-        collect_witness_ms: snap.collect_witness_ms,
         commit_ms: snap.commit_ms,
         pipeline_total_ms: snap.pipeline_total_ms,
         collect_aggregator_gossip_total: snap.gossip_fallback_total,
@@ -664,8 +700,6 @@ pub async fn handle_v1_sumeragi_phases(
             collect_prevote_ms: snap.collect_prevote_ema_ms,
             collect_precommit_ms: snap.collect_precommit_ema_ms,
             collect_aggregator_ms: snap.collect_aggregator_ema_ms,
-            collect_exec_ms: snap.collect_exec_ema_ms,
-            collect_witness_ms: snap.collect_witness_ema_ms,
             commit_ms: snap.commit_ema_ms,
             pipeline_total_ms: snap.pipeline_total_ema_ms,
         },
@@ -1690,6 +1724,10 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "quorum_timeout_total",
             snap.view_change_causes.quorum_timeout_total,
         ),
+        json_entry(
+            "stake_quorum_timeout_total",
+            snap.view_change_causes.stake_quorum_timeout_total,
+        ),
         json_entry("da_gate_total", snap.view_change_causes.da_gate_total),
         json_entry(
             "missing_payload_total",
@@ -1719,6 +1757,11 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry(
             "last_quorum_timeout_timestamp_ms",
             snap.view_change_causes.last_quorum_timeout_timestamp_ms,
+        ),
+        json_entry(
+            "last_stake_quorum_timeout_timestamp_ms",
+            snap.view_change_causes
+                .last_stake_quorum_timeout_timestamp_ms,
         ),
         json_entry(
             "last_da_gate_timestamp_ms",
@@ -1819,6 +1862,97 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "rbc_deliver_expired_total",
             snap.dedup_evictions.rbc_deliver_expired_total,
         ),
+    ]);
+    let consensus_message_handling_entries = Value::Array(
+        snap.consensus_message_handling
+            .entries
+            .iter()
+            .map(|entry| {
+                json_object(vec![
+                    json_entry("kind", entry.kind.as_str()),
+                    json_entry("outcome", entry.outcome.as_str()),
+                    json_entry("reason", entry.reason.as_str()),
+                    json_entry("total", entry.total),
+                ])
+            })
+            .collect(),
+    );
+    let consensus_message_handling =
+        json_object(vec![json_entry("entries", consensus_message_handling_entries)]);
+    let vote_validation_drop_entries = Value::Array(
+        snap.vote_validation_drops
+            .entries
+            .iter()
+            .map(|entry| {
+                json_object(vec![
+                    json_entry("reason", entry.reason.as_str()),
+                    json_entry("height", entry.height),
+                    json_entry("view", entry.view),
+                    json_entry("epoch", entry.epoch),
+                    json_entry("signer_index", entry.signer_index),
+                    json_entry(
+                        "peer_id",
+                        entry
+                            .peer_id
+                            .as_ref()
+                            .map(|peer| Value::from(format!("{peer}")))
+                            .unwrap_or(Value::Null),
+                    ),
+                    json_entry(
+                        "roster_hash",
+                        entry
+                            .roster_hash
+                            .map(|hash| Value::from(format!("{hash}")))
+                            .unwrap_or(Value::Null),
+                    ),
+                    json_entry("roster_len", entry.roster_len),
+                    json_entry("block_hash", Value::from(format!("{}", entry.block_hash))),
+                    json_entry("timestamp_ms", entry.timestamp_ms),
+                ])
+            })
+            .collect(),
+    );
+    let vote_validation_drop_peer_entries = Value::Array(
+        snap.vote_validation_drops
+            .peer_entries
+            .iter()
+            .map(|entry| {
+                let reasons = Value::Array(
+                    entry
+                        .reasons
+                        .iter()
+                        .map(|reason| {
+                            json_object(vec![
+                                json_entry("reason", reason.reason.as_str()),
+                                json_entry("total", reason.total),
+                            ])
+                        })
+                        .collect(),
+                );
+                json_object(vec![
+                    json_entry("peer_id", Value::from(format!("{}", entry.peer_id))),
+                    json_entry(
+                        "roster_hash",
+                        entry
+                            .roster_hash
+                            .map(|hash| Value::from(format!("{hash}")))
+                            .unwrap_or(Value::Null),
+                    ),
+                    json_entry("roster_len", entry.roster_len),
+                    json_entry("total", entry.total),
+                    json_entry("reasons", reasons),
+                    json_entry("last_height", entry.last_height),
+                    json_entry("last_view", entry.last_view),
+                    json_entry("last_epoch", entry.last_epoch),
+                    json_entry("last_timestamp_ms", entry.last_timestamp_ms),
+                ])
+            })
+            .collect(),
+    );
+    let vote_validation_drops = json_object(vec![
+        json_entry("total", snap.vote_validation_drops.total),
+        json_entry("entries", vote_validation_drop_entries),
+        json_entry("peer_entries", vote_validation_drop_peer_entries),
     ]);
     let tx_queue = json_object(vec![
         json_entry("depth", snap.tx_queue_depth),
@@ -2010,6 +2144,10 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "quorum_timeout_total",
             snap.view_change_causes.quorum_timeout_total,
         ),
+        json_entry(
+            "stake_quorum_timeout_total",
+            snap.view_change_causes.stake_quorum_timeout_total,
+        ),
         json_entry("da_gate_total", snap.view_change_causes.da_gate_total),
         json_entry(
             "missing_payload_total",
@@ -2054,6 +2192,10 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry(
             "drop_missing_total",
             snap.block_sync_roster.drop_missing_total,
+        ),
+        json_entry(
+            "drop_unsolicited_share_blocks_total",
+            snap.block_sync_roster.drop_unsolicited_share_blocks_total,
         ),
     ]);
     let block_sync = json_object(vec![
@@ -2331,6 +2473,117 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("evictions_total", snap.rbc_store_evictions_total),
         json_entry("recent_evictions", recent_evictions),
     ]);
+    let rbc_mismatch_entries = Value::Array(
+        snap.rbc_mismatch
+            .entries
+            .iter()
+            .map(|entry| {
+                json_object(vec![
+                    json_entry("peer_id", Value::from(entry.peer_id.to_string())),
+                    json_entry(
+                        "chunk_digest_mismatch_total",
+                        entry.chunk_digest_mismatch_total,
+                    ),
+                    json_entry(
+                        "payload_hash_mismatch_total",
+                        entry.payload_hash_mismatch_total,
+                    ),
+                    json_entry(
+                        "chunk_root_mismatch_total",
+                        entry.chunk_root_mismatch_total,
+                    ),
+                    json_entry("last_timestamp_ms", entry.last_timestamp_ms),
+                ])
+            })
+            .collect(),
+    );
+    let rbc_mismatch = json_object(vec![json_entry("entries", rbc_mismatch_entries)]);
+    let pending_rbc_entries = Value::Array(
+        snap.pending_rbc
+            .entries
+            .iter()
+            .map(|entry| {
+                json_object(vec![
+                    json_entry("block_hash", Value::from(format!("{}", entry.block_hash))),
+                    json_entry("height", entry.height),
+                    json_entry("view", entry.view),
+                    json_entry("chunks", entry.chunks),
+                    json_entry("bytes", entry.bytes),
+                    json_entry("ready", entry.ready),
+                    json_entry("deliver", entry.deliver),
+                    json_entry("dropped_chunks", entry.dropped_chunks),
+                    json_entry("dropped_bytes", entry.dropped_bytes),
+                    json_entry("dropped_ready", entry.dropped_ready),
+                    json_entry("dropped_deliver", entry.dropped_deliver),
+                    json_entry("age_ms", entry.age_ms),
+                ])
+            })
+            .collect(),
+    );
+    let pending_rbc = json_object(vec![
+        json_entry("sessions", snap.pending_rbc.sessions),
+        json_entry("session_cap", snap.pending_rbc.session_cap),
+        json_entry("chunks", snap.pending_rbc.chunks),
+        json_entry("bytes", snap.pending_rbc.bytes),
+        json_entry(
+            "max_chunks_per_session",
+            snap.pending_rbc.max_chunks_per_session,
+        ),
+        json_entry(
+            "max_bytes_per_session",
+            snap.pending_rbc.max_bytes_per_session,
+        ),
+        json_entry("ttl_ms", snap.pending_rbc.ttl_ms),
+        json_entry("drops_total", snap.pending_rbc.drops_total),
+        json_entry("drops_cap_total", snap.pending_rbc.drops_cap_total),
+        json_entry(
+            "drops_cap_bytes_total",
+            snap.pending_rbc.drops_cap_bytes_total,
+        ),
+        json_entry("drops_ttl_total", snap.pending_rbc.drops_ttl_total),
+        json_entry(
+            "drops_ttl_bytes_total",
+            snap.pending_rbc.drops_ttl_bytes_total,
+        ),
+        json_entry("drops_bytes_total", snap.pending_rbc.drops_bytes_total),
+        json_entry("evicted_total", snap.pending_rbc.evicted_total),
+        json_entry("stash_ready_total", snap.pending_rbc.stash_ready_total),
+        json_entry(
+            "stash_ready_init_missing_total",
+            snap.pending_rbc.stash_ready_init_missing_total,
+        ),
+        json_entry(
+            "stash_ready_roster_missing_total",
+            snap.pending_rbc.stash_ready_roster_missing_total,
+        ),
+        json_entry(
+            "stash_ready_roster_hash_mismatch_total",
+            snap.pending_rbc.stash_ready_roster_hash_mismatch_total,
+        ),
+        json_entry(
+            "stash_ready_roster_unverified_total",
+            snap.pending_rbc.stash_ready_roster_unverified_total,
+        ),
+        json_entry("stash_deliver_total", snap.pending_rbc.stash_deliver_total),
+        json_entry(
+            "stash_deliver_init_missing_total",
+            snap.pending_rbc.stash_deliver_init_missing_total,
+        ),
+        json_entry(
+            "stash_deliver_roster_missing_total",
+            snap.pending_rbc.stash_deliver_roster_missing_total,
+        ),
+        json_entry(
+            "stash_deliver_roster_hash_mismatch_total",
+            snap.pending_rbc.stash_deliver_roster_hash_mismatch_total,
+        ),
+        json_entry(
+            "stash_deliver_roster_unverified_total",
+            snap.pending_rbc.stash_deliver_roster_unverified_total,
+        ),
+        json_entry("stash_chunk_total", snap.pending_rbc.stash_chunk_total),
+        json_entry("entries", pending_rbc_entries),
+    ]);
     let npos_election = snap
         .npos_election
         .as_ref()
@@ -2457,6 +2710,8 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("view_change_causes", view_change_causes),
         json_entry("highest_qc", highest_qc),
         json_entry("locked_qc", locked_qc),
+        json_entry("commit_qc", commit_qc),
+        json_entry("commit_quorum", commit_quorum),
         json_entry("tx_queue", tx_queue),
         json_entry("worker_loop", worker_loop),
         json_entry("commit_inflight", commit_inflight),
@@ -2466,6 +2721,8 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("epoch", epoch),
         json_entry("gossip_fallback_total", snap.gossip_fallback_total),
         json_entry("dedup_evictions", dedup_evictions),
+        json_entry("consensus_message_handling", consensus_message_handling),
+        json_entry("vote_validation_drops", vote_validation_drops),
         json_entry("bg_post_drop_post_total", snap.bg_post_drop_post_total),
         json_entry(
             "bg_post_drop_broadcast_total",
@@ -2503,6 +2760,8 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             snap.commit_pipeline_tick_total,
         ),
         json_entry("rbc_store", rbc_store),
+        json_entry("rbc_mismatch", rbc_mismatch),
+        json_entry("pending_rbc", pending_rbc),
         json_entry("qc_rebuild_attempts_total", snap.qc_rebuild_attempts_total),
         json_entry(
             "qc_rebuild_successes_total",
@@ -2947,6 +3206,189 @@ mod status_tests {
     }
 
     #[test]
+    fn status_snapshot_json_includes_rbc_mismatch() {
+        let peer_pk = PublicKey::from_hex(
+            Algorithm::Ed25519,
+            "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
+        )
+        .expect("peer pk parses");
+        let peer = PeerId::from(peer_pk);
+        let peer_id = peer.to_string();
+        let entry = status::RbcMismatchEntry {
+            peer_id: peer.clone(),
+            chunk_digest_mismatch_total: 3,
+            payload_hash_mismatch_total: 2,
+            chunk_root_mismatch_total: 1,
+            last_timestamp_ms: 1_724_000_000_123,
+        };
+        let snap = sumeragi::StatusSnapshot {
+            rbc_mismatch: status::RbcMismatchSnapshot {
+                entries: vec![entry],
+            },
+            ..Default::default()
+        };
+        let payload = status_snapshot_json(&snap);
+        let mismatch = payload
+            .get("rbc_mismatch")
+            .and_then(Value::as_object)
+            .expect("rbc_mismatch object");
+        let entries = mismatch
+            .get("entries")
+            .and_then(Value::as_array)
+            .expect("rbc_mismatch entries");
+        assert_eq!(entries.len(), 1);
+        let entry = entries[0].as_object().expect("rbc_mismatch entry object");
+        assert_eq!(
+            entry.get("peer_id").and_then(Value::as_str),
+            Some(peer_id.as_str())
+        );
+        assert_eq!(
+            entry
+                .get("chunk_digest_mismatch_total")
+                .and_then(Value::as_u64),
+            Some(3)
+        );
+        assert_eq!(
+            entry
+                .get("payload_hash_mismatch_total")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            entry
+                .get("chunk_root_mismatch_total")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            entry.get("last_timestamp_ms").and_then(Value::as_u64),
+            Some(1_724_000_000_123)
+        );
+    }
+
+    #[test]
+    fn status_snapshot_json_includes_pending_rbc_stash_counters() {
+        let hash = Hash::prehashed([0x11; Hash::LENGTH]);
+        let hash_typed = HashOf::from_untyped_unchecked(hash);
+        let hash_str = format!("{hash_typed}");
+        let mut entry = status::PendingRbcEntrySnapshot::default();
+        entry.block_hash = hash_typed;
+        entry.height = 9;
+        entry.view = 1;
+        entry.ready = 2;
+        entry.deliver = 1;
+        entry.age_ms = 42;
+
+        let pending_rbc = status::PendingRbcSnapshot {
+            sessions: 1,
+            session_cap: 8,
+            chunks: 3,
+            bytes: 1024,
+            max_chunks_per_session: 10,
+            max_bytes_per_session: 2048,
+            ttl_ms: 1000,
+            drops_total: 1,
+            drops_cap_total: 1,
+            drops_cap_bytes_total: 12,
+            drops_ttl_total: 0,
+            drops_ttl_bytes_total: 0,
+            drops_bytes_total: 12,
+            evicted_total: 0,
+            stash_ready_total: 2,
+            stash_ready_init_missing_total: 1,
+            stash_ready_roster_missing_total: 0,
+            stash_ready_roster_hash_mismatch_total: 0,
+            stash_ready_roster_unverified_total: 1,
+            stash_deliver_total: 1,
+            stash_deliver_init_missing_total: 1,
+            stash_deliver_roster_missing_total: 0,
+            stash_deliver_roster_hash_mismatch_total: 0,
+            stash_deliver_roster_unverified_total: 0,
+            stash_chunk_total: 3,
+            entries: vec![entry],
+        };
+        let snap = sumeragi::StatusSnapshot {
+            pending_rbc,
+            ..Default::default()
+        };
+        let payload = status_snapshot_json(&snap);
+        let pending = payload
+            .get("pending_rbc")
+            .and_then(Value::as_object)
+            .expect("pending_rbc object");
+        assert_eq!(
+            pending.get("stash_ready_total").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            pending
+                .get("stash_ready_init_missing_total")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            pending
+                .get("stash_ready_roster_unverified_total")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            pending.get("stash_deliver_total").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            pending.get("stash_chunk_total").and_then(Value::as_u64),
+            Some(3)
+        );
+
+        let entries = pending
+            .get("entries")
+            .and_then(Value::as_array)
+            .expect("pending entries array");
+        assert_eq!(entries.len(), 1);
+        let entry = entries[0].as_object().expect("pending entry object");
+        assert_eq!(
+            entry.get("block_hash").and_then(Value::as_str),
+            Some(hash_str.as_str())
+        );
+        assert_eq!(entry.get("height").and_then(Value::as_u64), Some(9));
+        assert_eq!(entry.get("view").and_then(Value::as_u64), Some(1));
+        assert_eq!(entry.get("ready").and_then(Value::as_u64), Some(2));
+        assert_eq!(entry.get("deliver").and_then(Value::as_u64), Some(1));
+        assert_eq!(entry.get("age_ms").and_then(Value::as_u64), Some(42));
+    }
+
+    #[test]
+    fn status_snapshot_json_includes_consensus_message_handling() {
+        let snap = sumeragi::StatusSnapshot {
+            consensus_message_handling: status::ConsensusMessageHandlingSnapshot {
+                entries: vec![status::ConsensusMessageHandlingEntry {
+                    kind: status::ConsensusMessageKind::BlockCreated,
+                    outcome: status::ConsensusMessageOutcome::Dropped,
+                    reason: status::ConsensusMessageReason::HintMismatch,
+                    total: 4,
+                }],
+            },
+            ..Default::default()
+        };
+        let payload = status_snapshot_json(&snap);
+        let handling = payload
+            .get("consensus_message_handling")
+            .and_then(Value::as_object)
+            .expect("consensus_message_handling object");
+        let entries = handling
+            .get("entries")
+            .and_then(Value::as_array)
+            .expect("consensus_message_handling entries");
+        assert_eq!(entries.len(), 1);
+        let entry = entries[0].as_object().expect("entry object");
+        assert_eq!(entry.get("kind").and_then(Value::as_str), Some("block_created"));
+        assert_eq!(entry.get("outcome").and_then(Value::as_str), Some("dropped"));
+        assert_eq!(entry.get("reason").and_then(Value::as_str), Some("hint_mismatch"));
+        assert_eq!(entry.get("total").and_then(Value::as_u64), Some(4));
+    }
+
+    #[test]
     fn status_snapshot_json_includes_da_gate_and_kura_store() {
         let last_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xCD; 32]));
         let snap = sumeragi::StatusSnapshot {
@@ -3071,10 +3513,14 @@ mod status_tests {
             Some(0)
         );
 
-        let roster = payload
-            .get("block_sync_roster")
+        let block_sync = payload
+            .get("block_sync")
             .and_then(Value::as_object)
-            .expect("block_sync_roster object");
+            .expect("block_sync object");
+        let roster = block_sync
+            .get("roster")
+            .and_then(Value::as_object)
+            .expect("block_sync roster object");
         assert_eq!(
             roster
                 .get("commit_roster_journal_total")
@@ -3084,6 +3530,105 @@ mod status_tests {
         assert_eq!(
             roster.get("drop_missing_total").and_then(Value::as_u64),
             Some(0)
+        );
+        assert_eq!(
+            roster
+                .get("drop_unsolicited_share_blocks_total")
+                .and_then(Value::as_u64),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn status_snapshot_json_includes_commit_qc_and_quorum() {
+        let block_hash =
+            HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed([0x11; 32]),
+            );
+        let validator_set_hash =
+            HashOf::<Vec<iroha_data_model::peer::PeerId>>::from_untyped_unchecked(
+                Hash::prehashed([0x22; 32]),
+            );
+        let snap = sumeragi::StatusSnapshot {
+            commit_qc: status::QcSnapshot {
+                height: 12,
+                view: 3,
+                epoch: 1,
+                block_hash: Some(block_hash),
+                validator_set_hash: Some(validator_set_hash),
+                validator_set_len: 4,
+                signatures_total: 3,
+            },
+            commit_quorum: status::CommitQuorumSnapshot {
+                height: 12,
+                view: 3,
+                block_hash: Some(block_hash),
+                signatures_present: 4,
+                signatures_counted: 3,
+                signatures_set_b: 2,
+                signatures_required: 3,
+                last_updated_ms: 1234,
+            },
+            ..Default::default()
+        };
+        let payload = status_snapshot_json(&snap);
+        let commit_qc = payload
+            .get("commit_qc")
+            .and_then(Value::as_object)
+            .expect("commit_qc object");
+        let block_hash_str = format!("{block_hash}");
+        let validator_set_hash_str = format!("{validator_set_hash}");
+        assert_eq!(commit_qc.get("height").and_then(Value::as_u64), Some(12));
+        assert_eq!(commit_qc.get("view").and_then(Value::as_u64), Some(3));
+        assert_eq!(commit_qc.get("epoch").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            commit_qc.get("block_hash").and_then(Value::as_str),
+            Some(block_hash_str.as_str())
+        );
+        assert_eq!(
+            commit_qc.get("validator_set_hash").and_then(Value::as_str),
+            Some(validator_set_hash_str.as_str())
+        );
+        assert_eq!(
+            commit_qc.get("validator_set_len").and_then(Value::as_u64),
+            Some(4)
+        );
+        assert_eq!(
+            commit_qc.get("signatures_total").and_then(Value::as_u64),
+            Some(3)
+        );
+        let commit_quorum = payload
+            .get("commit_quorum")
+            .and_then(Value::as_object)
+            .expect("commit_quorum object");
+        assert_eq!(
+            commit_quorum.get("height").and_then(Value::as_u64),
+            Some(12)
+        );
+        assert_eq!(commit_quorum.get("view").and_then(Value::as_u64), Some(3));
+        assert_eq!(
+            commit_quorum.get("block_hash").and_then(Value::as_str),
+            Some(block_hash_str.as_str())
+        );
+        assert_eq!(
+            commit_quorum.get("signatures_present").and_then(Value::as_u64),
+            Some(4)
+        );
+        assert_eq!(
+            commit_quorum.get("signatures_counted").and_then(Value::as_u64),
+            Some(3)
+        );
+        assert_eq!(
+            commit_quorum.get("signatures_set_b").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            commit_quorum.get("signatures_required").and_then(Value::as_u64),
+            Some(3)
+        );
+        assert_eq!(
+            commit_quorum.get("last_updated_ms").and_then(Value::as_u64),
+            Some(1234)
         );
     }
 }
@@ -3165,6 +3710,7 @@ pub async fn handle_v1_sumeragi_status(
             view_change_causes: SumeragiViewChangeCauseStatus {
                 commit_failure_total: snap.view_change_causes.commit_failure_total,
                 quorum_timeout_total: snap.view_change_causes.quorum_timeout_total,
+                stake_quorum_timeout_total: snap.view_change_causes.stake_quorum_timeout_total,
                 da_gate_total: snap.view_change_causes.da_gate_total,
                 missing_payload_total: snap.view_change_causes.missing_payload_total,
                 missing_qc_total: snap.view_change_causes.missing_qc_total,
@@ -3177,6 +3723,9 @@ pub async fn handle_v1_sumeragi_status(
                 last_quorum_timeout_timestamp_ms: snap
                     .view_change_causes
                     .last_quorum_timeout_timestamp_ms,
+                last_stake_quorum_timeout_timestamp_ms: snap
+                    .view_change_causes
+                    .last_stake_quorum_timeout_timestamp_ms,
                 last_da_gate_timestamp_ms: snap.view_change_causes.last_da_gate_timestamp_ms,
                 last_missing_payload_timestamp_ms: snap
                     .view_change_causes
@@ -3190,6 +3739,62 @@ pub async fn handle_v1_sumeragi_status(
             block_created_dropped_by_lock_total: snap.block_created_dropped_by_lock_total,
             block_created_hint_mismatch_total: snap.block_created_hint_mismatch_total,
             block_created_proposal_mismatch_total: snap.block_created_proposal_mismatch_total,
+            consensus_message_handling: SumeragiConsensusMessageHandlingStatus {
+                entries: snap
+                    .consensus_message_handling
+                    .entries
+                    .iter()
+                    .map(|entry| SumeragiConsensusMessageHandlingEntry {
+                        kind: entry.kind.as_str().to_owned(),
+                        outcome: entry.outcome.as_str().to_owned(),
+                        reason: entry.reason.as_str().to_owned(),
+                        total: entry.total,
+                    })
+                    .collect(),
+            },
+            vote_validation_drops: SumeragiVoteValidationDropStatus {
+                total: snap.vote_validation_drops.total,
+                entries: snap
+                    .vote_validation_drops
+                    .entries
+                    .iter()
+                    .map(|entry| SumeragiVoteValidationDropEntry {
+                        reason: entry.reason.as_str().to_owned(),
+                        height: entry.height,
+                        view: entry.view,
+                        epoch: entry.epoch,
+                        signer_index: entry.signer_index,
+                        peer_id: entry.peer_id.clone(),
+                        roster_hash: entry.roster_hash,
+                        roster_len: entry.roster_len,
+                        block_hash: entry.block_hash,
+                        timestamp_ms: entry.timestamp_ms,
+                    })
+                    .collect(),
+                peer_entries: snap
+                    .vote_validation_drops
+                    .peer_entries
+                    .iter()
+                    .map(|entry| SumeragiVoteValidationDropPeerEntry {
+                        peer_id: entry.peer_id.clone(),
+                        roster_hash: entry.roster_hash,
+                        roster_len: entry.roster_len,
+                        total: entry.total,
+                        reasons: entry
+                            .reasons
+                            .iter()
+                            .map(|reason| SumeragiVoteValidationDropReasonCount {
+                                reason: reason.reason.as_str().to_owned(),
+                                total: reason.total,
+                            })
+                            .collect(),
+                        last_height: entry.last_height,
+                        last_view: entry.last_view,
+                        last_epoch: entry.last_epoch,
+                        last_timestamp_ms: entry.last_timestamp_ms,
+                    })
+                    .collect(),
+            },
             validation_reject_total: snap.validation_reject_total,
             validation_reject_reason: snap.validation_reject_reason.map(ToOwned::to_owned),
             validation_rejects: SumeragiValidationRejectStatus {
@@ -3227,6 +3832,9 @@ pub async fn handle_v1_sumeragi_status(
                 roster_sidecar_total: snap.block_sync_roster.roster_sidecar_total,
                 commit_roster_journal_total: snap.block_sync_roster.commit_roster_journal_total,
                 drop_missing_total: snap.block_sync_roster.drop_missing_total,
+                drop_unsolicited_share_blocks_total: snap
+                    .block_sync_roster
+                    .drop_unsolicited_share_blocks_total,
             },
             pacemaker_backpressure_deferrals_total: snap.pacemaker_backpressure_deferrals_total,
             commit_pipeline_tick_total: snap.commit_pipeline_tick_total,
@@ -3313,6 +3921,20 @@ pub async fn handle_v1_sumeragi_status(
                     })
                     .collect(),
             },
+            rbc_mismatch: SumeragiRbcMismatchStatus {
+                entries: snap
+                    .rbc_mismatch
+                    .entries
+                    .iter()
+                    .map(|entry| SumeragiRbcMismatchEntry {
+                        peer_id: entry.peer_id.clone(),
+                        chunk_digest_mismatch_total: entry.chunk_digest_mismatch_total,
+                        payload_hash_mismatch_total: entry.payload_hash_mismatch_total,
+                        chunk_root_mismatch_total: entry.chunk_root_mismatch_total,
+                        last_timestamp_ms: entry.last_timestamp_ms,
+                    })
+                    .collect(),
+            },
             pending_rbc: SumeragiPendingRbcStatus {
                 sessions: snap.pending_rbc.sessions,
                 session_cap: snap.pending_rbc.session_cap,
@@ -3328,6 +3950,25 @@ pub async fn handle_v1_sumeragi_status(
                 drops_ttl_bytes_total: snap.pending_rbc.drops_ttl_bytes_total,
                 drops_bytes_total: snap.pending_rbc.drops_bytes_total,
                 evicted_total: snap.pending_rbc.evicted_total,
+                stash_ready_total: snap.pending_rbc.stash_ready_total,
+                stash_ready_init_missing_total: snap.pending_rbc.stash_ready_init_missing_total,
+                stash_ready_roster_missing_total: snap.pending_rbc.stash_ready_roster_missing_total,
+                stash_ready_roster_hash_mismatch_total: snap
+                    .pending_rbc
+                    .stash_ready_roster_hash_mismatch_total,
+                stash_ready_roster_unverified_total: snap
+                    .pending_rbc
+                    .stash_ready_roster_unverified_total,
+                stash_deliver_total: snap.pending_rbc.stash_deliver_total,
+                stash_deliver_init_missing_total: snap.pending_rbc.stash_deliver_init_missing_total,
+                stash_deliver_roster_missing_total: snap.pending_rbc.stash_deliver_roster_missing_total,
+                stash_deliver_roster_hash_mismatch_total: snap
+                    .pending_rbc
+                    .stash_deliver_roster_hash_mismatch_total,
+                stash_deliver_roster_unverified_total: snap
+                    .pending_rbc
+                    .stash_deliver_roster_unverified_total,
+                stash_chunk_total: snap.pending_rbc.stash_chunk_total,
                 entries: snap
                     .pending_rbc
                     .entries
@@ -3347,6 +3988,7 @@ pub async fn handle_v1_sumeragi_status(
                         age_ms: entry.age_ms,
                     })
                     .collect(),
+                ..Default::default()
             },
             tx_queue_depth: snap.tx_queue_depth,
             tx_queue_capacity: snap.tx_queue_capacity,
@@ -4065,12 +4707,24 @@ pub async fn handle_v1_sumeragi_rbc_status(
             m.sumeragi_rbc_ready_broadcasts_total.get(),
         ),
         json_entry(
+            "ready_rebroadcasts_skipped_total",
+            m.sumeragi_rbc_rebroadcast_skipped_total
+                .with_label_values(&["ready"])
+                .get(),
+        ),
+        json_entry(
             "deliver_broadcasts_total",
             m.sumeragi_rbc_deliver_broadcasts_total.get(),
         ),
         json_entry(
             "payload_bytes_delivered_total",
             m.sumeragi_rbc_payload_bytes_delivered_total.get(),
+        ),
+        json_entry(
+            "payload_rebroadcasts_skipped_total",
+            m.sumeragi_rbc_rebroadcast_skipped_total
+                .with_label_values(&["payload"])
+                .get(),
         ),
     ]);
     let body = norito::json::to_json_pretty(&payload).map_err(|e| {

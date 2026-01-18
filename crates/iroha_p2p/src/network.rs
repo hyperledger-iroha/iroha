@@ -368,6 +368,10 @@ static DROPPED_POSTS_LO: AtomicU64 = AtomicU64::new(0);
 /// High/Low split for bounded queue drops (broadcasts)
 static DROPPED_BROADCASTS_HI: AtomicU64 = AtomicU64::new(0);
 static DROPPED_BROADCASTS_LO: AtomicU64 = AtomicU64::new(0);
+/// Latest observed depth for the high-priority network message queue.
+static NETWORK_QUEUE_DEPTH_HIGH: AtomicU64 = AtomicU64::new(0);
+/// Latest observed depth for the low-priority network message queue.
+static NETWORK_QUEUE_DEPTH_LOW: AtomicU64 = AtomicU64::new(0);
 /// Count of DNS interval-based hostname refreshes performed.
 static DNS_REFRESHES: AtomicU64 = AtomicU64::new(0);
 /// Count of DNS TTL-based hostname refreshes performed.
@@ -410,6 +414,26 @@ static LOW_THROTTLED_POSTS: AtomicU64 = AtomicU64::new(0);
 static LOW_THROTTLED_BROADCASTS: AtomicU64 = AtomicU64::new(0);
 /// Count of trust-gossip frames skipped because the capability is disabled locally or remotely.
 static TRUST_GOSSIP_SKIPPED_CAP_OFF: AtomicU64 = AtomicU64::new(0);
+/// Count of inbound messages dropped because subscriber queues are full.
+static SUBSCRIBER_QUEUE_FULL: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIBER_QUEUE_FULL_CONSENSUS: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIBER_QUEUE_FULL_CONSENSUS_CHUNK: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIBER_QUEUE_FULL_CONTROL: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIBER_QUEUE_FULL_BLOCK_SYNC: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIBER_QUEUE_FULL_TX_GOSSIP: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIBER_QUEUE_FULL_PEER_GOSSIP: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIBER_QUEUE_FULL_HEALTH: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIBER_QUEUE_FULL_OTHER: AtomicU64 = AtomicU64::new(0);
+/// Count of inbound frames dropped because no subscriber matches the topic.
+static SUBSCRIBER_UNROUTED: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIBER_UNROUTED_CONSENSUS: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIBER_UNROUTED_CONSENSUS_CHUNK: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIBER_UNROUTED_CONTROL: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIBER_UNROUTED_BLOCK_SYNC: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIBER_UNROUTED_TX_GOSSIP: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIBER_UNROUTED_PEER_GOSSIP: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIBER_UNROUTED_HEALTH: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIBER_UNROUTED_OTHER: AtomicU64 = AtomicU64::new(0);
 /// Count of per-peer post channel overflows (bounded per-topic channels).
 static POST_OVERFLOWS: AtomicU64 = AtomicU64::new(0);
 /// Per-topic frame cap violations
@@ -495,10 +519,9 @@ pub fn data_frame_wire_len<T: Encode + Clone>(
     priority: message::Priority,
     payload: &T,
 ) -> usize {
-    let target = match target {
-        Some(peer_id) => RelayTarget::Direct(peer_id.clone()),
-        None => RelayTarget::Broadcast,
-    };
+    let target = target.map_or(RelayTarget::Broadcast, |peer_id| {
+        RelayTarget::Direct(peer_id.clone())
+    });
     let frame = RelayMessage::new(origin.clone(), target, ttl, priority, payload.clone());
     crate::peer::data_message_wire_len(frame)
 }
@@ -591,6 +614,99 @@ pub fn dropped_broadcast_low_count() -> u64 {
     DROPPED_BROADCASTS_LO.load(Ordering::Relaxed)
 }
 
+/// Returns the last observed depth of the high-priority network queue.
+pub fn network_queue_depth_high() -> u64 {
+    NETWORK_QUEUE_DEPTH_HIGH.load(Ordering::Relaxed)
+}
+
+/// Returns the last observed depth of the low-priority network queue.
+pub fn network_queue_depth_low() -> u64 {
+    NETWORK_QUEUE_DEPTH_LOW.load(Ordering::Relaxed)
+}
+
+// TODO: Temporary queue-depth instrumentation for soak diagnostics; remove or formalize later.
+fn update_network_queue_depth_high(len: usize) {
+    NETWORK_QUEUE_DEPTH_HIGH.store(len as u64, Ordering::Relaxed);
+}
+
+fn update_network_queue_depth_low(len: usize) {
+    NETWORK_QUEUE_DEPTH_LOW.store(len as u64, Ordering::Relaxed);
+}
+
+/// Returns the number of inbound messages dropped because subscriber queues are full.
+pub fn subscriber_queue_full_count() -> u64 {
+    SUBSCRIBER_QUEUE_FULL.load(Ordering::Relaxed)
+}
+/// Returns the number of subscriber-queue drops for topic Consensus.
+pub fn subscriber_queue_full_consensus_count() -> u64 {
+    SUBSCRIBER_QUEUE_FULL_CONSENSUS.load(Ordering::Relaxed)
+}
+/// Returns the number of subscriber-queue drops for topic ConsensusChunk.
+pub fn subscriber_queue_full_consensus_chunk_count() -> u64 {
+    SUBSCRIBER_QUEUE_FULL_CONSENSUS_CHUNK.load(Ordering::Relaxed)
+}
+/// Returns the number of subscriber-queue drops for topic Control.
+pub fn subscriber_queue_full_control_count() -> u64 {
+    SUBSCRIBER_QUEUE_FULL_CONTROL.load(Ordering::Relaxed)
+}
+/// Returns the number of subscriber-queue drops for topic `BlockSync`.
+pub fn subscriber_queue_full_block_sync_count() -> u64 {
+    SUBSCRIBER_QUEUE_FULL_BLOCK_SYNC.load(Ordering::Relaxed)
+}
+/// Returns the number of subscriber-queue drops for topic `TxGossip`.
+pub fn subscriber_queue_full_tx_gossip_count() -> u64 {
+    SUBSCRIBER_QUEUE_FULL_TX_GOSSIP.load(Ordering::Relaxed)
+}
+/// Returns the number of subscriber-queue drops for topic `PeerGossip`.
+pub fn subscriber_queue_full_peer_gossip_count() -> u64 {
+    SUBSCRIBER_QUEUE_FULL_PEER_GOSSIP.load(Ordering::Relaxed)
+}
+/// Returns the number of subscriber-queue drops for topic Health.
+pub fn subscriber_queue_full_health_count() -> u64 {
+    SUBSCRIBER_QUEUE_FULL_HEALTH.load(Ordering::Relaxed)
+}
+/// Returns the number of subscriber-queue drops for topic Other.
+pub fn subscriber_queue_full_other_count() -> u64 {
+    SUBSCRIBER_QUEUE_FULL_OTHER.load(Ordering::Relaxed)
+}
+
+/// Returns the number of inbound messages dropped due to no matching subscriber.
+pub fn subscriber_unrouted_count() -> u64 {
+    SUBSCRIBER_UNROUTED.load(Ordering::Relaxed)
+}
+/// Returns the number of unrouted inbound messages for topic Consensus.
+pub fn subscriber_unrouted_consensus_count() -> u64 {
+    SUBSCRIBER_UNROUTED_CONSENSUS.load(Ordering::Relaxed)
+}
+/// Returns the number of unrouted inbound messages for topic ConsensusChunk.
+pub fn subscriber_unrouted_consensus_chunk_count() -> u64 {
+    SUBSCRIBER_UNROUTED_CONSENSUS_CHUNK.load(Ordering::Relaxed)
+}
+/// Returns the number of unrouted inbound messages for topic Control.
+pub fn subscriber_unrouted_control_count() -> u64 {
+    SUBSCRIBER_UNROUTED_CONTROL.load(Ordering::Relaxed)
+}
+/// Returns the number of unrouted inbound messages for topic `BlockSync`.
+pub fn subscriber_unrouted_block_sync_count() -> u64 {
+    SUBSCRIBER_UNROUTED_BLOCK_SYNC.load(Ordering::Relaxed)
+}
+/// Returns the number of unrouted inbound messages for topic `TxGossip`.
+pub fn subscriber_unrouted_tx_gossip_count() -> u64 {
+    SUBSCRIBER_UNROUTED_TX_GOSSIP.load(Ordering::Relaxed)
+}
+/// Returns the number of unrouted inbound messages for topic `PeerGossip`.
+pub fn subscriber_unrouted_peer_gossip_count() -> u64 {
+    SUBSCRIBER_UNROUTED_PEER_GOSSIP.load(Ordering::Relaxed)
+}
+/// Returns the number of unrouted inbound messages for topic Health.
+pub fn subscriber_unrouted_health_count() -> u64 {
+    SUBSCRIBER_UNROUTED_HEALTH.load(Ordering::Relaxed)
+}
+/// Returns the number of unrouted inbound messages for topic Other.
+pub fn subscriber_unrouted_other_count() -> u64 {
+    SUBSCRIBER_UNROUTED_OTHER.load(Ordering::Relaxed)
+}
+
 /// Testing helper: increment bounded queue drop counters directly.
 ///
 /// - `priority_high`: true for High, false for Low.
@@ -612,6 +728,29 @@ pub fn inc_queue_drop_for_test(priority_high: bool, broadcast: bool, n: u64) {
         } else {
             DROPPED_POSTS_LO.fetch_add(n, Relaxed);
         }
+    }
+}
+
+/// Testing helper: set the observed network queue depth for High/Low queues.
+pub fn set_network_queue_depth_for_test(priority_high: bool, len: usize) {
+    if priority_high {
+        update_network_queue_depth_high(len);
+    } else {
+        update_network_queue_depth_low(len);
+    }
+}
+
+/// Testing helper: increment subscriber-queue-full counters directly for a topic.
+pub fn inc_subscriber_queue_full_for_test(topic: message::Topic, n: u64) {
+    for _ in 0..n {
+        inc_subscriber_queue_full_for(topic);
+    }
+}
+
+/// Testing helper: increment subscriber unrouted counters directly for a topic.
+pub fn inc_subscriber_unrouted_for_test(topic: message::Topic, n: u64) {
+    for _ in 0..n {
+        inc_subscriber_unrouted_for(topic);
     }
 }
 
@@ -740,6 +879,68 @@ fn trust_gossip_allowed(topic: message::Topic, trust_gossip: bool) -> bool {
     !matches!(topic, message::Topic::TrustGossip) || trust_gossip
 }
 
+fn inc_subscriber_queue_full_for(topic: message::Topic) -> u64 {
+    let total = SUBSCRIBER_QUEUE_FULL.fetch_add(1, Ordering::Relaxed) + 1;
+    match topic {
+        message::Topic::Consensus | message::Topic::ConsensusPayload => {
+            SUBSCRIBER_QUEUE_FULL_CONSENSUS.fetch_add(1, Ordering::Relaxed);
+        }
+        message::Topic::ConsensusChunk => {
+            SUBSCRIBER_QUEUE_FULL_CONSENSUS_CHUNK.fetch_add(1, Ordering::Relaxed);
+        }
+        message::Topic::Control => {
+            SUBSCRIBER_QUEUE_FULL_CONTROL.fetch_add(1, Ordering::Relaxed);
+        }
+        message::Topic::BlockSync => {
+            SUBSCRIBER_QUEUE_FULL_BLOCK_SYNC.fetch_add(1, Ordering::Relaxed);
+        }
+        message::Topic::TxGossip | message::Topic::TxGossipRestricted => {
+            SUBSCRIBER_QUEUE_FULL_TX_GOSSIP.fetch_add(1, Ordering::Relaxed);
+        }
+        message::Topic::PeerGossip | message::Topic::TrustGossip => {
+            SUBSCRIBER_QUEUE_FULL_PEER_GOSSIP.fetch_add(1, Ordering::Relaxed);
+        }
+        message::Topic::Health => {
+            SUBSCRIBER_QUEUE_FULL_HEALTH.fetch_add(1, Ordering::Relaxed);
+        }
+        message::Topic::Other => {
+            SUBSCRIBER_QUEUE_FULL_OTHER.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    total
+}
+
+fn inc_subscriber_unrouted_for(topic: message::Topic) -> u64 {
+    let total = SUBSCRIBER_UNROUTED.fetch_add(1, Ordering::Relaxed) + 1;
+    match topic {
+        message::Topic::Consensus | message::Topic::ConsensusPayload => {
+            SUBSCRIBER_UNROUTED_CONSENSUS.fetch_add(1, Ordering::Relaxed);
+        }
+        message::Topic::ConsensusChunk => {
+            SUBSCRIBER_UNROUTED_CONSENSUS_CHUNK.fetch_add(1, Ordering::Relaxed);
+        }
+        message::Topic::Control => {
+            SUBSCRIBER_UNROUTED_CONTROL.fetch_add(1, Ordering::Relaxed);
+        }
+        message::Topic::BlockSync => {
+            SUBSCRIBER_UNROUTED_BLOCK_SYNC.fetch_add(1, Ordering::Relaxed);
+        }
+        message::Topic::TxGossip | message::Topic::TxGossipRestricted => {
+            SUBSCRIBER_UNROUTED_TX_GOSSIP.fetch_add(1, Ordering::Relaxed);
+        }
+        message::Topic::PeerGossip | message::Topic::TrustGossip => {
+            SUBSCRIBER_UNROUTED_PEER_GOSSIP.fetch_add(1, Ordering::Relaxed);
+        }
+        message::Topic::Health => {
+            SUBSCRIBER_UNROUTED_HEALTH.fetch_add(1, Ordering::Relaxed);
+        }
+        message::Topic::Other => {
+            SUBSCRIBER_UNROUTED_OTHER.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    total
+}
+
 /// Returns the number of per-peer post channel overflows observed.
 pub fn post_overflow_count() -> u64 {
     POST_OVERFLOWS.load(Ordering::Relaxed)
@@ -763,9 +964,12 @@ fn inc_trust_gossip_skipped(direction: &'static str, reason: &'static str) {
 
 fn inc_post_overflow_for(topic: message::Topic) {
     match topic {
-        message::Topic::Consensus => POST_OVERFLOWS_CONSENSUS.fetch_add(1, Ordering::Relaxed),
-        message::Topic::Control => POST_OVERFLOWS_CONTROL.fetch_add(1, Ordering::Relaxed),
+        message::Topic::Consensus | message::Topic::ConsensusPayload => {
+            POST_OVERFLOWS_CONSENSUS.fetch_add(1, Ordering::Relaxed)
+        }
+        message::Topic::ConsensusChunk => POST_OVERFLOWS_BLOCK_SYNC.fetch_add(1, Ordering::Relaxed),
         message::Topic::BlockSync => POST_OVERFLOWS_BLOCK_SYNC.fetch_add(1, Ordering::Relaxed),
+        message::Topic::Control => POST_OVERFLOWS_CONTROL.fetch_add(1, Ordering::Relaxed),
         message::Topic::TxGossip | message::Topic::TxGossipRestricted => {
             POST_OVERFLOWS_TX_GOSSIP.fetch_add(1, Ordering::Relaxed)
         }
@@ -779,14 +983,17 @@ fn inc_post_overflow_for(topic: message::Topic) {
 
 fn inc_post_overflow_for_prio(topic: message::Topic, high: bool) {
     match (high, topic) {
-        (true, message::Topic::Consensus) => {
+        (true, message::Topic::Consensus | message::Topic::ConsensusPayload) => {
             POST_OVERFLOWS_HI_CONSENSUS.fetch_add(1, Ordering::Relaxed)
         }
-        (true, message::Topic::Control) => {
-            POST_OVERFLOWS_HI_CONTROL.fetch_add(1, Ordering::Relaxed)
+        (true, message::Topic::ConsensusChunk) => {
+            POST_OVERFLOWS_HI_BLOCK_SYNC.fetch_add(1, Ordering::Relaxed)
         }
         (true, message::Topic::BlockSync) => {
             POST_OVERFLOWS_HI_BLOCK_SYNC.fetch_add(1, Ordering::Relaxed)
+        }
+        (true, message::Topic::Control) => {
+            POST_OVERFLOWS_HI_CONTROL.fetch_add(1, Ordering::Relaxed)
         }
         (true, message::Topic::TxGossip | message::Topic::TxGossipRestricted) => {
             POST_OVERFLOWS_HI_TX_GOSSIP.fetch_add(1, Ordering::Relaxed)
@@ -796,14 +1003,17 @@ fn inc_post_overflow_for_prio(topic: message::Topic, high: bool) {
         }
         (true, message::Topic::Health) => POST_OVERFLOWS_HI_HEALTH.fetch_add(1, Ordering::Relaxed),
         (true, message::Topic::Other) => POST_OVERFLOWS_HI_OTHER.fetch_add(1, Ordering::Relaxed),
-        (false, message::Topic::Consensus) => {
+        (false, message::Topic::Consensus | message::Topic::ConsensusPayload) => {
             POST_OVERFLOWS_LO_CONSENSUS.fetch_add(1, Ordering::Relaxed)
         }
-        (false, message::Topic::Control) => {
-            POST_OVERFLOWS_LO_CONTROL.fetch_add(1, Ordering::Relaxed)
+        (false, message::Topic::ConsensusChunk) => {
+            POST_OVERFLOWS_LO_BLOCK_SYNC.fetch_add(1, Ordering::Relaxed)
         }
         (false, message::Topic::BlockSync) => {
             POST_OVERFLOWS_LO_BLOCK_SYNC.fetch_add(1, Ordering::Relaxed)
+        }
+        (false, message::Topic::Control) => {
+            POST_OVERFLOWS_LO_CONTROL.fetch_add(1, Ordering::Relaxed)
         }
         (false, message::Topic::TxGossip | message::Topic::TxGossipRestricted) => {
             POST_OVERFLOWS_LO_TX_GOSSIP.fetch_add(1, Ordering::Relaxed)
@@ -847,9 +1057,12 @@ pub fn post_overflow_other_count() -> u64 {
 
 fn inc_cap_violation(topic: message::Topic) {
     match topic {
-        message::Topic::Consensus => CAP_VIOL_CONSENSUS.fetch_add(1, Ordering::Relaxed),
-        message::Topic::Control => CAP_VIOL_CONTROL.fetch_add(1, Ordering::Relaxed),
+        message::Topic::Consensus | message::Topic::ConsensusPayload => {
+            CAP_VIOL_CONSENSUS.fetch_add(1, Ordering::Relaxed)
+        }
+        message::Topic::ConsensusChunk => CAP_VIOL_BLOCK_SYNC.fetch_add(1, Ordering::Relaxed),
         message::Topic::BlockSync => CAP_VIOL_BLOCK_SYNC.fetch_add(1, Ordering::Relaxed),
+        message::Topic::Control => CAP_VIOL_CONTROL.fetch_add(1, Ordering::Relaxed),
         message::Topic::TxGossip | message::Topic::TxGossipRestricted => {
             CAP_VIOL_TX_GOSSIP.fetch_add(1, Ordering::Relaxed)
         }
@@ -1276,6 +1489,38 @@ fn allow_ip_with_policy(
     true
 }
 
+/// Filter for peer-message subscriptions.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SubscriberFilter {
+    /// Receive every incoming message.
+    All,
+    /// Receive messages whose topic matches one of the listed entries.
+    Topics(Vec<message::Topic>),
+}
+
+impl SubscriberFilter {
+    /// Build a filter from an iterable of topics.
+    pub fn topics<I>(topics: I) -> Self
+    where
+        I: IntoIterator<Item = message::Topic>,
+    {
+        Self::Topics(topics.into_iter().collect())
+    }
+
+    fn matches(&self, topic: message::Topic) -> bool {
+        match self {
+            Self::All => true,
+            Self::Topics(topics) => topics.iter().any(|t| *t == topic),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct Subscriber<T: Pload> {
+    sender: mpsc::Sender<PeerMessage<T>>,
+    filter: SubscriberFilter,
+}
+
 /// `NetworkBase` actor handle.
 // NOTE: high/low network queues are now bounded by configuration to prevent
 // memory blow-ups. Separate channels for consensus/control versus
@@ -1285,7 +1530,7 @@ fn allow_ip_with_policy(
 #[debug("core::any::type_name::<Self>()")]
 pub struct NetworkBaseHandle<T: Pload, K: Kex, E: Enc> {
     /// Sender to subscribe for messages received form other peers in the network
-    subscribe_to_peers_messages_sender: mpsc::UnboundedSender<mpsc::Sender<PeerMessage<T>>>,
+    subscribe_to_peers_messages_sender: mpsc::UnboundedSender<Subscriber<T>>,
     /// Receiver of `OnlinePeer` message
     online_peers_receiver: watch::Receiver<OnlinePeers>,
     /// [`UpdateTopology`] message sender
@@ -1306,6 +1551,8 @@ pub struct NetworkBaseHandle<T: Pload, K: Kex, E: Enc> {
     network_message_high_sender: net_channel::Sender<NetworkMessage<T>>,
     /// Sender of low priority messages
     network_message_low_sender: net_channel::Sender<NetworkMessage<T>>,
+    /// Configured capacity for subscriber queues.
+    subscriber_queue_cap: core::num::NonZeroUsize,
     /// Key exchange used by network
     _key_exchange: core::marker::PhantomData<K>,
     /// Encryptor used by the network
@@ -1326,6 +1573,7 @@ impl<T: Pload, K: Kex, E: Enc> Clone for NetworkBaseHandle<T, K, E> {
             service_message_sender: self.service_message_sender.clone(),
             network_message_high_sender: self.network_message_high_sender.clone(),
             network_message_low_sender: self.network_message_low_sender.clone(),
+            subscriber_queue_cap: self.subscriber_queue_cap,
             _key_exchange: core::marker::PhantomData::<K>,
             _encryptor: core::marker::PhantomData::<E>,
         }
@@ -1363,8 +1611,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
     /// The returned handle drops all outgoing messages and reports no online peers.
     #[must_use]
     pub fn closed_for_tests() -> Self {
-        let (subscribe_tx, _subscribe_rx) =
-            mpsc::unbounded_channel::<mpsc::Sender<PeerMessage<T>>>();
+        let (subscribe_tx, _subscribe_rx) = mpsc::unbounded_channel::<Subscriber<T>>();
         let (update_topology_tx, update_topology_rx) =
             mpsc::unbounded_channel::<message::UpdateTopology>();
         let (update_peers_tx, update_peers_rx) = mpsc::unbounded_channel::<message::UpdatePeers>();
@@ -1402,6 +1649,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             service_message_sender: service_message_tx,
             network_message_high_sender,
             network_message_low_sender,
+            subscriber_queue_cap: core::num::NonZeroUsize::new(1).expect("nonzero"),
             _key_exchange: core::marker::PhantomData::<K>,
             _encryptor: core::marker::PhantomData::<E>,
         }
@@ -1441,6 +1689,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             p2p_queue_cap_high,
             p2p_queue_cap_low,
             p2p_post_queue_cap,
+            p2p_subscriber_queue_cap,
             dns_refresh_interval,
             dns_refresh_ttl,
             happy_eyeballs_stagger: config_happy_eyeballs_stagger,
@@ -1738,6 +1987,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                 service_message_sender: service_message_sender_handle,
                 network_message_high_sender,
                 network_message_low_sender,
+                subscriber_queue_cap: p2p_subscriber_queue_cap,
                 _key_exchange: core::marker::PhantomData,
                 _encryptor: core::marker::PhantomData,
             },
@@ -1820,19 +2070,42 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
     ///
     /// Returns the supplied `sender` when the network actor has already
     /// terminated and cannot accept new subscriptions.
-    pub fn subscribe_to_peers_messages(
+    ///
+    /// The supplied [`SubscriberFilter`] limits which topics are delivered to
+    /// the subscriber queue.
+    pub fn subscribe_to_peers_messages_with_filter(
         &self,
         sender: mpsc::Sender<PeerMessage<T>>,
+        filter: SubscriberFilter,
     ) -> Result<(), mpsc::Sender<PeerMessage<T>>> {
-        self
-            .subscribe_to_peers_messages_sender
-            .send(sender)
+        let subscriber = Subscriber { sender, filter };
+        self.subscribe_to_peers_messages_sender
+            .send(subscriber)
             .map_err(|err| {
                 iroha_logger::warn!(
                     "P2P subscriber registration failed because the network actor has already shut down"
                 );
-                err.0
+                err.0.sender
             })
+    }
+
+    /// Subscribe to messages received from other peers using the default filter.
+    ///
+    /// # Errors
+    ///
+    /// Returns the supplied `sender` when the network actor has already
+    /// terminated and cannot accept new subscriptions.
+    pub fn subscribe_to_peers_messages(
+        &self,
+        sender: mpsc::Sender<PeerMessage<T>>,
+    ) -> Result<(), mpsc::Sender<PeerMessage<T>>> {
+        self.subscribe_to_peers_messages_with_filter(sender, SubscriberFilter::All)
+    }
+
+    /// Configured capacity for P2P subscriber queues.
+    #[must_use]
+    pub fn subscriber_queue_cap(&self) -> core::num::NonZeroUsize {
+        self.subscriber_queue_cap
     }
 
     /// Send [`Post<T>`] message on network actor.
@@ -1986,8 +2259,7 @@ mod handle_update_tests {
     impl message::ClassifyTopic for Dummy {}
 
     fn closed_handle() -> NetworkBaseHandle<Dummy, X25519Sha256, ChaCha20Poly1305> {
-        let (subscribe_tx, _subscribe_rx) =
-            mpsc::unbounded_channel::<mpsc::Sender<PeerMessage<Dummy>>>();
+        let (subscribe_tx, _subscribe_rx) = mpsc::unbounded_channel::<Subscriber<Dummy>>();
         let (update_topology_tx, update_topology_rx) =
             mpsc::unbounded_channel::<message::UpdateTopology>();
         let (update_peers_tx, update_peers_rx) = mpsc::unbounded_channel::<message::UpdatePeers>();
@@ -2025,6 +2297,7 @@ mod handle_update_tests {
             service_message_sender: service_message_tx,
             network_message_high_sender,
             network_message_low_sender,
+            subscriber_queue_cap: core::num::NonZeroUsize::new(1).expect("nonzero"),
             _key_exchange: core::marker::PhantomData,
             _encryptor: core::marker::PhantomData,
         }
@@ -2056,6 +2329,12 @@ mod handle_update_tests {
             },
         };
         handle.update_consensus_caps(caps, false);
+    }
+
+    #[test]
+    fn closed_handle_reports_subscriber_queue_cap() {
+        let handle = closed_handle();
+        assert_eq!(handle.subscriber_queue_cap().get(), 1);
     }
 
     #[tokio::test]
@@ -2197,6 +2476,7 @@ mod accept_stream_tests {
             require_sm_openssl_preview_match: true,
             idle_timeout: std::time::Duration::from_millis(200),
             peer_gossip_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
+            peer_gossip_max_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
                 iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
             trust_penalty_bad_gossip:
@@ -2214,6 +2494,34 @@ mod accept_stream_tests {
             p2p_queue_cap_high: core::num::NonZeroUsize::new(128).unwrap(),
             p2p_queue_cap_low: core::num::NonZeroUsize::new(128).unwrap(),
             p2p_post_queue_cap: core::num::NonZeroUsize::new(64).unwrap(),
+            p2p_subscriber_queue_cap:
+                iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
+            consensus_ingress_rate_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
+            consensus_ingress_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
+            consensus_ingress_bytes_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
+            consensus_ingress_bytes_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+            consensus_ingress_critical_rate_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
+            consensus_ingress_critical_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
+            consensus_ingress_critical_bytes_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
+            consensus_ingress_critical_bytes_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
+            consensus_ingress_rbc_session_limit:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
+            consensus_ingress_penalty_threshold:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
+            consensus_ingress_penalty_window: Duration::from_millis(
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
+            ),
+            consensus_ingress_penalty_cooldown: Duration::from_millis(
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
+            ),
             happy_eyeballs_stagger: std::time::Duration::from_millis(50),
             addr_ipv6_first: false,
             max_incoming: None,
@@ -2601,8 +2909,7 @@ mod accept_stream_tests {
             Err(e) => panic!("tcp listener from_std failed: {e:?}"),
         };
 
-        let (_subscribe_tx, subscribe_rx) =
-            mpsc::unbounded_channel::<mpsc::Sender<super::PeerMessage<Dummy>>>();
+        let (_subscribe_tx, subscribe_rx) = mpsc::unbounded_channel::<super::Subscriber<Dummy>>();
         let (_update_topology_tx, update_topology_rx) =
             mpsc::unbounded_channel::<super::message::UpdateTopology>();
         let (_update_peers_tx, update_peers_rx) =
@@ -2890,7 +3197,7 @@ mod accept_stream_tests {
     #[tokio::test(flavor = "current_thread")]
     #[allow(clippy::too_many_lines)]
     async fn peer_message_over_cap_increments_violation_counter() {
-        use crate::network::{cap_violations_consensus, message};
+        use crate::network::{cap_violations_block_sync, message};
 
         #[derive(Clone, Debug, Decode, Encode)]
         struct DummyConsensus;
@@ -2918,7 +3225,7 @@ mod accept_stream_tests {
         };
 
         let (_subscribe_tx, subscribe_rx): (
-            mpsc::UnboundedSender<mpsc::Sender<super::PeerMessage<DummyConsensus>>>,
+            mpsc::UnboundedSender<super::Subscriber<DummyConsensus>>,
             _,
         ) = mpsc::unbounded_channel();
         let (_update_topology_tx, update_topology_rx) =
@@ -3042,7 +3349,7 @@ mod accept_stream_tests {
             _encryptor: core::marker::PhantomData,
         };
 
-        let before = cap_violations_consensus();
+        let before = cap_violations_block_sync();
 
         let peer = Peer::new(
             listen_addr_std.into(),
@@ -3067,6 +3374,410 @@ mod accept_stream_tests {
             after,
             before + 1,
             "expected cap violation counter to increase"
+        );
+        assert!(
+            network.retry_backoff.contains_key(peer.id()),
+            "cap violation should schedule backoff for offending peer"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    #[allow(clippy::too_many_lines)]
+    async fn peer_message_consensus_payload_uses_block_sync_cap() {
+        use crate::network::{cap_violations_consensus, message};
+
+        #[derive(Clone, Debug, Decode, Encode)]
+        struct DummyPayload;
+
+        impl message::ClassifyTopic for DummyPayload {
+            fn topic(&self) -> message::Topic {
+                message::Topic::ConsensusPayload
+            }
+        }
+
+        let key_pair = KeyPair::random();
+
+        let std_listener = match std::net::TcpListener::bind("127.0.0.1:0") {
+            Ok(listener) => listener,
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(e) => panic!("listener bind failed: {e:?}"),
+        };
+        let listen_addr_std = std_listener.local_addr().unwrap();
+        let listener_clone = std_listener.try_clone().unwrap();
+        listener_clone.set_nonblocking(true).unwrap();
+        let listener = match TcpListener::from_std(listener_clone) {
+            Ok(listener) => listener,
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(e) => panic!("tcp stream from_std failed: {e:?}"),
+        };
+
+        let (_subscribe_tx, subscribe_rx): (
+            mpsc::UnboundedSender<super::Subscriber<DummyPayload>>,
+            _,
+        ) = mpsc::unbounded_channel();
+        let (_update_topology_tx, update_topology_rx) =
+            mpsc::unbounded_channel::<super::message::UpdateTopology>();
+        let (_update_peers_tx, update_peers_rx) =
+            mpsc::unbounded_channel::<super::message::UpdatePeers>();
+        let (_update_trusted_tx, update_trusted_peers_receiver) =
+            mpsc::unbounded_channel::<super::message::UpdateTrustedPeers>();
+        let (_update_acl_tx, update_acl_rx) =
+            mpsc::unbounded_channel::<super::message::UpdateAcl>();
+        let (_update_handshake_tx, update_handshake_rx) =
+            mpsc::unbounded_channel::<super::message::UpdateHandshake>();
+        let (_update_consensus_caps_tx, update_consensus_caps_receiver) =
+            mpsc::unbounded_channel::<super::message::UpdateConsensusCaps>();
+        let (peer_message_tx, peer_message_rx) =
+            mpsc::channel::<super::PeerMessage<WireMessage<DummyPayload>>>(1);
+        let (service_message_tx, service_message_rx) =
+            mpsc::channel::<super::ServiceMessage<WireMessage<DummyPayload>>>(4);
+        let (_hi_tx, network_message_high_rx) = super::net_channel::channel_with_capacity(1);
+        let (_lo_tx, network_message_low_rx) = super::net_channel::channel_with_capacity(1);
+        let (online_peers_tx, _online_peers_rx) = watch::channel(HashSet::new());
+
+        let soranet = Arc::new(SoranetHandshakeConfig::defaults());
+
+        let mut network = super::NetworkBase::<DummyPayload, X25519Sha256, ChaCha20Poly1305> {
+            listen_addr: listen_addr_std.into(),
+            public_address: listen_addr_std.into(),
+            relay_role: RelayRole::Disabled,
+            relay_mode: iroha_config::parameters::actual::RelayMode::Disabled,
+            relay_hub_address: None,
+            relay_hub_peer: None,
+            relay_ttl: DEFAULT_RELAY_TTL,
+            trust_gossip_config: true,
+            trust_gossip: true,
+            self_id: PeerId::from(key_pair.public_key().clone()),
+            address_book: HashMap::new(),
+            peer_reputations: PeerReputationBook::default(),
+            soranet_handshake: soranet.clone(),
+            peers: HashMap::new(),
+            connecting_peers: HashMap::new(),
+            listener,
+            key_pair: key_pair.clone(),
+            subscribers_to_peers_messages: Vec::new(),
+            subscribe_to_peers_messages_receiver: subscribe_rx,
+            online_peers_sender: online_peers_tx,
+            update_topology_receiver: update_topology_rx,
+            update_peers_receiver: update_peers_rx,
+            update_trusted_peers_receiver,
+            update_acl_receiver: update_acl_rx,
+            network_message_high_receiver: network_message_high_rx,
+            network_message_low_receiver: network_message_low_rx,
+            peer_message_receiver: peer_message_rx,
+            peer_message_sender: peer_message_tx,
+            service_message_receiver: service_message_rx,
+            service_message_sender: service_message_tx,
+            update_handshake_receiver: update_handshake_rx,
+            update_consensus_caps_receiver,
+            current_conn_id: 0,
+            current_topology: HashSet::new(),
+            current_peers_addresses: Vec::new(),
+            idle_timeout: Duration::from_millis(50),
+            chain_id: None,
+            consensus_caps: None,
+            confidential_caps: None,
+            crypto_caps: None,
+            post_queue_cap: 4,
+            dns_refresh_interval: None,
+            dns_refresh_ttl: None,
+            dns_last_refresh: HashMap::new(),
+            dns_pending_refresh: HashSet::new(),
+            quic_enabled: false,
+            tls_enabled: false,
+            prefer_ws_fallback: false,
+            allowlist_only: false,
+            allow_keys: HashSet::new(),
+            deny_keys: HashSet::new(),
+            allow_nets: Vec::new(),
+            deny_nets: Vec::new(),
+            retry_backoff: HashMap::new(),
+            pending_connects: Vec::new(),
+            happy_eyeballs_stagger: Duration::from_millis(10),
+            topology_update_interval:
+                iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
+            addr_ipv6_first: false,
+            last_active: HashMap::new(),
+            incoming_pending: HashSet::new(),
+            incoming_active: HashSet::new(),
+            max_incoming: None,
+            max_total_connections: None,
+            accept_params: AcceptThrottleParams::new(
+                None,
+                None,
+                iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V4_BITS,
+                iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V6_BITS,
+                None,
+                None,
+                iroha_config::parameters::defaults::network::MAX_ACCEPT_BUCKETS.get(),
+                iroha_config::parameters::defaults::network::ACCEPT_BUCKET_IDLE,
+            ),
+            accept_prefix_buckets: HashMap::new(),
+            accept_ip_buckets: HashMap::new(),
+            sampler_high_queue_warn: LogSampler::new(),
+            sampler_low_queue_warn: LogSampler::new(),
+            sampler_accept_err: LogSampler::new(),
+            low_rate_per_sec: None,
+            low_burst: None,
+            low_buckets: HashMap::new(),
+            low_bytes_per_sec: None,
+            low_bytes_burst: None,
+            low_bytes_buckets: HashMap::new(),
+            max_frame_bytes: 4096,
+            cap_consensus: 128,
+            cap_control: 128,
+            cap_block_sync: 512,
+            cap_tx_gossip: 128,
+            cap_peer_gossip: 128,
+            cap_health: 128,
+            cap_other: 128,
+            disconnect_on_post_overflow: false,
+            _key_exchange: core::marker::PhantomData,
+            _encryptor: core::marker::PhantomData,
+        };
+
+        let before = cap_violations_consensus();
+
+        let peer = Peer::new(
+            listen_addr_std.into(),
+            PeerId::from(key_pair.public_key().clone()),
+        );
+        let within_block_sync_cap = super::PeerMessage {
+            peer: peer.clone(),
+            payload: RelayMessage::new(
+                peer.id().clone(),
+                RelayTarget::Direct(network.self_id.clone()),
+                DEFAULT_RELAY_TTL,
+                Priority::High,
+                DummyPayload,
+            ),
+            payload_bytes: 256,
+        };
+        network.peer_message(within_block_sync_cap).await;
+        assert_eq!(
+            cap_violations_consensus(),
+            before,
+            "consensus payload should use block sync cap"
+        );
+
+        let oversized = super::PeerMessage {
+            peer: peer.clone(),
+            payload: RelayMessage::new(
+                peer.id().clone(),
+                RelayTarget::Direct(network.self_id.clone()),
+                DEFAULT_RELAY_TTL,
+                Priority::High,
+                DummyPayload,
+            ),
+            payload_bytes: 1024,
+        };
+        network.peer_message(oversized).await;
+        assert_eq!(
+            cap_violations_consensus(),
+            before + 1,
+            "oversized consensus payload should be dropped"
+        );
+        assert!(
+            network.retry_backoff.contains_key(peer.id()),
+            "cap violation should schedule backoff for offending peer"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    #[allow(clippy::too_many_lines)]
+    async fn peer_message_consensus_chunk_uses_block_sync_cap() {
+        use crate::network::{cap_violations_consensus, message};
+
+        #[derive(Clone, Debug, Decode, Encode)]
+        struct DummyPayload;
+
+        impl message::ClassifyTopic for DummyPayload {
+            fn topic(&self) -> message::Topic {
+                message::Topic::ConsensusChunk
+            }
+        }
+
+        let key_pair = KeyPair::random();
+
+        let std_listener = match std::net::TcpListener::bind("127.0.0.1:0") {
+            Ok(listener) => listener,
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(e) => panic!("listener bind failed: {e:?}"),
+        };
+        let listen_addr_std = std_listener.local_addr().unwrap();
+        let listener_clone = std_listener.try_clone().unwrap();
+        listener_clone.set_nonblocking(true).unwrap();
+        let listener = match TcpListener::from_std(listener_clone) {
+            Ok(listener) => listener,
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(e) => panic!("tcp stream from_std failed: {e:?}"),
+        };
+
+        let (_subscribe_tx, subscribe_rx): (
+            mpsc::UnboundedSender<super::Subscriber<DummyPayload>>,
+            _,
+        ) = mpsc::unbounded_channel();
+        let (_update_topology_tx, update_topology_rx) =
+            mpsc::unbounded_channel::<super::message::UpdateTopology>();
+        let (_update_peers_tx, update_peers_rx) =
+            mpsc::unbounded_channel::<super::message::UpdatePeers>();
+        let (_update_trusted_tx, update_trusted_peers_receiver) =
+            mpsc::unbounded_channel::<super::message::UpdateTrustedPeers>();
+        let (_update_acl_tx, update_acl_rx) =
+            mpsc::unbounded_channel::<super::message::UpdateAcl>();
+        let (_update_handshake_tx, update_handshake_rx) =
+            mpsc::unbounded_channel::<super::message::UpdateHandshake>();
+        let (_update_consensus_caps_tx, update_consensus_caps_receiver) =
+            mpsc::unbounded_channel::<super::message::UpdateConsensusCaps>();
+        let (peer_message_tx, peer_message_rx) =
+            mpsc::channel::<super::PeerMessage<WireMessage<DummyPayload>>>(1);
+        let (service_message_tx, service_message_rx) =
+            mpsc::channel::<super::ServiceMessage<WireMessage<DummyPayload>>>(4);
+        let (_hi_tx, network_message_high_rx) = super::net_channel::channel_with_capacity(1);
+        let (_lo_tx, network_message_low_rx) = super::net_channel::channel_with_capacity(1);
+        let (online_peers_tx, _online_peers_rx) = watch::channel(HashSet::new());
+
+        let soranet = Arc::new(SoranetHandshakeConfig::defaults());
+
+        let mut network = super::NetworkBase::<DummyPayload, X25519Sha256, ChaCha20Poly1305> {
+            listen_addr: listen_addr_std.into(),
+            public_address: listen_addr_std.into(),
+            relay_role: RelayRole::Disabled,
+            relay_mode: iroha_config::parameters::actual::RelayMode::Disabled,
+            relay_hub_address: None,
+            relay_hub_peer: None,
+            relay_ttl: DEFAULT_RELAY_TTL,
+            trust_gossip_config: true,
+            trust_gossip: true,
+            self_id: PeerId::from(key_pair.public_key().clone()),
+            address_book: HashMap::new(),
+            peer_reputations: PeerReputationBook::default(),
+            soranet_handshake: soranet.clone(),
+            peers: HashMap::new(),
+            connecting_peers: HashMap::new(),
+            listener,
+            key_pair: key_pair.clone(),
+            subscribers_to_peers_messages: Vec::new(),
+            subscribe_to_peers_messages_receiver: subscribe_rx,
+            online_peers_sender: online_peers_tx,
+            update_topology_receiver: update_topology_rx,
+            update_peers_receiver: update_peers_rx,
+            update_trusted_peers_receiver,
+            update_acl_receiver: update_acl_rx,
+            network_message_high_receiver: network_message_high_rx,
+            network_message_low_receiver: network_message_low_rx,
+            peer_message_receiver: peer_message_rx,
+            peer_message_sender: peer_message_tx,
+            service_message_receiver: service_message_rx,
+            service_message_sender: service_message_tx,
+            update_handshake_receiver: update_handshake_rx,
+            update_consensus_caps_receiver,
+            current_conn_id: 0,
+            current_topology: HashSet::new(),
+            current_peers_addresses: Vec::new(),
+            idle_timeout: Duration::from_millis(50),
+            chain_id: None,
+            consensus_caps: None,
+            confidential_caps: None,
+            crypto_caps: None,
+            post_queue_cap: 4,
+            dns_refresh_interval: None,
+            dns_refresh_ttl: None,
+            dns_last_refresh: HashMap::new(),
+            dns_pending_refresh: HashSet::new(),
+            quic_enabled: false,
+            tls_enabled: false,
+            prefer_ws_fallback: false,
+            allowlist_only: false,
+            allow_keys: HashSet::new(),
+            deny_keys: HashSet::new(),
+            allow_nets: Vec::new(),
+            deny_nets: Vec::new(),
+            retry_backoff: HashMap::new(),
+            pending_connects: Vec::new(),
+            happy_eyeballs_stagger: Duration::from_millis(10),
+            topology_update_interval:
+                iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
+            addr_ipv6_first: false,
+            last_active: HashMap::new(),
+            incoming_pending: HashSet::new(),
+            incoming_active: HashSet::new(),
+            max_incoming: None,
+            max_total_connections: None,
+            accept_params: AcceptThrottleParams::new(
+                None,
+                None,
+                iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V4_BITS,
+                iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V6_BITS,
+                None,
+                None,
+                iroha_config::parameters::defaults::network::MAX_ACCEPT_BUCKETS.get(),
+                iroha_config::parameters::defaults::network::ACCEPT_BUCKET_IDLE,
+            ),
+            accept_prefix_buckets: HashMap::new(),
+            accept_ip_buckets: HashMap::new(),
+            sampler_high_queue_warn: LogSampler::new(),
+            sampler_low_queue_warn: LogSampler::new(),
+            sampler_accept_err: LogSampler::new(),
+            low_rate_per_sec: None,
+            low_burst: None,
+            low_buckets: HashMap::new(),
+            low_bytes_per_sec: None,
+            low_bytes_burst: None,
+            low_bytes_buckets: HashMap::new(),
+            max_frame_bytes: 4096,
+            cap_consensus: 128,
+            cap_control: 128,
+            cap_block_sync: 512,
+            cap_tx_gossip: 128,
+            cap_peer_gossip: 128,
+            cap_health: 128,
+            cap_other: 128,
+            disconnect_on_post_overflow: false,
+            _key_exchange: core::marker::PhantomData,
+            _encryptor: core::marker::PhantomData,
+        };
+
+        let before = cap_violations_consensus();
+
+        let peer = Peer::new(
+            listen_addr_std.into(),
+            PeerId::from(key_pair.public_key().clone()),
+        );
+        let within_block_sync_cap = super::PeerMessage {
+            peer: peer.clone(),
+            payload: RelayMessage::new(
+                peer.id().clone(),
+                RelayTarget::Direct(network.self_id.clone()),
+                DEFAULT_RELAY_TTL,
+                Priority::High,
+                DummyPayload,
+            ),
+            payload_bytes: 256,
+        };
+        network.peer_message(within_block_sync_cap).await;
+        assert_eq!(
+            cap_violations_block_sync(),
+            before,
+            "consensus chunk should use block sync cap"
+        );
+
+        let oversized = super::PeerMessage {
+            peer: peer.clone(),
+            payload: RelayMessage::new(
+                peer.id().clone(),
+                RelayTarget::Direct(network.self_id.clone()),
+                DEFAULT_RELAY_TTL,
+                Priority::High,
+                DummyPayload,
+            ),
+            payload_bytes: 1024,
+        };
+        network.peer_message(oversized).await;
+        assert_eq!(
+            cap_violations_block_sync(),
+            before + 1,
+            "oversized consensus chunk should be dropped"
         );
         assert!(
             network.retry_backoff.contains_key(peer.id()),
@@ -3125,6 +3836,7 @@ mod accept_stream_tests {
 
         let topics = [
             Consensus,
+            ConsensusChunk,
             Control,
             BlockSync,
             TxGossip,
@@ -3561,9 +4273,9 @@ struct NetworkBase<T: Pload, K: Kex, E: Enc> {
     /// Our app-level key pair
     key_pair: KeyPair,
     /// Recipients of messages received from other peers in the network.
-    subscribers_to_peers_messages: Vec<mpsc::Sender<PeerMessage<T>>>,
+    subscribers_to_peers_messages: Vec<Subscriber<T>>,
     /// Receiver to subscribe for messages received from other peers in the network.
-    subscribe_to_peers_messages_receiver: mpsc::UnboundedReceiver<mpsc::Sender<PeerMessage<T>>>,
+    subscribe_to_peers_messages_receiver: mpsc::UnboundedReceiver<Subscriber<T>>,
     /// Sender of `OnlinePeer` message
     online_peers_sender: watch::Sender<OnlinePeers>,
     /// [`UpdateTopology`] message receiver
@@ -3918,6 +4630,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                         break;
                     };
                     let len = self.network_message_high_receiver.len();
+                    update_network_queue_depth_high(len);
                     if len > 100 {
                         if let Some(supp) = self.sampler_high_queue_warn.should_log(tokio::time::Duration::from_secs(1)) {
                             iroha_logger::warn!(size=len, suppressed=supp, "High-priority messages are piling up in the queue");
@@ -3935,6 +4648,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                         break;
                     };
                     let len = self.network_message_low_receiver.len();
+                    update_network_queue_depth_low(len);
                     if len > 100 {
                         if let Some(supp) = self.sampler_low_queue_warn.should_log(tokio::time::Duration::from_secs(1)) {
                             iroha_logger::warn!(size=len, suppressed=supp, "Low-priority messages are piling up in the queue");
@@ -4279,9 +4993,14 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         topic: message::Topic,
     ) -> bool {
         let is_high = matches!(frame.priority, Priority::High);
-        let is_consensus = matches!(topic, message::Topic::Consensus);
+        let is_consensus = matches!(
+            topic,
+            message::Topic::Consensus
+                | message::Topic::ConsensusPayload
+                | message::Topic::ConsensusChunk
+        );
         if matches!(topic, message::Topic::BlockSync) {
-            iroha_logger::info!(
+            iroha_logger::debug!(
                 peer=%peer_id,
                 high=is_high,
                 "enqueueing block sync frame to peer"
@@ -4313,7 +5032,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         let outcome = match ref_peer.handle.post(frame) {
             Ok(()) => {
                 if is_consensus {
-                    iroha_logger::info!(
+                    iroha_logger::debug!(
                         peer=%peer_id,
                         high=is_high,
                         "consensus frame enqueued to peer"
@@ -4704,8 +5423,13 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
     ) {
         iroha_logger::trace!(peer=%peer_id, "Post message");
         let topic = data.topic();
-        if matches!(topic, message::Topic::Consensus) {
-            iroha_logger::info!(
+        if matches!(
+            topic,
+            message::Topic::Consensus
+                | message::Topic::ConsensusPayload
+                | message::Topic::ConsensusChunk
+        ) {
+            iroha_logger::debug!(
                 peer = %peer_id,
                 high = matches!(priority, Priority::High),
                 "sending consensus frame to peer"
@@ -4750,8 +5474,13 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
     fn broadcast(&mut self, Broadcast { data, priority }: Broadcast<T>) {
         iroha_logger::trace!("Broadcast message");
         let topic = data.topic();
-        if matches!(topic, message::Topic::Consensus) {
-            iroha_logger::info!(
+        if matches!(
+            topic,
+            message::Topic::Consensus
+                | message::Topic::ConsensusPayload
+                | message::Topic::ConsensusChunk
+        ) {
+            iroha_logger::debug!(
                 high = matches!(priority, Priority::High),
                 "broadcasting consensus frame to all peers"
             );
@@ -4780,7 +5509,9 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                             "Failed to enqueue tx gossip broadcast frame"
                         );
                     }
-                    message::Topic::Consensus => {
+                    message::Topic::Consensus
+                    | message::Topic::ConsensusPayload
+                    | message::Topic::ConsensusChunk => {
                         iroha_logger::warn!(peer=%pid, "Failed to enqueue consensus broadcast frame");
                     }
                     _ => {}
@@ -4815,6 +5546,9 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         }
         let cap = match topic {
             message::Topic::Consensus => self.cap_consensus,
+            // Payload-heavy consensus frames share the block-sync cap.
+            message::Topic::ConsensusPayload => self.cap_block_sync,
+            message::Topic::ConsensusChunk => self.cap_block_sync,
             message::Topic::Control => self.cap_control,
             message::Topic::BlockSync => self.cap_block_sync,
             message::Topic::TxGossip | message::Topic::TxGossipRestricted => self.cap_tx_gossip,
@@ -4850,8 +5584,34 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             priority,
             payload,
         } = msg.payload;
+        let mut allow_origin_mismatch = false;
+        if matches!(
+            self.relay_mode,
+            iroha_config::parameters::actual::RelayMode::Spoke
+        ) {
+            let hub_peer = self
+                .relay_hub_peer
+                .clone()
+                .or_else(|| self.ensure_hub_peer());
+            if hub_peer
+                .as_ref()
+                .is_some_and(|hub| hub == incoming_peer.id())
+            {
+                allow_origin_mismatch = true;
+            } else if let Some(hub_addr) = self.relay_hub_address.as_ref() {
+                allow_origin_mismatch = hub_addr == incoming_peer.address();
+            }
+        }
+        if origin != *incoming_peer.id() && !allow_origin_mismatch {
+            iroha_logger::warn!(
+                peer = %incoming_peer,
+                origin = %origin,
+                "dropping relay frame with mismatched origin"
+            );
+            return;
+        }
         if matches!(topic, message::Topic::BlockSync) {
-            iroha_logger::info!(
+            iroha_logger::debug!(
                 from=%incoming_peer,
                 origin=%origin,
                 ?target,
@@ -4882,13 +5642,18 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                 topic,
                 message::Topic::TxGossip | message::Topic::TxGossipRestricted
             ) {
-                iroha_logger::info!(
+                iroha_logger::debug!(
                     peer=%deliver.peer,
                     size_bytes,
                     "delivering tx gossip frame to subscribers"
                 );
-            } else if matches!(topic, message::Topic::Consensus) {
-                iroha_logger::info!(
+            } else if matches!(
+                topic,
+                message::Topic::Consensus
+                    | message::Topic::ConsensusPayload
+                    | message::Topic::ConsensusChunk
+            ) {
+                iroha_logger::debug!(
                     peer=%deliver.peer,
                     size_bytes,
                     "delivering consensus frame to subscribers"
@@ -4928,7 +5693,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         }
     }
 
-    fn subscribe_to_peers_messages(&mut self, subscriber: mpsc::Sender<PeerMessage<T>>) {
+    fn subscribe_to_peers_messages(&mut self, subscriber: Subscriber<T>) {
         self.subscribers_to_peers_messages.push(subscriber);
         iroha_logger::info!(
             subscribers = self.subscribers_to_peers_messages.len(),
@@ -4941,7 +5706,12 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
 
         let topic = msg.payload.topic();
         if self.subscribers_to_peers_messages.is_empty() {
-            if matches!(topic, message::Topic::Consensus) {
+            if matches!(
+                topic,
+                message::Topic::Consensus
+                    | message::Topic::ConsensusPayload
+                    | message::Topic::ConsensusChunk
+            ) {
                 iroha_logger::warn!(
                     peer = %msg.peer,
                     "dropping consensus frame because no subscribers are registered yet"
@@ -4952,27 +5722,48 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             return;
         }
         if matches!(topic, message::Topic::BlockSync) {
-            iroha_logger::info!(
+            iroha_logger::debug!(
                 peer = %msg.peer,
                 size_bytes = msg.payload_bytes,
                 "dispatching block sync message to subscribers"
             );
         }
         let mut next = Vec::with_capacity(self.subscribers_to_peers_messages.len());
+        let mut matched_any = false;
         for subscriber in self.subscribers_to_peers_messages.drain(..) {
-            match subscriber.try_send(msg.clone()) {
+            if !subscriber.filter.matches(topic) {
+                next.push(subscriber);
+                continue;
+            }
+            matched_any = true;
+            match subscriber.sender.try_send(msg.clone()) {
                 Ok(()) => next.push(subscriber),
                 Err(TrySendError::Full(_)) => {
-                    iroha_logger::warn!(
-                        peer = %msg.peer,
-                        topic = ?topic,
-                        "subscriber queue full; dropping inbound message"
-                    );
+                    let drops = inc_subscriber_queue_full_for(topic);
+                    if drops == 1 || drops % 1024 == 0 {
+                        iroha_logger::warn!(
+                            peer = %msg.peer,
+                            topic = ?topic,
+                            drops,
+                            "subscriber queue full; dropping inbound message"
+                        );
+                    }
                     next.push(subscriber);
                 }
                 Err(TrySendError::Closed(_)) => {
                     iroha_logger::debug!("subscriber channel closed; dropping subscriber");
                 }
+            }
+        }
+        if !matched_any {
+            let misses = inc_subscriber_unrouted_for(topic);
+            if misses == 1 || misses % 1024 == 0 {
+                iroha_logger::warn!(
+                    peer = %msg.peer,
+                    topic = ?topic,
+                    misses,
+                    "no subscribers registered for topic; dropping inbound message"
+                );
             }
         }
         self.subscribers_to_peers_messages = next;
@@ -5184,6 +5975,21 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy, Debug, Decode, Encode)]
+    enum TopicMsg {
+        Trust,
+        Peer,
+    }
+
+    impl message::ClassifyTopic for TopicMsg {
+        fn topic(&self) -> message::Topic {
+            match self {
+                Self::Trust => message::Topic::TrustGossip,
+                Self::Peer => message::Topic::PeerGossip,
+            }
+        }
+    }
+
     #[test]
     fn trust_gossip_allowed_blocks_when_disabled() {
         assert!(trust_gossip_allowed(
@@ -5202,6 +6008,57 @@ mod tests {
             message::Topic::TrustGossip,
             /*trust_gossip=*/ false
         ));
+    }
+
+    #[test]
+    fn subscriber_filter_routes_topics() {
+        let Some(mut network) = bare_network_with::<TopicMsg>() else {
+            return;
+        };
+        let (trust_tx, mut trust_rx) = mpsc::channel(1);
+        let (peer_tx, mut peer_rx) = mpsc::channel(1);
+
+        network.subscribe_to_peers_messages(Subscriber {
+            sender: trust_tx,
+            filter: SubscriberFilter::topics([message::Topic::TrustGossip]),
+        });
+        network.subscribe_to_peers_messages(Subscriber {
+            sender: peer_tx,
+            filter: SubscriberFilter::topics([message::Topic::PeerGossip]),
+        });
+
+        let peer = Peer::new(
+            socket_addr!(127.0.0.1:202),
+            KeyPair::random().public_key().clone(),
+        );
+
+        network.dispatch_to_subscribers(PeerMessage {
+            peer: peer.clone(),
+            payload: TopicMsg::Trust,
+            payload_bytes: 1,
+        });
+        assert!(matches!(trust_rx.try_recv(), Ok(msg) if matches!(msg.payload, TopicMsg::Trust)));
+        assert!(matches!(peer_rx.try_recv(), Err(TryRecvError::Empty)));
+
+        network.dispatch_to_subscribers(PeerMessage {
+            peer,
+            payload: TopicMsg::Peer,
+            payload_bytes: 1,
+        });
+        assert!(matches!(peer_rx.try_recv(), Ok(msg) if matches!(msg.payload, TopicMsg::Peer)));
+        assert!(matches!(trust_rx.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn subscribe_with_filter_returns_error_when_closed() {
+        let handle =
+            NetworkBaseHandle::<DummyMsg, X25519Sha256, ChaCha20Poly1305>::closed_for_tests();
+        let (tx, _rx) = mpsc::channel(1);
+        assert!(
+            handle
+                .subscribe_to_peers_messages_with_filter(tx, SubscriberFilter::All)
+                .is_err()
+        );
     }
 
     #[test]
@@ -5292,6 +6149,13 @@ mod tests {
             .expect("trust gossip test lock poisoned")
     }
 
+    fn queue_depth_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("queue depth test lock poisoned")
+    }
+
     #[allow(clippy::too_many_lines)]
     fn bare_network() -> Option<NetworkBase<DummyMsg, X25519Sha256, ChaCha20Poly1305>> {
         bare_network_with::<DummyMsg>()
@@ -5315,8 +6179,7 @@ mod tests {
             Err(e) => panic!("tcp listener from_std failed: {e:?}"),
         };
 
-        let (_subscribe_tx, subscribe_rx) =
-            mpsc::unbounded_channel::<mpsc::Sender<PeerMessage<T>>>();
+        let (_subscribe_tx, subscribe_rx) = mpsc::unbounded_channel::<Subscriber<T>>();
         let (_update_topology_tx, update_topology_rx) =
             mpsc::unbounded_channel::<message::UpdateTopology>();
         let (_update_peers_tx, update_peers_rx) = mpsc::unbounded_channel::<message::UpdatePeers>();
@@ -5808,6 +6671,82 @@ mod tests {
         );
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn peer_message_drops_mismatched_origin_without_hub() {
+        let Some(mut network) = bare_network_with::<DummyMsg>() else {
+            return;
+        };
+        let (tx, mut rx) = mpsc::channel(1);
+        network.subscribe_to_peers_messages(Subscriber {
+            sender: tx,
+            filter: SubscriberFilter::All,
+        });
+        let incoming_peer = Peer::new(
+            socket_addr!(127.0.0.1:202),
+            KeyPair::random().public_key().clone(),
+        );
+        let origin = PeerId::from(KeyPair::random().public_key().clone());
+        let payload = RelayMessage::new(
+            origin,
+            RelayTarget::Direct(network.self_id.clone()),
+            DEFAULT_RELAY_TTL,
+            Priority::Low,
+            DummyMsg,
+        );
+        let msg = PeerMessage {
+            peer: incoming_peer,
+            payload,
+            payload_bytes: 1,
+        };
+
+        network.peer_message(msg).await;
+
+        assert!(
+            matches!(rx.try_recv(), Err(TryRecvError::Empty)),
+            "mismatched origin should be dropped when not relaying from the hub"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn peer_message_allows_mismatched_origin_from_hub_in_spoke_mode() {
+        let Some(mut network) = bare_network_with::<DummyMsg>() else {
+            return;
+        };
+        network.relay_mode = iroha_config::parameters::actual::RelayMode::Spoke;
+        let hub_peer = Peer::new(
+            socket_addr!(127.0.0.1:203),
+            KeyPair::random().public_key().clone(),
+        );
+        network.relay_hub_peer = Some(hub_peer.id().clone());
+        let (tx, mut rx) = mpsc::channel(1);
+        network.subscribe_to_peers_messages(Subscriber {
+            sender: tx,
+            filter: SubscriberFilter::All,
+        });
+        let origin = PeerId::from(KeyPair::random().public_key().clone());
+        let payload = RelayMessage::new(
+            origin.clone(),
+            RelayTarget::Direct(network.self_id.clone()),
+            DEFAULT_RELAY_TTL,
+            Priority::Low,
+            DummyMsg,
+        );
+        let msg = PeerMessage {
+            peer: hub_peer,
+            payload,
+            payload_bytes: 1,
+        };
+
+        network.peer_message(msg).await;
+
+        let received = rx.try_recv().expect("expected relay message");
+        assert_eq!(
+            received.peer.id(),
+            &origin,
+            "origin should be preserved when relaying through the hub"
+        );
+    }
+
     #[test]
     fn clear_low_buckets_removes_entries() {
         let peer_id = PeerId::from(KeyPair::random().public_key().clone());
@@ -5850,7 +6789,10 @@ mod tests {
             payload_bytes: 1,
         };
         tx.try_send(msg.clone()).expect("fill channel");
-        network.subscribers_to_peers_messages.push(tx);
+        network.subscribers_to_peers_messages.push(Subscriber {
+            sender: tx,
+            filter: SubscriberFilter::All,
+        });
 
         network.dispatch_to_subscribers(msg);
 
@@ -5864,6 +6806,98 @@ mod tests {
             payload: DummyMsg, ..
         } = first;
         assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn dispatch_to_subscribers_tracks_unmatched_topics() {
+        let Some(mut network) = bare_network_with::<TopicMsg>() else {
+            return;
+        };
+        let (tx, mut rx) = mpsc::channel(1);
+        network.subscribe_to_peers_messages(Subscriber {
+            sender: tx,
+            filter: SubscriberFilter::topics([message::Topic::TrustGossip]),
+        });
+        let peer = Peer::new(
+            socket_addr!(127.0.0.1:303),
+            KeyPair::random().public_key().clone(),
+        );
+
+        let before = subscriber_unrouted_count();
+        network.dispatch_to_subscribers(PeerMessage {
+            peer,
+            payload: TopicMsg::Peer,
+            payload_bytes: 1,
+        });
+        let after = subscriber_unrouted_count();
+
+        assert!(
+            after >= before + 1,
+            "unmatched topics should increment the unrouted counter"
+        );
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn subscriber_queue_full_counts_increment_by_topic() {
+        let before_total = subscriber_queue_full_count();
+        let before_consensus = subscriber_queue_full_consensus_count();
+        let before_chunks = subscriber_queue_full_consensus_chunk_count();
+        inc_subscriber_queue_full_for_test(message::Topic::Consensus, 2);
+        inc_subscriber_queue_full_for_test(message::Topic::ConsensusChunk, 1);
+        let after_total = subscriber_queue_full_count();
+        let after_consensus = subscriber_queue_full_consensus_count();
+        let after_chunks = subscriber_queue_full_consensus_chunk_count();
+
+        assert!(
+            after_total >= before_total + 3,
+            "queue-full counter should increase by at least the increment"
+        );
+        assert!(
+            after_consensus >= before_consensus + 2,
+            "queue-full per-topic counter should track consensus drops"
+        );
+        assert!(
+            after_chunks >= before_chunks + 1,
+            "queue-full per-topic counter should track consensus chunk drops"
+        );
+    }
+
+    #[test]
+    fn subscriber_unrouted_counts_increment_by_topic() {
+        let before = subscriber_unrouted_count();
+        let before_peer = subscriber_unrouted_peer_gossip_count();
+        let before_chunks = subscriber_unrouted_consensus_chunk_count();
+        inc_subscriber_unrouted_for_test(message::Topic::TrustGossip, 3);
+        inc_subscriber_unrouted_for_test(message::Topic::ConsensusChunk, 1);
+        let after = subscriber_unrouted_count();
+        let after_peer = subscriber_unrouted_peer_gossip_count();
+        let after_chunks = subscriber_unrouted_consensus_chunk_count();
+
+        assert!(
+            after >= before + 4,
+            "increment helper should increase subscriber unrouted count"
+        );
+        assert!(
+            after_peer >= before_peer + 3,
+            "trust-gossip should be grouped under peer gossip counters"
+        );
+        assert!(
+            after_chunks >= before_chunks + 1,
+            "consensus chunk drops should be tracked separately"
+        );
+    }
+
+    #[test]
+    fn network_queue_depth_tracks_updates() {
+        let _guard = queue_depth_test_guard();
+        set_network_queue_depth_for_test(true, 0);
+        set_network_queue_depth_for_test(false, 0);
+        set_network_queue_depth_for_test(true, 12);
+        set_network_queue_depth_for_test(false, 7);
+
+        assert_eq!(network_queue_depth_high(), 12);
+        assert_eq!(network_queue_depth_low(), 7);
     }
 
     #[test]
@@ -5919,8 +6953,12 @@ pub mod message {
     /// basic prioritization.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     pub enum Topic {
-        /// Consensus data plane (blocks, votes).
+        /// Consensus data plane (votes, hints).
         Consensus,
+        /// Consensus payload chunks (RBC chunk data).
+        ConsensusChunk,
+        /// Consensus payload plane (blocks, READY/DELIVER bundles).
+        ConsensusPayload,
         /// Consensus control plane (view changes, coordination).
         Control,
         /// Block synchronization stream.

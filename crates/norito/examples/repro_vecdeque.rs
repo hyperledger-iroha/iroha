@@ -65,8 +65,7 @@ fn main() {
     let __flags: u8 = 0;
     let _g = norito::core::DecodeFlagsGuard::enter(__flags);
     println!(
-        "ucsl={} ucl={} flags={:02x}",
-        norito::core::use_compact_seq_len(),
+        "ucl={} flags={:02x}",
         norito::core::use_compact_len(),
         __flags
     );

@@ -678,7 +678,7 @@ mod query_errors_handling {
 
         match decode_query_response(&response) {
             Err(QueryError::Other(inner)) => {
-                let messages: Vec<String> = inner.chain().map(|cause| cause.to_string()).collect();
+                let messages: Vec<String> = inner.chain().map(ToString::to_string).collect();
                 assert!(
                     messages
                         .iter()

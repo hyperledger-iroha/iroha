@@ -172,11 +172,9 @@ impl CommitRosterJournal {
         let (persisted, read_path) = match (tmp, main) {
             (None, None) => return Ok(journal),
             (Some(Ok(persisted)), _) => (persisted, tmp_path.clone()),
-            (Some(Err(_)), Some(Ok(persisted))) => (persisted, path.clone()),
             (Some(Err(tmp_err)), None) => return Err(tmp_err),
-            (None, Some(Ok(persisted))) => (persisted, path.clone()),
-            (None, Some(Err(err))) => return Err(err),
-            (Some(Err(_)), Some(Err(err))) => return Err(err),
+            (Some(Err(_)) | None, Some(Ok(persisted))) => (persisted, path.clone()),
+            (None | Some(Err(_)), Some(Err(err))) => return Err(err),
         };
 
         for entry in persisted.entries {
@@ -357,8 +355,8 @@ impl CommitRosterJournal {
                     source,
                 })?;
             file.write_all(&bytes)
-                .and_then(|_| file.flush())
-                .and_then(|_| file.sync_data())
+                .and_then(|()| file.flush())
+                .and_then(|()| file.sync_data())
                 .map_err(|source| CommitRosterJournalError::Write {
                     path: tmp_path.clone(),
                     source,

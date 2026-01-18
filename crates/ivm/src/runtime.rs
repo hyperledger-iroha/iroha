@@ -124,7 +124,10 @@ impl<H: IVMHost> IVMHost for SyscallDispatcher<H> {
         self.inner.syscall(number, vm)
     }
 
-    fn as_any(&mut self) -> &mut dyn Any {
+    fn as_any(&mut self) -> &mut dyn Any
+    where
+        Self: 'static,
+    {
         self.inner.as_any()
     }
 
@@ -172,7 +175,10 @@ impl IVMHost for SharedHost {
         host.syscall(number, vm)
     }
 
-    fn as_any(&mut self) -> &mut dyn Any {
+    fn as_any(&mut self) -> &mut dyn Any
+    where
+        Self: 'static,
+    {
         self
     }
 

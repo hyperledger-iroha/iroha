@@ -1,7 +1,7 @@
 package org.hyperledger.iroha.android.tx;
 
 import java.util.Arrays;
-import java.util.Map;
+import java.util.Collections;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoException;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
@@ -70,7 +70,7 @@ public final class SignedTransactionHasherTests {
             .setInstructionBytes(new byte[] {seed, (byte) (seed + 1)})
             .setTimeToLiveMs(5_000L)
             .setNonce(99)
-            .setMetadata(Map.of("note", "txn-" + seed))
+            .setMetadata(Collections.singletonMap("note", "txn-" + seed))
             .build();
     final byte[] encodedPayload = codec.encodeTransaction(payload);
     final byte[] signature = new byte[64];

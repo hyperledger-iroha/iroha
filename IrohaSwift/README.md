@@ -3,9 +3,9 @@
 Swift SDK targeting Hyperledger Iroha v2 and Sora Nexus (Iroha v3) nodes on Apple platforms.
 
 Features:
-- Torii HTTP client (balances, transactions, pipeline recovery, time service, ZK attachments, prover reports, contracts)
+- Torii HTTP client (balances, transactions, subscriptions, pipeline recovery, time service, ZK attachments, prover reports, contracts)
 - Health & metrics helpers (fetch `/v1/health` text probe and `/v1/metrics` Prometheus/JSON payloads)
-- Norito envelope encoder (header + CRC64-ECMA)
+- Norito envelope encoder (header + CRC64-XZ)
 - Native NoritoBridge integration (required by default; set `IROHASWIFT_USE_BRIDGE=optional` for the Swift-only fallback) powering transfer/mint/burn builders and JSON inspection helpers
 - Norito RPC HTTP helper (`NoritoRpcClient`) with binary header/query/timeout handling
 - Pipeline submission helpers (POST `/v1/pipeline/transactions` with configurable retries + status polling)
@@ -114,6 +114,72 @@ sdk.submitAndWait(envelope: envelope) { result in
 
 `IrohaSDK` trims and validates chain/account/asset identifiers before signing and fails fast on malformed inputs. Override `creationTimeProvider` when you need deterministic timestamps for fixture generation or offline signing flows.
 
+### Subscriptions
+
+Subscription plans live on asset definitions and are billed by triggers. Use
+`bill_for.period = previous_period` for arrears billing (charge on the first for
+last month) or `next_period` for fixed-price plans billed in advance.
+
+```swift
+let plan: ToriiSubscriptionPlan = [
+    "provider": .string("aws@commerce"),
+    "billing": .object([
+        "cadence": .object([
+            "kind": .string("monthly_calendar"),
+            "detail": .object([
+                "anchor_day": .number(1),
+                "anchor_time_ms": .number(0)
+            ])
+        ]),
+        "bill_for": .object([
+            "period": .string("previous_period"),
+            "value": .null
+        ]),
+        "retry_backoff_ms": .number(86_400_000),
+        "max_failures": .number(3),
+        "grace_ms": .number(604_800_000)
+    ]),
+    "pricing": .object([
+        "kind": .string("usage"),
+        "detail": .object([
+            "unit_price": .string("0.024"),
+            "unit_key": .string("compute_ms"),
+            "asset_definition": .string("usd#pay")
+        ])
+    ])
+]
+
+let planRequest = ToriiSubscriptionPlanCreateRequest(
+    authority: "aws@commerce",
+    privateKey: "provider-private-key-hex",
+    planId: "aws_compute#commerce",
+    plan: plan
+)
+try await torii.createSubscriptionPlan(planRequest)
+
+let subscriptionRequest = ToriiSubscriptionCreateRequest(
+    authority: "alice@users",
+    privateKey: "subscriber-private-key-hex",
+    subscriptionId: "sub-001",
+    planId: "aws_compute#commerce"
+)
+try await torii.createSubscription(subscriptionRequest)
+
+let usageRequest = ToriiSubscriptionUsageRequest(
+    authority: "aws@commerce",
+    privateKey: "provider-private-key-hex",
+    unitKey: "compute_ms",
+    delta: "3600000"
+)
+try await torii.recordSubscriptionUsage(subscriptionId: "sub-001", requestBody: usageRequest)
+
+let actionRequest = ToriiSubscriptionActionRequest(
+    authority: "aws@commerce",
+    privateKey: "provider-private-key-hex"
+)
+try await torii.chargeSubscriptionNow(subscriptionId: "sub-001", requestBody: actionRequest)
+```
+
 ### Canonical request signing
 
 App-facing Torii endpoints accept optional `X-Iroha-Account` /
@@ -156,6 +222,8 @@ secp256k1 requires 33 bytes when enabled), and reject empty keys.
 helpers in `TxBuilder` (for example `submitAndWait(transfer:keypair:)`) wrap the same
 flow. No additional configuration is required when targeting Torii builds that ship the
 pipeline surface.
+If `/v1/pipeline/transactions/status` responds with `404`, Torii likely restarted or
+evicted the in-memory status cache; the SDK treats this as "pending" and continues polling.
 Pipeline submissions include an `Idempotency-Key` header derived from the transaction
 hash so retries stay safe; override `sdk.pipelineSubmitOptions.idempotencyKeyFactory` or
 set it to `nil` to disable the header when integrating with custom gateways.
@@ -467,7 +535,7 @@ let payload = try ConfidentialEncryptedPayload(
 )
 
 let noritoBytes = try payload.serializedPayload()      // bare Norito struct bytes
-let envelope = try payload.noritoEnvelope()            // header + CRC64-ECMA
+let envelope = try payload.noritoEnvelope()            // header + CRC64-XZ
 ```
 
 Each initializer validates the X25519 public key (32 bytes) and XChaCha20-Poly1305 nonce

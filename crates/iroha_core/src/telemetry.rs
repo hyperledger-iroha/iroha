@@ -2284,6 +2284,52 @@ impl StateTelemetry {
             .with_label_values(&[component])
             .inc();
     }
+
+    /// Record a DA cache hit/miss for a component.
+    #[cfg(feature = "telemetry")]
+    pub fn inc_storage_da_cache(&self, component: &'static str, result: &'static str) {
+        if !self.is_enabled() {
+            return;
+        }
+        self.metrics
+            .storage_da_cache_total
+            .with_label_values(&[component, result])
+            .inc();
+    }
+
+    /// No-op when telemetry is disabled.
+    #[cfg(not(feature = "telemetry"))]
+    #[allow(unused_variables)]
+    pub fn inc_storage_da_cache(&self, component: &'static str, result: &'static str) {}
+
+    /// Record DA-backed storage churn bytes for a component.
+    #[cfg(feature = "telemetry")]
+    pub fn add_storage_da_churn_bytes(
+        &self,
+        component: &'static str,
+        direction: &'static str,
+        bytes: u64,
+    ) {
+        if !self.is_enabled() || bytes == 0 {
+            return;
+        }
+        self.metrics
+            .storage_da_churn_bytes_total
+            .with_label_values(&[component, direction])
+            .inc_by(bytes);
+    }
+
+    /// No-op when telemetry is disabled.
+    #[cfg(not(feature = "telemetry"))]
+    #[allow(unused_variables)]
+    pub fn add_storage_da_churn_bytes(
+        &self,
+        component: &'static str,
+        direction: &'static str,
+        bytes: u64,
+    ) {
+    }
+
     /// Whether Nexus lane/dataspace metrics should be emitted.
     #[inline]
     fn nexus_lane_metrics_enabled(&self) -> bool {
@@ -2688,6 +2734,30 @@ impl StateTelemetry {
             self.metrics
                 .sm_syscall_failures_total
                 .with_label_values(&[kind, mode, reason])
+                .inc();
+        }
+    }
+
+    /// Record a subscription billing attempt grouped by pricing kind.
+    pub fn record_subscription_billing_attempt(&self, pricing: &'static str) {
+        if self.is_enabled() {
+            self.metrics
+                .subscription_billing_attempts_total
+                .with_label_values(&[pricing])
+                .inc();
+        }
+    }
+
+    /// Record a subscription billing outcome grouped by pricing kind and result.
+    pub fn record_subscription_billing_outcome(
+        &self,
+        pricing: &'static str,
+        outcome: &'static str,
+    ) {
+        if self.is_enabled() {
+            self.metrics
+                .subscription_billing_outcomes_total
+                .with_label_values(&[pricing, outcome])
                 .inc();
         }
     }
@@ -4348,7 +4418,7 @@ impl core::fmt::Debug for StateTelemetry {
         f.debug_struct("StateTelemetry")
             .field("enabled", &self.enabled.load(Ordering::Relaxed))
             .field("nexus_enabled", &self.nexus_enabled.load(Ordering::Relaxed))
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -4374,10 +4444,10 @@ pub struct StreamingTelemetry {
 #[cfg(feature = "telemetry")]
 impl core::fmt::Debug for StreamingTelemetry {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let parity_buckets_len = match self.parity_buckets.try_lock() {
-            Ok(guard) => guard.len(),
-            Err(_) => 0,
-        };
+        let parity_buckets_len = self
+            .parity_buckets
+            .try_lock()
+            .map_or(0, |guard| guard.len());
         f.debug_struct("StreamingTelemetry")
             .field("enabled", &self.enabled.load(Ordering::Relaxed))
             .field("parity_buckets_len", &parity_buckets_len)
@@ -4789,6 +4859,7 @@ pub fn record_state_tx_queue_backpressure(
 }
 
 /// Update gauges that reflect the most recent tiered-state snapshot.
+#[allow(clippy::too_many_arguments)]
 pub fn record_state_tiered_snapshot(
     telemetry: &StateTelemetry,
     snapshot_index: u64,
@@ -5427,6 +5498,16 @@ impl Telemetry {
         self.metrics
             .sumeragi_block_sync_roster_drop_total
             .with_label_values(&[reason])
+            .inc();
+    }
+
+    /// Record that a block-sync `ShareBlocks` batch was dropped as unsolicited.
+    pub fn note_block_sync_unsolicited_share_blocks_drop(&self) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        self.metrics
+            .sumeragi_block_sync_share_blocks_unsolicited_total
             .inc();
     }
 
@@ -6449,6 +6530,14 @@ impl Telemetry {
         }
     }
 
+    /// Increment RBC rebroadcast skip counter labeled by kind (payload|ready).
+    pub fn inc_rbc_rebroadcast_skipped(&self, kind: &'static str) {
+        let _ = kind;
+        if self.enabled.load(Ordering::Relaxed) {
+            // TODO: wire to telemetry metric once registry exposes rebroadcast skips.
+        }
+    }
+
     /// Increment RBC DELIVER broadcasts counter.
     pub fn inc_rbc_deliver_broadcasts(&self) {
         if self.enabled.load(Ordering::Relaxed) {
@@ -6480,6 +6569,22 @@ impl Telemetry {
     pub fn inc_rbc_deliver_defer_chunks(&self) {
         if self.enabled.load(Ordering::Relaxed) {
             self.metrics.sumeragi_rbc_deliver_defer_chunks_total.inc();
+        }
+    }
+
+    /// Increment RBC mismatch counter for the given peer and mismatch kind.
+    pub fn inc_rbc_mismatch(
+        &self,
+        peer: &iroha_data_model::peer::PeerId,
+        kind: status::RbcMismatchKind,
+    ) {
+        if self.enabled.load(Ordering::Relaxed) {
+            let peer_label = peer.to_string();
+            let kind_label = kind.label();
+            self.metrics
+                .sumeragi_rbc_mismatch_total
+                .with_label_values(&[peer_label.as_str(), kind_label])
+                .inc();
         }
     }
 
@@ -7678,6 +7783,16 @@ impl Telemetry {
         }
     }
 
+    /// Increment counter for consensus message drops/deferrals labeled by kind/outcome/reason.
+    pub fn note_consensus_message_handling(&self, kind: &str, outcome: &str, reason: &str) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .sumeragi_consensus_message_handling_total
+                .with_label_values(&[kind, outcome, reason])
+                .inc();
+        }
+    }
+
     /// Set current collector parameters (`collectors_k`, `redundant_send_r`) as gauges
     pub fn set_collectors_params(&self, collectors_k: u64, redundant_send_r: u64) {
         if self.enabled.load(Ordering::Relaxed) {
@@ -8074,7 +8189,12 @@ impl Actor {
         }
         self.last_online_peers = current_online;
         self.metrics.connected_peers.set(peer_count);
-        self.metrics.queue_size.set(self.queue.tx_len() as u64);
+        let queued = self.queue.queued_len() as u64;
+        let active = self.queue.active_len() as u64;
+        let inflight = active.saturating_sub(queued);
+        self.metrics.queue_size.set(active);
+        self.metrics.queue_queued.set(queued);
+        self.metrics.queue_inflight.set(inflight);
         // P2P counters (gauges): sample from p2p module
         self.metrics
             .p2p_dropped_posts
@@ -8082,6 +8202,54 @@ impl Actor {
         self.metrics
             .p2p_dropped_broadcasts
             .set(iroha_p2p::network::dropped_broadcast_count());
+        self.metrics
+            .p2p_subscriber_queue_full_total
+            .set(iroha_p2p::network::subscriber_queue_full_count());
+        let full = &self.metrics.p2p_subscriber_queue_full_by_topic_total;
+        full.with_label_values(&["Consensus"])
+            .set(iroha_p2p::network::subscriber_queue_full_consensus_count());
+        full.with_label_values(&["ConsensusChunk"])
+            .set(iroha_p2p::network::subscriber_queue_full_consensus_chunk_count());
+        full.with_label_values(&["Control"])
+            .set(iroha_p2p::network::subscriber_queue_full_control_count());
+        full.with_label_values(&["BlockSync"])
+            .set(iroha_p2p::network::subscriber_queue_full_block_sync_count());
+        full.with_label_values(&["TxGossip"])
+            .set(iroha_p2p::network::subscriber_queue_full_tx_gossip_count());
+        full.with_label_values(&["PeerGossip"])
+            .set(iroha_p2p::network::subscriber_queue_full_peer_gossip_count());
+        full.with_label_values(&["Health"])
+            .set(iroha_p2p::network::subscriber_queue_full_health_count());
+        full.with_label_values(&["Other"])
+            .set(iroha_p2p::network::subscriber_queue_full_other_count());
+        self.metrics
+            .p2p_subscriber_unrouted_total
+            .set(iroha_p2p::network::subscriber_unrouted_count());
+        let unrouted = &self.metrics.p2p_subscriber_unrouted_by_topic_total;
+        unrouted
+            .with_label_values(&["Consensus"])
+            .set(iroha_p2p::network::subscriber_unrouted_consensus_count());
+        unrouted
+            .with_label_values(&["ConsensusChunk"])
+            .set(iroha_p2p::network::subscriber_unrouted_consensus_chunk_count());
+        unrouted
+            .with_label_values(&["Control"])
+            .set(iroha_p2p::network::subscriber_unrouted_control_count());
+        unrouted
+            .with_label_values(&["BlockSync"])
+            .set(iroha_p2p::network::subscriber_unrouted_block_sync_count());
+        unrouted
+            .with_label_values(&["TxGossip"])
+            .set(iroha_p2p::network::subscriber_unrouted_tx_gossip_count());
+        unrouted
+            .with_label_values(&["PeerGossip"])
+            .set(iroha_p2p::network::subscriber_unrouted_peer_gossip_count());
+        unrouted
+            .with_label_values(&["Health"])
+            .set(iroha_p2p::network::subscriber_unrouted_health_count());
+        unrouted
+            .with_label_values(&["Other"])
+            .set(iroha_p2p::network::subscriber_unrouted_other_count());
         self.metrics
             .p2p_handshake_failures
             .set(iroha_p2p::peer::handshake_failure_count());
@@ -8211,6 +8379,14 @@ impl Actor {
         self.metrics
             .p2p_ws_outbound_total
             .set(iroha_p2p::network::ws_outbound_total());
+        // High/Low bounded-queue depth (network actor queues)
+        let queue_depth = &self.metrics.p2p_queue_depth;
+        queue_depth
+            .with_label_values(&["High"])
+            .set(iroha_p2p::network::network_queue_depth_high());
+        queue_depth
+            .with_label_values(&["Low"])
+            .set(iroha_p2p::network::network_queue_depth_low());
         // High/Low bounded-queue drops (network actor queues)
         let drops = &self.metrics.p2p_queue_dropped_total;
         drops
@@ -8391,8 +8567,9 @@ impl Actor {
             let curr_time = self.time_source.get_unix_time();
 
             // this will overflow in 584,942,417 years
+            let uptime = curr_time.checked_sub(timestamp).unwrap_or(Duration::ZERO);
             self.metrics.uptime_since_genesis_ms.set(
-                (curr_time - timestamp)
+                uptime
                     .as_millis()
                     .try_into()
                     .expect("Timestamp should fit into u64"),
@@ -8456,10 +8633,7 @@ impl Actor {
 }
 
 fn block_counts_as_non_empty(block: &iroha_data_model::block::SignedBlock) -> bool {
-    if block.entrypoint_hashes().count() != 0 {
-        return true;
-    }
-    block.header().is_genesis()
+    !block.is_empty() || block.header().is_genesis()
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -8792,6 +8966,39 @@ mod tests {
                 .with_label_values(&["missing"])
                 .get(),
             1
+        );
+    }
+
+    #[test]
+    fn consensus_message_handling_metric_increments() {
+        let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
+        let telemetry = Telemetry::new(metrics.clone(), true);
+
+        telemetry.note_consensus_message_handling("block_created", "dropped", "hint_mismatch");
+        telemetry.note_consensus_message_handling("block_created", "dropped", "hint_mismatch");
+
+        assert_eq!(
+            metrics
+                .sumeragi_consensus_message_handling_total
+                .with_label_values(&["block_created", "dropped", "hint_mismatch"])
+                .get(),
+            2
+        );
+    }
+
+    #[test]
+    fn block_sync_unsolicited_share_blocks_metric_increments() {
+        let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
+        let telemetry = Telemetry::new(metrics.clone(), true);
+
+        telemetry.note_block_sync_unsolicited_share_blocks_drop();
+        telemetry.note_block_sync_unsolicited_share_blocks_drop();
+
+        assert_eq!(
+            metrics
+                .sumeragi_block_sync_share_blocks_unsolicited_total
+                .get(),
+            2
         );
     }
 
@@ -11254,6 +11461,49 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "telemetry")]
+    #[test]
+    fn storage_da_metrics_updated() {
+        use std::sync::Arc;
+
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = StateTelemetry::new(metrics.clone(), true);
+
+        telemetry.inc_storage_da_cache("kura", "hit");
+        telemetry.inc_storage_da_cache("kura", "miss");
+        telemetry.add_storage_da_churn_bytes("kura", "evicted", 1024);
+        telemetry.add_storage_da_churn_bytes("kura", "rehydrated", 512);
+
+        assert_eq!(
+            metrics
+                .storage_da_cache_total
+                .with_label_values(&["kura", "hit"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .storage_da_cache_total
+                .with_label_values(&["kura", "miss"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .storage_da_churn_bytes_total
+                .with_label_values(&["kura", "evicted"])
+                .get(),
+            1024
+        );
+        assert_eq!(
+            metrics
+                .storage_da_churn_bytes_total
+                .with_label_values(&["kura", "rehydrated"])
+                .get(),
+            512
+        );
+    }
+
     #[test]
     fn state_telemetry_debug_smoke() {
         let telemetry = StateTelemetry::new(Arc::new(Metrics::default()), true);
@@ -11602,6 +11852,7 @@ mod tests {
                     capacity: nonzero!(10usize),
                     capacity_per_user: nonzero!(10usize),
                     transaction_time_to_live: Duration::from_secs(100),
+                    ..Default::default()
                 },
                 &time_source,
             ));
@@ -11750,6 +12001,7 @@ mod tests {
                 capacity: nonzero_ext::nonzero!(10usize),
                 capacity_per_user: nonzero_ext::nonzero!(10usize),
                 transaction_time_to_live: Duration::from_secs(100),
+                ..Default::default()
             },
             &time_source,
         ));
@@ -12156,6 +12408,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rbc_rebroadcast_skipped_counter_tracks_kinds() {
+        let sut = SystemUnderTest::new();
+
+        sut.telemetry.inc_rbc_rebroadcast_skipped("payload");
+        sut.telemetry.inc_rbc_rebroadcast_skipped("ready");
+
+        let metrics = sut.telemetry.metrics().await;
+        assert_eq!(
+            metrics
+                .sumeragi_rbc_rebroadcast_skipped_total
+                .with_label_values(&["payload"])
+                .get(),
+            1,
+            "payload rebroadcast skip counter should increment"
+        );
+        assert_eq!(
+            metrics
+                .sumeragi_rbc_rebroadcast_skipped_total
+                .with_label_values(&["ready"])
+                .get(),
+            1,
+            "READY rebroadcast skip counter should increment"
+        );
+    }
+
+    #[tokio::test]
     async fn commit_pipeline_tick_metrics_track_outcome() {
         let sut = SystemUnderTest::new();
         let metrics = sut.telemetry.metrics().await;
@@ -12291,6 +12569,167 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn p2p_queue_depth_metric_tracks_updates() {
+        let sut = SystemUnderTest::new();
+        iroha_p2p::network::set_network_queue_depth_for_test(true, 12);
+        iroha_p2p::network::set_network_queue_depth_for_test(false, 7);
+
+        sut.force_sync().await;
+        let metrics = sut.telemetry.metrics().await;
+        let depth = &metrics.p2p_queue_depth;
+        assert_eq!(depth.with_label_values(&["High"]).get(), 12);
+        assert_eq!(depth.with_label_values(&["Low"]).get(), 7);
+    }
+
+    #[tokio::test]
+    async fn p2p_subscriber_unrouted_metric_tracks_counter() {
+        use iroha_p2p::network::message::Topic;
+
+        let sut = SystemUnderTest::new();
+        let metrics = sut.telemetry.metrics().await;
+        let baseline = metrics.p2p_subscriber_unrouted_total.get();
+
+        iroha_p2p::network::inc_subscriber_unrouted_for_test(Topic::Consensus, 4);
+
+        sut.force_sync().await;
+        let metrics = sut.telemetry.metrics().await;
+        assert!(
+            metrics.p2p_subscriber_unrouted_total.get() >= baseline + 4,
+            "subscriber unrouted metric should track the network counter"
+        );
+    }
+
+    #[tokio::test]
+    async fn p2p_subscriber_queue_full_metric_tracks_counter() {
+        use iroha_p2p::network::message::Topic;
+
+        let sut = SystemUnderTest::new();
+        let metrics = sut.telemetry.metrics().await;
+        let baseline = metrics.p2p_subscriber_queue_full_total.get();
+
+        iroha_p2p::network::inc_subscriber_queue_full_for_test(Topic::Control, 2);
+
+        sut.force_sync().await;
+        let metrics = sut.telemetry.metrics().await;
+        assert!(
+            metrics.p2p_subscriber_queue_full_total.get() >= baseline + 2,
+            "subscriber queue-full metric should track the network counter"
+        );
+    }
+
+    #[tokio::test]
+    async fn p2p_subscriber_queue_full_by_topic_tracks_counters() {
+        use iroha_p2p::network::{inc_subscriber_queue_full_for_test as bump, message::Topic};
+
+        let sut = SystemUnderTest::new();
+        let metrics = sut.telemetry.metrics().await;
+        let by = &metrics.p2p_subscriber_queue_full_by_topic_total;
+        let mut baseline = BTreeMap::new();
+        for topic in [
+            "Consensus",
+            "ConsensusChunk",
+            "Control",
+            "BlockSync",
+            "TxGossip",
+            "PeerGossip",
+            "Health",
+            "Other",
+        ] {
+            baseline.insert(topic.to_string(), by.with_label_values(&[topic]).get());
+        }
+
+        for &topic in &[
+            Topic::Consensus,
+            Topic::ConsensusChunk,
+            Topic::Control,
+            Topic::BlockSync,
+            Topic::TxGossip,
+            Topic::PeerGossip,
+            Topic::Health,
+            Topic::Other,
+        ] {
+            bump(topic, 1);
+        }
+
+        sut.force_sync().await;
+        let metrics = sut.telemetry.metrics().await;
+        let by = &metrics.p2p_subscriber_queue_full_by_topic_total;
+        for topic in [
+            "Consensus",
+            "ConsensusChunk",
+            "Control",
+            "BlockSync",
+            "TxGossip",
+            "PeerGossip",
+            "Health",
+            "Other",
+        ] {
+            let after = by.with_label_values(&[topic]).get();
+            let before = baseline.get(topic).copied().unwrap_or(0);
+            assert!(
+                after > before,
+                "expected {topic} queue-full metric to increase"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn p2p_subscriber_unrouted_by_topic_tracks_counters() {
+        use iroha_p2p::network::{inc_subscriber_unrouted_for_test as bump, message::Topic};
+
+        let sut = SystemUnderTest::new();
+        let metrics = sut.telemetry.metrics().await;
+        let by = &metrics.p2p_subscriber_unrouted_by_topic_total;
+        let mut baseline = BTreeMap::new();
+        for topic in [
+            "Consensus",
+            "ConsensusChunk",
+            "Control",
+            "BlockSync",
+            "TxGossip",
+            "PeerGossip",
+            "Health",
+            "Other",
+        ] {
+            baseline.insert(topic.to_string(), by.with_label_values(&[topic]).get());
+        }
+
+        for &topic in &[
+            Topic::Consensus,
+            Topic::ConsensusChunk,
+            Topic::Control,
+            Topic::BlockSync,
+            Topic::TxGossip,
+            Topic::PeerGossip,
+            Topic::Health,
+            Topic::Other,
+        ] {
+            bump(topic, 1);
+        }
+
+        sut.force_sync().await;
+        let metrics = sut.telemetry.metrics().await;
+        let by = &metrics.p2p_subscriber_unrouted_by_topic_total;
+        for topic in [
+            "Consensus",
+            "ConsensusChunk",
+            "Control",
+            "BlockSync",
+            "TxGossip",
+            "PeerGossip",
+            "Health",
+            "Other",
+        ] {
+            let after = by.with_label_values(&[topic]).get();
+            let before = baseline.get(topic).copied().unwrap_or(0);
+            assert!(
+                after > before,
+                "expected {topic} unrouted metric to increase"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn p2p_overflow_label_matrix_reflects_counters() {
         use iroha_p2p::network::{inc_post_overflow_for_test as bump, message::Topic};
         let sut = SystemUnderTest::new();
@@ -12377,6 +12816,23 @@ mod tests {
 
         telemetry.clear_membership_mismatch(&peer_id);
         assert_eq!(gauge.get(), 0);
+    }
+
+    #[test]
+    fn rbc_mismatch_metrics_toggle() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = Telemetry::new(Arc::clone(&metrics), true);
+        let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_label = peer_id.to_string();
+        let kind = status::RbcMismatchKind::PayloadHash;
+
+        let counter = metrics
+            .sumeragi_rbc_mismatch_total
+            .with_label_values(&[peer_label.as_str(), kind.label()]);
+        assert_eq!(counter.get(), 0);
+
+        telemetry.inc_rbc_mismatch(&peer_id, kind);
+        assert_eq!(counter.get(), 1);
     }
 
     #[test]
@@ -12603,6 +13059,49 @@ mod tests {
                 .get(),
             1,
             "disabled telemetry must not record additional successes"
+        );
+    }
+
+    #[test]
+    fn subscription_billing_counters_respect_enablement() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = StateTelemetry::new(Arc::clone(&metrics), true);
+
+        telemetry.record_subscription_billing_attempt("usage");
+        telemetry.record_subscription_billing_outcome("usage", "paid");
+        assert_eq!(
+            metrics
+                .subscription_billing_attempts_total
+                .with_label_values(&["usage"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .subscription_billing_outcomes_total
+                .with_label_values(&["usage", "paid"])
+                .get(),
+            1
+        );
+
+        telemetry.disable();
+        telemetry.record_subscription_billing_attempt("fixed");
+        telemetry.record_subscription_billing_outcome("fixed", "failed");
+        assert_eq!(
+            metrics
+                .subscription_billing_attempts_total
+                .with_label_values(&["fixed"])
+                .get(),
+            0,
+            "disabled telemetry must not record attempts"
+        );
+        assert_eq!(
+            metrics
+                .subscription_billing_outcomes_total
+                .with_label_values(&["fixed", "failed"])
+                .get(),
+            0,
+            "disabled telemetry must not record outcomes"
         );
     }
 
@@ -12976,11 +13475,16 @@ mod tests {
     #[test]
     fn genesis_commit_time_is_zero() {
         let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1500));
-        let header = BlockBuilder::new_with_time_source(vec![], time_source.clone())
-            .chain(1, None)
-            .sign(KeyPair::random().private_key())
-            .unpack(|_| {})
-            .header();
+        let creation_time_ms =
+            u64::try_from(time_source.get_unix_time().as_millis()).unwrap_or(u64::MAX);
+        let header = BlockHeader::new(
+            std::num::NonZeroU64::new(1).expect("non-zero height"),
+            None,
+            None,
+            None,
+            creation_time_ms,
+            0,
+        );
 
         time_handle.advance(Duration::from_secs(12));
         let report = BlockCommitReport::new(&header, &time_source);
@@ -13006,6 +13510,12 @@ mod tests {
         assert!(!block_counts_as_non_empty(&block));
     }
 
+    #[test]
+    fn block_payload_detects_da_commitment_blocks() {
+        let block = block_with_da_commitments(2);
+        assert!(block_counts_as_non_empty(&block));
+    }
+
     fn empty_block(height: u64) -> iroha_data_model::block::SignedBlock {
         use std::num::NonZeroU64;
 
@@ -13024,6 +13534,55 @@ mod tests {
         let signature = BlockSignature::new(0, SignatureOf::new(signer.private_key(), &header));
 
         iroha_data_model::block::SignedBlock::presigned(signature, header, Vec::new())
+    }
+
+    fn block_with_da_commitments(height: u64) -> iroha_data_model::block::SignedBlock {
+        use std::num::NonZeroU64;
+
+        use iroha_crypto::{Hash, Signature, SignatureOf};
+        use iroha_data_model::{
+            block::{BlockHeader, BlockSignature},
+            da::{
+                commitment::{
+                    DaCommitmentBundle, DaCommitmentRecord, DaProofScheme, KzgCommitment,
+                },
+                types::{BlobDigest, RetentionPolicy, StorageTicketId},
+            },
+            nexus::LaneId,
+            sorafs::pin_registry::ManifestDigest,
+        };
+
+        let header = BlockHeader::new(
+            NonZeroU64::new(height).expect("height must be > 0"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let signer = KeyPair::random();
+        let signature = BlockSignature::new(0, SignatureOf::new(signer.private_key(), &header));
+        let mut block =
+            iroha_data_model::block::SignedBlock::presigned(signature, header, Vec::new());
+
+        let record = DaCommitmentRecord::new(
+            LaneId::new(0),
+            1,
+            1,
+            BlobDigest::new([0x11; 32]),
+            ManifestDigest::new([0x22; 32]),
+            DaProofScheme::MerkleSha256,
+            Hash::prehashed([0x33; 32]),
+            Some(KzgCommitment::new([0x44; 48])),
+            Some(Hash::prehashed([0x55; 32])),
+            RetentionPolicy::default(),
+            StorageTicketId::new([0x66; 32]),
+            Signature::from_bytes(&[0x77; 64]),
+        );
+        let bundle = DaCommitmentBundle::new(vec![record]);
+        block.set_da_commitments(Some(bundle));
+
+        block
     }
 
     fn block_with_transactions(height: u64) -> iroha_data_model::block::SignedBlock {

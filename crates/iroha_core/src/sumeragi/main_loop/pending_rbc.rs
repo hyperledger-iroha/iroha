@@ -6,6 +6,7 @@ use std::{
 };
 
 use eyre::Result;
+use iroha_data_model::peer::PeerId;
 use iroha_logger::prelude::*;
 
 use super::Actor;
@@ -16,8 +17,14 @@ use crate::sumeragi::{
 };
 
 #[derive(Debug)]
+pub(super) struct PendingRbcChunk {
+    pub(super) chunk: RbcChunk,
+    pub(super) sender: Option<PeerId>,
+}
+
+#[derive(Debug)]
 pub(super) struct PendingRbcMessages {
-    pub(super) chunks: VecDeque<RbcChunk>,
+    pub(super) chunks: VecDeque<PendingRbcChunk>,
     pub(super) ready: Vec<RbcReady>,
     pub(super) deliver: Vec<RbcDeliver>,
     pending_bytes: usize,
@@ -58,6 +65,7 @@ impl PendingRbcMessages {
         }
     }
 
+    #[allow(clippy::unused_self)]
     pub(super) fn touch(&mut self, _now: Instant) {
         // TTL is anchored to `first_seen` for pre-INIT stashes; active sessions bypass TTL.
     }
@@ -129,6 +137,7 @@ impl PendingRbcMessages {
     pub(super) fn push_chunk_capped(
         &mut self,
         chunk: RbcChunk,
+        sender: Option<PeerId>,
         max_chunks: usize,
         max_bytes: usize,
         now: Instant,
@@ -150,7 +159,7 @@ impl PendingRbcMessages {
         {
             if let Some(evicted) = self.chunks.pop_front() {
                 evicted_chunks = evicted_chunks.saturating_add(1);
-                let evicted_len = evicted.bytes.len();
+                let evicted_len = evicted.chunk.bytes.len();
                 evicted_bytes =
                     evicted_bytes.saturating_add(u64::try_from(evicted_len).unwrap_or(u64::MAX));
                 self.pending_bytes = self.pending_bytes.saturating_sub(evicted_len);
@@ -174,7 +183,7 @@ impl PendingRbcMessages {
 
         self.touch(now);
         self.pending_bytes = self.pending_bytes.saturating_add(chunk_len);
-        self.chunks.push_back(chunk);
+        self.chunks.push_back(PendingRbcChunk { chunk, sender });
         PendingChunkOutcome::Inserted {
             pending_chunks: self.chunks.len(),
             pending_bytes: self.pending_bytes,
@@ -294,7 +303,7 @@ impl Actor {
             let oldest = pending
                 .iter()
                 .filter(|(session_key, _)| {
-                    active_sessions.map_or(true, |sessions| !sessions.contains_key(session_key))
+                    active_sessions.is_none_or(|sessions| !sessions.contains_key(session_key))
                 })
                 .min_by_key(|(_, entry)| entry.first_seen())
                 .map(|(session_key, _)| *session_key);
@@ -377,6 +386,11 @@ impl Actor {
                     eviction.reason,
                     &eviction.removed,
                 );
+                self.request_missing_block_after_rbc_drop(
+                    eviction.key,
+                    eviction.reason,
+                    "pending_rbc_eviction",
+                );
             }
             self.publish_rbc_backlog_snapshot();
         }
@@ -407,8 +421,8 @@ impl Actor {
             return Ok(());
         };
 
-        for chunk in pending.chunks {
-            self.handle_rbc_chunk(chunk)?;
+        for entry in pending.chunks {
+            self.handle_rbc_chunk(entry.chunk, entry.sender)?;
         }
         for ready in pending.ready {
             self.handle_rbc_ready(ready)?;
@@ -450,6 +464,38 @@ impl Actor {
         }
     }
 }
+
+pub(super) fn rbc_ready_stash_bytes(ready: &RbcReady) -> usize {
+    ready
+        .signature
+        .len()
+        .saturating_add(ready.roster_hash.as_ref().len())
+        .saturating_add(ready.chunk_root.as_ref().len())
+        .saturating_add(ready.block_hash.as_ref().as_ref().len())
+        .saturating_add(std::mem::size_of::<u64>() * 3)
+        .saturating_add(std::mem::size_of::<u32>())
+}
+
+pub(super) fn rbc_deliver_stash_bytes(deliver: &RbcDeliver) -> usize {
+    let ready_bytes = deliver
+        .ready_signatures
+        .iter()
+        .map(|entry| std::mem::size_of::<u32>().saturating_add(entry.signature.len()))
+        .sum::<usize>();
+    deliver
+        .signature
+        .len()
+        .saturating_add(ready_bytes)
+        .saturating_add(deliver.roster_hash.as_ref().len())
+        .saturating_add(deliver.chunk_root.as_ref().len())
+        .saturating_add(deliver.block_hash.as_ref().as_ref().len())
+        .saturating_add(std::mem::size_of::<u64>() * 3)
+        .saturating_add(std::mem::size_of::<u32>())
+}
+
+/// Hard cap on how many pending RBC stashes we buffer; active-session stashes are retained,
+/// and new sessions are rejected once the cap is reached.
+pub(super) const PENDING_RBC_STASH_LIMIT: usize = 256;
 
 #[cfg(test)]
 mod tests {
@@ -534,29 +580,3 @@ mod tests {
         assert!(pending.contains_key(&key_b));
     }
 }
-
-pub(super) fn rbc_ready_stash_bytes(ready: &RbcReady) -> usize {
-    ready
-        .signature
-        .len()
-        .saturating_add(ready.roster_hash.as_ref().len())
-        .saturating_add(ready.chunk_root.as_ref().len())
-        .saturating_add(ready.block_hash.as_ref().as_ref().len())
-        .saturating_add(std::mem::size_of::<u64>() * 3)
-        .saturating_add(std::mem::size_of::<u32>())
-}
-
-pub(super) fn rbc_deliver_stash_bytes(deliver: &RbcDeliver) -> usize {
-    deliver
-        .signature
-        .len()
-        .saturating_add(deliver.roster_hash.as_ref().len())
-        .saturating_add(deliver.chunk_root.as_ref().len())
-        .saturating_add(deliver.block_hash.as_ref().as_ref().len())
-        .saturating_add(std::mem::size_of::<u64>() * 3)
-        .saturating_add(std::mem::size_of::<u32>())
-}
-
-/// Hard cap on how many pending RBC stashes we buffer; active-session stashes are retained,
-/// and new sessions are rejected once the cap is reached.
-pub(super) const PENDING_RBC_STASH_LIMIT: usize = 256;

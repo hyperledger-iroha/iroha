@@ -8,6 +8,7 @@ import base64
 import hashlib
 import json
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Set, TextIO, Union
@@ -31,7 +32,17 @@ def iroha_hash(data: bytes) -> str:
     return digest.hex()
 
 
-def load_payload_fixtures(path: Path) -> Dict[str, str]:
+@dataclass(frozen=True)
+class PayloadFixture:
+    encoded: str
+    chain: str
+    authority: str
+    creation_time_ms: int
+    time_to_live_ms: Optional[int]
+    nonce: Optional[int]
+
+
+def load_payload_fixtures(path: Path) -> Dict[str, PayloadFixture]:
     try:
         payloads = json.loads(path.read_text())
     except json.JSONDecodeError as exc:
@@ -40,7 +51,7 @@ def load_payload_fixtures(path: Path) -> Dict[str, str]:
     if not isinstance(payloads, list):
         raise ValueError(f"fixtures JSON at {path} must be a list")
 
-    mapping: Dict[str, str] = {}
+    mapping: Dict[str, PayloadFixture] = {}
     for entry in payloads:
         if not isinstance(entry, dict):
             raise ValueError(f"fixture entry in {path} is not an object")
@@ -49,7 +60,47 @@ def load_payload_fixtures(path: Path) -> Dict[str, str]:
         if not isinstance(name, str):
             raise ValueError(f"fixture entry in {path} missing name string: {entry!r}")
         if isinstance(encoded, str):
-            mapping[name] = encoded
+            chain = entry.get("chain")
+            authority = entry.get("authority")
+            creation_time_ms = entry.get("creation_time_ms")
+            if "time_to_live_ms" not in entry:
+                raise ValueError(
+                    f"fixture entry {name} in {path} missing time_to_live_ms field"
+                )
+            if "nonce" not in entry:
+                raise ValueError(
+                    f"fixture entry {name} in {path} missing nonce field"
+                )
+            time_to_live_ms = entry.get("time_to_live_ms")
+            nonce = entry.get("nonce")
+            if not isinstance(chain, str) or not chain.strip():
+                raise ValueError(
+                    f"fixture entry {name} in {path} missing chain string"
+                )
+            if not isinstance(authority, str) or not authority.strip():
+                raise ValueError(
+                    f"fixture entry {name} in {path} missing authority string"
+                )
+            if not isinstance(creation_time_ms, int) or isinstance(creation_time_ms, bool):
+                raise ValueError(
+                    f"fixture entry {name} in {path} missing creation_time_ms integer"
+                )
+            if time_to_live_ms is not None and (
+                not isinstance(time_to_live_ms, int) or isinstance(time_to_live_ms, bool)
+            ):
+                raise ValueError(
+                    f"fixture entry {name} in {path} has invalid time_to_live_ms"
+                )
+            if nonce is not None and (not isinstance(nonce, int) or isinstance(nonce, bool)):
+                raise ValueError(f"fixture entry {name} in {path} has invalid nonce")
+            mapping[name] = PayloadFixture(
+                encoded=encoded,
+                chain=chain,
+                authority=authority,
+                creation_time_ms=creation_time_ms,
+                time_to_live_ms=time_to_live_ms,
+                nonce=nonce,
+            )
             continue
         # Some fixtures intentionally embed raw payload JSON for doc/test coverage.
         # Skip them because they do not participate in the canonical manifest.
@@ -69,7 +120,7 @@ def load_manifest(path: Path) -> Dict[str, object]:
 def compare(
     resources_dir: Path,
     manifest: Dict[str, object],
-    payload_map: Dict[str, str],
+    payload_map: Dict[str, PayloadFixture],
 ) -> List[str]:
     errors: List[str] = []
 
@@ -94,12 +145,46 @@ def compare(
         signed_base64 = entry.get("signed_base64")
         signed_hash = entry.get("signed_hash")
         signed_len = entry.get("signed_len")
+        chain = entry.get("chain")
+        authority = entry.get("authority")
+        creation_time_ms = entry.get("creation_time_ms")
+        if "time_to_live_ms" not in entry:
+            errors.append(f"manifest fixture missing time_to_live_ms field: {entry}")
+            continue
+        if "nonce" not in entry:
+            errors.append(f"manifest fixture missing nonce field: {entry}")
+            continue
+        time_to_live_ms = entry.get("time_to_live_ms")
+        nonce = entry.get("nonce")
 
-        if not all(isinstance(v, str) for v in (name, encoded_file, payload_base64, payload_hash, signed_base64, signed_hash)):
+        if not all(
+            isinstance(v, str)
+            for v in (
+                name,
+                encoded_file,
+                payload_base64,
+                payload_hash,
+                signed_base64,
+                signed_hash,
+                chain,
+                authority,
+            )
+        ):
             errors.append(f"manifest fixture missing required string fields: {entry}")
             continue
         if not isinstance(encoded_len, int) or not isinstance(signed_len, int):
             errors.append(f"manifest fixture missing encoded_len/signed_len integers: {entry}")
+            continue
+        if not isinstance(creation_time_ms, int) or isinstance(creation_time_ms, bool):
+            errors.append(f"manifest fixture missing creation_time_ms integer: {entry}")
+            continue
+        if time_to_live_ms is not None and (
+            not isinstance(time_to_live_ms, int) or isinstance(time_to_live_ms, bool)
+        ):
+            errors.append(f"manifest fixture has invalid time_to_live_ms: {entry}")
+            continue
+        if nonce is not None and (not isinstance(nonce, int) or isinstance(nonce, bool)):
+            errors.append(f"manifest fixture has invalid nonce: {entry}")
             continue
 
         seen_names.add(name)
@@ -115,8 +200,36 @@ def compare(
         payload_entry = payload_map.get(name)
         if payload_entry is None:
             errors.append(f"fixtures JSON missing entry for {name}")
-        elif payload_entry != payload_base64:
-            errors.append(f"payload JSON for {name} does not match manifest payload_base64")
+        else:
+            if payload_entry.encoded != payload_base64:
+                errors.append(
+                    f"payload JSON for {name} does not match manifest payload_base64"
+                )
+            if payload_entry.chain != chain:
+                errors.append(
+                    f"payload JSON chain mismatch for {name}: "
+                    f"payloads={payload_entry.chain} manifest={chain}"
+                )
+            if payload_entry.authority != authority:
+                errors.append(
+                    f"payload JSON authority mismatch for {name}: "
+                    f"payloads={payload_entry.authority} manifest={authority}"
+                )
+            if payload_entry.creation_time_ms != creation_time_ms:
+                errors.append(
+                    f"payload JSON creation_time_ms mismatch for {name}: "
+                    f"payloads={payload_entry.creation_time_ms} manifest={creation_time_ms}"
+                )
+            if payload_entry.time_to_live_ms != time_to_live_ms:
+                errors.append(
+                    f"payload JSON time_to_live_ms mismatch for {name}: "
+                    f"payloads={payload_entry.time_to_live_ms} manifest={time_to_live_ms}"
+                )
+            if payload_entry.nonce != nonce:
+                errors.append(
+                    f"payload JSON nonce mismatch for {name}: "
+                    f"payloads={payload_entry.nonce} manifest={nonce}"
+                )
 
         fixture_path = resources_dir / encoded_file
         if not fixture_path.exists():
@@ -260,7 +373,7 @@ def build_summary_payload(
     pipeline_metadata: Optional[dict],
     pipeline_source: Optional[str],
     manifest: Optional[dict],
-    payload_map: Dict[str, str],
+    payload_map: Dict[str, PayloadFixture],
 ) -> dict:
     timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     payload: Dict[str, object] = {
@@ -320,7 +433,7 @@ def build_artifact_metadata(
     fixtures_path: Path,
     manifest_path: Path,
     manifest: Optional[dict],
-    payload_map: Dict[str, str],
+    payload_map: Dict[str, PayloadFixture],
 ) -> Dict[str, object]:
     encoded_files = sorted(resources_dir.glob("*.norito"))
     manifest_fixtures = manifest.get("fixtures") if isinstance(manifest, dict) else None
@@ -331,9 +444,9 @@ def build_artifact_metadata(
           "fixture_count": len(manifest_fixtures) if isinstance(manifest_fixtures, list) else 0,
         },
         "payloads": {
-          "path": str(fixtures_path),
-          "sha256": sha256_file(fixtures_path),
-          "entry_count": len(payload_map),
+            "path": str(fixtures_path),
+            "sha256": sha256_file(fixtures_path),
+            "entry_count": len(payload_map),
         },
         "encoded": {
           "dir": str(resources_dir),

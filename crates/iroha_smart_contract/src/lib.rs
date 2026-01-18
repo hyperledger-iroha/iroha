@@ -352,16 +352,15 @@ mod tests {
         });
         // Encode response using Norito core with explicit flags to match
         // the adaptive bare decode expectations (packed-struct + compact-len
-        // with field bitset and varint-coded offsets).
+        // with field bitset and fixed-width offsets).
         let mut body = Vec::new();
         {
             use norito::core::{DecodeFlagsGuard, NoritoSerialize as _, header_flags};
             let mut flags: u8 = 0;
-            // Prefer hybrid packed-struct layout with compact lengths and varint offsets.
+            // Prefer hybrid packed-struct layout with compact lengths.
             flags |= header_flags::PACKED_STRUCT;
             flags |= header_flags::COMPACT_LEN;
             flags |= header_flags::FIELD_BITSET;
-            flags |= header_flags::VARINT_OFFSETS;
             let _guard = DecodeFlagsGuard::enter(flags);
             response.serialize(&mut body).expect("encode resp");
         }

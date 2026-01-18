@@ -586,6 +586,7 @@ impl JdgAttestationGuard {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     fn verify_signatures(
         attestation: &JdgAttestation,
         committee: &JdgCommitteeRecord,
@@ -867,17 +868,17 @@ pub enum JdgCommitteeError {
         committee_id: JdgCommitteeId,
         /// Member index.
         index: usize,
-        /// Algorithm requiring PoP.
+        /// Algorithm requiring `PoP`.
         algorithm: Algorithm,
     },
-    /// BLS member PoP failed verification.
+    /// BLS member `PoP` failed verification.
     #[error("committee {committee_id:?} member {index} invalid PoP for {algorithm:?}")]
     InvalidMemberPop {
         /// Committee identifier.
         committee_id: JdgCommitteeId,
         /// Member index.
         index: usize,
-        /// Algorithm requiring PoP.
+        /// Algorithm requiring `PoP`.
         algorithm: Algorithm,
     },
     /// Activation/retire window is invalid.

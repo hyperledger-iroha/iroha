@@ -179,10 +179,7 @@ fn streaming_verifier_enforces_chunk_size_limit() {
         .expect("write car");
     let manifest = build_manifest(&plan, &stats);
 
-    let config = StreamingVerifierConfig {
-        max_chunk_size: 1,
-        ..StreamingVerifierConfig::default()
-    };
+    let config = StreamingVerifierConfig { max_chunk_size: 1 };
     let mut verifier = StreamingCarVerifier::new(manifest, config);
     let result = verifier.update(&car_bytes);
     assert!(matches!(

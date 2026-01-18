@@ -219,6 +219,7 @@ The resolver also surfaces retry profiles that mirror the Torii roadmap:
 - `pipeline` — used for `/v1/pipeline/transactions` + `/v1/pipeline/transactions/status`. POST
   submissions are safe to retry because the payload hash deduplicates requests, so the profile adds
   `POST` to the allowed methods, lowers the initial backoff to 250 ms, and raises the attempt cap to 5.
+  A `404` from the status endpoint is treated as pending, so pollers keep waiting after Torii restarts.
 - `streaming` — used for SSE endpoints (`/v1/events/sse`, `/v1/sumeragi/status/sse`,
   `/v1/kaigi/relays/events`). It prefers longer retry windows so event feeds reconnect automatically.
 

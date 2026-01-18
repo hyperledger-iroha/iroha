@@ -1,7 +1,4 @@
 //! PQC (Dilithium3) deterministic batch verification tests.
-//! Requires `--features ml-dsa`.
-
-#![cfg(feature = "ml-dsa")]
 
 use iroha_crypto::{Algorithm, KeyPair, pqc_verify_batch_deterministic};
 use pqcrypto_dilithium::dilithium3 as dilithium;

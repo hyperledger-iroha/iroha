@@ -12,9 +12,10 @@ exposing composable adapters that describe how values should be encoded.
   to serialize a particular shape. The module ships factory helpers such as
   `u64()`, `i64()`, `string()`, `option(inner)`, `seq(inner)`,
   `map_adapter(key, value)`, `StructAdapter([...])`, and `tuple_adapter(...)`.
-- **Flags** – the codec honours `PACKED_SEQ`, `COMPACT_LEN`, `VARINT_OFFSETS`,
-  `PACKED_STRUCT`, and `FIELD_BITSET`. By default all optional optimisations are disabled
-  (so `norito.DEFAULT_FLAGS` is `0`), matching the canonical Rust layout policy.
+- **Flags** – the codec honours `PACKED_SEQ`, `COMPACT_LEN`, `PACKED_STRUCT`,
+  and `FIELD_BITSET`. By default all optional optimisations are disabled (so
+  `norito.DEFAULT_FLAGS` is `0`), matching the canonical Rust layout policy; reserved
+  layout bits are rejected during decode.
 - **Header version** – v1 fixes the minor byte to `0x00`; decoders reject minor
   mismatches and unknown flag bits. Non-zero header flags are allowed only when
   explicitly set and within the supported mask.

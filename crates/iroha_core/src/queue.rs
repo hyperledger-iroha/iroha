@@ -16,8 +16,9 @@ use std::{
     ops::Deref,
     str::FromStr,
     sync::{
-        Arc, LazyLock,
+        Arc, LazyLock, OnceLock,
         atomic::{AtomicU64, AtomicUsize, Ordering},
+        mpsc,
     },
 };
 
@@ -111,17 +112,16 @@ impl QueueLimits {
     /// Build limits using values from the runtime Nexus configuration.
     #[must_use]
     pub fn from_nexus(nexus: &Nexus) -> Self {
-        if !nexus.enabled {
-            return Self::default();
-        }
         let fallback = LaneSchedulingLimits::new(
             u64::from(nexus.fusion.exit_teu),
             u64::from(nexus.da.rotation.window_slots.get()),
         );
         let mut per_lane = BTreeMap::new();
-        for lane in nexus.lane_catalog.lanes() {
-            let limits = Self::lane_limits_from_metadata(lane, fallback);
-            per_lane.insert(lane.id, limits);
+        if nexus.enabled {
+            for lane in nexus.lane_catalog.lanes() {
+                let limits = Self::lane_limits_from_metadata(lane, fallback);
+                per_lane.insert(lane.id, limits);
+            }
         }
         Self { fallback, per_lane }
     }
@@ -231,10 +231,16 @@ pub struct Queue {
     time_source: TimeSource,
     /// Length of time after which transactions are dropped.
     pub tx_time_to_live: Duration,
+    /// Minimum interval between expired-transaction sweeps.
+    expired_cull_interval: Duration,
+    /// Last time (unix ms) we swept expired transactions.
+    last_expired_cull_ms: AtomicU64,
     /// Queue to gossip transactions
     tx_gossip: ArrayQueue<SignedTxHash>,
     /// Broadcast queue load so producers can observe backpressure.
     backpressure_tx: watch::Sender<BackpressureState>,
+    /// Optional wake handle for the Sumeragi worker when new transactions are enqueued.
+    sumeragi_wake: OnceLock<mpsc::SyncSender<()>>,
     /// Limits derived from Nexus configuration (TEU capacity, starvation bounds).
     nexus_limits: RwLock<QueueLimits>,
     /// Cached TEU metadata for queued transactions keyed by hash.
@@ -260,6 +266,7 @@ impl fmt::Debug for Queue {
             .field("capacity", &self.capacity)
             .field("capacity_per_user", &self.capacity_per_user)
             .field("tx_time_to_live", &self.tx_time_to_live)
+            .field("expired_cull_interval", &self.expired_cull_interval)
             .finish_non_exhaustive()
     }
 }
@@ -270,14 +277,14 @@ impl fmt::Debug for Queue {
 pub enum BackpressureState {
     /// Queue has room for new transactions.
     Healthy {
-        /// Number of transactions currently in the queue when the snapshot was taken.
+        /// Number of transactions tracked by the queue (queued + in-flight).
         queued: usize,
         /// Maximum queue capacity configured for the peer.
         capacity: NonZeroUsize,
     },
     /// Queue reached capacity; callers should defer submissions.
     Saturated {
-        /// Number of transactions observed when saturation triggered.
+        /// Number of transactions tracked by the queue when saturation triggered.
         queued: usize,
         /// Maximum queue capacity configured for the peer.
         capacity: NonZeroUsize,
@@ -292,7 +299,7 @@ impl BackpressureState {
     }
 
     #[must_use]
-    /// Number of transactions recorded in the snapshot.
+    /// Number of transactions tracked by the queue in the snapshot.
     pub const fn queued(self) -> usize {
         match self {
             Self::Healthy { queued, .. } | Self::Saturated { queued, .. } => queued,
@@ -1139,6 +1146,7 @@ impl Queue {
             capacity,
             capacity_per_user,
             transaction_time_to_live,
+            expired_cull_interval,
         }: Config,
         events_sender: EventsSender,
         router: Arc<dyn LaneRouter>,
@@ -1150,6 +1158,7 @@ impl Queue {
                 capacity,
                 capacity_per_user,
                 transaction_time_to_live,
+                expired_cull_interval,
             },
             events_sender,
             router,
@@ -1166,6 +1175,7 @@ impl Queue {
             capacity,
             capacity_per_user,
             transaction_time_to_live,
+            expired_cull_interval,
         }: Config,
         events_sender: EventsSender,
         router: Arc<dyn LaneRouter>,
@@ -1179,6 +1189,7 @@ impl Queue {
                 capacity,
                 capacity_per_user,
                 transaction_time_to_live,
+                expired_cull_interval,
             },
             events_sender,
             router,
@@ -1195,6 +1206,7 @@ impl Queue {
             capacity,
             capacity_per_user,
             transaction_time_to_live,
+            expired_cull_interval,
         }: Config,
         events_sender: EventsSender,
         router: Arc<dyn LaneRouter>,
@@ -1226,8 +1238,11 @@ impl Queue {
                 capacity_per_user,
                 time_source: TimeSource::new_system(),
                 tx_time_to_live: transaction_time_to_live,
+                expired_cull_interval,
+                last_expired_cull_ms: AtomicU64::new(0),
                 tx_gossip: ArrayQueue::new(capacity.get()),
                 backpressure_tx,
+                sumeragi_wake: OnceLock::new(),
                 nexus_limits: RwLock::new(limits),
                 #[cfg(feature = "telemetry")]
                 tx_teu: DashMap::new(),
@@ -1265,6 +1280,16 @@ impl Queue {
         }
         queue.publish_backpressure_state(0, None);
         queue
+    }
+
+    pub(crate) fn set_sumeragi_wake(&self, wake: mpsc::SyncSender<()>) {
+        let _ = self.sumeragi_wake.set(wake);
+    }
+
+    fn wake_sumeragi(&self) {
+        if let Some(wake) = self.sumeragi_wake.get() {
+            let _ = wake.try_send(());
+        }
     }
 
     fn is_pending(&self, tx: &CheckedTransaction<'static>, state_view: &StateView) -> bool {
@@ -1331,6 +1356,15 @@ impl Queue {
             }
         }
         batch
+    }
+
+    /// Resolve routing for an inbound gossip transaction using the active router.
+    pub(crate) fn route_for_gossip(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+        state_view: &StateView<'_>,
+    ) -> RoutingDecision {
+        self.router.read().route(tx, state_view)
     }
 
     /// Return transactions back to the gossip backlog by their hashes.
@@ -1682,26 +1716,30 @@ impl Queue {
         routing_ledger::record(hash, routing_decision);
         // Drop the local holder before attempting to unwrap on push failure.
         drop(tx_arc);
-        self.tx_hashes.push(hash).map_err(|err_hash| {
+        let mut pushed = self.tx_hashes.push(hash).is_ok();
+        if !pushed {
+            let compacted = self.compact_hash_queue_locked();
+            if compacted > 0 {
+                pushed = self.tx_hashes.push(hash).is_ok();
+            }
+        }
+        if !pushed {
             warn!("Queue is full");
-            let (_, err_tx) = self
-                .txs
-                .remove(&err_hash)
-                .expect("Inserted just before match");
-            if let Some((_, decision)) = self.routing_decisions.remove(&err_hash) {
-                routing_ledger::discard_if_matches(&err_hash, decision);
+            let (_, err_tx) = self.txs.remove(&hash).expect("Inserted just before match");
+            if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
+                routing_ledger::discard_if_matches(&hash, decision);
             }
             self.decrease_per_user_tx_count(err_tx.as_ref().as_ref().authority());
             self.publish_backpressure_state(self.capacity.get(), backpressure_telemetry);
-            Failure {
+            return Err(Failure {
                 tx: Box::new(
                     Arc::try_unwrap(err_tx)
                         .unwrap_or_else(|_| panic!("no other Arc holders during push failure"))
                         .into_accepted(),
                 ),
                 err: Error::Full,
-            }
-        })?;
+            });
+        }
         #[cfg(feature = "telemetry")]
         self.record_teu_enqueue(
             hash,
@@ -1719,7 +1757,7 @@ impl Queue {
             queued = self.tx_hashes.len(),
             "transaction enqueued"
         );
-        self.publish_backpressure_state(self.tx_hashes.len(), backpressure_telemetry);
+        self.publish_backpressure_state(self.active_len(), backpressure_telemetry);
         if let Err(err_hash) = self.tx_gossip.push(hash) {
             warn!(
                 lane_id = %lane_id,
@@ -1744,6 +1782,7 @@ impl Queue {
             len = self.tx_hashes.len(),
             "Transaction queue length"
         );
+        self.wake_sumeragi();
         Ok(routing_decision)
     }
 
@@ -1801,22 +1840,21 @@ impl Queue {
         #[cfg(not(feature = "telemetry"))]
         let backpressure_telemetry: Option<&StateTelemetry> = None;
         loop {
-            let hash = match self.tx_hashes.pop() {
-                Some(hash) => hash,
-                None => {
-                    if self.resync_hash_queue_if_needed(state_view) {
-                        continue;
-                    }
-                    return None;
+            let hash = if let Some(hash) = self.tx_hashes.pop() {
+                hash
+            } else {
+                if self.resync_hash_queue_if_needed(state_view) {
+                    continue;
                 }
+                return None;
             };
             if self.removed_hashes.remove(&hash).is_some() {
                 continue;
             }
 
-            let entry = match self.txs.entry(hash) {
-                Entry::Occupied(entry) => entry,
-                Entry::Vacant(_) => {
+            let tx_arc = match self.txs.get(&hash) {
+                Some(entry) => Arc::clone(entry.value()),
+                None => {
                     #[cfg(test)]
                     self.vacant_entry_warnings.fetch_add(1, Ordering::Relaxed);
                     warn!("Looks like we're experiencing a high load");
@@ -1824,18 +1862,16 @@ impl Queue {
                 }
             };
 
-            let tx_arc;
-            {
-                let tx_ref = entry.get();
-                if let Err(e) = self.check_tx(tx_ref.as_ref(), state_view) {
-                    iroha_logger::warn!(
-                        tx = %hash,
-                        ?e,
-                        "dropping transaction during queue pop (check_tx)"
-                    );
-                    let _ = tx_ref;
-                    iroha_logger::trace!(?hash, ?e, "dropping transaction during queue pop");
-                    let (_, removed_tx) = entry.remove_entry();
+            if let Err(e) = self.check_tx(tx_arc.as_ref(), state_view) {
+                iroha_logger::warn!(
+                    tx = %hash,
+                    ?e,
+                    "dropping transaction during queue pop (check_tx)"
+                );
+                iroha_logger::trace!(?hash, ?e, "dropping transaction during queue pop");
+                // Drop the cloned arc before removing to keep expiration recovery effective.
+                drop(tx_arc);
+                if let Some((_, removed_tx)) = self.txs.remove(&hash) {
                     self.decrease_per_user_tx_count(removed_tx.as_ref().as_ref().authority());
                     if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
                         routing_ledger::discard_if_matches(&hash, decision);
@@ -1850,9 +1886,8 @@ impl Queue {
                     {
                         expired_transactions.push(tx.into_accepted());
                     }
-                    continue;
                 }
-                tx_arc = Arc::clone(tx_ref);
+                continue;
             }
 
             let routing = self
@@ -1872,14 +1907,14 @@ impl Queue {
                 #[cfg(feature = "telemetry")]
                 telemetry: Some(telemetry_clone),
             };
-            self.publish_backpressure_state(self.tx_hashes.len(), backpressure_telemetry);
+            self.publish_backpressure_state(self.active_len(), backpressure_telemetry);
             return Some(guard);
         }
     }
 
     /// Rebuild the hash queue when it is empty but transactions remain in the map.
     /// Skip resync if there are in-flight guards to avoid re-enqueuing active selections.
-    fn resync_hash_queue_if_needed(&self, _state_view: &StateView) -> bool {
+    fn resync_hash_queue_if_needed(&self, state_view: &StateView) -> bool {
         if !self.tx_hashes.is_empty() || self.txs.is_empty() {
             return false;
         }
@@ -1887,9 +1922,11 @@ impl Queue {
             return false;
         }
         #[cfg(feature = "telemetry")]
-        let backpressure_telemetry: Option<&StateTelemetry> = Some(_state_view.telemetry);
+        let backpressure_telemetry: Option<&StateTelemetry> = Some(state_view.telemetry);
         #[cfg(not(feature = "telemetry"))]
         let backpressure_telemetry: Option<&StateTelemetry> = None;
+        #[cfg(not(feature = "telemetry"))]
+        let _ = state_view;
 
         let _guard = self.push_remove_lock.lock();
         if !self.tx_hashes.is_empty() || self.txs.is_empty() {
@@ -1916,7 +1953,8 @@ impl Queue {
         }
 
         if inserted > 0 {
-            self.publish_backpressure_state(self.tx_hashes.len(), backpressure_telemetry);
+            self.removed_hashes.clear();
+            self.publish_backpressure_state(self.active_len(), backpressure_telemetry);
             warn!(
                 queued = self.tx_hashes.len(),
                 total, "queue hash index was empty; rebuilt from queued transactions"
@@ -1927,9 +1965,30 @@ impl Queue {
         false
     }
 
-    /// Return the number of transactions in the queue.
-    pub fn tx_len(&self) -> usize {
-        self.tx_hashes.len()
+    /// Return the number of transactions tracked by the queue (queued + in-flight).
+    pub fn active_len(&self) -> usize {
+        self.txs.len()
+    }
+
+    /// Return the number of transactions still awaiting selection from the queue.
+    pub fn queued_len(&self) -> usize {
+        let queued = self.tx_hashes.len();
+        queued.saturating_sub(self.removed_hashes.len())
+    }
+
+    /// Remove expired transactions if the configured sweep interval has elapsed.
+    pub(crate) fn cull_expired_entries_if_due(&self, state_view: &StateView) -> usize {
+        let interval_ms = Self::duration_to_millis(self.expired_cull_interval);
+        if interval_ms == 0 {
+            return 0;
+        }
+        let now_ms = Self::duration_to_millis(self.time_source.now());
+        let last_ms = self.last_expired_cull_ms.load(Ordering::Relaxed);
+        if now_ms.saturating_sub(last_ms) < interval_ms {
+            return 0;
+        }
+        self.last_expired_cull_ms.store(now_ms, Ordering::Relaxed);
+        self.cull_expired_entries(state_view)
     }
 
     /// Gets transactions till they fill whole block or till the end of queue.
@@ -2000,7 +2059,7 @@ impl Queue {
         // and some expired transactions remain only in the `txs` map, cull them now so
         // that expiration events are not missed, preventing tests from hanging on recv().
         if transactions.is_empty() {
-            self.cull_expired_entries(state_view);
+            let _ = self.cull_expired_entries(state_view);
         }
     }
 
@@ -2076,9 +2135,13 @@ impl Queue {
         deferred
     }
 
+    fn duration_to_millis(duration: Duration) -> u64 {
+        u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+    }
+
     /// Remove any entries from `txs` that have expired or were already committed,
     /// emitting expiration events for TTL-elapsed transactions.
-    fn cull_expired_entries(&self, state_view: &StateView) {
+    fn cull_expired_entries(&self, state_view: &StateView) -> usize {
         #[cfg(feature = "telemetry")]
         let backpressure_telemetry: Option<&StateTelemetry> = Some(state_view.telemetry);
         #[cfg(not(feature = "telemetry"))]
@@ -2091,9 +2154,10 @@ impl Queue {
             }
         }
         if to_remove.is_empty() {
-            return;
+            return 0;
         }
         let _guard = self.push_remove_lock.lock();
+        let mut removed = 0usize;
         for hash in to_remove {
             if let Some((_, tx_arc)) = self.txs.remove(&hash) {
                 let routing = self
@@ -2121,9 +2185,44 @@ impl Queue {
                         );
                     }
                 }
+                removed = removed.saturating_add(1);
             }
         }
-        self.publish_backpressure_state(self.tx_hashes.len(), backpressure_telemetry);
+        if removed > 0 && !self.removed_hashes.is_empty() && !self.tx_hashes.is_empty() {
+            let _ = self.compact_hash_queue_locked();
+        }
+        if removed > 0 {
+            self.publish_backpressure_state(self.active_len(), backpressure_telemetry);
+        }
+        removed
+    }
+
+    /// Rebuild the hash queue, dropping entries that are no longer tracked in `txs`.
+    ///
+    /// Caller must hold `push_remove_lock` to exclude concurrent enqueue operations.
+    fn compact_hash_queue_locked(&self) -> usize {
+        let mut retained = Vec::with_capacity(self.txs.len());
+        let mut dropped = 0usize;
+        while let Some(hash) = self.tx_hashes.pop() {
+            self.removed_hashes.remove(&hash);
+            if self.txs.contains_key(&hash) {
+                retained.push(hash);
+            } else {
+                dropped = dropped.saturating_add(1);
+            }
+        }
+        for hash in retained {
+            if self.tx_hashes.push(hash).is_err() {
+                warn!(
+                    queued = self.tx_hashes.len(),
+                    tracked = self.txs.len(),
+                    "queue hash compaction reached capacity before re-enqueuing all transactions"
+                );
+                break;
+            }
+        }
+        self.removed_hashes.clear();
+        dropped
     }
 
     /// Overview:
@@ -2148,16 +2247,16 @@ impl Queue {
                 .remove(&hash)
                 .map(|(_, decision)| decision);
             self.decrease_per_user_tx_count(tx.as_ref().authority());
-            // Transaction has already been popped from `tx_hashes`, so no
-            // removal guard is required. Ensure no stale marker remains.
-            self.removed_hashes.remove(&hash);
             if let Some(decision) = decision {
                 routing_ledger::record(hash, decision);
             }
         }
+        // Transaction guards always represent popped hashes; clear any stale marker even if
+        // the entry was culled while the guard was in-flight.
+        self.removed_hashes.remove(&hash);
         #[cfg(feature = "telemetry")]
         self.record_teu_dequeue(&hash, telemetry);
-        self.publish_backpressure_state(self.tx_hashes.len(), telemetry);
+        self.publish_backpressure_state(self.active_len(), telemetry);
     }
 
     /// Check that the user adhered to the maximum transaction per user limit and increment their transaction count.
@@ -2635,7 +2734,10 @@ pub mod tests {
                     capacity_per_user: cfg.capacity_per_user,
                     time_source: time_source.clone(),
                     tx_time_to_live: cfg.transaction_time_to_live,
+                    expired_cull_interval: cfg.expired_cull_interval,
+                    last_expired_cull_ms: AtomicU64::new(0),
                     backpressure_tx,
+                    sumeragi_wake: OnceLock::new(),
                     nexus_limits: parking_lot::RwLock::new(QueueLimits::default()),
                     #[cfg(feature = "telemetry")]
                     tx_teu: DashMap::new(),
@@ -2698,6 +2800,21 @@ pub mod tests {
     }
 
     #[test]
+    fn queue_limits_use_configured_fusion_teu_when_nexus_disabled() {
+        let mut nexus = Nexus::default();
+        nexus.enabled = false;
+        nexus.fusion.exit_teu = 120_000;
+
+        let limits = QueueLimits::from_nexus(&nexus);
+
+        assert_eq!(limits.fallback.teu_capacity, 120_000);
+        assert!(
+            limits.per_lane.is_empty(),
+            "disabled nexus should not apply lane overrides"
+        );
+    }
+
+    #[test]
     fn apply_lane_lifecycle_reconfigures_router_and_limits() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -2726,6 +2843,7 @@ pub mod tests {
                 transaction_time_to_live: Duration::from_secs(60),
                 capacity: nonzero!(8_usize),
                 capacity_per_user: nonzero!(4_usize),
+                ..Config::default()
             },
             tokio::sync::broadcast::Sender::new(1),
             router,
@@ -3765,6 +3883,24 @@ pub mod tests {
         accepted_tx_by(account_id, &key_pair, time_source)
     }
 
+    #[test]
+    fn push_wakes_sumeragi_when_configured() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Queue::test(config_factory(), &time_source);
+        let (wake_tx, wake_rx) = std::sync::mpsc::sync_channel(1);
+        queue.set_sumeragi_wake(wake_tx);
+
+        queue
+            .push(accepted_tx_by_someone(&time_source), state.view())
+            .expect("push should succeed");
+
+        assert!(matches!(wake_rx.try_recv(), Ok(())));
+    }
+
     #[tokio::test]
     async fn push_rejects_without_governance_manifest() {
         let kura = Kura::blank_kura_for_testing();
@@ -4210,6 +4346,32 @@ pub mod tests {
         assert_eq!(entry.tx.as_ref().hash(), hash);
         assert_eq!(entry.routing.lane_id, LaneId::SINGLE);
         assert_eq!(entry.routing.dataspace_id, DataSpaceId::GLOBAL);
+    }
+
+    #[test]
+    fn route_for_gossip_uses_router_decision() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let expected_lane = LaneId::new(2);
+        let expected_dataspace = DataSpaceId::new(7);
+        let queue = Queue::test_with_router(
+            config_factory(),
+            &time_source,
+            Arc::new(StaticRouter {
+                lane: expected_lane,
+                dataspace: expected_dataspace,
+            }),
+        );
+
+        let tx = accepted_tx_by_someone(&time_source);
+        let state_view = state.view();
+        let routing = queue.route_for_gossip(&tx, &state_view);
+
+        assert_eq!(routing.lane_id, expected_lane);
+        assert_eq!(routing.dataspace_id, expected_dataspace);
     }
 
     fn config_factory() -> Config {
@@ -5136,7 +5298,7 @@ pub mod tests {
         }
 
         while queue.tx_hashes.pop().is_some() {}
-        assert_eq!(queue.tx_len(), 0, "hash queue should be empty");
+        assert_eq!(queue.queued_len(), 0, "hash queue should be empty");
         assert_eq!(queue.txs.len(), 3, "tx map retains queued entries");
 
         let mut guards = Vec::new();
@@ -5144,7 +5306,11 @@ pub mod tests {
         assert_eq!(guards.len(), 2, "resync should repopulate hashes");
         drop(guards);
 
-        assert_eq!(queue.tx_len(), 1, "remaining queue size should be tracked");
+        assert_eq!(
+            queue.queued_len(),
+            1,
+            "remaining queue size should be tracked"
+        );
     }
 
     #[tokio::test]
@@ -5163,7 +5329,7 @@ pub mod tests {
         queue.get_transactions_for_block(&state.view(), nonzero!(1_usize), &mut guards);
         assert_eq!(guards.len(), 1, "expected one in-flight guard");
         assert_eq!(
-            queue.tx_len(),
+            queue.queued_len(),
             0,
             "hash queue should be empty while guard is held"
         );
@@ -5234,7 +5400,7 @@ pub mod tests {
 
         drop(guard);
 
-        assert_eq!(queue.tx_len(), 0);
+        assert_eq!(queue.queued_len(), 0);
         assert_eq!(cloned.as_ref().hash(), guard_hash);
     }
 
@@ -5505,6 +5671,146 @@ pub mod tests {
         )
     }
 
+    #[test]
+    fn expired_cull_sweeps_reduce_active_len() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Queue::test(
+            Config {
+                transaction_time_to_live: Duration::from_secs(1),
+                expired_cull_interval: Duration::from_secs(1),
+                ..config_factory()
+            },
+            &time_source,
+        );
+
+        queue
+            .push(accepted_tx_by_someone(&time_source), state.view())
+            .expect("push succeeds");
+        assert_eq!(queue.active_len(), 1, "tx tracked before expiration");
+
+        time_handle.advance(Duration::from_secs(2));
+        let culled = queue.cull_expired_entries_if_due(&state.view());
+        assert_eq!(culled, 1, "expired transaction should be culled");
+        assert_eq!(
+            queue.active_len(),
+            0,
+            "expired tx removed from active count"
+        );
+    }
+
+    #[test]
+    fn expired_cull_compacts_hash_queue() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let mut cfg = config_factory();
+        cfg.capacity = nonzero!(2_usize);
+        cfg.capacity_per_user = nonzero!(2_usize);
+        cfg.transaction_time_to_live = Duration::from_secs(1);
+        cfg.expired_cull_interval = Duration::from_secs(1);
+
+        let queue = Queue::test(cfg, &time_source);
+        queue
+            .push(accepted_tx_by_someone(&time_source), state.view())
+            .expect("push succeeds");
+        queue
+            .push(accepted_tx_by_someone(&time_source), state.view())
+            .expect("push succeeds");
+        assert_eq!(queue.queued_len(), 2, "hash queue tracks queued txs");
+
+        time_handle.advance(Duration::from_secs(2));
+        let culled = queue.cull_expired_entries_if_due(&state.view());
+        assert_eq!(culled, 2, "expired transactions should be culled");
+        assert_eq!(queue.queued_len(), 0, "hash queue compacted after cull");
+
+        queue
+            .push(accepted_tx_by_someone(&time_source), state.view())
+            .expect("push after compaction succeeds");
+        assert_eq!(queue.queued_len(), 1, "hash queue accepts new txs");
+    }
+
+    #[test]
+    fn queued_len_excludes_inflight_transactions() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let mut cfg = config_factory();
+        cfg.capacity = nonzero!(2_usize);
+        cfg.capacity_per_user = nonzero!(2_usize);
+        cfg.transaction_time_to_live = Duration::from_secs(100);
+
+        let queue = Arc::new(Queue::test(cfg, &time_source));
+        queue
+            .push(accepted_tx_by_someone(&time_source), state.view())
+            .expect("push succeeds");
+        assert_eq!(queue.queued_len(), 1, "queued count before pop");
+
+        let mut expired = Vec::new();
+        let guard = queue
+            .pop_from_queue(&state.view(), &mut expired)
+            .expect("pop should return a transaction guard");
+        assert!(expired.is_empty());
+        assert_eq!(queue.queued_len(), 0, "hash queue empty after pop");
+        assert_eq!(queue.active_len(), 1, "active count includes in-flight");
+        assert_eq!(queue.queued_len(), 0, "queued count excludes in-flight");
+        drop(guard);
+        assert_eq!(
+            queue.active_len(),
+            0,
+            "active count clears after guard drop"
+        );
+    }
+
+    #[test]
+    fn inflight_cull_clears_removed_hash_marker_on_drop() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let mut cfg = config_factory();
+        cfg.transaction_time_to_live = Duration::from_millis(1);
+        cfg.expired_cull_interval = Duration::from_millis(1);
+
+        let queue = Arc::new(Queue::test(cfg, &time_source));
+        queue
+            .push(accepted_tx_by_someone(&time_source), state.view())
+            .expect("push succeeds");
+
+        let mut expired = Vec::new();
+        let guard = queue
+            .pop_from_queue(&state.view(), &mut expired)
+            .expect("pop should return a transaction guard");
+        assert!(expired.is_empty());
+
+        time_handle.advance(Duration::from_millis(2));
+        let culled = queue.cull_expired_entries_if_due(&state.view());
+        assert_eq!(culled, 1, "expired in-flight tx should be culled");
+        assert_eq!(
+            queue.active_len(),
+            0,
+            "active count reflects the culled in-flight entry"
+        );
+        assert!(
+            !queue.removed_hashes.is_empty(),
+            "removed hash marker should be set after cull"
+        );
+
+        drop(guard);
+        assert!(
+            queue.removed_hashes.is_empty(),
+            "removed hash marker should be cleared on guard drop"
+        );
+    }
+
     #[tokio::test]
     async fn concurrent_stress_test() {
         let max_txs_in_block = nonzero!(10_usize);
@@ -5609,6 +5915,7 @@ pub mod tests {
                 transaction_time_to_live: Duration::from_secs(100),
                 capacity: 100.try_into().unwrap(),
                 capacity_per_user: 1.try_into().unwrap(),
+                ..Config::default()
             },
             &time_source,
         );

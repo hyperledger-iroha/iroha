@@ -100,12 +100,14 @@ LaneConfigEntry {
 ## ميزانيات التخزين
 
 - `nexus.storage.max_disk_usage_bytes` يحدد ميزانية القرص الاجمالية التي يجب ان تستهلكها عقد Nexus عبر Kura ولقطات WSV الباردة وتخزين SoraFS و spools البث (SoraNet/SoraVPN).
-- `nexus.storage.max_wsv_memory_bytes` يحد طبقة WSV الساخنة عبر تمرير قياس حمولة Norito الحتمية الى `tiered_state.hot_retained_bytes`؛ قد يتجاوز الاحتفاظ المسموح الميزانية مؤقتا، لكن التجاوز مرئي عبر telemetria (`state_tiered_hot_bytes`, `state_tiered_hot_grace_overflow_bytes`).
+- عند تجاوز الميزانية الكلية، تكون الازالة حتمية: يتم تقليم spools تزويد SoraNet بترتيب المسار النسبي، ثم spools SoraVPN، ثم لقطات tiered-state الباردة من الاقدم الى الاحدث (مع offload الى `da_store_root` عند ضبطه)، ثم مقاطع Kura المتقاعدة، واخيرا يتم تفريغ اجسام الكتل النشطة لـ Kura الى `da_blocks/` لاعادة الترطيب عبر DA عند القراءة.
+- `nexus.storage.max_wsv_memory_bytes` يحد طبقة WSV الساخنة عبر تمرير قياس WSV الحتمي في الذاكرة الى `tiered_state.hot_retained_bytes`؛ قد يتجاوز الاحتفاظ المسموح الميزانية مؤقتا، لكن التجاوز مرئي عبر telemetria (`state_tiered_hot_bytes`, `state_tiered_hot_grace_overflow_bytes`).
 - `nexus.storage.disk_budget_weights` يقسم ميزانية القرص بين المكونات باستخدام نقاط الاساس (يجب ان تساوي 10,000). تطبق الحدود المشتقة على `kura.max_disk_usage_bytes` و`tiered_state.max_cold_bytes` و`sorafs.storage.max_capacity_bytes` و`streaming.soranet.provision_spool_max_bytes` و`streaming.soravpn.provision_spool_max_bytes`.
 - تطبيق ميزانية Kura يجمع بايتات مخزن الكتل عبر مقاطع المسارات النشطة والمتقاعدة ويشمل الكتل في الطابور غير المحفوظة بعد لتجنب تجاوز الميزانية اثناء تاخير الكتابة.
 - spools تزويد SoraVPN تستخدم اعدادات `streaming.soravpn` وتحد بشكل مستقل عن spool تزويد SoraNet.
 - لا تزال حدود كل مكون سارية: عندما يكون للمكون حد صريح غير صفري، يتم تطبيق الاصغر بين ذلك الحد وميزانية Nexus المشتقة.
 - telemetria الميزانيات تستخدم `storage_budget_bytes_used{component=...}` و`storage_budget_bytes_limit{component=...}` للابلاغ عن الاستخدام/الحدود لـ `kura` و`wsv_hot` و`wsv_cold` و`soranet_spool` و`soravpn_spool`؛ ويزداد `storage_budget_exceeded_total{component=...}` عندما ترفض الالية بيانات جديدة وتصدر السجلات تحذيرا للمشغل.
+- تضيف telemetria ازالة DA `storage_da_cache_total{component=...,result=hit|miss}` و`storage_da_churn_bytes_total{component=...,direction=evicted|rehydrated}` لتتبع نشاط التخزين المؤقت والبايتات المنقولة لـ `kura` و`wsv_cold`.
 - Kura يبلغ نفس المحاسبة المستخدمة اثناء القبول (بايتات على القرص بالاضافة الى الكتل في الطابور، بما في ذلك حمولات merge-ledger عند وجودها)، لذا تعكس المقاييس الضغط الفعلي وليس فقط البايتات المحفوظة.
 
 ## التوجيه وواجهات API

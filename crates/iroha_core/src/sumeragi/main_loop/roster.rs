@@ -5,9 +5,11 @@ use std::{
     sync::Arc,
 };
 
+use iroha_config::parameters::actual::ConsensusMode;
 use iroha_crypto::blake2::{Blake2b512, Digest as BlakeDigest, digest::Update as BlakeUpdate};
-use iroha_data_model::{ChainId, Encode as _, peer::PeerId};
+use iroha_data_model::{ChainId, Encode as _, nexus::PublicLaneValidatorStatus, peer::PeerId};
 use iroha_logger::prelude::*;
+use mv::storage::StorageReadOnly;
 
 use crate::{
     state::{State, StateView, WorldReadOnly},
@@ -15,8 +17,10 @@ use crate::{
 };
 
 pub(super) fn canonicalize_roster(roster: Vec<PeerId>) -> Vec<PeerId> {
-    // Preserve input ordering so topology rotation and config ordering remain stable.
-    dedup_preserving_order(roster)
+    // Sort to keep roster ordering deterministic across peers.
+    let mut roster = dedup_preserving_order(roster);
+    roster.sort();
+    roster
 }
 
 #[allow(dead_code)]
@@ -144,6 +148,16 @@ fn filter_roster_bls(roster: impl IntoIterator<Item = PeerId>) -> Vec<PeerId> {
     dedup_preserving_order(roster.into_iter().filter(roster_member_allowed_bls))
 }
 
+fn missing_pops_for_roster(
+    roster: &[PeerId],
+    pops: &BTreeMap<iroha_crypto::PublicKey, Vec<u8>>,
+) -> usize {
+    roster
+        .iter()
+        .filter(|peer| !pops.contains_key(peer.public_key()))
+        .count()
+}
+
 fn guard_pop_quorum(filtered: Vec<PeerId>, baseline: &[PeerId], pops_len: usize) -> Vec<PeerId> {
     if baseline.is_empty() {
         return Vec::new();
@@ -168,16 +182,16 @@ fn guard_pop_quorum(filtered: Vec<PeerId>, baseline: &[PeerId], pops_len: usize)
 }
 
 #[allow(clippy::if_not_else)]
-pub(super) fn derive_active_topology(
-    view: &StateView<'_>,
+pub(super) fn derive_active_topology_from_views(
+    world: &impl WorldReadOnly,
+    commit_topology: &[PeerId],
     trusted: &iroha_config::parameters::actual::TrustedPeers,
     _me: &PeerId,
 ) -> Vec<PeerId> {
-    let world_peers = view.world.peers();
-    let commit_topology = view.commit_topology();
+    let world_peers = world.peers();
     let use_commit = !commit_topology.is_empty();
     let mut baseline = if use_commit {
-        commit_topology.iter().cloned().collect()
+        commit_topology.to_vec()
     } else if !world_peers.is_empty() {
         world_peers.iter().cloned().collect()
     } else {
@@ -191,26 +205,34 @@ pub(super) fn derive_active_topology(
     let mut roster = if trusted.pops.is_empty() {
         baseline
     } else {
-        let filtered = filter_roster_with_pops(baseline.clone(), &trusted.pops);
-        if filtered.len() < baseline.len() {
+        let missing = missing_pops_for_roster(&baseline, &trusted.pops);
+        if missing > 0 {
             iroha_logger::warn!(
+                missing,
                 pops = trusted.pops.len(),
                 baseline = baseline.len(),
-                filtered = filtered.len(),
-                "PoP map incomplete for active topology; excluding peers without PoP"
+                "PoP map incomplete for active topology; skipping PoP filtering"
             );
+            baseline
+        } else {
+            let filtered = filter_roster_with_pops(baseline.clone(), &trusted.pops);
+            guard_pop_quorum(filtered, &baseline, trusted.pops.len())
         }
-        guard_pop_quorum(filtered, &baseline, trusted.pops.len())
     };
 
-    roster = canonicalize_roster(roster);
+    roster = if use_commit {
+        // Commit topology is already deterministic (sorted + hash-rotated); keep its order.
+        dedup_preserving_order(roster)
+    } else {
+        canonicalize_roster(roster)
+    };
     if !roster.is_empty() {
         return roster;
     }
 
     iroha_logger::info!(
-        world_peers = view.world.peers().len(),
-        commit_topology_len = view.commit_topology().len(),
+        world_peers = world.peers().len(),
+        commit_topology_len = commit_topology.len(),
         "commit topology fallback to trusted peers"
     );
 
@@ -218,20 +240,90 @@ pub(super) fn derive_active_topology(
         filter_roster_bls(crate::sumeragi::filter_validators_from_trusted(trusted))
     } else {
         let baseline = filter_roster_bls(crate::sumeragi::filter_validators_from_trusted(trusted));
-        let filtered = filter_roster_with_pops(baseline.clone(), &trusted.pops);
-        if filtered.len() < baseline.len() {
+        let missing = missing_pops_for_roster(&baseline, &trusted.pops);
+        if missing > 0 {
             iroha_logger::warn!(
+                missing,
                 pops = trusted.pops.len(),
                 baseline = baseline.len(),
-                filtered = filtered.len(),
-                "PoP map incomplete for trusted roster fallback; excluding peers without PoP"
+                "PoP map incomplete for trusted roster fallback; skipping PoP filtering"
             );
+            baseline
+        } else {
+            let filtered = filter_roster_with_pops(baseline.clone(), &trusted.pops);
+            guard_pop_quorum(filtered, &baseline, trusted.pops.len())
         }
-        guard_pop_quorum(filtered, &baseline, trusted.pops.len())
     };
     canonicalize_roster(fallback)
 }
 
+#[allow(clippy::if_not_else)]
+#[cfg(test)]
+pub(super) fn derive_active_topology(
+    view: &StateView<'_>,
+    trusted: &iroha_config::parameters::actual::TrustedPeers,
+    me: &PeerId,
+) -> Vec<PeerId> {
+    derive_active_topology_from_views(view.world(), view.commit_topology().as_slice(), trusted, me)
+}
+
+/// Mode-aware roster selection with NPoS staking bootstrap.
+pub(super) fn derive_active_topology_for_mode(
+    view: &StateView<'_>,
+    trusted: &iroha_config::parameters::actual::TrustedPeers,
+    me: &PeerId,
+    consensus_mode: ConsensusMode,
+) -> Vec<PeerId> {
+    let commit_topology = view.commit_topology();
+    let use_commit = !commit_topology.is_empty();
+    if matches!(consensus_mode, ConsensusMode::Npos) {
+        let active_roster = active_validator_roster_from_world(view.world());
+        if !active_roster.is_empty() {
+            if use_commit {
+                let commit_set: BTreeSet<_> = commit_topology.iter().cloned().collect();
+                let missing: Vec<_> = active_roster
+                    .iter()
+                    .filter(|peer| !commit_set.contains(*peer))
+                    .cloned()
+                    .collect();
+                if !missing.is_empty() {
+                    iroha_logger::warn!(
+                        commit_topology_len = commit_topology.len(),
+                        active_roster_len = active_roster.len(),
+                        missing_len = missing.len(),
+                        "commit topology missing active validators; using active roster for NPoS"
+                    );
+                }
+            }
+            let mut roster = active_roster.clone();
+            roster = if trusted.pops.is_empty() {
+                roster
+            } else {
+                let missing = missing_pops_for_roster(&roster, &trusted.pops);
+                if missing > 0 {
+                    iroha_logger::warn!(
+                        missing,
+                        pops = trusted.pops.len(),
+                        baseline = roster.len(),
+                        "PoP map incomplete for NPoS validator roster; skipping PoP filtering"
+                    );
+                    roster
+                } else {
+                    let filtered = filter_roster_with_pops(roster.clone(), &trusted.pops);
+                    guard_pop_quorum(filtered, &roster, trusted.pops.len())
+                }
+            };
+            // NPoS needs a canonical roster order so signer indices stay consistent across peers.
+            roster = canonicalize_roster(roster);
+            if !roster.is_empty() {
+                return roster;
+            }
+        }
+    }
+    derive_active_topology_from_views(view.world(), commit_topology.as_slice(), trusted, me)
+}
+
+#[cfg(test)]
 pub(super) fn derive_local_validator_index(
     view: &StateView<'_>,
     trusted: &iroha_config::parameters::actual::TrustedPeers,
@@ -243,6 +335,38 @@ pub(super) fn derive_local_validator_index(
             .inspect_err(|err| warn!(?idx, ?err, "local validator index exceeds u32 range"))
             .ok()
     })
+}
+
+pub(super) fn derive_local_validator_index_for_mode(
+    view: &StateView<'_>,
+    trusted: &iroha_config::parameters::actual::TrustedPeers,
+    me: &PeerId,
+    consensus_mode: ConsensusMode,
+) -> Option<ValidatorIndex> {
+    let roster = derive_active_topology_for_mode(view, trusted, me, consensus_mode);
+    roster.iter().position(|peer| peer == me).and_then(|idx| {
+        u32::try_from(idx)
+            .inspect_err(|err| warn!(?idx, ?err, "local validator index exceeds u32 range"))
+            .ok()
+    })
+}
+
+fn active_validator_roster_from_world(world: &impl WorldReadOnly) -> Vec<PeerId> {
+    let mut roster = BTreeSet::new();
+    for ((_lane_id, validator_id), record) in world.public_lane_validators().iter() {
+        if !matches!(record.status, PublicLaneValidatorStatus::Active) {
+            continue;
+        }
+        let Some(pk) = validator_id.try_signatory() else {
+            continue;
+        };
+        let peer_id = PeerId::from(pk.clone());
+        if !roster_member_allowed_bls(&peer_id) {
+            continue;
+        }
+        roster.insert(peer_id);
+    }
+    roster.into_iter().collect()
 }
 
 pub(super) fn compute_membership_view_hash(
@@ -295,14 +419,26 @@ mod tests {
         query::store::LiveQueryStore,
         state::{State, World},
     };
+    use iroha_config::parameters::actual::ConsensusMode;
     use iroha_crypto::{Algorithm, KeyPair, bls_normal_pop_prove};
-    use iroha_data_model::peer::Peer;
+    use iroha_data_model::{
+        account::AccountId,
+        metadata::Metadata,
+        nexus::{LaneId, PublicLaneValidatorRecord, PublicLaneValidatorStatus},
+        peer::Peer,
+        prelude::DomainId,
+    };
+    use iroha_primitives::numeric::Numeric;
     use iroha_primitives::unique_vec::UniqueVec;
 
     use super::*;
 
+    fn make_peer(peer_id: PeerId, port: u16) -> Peer {
+        Peer::new(format!("127.0.0.1:{port}").parse().expect("addr"), peer_id)
+    }
+
     #[test]
-    fn canonicalize_roster_preserves_order_and_dedups() {
+    fn canonicalize_roster_sorts_and_dedups() {
         let first = PeerId::new(
             KeyPair::random_with_algorithm(Algorithm::BlsNormal)
                 .public_key()
@@ -317,7 +453,9 @@ mod tests {
         let roster = vec![first.clone(), second.clone(), first.clone()];
         let canonical = canonicalize_roster(roster);
 
-        assert_eq!(canonical, vec![first, second]);
+        let mut expected = vec![first, second];
+        expected.sort();
+        assert_eq!(canonical, expected);
     }
 
     #[test]
@@ -366,6 +504,54 @@ mod tests {
     }
 
     #[test]
+    fn active_topology_skips_incomplete_pops() {
+        let keypairs: Vec<KeyPair> = (0..4)
+            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .collect();
+        let peers: Vec<PeerId> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+
+        let world = World::new();
+        {
+            let mut block = world.block();
+            let peers_cell = block.peers.get_mut();
+            for peer in &peers {
+                let _ = peers_cell.push(peer.clone());
+            }
+            block.commit();
+        }
+
+        let mut pops = BTreeMap::new();
+        for kp in keypairs.iter().take(3) {
+            let pop = bls_normal_pop_prove(kp.private_key()).expect("pop");
+            pops.insert(kp.public_key().clone(), pop);
+        }
+
+        let trusted = iroha_config::parameters::actual::TrustedPeers {
+            myself: make_peer(peers[0].clone(), 10_000),
+            others: UniqueVec::from_iter(
+                peers
+                    .iter()
+                    .skip(1)
+                    .enumerate()
+                    .map(|(idx, peer_id)| make_peer(peer_id.clone(), 10_001 + idx as u16)),
+            ),
+            pops,
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_for_testing(world, kura, LiveQueryStore::start_test());
+        let view = state.view();
+        let roster = derive_active_topology(&view, &trusted, &peers[0]);
+
+        let mut expected = peers.clone();
+        expected.sort();
+        assert_eq!(roster, expected);
+    }
+
+    #[test]
     fn active_topology_sorts_world_peers_when_commit_topology_empty() {
         let mut peers: Vec<PeerId> = (0..4)
             .map(|_| {
@@ -404,5 +590,364 @@ mod tests {
         let roster = derive_active_topology(&view, &trusted, &peers[0]);
 
         assert_eq!(roster, peers);
+    }
+
+    #[test]
+    fn active_topology_for_npos_prefers_active_validators() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+
+        let domain: DomainId = "validators".parse().expect("domain id");
+        let keypair_active = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair_pending = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let account_active = AccountId::new(domain.clone(), keypair_active.public_key().clone());
+        let account_pending = AccountId::new(domain, keypair_pending.public_key().clone());
+        let peer_active = PeerId::new(keypair_active.public_key().clone());
+
+        {
+            let mut block = state.world.public_lane_validators.block();
+            block.insert(
+                (LaneId::new(1), account_active.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::new(1),
+                    validator: account_active.clone(),
+                    stake_account: account_active,
+                    total_stake: Numeric::new(10, 0),
+                    self_stake: Numeric::new(10, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+            block.insert(
+                (LaneId::new(2), account_pending.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::new(2),
+                    validator: account_pending.clone(),
+                    stake_account: account_pending,
+                    total_stake: Numeric::new(15, 0),
+                    self_stake: Numeric::new(15, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::PendingActivation(3),
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+            block.commit();
+        }
+
+        let trusted = iroha_config::parameters::actual::TrustedPeers {
+            myself: Peer::new(
+                "127.0.0.1:10000".parse().expect("addr"),
+                peer_active.clone(),
+            ),
+            others: UniqueVec::new(),
+            pops: BTreeMap::new(),
+        };
+        let view = state.view();
+        let roster =
+            derive_active_topology_for_mode(&view, &trusted, &peer_active, ConsensusMode::Npos);
+
+        assert_eq!(roster, vec![peer_active]);
+    }
+
+    #[test]
+    fn active_topology_for_npos_skips_incomplete_pops() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+
+        let domain: DomainId = "validators".parse().expect("domain id");
+        let keypairs: Vec<KeyPair> = (0..3)
+            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .collect();
+        let accounts: Vec<AccountId> = keypairs
+            .iter()
+            .map(|kp| AccountId::new(domain.clone(), kp.public_key().clone()))
+            .collect();
+        let peers: Vec<PeerId> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+
+        {
+            let mut block = state.world.public_lane_validators.block();
+            for (idx, account) in accounts.iter().enumerate() {
+                let lane_id = LaneId::new(idx as u32 + 1);
+                block.insert(
+                    (lane_id, account.clone()),
+                    PublicLaneValidatorRecord {
+                        lane_id,
+                        validator: account.clone(),
+                        stake_account: account.clone(),
+                        total_stake: Numeric::new(10, 0),
+                        self_stake: Numeric::new(10, 0),
+                        metadata: Metadata::default(),
+                        status: PublicLaneValidatorStatus::Active,
+                        activation_epoch: None,
+                        activation_height: None,
+                        last_reward_epoch: None,
+                    },
+                );
+            }
+            block.commit();
+        }
+
+        let mut pops = BTreeMap::new();
+        for kp in keypairs.iter().take(2) {
+            let pop = bls_normal_pop_prove(kp.private_key()).expect("pop");
+            pops.insert(kp.public_key().clone(), pop);
+        }
+
+        let trusted = iroha_config::parameters::actual::TrustedPeers {
+            myself: make_peer(peers[0].clone(), 11_000),
+            others: UniqueVec::from_iter(
+                peers
+                    .iter()
+                    .skip(1)
+                    .enumerate()
+                    .map(|(idx, peer_id)| make_peer(peer_id.clone(), 11_001 + idx as u16)),
+            ),
+            pops,
+        };
+
+        let view = state.view();
+        let roster =
+            derive_active_topology_for_mode(&view, &trusted, &peers[0], ConsensusMode::Npos);
+
+        let mut expected = peers.clone();
+        expected.sort();
+        assert_eq!(roster, expected);
+    }
+
+    #[test]
+    fn active_topology_for_npos_filters_inactive_commit_topology() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+
+        let domain: DomainId = "validators".parse().expect("domain id");
+        let keypair_active = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair_inactive = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let account_active = AccountId::new(domain.clone(), keypair_active.public_key().clone());
+        let account_inactive = AccountId::new(domain, keypair_inactive.public_key().clone());
+        let peer_active = PeerId::new(keypair_active.public_key().clone());
+        let peer_inactive = PeerId::new(keypair_inactive.public_key().clone());
+
+        {
+            let mut block = state.world.public_lane_validators.block();
+            block.insert(
+                (LaneId::new(1), account_active.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::new(1),
+                    validator: account_active.clone(),
+                    stake_account: account_active,
+                    total_stake: Numeric::new(10, 0),
+                    self_stake: Numeric::new(10, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+            block.insert(
+                (LaneId::new(1), account_inactive.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::new(1),
+                    validator: account_inactive.clone(),
+                    stake_account: account_inactive,
+                    total_stake: Numeric::new(15, 0),
+                    self_stake: Numeric::new(15, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::PendingActivation(1),
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+            block.commit();
+        }
+        {
+            let mut block = state.commit_topology.block();
+            let mut tx = block.transaction();
+            *tx = vec![peer_inactive.clone(), peer_active.clone()];
+            tx.apply();
+            block.commit();
+        }
+
+        let trusted = iroha_config::parameters::actual::TrustedPeers {
+            myself: Peer::new(
+                "127.0.0.1:10000".parse().expect("addr"),
+                peer_active.clone(),
+            ),
+            others: UniqueVec::new(),
+            pops: BTreeMap::new(),
+        };
+        let view = state.view();
+        let roster =
+            derive_active_topology_for_mode(&view, &trusted, &peer_active, ConsensusMode::Npos);
+
+        assert_eq!(roster, vec![peer_active]);
+    }
+
+    #[test]
+    fn active_topology_for_npos_canonicalizes_commit_topology_order() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+
+        let domain: DomainId = "validators".parse().expect("domain id");
+        let keypair_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair_c = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let account_a = AccountId::new(domain.clone(), keypair_a.public_key().clone());
+        let account_b = AccountId::new(domain.clone(), keypair_b.public_key().clone());
+        let account_c = AccountId::new(domain, keypair_c.public_key().clone());
+        let peer_a = PeerId::new(keypair_a.public_key().clone());
+        let peer_b = PeerId::new(keypair_b.public_key().clone());
+        let peer_c = PeerId::new(keypair_c.public_key().clone());
+
+        {
+            let mut block = state.world.public_lane_validators.block();
+            for (account, stake) in [
+                (account_a.clone(), Numeric::new(10, 0)),
+                (account_b.clone(), Numeric::new(12, 0)),
+                (account_c.clone(), Numeric::new(14, 0)),
+            ] {
+                block.insert(
+                    (LaneId::new(1), account.clone()),
+                    PublicLaneValidatorRecord {
+                        lane_id: LaneId::new(1),
+                        validator: account.clone(),
+                        stake_account: account,
+                        total_stake: stake.clone(),
+                        self_stake: stake,
+                        metadata: Metadata::default(),
+                        status: PublicLaneValidatorStatus::Active,
+                        activation_epoch: None,
+                        activation_height: None,
+                        last_reward_epoch: None,
+                    },
+                );
+            }
+            block.commit();
+        }
+        {
+            let mut block = state.commit_topology.block();
+            let mut tx = block.transaction();
+            *tx = vec![peer_b.clone(), peer_a.clone()];
+            tx.apply();
+            block.commit();
+        }
+
+        let trusted = iroha_config::parameters::actual::TrustedPeers {
+            myself: Peer::new("127.0.0.1:10000".parse().expect("addr"), peer_a.clone()),
+            others: UniqueVec::new(),
+            pops: BTreeMap::new(),
+        };
+        let view = state.view();
+        let roster = derive_active_topology_for_mode(&view, &trusted, &peer_a, ConsensusMode::Npos);
+
+        let mut expected = vec![peer_a, peer_b, peer_c];
+        expected.sort();
+        assert_eq!(roster, expected);
+    }
+
+    #[test]
+    fn local_validator_index_for_mode_uses_active_validator_roster() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+
+        let domain: DomainId = "validators".parse().expect("domain id");
+        let keypair_active = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let account_active = AccountId::new(domain, keypair_active.public_key().clone());
+        let peer_active = PeerId::new(keypair_active.public_key().clone());
+
+        {
+            let mut block = state.world.public_lane_validators.block();
+            block.insert(
+                (LaneId::new(1), account_active.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::new(1),
+                    validator: account_active.clone(),
+                    stake_account: account_active,
+                    total_stake: Numeric::new(8, 0),
+                    self_stake: Numeric::new(8, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+            block.commit();
+        }
+
+        let trusted = iroha_config::parameters::actual::TrustedPeers {
+            myself: Peer::new(
+                "127.0.0.1:10000".parse().expect("addr"),
+                peer_active.clone(),
+            ),
+            others: UniqueVec::new(),
+            pops: BTreeMap::new(),
+        };
+        let view = state.view();
+        let idx = derive_local_validator_index_for_mode(
+            &view,
+            &trusted,
+            &peer_active,
+            ConsensusMode::Npos,
+        );
+
+        assert_eq!(idx, ValidatorIndex::try_from(0).ok());
+    }
+
+    #[test]
+    fn active_topology_from_views_matches_state_view() {
+        let peers: Vec<PeerId> = (0..3)
+            .map(|_| {
+                PeerId::new(
+                    KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                        .public_key()
+                        .clone(),
+                )
+            })
+            .collect();
+        let world = World::new();
+        {
+            let mut block = world.block();
+            let peers_cell = block.peers.get_mut();
+            for peer in &peers {
+                let _ = peers_cell.push(peer.clone());
+            }
+            block.commit();
+        }
+
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_for_testing(world, kura, LiveQueryStore::start_test());
+        let trusted = iroha_config::parameters::actual::TrustedPeers {
+            myself: Peer::new("127.0.0.1:10000".parse().expect("addr"), peers[0].clone()),
+            others: UniqueVec::new(),
+            pops: BTreeMap::new(),
+        };
+
+        let view = state.view();
+        let world_view = state.world.view();
+        let commit_topology = state.commit_topology.view();
+        let from_view = derive_active_topology(&view, &trusted, &peers[0]);
+        let from_views = derive_active_topology_from_views(
+            &world_view,
+            commit_topology.as_slice(),
+            &trusted,
+            &peers[0],
+        );
+
+        assert_eq!(from_views, from_view);
     }
 }

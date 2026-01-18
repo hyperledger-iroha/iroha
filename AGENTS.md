@@ -4,6 +4,7 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 
 ## Quickstart
 - Build workspace: `cargo build --workspace`
+- Builds can take about 20 minutes; use a 20-minute timeout for build steps.
 - Test everything: `cargo test --workspace` (note that this run typically takes several hours; plan accordingly)
 - Lint strictly: `cargo clippy --workspace --all-targets -- -D warnings`
 - Format code: `cargo fmt --all` (edition 2024)

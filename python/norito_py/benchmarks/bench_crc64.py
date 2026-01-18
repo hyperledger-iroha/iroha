@@ -25,13 +25,18 @@ import time
 from pathlib import Path
 from typing import Callable, Iterable, List, Optional, Tuple
 
-PACKAGE_ROOT = Path(__file__).resolve().parent.parent
-SRC_DIR = PACKAGE_ROOT / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
+def _load_crc64() -> tuple[int, list[int], Callable[[bytes, int], int]]:
+    package_root = Path(__file__).resolve().parent.parent
+    src_dir = package_root / "src"
+    if str(src_dir) not in sys.path:
+        sys.path.insert(0, str(src_dir))
 
-from norito.crc64 import _MASK, _TABLE  # type: ignore[attr-defined]
-from norito.crc64 import crc64
+    from norito.crc64 import _MASK, _TABLE, crc64  # type: ignore[attr-defined]
+
+    return _MASK, _TABLE, crc64
+
+
+_MASK, _TABLE, crc64 = _load_crc64()
 
 
 def _random_payload(size_mib: float) -> bytes:
@@ -64,13 +69,14 @@ def _try_setup_numba() -> Optional[Callable[[bytes], int]]:
     def _crc64_numba(view: np.ndarray, initial: int) -> int:
         crc = np.uint64(initial) & mask
         for byte in view:
-            idx = ((crc >> np.uint64(56)) ^ np.uint64(byte)) & np.uint64(0xFF)
-            crc = table[int(idx)] ^ ((crc << np.uint64(8)) & mask)
-        return int(crc)
+            idx = (crc ^ np.uint64(byte)) & np.uint64(0xFF)
+            crc = table[int(idx)] ^ (crc >> np.uint64(8))
+        return int(crc & mask)
 
-    def crc64_numba(payload: bytes, initial: int = 0) -> int:
+    def crc64_numba(payload: bytes, initial: int = int(mask)) -> int:
         view = np.frombuffer(payload, dtype=np.uint8)
-        return _crc64_numba(view, initial)
+        crc = _crc64_numba(view, initial)
+        return int(crc ^ mask)
 
     return crc64_numba
 

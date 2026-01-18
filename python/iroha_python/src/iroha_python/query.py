@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional
+from typing import Any, Dict, Iterable, Mapping, Optional
 
-from .query_filter import ensure_filter, FilterExpr
+from .query_filter import FilterExpr, ensure_filter
 
 
 @dataclass

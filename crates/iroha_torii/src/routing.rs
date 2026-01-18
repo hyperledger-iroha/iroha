@@ -9,7 +9,10 @@
 )]
 
 use core::str::FromStr;
-use std::sync::{Arc, LazyLock, RwLock};
+use std::{
+    sync::{Arc, LazyLock, RwLock},
+    time::SystemTime,
+};
 
 use axum::{
     Json,
@@ -34,6 +37,8 @@ use iroha_config::{
 use iroha_core::kura::Kura;
 // Network Time Service endpoints are backed by `iroha_core::time`.
 use iroha_core::smartcontracts::isi::sorafs::manifest_pin_policy_constraints_from_config;
+#[cfg(feature = "app_api")]
+use iroha_core::smartcontracts::triggers::set::SetReadOnly;
 use iroha_core::{
     nexus::{
         portfolio,
@@ -310,15 +315,19 @@ use iroha_data_model::{
     account,
     block::consensus::{
         SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus, SumeragiCommitQuorumStatus,
-        SumeragiConsensusCapsStatus, SumeragiDaGateReason, SumeragiDaGateSatisfaction,
+        SumeragiConsensusCapsStatus, SumeragiConsensusMessageHandlingEntry,
+        SumeragiConsensusMessageHandlingStatus, SumeragiDaGateReason, SumeragiDaGateSatisfaction,
         SumeragiDaGateStatus, SumeragiDataspaceCommitment, SumeragiKuraStoreStatus,
         SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiMembershipMismatchStatus,
         SumeragiMembershipStatus, SumeragiMissingBlockFetchStatus, SumeragiPeerKeyPolicyStatus,
         SumeragiPendingRbcEntry, SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcSnapshot,
-        SumeragiQcStatus, SumeragiRbcEvictedSession, SumeragiRbcStoreStatus,
-        SumeragiRuntimeUpgradeHook, SumeragiStatusWire, SumeragiValidationRejectStatus,
-        SumeragiViewChangeCauseStatus, SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
-        SumeragiWorkerQueueDiagnostics, SumeragiWorkerQueueTotals,
+        SumeragiQcStatus, SumeragiRbcEvictedSession, SumeragiRbcMismatchEntry,
+        SumeragiRbcMismatchStatus, SumeragiRbcStoreStatus, SumeragiRuntimeUpgradeHook,
+        SumeragiStatusWire, SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
+        SumeragiVoteValidationDropEntry, SumeragiVoteValidationDropPeerEntry,
+        SumeragiVoteValidationDropReasonCount, SumeragiVoteValidationDropStatus,
+        SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths, SumeragiWorkerQueueDiagnostics,
+        SumeragiWorkerQueueTotals,
     },
     domain::DomainId,
     events::{
@@ -454,8 +463,6 @@ struct SumeragiPhasesEma {
     collect_prevote_ms: u64,
     collect_precommit_ms: u64,
     collect_aggregator_ms: u64,
-    collect_exec_ms: u64,
-    collect_witness_ms: u64,
     commit_ms: u64,
     pipeline_total_ms: u64,
 }
@@ -467,8 +474,6 @@ struct SumeragiPhasesResponse {
     collect_prevote_ms: u64,
     collect_precommit_ms: u64,
     collect_aggregator_ms: u64,
-    collect_exec_ms: u64,
-    collect_witness_ms: u64,
     commit_ms: u64,
     pipeline_total_ms: u64,
     collect_aggregator_gossip_total: u64,
@@ -543,6 +548,29 @@ struct OkIdResponse {
 #[cfg(test)]
 fn json_string(value: Value) -> String {
     norito::json::to_string(&value).expect("serialize request body")
+}
+
+#[cfg(test)]
+fn dummy_accepted_transaction() -> iroha_core::tx::AcceptedTransaction<'static> {
+    use std::{borrow::Cow, time::Duration};
+
+    use iroha_crypto::KeyPair;
+    use iroha_data_model::{
+        AccountId, ChainId, DomainId, Level, isi::Log, transaction::TransactionBuilder,
+    };
+
+    let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
+        .parse()
+        .expect("valid chain id");
+    let domain_id: DomainId = "dummy".parse().expect("valid domain id");
+    let keypair = KeyPair::random();
+    let authority = AccountId::new(domain_id, keypair.public_key().clone());
+    let mut builder = TransactionBuilder::new(chain_id, authority);
+    builder.set_creation_time(Duration::from_millis(0));
+    let tx = builder
+        .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
+        .sign(keypair.private_key());
+    iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx))
 }
 
 mod debug_toggle_override {
@@ -1831,6 +1859,7 @@ impl MaybeTelemetry {
                 capacity: nonzero_ext::nonzero!(1usize),
                 capacity_per_user: nonzero_ext::nonzero!(1usize),
                 transaction_time_to_live: core::time::Duration::from_secs(1),
+                ..Default::default()
             };
             let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
             let queue = Arc::new(Queue::from_config(queue_cfg, events_sender));
@@ -3772,8 +3801,6 @@ pub async fn handle_v1_sumeragi_phases(
         collect_prevote_ms: snap.collect_prevote_ms,
         collect_precommit_ms: snap.collect_precommit_ms,
         collect_aggregator_ms: snap.collect_aggregator_ms,
-        collect_exec_ms: snap.collect_exec_ms,
-        collect_witness_ms: snap.collect_witness_ms,
         commit_ms: snap.commit_ms,
         pipeline_total_ms: snap.pipeline_total_ms,
         collect_aggregator_gossip_total: snap.gossip_fallback_total,
@@ -3786,8 +3813,6 @@ pub async fn handle_v1_sumeragi_phases(
             collect_prevote_ms: snap.collect_prevote_ema_ms,
             collect_precommit_ms: snap.collect_precommit_ema_ms,
             collect_aggregator_ms: snap.collect_aggregator_ema_ms,
-            collect_exec_ms: snap.collect_exec_ema_ms,
-            collect_witness_ms: snap.collect_witness_ema_ms,
             commit_ms: snap.commit_ema_ms,
             pipeline_total_ms: snap.pipeline_total_ema_ms,
         },
@@ -7168,6 +7193,267 @@ struct PreparedContractCall {
     code_hash: iroha_crypto::Hash,
     abi_hash: iroha_crypto::Hash,
     manifest: manifest::ContractManifest,
+}
+
+// ---------------------- Subscription API DTOs ----------------------
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Request payload for creating a subscription plan.
+pub struct SubscriptionPlanCreateDto {
+    /// Account authorizing the transaction (plan provider).
+    pub authority: iroha_data_model::account::AccountId,
+    /// Signing key for submitting the transaction.
+    pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
+    /// Asset definition id used to store the plan metadata.
+    pub plan_id: iroha_data_model::asset::AssetDefinitionId,
+    /// Subscription plan payload stored on the asset definition.
+    pub plan: iroha_data_model::subscription::SubscriptionPlan,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Response payload returned after registering a subscription plan.
+pub struct SubscriptionPlanCreateResponseDto {
+    /// Whether the plan registration succeeded.
+    pub ok: bool,
+    /// Plan asset definition id.
+    pub plan_id: iroha_data_model::asset::AssetDefinitionId,
+    /// Hex-encoded transaction hash submitted to the queue.
+    pub tx_hash_hex: String,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone, Debug, Default, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
+)]
+/// Query parameters for listing subscription plans.
+pub struct SubscriptionPlanListParams {
+    /// Optional plan provider filter.
+    pub provider: Option<String>,
+    /// Optional limit for pagination.
+    pub limit: Option<u64>,
+    /// Offset for pagination (default 0).
+    #[norito(default)]
+    pub offset: u64,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Subscription plan list item.
+pub struct SubscriptionPlanListItem {
+    /// Plan asset definition id.
+    pub plan_id: iroha_data_model::asset::AssetDefinitionId,
+    /// Plan metadata payload.
+    pub plan: iroha_data_model::subscription::SubscriptionPlan,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Response payload for listing subscription plans.
+pub struct SubscriptionPlanListResponseDto {
+    /// Plan items.
+    pub items: Vec<SubscriptionPlanListItem>,
+    /// Total number of matching plans.
+    pub total: u64,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Request payload for creating a subscription.
+pub struct SubscriptionCreateDto {
+    /// Account authorizing the transaction (subscriber).
+    pub authority: iroha_data_model::account::AccountId,
+    /// Signing key for submitting the transaction.
+    pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
+    /// Subscription NFT id to register.
+    pub subscription_id: iroha_data_model::nft::NftId,
+    /// Asset definition id for the subscription plan.
+    pub plan_id: iroha_data_model::asset::AssetDefinitionId,
+    /// Optional billing trigger id; derived when omitted.
+    #[norito(default)]
+    pub billing_trigger_id: Option<iroha_data_model::trigger::TriggerId>,
+    /// Optional usage trigger id for usage plans; derived when omitted.
+    #[norito(default)]
+    pub usage_trigger_id: Option<iroha_data_model::trigger::TriggerId>,
+    /// Optional first charge timestamp in UTC milliseconds.
+    #[norito(default)]
+    pub first_charge_ms: Option<u64>,
+    /// Grant `CanExecuteTrigger` to the plan provider for usage recording.
+    #[norito(default)]
+    pub grant_usage_to_provider: Option<bool>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Response payload returned after creating a subscription.
+pub struct SubscriptionCreateResponseDto {
+    /// Whether the subscription creation succeeded.
+    pub ok: bool,
+    /// Subscription NFT id.
+    pub subscription_id: iroha_data_model::nft::NftId,
+    /// Billing trigger id assigned to the subscription.
+    pub billing_trigger_id: iroha_data_model::trigger::TriggerId,
+    /// Usage trigger id (present for usage plans).
+    #[norito(default)]
+    pub usage_trigger_id: Option<iroha_data_model::trigger::TriggerId>,
+    /// First charge time in UTC milliseconds.
+    pub first_charge_ms: u64,
+    /// Hex-encoded transaction hash submitted to the queue.
+    pub tx_hash_hex: String,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone, Debug, Default, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
+)]
+/// Query parameters for listing subscriptions.
+pub struct SubscriptionListParams {
+    /// Optional subscriber filter.
+    pub owned_by: Option<String>,
+    /// Optional provider filter.
+    pub provider: Option<String>,
+    /// Optional status filter (active, paused, past_due, canceled, suspended).
+    pub status: Option<String>,
+    /// Optional limit for pagination.
+    pub limit: Option<u64>,
+    /// Offset for pagination (default 0).
+    #[norito(default)]
+    pub offset: u64,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Subscription list item payload.
+pub struct SubscriptionListItem {
+    /// Subscription NFT id.
+    pub subscription_id: iroha_data_model::nft::NftId,
+    /// Subscription state metadata.
+    pub subscription: iroha_data_model::subscription::SubscriptionState,
+    /// Optional latest invoice metadata.
+    #[norito(default)]
+    pub invoice: Option<iroha_data_model::subscription::SubscriptionInvoice>,
+    /// Optional plan metadata payload.
+    #[norito(default)]
+    pub plan: Option<iroha_data_model::subscription::SubscriptionPlan>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Response payload for listing subscriptions.
+pub struct SubscriptionListResponseDto {
+    /// Subscription items.
+    pub items: Vec<SubscriptionListItem>,
+    /// Total number of matching subscriptions.
+    pub total: u64,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Response payload for fetching a subscription.
+pub struct SubscriptionGetResponseDto {
+    /// Subscription NFT id.
+    pub subscription_id: iroha_data_model::nft::NftId,
+    /// Subscription state metadata.
+    pub subscription: iroha_data_model::subscription::SubscriptionState,
+    /// Optional latest invoice metadata.
+    #[norito(default)]
+    pub invoice: Option<iroha_data_model::subscription::SubscriptionInvoice>,
+    /// Optional plan metadata payload.
+    #[norito(default)]
+    pub plan: Option<iroha_data_model::subscription::SubscriptionPlan>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Request payload for subscription status updates.
+pub struct SubscriptionActionDto {
+    /// Account authorizing the transaction (subscriber).
+    pub authority: iroha_data_model::account::AccountId,
+    /// Signing key for submitting the transaction.
+    pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
+    /// Optional charge time override in UTC milliseconds.
+    #[norito(default)]
+    pub charge_at_ms: Option<u64>,
+    /// Optional cancel mode (`immediate` or `period_end`).
+    #[norito(default)]
+    pub cancel_mode: Option<SubscriptionCancelMode>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+    PartialEq,
+    Eq,
+)]
+#[norito(tag = "mode", content = "value", rename_all = "snake_case")]
+/// Cancelation mode for subscription cancel requests.
+pub enum SubscriptionCancelMode {
+    Immediate,
+    PeriodEnd,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Request payload for recording subscription usage.
+pub struct SubscriptionUsageRequestDto {
+    /// Account authorizing the transaction (usage reporter).
+    pub authority: iroha_data_model::account::AccountId,
+    /// Signing key for submitting the transaction.
+    pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
+    /// Usage counter key to update.
+    pub unit_key: iroha_data_model::name::Name,
+    /// Usage increment (must be non-negative).
+    pub delta: iroha_primitives::numeric::Numeric,
+    /// Optional usage trigger id; derived when omitted.
+    #[norito(default)]
+    pub usage_trigger_id: Option<iroha_data_model::trigger::TriggerId>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Response payload for subscription actions.
+pub struct SubscriptionActionResponseDto {
+    /// Whether the action succeeded.
+    pub ok: bool,
+    /// Subscription NFT id.
+    pub subscription_id: iroha_data_model::nft::NftId,
+    /// Hex-encoded transaction hash submitted to the queue.
+    pub tx_hash_hex: String,
 }
 
 #[cfg(feature = "app_api")]
@@ -12101,6 +12387,26 @@ fn tx_predicate_from_filter(
 const STRICT_ADDRESSES_REASON: &str = "ERR_STRICT_ADDRESS_REQUIRED";
 #[cfg(feature = "app_api")]
 const LOCAL12_COLLISION_METRIC_KIND: &str = "local12_digest";
+#[cfg(feature = "app_api")]
+static SUBSCRIPTION_PLAN_KEY: LazyLock<Name> = LazyLock::new(|| {
+    Name::from_str(iroha_data_model::subscription::SUBSCRIPTION_PLAN_METADATA_KEY)
+        .expect("subscription plan metadata key is valid")
+});
+#[cfg(feature = "app_api")]
+static SUBSCRIPTION_KEY: LazyLock<Name> = LazyLock::new(|| {
+    Name::from_str(iroha_data_model::subscription::SUBSCRIPTION_METADATA_KEY)
+        .expect("subscription metadata key is valid")
+});
+#[cfg(feature = "app_api")]
+static SUBSCRIPTION_INVOICE_KEY: LazyLock<Name> = LazyLock::new(|| {
+    Name::from_str(iroha_data_model::subscription::SUBSCRIPTION_INVOICE_METADATA_KEY)
+        .expect("subscription invoice metadata key is valid")
+});
+#[cfg(feature = "app_api")]
+static SUBSCRIPTION_TRIGGER_REF_KEY: LazyLock<Name> = LazyLock::new(|| {
+    Name::from_str(iroha_data_model::subscription::SUBSCRIPTION_TRIGGER_REF_METADATA_KEY)
+        .expect("subscription trigger reference metadata key is valid")
+});
 
 #[cfg(feature = "app_api")]
 const ENDPOINT_ACCOUNTS_LIST: &str = "/v1/accounts";
@@ -12177,6 +12483,10 @@ pub const ENDPOINT_ASSET_HOLDERS_QUERY: &str = "/v1/assets/{definition_id}/holde
 const ENDPOINT_NFTS_LIST: &str = "/v1/nfts";
 #[cfg(feature = "app_api")]
 const ENDPOINT_NFTS_QUERY: &str = "/v1/nfts/query";
+#[cfg(feature = "app_api")]
+const ENDPOINT_SUBSCRIPTION_PLANS_LIST: &str = "/v1/subscriptions/plans";
+#[cfg(feature = "app_api")]
+const ENDPOINT_SUBSCRIPTIONS_LIST: &str = "/v1/subscriptions";
 #[cfg(feature = "app_api")]
 const ENDPOINT_KAIGI_RELAYS: &str = "/v1/kaigi/relays";
 #[cfg(feature = "app_api")]
@@ -14571,7 +14881,7 @@ mod tx_query_integration_smoke {
         // transactions block before committing to satisfy state invariants.
         let leader0 = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
-        let unverified0 = BlockBuilder::new(Vec::new())
+        let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, state.view().latest_block().as_deref())
             .sign(leader0.private_key())
             .unpack(|_| {});
@@ -14597,7 +14907,7 @@ mod tx_query_integration_smoke {
             .execute(&exec_id, &mut stx)
             .ok();
         stx.apply();
-        // Validate and persist an empty block record to initialize transactions state
+        // Validate and persist a minimal block record to initialize transactions state
         let valid0 = unverified0
             .clone()
             .validate_and_record_transactions(&mut st_block0)
@@ -14760,7 +15070,7 @@ mod tx_query_integration_smoke {
         // Register domain + operator + target account
         let leader0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
-        let unverified0 = BlockBuilder::new(Vec::new())
+        let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, state.view().latest_block().as_deref())
             .sign(leader0.private_key())
             .unpack(|_| {});
@@ -14863,7 +15173,7 @@ mod tx_query_integration_smoke {
         // Ensure domain and accounts exist before committing txs
         let leader0 = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
-        let unverified0 = BlockBuilder::new(Vec::new())
+        let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, state.view().latest_block().as_deref())
             .sign(leader0.private_key())
             .unpack(|_| {});
@@ -16220,7 +16530,7 @@ mod tx_query_integration_smoke {
         {
             let leader0 = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
             let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
-            let unverified0 = BlockBuilder::new(Vec::new())
+            let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
                 .chain(0, state.view().latest_block().as_deref())
                 .sign(leader0.private_key())
                 .unpack(|_| {});
@@ -16396,7 +16706,7 @@ mod tx_query_integration_smoke {
         {
             let leader0 = KeyPair::random();
             let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
-            let unverified0 = BlockBuilder::new(Vec::new())
+            let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
                 .chain(0, state.view().latest_block().as_deref())
                 .sign(leader0.private_key())
                 .unpack(|_| {});
@@ -16547,6 +16857,7 @@ mod tx_query_integration_smoke {
     }
 }
 #[cfg(all(test, feature = "app_api"))]
+#[allow(clippy::await_holding_lock)]
 mod app_api_integration_tests {
     use std::borrow::Cow;
     use std::sync::{LazyLock, Mutex, MutexGuard};
@@ -18245,12 +18556,12 @@ mod query_endpoint_tests {
         isi.execute(&authority, &mut stx)
             .expect("execute verify-proof");
         stx.apply();
-        // Record an empty transactions block for commit invariants, then commit state
+        // Record a minimal transactions block for commit invariants, then commit state
         let leader = iroha_crypto::KeyPair::random();
         let _topo = iroha_core::sumeragi::network_topology::Topology::new(vec![
             iroha_data_model::peer::PeerId::new(leader.public_key().clone()),
         ]);
-        let unverified = iroha_core::block::BlockBuilder::new(Vec::new())
+        let unverified = iroha_core::block::BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, latest_block.as_deref())
             .sign(leader.private_key())
             .unpack(|_| {});
@@ -18323,9 +18634,9 @@ pub fn handle_v1_events_sse(
     } = parse_sse_filter_params(params.filter.as_deref())?;
     let proof_only = filters.is_none()
         && crate::proof_filters::has_any_proof_filters(
-            &proof_backend,
-            &proof_call_hash,
-            &proof_envelope_hash,
+            proof_backend.as_ref(),
+            proof_call_hash.as_ref(),
+            proof_envelope_hash.as_ref(),
         );
     let rx = events.subscribe();
     let stream = stream::unfold(rx, move |mut rx| {
@@ -18346,9 +18657,9 @@ pub fn handle_v1_events_sse(
                         }
                         if !crate::proof_filters::event_matches_proof_filters(
                             &event_box,
-                            &proof_backend,
-                            &proof_call_hash,
-                            &proof_envelope_hash,
+                            proof_backend.as_ref(),
+                            proof_call_hash.as_ref(),
+                            proof_envelope_hash.as_ref(),
                             proof_only,
                         ) {
                             continue;
@@ -19388,6 +19699,99 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             snap.dedup_evictions.rbc_deliver_expired_total,
         ),
     ]);
+    let consensus_message_handling_entries = Value::Array(
+        snap.consensus_message_handling
+            .entries
+            .iter()
+            .map(|entry| {
+                json_object(vec![
+                    json_entry("kind", entry.kind.as_str()),
+                    json_entry("outcome", entry.outcome.as_str()),
+                    json_entry("reason", entry.reason.as_str()),
+                    json_entry("total", entry.total),
+                ])
+            })
+            .collect(),
+    );
+    let consensus_message_handling = json_object(vec![json_entry(
+        "entries",
+        consensus_message_handling_entries,
+    )]);
+    let vote_validation_drop_entries = Value::Array(
+        snap.vote_validation_drops
+            .entries
+            .iter()
+            .map(|entry| {
+                json_object(vec![
+                    json_entry("reason", entry.reason.as_str()),
+                    json_entry("height", entry.height),
+                    json_entry("view", entry.view),
+                    json_entry("epoch", entry.epoch),
+                    json_entry("signer_index", entry.signer_index),
+                    json_entry(
+                        "peer_id",
+                        entry
+                            .peer_id
+                            .as_ref()
+                            .map(|peer| Value::from(format!("{peer}")))
+                            .unwrap_or(Value::Null),
+                    ),
+                    json_entry(
+                        "roster_hash",
+                        entry
+                            .roster_hash
+                            .map(|hash| Value::from(format!("{hash}")))
+                            .unwrap_or(Value::Null),
+                    ),
+                    json_entry("roster_len", entry.roster_len),
+                    json_entry("block_hash", Value::from(format!("{}", entry.block_hash))),
+                    json_entry("timestamp_ms", entry.timestamp_ms),
+                ])
+            })
+            .collect(),
+    );
+    let vote_validation_drop_peer_entries = Value::Array(
+        snap.vote_validation_drops
+            .peer_entries
+            .iter()
+            .map(|entry| {
+                let reasons = Value::Array(
+                    entry
+                        .reasons
+                        .iter()
+                        .map(|reason| {
+                            json_object(vec![
+                                json_entry("reason", reason.reason.as_str()),
+                                json_entry("total", reason.total),
+                            ])
+                        })
+                        .collect(),
+                );
+                json_object(vec![
+                    json_entry("peer_id", Value::from(format!("{}", entry.peer_id))),
+                    json_entry(
+                        "roster_hash",
+                        entry
+                            .roster_hash
+                            .map(|hash| Value::from(format!("{hash}")))
+                            .unwrap_or(Value::Null),
+                    ),
+                    json_entry("roster_len", entry.roster_len),
+                    json_entry("total", entry.total),
+                    json_entry("reasons", reasons),
+                    json_entry("last_height", entry.last_height),
+                    json_entry("last_view", entry.last_view),
+                    json_entry("last_epoch", entry.last_epoch),
+                    json_entry("last_timestamp_ms", entry.last_timestamp_ms),
+                ])
+            })
+            .collect(),
+    );
+    let vote_validation_drops = json_object(vec![
+        json_entry("total", snap.vote_validation_drops.total),
+        json_entry("entries", vote_validation_drop_entries),
+        json_entry("peer_entries", vote_validation_drop_peer_entries),
+    ]);
     let tx_queue = json_object(vec![
         json_entry("depth", snap.tx_queue_depth),
         json_entry("capacity", snap.tx_queue_capacity),
@@ -19499,6 +19903,10 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "quorum_timeout_total",
             snap.view_change_causes.quorum_timeout_total,
         ),
+        json_entry(
+            "stake_quorum_timeout_total",
+            snap.view_change_causes.stake_quorum_timeout_total,
+        ),
         json_entry("da_gate_total", snap.view_change_causes.da_gate_total),
         json_entry(
             "censorship_evidence_total",
@@ -19532,6 +19940,11 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry(
             "last_quorum_timeout_timestamp_ms",
             snap.view_change_causes.last_quorum_timeout_timestamp_ms,
+        ),
+        json_entry(
+            "last_stake_quorum_timeout_timestamp_ms",
+            snap.view_change_causes
+                .last_stake_quorum_timeout_timestamp_ms,
         ),
         json_entry(
             "last_da_gate_timestamp_ms",
@@ -19662,6 +20075,10 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry(
             "drop_missing_total",
             snap.block_sync_roster.drop_missing_total,
+        ),
+        json_entry(
+            "drop_unsolicited_share_blocks_total",
+            snap.block_sync_roster.drop_unsolicited_share_blocks_total,
         ),
     ]);
     let block_sync = json_object(vec![
@@ -20191,6 +20608,28 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("evictions_total", snap.rbc_store_evictions_total),
         json_entry("recent_evictions", recent_evictions),
     ]);
+    let rbc_mismatch_entries = Value::Array(
+        snap.rbc_mismatch
+            .entries
+            .iter()
+            .map(|entry| {
+                json_object(vec![
+                    json_entry("peer_id", Value::from(entry.peer_id.to_string())),
+                    json_entry(
+                        "chunk_digest_mismatch_total",
+                        entry.chunk_digest_mismatch_total,
+                    ),
+                    json_entry(
+                        "payload_hash_mismatch_total",
+                        entry.payload_hash_mismatch_total,
+                    ),
+                    json_entry("chunk_root_mismatch_total", entry.chunk_root_mismatch_total),
+                    json_entry("last_timestamp_ms", entry.last_timestamp_ms),
+                ])
+            })
+            .collect(),
+    );
+    let rbc_mismatch = json_object(vec![json_entry("entries", rbc_mismatch_entries)]);
     let pending_rbc_entries = Value::Array(
         snap.pending_rbc
             .entries
@@ -20213,7 +20652,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             })
             .collect(),
     );
-    let _pending_rbc = json_object(vec![
+    let pending_rbc = json_object(vec![
         json_entry("sessions", snap.pending_rbc.sessions),
         json_entry("session_cap", snap.pending_rbc.session_cap),
         json_entry("chunks", snap.pending_rbc.chunks),
@@ -20240,6 +20679,41 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         ),
         json_entry("drops_bytes_total", snap.pending_rbc.drops_bytes_total),
         json_entry("evicted_total", snap.pending_rbc.evicted_total),
+        json_entry("stash_ready_total", snap.pending_rbc.stash_ready_total),
+        json_entry(
+            "stash_ready_init_missing_total",
+            snap.pending_rbc.stash_ready_init_missing_total,
+        ),
+        json_entry(
+            "stash_ready_roster_missing_total",
+            snap.pending_rbc.stash_ready_roster_missing_total,
+        ),
+        json_entry(
+            "stash_ready_roster_hash_mismatch_total",
+            snap.pending_rbc.stash_ready_roster_hash_mismatch_total,
+        ),
+        json_entry(
+            "stash_ready_roster_unverified_total",
+            snap.pending_rbc.stash_ready_roster_unverified_total,
+        ),
+        json_entry("stash_deliver_total", snap.pending_rbc.stash_deliver_total),
+        json_entry(
+            "stash_deliver_init_missing_total",
+            snap.pending_rbc.stash_deliver_init_missing_total,
+        ),
+        json_entry(
+            "stash_deliver_roster_missing_total",
+            snap.pending_rbc.stash_deliver_roster_missing_total,
+        ),
+        json_entry(
+            "stash_deliver_roster_hash_mismatch_total",
+            snap.pending_rbc.stash_deliver_roster_hash_mismatch_total,
+        ),
+        json_entry(
+            "stash_deliver_roster_unverified_total",
+            snap.pending_rbc.stash_deliver_roster_unverified_total,
+        ),
+        json_entry("stash_chunk_total", snap.pending_rbc.stash_chunk_total),
         json_entry("entries", pending_rbc_entries),
     ]);
     let npos_election = snap
@@ -20391,6 +20865,8 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("rbc_dataspace_backlog", rbc_dataspace_backlog),
         json_entry("gossip_fallback_total", snap.gossip_fallback_total),
         json_entry("dedup_evictions", dedup_evictions),
+        json_entry("consensus_message_handling", consensus_message_handling),
+        json_entry("vote_validation_drops", vote_validation_drops),
         json_entry("bg_post_drop_post_total", snap.bg_post_drop_post_total),
         json_entry(
             "bg_post_drop_broadcast_total",
@@ -20429,6 +20905,8 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         ),
         json_entry("da_reschedule_total", snap.da_reschedule_total),
         json_entry("rbc_store", rbc_store),
+        json_entry("rbc_mismatch", rbc_mismatch),
+        json_entry("pending_rbc", pending_rbc),
         json_entry("qc_rebuild_attempts_total", snap.qc_rebuild_attempts_total),
         json_entry(
             "qc_rebuild_successes_total",
@@ -20469,6 +20947,7 @@ mod status_tests {
             LaneVolatilityClass,
         },
         consensus::{ValidatorElectionOutcome, ValidatorElectionParameters, ValidatorTieBreak},
+        peer::PeerId,
     };
     use iroha_p2p::ConsensusConfigCaps;
 
@@ -21390,6 +21869,199 @@ mod status_tests {
     }
 
     #[test]
+    fn status_snapshot_json_includes_rbc_mismatch_entries() {
+        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_label = peer.to_string();
+        let entry = status::RbcMismatchEntry {
+            peer_id: peer,
+            chunk_digest_mismatch_total: 2,
+            payload_hash_mismatch_total: 1,
+            chunk_root_mismatch_total: 3,
+            last_timestamp_ms: 42,
+        };
+        let snap = sumeragi::StatusSnapshot {
+            rbc_mismatch: status::RbcMismatchSnapshot {
+                entries: vec![entry.clone()],
+            },
+            ..Default::default()
+        };
+        let payload = status_snapshot_json(&snap);
+        let mismatch = payload
+            .get("rbc_mismatch")
+            .and_then(Value::as_object)
+            .expect("rbc_mismatch object");
+        let entries = mismatch
+            .get("entries")
+            .and_then(Value::as_array)
+            .expect("entries array");
+        assert_eq!(entries.len(), 1);
+        let stored = entries.first().and_then(Value::as_object).unwrap();
+        assert_eq!(
+            stored.get("peer_id").and_then(Value::as_str).unwrap(),
+            peer_label
+        );
+        assert_eq!(
+            stored
+                .get("chunk_digest_mismatch_total")
+                .and_then(Value::as_u64)
+                .unwrap(),
+            entry.chunk_digest_mismatch_total
+        );
+        assert_eq!(
+            stored
+                .get("payload_hash_mismatch_total")
+                .and_then(Value::as_u64)
+                .unwrap(),
+            entry.payload_hash_mismatch_total
+        );
+        assert_eq!(
+            stored
+                .get("chunk_root_mismatch_total")
+                .and_then(Value::as_u64)
+                .unwrap(),
+            entry.chunk_root_mismatch_total
+        );
+        assert_eq!(
+            stored
+                .get("last_timestamp_ms")
+                .and_then(Value::as_u64)
+                .unwrap(),
+            entry.last_timestamp_ms
+        );
+    }
+
+    #[test]
+    fn status_snapshot_json_includes_consensus_message_handling() {
+        let snap = sumeragi::StatusSnapshot {
+            consensus_message_handling: status::ConsensusMessageHandlingSnapshot {
+                entries: vec![status::ConsensusMessageHandlingEntry {
+                    kind: status::ConsensusMessageKind::BlockSyncUpdate,
+                    outcome: status::ConsensusMessageOutcome::Deferred,
+                    reason: status::ConsensusMessageReason::SignatureMismatchDeferred,
+                    total: 3,
+                }],
+            },
+            ..Default::default()
+        };
+        let payload = status_snapshot_json(&snap);
+        let handling = payload
+            .get("consensus_message_handling")
+            .and_then(Value::as_object)
+            .expect("consensus_message_handling object");
+        let entries = handling
+            .get("entries")
+            .and_then(Value::as_array)
+            .expect("consensus_message_handling entries");
+        assert_eq!(entries.len(), 1);
+        let entry = entries[0].as_object().expect("entry object");
+        assert_eq!(
+            entry.get("kind").and_then(Value::as_str),
+            Some("block_sync_update")
+        );
+        assert_eq!(
+            entry.get("outcome").and_then(Value::as_str),
+            Some("deferred")
+        );
+        assert_eq!(
+            entry.get("reason").and_then(Value::as_str),
+            Some("signature_mismatch_deferred")
+        );
+        assert_eq!(entry.get("total").and_then(Value::as_u64), Some(3));
+    }
+
+    #[test]
+    fn status_snapshot_json_includes_pending_rbc_stash_counters() {
+        let hash = Hash::prehashed([0x11; Hash::LENGTH]);
+        let hash_typed = HashOf::from_untyped_unchecked(hash);
+        let hash_str = format!("{hash_typed}");
+        let mut entry = status::PendingRbcEntrySnapshot::default();
+        entry.block_hash = hash_typed;
+        entry.height = 9;
+        entry.view = 1;
+        entry.ready = 2;
+        entry.deliver = 1;
+        entry.age_ms = 42;
+
+        let pending_rbc = status::PendingRbcSnapshot {
+            sessions: 1,
+            session_cap: 8,
+            chunks: 3,
+            bytes: 1024,
+            max_chunks_per_session: 10,
+            max_bytes_per_session: 2048,
+            ttl_ms: 1000,
+            drops_total: 1,
+            drops_cap_total: 1,
+            drops_cap_bytes_total: 12,
+            drops_ttl_total: 0,
+            drops_ttl_bytes_total: 0,
+            drops_bytes_total: 12,
+            evicted_total: 0,
+            stash_ready_total: 2,
+            stash_ready_init_missing_total: 1,
+            stash_ready_roster_missing_total: 0,
+            stash_ready_roster_hash_mismatch_total: 0,
+            stash_ready_roster_unverified_total: 1,
+            stash_deliver_total: 1,
+            stash_deliver_init_missing_total: 1,
+            stash_deliver_roster_missing_total: 0,
+            stash_deliver_roster_hash_mismatch_total: 0,
+            stash_deliver_roster_unverified_total: 0,
+            stash_chunk_total: 3,
+            entries: vec![entry],
+        };
+        let snap = sumeragi::StatusSnapshot {
+            pending_rbc,
+            ..Default::default()
+        };
+        let payload = status_snapshot_json(&snap);
+        let pending = payload
+            .get("pending_rbc")
+            .and_then(Value::as_object)
+            .expect("pending_rbc object");
+        assert_eq!(
+            pending.get("stash_ready_total").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            pending
+                .get("stash_ready_init_missing_total")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            pending
+                .get("stash_ready_roster_unverified_total")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            pending.get("stash_deliver_total").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            pending.get("stash_chunk_total").and_then(Value::as_u64),
+            Some(3)
+        );
+
+        let entries = pending
+            .get("entries")
+            .and_then(Value::as_array)
+            .expect("pending entries array");
+        assert_eq!(entries.len(), 1);
+        let entry = entries[0].as_object().expect("pending entry object");
+        assert_eq!(
+            entry.get("block_hash").and_then(Value::as_str),
+            Some(hash_str.as_str())
+        );
+        assert_eq!(entry.get("height").and_then(Value::as_u64), Some(9));
+        assert_eq!(entry.get("view").and_then(Value::as_u64), Some(1));
+        assert_eq!(entry.get("ready").and_then(Value::as_u64), Some(2));
+        assert_eq!(entry.get("deliver").and_then(Value::as_u64), Some(1));
+        assert_eq!(entry.get("age_ms").and_then(Value::as_u64), Some(42));
+    }
+
+    #[test]
     fn status_snapshot_json_includes_da_gate_and_kura_store() {
         let last_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xEE; 32]));
         let snap = sumeragi::StatusSnapshot {
@@ -21627,6 +22299,7 @@ pub async fn handle_v1_sumeragi_status(
             view_change_causes: SumeragiViewChangeCauseStatus {
                 commit_failure_total: snap.view_change_causes.commit_failure_total,
                 quorum_timeout_total: snap.view_change_causes.quorum_timeout_total,
+                stake_quorum_timeout_total: snap.view_change_causes.stake_quorum_timeout_total,
                 da_gate_total: snap.view_change_causes.da_gate_total,
                 censorship_evidence_total: snap.view_change_causes.censorship_evidence_total,
                 missing_payload_total: snap.view_change_causes.missing_payload_total,
@@ -21640,6 +22313,9 @@ pub async fn handle_v1_sumeragi_status(
                 last_quorum_timeout_timestamp_ms: snap
                     .view_change_causes
                     .last_quorum_timeout_timestamp_ms,
+                last_stake_quorum_timeout_timestamp_ms: snap
+                    .view_change_causes
+                    .last_stake_quorum_timeout_timestamp_ms,
                 last_da_gate_timestamp_ms: snap.view_change_causes.last_da_gate_timestamp_ms,
                 last_censorship_evidence_timestamp_ms: snap
                     .view_change_causes
@@ -21656,6 +22332,62 @@ pub async fn handle_v1_sumeragi_status(
             block_created_dropped_by_lock_total: snap.block_created_dropped_by_lock_total,
             block_created_hint_mismatch_total: snap.block_created_hint_mismatch_total,
             block_created_proposal_mismatch_total: snap.block_created_proposal_mismatch_total,
+            consensus_message_handling: SumeragiConsensusMessageHandlingStatus {
+                entries: snap
+                    .consensus_message_handling
+                    .entries
+                    .iter()
+                    .map(|entry| SumeragiConsensusMessageHandlingEntry {
+                        kind: entry.kind.as_str().to_owned(),
+                        outcome: entry.outcome.as_str().to_owned(),
+                        reason: entry.reason.as_str().to_owned(),
+                        total: entry.total,
+                    })
+                    .collect(),
+            },
+            vote_validation_drops: SumeragiVoteValidationDropStatus {
+                total: snap.vote_validation_drops.total,
+                entries: snap
+                    .vote_validation_drops
+                    .entries
+                    .iter()
+                    .map(|entry| SumeragiVoteValidationDropEntry {
+                        reason: entry.reason.as_str().to_owned(),
+                        height: entry.height,
+                        view: entry.view,
+                        epoch: entry.epoch,
+                        signer_index: entry.signer_index,
+                        peer_id: entry.peer_id.clone(),
+                        roster_hash: entry.roster_hash,
+                        roster_len: entry.roster_len,
+                        block_hash: entry.block_hash,
+                        timestamp_ms: entry.timestamp_ms,
+                    })
+                    .collect(),
+                peer_entries: snap
+                    .vote_validation_drops
+                    .peer_entries
+                    .iter()
+                    .map(|entry| SumeragiVoteValidationDropPeerEntry {
+                        peer_id: entry.peer_id.clone(),
+                        roster_hash: entry.roster_hash,
+                        roster_len: entry.roster_len,
+                        total: entry.total,
+                        reasons: entry
+                            .reasons
+                            .iter()
+                            .map(|reason| SumeragiVoteValidationDropReasonCount {
+                                reason: reason.reason.as_str().to_owned(),
+                                total: reason.total,
+                            })
+                            .collect(),
+                        last_height: entry.last_height,
+                        last_view: entry.last_view,
+                        last_epoch: entry.last_epoch,
+                        last_timestamp_ms: entry.last_timestamp_ms,
+                    })
+                    .collect(),
+            },
             validation_reject_total: snap.validation_reject_total,
             validation_reject_reason: snap.validation_reject_reason.map(ToOwned::to_owned),
             validation_rejects: SumeragiValidationRejectStatus {
@@ -21691,6 +22423,9 @@ pub async fn handle_v1_sumeragi_status(
                 roster_sidecar_total: snap.block_sync_roster.roster_sidecar_total,
                 commit_roster_journal_total: snap.block_sync_roster.commit_roster_journal_total,
                 drop_missing_total: snap.block_sync_roster.drop_missing_total,
+                drop_unsolicited_share_blocks_total: snap
+                    .block_sync_roster
+                    .drop_unsolicited_share_blocks_total,
             },
             pacemaker_backpressure_deferrals_total: snap.pacemaker_backpressure_deferrals_total,
             commit_pipeline_tick_total: snap.commit_pipeline_tick_total,
@@ -21771,6 +22506,20 @@ pub async fn handle_v1_sumeragi_status(
                     })
                     .collect(),
             },
+            rbc_mismatch: SumeragiRbcMismatchStatus {
+                entries: snap
+                    .rbc_mismatch
+                    .entries
+                    .iter()
+                    .map(|entry| SumeragiRbcMismatchEntry {
+                        peer_id: entry.peer_id.clone(),
+                        chunk_digest_mismatch_total: entry.chunk_digest_mismatch_total,
+                        payload_hash_mismatch_total: entry.payload_hash_mismatch_total,
+                        chunk_root_mismatch_total: entry.chunk_root_mismatch_total,
+                        last_timestamp_ms: entry.last_timestamp_ms,
+                    })
+                    .collect(),
+            },
             pending_rbc: SumeragiPendingRbcStatus {
                 sessions: snap.pending_rbc.sessions,
                 session_cap: snap.pending_rbc.session_cap,
@@ -21786,6 +22535,27 @@ pub async fn handle_v1_sumeragi_status(
                 drops_ttl_bytes_total: snap.pending_rbc.drops_ttl_bytes_total,
                 drops_bytes_total: snap.pending_rbc.drops_bytes_total,
                 evicted_total: snap.pending_rbc.evicted_total,
+                stash_ready_total: snap.pending_rbc.stash_ready_total,
+                stash_ready_init_missing_total: snap.pending_rbc.stash_ready_init_missing_total,
+                stash_ready_roster_missing_total: snap.pending_rbc.stash_ready_roster_missing_total,
+                stash_ready_roster_hash_mismatch_total: snap
+                    .pending_rbc
+                    .stash_ready_roster_hash_mismatch_total,
+                stash_ready_roster_unverified_total: snap
+                    .pending_rbc
+                    .stash_ready_roster_unverified_total,
+                stash_deliver_total: snap.pending_rbc.stash_deliver_total,
+                stash_deliver_init_missing_total: snap.pending_rbc.stash_deliver_init_missing_total,
+                stash_deliver_roster_missing_total: snap
+                    .pending_rbc
+                    .stash_deliver_roster_missing_total,
+                stash_deliver_roster_hash_mismatch_total: snap
+                    .pending_rbc
+                    .stash_deliver_roster_hash_mismatch_total,
+                stash_deliver_roster_unverified_total: snap
+                    .pending_rbc
+                    .stash_deliver_roster_unverified_total,
+                stash_chunk_total: snap.pending_rbc.stash_chunk_total,
                 entries: snap
                     .pending_rbc
                     .entries
@@ -21805,6 +22575,7 @@ pub async fn handle_v1_sumeragi_status(
                         age_ms: entry.age_ms,
                     })
                     .collect(),
+                ..Default::default()
             },
             tx_queue_depth: snap.tx_queue_depth,
             tx_queue_capacity: snap.tx_queue_capacity,
@@ -22619,12 +23390,24 @@ pub async fn handle_v1_sumeragi_rbc_status(
             m.sumeragi_rbc_ready_broadcasts_total.get(),
         ),
         json_entry(
+            "ready_rebroadcasts_skipped_total",
+            m.sumeragi_rbc_rebroadcast_skipped_total
+                .with_label_values(&["ready"])
+                .get(),
+        ),
+        json_entry(
             "deliver_broadcasts_total",
             m.sumeragi_rbc_deliver_broadcasts_total.get(),
         ),
         json_entry(
             "payload_bytes_delivered_total",
             m.sumeragi_rbc_payload_bytes_delivered_total.get(),
+        ),
+        json_entry(
+            "payload_rebroadcasts_skipped_total",
+            m.sumeragi_rbc_rebroadcast_skipped_total
+                .with_label_values(&["payload"])
+                .get(),
         ),
     ]);
     let body = norito::json::to_json_pretty(&payload).map_err(|e| {
@@ -25421,7 +26204,7 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
     let _topology = iroha_core::sumeragi::network_topology::Topology::new(vec![
         iroha_data_model::peer::PeerId::new(leader.public_key().clone()),
     ]);
-    let unverified = iroha_core::block::BlockBuilder::new(Vec::new())
+    let unverified = iroha_core::block::BlockBuilder::new(vec![dummy_accepted_transaction()])
         .chain(0, latest_block.as_deref())
         .sign(leader.private_key())
         .unpack(|_| {});
@@ -27635,7 +28418,7 @@ mod accounts_query_tests {
         // Register a domain with five accounts
         let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let _topology = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
-        let unverified = BlockBuilder::new(Vec::new())
+        let unverified = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, state.view().latest_block().as_deref())
             .sign(leader.private_key())
             .unpack(|_| {});
@@ -34429,6 +35212,1975 @@ fn validate_nfts_filter_adapter(expr: &FilterExpr) -> Result<()> {
         F::IsNull(_) | F::Lt(_, _) | F::Lte(_, _) | F::Gt(_, _) | F::Gte(_, _) => {
             Err(Error::Query(iroha_data_model::ValidationFail::TooComplex))
         }
+    }
+}
+
+// ---------------------- Subscription API ----------------------
+
+#[cfg(feature = "app_api")]
+fn parse_subscription_status_filter(raw: &str) -> Result<SubscriptionStatus> {
+    let status = match raw.trim().to_ascii_lowercase().as_str() {
+        "active" => SubscriptionStatus::Active,
+        "paused" => SubscriptionStatus::Paused,
+        "past_due" => SubscriptionStatus::PastDue,
+        "canceled" => SubscriptionStatus::Canceled,
+        "suspended" => SubscriptionStatus::Suspended,
+        other => {
+            return Err(conversion_error(format!(
+                "invalid subscription status `{other}`"
+            )));
+        }
+    };
+    Ok(status)
+}
+
+#[cfg(feature = "app_api")]
+fn subscription_plan_from_metadata(metadata: &Metadata) -> Result<Option<SubscriptionPlan>> {
+    let Some(value) = metadata.get(&*SUBSCRIPTION_PLAN_KEY) else {
+        return Ok(None);
+    };
+    let plan = value
+        .try_into_any_norito::<SubscriptionPlan>()
+        .map_err(|err| conversion_error(format!("invalid subscription plan metadata: {err}")))?;
+    Ok(Some(plan))
+}
+
+#[cfg(feature = "app_api")]
+fn subscription_state_from_metadata(metadata: &Metadata) -> Result<Option<SubscriptionState>> {
+    let Some(value) = metadata.get(&*SUBSCRIPTION_KEY) else {
+        return Ok(None);
+    };
+    let state = value
+        .try_into_any_norito::<SubscriptionState>()
+        .map_err(|err| conversion_error(format!("invalid subscription metadata: {err}")))?;
+    Ok(Some(state))
+}
+
+#[cfg(feature = "app_api")]
+fn subscription_invoice_from_metadata(metadata: &Metadata) -> Result<Option<SubscriptionInvoice>> {
+    let Some(value) = metadata.get(&*SUBSCRIPTION_INVOICE_KEY) else {
+        return Ok(None);
+    };
+    let invoice = value
+        .try_into_any_norito::<SubscriptionInvoice>()
+        .map_err(|err| conversion_error(format!("invalid subscription invoice metadata: {err}")))?;
+    Ok(Some(invoice))
+}
+
+#[cfg(feature = "app_api")]
+fn network_time_ms() -> Result<u64> {
+    let now = time::now().now;
+    let duration = now
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_err(|err| conversion_error(format!("invalid network time: {err}")))?;
+    u64::try_from(duration.as_millis())
+        .map_err(|_| conversion_error("network time milliseconds overflow".to_string()))
+}
+
+#[cfg(feature = "app_api")]
+fn default_charge_ms(now_ms: u64, billing: SubscriptionBilling) -> Result<u64> {
+    use iroha_primitives::calendar;
+
+    match billing.cadence {
+        SubscriptionCadence::MonthlyCalendar(cadence) => {
+            let anchor = calendar::monthly_anchor_at_or_before(
+                now_ms,
+                cadence.anchor_day,
+                cadence.anchor_time_ms,
+            )
+            .map_err(|err| conversion_error(format!("invalid cadence anchor: {err}")))?;
+            if anchor == now_ms {
+                Ok(now_ms)
+            } else {
+                calendar::monthly_anchor_after(now_ms, cadence.anchor_day, cadence.anchor_time_ms)
+                    .map_err(|err| conversion_error(format!("invalid cadence anchor: {err}")))
+            }
+        }
+        SubscriptionCadence::FixedPeriod(cadence) => {
+            if cadence.period_ms == 0 {
+                return Err(conversion_error(
+                    "billing period must be positive".to_string(),
+                ));
+            }
+            match billing.bill_for {
+                SubscriptionBillFor::PreviousPeriod => now_ms
+                    .checked_add(cadence.period_ms)
+                    .ok_or_else(|| conversion_error("billing period overflow".to_string())),
+                SubscriptionBillFor::NextPeriod => Ok(now_ms),
+            }
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn resolve_charge_ms(billing: SubscriptionBilling, requested: Option<u64>) -> Result<u64> {
+    if let Some(value) = requested {
+        return Ok(value);
+    }
+    let now_ms = network_time_ms()?;
+    default_charge_ms(now_ms, billing)
+}
+
+#[cfg(feature = "app_api")]
+fn initial_period_for_charge(
+    billing: SubscriptionBilling,
+    charge_at_ms: u64,
+) -> Result<(u64, u64)> {
+    use iroha_primitives::calendar;
+
+    match billing.cadence {
+        SubscriptionCadence::MonthlyCalendar(cadence) => {
+            let direction = match billing.bill_for {
+                SubscriptionBillFor::PreviousPeriod => calendar::BillingPeriod::Previous,
+                SubscriptionBillFor::NextPeriod => calendar::BillingPeriod::Next,
+            };
+            let period = calendar::monthly_billing_period(
+                charge_at_ms,
+                cadence.anchor_day,
+                cadence.anchor_time_ms,
+                direction,
+            )
+            .map_err(|err| conversion_error(format!("invalid cadence anchor: {err}")))?;
+            Ok((period.start_ms, period.end_ms))
+        }
+        SubscriptionCadence::FixedPeriod(cadence) => {
+            if cadence.period_ms == 0 {
+                return Err(conversion_error(
+                    "billing period must be positive".to_string(),
+                ));
+            }
+            match billing.bill_for {
+                SubscriptionBillFor::PreviousPeriod => {
+                    let start = charge_at_ms
+                        .checked_sub(cadence.period_ms)
+                        .ok_or_else(|| conversion_error("billing period overflow".to_string()))?;
+                    Ok((start, charge_at_ms))
+                }
+                SubscriptionBillFor::NextPeriod => charge_at_ms
+                    .checked_add(cadence.period_ms)
+                    .map(|end| (charge_at_ms, end))
+                    .ok_or_else(|| conversion_error("billing period overflow".to_string())),
+            }
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn derive_trigger_id(prefix: &str, subscription_id: &NftId) -> Result<TriggerId> {
+    let hash = Hash::new(subscription_id.to_string());
+    let name = format!("{prefix}{}", hex::encode(hash.as_ref()));
+    TriggerId::from_str(&name)
+        .map_err(|err| conversion_error(format!("invalid derived trigger id: {err}")))
+}
+
+#[cfg(feature = "app_api")]
+fn resolve_trigger_id(
+    prefix: &str,
+    subscription_id: &NftId,
+    explicit: Option<TriggerId>,
+) -> Result<TriggerId> {
+    explicit
+        .map(Ok)
+        .unwrap_or_else(|| derive_trigger_id(prefix, subscription_id))
+}
+
+#[cfg(feature = "app_api")]
+fn ivm_syscall_program(syscall: u32) -> IvmBytecode {
+    let opcode = u8::try_from(syscall).expect("syscall opcode fits in u8");
+    let mut code = Vec::new();
+    code.extend_from_slice(
+        &ivm::encoding::wide::encode_sys(ivm::instruction::wide::system::SCALL, opcode)
+            .to_le_bytes(),
+    );
+    code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    let mut blob = ivm::ProgramMetadata::default().encode();
+    blob.extend_from_slice(&code);
+    IvmBytecode::from_compiled(blob)
+}
+
+#[cfg(feature = "app_api")]
+fn build_billing_trigger(
+    trigger_id: TriggerId,
+    authority: AccountId,
+    subscription_id: NftId,
+    charge_at_ms: u64,
+) -> Trigger {
+    use iroha_data_model::events::time::{ExecutionTime, Schedule, TimeEventFilter};
+
+    let schedule = Schedule {
+        start_ms: charge_at_ms,
+        period_ms: None,
+    };
+    let mut metadata = Metadata::default();
+    metadata.insert(
+        (*SUBSCRIPTION_TRIGGER_REF_KEY).clone(),
+        IrohaJson::new(SubscriptionTriggerRef {
+            subscription_nft_id: subscription_id,
+        }),
+    );
+    let action = Action::new(
+        Executable::Ivm(ivm_syscall_program(
+            ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL,
+        )),
+        Repeats::Exactly(1),
+        authority,
+        TimeEventFilter(ExecutionTime::Schedule(schedule)),
+    )
+    .with_metadata(metadata);
+    Trigger::new(trigger_id, action)
+}
+
+#[cfg(feature = "app_api")]
+fn build_usage_trigger(trigger_id: TriggerId, authority: AccountId) -> Trigger {
+    use iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter;
+
+    let action = Action::new(
+        Executable::Ivm(ivm_syscall_program(
+            ivm::syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE,
+        )),
+        Repeats::Indefinitely,
+        authority.clone(),
+        ExecuteTriggerEventFilter::new()
+            .for_trigger(trigger_id.clone())
+            .under_authority(authority),
+    );
+    Trigger::new(trigger_id, action)
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_v1_subscription_plan(
+    chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
+    NoritoJson(req): NoritoJson<SubscriptionPlanCreateDto>,
+) -> Result<impl IntoResponse> {
+    let SubscriptionPlanCreateDto {
+        authority,
+        private_key,
+        plan_id,
+        plan,
+    } = req;
+
+    if plan.provider != authority {
+        return Err(conversion_error(
+            "plan provider must match authority".to_string(),
+        ));
+    }
+
+    let plan_key = (*SUBSCRIPTION_PLAN_KEY).clone();
+    let instructions = vec![
+        InstructionBox::from(Register::asset_definition(AssetDefinition::numeric(
+            plan_id.clone(),
+        ))),
+        InstructionBox::from(SetKeyValue::asset_definition(
+            plan_id.clone(),
+            plan_key,
+            IrohaJson::new(plan),
+        )),
+    ];
+
+    let tx = TransactionBuilder::new((*chain_id).clone(), authority.clone())
+        .with_instructions(instructions)
+        .sign(&private_key.0);
+    let tx_hash_hex = hex::encode(tx.hash().as_ref());
+
+    handle_transaction_with_metrics(
+        chain_id,
+        queue,
+        state,
+        tx,
+        telemetry,
+        ENDPOINT_SUBSCRIPTION_PLANS_LIST,
+    )
+    .await?;
+
+    let payload = SubscriptionPlanCreateResponseDto {
+        ok: true,
+        plan_id,
+        tx_hash_hex,
+    };
+    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_subscription_plans(
+    state: Arc<CoreState>,
+    crate::NoritoQuery(params): crate::NoritoQuery<SubscriptionPlanListParams>,
+) -> Result<impl IntoResponse> {
+    let provider = match params.provider {
+        Some(raw) if !raw.trim().is_empty() => Some(
+            raw.parse::<AccountId>()
+                .map_err(|err| conversion_error(format!("invalid provider id: {err}")))?,
+        ),
+        _ => None,
+    };
+
+    let state_view = state.view();
+    let cap = app_query_page_cap(&state);
+    let pagination = enforce_app_pagination(
+        params.limit,
+        params.offset,
+        cap,
+        ENDPOINT_SUBSCRIPTION_PLANS_LIST,
+    )?;
+
+    let mut items_with_keys = Vec::new();
+    for def in state_view.world().asset_definitions_iter() {
+        let Some(plan) = subscription_plan_from_metadata(def.metadata())? else {
+            continue;
+        };
+        if let Some(ref provider_id) = provider {
+            if &plan.provider != provider_id {
+                continue;
+            }
+        }
+        items_with_keys.push((
+            def.id().to_string(),
+            SubscriptionPlanListItem {
+                plan_id: def.id().clone(),
+                plan,
+            },
+        ));
+    }
+
+    let (items, total) =
+        collect_page_streaming(items_with_keys, pagination.offset, pagination.limit, None);
+    let payload = SubscriptionPlanListResponseDto {
+        items,
+        total: total as u64,
+    };
+    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_v1_subscription_create(
+    chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
+    NoritoJson(req): NoritoJson<SubscriptionCreateDto>,
+) -> Result<impl IntoResponse> {
+    use iroha_executor_data_model::permission::trigger::CanExecuteTrigger;
+
+    let SubscriptionCreateDto {
+        authority,
+        private_key,
+        subscription_id,
+        plan_id,
+        billing_trigger_id,
+        usage_trigger_id,
+        first_charge_ms,
+        grant_usage_to_provider,
+    } = req;
+
+    let (plan, charge_at_ms, period_start, period_end, billing_trigger_id, usage_trigger_id) = {
+        let view = state.view();
+        let plan_def = view
+            .world()
+            .asset_definitions()
+            .get(&plan_id)
+            .ok_or_else(|| {
+                conversion_error(format!("plan asset definition `{plan_id}` not found"))
+            })?;
+        let plan = subscription_plan_from_metadata(plan_def.metadata())?
+            .ok_or_else(|| conversion_error("plan metadata missing".to_string()))?;
+        let charge_at_ms = resolve_charge_ms(plan.billing, first_charge_ms)?;
+        let (period_start, period_end) = initial_period_for_charge(plan.billing, charge_at_ms)?;
+        let billing_trigger_id =
+            resolve_trigger_id("sub_bill_", &subscription_id, billing_trigger_id)?;
+        let usage_trigger_id = match &plan.pricing {
+            SubscriptionPricing::Usage(_) => Some(resolve_trigger_id(
+                "sub_usage_",
+                &subscription_id,
+                usage_trigger_id,
+            )?),
+            SubscriptionPricing::Fixed(_) => {
+                if usage_trigger_id.is_some() {
+                    return Err(conversion_error(
+                        "usage_trigger_id requires usage pricing".to_string(),
+                    ));
+                }
+                None
+            }
+        };
+        (
+            plan,
+            charge_at_ms,
+            period_start,
+            period_end,
+            billing_trigger_id,
+            usage_trigger_id,
+        )
+    };
+
+    let subscription_state = SubscriptionState {
+        plan_id: plan_id.clone(),
+        provider: plan.provider.clone(),
+        subscriber: authority.clone(),
+        status: SubscriptionStatus::Active,
+        current_period_start_ms: period_start,
+        current_period_end_ms: period_end,
+        next_charge_ms: charge_at_ms,
+        cancel_at_period_end: false,
+        cancel_at_ms: None,
+        failure_count: 0,
+        usage_accumulated: std::collections::BTreeMap::new(),
+        billing_trigger_id: billing_trigger_id.clone(),
+    };
+
+    let mut metadata = Metadata::default();
+    metadata.insert(
+        (*SUBSCRIPTION_KEY).clone(),
+        IrohaJson::new(subscription_state),
+    );
+
+    let mut instructions = Vec::new();
+    instructions.push(InstructionBox::from(Register::nft(Nft::new(
+        subscription_id.clone(),
+        metadata,
+    ))));
+    instructions.push(InstructionBox::from(Register::trigger(
+        build_billing_trigger(
+            billing_trigger_id.clone(),
+            authority.clone(),
+            subscription_id.clone(),
+            charge_at_ms,
+        ),
+    )));
+
+    if let Some(ref usage_trigger_id) = usage_trigger_id {
+        instructions.push(InstructionBox::from(Register::trigger(
+            build_usage_trigger(usage_trigger_id.clone(), authority.clone()),
+        )));
+        let grant_provider = grant_usage_to_provider.unwrap_or(true);
+        if grant_provider && plan.provider != authority {
+            let perm: Permission = CanExecuteTrigger {
+                trigger: usage_trigger_id.clone(),
+            }
+            .into();
+            instructions.push(InstructionBox::from(Grant::account_permission(
+                perm,
+                plan.provider.clone(),
+            )));
+        }
+    }
+
+    let tx = TransactionBuilder::new((*chain_id).clone(), authority.clone())
+        .with_instructions(instructions)
+        .sign(&private_key.0);
+    let tx_hash_hex = hex::encode(tx.hash().as_ref());
+
+    handle_transaction_with_metrics(
+        chain_id,
+        queue,
+        state,
+        tx,
+        telemetry,
+        ENDPOINT_SUBSCRIPTIONS_LIST,
+    )
+    .await?;
+
+    let payload = SubscriptionCreateResponseDto {
+        ok: true,
+        subscription_id,
+        billing_trigger_id,
+        usage_trigger_id,
+        first_charge_ms: charge_at_ms,
+        tx_hash_hex,
+    };
+    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_subscriptions(
+    state: Arc<CoreState>,
+    crate::NoritoQuery(params): crate::NoritoQuery<SubscriptionListParams>,
+) -> Result<impl IntoResponse> {
+    let owned_by = match params.owned_by {
+        Some(raw) if !raw.trim().is_empty() => Some(
+            raw.parse::<AccountId>()
+                .map_err(|err| conversion_error(format!("invalid subscriber id: {err}")))?,
+        ),
+        _ => None,
+    };
+    let provider = match params.provider {
+        Some(raw) if !raw.trim().is_empty() => Some(
+            raw.parse::<AccountId>()
+                .map_err(|err| conversion_error(format!("invalid provider id: {err}")))?,
+        ),
+        _ => None,
+    };
+    let status = params
+        .status
+        .as_ref()
+        .map(|raw| parse_subscription_status_filter(raw))
+        .transpose()?;
+
+    let state_view = state.view();
+    let cap = app_query_page_cap(&state);
+    let pagination = enforce_app_pagination(
+        params.limit,
+        params.offset,
+        cap,
+        ENDPOINT_SUBSCRIPTIONS_LIST,
+    )?;
+
+    let mut plan_cache: std::collections::BTreeMap<AssetDefinitionId, SubscriptionPlan> =
+        std::collections::BTreeMap::new();
+    let mut items_with_keys = Vec::new();
+    for nft in state_view.world().nfts_iter() {
+        let Some(subscription) = subscription_state_from_metadata(&nft.content)? else {
+            continue;
+        };
+        if let Some(ref owner_id) = owned_by {
+            if &nft.owned_by != owner_id {
+                continue;
+            }
+        }
+        if let Some(ref provider_id) = provider {
+            if &subscription.provider != provider_id {
+                continue;
+            }
+        }
+        if let Some(status_filter) = status {
+            if subscription.status != status_filter {
+                continue;
+            }
+        }
+        let invoice = subscription_invoice_from_metadata(&nft.content)?;
+        let plan = if let Some(plan) = plan_cache.get(&subscription.plan_id) {
+            Some(plan.clone())
+        } else {
+            let plan = match state_view
+                .world()
+                .asset_definitions()
+                .get(&subscription.plan_id)
+            {
+                Some(def) => subscription_plan_from_metadata(def.metadata())?,
+                None => None,
+            };
+            if let Some(ref plan) = plan {
+                plan_cache.insert(subscription.plan_id.clone(), plan.clone());
+            }
+            plan
+        };
+        items_with_keys.push((
+            nft.id().to_string(),
+            SubscriptionListItem {
+                subscription_id: nft.id().clone(),
+                subscription,
+                invoice,
+                plan,
+            },
+        ));
+    }
+
+    let (items, total) =
+        collect_page_streaming(items_with_keys, pagination.offset, pagination.limit, None);
+    let payload = SubscriptionListResponseDto {
+        items,
+        total: total as u64,
+    };
+    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_subscription_get(
+    state: Arc<CoreState>,
+    subscription_id: NftId,
+) -> Result<impl IntoResponse> {
+    let view = state.view();
+    let nft = view
+        .world()
+        .nfts()
+        .get(&subscription_id)
+        .ok_or_else(|| conversion_error("subscription nft not found".to_string()))?;
+    let subscription = subscription_state_from_metadata(&nft.content)?
+        .ok_or_else(|| conversion_error("subscription metadata missing".to_string()))?;
+    let invoice = subscription_invoice_from_metadata(&nft.content)?;
+    let plan = match view.world().asset_definitions().get(&subscription.plan_id) {
+        Some(def) => subscription_plan_from_metadata(def.metadata())?,
+        None => None,
+    };
+
+    let payload = SubscriptionGetResponseDto {
+        subscription_id,
+        subscription,
+        invoice,
+        plan,
+    };
+    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_v1_subscription_pause(
+    chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
+    subscription_id: NftId,
+    NoritoJson(req): NoritoJson<SubscriptionActionDto>,
+) -> Result<impl IntoResponse> {
+    let SubscriptionActionDto {
+        authority,
+        private_key,
+        ..
+    } = req;
+
+    let (mut subscription_state, owner, billing_trigger_exists) = {
+        let view = state.view();
+        let nft = view
+            .world()
+            .nfts()
+            .get(&subscription_id)
+            .ok_or_else(|| conversion_error("subscription nft not found".to_string()))?;
+        let subscription_state = subscription_state_from_metadata(&nft.content)?
+            .ok_or_else(|| conversion_error("subscription metadata missing".to_string()))?;
+        let owner = nft.owned_by.clone();
+        let billing_trigger_exists = view
+            .world()
+            .triggers()
+            .time_triggers()
+            .get(&subscription_state.billing_trigger_id)
+            .is_some();
+        (subscription_state, owner, billing_trigger_exists)
+    };
+    if owner != authority {
+        return Err(conversion_error(
+            "subscription owner must match authority".to_string(),
+        ));
+    }
+    if matches!(
+        subscription_state.status,
+        SubscriptionStatus::Canceled | SubscriptionStatus::Suspended
+    ) {
+        return Err(conversion_error(
+            "subscription cannot be paused from current status".to_string(),
+        ));
+    }
+    subscription_state.status = SubscriptionStatus::Paused;
+    let billing_trigger_id = subscription_state.billing_trigger_id.clone();
+
+    let mut instructions = Vec::new();
+    instructions.push(InstructionBox::from(SetKeyValue::nft(
+        subscription_id.clone(),
+        (*SUBSCRIPTION_KEY).clone(),
+        IrohaJson::new(subscription_state.clone()),
+    )));
+    if billing_trigger_exists {
+        instructions.push(InstructionBox::from(Unregister::trigger(
+            billing_trigger_id,
+        )));
+    }
+
+    let tx = TransactionBuilder::new((*chain_id).clone(), authority.clone())
+        .with_instructions(instructions)
+        .sign(&private_key.0);
+    let tx_hash_hex = hex::encode(tx.hash().as_ref());
+    handle_transaction_with_metrics(
+        chain_id,
+        queue,
+        state,
+        tx,
+        telemetry,
+        ENDPOINT_SUBSCRIPTIONS_LIST,
+    )
+    .await?;
+
+    let payload = SubscriptionActionResponseDto {
+        ok: true,
+        subscription_id,
+        tx_hash_hex,
+    };
+    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_v1_subscription_resume(
+    chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
+    subscription_id: NftId,
+    NoritoJson(req): NoritoJson<SubscriptionActionDto>,
+) -> Result<impl IntoResponse> {
+    let SubscriptionActionDto {
+        authority,
+        private_key,
+        charge_at_ms,
+        ..
+    } = req;
+
+    let (mut subscription_state, owner, plan, billing_trigger_exists) = {
+        let view = state.view();
+        let nft = view
+            .world()
+            .nfts()
+            .get(&subscription_id)
+            .ok_or_else(|| conversion_error("subscription nft not found".to_string()))?;
+        let subscription_state = subscription_state_from_metadata(&nft.content)?
+            .ok_or_else(|| conversion_error("subscription metadata missing".to_string()))?;
+        let owner = nft.owned_by.clone();
+        let plan_def = view
+            .world()
+            .asset_definitions()
+            .get(&subscription_state.plan_id)
+            .ok_or_else(|| conversion_error("plan asset definition not found".to_string()))?;
+        let plan = subscription_plan_from_metadata(plan_def.metadata())?
+            .ok_or_else(|| conversion_error("plan metadata missing".to_string()))?;
+        let billing_trigger_exists = view
+            .world()
+            .triggers()
+            .time_triggers()
+            .get(&subscription_state.billing_trigger_id)
+            .is_some();
+        (subscription_state, owner, plan, billing_trigger_exists)
+    };
+    if owner != authority {
+        return Err(conversion_error(
+            "subscription owner must match authority".to_string(),
+        ));
+    }
+    if subscription_state.status != SubscriptionStatus::Paused {
+        return Err(conversion_error("subscription is not paused".to_string()));
+    }
+
+    let next_charge_ms = resolve_charge_ms(plan.billing, charge_at_ms)?;
+    let (period_start, period_end) = initial_period_for_charge(plan.billing, next_charge_ms)?;
+    subscription_state.status = SubscriptionStatus::Active;
+    subscription_state.failure_count = 0;
+    subscription_state.next_charge_ms = next_charge_ms;
+    subscription_state.current_period_start_ms = period_start;
+    subscription_state.current_period_end_ms = period_end;
+
+    let mut instructions = Vec::new();
+    instructions.push(InstructionBox::from(SetKeyValue::nft(
+        subscription_id.clone(),
+        (*SUBSCRIPTION_KEY).clone(),
+        IrohaJson::new(subscription_state.clone()),
+    )));
+    if billing_trigger_exists {
+        instructions.push(InstructionBox::from(Unregister::trigger(
+            subscription_state.billing_trigger_id.clone(),
+        )));
+    }
+    instructions.push(InstructionBox::from(Register::trigger(
+        build_billing_trigger(
+            subscription_state.billing_trigger_id.clone(),
+            authority.clone(),
+            subscription_id.clone(),
+            next_charge_ms,
+        ),
+    )));
+    let tx = TransactionBuilder::new((*chain_id).clone(), authority.clone())
+        .with_instructions(instructions)
+        .sign(&private_key.0);
+    let tx_hash_hex = hex::encode(tx.hash().as_ref());
+    handle_transaction_with_metrics(
+        chain_id,
+        queue,
+        state,
+        tx,
+        telemetry,
+        ENDPOINT_SUBSCRIPTIONS_LIST,
+    )
+    .await?;
+
+    let payload = SubscriptionActionResponseDto {
+        ok: true,
+        subscription_id,
+        tx_hash_hex,
+    };
+    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_v1_subscription_cancel(
+    chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
+    subscription_id: NftId,
+    NoritoJson(req): NoritoJson<SubscriptionActionDto>,
+) -> Result<impl IntoResponse> {
+    let SubscriptionActionDto {
+        authority,
+        private_key,
+        cancel_mode,
+        ..
+    } = req;
+
+    let (mut subscription_state, owner, billing_trigger_exists) = {
+        let view = state.view();
+        let nft = view
+            .world()
+            .nfts()
+            .get(&subscription_id)
+            .ok_or_else(|| conversion_error("subscription nft not found".to_string()))?;
+        let subscription_state = subscription_state_from_metadata(&nft.content)?
+            .ok_or_else(|| conversion_error("subscription metadata missing".to_string()))?;
+        let owner = nft.owned_by.clone();
+        let billing_trigger_exists = view
+            .world()
+            .triggers()
+            .time_triggers()
+            .get(&subscription_state.billing_trigger_id)
+            .is_some();
+        (subscription_state, owner, billing_trigger_exists)
+    };
+    if owner != authority {
+        return Err(conversion_error(
+            "subscription owner must match authority".to_string(),
+        ));
+    }
+    let cancel_mode = cancel_mode.unwrap_or(SubscriptionCancelMode::Immediate);
+    let mut instructions = Vec::new();
+    match cancel_mode {
+        SubscriptionCancelMode::Immediate => {
+            subscription_state.status = SubscriptionStatus::Canceled;
+            subscription_state.cancel_at_period_end = false;
+            subscription_state.cancel_at_ms = None;
+            instructions.push(InstructionBox::from(SetKeyValue::nft(
+                subscription_id.clone(),
+                (*SUBSCRIPTION_KEY).clone(),
+                IrohaJson::new(subscription_state.clone()),
+            )));
+            if billing_trigger_exists {
+                instructions.push(InstructionBox::from(Unregister::trigger(
+                    subscription_state.billing_trigger_id,
+                )));
+            }
+        }
+        SubscriptionCancelMode::PeriodEnd => {
+            if !matches!(
+                subscription_state.status,
+                SubscriptionStatus::Active | SubscriptionStatus::PastDue
+            ) {
+                return Err(conversion_error(
+                    "subscription must be active to cancel at period end".to_string(),
+                ));
+            }
+            subscription_state.cancel_at_period_end = true;
+            subscription_state.cancel_at_ms = Some(subscription_state.current_period_end_ms);
+            instructions.push(InstructionBox::from(SetKeyValue::nft(
+                subscription_id.clone(),
+                (*SUBSCRIPTION_KEY).clone(),
+                IrohaJson::new(subscription_state.clone()),
+            )));
+        }
+    }
+
+    let tx = TransactionBuilder::new((*chain_id).clone(), authority.clone())
+        .with_instructions(instructions)
+        .sign(&private_key.0);
+    let tx_hash_hex = hex::encode(tx.hash().as_ref());
+    handle_transaction_with_metrics(
+        chain_id,
+        queue,
+        state,
+        tx,
+        telemetry,
+        ENDPOINT_SUBSCRIPTIONS_LIST,
+    )
+    .await?;
+
+    let payload = SubscriptionActionResponseDto {
+        ok: true,
+        subscription_id,
+        tx_hash_hex,
+    };
+    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_v1_subscription_keep(
+    chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
+    subscription_id: NftId,
+    NoritoJson(req): NoritoJson<SubscriptionActionDto>,
+) -> Result<impl IntoResponse> {
+    let SubscriptionActionDto {
+        authority,
+        private_key,
+        ..
+    } = req;
+
+    let (mut subscription_state, owner) = {
+        let view = state.view();
+        let nft = view
+            .world()
+            .nfts()
+            .get(&subscription_id)
+            .ok_or_else(|| conversion_error("subscription nft not found".to_string()))?;
+        let subscription_state = subscription_state_from_metadata(&nft.content)?
+            .ok_or_else(|| conversion_error("subscription metadata missing".to_string()))?;
+        let owner = nft.owned_by.clone();
+        (subscription_state, owner)
+    };
+    if owner != authority {
+        return Err(conversion_error(
+            "subscription owner must match authority".to_string(),
+        ));
+    }
+    if !subscription_state.cancel_at_period_end {
+        return Err(conversion_error(
+            "subscription is not scheduled to cancel at period end".to_string(),
+        ));
+    }
+    if matches!(
+        subscription_state.status,
+        SubscriptionStatus::Canceled | SubscriptionStatus::Suspended
+    ) {
+        return Err(conversion_error(
+            "subscription cannot be kept from current status".to_string(),
+        ));
+    }
+    subscription_state.cancel_at_period_end = false;
+    subscription_state.cancel_at_ms = None;
+
+    let instructions = vec![InstructionBox::from(SetKeyValue::nft(
+        subscription_id.clone(),
+        (*SUBSCRIPTION_KEY).clone(),
+        IrohaJson::new(subscription_state.clone()),
+    ))];
+
+    let tx = TransactionBuilder::new((*chain_id).clone(), authority.clone())
+        .with_instructions(instructions)
+        .sign(&private_key.0);
+    let tx_hash_hex = hex::encode(tx.hash().as_ref());
+    handle_transaction_with_metrics(
+        chain_id,
+        queue,
+        state,
+        tx,
+        telemetry,
+        ENDPOINT_SUBSCRIPTIONS_LIST,
+    )
+    .await?;
+
+    let payload = SubscriptionActionResponseDto {
+        ok: true,
+        subscription_id,
+        tx_hash_hex,
+    };
+    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_v1_subscription_charge_now(
+    chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
+    subscription_id: NftId,
+    NoritoJson(req): NoritoJson<SubscriptionActionDto>,
+) -> Result<impl IntoResponse> {
+    let SubscriptionActionDto {
+        authority,
+        private_key,
+        charge_at_ms,
+        ..
+    } = req;
+
+    let (mut subscription_state, owner, billing_trigger_exists) = {
+        let view = state.view();
+        let nft = view
+            .world()
+            .nfts()
+            .get(&subscription_id)
+            .ok_or_else(|| conversion_error("subscription nft not found".to_string()))?;
+        let subscription_state = subscription_state_from_metadata(&nft.content)?
+            .ok_or_else(|| conversion_error("subscription metadata missing".to_string()))?;
+        let owner = nft.owned_by.clone();
+        let billing_trigger_exists = view
+            .world()
+            .triggers()
+            .time_triggers()
+            .get(&subscription_state.billing_trigger_id)
+            .is_some();
+        (subscription_state, owner, billing_trigger_exists)
+    };
+    if owner != authority {
+        return Err(conversion_error(
+            "subscription owner must match authority".to_string(),
+        ));
+    }
+    if matches!(
+        subscription_state.status,
+        SubscriptionStatus::Paused | SubscriptionStatus::Canceled | SubscriptionStatus::Suspended
+    ) {
+        return Err(conversion_error(
+            "subscription cannot be charged from current status".to_string(),
+        ));
+    }
+
+    let charge_at_ms = charge_at_ms.unwrap_or(network_time_ms()?);
+    subscription_state.next_charge_ms = charge_at_ms;
+
+    let mut instructions = Vec::new();
+    instructions.push(InstructionBox::from(SetKeyValue::nft(
+        subscription_id.clone(),
+        (*SUBSCRIPTION_KEY).clone(),
+        IrohaJson::new(subscription_state.clone()),
+    )));
+    if billing_trigger_exists {
+        instructions.push(InstructionBox::from(Unregister::trigger(
+            subscription_state.billing_trigger_id.clone(),
+        )));
+    }
+    instructions.push(InstructionBox::from(Register::trigger(
+        build_billing_trigger(
+            subscription_state.billing_trigger_id.clone(),
+            authority.clone(),
+            subscription_id.clone(),
+            charge_at_ms,
+        ),
+    )));
+    let tx = TransactionBuilder::new((*chain_id).clone(), authority.clone())
+        .with_instructions(instructions)
+        .sign(&private_key.0);
+    let tx_hash_hex = hex::encode(tx.hash().as_ref());
+    handle_transaction_with_metrics(
+        chain_id,
+        queue,
+        state,
+        tx,
+        telemetry,
+        ENDPOINT_SUBSCRIPTIONS_LIST,
+    )
+    .await?;
+
+    let payload = SubscriptionActionResponseDto {
+        ok: true,
+        subscription_id,
+        tx_hash_hex,
+    };
+    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_v1_subscription_usage(
+    chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
+    subscription_id: NftId,
+    NoritoJson(req): NoritoJson<SubscriptionUsageRequestDto>,
+) -> Result<impl IntoResponse> {
+    let SubscriptionUsageRequestDto {
+        authority,
+        private_key,
+        unit_key,
+        delta,
+        usage_trigger_id,
+    } = req;
+
+    if delta < Numeric::zero() {
+        return Err(conversion_error(
+            "usage delta must be non-negative".to_string(),
+        ));
+    }
+
+    let trigger_id = resolve_trigger_id("sub_usage_", &subscription_id, usage_trigger_id)?;
+    let usage_args = SubscriptionUsageDelta {
+        subscription_nft_id: subscription_id.clone(),
+        unit_key,
+        delta,
+    };
+    let instruction = ExecuteTrigger::new(trigger_id).with_args(usage_args);
+    let tx = TransactionBuilder::new((*chain_id).clone(), authority.clone())
+        .with_instructions([InstructionBox::from(instruction)])
+        .sign(&private_key.0);
+    let tx_hash_hex = hex::encode(tx.hash().as_ref());
+    handle_transaction_with_metrics(
+        chain_id,
+        queue,
+        state,
+        tx,
+        telemetry,
+        ENDPOINT_SUBSCRIPTIONS_LIST,
+    )
+    .await?;
+
+    let payload = SubscriptionActionResponseDto {
+        ok: true,
+        subscription_id,
+        tx_hash_hex,
+    };
+    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod subscription_api_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    use http_body_util::BodyExt as _;
+    use iroha_config::parameters::actual::Queue as QueueConfig;
+    use iroha_core::{
+        EventsSender, kura::Kura, query::store::LiveQueryStore, queue::Queue, state::World,
+    };
+    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
+
+    #[test]
+    fn derive_trigger_id_is_deterministic() {
+        let subscription_id: NftId = "sub1$wonderland".parse().unwrap();
+        let bill = derive_trigger_id("sub_bill_", &subscription_id).unwrap();
+        let bill2 = derive_trigger_id("sub_bill_", &subscription_id).unwrap();
+        let usage = derive_trigger_id("sub_usage_", &subscription_id).unwrap();
+        assert_eq!(bill, bill2);
+        assert_ne!(bill, usage);
+    }
+
+    #[test]
+    fn default_charge_ms_fixed_period_respects_bill_for() {
+        let billing = SubscriptionBilling {
+            cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
+                period_ms: 1_000,
+            }),
+            bill_for: SubscriptionBillFor::PreviousPeriod,
+            retry_backoff_ms: 0,
+            max_failures: 0,
+            grace_ms: 0,
+        };
+        assert_eq!(default_charge_ms(10_000, billing).unwrap(), 11_000);
+
+        let billing_next = SubscriptionBilling {
+            bill_for: SubscriptionBillFor::NextPeriod,
+            ..billing
+        };
+        assert_eq!(default_charge_ms(10_000, billing_next).unwrap(), 10_000);
+    }
+
+    #[test]
+    fn initial_period_fixed_period_matches_charge_window() {
+        let billing = SubscriptionBilling {
+            cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
+                period_ms: 2_000,
+            }),
+            bill_for: SubscriptionBillFor::PreviousPeriod,
+            retry_backoff_ms: 0,
+            max_failures: 0,
+            grace_ms: 0,
+        };
+        let (start, end) = initial_period_for_charge(billing, 10_000).unwrap();
+        assert_eq!(start, 8_000);
+        assert_eq!(end, 10_000);
+
+        let billing_next = SubscriptionBilling {
+            bill_for: SubscriptionBillFor::NextPeriod,
+            ..billing
+        };
+        let (start, end) = initial_period_for_charge(billing_next, 10_000).unwrap();
+        assert_eq!(start, 10_000);
+        assert_eq!(end, 12_000);
+    }
+
+    #[test]
+    fn parse_subscription_status_filter_accepts_known_values() {
+        assert_eq!(
+            parse_subscription_status_filter("active").unwrap(),
+            SubscriptionStatus::Active
+        );
+        assert_eq!(
+            parse_subscription_status_filter("past_due").unwrap(),
+            SubscriptionStatus::PastDue
+        );
+        assert!(parse_subscription_status_filter("unknown").is_err());
+    }
+
+    #[test]
+    fn subscription_plan_from_metadata_roundtrips() {
+        let plan = SubscriptionPlan {
+            provider: ALICE_ID.clone(),
+            billing: SubscriptionBilling {
+                cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
+                    period_ms: 1_000,
+                }),
+                bill_for: SubscriptionBillFor::NextPeriod,
+                retry_backoff_ms: 0,
+                max_failures: 0,
+                grace_ms: 0,
+            },
+            pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
+                amount: Numeric::new(10_u32, 0),
+                asset_definition: "usd#wonderland".parse().unwrap(),
+            }),
+        };
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            (*SUBSCRIPTION_PLAN_KEY).clone(),
+            IrohaJson::new(plan.clone()),
+        );
+        let parsed = subscription_plan_from_metadata(&metadata)
+            .unwrap()
+            .expect("plan metadata present");
+        assert_eq!(parsed, plan);
+    }
+
+    #[test]
+    fn subscription_state_and_invoice_from_metadata_roundtrip() {
+        let billing_trigger_id: TriggerId = "billing_trigger".parse().unwrap();
+        let subscription = SubscriptionState {
+            plan_id: "plan#wonderland".parse().unwrap(),
+            provider: ALICE_ID.clone(),
+            subscriber: ALICE_ID.clone(),
+            status: SubscriptionStatus::Active,
+            current_period_start_ms: 1_000,
+            current_period_end_ms: 2_000,
+            next_charge_ms: 2_000,
+            cancel_at_period_end: false,
+            cancel_at_ms: None,
+            failure_count: 0,
+            usage_accumulated: std::collections::BTreeMap::new(),
+            billing_trigger_id,
+        };
+        let invoice = SubscriptionInvoice {
+            subscription_nft_id: "sub1$wonderland".parse().unwrap(),
+            period_start_ms: 1_000,
+            period_end_ms: 2_000,
+            attempted_at_ms: 2_000,
+            amount: Numeric::new(5_u32, 0),
+            asset_definition: "usd#wonderland".parse().unwrap(),
+            status: SubscriptionInvoiceStatus::Paid,
+            tx_hash: None,
+        };
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            (*SUBSCRIPTION_KEY).clone(),
+            IrohaJson::new(subscription.clone()),
+        );
+        metadata.insert(
+            (*SUBSCRIPTION_INVOICE_KEY).clone(),
+            IrohaJson::new(invoice.clone()),
+        );
+        let parsed_state = subscription_state_from_metadata(&metadata)
+            .unwrap()
+            .expect("state present");
+        let parsed_invoice = subscription_invoice_from_metadata(&metadata)
+            .unwrap()
+            .expect("invoice present");
+        assert_eq!(parsed_state, subscription);
+        assert_eq!(parsed_invoice, invoice);
+    }
+
+    #[test]
+    fn resolve_charge_ms_prefers_explicit() {
+        let billing = SubscriptionBilling {
+            cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
+                period_ms: 1_000,
+            }),
+            bill_for: SubscriptionBillFor::NextPeriod,
+            retry_backoff_ms: 0,
+            max_failures: 0,
+            grace_ms: 0,
+        };
+        assert_eq!(resolve_charge_ms(billing, Some(42_000)).unwrap(), 42_000);
+    }
+
+    #[test]
+    fn resolve_trigger_id_prefers_explicit() {
+        let subscription_id: NftId = "sub2$wonderland".parse().unwrap();
+        let explicit: TriggerId = "explicit_trigger".parse().unwrap();
+        let resolved =
+            resolve_trigger_id("sub_bill_", &subscription_id, Some(explicit.clone())).unwrap();
+        assert_eq!(resolved, explicit);
+    }
+
+    #[test]
+    fn network_time_ms_is_nonzero() {
+        let now = network_time_ms().unwrap();
+        assert!(now > 0);
+    }
+
+    #[test]
+    fn ivm_syscall_program_emits_bytecode() {
+        let program = ivm_syscall_program(ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL);
+        assert!(!program.as_ref().is_empty());
+    }
+
+    #[test]
+    fn build_billing_trigger_attaches_metadata_and_schedule() {
+        use iroha_data_model::events::{EventFilterBox, time::ExecutionTime};
+        let trigger_id: TriggerId = "bill_trigger".parse().unwrap();
+        let subscription_id: NftId = "sub3$wonderland".parse().unwrap();
+        let authority = ALICE_ID.clone();
+        let trigger = build_billing_trigger(
+            trigger_id.clone(),
+            authority.clone(),
+            subscription_id.clone(),
+            55,
+        );
+        assert_eq!(trigger.id(), &trigger_id);
+        let meta = trigger.metadata();
+        let ref_value = meta
+            .get(&*SUBSCRIPTION_TRIGGER_REF_KEY)
+            .expect("subscription_ref metadata");
+        let parsed: SubscriptionTriggerRef = ref_value.try_into_any_norito().unwrap();
+        assert_eq!(parsed.subscription_nft_id, subscription_id);
+        match trigger.action().filter() {
+            EventFilterBox::Time(filter) => match filter.0 {
+                ExecutionTime::Schedule(schedule) => {
+                    assert_eq!(schedule.start_ms, 55);
+                    assert_eq!(schedule.period_ms, None);
+                }
+                _ => panic!("expected schedule execution time"),
+            },
+            _ => panic!("expected time filter"),
+        }
+        assert_eq!(trigger.action().authority(), &authority);
+    }
+
+    #[test]
+    fn build_usage_trigger_uses_execute_filter() {
+        use iroha_data_model::events::{
+            EventFilterBox, execute_trigger::ExecuteTriggerEventFilter,
+        };
+        let trigger_id: TriggerId = "usage_trigger".parse().unwrap();
+        let authority = ALICE_ID.clone();
+        let trigger = build_usage_trigger(trigger_id.clone(), authority.clone());
+        match trigger.action().filter() {
+            EventFilterBox::ExecuteTrigger(filter) => {
+                let expected = ExecuteTriggerEventFilter::new()
+                    .for_trigger(trigger_id.clone())
+                    .under_authority(authority.clone());
+                assert_eq!(filter, &expected);
+            }
+            _ => panic!("expected execute trigger filter"),
+        }
+    }
+
+    fn test_queue_components() -> (Arc<Queue>, Arc<ChainId>, MaybeTelemetry) {
+        let events: EventsSender = tokio::sync::broadcast::channel(8).0;
+        let queue_cfg = QueueConfig::default();
+        let queue = Arc::new(Queue::from_config(queue_cfg, events));
+        let chain_id: Arc<ChainId> = Arc::new("subscriptions-test".parse().unwrap());
+        let telemetry = MaybeTelemetry::disabled();
+        (queue, chain_id, telemetry)
+    }
+
+    fn sample_plan(provider: AccountId) -> SubscriptionPlan {
+        SubscriptionPlan {
+            provider,
+            billing: SubscriptionBilling {
+                cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
+                    period_ms: 1_000,
+                }),
+                bill_for: SubscriptionBillFor::NextPeriod,
+                retry_backoff_ms: 0,
+                max_failures: 0,
+                grace_ms: 0,
+            },
+            pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
+                amount: Numeric::new(10_u32, 0),
+                asset_definition: "usd#wonderland".parse().unwrap(),
+            }),
+        }
+    }
+
+    fn sample_subscription_state(
+        plan_id: AssetDefinitionId,
+        provider: AccountId,
+        subscriber: AccountId,
+        status: SubscriptionStatus,
+        billing_trigger_id: TriggerId,
+    ) -> SubscriptionState {
+        SubscriptionState {
+            plan_id,
+            provider,
+            subscriber,
+            status,
+            current_period_start_ms: 0,
+            current_period_end_ms: 1_000,
+            next_charge_ms: 1_000,
+            cancel_at_period_end: false,
+            cancel_at_ms: None,
+            failure_count: 0,
+            usage_accumulated: std::collections::BTreeMap::new(),
+            billing_trigger_id,
+        }
+    }
+
+    async fn response_json(resp: Response) -> Value {
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        norito::json::from_slice(&body).unwrap()
+    }
+
+    async fn assert_action_ok(resp: Response, expected_id: &NftId) {
+        assert_eq!(resp.status(), StatusCode::OK);
+        let json = response_json(resp).await;
+        assert_eq!(json["ok"].as_bool(), Some(true));
+        let id_str = expected_id.to_string();
+        assert_eq!(json["subscription_id"].as_str(), Some(id_str.as_str()));
+    }
+
+    fn state_with_plans_and_subscriptions(
+        provider: AccountId,
+        subscriber: AccountId,
+        plans: Vec<(AssetDefinitionId, SubscriptionPlan)>,
+        subscriptions: Vec<(NftId, SubscriptionState, Option<SubscriptionInvoice>)>,
+    ) -> Arc<CoreState> {
+        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain = Domain::new(domain_id).build(&provider);
+        let accounts = vec![
+            Account::new(provider.clone()).build(&provider),
+            Account::new(subscriber.clone()).build(&provider),
+        ];
+        let asset_definitions: Vec<AssetDefinition> = plans
+            .into_iter()
+            .map(|(plan_id, plan)| {
+                let mut def =
+                    AssetDefinition::new(plan_id, NumericSpec::integer()).build(&provider);
+                def.metadata
+                    .insert((*SUBSCRIPTION_PLAN_KEY).clone(), IrohaJson::new(plan));
+                def
+            })
+            .collect();
+        let nfts: Vec<Nft> = subscriptions
+            .into_iter()
+            .map(|(nft_id, state, invoice)| {
+                let mut metadata = Metadata::default();
+                metadata.insert((*SUBSCRIPTION_KEY).clone(), IrohaJson::new(state));
+                if let Some(invoice) = invoice {
+                    metadata.insert((*SUBSCRIPTION_INVOICE_KEY).clone(), IrohaJson::new(invoice));
+                }
+                Nft::new(nft_id, metadata).build(&subscriber)
+            })
+            .collect();
+        let world = World::with_assets([domain], accounts, asset_definitions, [], nfts);
+        Arc::new(CoreState::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ))
+    }
+
+    #[tokio::test]
+    async fn handle_v1_subscription_plans_filters_provider() {
+        let provider = ALICE_ID.clone();
+        let other = BOB_ID.clone();
+        let plan_primary_id: AssetDefinitionId = "plan-a#wonderland".parse().unwrap();
+        let plan_secondary_id: AssetDefinitionId = "plan-b#wonderland".parse().unwrap();
+        let plan_a = SubscriptionPlan {
+            provider: provider.clone(),
+            billing: SubscriptionBilling {
+                cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
+                    period_ms: 1_000,
+                }),
+                bill_for: SubscriptionBillFor::NextPeriod,
+                retry_backoff_ms: 0,
+                max_failures: 0,
+                grace_ms: 0,
+            },
+            pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
+                amount: Numeric::new(10_u32, 0),
+                asset_definition: "usd#wonderland".parse().unwrap(),
+            }),
+        };
+        let plan_b = SubscriptionPlan {
+            provider: other.clone(),
+            ..plan_a.clone()
+        };
+        let state = state_with_plans_and_subscriptions(
+            provider.clone(),
+            other.clone(),
+            vec![
+                (plan_primary_id.clone(), plan_a),
+                (plan_secondary_id, plan_b),
+            ],
+            Vec::new(),
+        );
+        let params = SubscriptionPlanListParams {
+            provider: Some(provider.to_string()),
+            limit: None,
+            offset: 0,
+        };
+        let resp = handle_v1_subscription_plans(state, crate::NoritoQuery(params))
+            .await
+            .expect("handler ok")
+            .into_response();
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: Value = norito::json::from_slice(&body).unwrap();
+        let items = json["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(json["total"].as_u64(), Some(1));
+        let plan_id = plan_primary_id.to_string();
+        assert_eq!(items[0]["plan_id"].as_str(), Some(plan_id.as_str()));
+    }
+
+    #[tokio::test]
+    async fn handle_v1_subscriptions_filters_status() {
+        let provider = ALICE_ID.clone();
+        let subscriber = BOB_ID.clone();
+        let plan_id: AssetDefinitionId = "plan-sub#wonderland".parse().unwrap();
+        let plan = SubscriptionPlan {
+            provider: provider.clone(),
+            billing: SubscriptionBilling {
+                cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
+                    period_ms: 1_000,
+                }),
+                bill_for: SubscriptionBillFor::NextPeriod,
+                retry_backoff_ms: 0,
+                max_failures: 0,
+                grace_ms: 0,
+            },
+            pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
+                amount: Numeric::new(1_u32, 0),
+                asset_definition: "usd#wonderland".parse().unwrap(),
+            }),
+        };
+        let active_id: NftId = "sub-active$wonderland".parse().unwrap();
+        let paused_id: NftId = "sub-paused$wonderland".parse().unwrap();
+        let active_state = SubscriptionState {
+            plan_id: plan_id.clone(),
+            provider: provider.clone(),
+            subscriber: subscriber.clone(),
+            status: SubscriptionStatus::Active,
+            current_period_start_ms: 0,
+            current_period_end_ms: 1_000,
+            next_charge_ms: 1_000,
+            cancel_at_period_end: false,
+            cancel_at_ms: None,
+            failure_count: 0,
+            usage_accumulated: std::collections::BTreeMap::new(),
+            billing_trigger_id: "bill_active".parse().unwrap(),
+        };
+        let paused_state = SubscriptionState {
+            status: SubscriptionStatus::Paused,
+            billing_trigger_id: "bill_paused".parse().unwrap(),
+            ..active_state.clone()
+        };
+        let state = state_with_plans_and_subscriptions(
+            provider.clone(),
+            subscriber.clone(),
+            vec![(plan_id, plan)],
+            vec![
+                (active_id.clone(), active_state, None),
+                (paused_id.clone(), paused_state, None),
+            ],
+        );
+        let params = SubscriptionListParams {
+            owned_by: Some(subscriber.to_string()),
+            provider: None,
+            status: Some("paused".to_string()),
+            limit: None,
+            offset: 0,
+        };
+        let resp = handle_v1_subscriptions(state, crate::NoritoQuery(params))
+            .await
+            .expect("handler ok")
+            .into_response();
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: Value = norito::json::from_slice(&body).unwrap();
+        let items = json["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        let paused_id_str = paused_id.to_string();
+        assert_eq!(
+            items[0]["subscription_id"].as_str(),
+            Some(paused_id_str.as_str())
+        );
+        let decoded_state: SubscriptionState =
+            norito::json::from_value(items[0]["subscription"].clone()).unwrap();
+        assert_eq!(decoded_state.status, SubscriptionStatus::Paused);
+    }
+
+    #[tokio::test]
+    async fn handle_v1_subscription_get_includes_invoice() {
+        let provider = ALICE_ID.clone();
+        let subscriber = BOB_ID.clone();
+        let plan_id: AssetDefinitionId = "plan-invoice#wonderland".parse().unwrap();
+        let plan = SubscriptionPlan {
+            provider: provider.clone(),
+            billing: SubscriptionBilling {
+                cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
+                    period_ms: 1_000,
+                }),
+                bill_for: SubscriptionBillFor::NextPeriod,
+                retry_backoff_ms: 0,
+                max_failures: 0,
+                grace_ms: 0,
+            },
+            pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
+                amount: Numeric::new(1_u32, 0),
+                asset_definition: "usd#wonderland".parse().unwrap(),
+            }),
+        };
+        let subscription_id: NftId = "sub-invoice$wonderland".parse().unwrap();
+        let subscription_state = SubscriptionState {
+            plan_id: plan_id.clone(),
+            provider: provider.clone(),
+            subscriber: subscriber.clone(),
+            status: SubscriptionStatus::Active,
+            current_period_start_ms: 0,
+            current_period_end_ms: 1_000,
+            next_charge_ms: 1_000,
+            cancel_at_period_end: false,
+            cancel_at_ms: None,
+            failure_count: 0,
+            usage_accumulated: std::collections::BTreeMap::new(),
+            billing_trigger_id: "bill_invoice".parse().unwrap(),
+        };
+        let invoice = SubscriptionInvoice {
+            subscription_nft_id: subscription_id.clone(),
+            period_start_ms: 0,
+            period_end_ms: 1_000,
+            attempted_at_ms: 1_000,
+            amount: Numeric::new(1_u32, 0),
+            asset_definition: "usd#wonderland".parse().unwrap(),
+            status: SubscriptionInvoiceStatus::Paid,
+            tx_hash: None,
+        };
+        let state = state_with_plans_and_subscriptions(
+            provider,
+            subscriber,
+            vec![(plan_id, plan)],
+            vec![(
+                subscription_id.clone(),
+                subscription_state,
+                Some(invoice.clone()),
+            )],
+        );
+        let resp = handle_v1_subscription_get(state, subscription_id.clone())
+            .await
+            .expect("handler ok")
+            .into_response();
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: Value = norito::json::from_slice(&body).unwrap();
+        let sub_id = subscription_id.to_string();
+        assert_eq!(json["subscription_id"].as_str(), Some(sub_id.as_str()));
+        let parsed_invoice: SubscriptionInvoice =
+            norito::json::from_value(json["invoice"].clone()).unwrap();
+        assert_eq!(parsed_invoice, invoice);
+    }
+
+    #[tokio::test]
+    async fn handle_post_v1_subscription_plan_enqueues_transaction() {
+        let provider = ALICE_ID.clone();
+        let subscriber = BOB_ID.clone();
+        let state = state_with_plans_and_subscriptions(
+            provider.clone(),
+            subscriber,
+            Vec::new(),
+            Vec::new(),
+        );
+        let (queue, chain_id, telemetry) = test_queue_components();
+        let plan_id: AssetDefinitionId = "plan-new#wonderland".parse().unwrap();
+        let plan = sample_plan(provider.clone());
+        let req = SubscriptionPlanCreateDto {
+            authority: provider,
+            private_key: ExposedPrivateKey(ALICE_KEYPAIR.private_key().clone()),
+            plan_id: plan_id.clone(),
+            plan,
+        };
+
+        let resp = handle_post_v1_subscription_plan(
+            chain_id,
+            queue.clone(),
+            state,
+            telemetry,
+            NoritoJson(req),
+        )
+        .await
+        .expect("handler ok")
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(queue.queued_len(), 1);
+
+        let json = response_json(resp).await;
+        assert_eq!(json["ok"].as_bool(), Some(true));
+        let plan_id_str = plan_id.to_string();
+        assert_eq!(json["plan_id"].as_str(), Some(plan_id_str.as_str()));
+    }
+
+    #[tokio::test]
+    async fn handle_post_v1_subscription_create_enqueues_transaction() {
+        let provider = ALICE_ID.clone();
+        let subscriber = BOB_ID.clone();
+        let plan_id: AssetDefinitionId = "plan-subscribe#wonderland".parse().unwrap();
+        let plan = sample_plan(provider.clone());
+        let state = state_with_plans_and_subscriptions(
+            provider.clone(),
+            subscriber.clone(),
+            vec![(plan_id.clone(), plan)],
+            Vec::new(),
+        );
+        let (queue, chain_id, telemetry) = test_queue_components();
+        let subscription_id: NftId = "sub-create$wonderland".parse().unwrap();
+        let req = SubscriptionCreateDto {
+            authority: subscriber,
+            private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
+            subscription_id: subscription_id.clone(),
+            plan_id,
+            billing_trigger_id: None,
+            usage_trigger_id: None,
+            first_charge_ms: Some(1_000),
+            grant_usage_to_provider: None,
+        };
+
+        let resp = handle_post_v1_subscription_create(
+            chain_id,
+            queue.clone(),
+            state,
+            telemetry,
+            NoritoJson(req),
+        )
+        .await
+        .expect("handler ok")
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(queue.queued_len(), 1);
+
+        let json = response_json(resp).await;
+        assert_eq!(json["ok"].as_bool(), Some(true));
+        let sub_id_str = subscription_id.to_string();
+        assert_eq!(json["subscription_id"].as_str(), Some(sub_id_str.as_str()));
+        assert_eq!(json["first_charge_ms"].as_u64(), Some(1_000));
+    }
+
+    #[tokio::test]
+    async fn handle_post_v1_subscription_actions_enqueue_transactions() {
+        let provider = ALICE_ID.clone();
+        let subscriber = BOB_ID.clone();
+        let plan_id: AssetDefinitionId = "plan-actions#wonderland".parse().unwrap();
+        let plan = sample_plan(provider.clone());
+        let active_id: NftId = "sub-active-actions$wonderland".parse().unwrap();
+        let paused_id: NftId = "sub-paused-actions$wonderland".parse().unwrap();
+        let active_state = sample_subscription_state(
+            plan_id.clone(),
+            provider.clone(),
+            subscriber.clone(),
+            SubscriptionStatus::Active,
+            "bill_active_actions".parse().unwrap(),
+        );
+        let paused_state = sample_subscription_state(
+            plan_id.clone(),
+            provider.clone(),
+            subscriber.clone(),
+            SubscriptionStatus::Paused,
+            "bill_paused_actions".parse().unwrap(),
+        );
+        let keep_id: NftId = "sub-keep-actions$wonderland".parse().unwrap();
+        let mut keep_state = sample_subscription_state(
+            plan_id.clone(),
+            provider.clone(),
+            subscriber.clone(),
+            SubscriptionStatus::Active,
+            "bill_keep_actions".parse().unwrap(),
+        );
+        keep_state.cancel_at_period_end = true;
+        keep_state.cancel_at_ms = Some(keep_state.current_period_end_ms);
+        let state = state_with_plans_and_subscriptions(
+            provider,
+            subscriber.clone(),
+            vec![(plan_id, plan)],
+            vec![
+                (active_id.clone(), active_state, None),
+                (paused_id.clone(), paused_state, None),
+                (keep_id.clone(), keep_state, None),
+            ],
+        );
+        let (queue, chain_id, telemetry) = test_queue_components();
+
+        let pause_req = SubscriptionActionDto {
+            authority: subscriber.clone(),
+            private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
+            charge_at_ms: None,
+            cancel_mode: None,
+        };
+        let resp = handle_post_v1_subscription_pause(
+            chain_id.clone(),
+            queue.clone(),
+            state.clone(),
+            telemetry.clone(),
+            active_id.clone(),
+            NoritoJson(pause_req),
+        )
+        .await
+        .expect("pause ok")
+        .into_response();
+        assert_eq!(queue.queued_len(), 1);
+        assert_action_ok(resp, &active_id).await;
+
+        let resume_req = SubscriptionActionDto {
+            authority: subscriber.clone(),
+            private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
+            charge_at_ms: Some(5_000),
+            cancel_mode: None,
+        };
+        let resp = handle_post_v1_subscription_resume(
+            chain_id.clone(),
+            queue.clone(),
+            state.clone(),
+            telemetry.clone(),
+            paused_id.clone(),
+            NoritoJson(resume_req),
+        )
+        .await
+        .expect("resume ok")
+        .into_response();
+        assert_eq!(queue.queued_len(), 2);
+        assert_action_ok(resp, &paused_id).await;
+
+        let cancel_req = SubscriptionActionDto {
+            authority: subscriber.clone(),
+            private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
+            charge_at_ms: None,
+            cancel_mode: None,
+        };
+        let resp = handle_post_v1_subscription_cancel(
+            chain_id.clone(),
+            queue.clone(),
+            state.clone(),
+            telemetry.clone(),
+            active_id.clone(),
+            NoritoJson(cancel_req),
+        )
+        .await
+        .expect("cancel ok")
+        .into_response();
+        assert_eq!(queue.queued_len(), 3);
+        assert_action_ok(resp, &active_id).await;
+
+        let keep_req = SubscriptionActionDto {
+            authority: subscriber.clone(),
+            private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
+            charge_at_ms: None,
+            cancel_mode: None,
+        };
+        let resp = handle_post_v1_subscription_keep(
+            chain_id.clone(),
+            queue.clone(),
+            state.clone(),
+            telemetry.clone(),
+            keep_id.clone(),
+            NoritoJson(keep_req),
+        )
+        .await
+        .expect("keep ok")
+        .into_response();
+        assert_eq!(queue.queued_len(), 4);
+        assert_action_ok(resp, &keep_id).await;
+
+        let charge_req = SubscriptionActionDto {
+            authority: subscriber.clone(),
+            private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
+            charge_at_ms: Some(9_000),
+            cancel_mode: None,
+        };
+        let resp = handle_post_v1_subscription_charge_now(
+            chain_id.clone(),
+            queue.clone(),
+            state.clone(),
+            telemetry.clone(),
+            active_id.clone(),
+            NoritoJson(charge_req),
+        )
+        .await
+        .expect("charge-now ok")
+        .into_response();
+        assert_eq!(queue.queued_len(), 5);
+        assert_action_ok(resp, &active_id).await;
+
+        let usage_req = SubscriptionUsageRequestDto {
+            authority: subscriber,
+            private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
+            unit_key: "requests".parse().unwrap(),
+            delta: Numeric::new(5_u32, 0),
+            usage_trigger_id: None,
+        };
+        let resp = handle_post_v1_subscription_usage(
+            chain_id,
+            queue.clone(),
+            state,
+            telemetry,
+            active_id.clone(),
+            NoritoJson(usage_req),
+        )
+        .await
+        .expect("usage ok")
+        .into_response();
+        assert_eq!(queue.queued_len(), 5);
+        assert_action_ok(resp, &active_id).await;
     }
 }
 

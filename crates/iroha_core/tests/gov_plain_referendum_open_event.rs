@@ -1,4 +1,4 @@
-//! Plain ballots opened in the same block should emit ReferendumOpened with the correct window.
+//! Plain ballots opened in the same block should emit `ReferendumOpened` with the correct window.
 
 use core::num::NonZeroU64;
 

@@ -40,7 +40,7 @@ translation_last_reviewed: 2026-01-01
   - Снимок on-chain параметров Sumeragi `{ block_time_ms, commit_time_ms, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`.
   - Когда `da_enabled` равно true, доказательство доступности (`availability evidence` или RBC `READY`) отслеживается, но commit не ждёт его; локальный `DELIVER` RBC также не является требованием. Операторы могут подтвердить здоровье транспорта payload через endpoints RBC ниже.
 - GET `/v1/sumeragi/rbc`
-  - Агрегированные счётчики Reliable Broadcast: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, deliver_broadcasts_total, payload_bytes_delivered_total }`.
+  - Агрегированные счётчики Reliable Broadcast: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, ready_rebroadcasts_skipped_total, deliver_broadcasts_total, payload_bytes_delivered_total, payload_rebroadcasts_skipped_total }`.
 - GET `/v1/sumeragi/rbc/sessions`
   - Снимок состояния по сессиям (хэш блока, height/view, счётчики чанков, флаг delivered, метка `invalid`, хэш payload, boolean recovered) для диагностики зависших доставок RBC и выделения восстановленных сессий после перезапуска.
   - CLI‑сокращение: `iroha sumeragi rbc sessions --summary` печатает `hash`, `height/view`, прогресс чанков, количество ready и флаги invalid/delivered.

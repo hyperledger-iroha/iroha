@@ -6,16 +6,17 @@ Iroha exports Prometheus-format metrics and a JSON status summary. This page lis
 
 Endpoints
 - `/metrics`: Prometheus exposition text. Hidden when telemetry is disabled or the profile does not allow expensive metrics.
-- `/status`: JSON status (hidden when telemetry is disabled). Includes top-level gauges (peers, blocks, queue), a `crypto { sm_helpers_available, sm_openssl_preview_enabled, halo2: { enabled, curve, backend, max_k, verifier_budget_ms, verifier_max_batch } }` snapshot, the `sumeragi { leader_index, highest_qc_height, locked_qc_height, locked_qc_view, gossip_fallback_total, view_change_proof_accepted_total, view_change_proof_stale_total, view_change_proof_rejected_total, block_created_dropped_by_lock_total, block_created_hint_mismatch_total, block_created_proposal_mismatch_total, pacemaker_backpressure_deferrals_total, tx_queue_depth, tx_queue_capacity, tx_queue_saturated, epoch_length_blocks, epoch_commit_deadline_offset, epoch_reveal_deadline_offset, prf_epoch_seed (hex), prf_height, prf_view }` view (highest/locked commit certificate heights), a `governance` snapshot, and (when available) `sorafs_micropayments` — the most recent SoraFS micropayment sample per provider including credit counters and ticket totals.
+- `/status`: JSON status (hidden when telemetry is disabled). Includes top-level gauges (peers, blocks, queue active count), a `crypto { sm_helpers_available, sm_openssl_preview_enabled, halo2: { enabled, curve, backend, max_k, verifier_budget_ms, verifier_max_batch } }` snapshot, the `sumeragi { leader_index, highest_qc_height, locked_qc_height, locked_qc_view, gossip_fallback_total, view_change_proof_accepted_total, view_change_proof_stale_total, view_change_proof_rejected_total, block_created_dropped_by_lock_total, block_created_hint_mismatch_total, block_created_proposal_mismatch_total, pacemaker_backpressure_deferrals_total, tx_queue_depth, tx_queue_capacity, tx_queue_saturated, epoch_length_blocks, epoch_commit_deadline_offset, epoch_reveal_deadline_offset, prf_epoch_seed (hex), prf_height, prf_view }` view (highest/locked commit certificate heights), a `governance` snapshot, and (when available) `sorafs_micropayments` — the most recent SoraFS micropayment sample per provider including credit counters and ticket totals.
 - `/v1/sumeragi/new_view` (JSON): latest NEW_VIEW receipt counts per `(height, view)` (bounded in-memory window; oldest entries evicted).
 - `/v1/sumeragi/new_view/sse` (SSE): periodic stream of the same JSON payload for live dashboards.
-- `/v1/sumeragi/status` (Norito by default): consensus status snapshot. Set `Accept: application/json` to receive `{ leader_index, view_change_index, highest_qc { height, view, subject_block_hash }, locked_qc { height, view, subject_block_hash }, tx_queue { depth, capacity, saturated }, epoch { length_blocks, commit_deadline_offset, reveal_deadline_offset }, gossip_fallback_total, block_created_dropped_by_lock_total, block_created_hint_mismatch_total, block_created_proposal_mismatch_total, pacemaker_backpressure_deferrals_total, da_reschedule_total, rbc_store { sessions, bytes, pressure_level, backpressure_deferrals_total, evictions_total, recent_evictions[...] }, lane_activity: [{ lane_id, tx_vertices, tx_edges, overlay_count, overlay_instr_total, overlay_bytes_total, rbc_chunks, rbc_bytes_total }], dataspace_activity: [{ lane_id, dataspace_id, tx_served }], rbc_lane_backlog: [{ lane_id, tx_count, total_chunks, pending_chunks, rbc_bytes_total }], rbc_dataspace_backlog: [{ lane_id, dataspace_id, tx_count, total_chunks, pending_chunks, rbc_bytes_total }], lane_commitments: [{ block_height, lane_id, tx_count, total_chunks, rbc_bytes_total, teu_total, block_hash }], dataspace_commitments: [{ block_height, lane_id, dataspace_id, tx_count, total_chunks, rbc_bytes_total, teu_total, block_hash }], lane_governance: [{ lane_id, alias, dataspace_id, visibility, storage_profile, governance, manifest_required, manifest_ready, manifest_path, validator_ids, quorum, protected_namespaces, runtime_upgrade { allow, require_metadata, metadata_key, allowed_ids } }], lane_governance_sealed_total, lane_governance_sealed_aliases, prf { height, view, epoch_seed }, vrf_penalty_epoch, vrf_committed_no_reveal_total, vrf_no_participation_total, vrf_late_reveals_total, collectors_targeted_{current,last_per_block}, redundant_sends_total, worker_loop { stage, stage_started_ms, last_iteration_ms, queue_depths { vote_rx, block_payload_rx, rbc_chunk_rx, block_rx, consensus_rx, lane_relay_rx, background_rx }, queue_diagnostics { blocked_total { vote_rx, block_payload_rx, rbc_chunk_rx, block_rx, consensus_rx, lane_relay_rx, background_rx }, blocked_ms_total { ... }, blocked_max_ms { ... }, dropped_total { ... } } }, commit_inflight { active, id, height, view, block_hash, started_ms, elapsed_ms, timeout_ms, timeout_total, last_timeout_timestamp_ms, last_timeout_elapsed_ms, last_timeout_height, last_timeout_view, last_timeout_block_hash, pause_total, resume_total, paused_since_ms, pause_queue_depths { ... }, resume_queue_depths { ... } }, settlement { dvp { success_total, failure_total, final_state_totals { none|delivery_only|payment_only|both }, failure_reasons, last_event { observed_at_ms, settlement_id, plan { order, atomicity }, outcome, failure_reason, final_state, legs { delivery_committed, payment_committed } } }, pvp { success_total, failure_total, final_state_totals { none|primary_only|counter_only|both }, failure_reasons, last_event { observed_at_ms, settlement_id, plan { order, atomicity }, outcome, failure_reason, final_state, legs { primary_committed, counter_committed }, fx_window_ms } } } }` (highest/locked commit certificates in `highest_qc`/`locked_qc`).
+- `/v1/sumeragi/status` (Norito by default): consensus status snapshot. Set `Accept: application/json` to receive `{ leader_index, view_change_index, highest_qc { height, view, subject_block_hash }, locked_qc { height, view, subject_block_hash }, commit_qc { height, view, epoch, block_hash, validator_set_hash, validator_set_len, signatures_total }, commit_quorum { height, view, block_hash, signatures_present, signatures_counted, signatures_set_b, signatures_required, last_updated_ms }, tx_queue { depth, capacity, saturated }, epoch { length_blocks, commit_deadline_offset, reveal_deadline_offset }, gossip_fallback_total, block_created_dropped_by_lock_total, block_created_hint_mismatch_total, block_created_proposal_mismatch_total, consensus_message_handling { entries: [{ kind, outcome, reason, total }] }, pacemaker_backpressure_deferrals_total, da_reschedule_total, rbc_store { sessions, bytes, pressure_level, backpressure_deferrals_total, evictions_total, recent_evictions[...] }, lane_activity: [{ lane_id, tx_vertices, tx_edges, overlay_count, overlay_instr_total, overlay_bytes_total, rbc_chunks, rbc_bytes_total }], dataspace_activity: [{ lane_id, dataspace_id, tx_served }], rbc_lane_backlog: [{ lane_id, tx_count, total_chunks, pending_chunks, rbc_bytes_total }], rbc_dataspace_backlog: [{ lane_id, dataspace_id, tx_count, total_chunks, pending_chunks, rbc_bytes_total }], lane_commitments: [{ block_height, lane_id, tx_count, total_chunks, rbc_bytes_total, teu_total, block_hash }], dataspace_commitments: [{ block_height, lane_id, dataspace_id, tx_count, total_chunks, rbc_bytes_total, teu_total, block_hash }], lane_governance: [{ lane_id, alias, dataspace_id, visibility, storage_profile, governance, manifest_required, manifest_ready, manifest_path, validator_ids, quorum, protected_namespaces, runtime_upgrade { allow, require_metadata, metadata_key, allowed_ids } }], lane_governance_sealed_total, lane_governance_sealed_aliases, prf { height, view, epoch_seed }, vrf_penalty_epoch, vrf_committed_no_reveal_total, vrf_no_participation_total, vrf_late_reveals_total, collectors_targeted_{current,last_per_block}, redundant_sends_total, worker_loop { stage, stage_started_ms, last_iteration_ms, queue_depths { vote_rx, block_payload_rx, rbc_chunk_rx, block_rx, consensus_rx, lane_relay_rx, background_rx }, queue_diagnostics { blocked_total { vote_rx, block_payload_rx, rbc_chunk_rx, block_rx, consensus_rx, lane_relay_rx, background_rx }, blocked_ms_total { ... }, blocked_max_ms { ... }, dropped_total { ... } } }, commit_inflight { active, id, height, view, block_hash, started_ms, elapsed_ms, timeout_ms, timeout_total, last_timeout_timestamp_ms, last_timeout_elapsed_ms, last_timeout_height, last_timeout_view, last_timeout_block_hash, pause_total, resume_total, paused_since_ms, pause_queue_depths { ... }, resume_queue_depths { ... } }, settlement { dvp { success_total, failure_total, final_state_totals { none|delivery_only|payment_only|both }, failure_reasons, last_event { observed_at_ms, settlement_id, plan { order, atomicity }, outcome, failure_reason, final_state, legs { delivery_committed, payment_committed } } }, pvp { success_total, failure_total, final_state_totals { none|primary_only|counter_only|both }, failure_reasons, last_event { observed_at_ms, settlement_id, plan { order, atomicity }, outcome, failure_reason, final_state, legs { primary_committed, counter_committed }, fx_window_ms } } } }` (highest/locked commit certificates in `highest_qc`/`locked_qc`).
 - `/v1/sumeragi/status/sse` (SSE): periodic stream (≈1s) emitting the same JSON payload as `/v1/sumeragi/status` for dashboards.
 - When `nexus.enabled = false` (Iroha 2 mode), lane/dataspace sections in `/status` and `/v1/sumeragi/status` are emptied and Prometheus output omits lane/dataspace labels so single-lane deployments stay lane-free.
-- `/v1/sumeragi/rbc` (JSON): RBC session/throughput metrics: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, deliver_broadcasts_total, payload_bytes_delivered_total }`.
+- `/v1/sumeragi/rbc` (JSON): RBC session/throughput metrics: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, ready_rebroadcasts_skipped_total, deliver_broadcasts_total, payload_bytes_delivered_total, payload_rebroadcasts_skipped_total }`.
 - `/v1/sumeragi/rbc/sessions` (JSON): RBC session snapshot: `{ sessions_active, items: [{ block_hash, height, view, total_chunks, received_chunks, ready_count, delivered, invalid, payload_hash, recovered, lane_backlog: [{ lane_id, tx_count, total_chunks, pending_chunks, rbc_bytes_total }], dataspace_backlog: [{ lane_id, dataspace_id, tx_count, total_chunks, pending_chunks, rbc_bytes_total }] }] }`.
 - `/v1/sumeragi/pacemaker` (JSON): pacemaker timers and config: `{ backoff_ms, rtt_floor_ms, jitter_ms, backoff_multiplier, rtt_floor_multiplier, max_backoff_ms, jitter_frac_permille }`.
 - `/v1/sumeragi/qc` (Norito by default): highest/locked commit certificate snapshot; includes `subject_block_hash` for the highest commit certificate when known. Set `Accept: application/json` to receive the JSON view.
+- `/v1/sumeragi/commit_qc/{hash}` (Norito by default): full commit QC record for a block hash (if present). Set `Accept: application/json` to receive `{ subject_block_hash, commit_qc }` with `parent_state_root`, `post_state_root`, and aggregate signature data when available.
 - `/v1/sumeragi/leader` (JSON): leader index snapshot; includes PRF context `{ height, view, epoch_seed }` in NPoS mode when available.
 - `/v1/sumeragi/phases` (JSON): compact per-phase latencies (ms) for operator dashboards; returns the latest observed durations for consensus phases.
 - `/v1/soranet/privacy/{event,share}` (Norito): privacy telemetry ingest for relay/collector signals. Requires `torii.soranet_privacy_ingest.enabled = true`, a token header (`X-SoraNet-Privacy-Token` or `X-API-Token`) when `require_token` is set, and a CIDR allow-list entry (empty list denies). Rate limits come from the same config (`rate_per_sec`/`burst`), and rejects surface `401/403/429` plus `soranet_privacy_ingest_reject_total{endpoint,reason}` counters for alerting.
@@ -41,6 +42,10 @@ Settlement telemetry
 - `iroha_settlement_finality_events_total{kind="dvp|pvp",outcome="success|failure",final_state="none|delivery_only|payment_only|both|primary_only|counter_only"}` — finality counters grouped by settlement kind, execution outcome, and which legs remained committed. DvP reports `delivery_only|payment_only`, PvP reports `primary_only|counter_only`; `none` means both legs rolled back.
 - `iroha_settlement_fx_window_ms{kind="pvp",order,atomicity}` — histogram of observed PvP FX windows (milliseconds between committed legs) labelled by execution order (`delivery_then_payment`/`payment_then_delivery`) and atomicity policy (`all_or_nothing|commit_first_leg|commit_second_leg`).
 
+Subscription telemetry
+- `iroha_subscription_billing_attempts_total{pricing="fixed|usage"}` — billing trigger invocations grouped by pricing kind.
+- `iroha_subscription_billing_outcomes_total{pricing="fixed|usage",result="paid|failed|suspended|skipped"}` — billing outcomes grouped by pricing kind and result label.
+
 Network time telemetry
 - `nts_offset_ms` (gauge) — smoothed or raw offset vs local clock.
 - `nts_confidence_ms` (gauge) — MAD confidence bound.
@@ -60,7 +65,7 @@ Runbook guidance
 Configuration
 - `telemetry_enabled` (default: true): Master kill switch. When set to false, the daemon skips telemetry worker startup, Torii hides `/metrics` and `/status`, and runtime instrumentation is bypassed regardless of profile.
 - `telemetry_profile` (default: `operator`): Capability bundle wiring both Torii routing and runtime sinks. Profiles toggle three capability flags — `metrics`, `expensive_metrics`, and `developer_outputs`. When `telemetry_enabled = false`, the effective profile is forced to `disabled`.
-- `torii.peer_telemetry_urls` (default: empty): Optional list of Torii base URLs used to fetch peer telemetry metadata. When set, Torii uses these URLs instead of deriving targets from P2P peer addresses.
+- `torii.peer_telemetry_urls` (default: empty): Optional list of Torii base URLs used to fetch peer telemetry metadata. When unset, peer telemetry discovery is disabled to avoid probing P2P ports.
 - `torii.peer_geo.enabled` (default: false): Enable peer geo lookups for Torii telemetry (opt-in; requires network access to the configured endpoint).
 - `torii.peer_geo.endpoint` (default: unset): Optional ip-api compatible endpoint used for peer geo lookups; when unset and `torii.peer_geo.enabled = true`, Torii uses the built-in ip-api default.
 - Build-time ISI instrumentation: `#[metrics]` counters (`isi{kind="total|success"}`) and timing histograms (`isi_times`) require building `irohad` with `--features expensive-telemetry` (or `iroha_core` `expensive-telemetry`). The runtime still respects `telemetry_enabled` and `telemetry_profile` for exposure.
@@ -100,6 +105,7 @@ cookie
 jwt
 bearer
 api_key
+api_key_hash
 apikey
 private_key
 privkey
@@ -442,9 +448,11 @@ IVM register pressure metrics (new)
 
 Block/consensus metrics
 - commit_time_ms (histogram), last_commit_time_ms (gauge), block_height, block_height_non_empty, txs{type in [accepted,rejected,total]}.
+- Queue gauges: `queue_size` (active queue size, queued + in-flight), `queue_queued` (waiting in the hash queue), `queue_inflight` (selected but not yet committed).
 
 P2P metrics (selected)
-- connected_peers, `p2p_peer_churn_total{event="connected|disconnected"}`, p2p_* gauges/counters for queue drops, throttling, DNS, handshake latencies (`p2p_handshake_ms_*`).
+- connected_peers, `p2p_peer_churn_total{event="connected|disconnected"}`, p2p_* gauges/counters for queue depth/drops, throttling, DNS, handshake latencies (`p2p_handshake_ms_*`).
+- `consensus_ingress_drop_total{topic,reason}` counts consensus ingress drops for payload topics (`topic` in `ConsensusPayload|ConsensusChunk|BlockSync`, `reason` in `rate|bytes|rbc_session_limit|penalty`).
 
 Sumeragi metrics
 - Counters: `sumeragi_tail_votes_total`, `sumeragi_widen_before_rotate_total`, `sumeragi_view_change_suggest_total`, `sumeragi_view_change_install_total`; histogram: `sumeragi_cert_size` (signatures per committed block).
@@ -536,7 +544,7 @@ Example PromQL
 
 Sumeragi phases latencies (operator dashboards)
 - Endpoint: `GET /v1/sumeragi/phases` (JSON)
-- Shape: `{ propose_ms, collect_da_ms, collect_prevote_ms, collect_precommit_ms, collect_aggregator_ms, collect_exec_ms, collect_witness_ms, commit_ms, pipeline_total_ms, ema_ms }` where `ema_ms` mirrors the phase keys (`propose_ms`, …, `collect_witness_ms`, `commit_ms`, `pipeline_total_ms`).
+- Shape: `{ propose_ms, collect_da_ms, collect_prevote_ms, collect_precommit_ms, collect_aggregator_ms, commit_ms, pipeline_total_ms, ema_ms }` where `ema_ms` mirrors the phase keys (`propose_ms`, …, `collect_aggregator_ms`, `commit_ms`, `pipeline_total_ms`).
 - Purpose: quick, compact snapshot of the latest observed durations (milliseconds) for each consensus phase to power lightweight dashboards.
 - `collect_aggregator_ms` tracks redundant collector fan-out latency (validator →
   secondary collectors). Pair it with `sumeragi_redundant_sends_*` counters when
@@ -546,7 +554,7 @@ Sumeragi phases latencies (operator dashboards)
   are split between `block_created_hint_mismatch_total` (height/view/parent
   mismatches) and `block_created_proposal_mismatch_total` (proposal header/payload
   mismatches that emit InvalidProposal evidence).
-- `pipeline_total_ms` sums the pacemaker-controlled phases (propose, collect_da, collect_prevote, collect_precommit, commit) to provide a single end-to-end latency figure; execution and witness stages remain observability-only and are not included.
+- `pipeline_total_ms` sums the pacemaker-controlled phases (propose, collect_da, collect_prevote, collect_precommit, commit) to provide a single end-to-end latency figure; `collect_aggregator_ms` remains a separate fan-out signal and is not included.
 
 Example response
 ```json
@@ -556,23 +564,18 @@ Example response
   "collect_prevote_ms": 33,
   "collect_precommit_ms": 44,
   "collect_aggregator_ms": 50,
-  "collect_exec_ms": 55,
-  "collect_witness_ms": 66,
   "commit_ms": 77,
   "pipeline_total_ms": 187,
   "collect_aggregator_gossip_total": 3,
   "block_created_dropped_by_lock_total": 1,
   "block_created_hint_mismatch_total": 2,
   "block_created_proposal_mismatch_total": 4,
-  "pacemaker_backpressure_deferrals_total": 1,
   "ema_ms": {
     "propose_ms": 15,
     "collect_da_ms": 26,
     "collect_prevote_ms": 37,
     "collect_precommit_ms": 48,
     "collect_aggregator_ms": 57,
-    "collect_exec_ms": 59,
-    "collect_witness_ms": 70,
     "commit_ms": 81,
     "pipeline_total_ms": 207
   }
@@ -663,7 +666,7 @@ Example response
 
 Sumeragi RBC (status example)
 - Endpoint: `GET /v1/sumeragi/rbc`
-- Shape: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, deliver_broadcasts_total, payload_bytes_delivered_total }`
+- Shape: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, ready_rebroadcasts_skipped_total, deliver_broadcasts_total, payload_bytes_delivered_total, payload_rebroadcasts_skipped_total }`
 
 Example response
 ```json
@@ -671,8 +674,10 @@ Example response
   "sessions_active": 2,
   "sessions_pruned_total": 10,
   "ready_broadcasts_total": 8,
+  "ready_rebroadcasts_skipped_total": 3,
   "deliver_broadcasts_total": 7,
-  "payload_bytes_delivered_total": 1234567
+  "payload_bytes_delivered_total": 1234567,
+  "payload_rebroadcasts_skipped_total": 5
 }
 ```
 
@@ -774,10 +779,11 @@ Configuration
 
 DA/RBC (Sumeragi) configuration
 - `sumeragi.da_enabled` (bool): enables data availability tracking and Reliable Broadcast (RBC) payload distribution together. Availability evidence (`availability evidence` or an RBC `READY` quorum) is recorded but does not gate commit; RBC remains transport/recovery and its delivery latency is still tracked.
-- `sumeragi.rbc_chunk_max_bytes` (usize): maximum bytes per RBC chunk when broadcasting payloads; must be > 0. Clamped at startup so serialized RBC chunks fit within the consensus frame plaintext cap derived from `network.max_frame_bytes_consensus`.
+- `sumeragi.rbc_chunk_max_bytes` (usize): maximum bytes per RBC chunk when broadcasting payloads; must be > 0. Clamped at startup so serialized RBC chunks fit within the consensus payload plaintext cap derived from `network.max_frame_bytes_block_sync`.
 - `sumeragi.rbc_session_ttl_secs` (u64): inactive RBC sessions are pruned after this TTL to bound memory.
+- `sumeragi.rbc_rebroadcast_sessions_per_tick` (usize): cap on RBC session rebroadcasts per tick to prevent payload storms when backlogs accumulate.
 
-Metrics: RBC exports gauges/counters (`sumeragi_rbc_sessions_active`, `sumeragi_rbc_sessions_pruned_total`, `sumeragi_rbc_ready_broadcasts_total`, `sumeragi_rbc_deliver_broadcasts_total`, `sumeragi_rbc_payload_bytes_delivered_total`) and per-lane/dataspace backlog gauges (`sumeragi_rbc_lane_{tx_count,total_chunks,pending_chunks,bytes_total}{lane_id}` and `sumeragi_rbc_dataspace_{tx_count,total_chunks,pending_chunks,bytes_total}{lane_id,dataspace_id}`) alongside the Torii JSON endpoints shown above.
+Metrics: RBC exports gauges/counters (`sumeragi_rbc_sessions_active`, `sumeragi_rbc_sessions_pruned_total`, `sumeragi_rbc_ready_broadcasts_total`, `sumeragi_rbc_deliver_broadcasts_total`, `sumeragi_rbc_payload_bytes_delivered_total`, `sumeragi_rbc_rebroadcast_skipped_total{kind="payload|ready"}`, `sumeragi_rbc_mismatch_total{peer,kind}`) and per-lane/dataspace backlog gauges (`sumeragi_rbc_lane_{tx_count,total_chunks,pending_chunks,bytes_total}{lane_id}` and `sumeragi_rbc_dataspace_{tx_count,total_chunks,pending_chunks,bytes_total}{lane_id,dataspace_id}`) alongside the Torii JSON endpoints shown above.
 Additional gauges track backlog pressure: `sumeragi_rbc_backlog_chunks_total`, `sumeragi_rbc_backlog_chunks_max`, and `sumeragi_rbc_backlog_sessions_pending`.
 
 ### Troubleshooting: RBC & pacemaker backpressure
@@ -785,8 +791,8 @@ Additional gauges track backlog pressure: `sumeragi_rbc_backlog_chunks_total`, `
 1. **Capture live snapshots.** Start with `iroha_cli sumeragi telemetry --summary` (or `GET /v1/sumeragi/telemetry`) to inspect `rbc_backlog` and vote ingestion, then fetch `/v1/sumeragi/rbc` and `/v1/sumeragi/rbc/sessions` to list active payloads, chunk counts, and recovery flags.
 2. **Inspect backlog counters.** Watch `sumeragi_rbc_backlog_chunks_total`, `sumeragi_rbc_backlog_chunks_max`, and `sumeragi_rbc_backlog_sessions_pending`. Sustained non-zero values over five minutes (e.g., `max_over_time(sumeragi_rbc_backlog_chunks_max[5m]) > 0`) imply slow chunk delivery; correlate with `ready_count` vs `delivered` in the session snapshot.
 3. **Check DA availability warnings.** Alert on spikes in `sumeragi_da_gate_block_total{reason="missing_local_data"}`; `sumeragi_rbc_da_reschedule_total` is legacy and should remain zero now that DA is advisory.
-4. **Evaluate pacemaker deferrals and queue saturation.** Use `increase(pacemaker_backpressure_deferrals_total[5m])`, `max_over_time(sumeragi_tx_queue_saturated[5m])`, and transaction queue depth gauges to confirm whether the pacemaker halted due to backpressure. Combine with `increase(gossip_fallback_total[5m])` and `increase(block_created_proposal_mismatch_total[5m])` to surface collectors retrying without progress.
-5. **Review logs and network health.** Filter consensus logs for `rbc` and `pacemaker_backpressure_deferral` to spot repeated retries, DA restarts, or queue pressure. Cross-check P2P metrics (`p2p_dropped_posts_total`, `p2p_dropped_broadcasts_total`) to identify network bottlenecks; adjust collector fan-out, queue capacity, or baseline load accordingly.
+4. **Evaluate pacemaker deferrals and proposal backpressure.** Use `increase(pacemaker_backpressure_deferrals_total[5m])`, `max_over_time(sumeragi_tx_queue_saturated[5m])`, `sumeragi_rbc_backlog_*`, and relay drop/backpressure counters to confirm whether the pacemaker halted due to queue saturation, relay/RBC backlog, or blocking pending blocks. Combine with `increase(gossip_fallback_total[5m])` and `increase(block_created_proposal_mismatch_total[5m])` to surface collectors retrying without progress.
+5. **Review logs and network health.** Filter consensus logs for `rbc` and `pacemaker_backpressure_deferral` to spot repeated retries, DA restarts, or queue pressure. Cross-check P2P metrics (`p2p_queue_depth{priority=...}`, `p2p_dropped_posts`, `p2p_dropped_broadcasts`, `p2p_subscriber_queue_full_total`, `p2p_subscriber_queue_full_by_topic_total{topic=...}`, `p2p_subscriber_unrouted_total`, `p2p_subscriber_unrouted_by_topic_total{topic=...}`) and payload ingress drops (`consensus_ingress_drop_total{topic="ConsensusPayload|ConsensusChunk|BlockSync",reason="rate|bytes|rbc_session_limit|penalty"}`) to identify network bottlenecks; adjust collector fan-out, queue capacity, or baseline load accordingly.
 6. **Correlate logs automatically.** Run `python3 scripts/sumeragi_backpressure_log_scraper.py <logfile>`
    to list each pacemaker deferral together with nearby missing-availability entries. Adjust
    `--window-before` / `--window-after` to match your alert window and add `--status path/to/status.json`

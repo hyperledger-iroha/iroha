@@ -1177,6 +1177,8 @@ pub struct Network {
     pub idle_timeout: Duration,
     /// Interval between peer gossip batches.
     pub peer_gossip_period: Duration,
+    /// Maximum interval between peer gossip batches (idle backoff ceiling).
+    pub peer_gossip_max_period: Duration,
     /// Whether to advertise and accept signed trust gossip frames.
     pub trust_gossip: bool,
     /// Half-life for peer trust decay (toward zero).
@@ -1212,6 +1214,32 @@ pub struct Network {
     pub p2p_queue_cap_low: NonZeroUsize,
     /// Capacity for the per-peer post queue (bounded mode only).
     pub p2p_post_queue_cap: NonZeroUsize,
+    /// Capacity for the inbound P2P subscriber queue feeding the node relay.
+    pub p2p_subscriber_queue_cap: NonZeroUsize,
+    /// Optional per-peer consensus ingress rate (msgs/sec). When None, ingress limiting is disabled.
+    pub consensus_ingress_rate_per_sec: Option<std::num::NonZeroU32>,
+    /// Optional burst for consensus ingress rate limiting. Defaults to `rate` when None.
+    pub consensus_ingress_burst: Option<std::num::NonZeroU32>,
+    /// Optional per-peer consensus ingress bytes/sec budget. When None, bytes limiting is disabled.
+    pub consensus_ingress_bytes_per_sec: Option<std::num::NonZeroU32>,
+    /// Optional burst (bytes) for consensus ingress bytes limiting. Defaults to `bytes_per_sec` when None.
+    pub consensus_ingress_bytes_burst: Option<std::num::NonZeroU32>,
+    /// Optional per-peer critical consensus ingress rate (msgs/sec). When None, critical limiting is disabled.
+    pub consensus_ingress_critical_rate_per_sec: Option<std::num::NonZeroU32>,
+    /// Optional burst for critical consensus ingress rate limiting. Defaults to `rate` when None.
+    pub consensus_ingress_critical_burst: Option<std::num::NonZeroU32>,
+    /// Optional per-peer critical consensus ingress bytes/sec budget. When None, bytes limiting is disabled.
+    pub consensus_ingress_critical_bytes_per_sec: Option<std::num::NonZeroU32>,
+    /// Optional burst (bytes) for critical consensus ingress bytes limiting. Defaults to `bytes_per_sec` when None.
+    pub consensus_ingress_critical_bytes_burst: Option<std::num::NonZeroU32>,
+    /// Maximum concurrent RBC sessions accepted per peer before throttling (0 disables).
+    pub consensus_ingress_rbc_session_limit: usize,
+    /// Drop threshold (per window) before temporarily suppressing consensus ingress.
+    pub consensus_ingress_penalty_threshold: u32,
+    /// Window for consensus ingress penalty tracking.
+    pub consensus_ingress_penalty_window: Duration,
+    /// Cooldown applied after consensus ingress penalties trigger.
+    pub consensus_ingress_penalty_cooldown: Duration,
     /// Stagger between parallel dial attempts for multi-address peers.
     pub happy_eyeballs_stagger: Duration,
     /// Prefer IPv6 addresses over hostnames/IPv4 when dialing.
@@ -1849,6 +1877,8 @@ pub struct Queue {
     pub capacity_per_user: NonZeroUsize,
     /// Transaction time-to-live.
     pub transaction_time_to_live: Duration,
+    /// Minimum interval between expired-transaction sweeps.
+    pub expired_cull_interval: Duration,
 }
 
 /// Nexus staking configuration (public lanes).
@@ -2892,6 +2922,8 @@ pub struct Pipeline {
     pub quarantine_tx_max_millis: u64,
     /// Default cursor mode for server-facing query endpoints.
     pub query_default_cursor_mode: QueryCursorMode,
+    /// Maximum fetch size for iterable queries executed inside the IVM.
+    pub query_max_fetch_size: u64,
     /// Minimum gas units required to use stored cursor mode (0 = disabled).
     pub query_stored_min_gas_units: u64,
     /// AMX per-dataspace execution budget in milliseconds.
@@ -2913,7 +2945,7 @@ pub struct TieredState {
     pub enabled: bool,
     /// Maximum number of keys to keep hot (0 = unlimited).
     pub hot_retained_keys: usize,
-    /// Hot-tier byte budget based on serialized Norito JSON size (0 = unlimited).
+    /// Hot-tier byte budget based on deterministic in-memory WSV sizing (0 = unlimited).
     /// Grace retention may temporarily exceed this budget.
     pub hot_retained_bytes: Bytes<u64>,
     /// Minimum snapshots to retain newly hot entries before demotion (0 = disabled).
@@ -3401,6 +3433,7 @@ impl Default for Queue {
             transaction_time_to_live: defaults::queue::TRANSACTION_TIME_TO_LIVE,
             capacity: defaults::queue::CAPACITY,
             capacity_per_user: defaults::queue::CAPACITY_PER_USER,
+            expired_cull_interval: defaults::queue::EXPIRED_CULL_INTERVAL,
         }
     }
 }
@@ -3530,6 +3563,8 @@ pub struct Sumeragi {
     pub block_max_transactions: Option<NonZeroUsize>,
     /// Optional cap on block payload bytes when RBC is disabled (None = unlimited).
     pub block_max_payload_bytes: Option<NonZeroUsize>,
+    /// Multiplier applied to the proposal queue scan budget (relative to max tx per block).
+    pub proposal_queue_scan_multiplier: NonZeroUsize,
     /// Capacity for the vote message channel.
     pub msg_channel_cap_votes: usize,
     /// Capacity for the block payload channel.
@@ -3565,6 +3600,16 @@ pub struct Sumeragi {
     pub membership_mismatch_alert_threshold: u32,
     /// Whether to drop consensus messages from peers with repeated membership mismatches.
     pub membership_mismatch_fail_closed: bool,
+    /// Maximum height delta accepted for inbound consensus messages (0 disables future gating).
+    pub consensus_future_height_window: u64,
+    /// Maximum view delta accepted for inbound consensus messages (0 disables future gating).
+    pub consensus_future_view_window: u64,
+    /// Invalid signature count before temporarily suppressing a signer (0 disables).
+    pub invalid_sig_penalty_threshold: u32,
+    /// Window for invalid signature penalty counting.
+    pub invalid_sig_penalty_window: Duration,
+    /// Cooldown applied after invalid signature penalties trigger.
+    pub invalid_sig_penalty_cooldown: Duration,
     /// Maximum DA commitments (blobs) permitted in a single block.
     pub da_max_commitments_per_block: usize,
     /// Maximum DA proof openings permitted in a single block (aggregate cap).
@@ -3580,6 +3625,8 @@ pub struct Sumeragi {
     pub require_precommit_qc: bool,
     /// RBC chunk maximum bytes per chunk.
     pub rbc_chunk_max_bytes: usize,
+    /// Optional fanout cap for RBC chunk broadcasts (None = auto based on topology).
+    pub rbc_chunk_fanout: Option<NonZeroUsize>,
     /// Maximum pending RBC chunks stashed before INIT.
     pub rbc_pending_max_chunks: usize,
     /// Maximum pending RBC bytes per session before INIT.
@@ -3588,6 +3635,10 @@ pub struct Sumeragi {
     pub rbc_pending_ttl: Duration,
     /// RBC session TTL for pruning inactive sessions.
     pub rbc_session_ttl: Duration,
+    /// Maximum RBC sessions rebroadcast per tick.
+    pub rbc_rebroadcast_sessions_per_tick: usize,
+    /// Maximum RBC payload chunks broadcast per tick.
+    pub rbc_payload_chunks_per_tick: usize,
     /// Maximum number of persisted RBC session summaries retained on disk.
     pub rbc_store_max_sessions: usize,
     /// Soft quota for persisted RBC session summaries.
@@ -3796,8 +3847,10 @@ pub struct TrustedPeers {
     pub myself: Peer,
     /// Other trusted peers.
     pub others: UniqueVec<Peer>,
-    /// Optional Proof-of-Possession (PoP) for validators' BLS keys, keyed by public key.
-    /// Peers without a valid PoP will be excluded from the consensus topology.
+    /// Proof-of-Possession (PoP) for validators' BLS keys, keyed by public key.
+    /// PoP entries must cover the full validator roster at config parse time; incomplete
+    /// or invalid PoP maps are rejected. Runtime roster derivation still guards against
+    /// missing or invalid PoPs to avoid divergent topologies.
     pub pops: std::collections::BTreeMap<PublicKey, Vec<u8>>,
 }
 
@@ -3843,6 +3896,8 @@ impl Default for LiveQueryStore {
 pub struct BlockSync {
     /// Block gossip interval.
     pub gossip_period: Duration,
+    /// Maximum block gossip interval (idle backoff ceiling).
+    pub gossip_max_period: Duration,
     /// Fanout cap for block-sync gossip (peer samples, block sync updates, availability votes, and NEW_VIEW gossip).
     pub gossip_size: NonZeroU32,
 }
@@ -3923,6 +3978,8 @@ pub struct TransactionGossiper {
     pub gossip_period: Duration,
     /// Number of transactions per gossip message.
     pub gossip_size: NonZeroU32,
+    /// Number of gossip periods to wait before re-sending the same transactions.
+    pub gossip_resend_ticks: NonZeroU32,
     /// Dataspace-aware targeting options.
     pub dataspace: DataspaceGossip,
 }
@@ -4062,6 +4119,10 @@ pub struct Torii {
     pub query_rate_per_authority_per_sec: Option<NonZeroU32>,
     /// Optional per-authority burst capacity (tokens).
     pub query_burst_per_authority: Option<NonZeroU32>,
+    /// Optional per-authority transaction submission rate (tokens/sec). None disables limiting.
+    pub tx_rate_per_authority_per_sec: Option<NonZeroU32>,
+    /// Optional per-authority transaction burst capacity (tokens).
+    pub tx_burst_per_authority: Option<NonZeroU32>,
     /// Optional per-origin deploy rate (tokens/sec). None disables limiting.
     pub deploy_rate_per_origin_per_sec: Option<NonZeroU32>,
     /// Optional per-origin deploy burst capacity (tokens).
@@ -6809,10 +6870,6 @@ pub struct Norito {
     pub zstd_level_gpu: i32,
     /// Size threshold that separates small and large CPU payloads for level selection.
     pub large_threshold: usize,
-    /// Enable varint-coded top-level sequence lengths for payloads up to this size.
-    pub enable_compact_seq_len_up_to: usize,
-    /// Enable varint-coded per-element sizes in packed sequences for payloads up to this size.
-    pub enable_varint_offsets_up_to: usize,
     /// Allow GPU compression offload when compiled and available.
     pub allow_gpu_compression: bool,
     /// Maximum allowed Norito archive length in bytes (0 = unlimited).

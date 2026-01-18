@@ -361,12 +361,16 @@ fn burn_then_execute_trigger_is_rejected() -> Result<()> {
             "burn trigger repetitions; torii={torii}, env_dir={}",
             env_dir.display()
         ))?;
-    // Burn may land in a block without a Merkle root; track total height to avoid stalling on `non_empty`.
-    rt.block_on(async { network.ensure_blocks_with(|height| height.total >= 3).await })
-        .wrap_err(format!(
-            "ensure_blocks_with(total>=3) after burn; torii={torii}, env_dir={}",
-            env_dir.display()
-        ))?;
+    // Wait for the burn transaction to commit before checking trigger state.
+    rt.block_on(async {
+        network
+            .ensure_blocks_with(|height| height.non_empty >= 3)
+            .await
+    })
+    .wrap_err(format!(
+        "ensure_blocks_with(total>=3) after burn; torii={torii}, env_dir={}",
+        env_dir.display()
+    ))?;
 
     // Wait until the trigger disappears from the active set; on slower CI
     // pipelines the removal is observed asynchronously.

@@ -514,9 +514,12 @@ pub mod genesis_instructions_json {
         asset::definition::NewAssetDefinition,
         domain::NewDomain,
         isi::{
-            Grant, GrantBox, InstructionBox, Mint, MintBox, Register, SetParameter, Transfer,
-            TransferBox, register::RegisterBox,
+            ActivatePublicLaneValidator, Grant, GrantBox, InstructionBox, Mint, MintBox, Register,
+            RegisterPublicLaneValidator, SetParameter, Transfer, TransferBox,
+            register::RegisterBox,
         },
+        metadata::Metadata,
+        nexus::LaneId,
         parameter::Parameter,
         permission::Permission,
         prelude::{AccountId, AssetDefinitionId, AssetId, DomainId},
@@ -620,6 +623,12 @@ pub mod genesis_instructions_json {
                             "Transfer" => try_decode_transfer(inner.clone())?,
                             "SetParameter" => try_decode_set_parameter(inner.clone())?,
                             "Grant" => try_decode_grant(inner.clone())?,
+                            "RegisterPublicLaneValidator" => {
+                                try_decode_register_public_lane_validator(inner.clone())?
+                            }
+                            "ActivatePublicLaneValidator" => {
+                                try_decode_activate_public_lane_validator(inner.clone())?
+                            }
                             _ => None,
                         };
                         if let Some(instr) = decoded {
@@ -813,6 +822,67 @@ pub mod genesis_instructions_json {
         Ok(Some(instruction))
     }
 
+    fn try_decode_register_public_lane_validator(
+        inner: Value,
+    ) -> Result<Option<InstructionBox>, json::Error> {
+        let mut fields = match inner {
+            Value::Object(map) => map,
+            other => {
+                return Err(json::Error::Message(format!(
+                    "expected object for RegisterPublicLaneValidator fields, found {other:?}"
+                )));
+            }
+        };
+        let lane_value = fields
+            .remove("lane_id")
+            .ok_or_else(|| json::Error::missing_field("lane_id"))?;
+        let lane_id = LaneId::from(parse_u32(lane_value, "lane_id")?);
+        let validator_str = take_string(&mut fields, "validator")?;
+        let validator: AccountId = parse_id(&validator_str, "validator")?;
+        let stake_account_str = take_string(&mut fields, "stake_account")?;
+        let stake_account: AccountId = parse_id(&stake_account_str, "stake_account")?;
+        let stake_value = fields
+            .remove("initial_stake")
+            .ok_or_else(|| json::Error::missing_field("initial_stake"))?;
+        let initial_stake = parse_numeric(stake_value)?;
+        let metadata_value = fields.remove("metadata");
+        let metadata = match metadata_value {
+            Some(Value::Null) | None => Metadata::default(),
+            Some(value) => norito::json::value::from_value(value)?,
+        };
+        ensure_no_extra_fields(&fields)?;
+        let register = RegisterPublicLaneValidator::new(
+            lane_id,
+            validator,
+            stake_account,
+            initial_stake,
+            metadata,
+        );
+        Ok(Some(InstructionBox::from(register)))
+    }
+
+    fn try_decode_activate_public_lane_validator(
+        inner: Value,
+    ) -> Result<Option<InstructionBox>, json::Error> {
+        let mut fields = match inner {
+            Value::Object(map) => map,
+            other => {
+                return Err(json::Error::Message(format!(
+                    "expected object for ActivatePublicLaneValidator fields, found {other:?}"
+                )));
+            }
+        };
+        let lane_value = fields
+            .remove("lane_id")
+            .ok_or_else(|| json::Error::missing_field("lane_id"))?;
+        let lane_id = LaneId::from(parse_u32(lane_value, "lane_id")?);
+        let validator_str = take_string(&mut fields, "validator")?;
+        let validator: AccountId = parse_id(&validator_str, "validator")?;
+        ensure_no_extra_fields(&fields)?;
+        let activate = ActivatePublicLaneValidator::new(lane_id, validator);
+        Ok(Some(InstructionBox::from(activate)))
+    }
+
     fn take_string(
         fields: &mut BTreeMap<String, Value>,
         field: &'static str,
@@ -853,6 +923,27 @@ pub mod genesis_instructions_json {
         value
             .parse::<T>()
             .map_err(|err| json::Error::Message(format!("invalid {label}: {err}")))
+    }
+
+    fn parse_u32(value: Value, label: &'static str) -> Result<u32, json::Error> {
+        match value {
+            Value::String(s) => s
+                .parse::<u32>()
+                .map_err(|err| json::Error::Message(format!("invalid {label}: {err}"))),
+            Value::Number(Number::U64(v)) => {
+                u32::try_from(v).map_err(|_| json::Error::Message(format!("invalid {label}: {v}")))
+            }
+            Value::Number(Number::I64(v)) => {
+                if v < 0 {
+                    return Err(json::Error::Message(format!("invalid {label}: {v}")));
+                }
+                u32::try_from(v as u64)
+                    .map_err(|_| json::Error::Message(format!("invalid {label}: {v}")))
+            }
+            other => Err(json::Error::Message(format!(
+                "expected numeric {label} value, found {other:?}"
+            ))),
+        }
     }
 
     fn parse_numeric(value: Value) -> Result<Numeric, json::Error> {
@@ -981,6 +1072,58 @@ pub mod genesis_instructions_json {
             };
         }
 
+        if let Some(register) = instruction
+            .as_any()
+            .downcast_ref::<RegisterPublicLaneValidator>()
+        {
+            let mut fields = Map::new();
+            fields.insert(
+                "lane_id".to_string(),
+                Value::Number(Number::U64(u64::from(register.lane_id().as_u32()))),
+            );
+            fields.insert(
+                "validator".to_string(),
+                Value::String(register.validator().to_string()),
+            );
+            fields.insert(
+                "stake_account".to_string(),
+                Value::String(register.stake_account().to_string()),
+            );
+            fields.insert(
+                "initial_stake".to_string(),
+                Value::String(register.initial_stake().to_string()),
+            );
+            let metadata = norito::json::value::to_value(register.metadata()).ok()?;
+            fields.insert("metadata".to_string(), metadata);
+            let mut outer = Map::new();
+            outer.insert(
+                "RegisterPublicLaneValidator".to_string(),
+                Value::Object(fields),
+            );
+            return Some(Value::Object(outer));
+        }
+
+        if let Some(activate) = instruction
+            .as_any()
+            .downcast_ref::<ActivatePublicLaneValidator>()
+        {
+            let mut fields = Map::new();
+            fields.insert(
+                "lane_id".to_string(),
+                Value::Number(Number::U64(u64::from(activate.lane_id().as_u32()))),
+            );
+            fields.insert(
+                "validator".to_string(),
+                Value::String(activate.validator().to_string()),
+            );
+            let mut outer = Map::new();
+            outer.insert(
+                "ActivatePublicLaneValidator".to_string(),
+                Value::Object(fields),
+            );
+            return Some(Value::Object(outer));
+        }
+
         None
     }
 
@@ -1025,11 +1168,17 @@ pub mod genesis_instructions_json {
         #[allow(unused_imports)]
         use iroha_data_model::{
             domain::Domain,
-            isi::{GrantBox, Log, MintBox, RegisterBox, SetParameter, TransferBox},
+            isi::{
+                GrantBox, Log, MintBox, RegisterBox, SetParameter, TransferBox,
+                staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
+            },
             level::Level,
+            metadata::Metadata,
+            nexus::LaneId,
             parameter::{Parameter, TransactionParameter},
             prelude::{
-                AssetDefinitionId, AssetId, Grant, InstructionBox, Mint, Register, Transfer,
+                AccountId, AssetDefinitionId, AssetId, Grant, InstructionBox, Mint, Register,
+                Transfer,
             },
         };
         use iroha_executor_data_model::permission::parameter::CanSetParameters;
@@ -1157,6 +1306,54 @@ pub mod genesis_instructions_json {
             assert_eq!(grant.destination(), &account_id);
             assert_eq!(grant.object().name(), "CanSetParameters");
             assert_eq!(grant.object().payload(), &Json::default());
+        }
+
+        #[test]
+        fn deserialize_structured_instructions_supports_npos_bootstrap() {
+            let validator_id = ALICE_ID.clone();
+            let register = RegisterPublicLaneValidator::new(
+                LaneId::SINGLE,
+                validator_id.clone(),
+                validator_id.clone(),
+                Numeric::from(10_u64),
+                Metadata::default(),
+            );
+            let activate = ActivatePublicLaneValidator::new(LaneId::SINGLE, validator_id.clone());
+            let instructions: Vec<InstructionBox> = vec![
+                InstructionBox::from(register),
+                InstructionBox::from(activate),
+            ];
+
+            let mut json_text = String::new();
+            serialize(&instructions, &mut json_text);
+            let parsed =
+                norito::json::from_str::<Value>(&json_text).expect("parse serialized JSON");
+            let instructions = from_value(&parsed).expect("deserialize instructions");
+            assert_eq!(instructions.len(), 2);
+
+            match instructions[0]
+                .as_any()
+                .downcast_ref::<RegisterPublicLaneValidator>()
+            {
+                Some(register) => {
+                    assert_eq!(*register.lane_id(), LaneId::SINGLE);
+                    assert_eq!(register.validator(), &validator_id);
+                    assert_eq!(register.stake_account(), &validator_id);
+                    assert_eq!(register.initial_stake(), &Numeric::from(10_u64));
+                    assert!(register.metadata().is_empty());
+                }
+                other => panic!("unexpected register validator instruction: {other:?}"),
+            }
+            match instructions[1]
+                .as_any()
+                .downcast_ref::<ActivatePublicLaneValidator>()
+            {
+                Some(activate) => {
+                    assert_eq!(*activate.lane_id(), LaneId::SINGLE);
+                    assert_eq!(activate.validator(), &validator_id);
+                }
+                other => panic!("unexpected activate validator instruction: {other:?}"),
+            }
         }
 
         #[test]
@@ -2794,7 +2991,7 @@ mod tests2 {
             transactions: vec![RawGenesisTx::default()],
             consensus_mode: Some(SumeragiConsensusMode::Permissioned),
             bls_domain: Some("bls:test-domain".to_string()),
-            wire_proto_versions: vec![1, 2],
+            wire_proto_versions: vec![1],
             consensus_fingerprint: Some("0xabc123".to_string()),
             crypto: ManifestCrypto::default(),
         };

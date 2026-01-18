@@ -7,7 +7,9 @@
 
 use eyre::Result;
 use integration_tests::sandbox;
-use iroha::data_model::{block::SignedBlock, prelude::*, query::block::prelude::FindBlocks};
+use iroha::data_model::{
+    Level, block::SignedBlock, isi::Log, prelude::*, query::block::prelude::FindBlocks,
+};
 use iroha_primitives::unique_vec::UniqueVec;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use tokio::runtime::Runtime;
@@ -73,6 +75,10 @@ fn rotation_signer_indices_match_expected_set_a() -> Result<()> {
     let client = network.client();
 
     // Let the network produce a few blocks
+    let status = client.get_status()?;
+    for idx in status.blocks..6 {
+        client.submit_blocking(Log::new(Level::INFO, format!("rotation seed {idx}")))?;
+    }
     rt.block_on(async { network.ensure_blocks_with(|x| x.total >= 6).await })?;
 
     // Fetch all blocks from a single peer (descending) and reverse to ascending
@@ -140,6 +146,10 @@ fn rotation_signer_indices_match_expected_set_a_n7_multiple_heights() -> Result<
     let client = network.client();
 
     // Let the network produce a number of blocks (>= 10 total)
+    let status = client.get_status()?;
+    for idx in status.blocks..10 {
+        client.submit_blocking(Log::new(Level::INFO, format!("rotation n7 seed {idx}")))?;
+    }
     rt.block_on(async { network.ensure_blocks_with(|x| x.total >= 10).await })?;
 
     // Fetch all blocks (descending) and reverse to ascending
@@ -208,6 +218,11 @@ fn canonical_certificate_identical_across_peers() -> Result<()> {
     };
 
     // Ensure we have several blocks
+    let client = network.client();
+    let status = client.get_status()?;
+    for idx in status.blocks..5 {
+        client.submit_blocking(Log::new(Level::INFO, format!("rotation cert seed {idx}")))?;
+    }
     rt.block_on(async { network.ensure_blocks_with(|x| x.total >= 5).await })?;
 
     // For each peer, fetch latest block and collect signer index sets. All must match.

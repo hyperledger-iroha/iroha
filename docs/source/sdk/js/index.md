@@ -81,5 +81,7 @@ automatically use the `pipeline` profile (POST retries enabled, 250 ms base ba
 while SSE endpoints use the `streaming` profile (longer retry window, 6 attempts). Override the
 profiles via `resolveToriiClientConfig({ overrides: { retryProfiles: { … } } })` or by passing
 `retryProfiles` directly to the `ToriiClient` constructor when you need different budgets.
+If `/v1/pipeline/transactions/status` returns `404`, the JS client treats it as "pending" and
+returns `null` so polling can continue after Torii restarts or cache eviction.
 See {doc}`torii_retry_policy` for the full table of defaults, override knobs,
 and error-handling expectations that governance audits during JS4/JS7 reviews.

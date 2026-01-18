@@ -7,6 +7,9 @@ private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E90
 trusted_peers = [
   "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2@localhost:8081",
 ]
+trusted_peers_pop = [
+  { public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }
+]
 
 [genesis]
 public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -22,6 +25,7 @@ public_address = "addr:localhost:3840#EB2D"
 block_gossip_period_ms = 10_000
 block_gossip_size = 4
 transaction_gossip_period_ms = 1_000
+transaction_gossip_resend_ticks = 3
 transaction_gossip_size = 500
 idle_timeout_ms = 10_000
 
@@ -111,6 +115,7 @@ format = "compact"
 capacity = 65_536
 capacity_per_user = 65_536
 transaction_time_to_live_ms = 100
+expired_cull_interval_ms = 1_000
 
 [snapshot]
 mode = "read_write"

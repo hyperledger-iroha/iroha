@@ -55,14 +55,14 @@ cargo test -p integration_tests \
 
 ## קווי בסיס צפויים
 
-עם `sumeragi.rbc_chunk_max_bytes = 64 KiB`, הוראה בגודל 10.5 MiB (11 010 048 בייט), ובהנחה ש‑`force_deliver_quorum_one` פעיל, מתקיימים התנאים הבאים:
+עם `sumeragi.rbc_chunk_max_bytes = 256 KiB`, הוראה בגודל 10.5 MiB (11 010 048 בייט), ובהנחה ש‑`force_deliver_quorum_one` פעיל, מתקיימים התנאים הבאים:
 
-שים לב: `sumeragi.rbc_chunk_max_bytes` נחתך בזמן ההפעלה כך ש־`RbcChunk` סריאלי ייכנס לתקרת ה‑plaintext שמתקבלת מ־`network.max_frame_bytes_consensus` לאחר ניכוי תקורת ההצפנה.
+שים לב: `sumeragi.rbc_chunk_max_bytes` נחתך בזמן ההפעלה כך ש־`RbcChunk` סריאלי ייכנס לתקרת ה‑plaintext שמתקבלת מ־`network.max_frame_bytes_block_sync` לאחר ניכוי תקורת ההצפנה.
 
 | תרחיש | מספר צ׳אנקים | סף READY | מונים לכל peer | תקציבי זמן |
 | --- | --- | --- | --- | --- |
-| ארבעה פירים | 168 צ׳אנקים (כולם נדרשים) | READY ≥1 (דיבוג כפוי; רגיל ≥3 עבור ‎f=1) | `payload_bytes_delivered_total ≥ 11 010 048`, ‏`deliver_broadcasts_total = 1`, ‏`ready_broadcasts_total = 1` | `commit_ms` ו-`rbc_deliver_ms` צריכים להישאר בתוך `commit_time_ms` (ברירת מחדל `4000`) |
-| שישה פירים | 168 צ׳אנקים | READY ≥1 (דיבוג כפוי; רגיל ≥4 עבור ‎f=2) | זהה לעיל | זהה לעיל |
+| ארבעה פירים | 42 צ׳אנקים (כולם נדרשים) | READY ≥1 (דיבוג כפוי; רגיל ≥3 עבור ‎f=1) | `payload_bytes_delivered_total ≥ 11 010 048`, ‏`deliver_broadcasts_total = 1`, ‏`ready_broadcasts_total = 1` | `commit_ms` ו-`rbc_deliver_ms` צריכים להישאר בתוך `commit_time_ms` (ברירת מחדל `4000`) |
+| שישה פירים | 42 צ׳אנקים | READY ≥1 (דיבוג כפוי; רגיל ≥4 עבור ‎f=2) | זהה לעיל | זהה לעיל |
 
 השארה במקטע הקומיט של 4 שניות מחייבת קצב אפקטיבי של ≥≈2.7 MiB/s. מומלץ להתריע כשזמן ה-DELIVER מתקרב ל-`commit_time_ms`, כאשר הקצב יורד מתחת לסף או כאשר המונים לכל peer מתפצלים (אות לכפיית יתר או צ׳אנקים חסרים).
 

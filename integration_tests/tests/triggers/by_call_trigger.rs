@@ -127,7 +127,12 @@ async fn execute_trigger_should_produce_event() -> Result<()> {
             let filter = ExecuteTriggerEventFilter::new()
                 .for_trigger(trigger_id)
                 .under_authority(account_id);
-            let mut events = test_client.listen_for_events_async([filter]).await?;
+            let mut events = timeout(
+                network.sync_timeout(),
+                test_client.listen_for_events_async([filter]),
+            )
+            .await
+            .wrap_err("Timed out opening ExecuteTrigger event stream")??;
 
             spawn_blocking({
                 let client = test_client.clone();
@@ -138,15 +143,21 @@ async fn execute_trigger_should_produce_event() -> Result<()> {
             })
             .await??;
 
-            let next_event = timeout(network.sync_timeout(), events.next())
-                .await
-                .wrap_err("Timed out waiting for ExecuteTrigger event")?;
-            let event =
-                next_event.ok_or_else(|| eyre::eyre!("Execute trigger event stream closed"))?;
-            event
-                .wrap_err("ExecuteTrigger event listener returned an error")
-                .map(|_| ())?;
-            Ok(())
+            let result = async {
+                let next_event = timeout(network.sync_timeout(), events.next())
+                    .await
+                    .wrap_err("Timed out waiting for ExecuteTrigger event")?;
+                let event =
+                    next_event.ok_or_else(|| eyre::eyre!("Execute trigger event stream closed"))?;
+                event
+                    .wrap_err("ExecuteTrigger event listener returned an error")
+                    .map(|_| ())?;
+                Ok(())
+            }
+            .await;
+
+            events.close().await;
+            result
         },
     ))
     .await

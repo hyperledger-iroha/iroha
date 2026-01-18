@@ -91,6 +91,32 @@ jobs:
         working-directory: wasm
         run: cargo fmt --all -- --check
 
+  norito_rpc_verify:
+    runs-on: ubuntu-latest
+    container:
+      image: hyperledger/iroha2-ci:nightly-2025-05-08
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+      - name: Norito-RPC fixture parity
+        run: cargo xtask norito-rpc-verify
+
+  android_fixture_compat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+      - name: Android fixture compatibility
+        working-directory: java/iroha_android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew :core:test --tests org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests
+
   clippy:
     runs-on: [self-hosted, Linux, iroha2]
     container:

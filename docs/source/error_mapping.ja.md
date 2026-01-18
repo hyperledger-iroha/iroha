@@ -34,6 +34,7 @@ translator: manual
 - `NotFound`: ライブクエリカーソルが存在しない。
 - `CursorMismatch` / `CursorDone`: カーソルプロトコルの不整合。
 - `FetchSizeTooBig`: サーバが設定した上限を超過。
+- `GasBudgetExceeded`: クエリ実行のガス／マテリアライズ予算を超過。
 - `InvalidSingularParameters`: 単一クエリでサポートされないパラメータ。
 - `CapacityLimit`: ライブクエリストアの容量に到達。
 

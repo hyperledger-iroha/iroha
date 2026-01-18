@@ -13,7 +13,7 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_schema::{EnumMeta, EnumVariant, Ident, IntoSchema, MetaMap, Metadata, TypeId};
 use norito::codec::{Decode, DecodeAll, Encode};
 
-use super::Header as BlockHeader;
+use super::{BlockSignature, Header as BlockHeader};
 use crate::{
     fastpq::{FastpqTransitionBatch, TransferTranscriptBundle},
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
@@ -22,7 +22,7 @@ use crate::{
 };
 
 /// Wire protocol version for consensus messages defined here.
-pub const PROTO_VERSION: u32 = 2;
+pub const PROTO_VERSION: u32 = 1;
 
 /// Mode tag for classic permissioned Sumeragi used in handshakes and hashing domains.
 pub const PERMISSIONED_TAG: &str = "iroha2-consensus::permissioned-sumeragi@v1";
@@ -830,6 +830,37 @@ pub struct SumeragiRbcStoreStatus {
     pub recent_evictions: Vec<SumeragiRbcEvictedSession>,
 }
 
+/// Per-peer RBC payload mismatch counters.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiRbcMismatchEntry {
+    /// Peer associated with the mismatch counts.
+    pub peer_id: PeerId,
+    /// Count of RBC chunk digest mismatches attributed to the peer.
+    pub chunk_digest_mismatch_total: u64,
+    /// Count of payload-hash mismatches attributed to the peer.
+    pub payload_hash_mismatch_total: u64,
+    /// Count of chunk-root mismatches attributed to the peer.
+    pub chunk_root_mismatch_total: u64,
+    /// Timestamp (ms since UNIX epoch) when the last mismatch was recorded.
+    pub last_timestamp_ms: u64,
+}
+
+/// Snapshot of RBC mismatch counters.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiRbcMismatchStatus {
+    /// Per-peer mismatch counters.
+    #[norito(default)]
+    pub entries: Vec<SumeragiRbcMismatchEntry>,
+}
+
 /// Snapshot of pending (pre-INIT) RBC stashes.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(
@@ -931,6 +962,39 @@ pub struct SumeragiPendingRbcStatus {
     /// Total pending sessions evicted (TTL expiry or stash-cap eviction).
     #[norito(default)]
     pub evicted_total: u64,
+    /// Total READY frames stashed before processing.
+    #[norito(default)]
+    pub stash_ready_total: u64,
+    /// READY frames stashed because INIT has not arrived yet.
+    #[norito(default)]
+    pub stash_ready_init_missing_total: u64,
+    /// READY frames stashed because the commit roster is missing.
+    #[norito(default)]
+    pub stash_ready_roster_missing_total: u64,
+    /// READY frames stashed because the commit roster hash mismatched.
+    #[norito(default)]
+    pub stash_ready_roster_hash_mismatch_total: u64,
+    /// READY frames stashed while the commit roster is unverified.
+    #[norito(default)]
+    pub stash_ready_roster_unverified_total: u64,
+    /// Total DELIVER frames stashed before processing.
+    #[norito(default)]
+    pub stash_deliver_total: u64,
+    /// DELIVER frames stashed because INIT has not arrived yet.
+    #[norito(default)]
+    pub stash_deliver_init_missing_total: u64,
+    /// DELIVER frames stashed because the commit roster is missing.
+    #[norito(default)]
+    pub stash_deliver_roster_missing_total: u64,
+    /// DELIVER frames stashed because the commit roster hash mismatched.
+    #[norito(default)]
+    pub stash_deliver_roster_hash_mismatch_total: u64,
+    /// DELIVER frames stashed while the commit roster is unverified.
+    #[norito(default)]
+    pub stash_deliver_roster_unverified_total: u64,
+    /// Chunk frames stashed before INIT arrives.
+    #[norito(default)]
+    pub stash_chunk_total: u64,
     /// Pending sessions with per-session drop counters.
     #[norito(default)]
     pub entries: Vec<SumeragiPendingRbcEntry>,
@@ -964,6 +1028,9 @@ pub struct SumeragiBlockSyncRosterStatus {
     /// Block-sync drops due to missing/invalid roster proofs.
     #[norito(default)]
     pub drop_missing_total: u64,
+    /// Block-sync `ShareBlocks` drops without a matching request.
+    #[norito(default)]
+    pub drop_unsolicited_share_blocks_total: u64,
 }
 
 /// View-change cause counters surfaced via `/v1/sumeragi/status`.
@@ -979,6 +1046,9 @@ pub struct SumeragiViewChangeCauseStatus {
     /// Total view changes triggered after quorum timeouts/missing commits.
     #[norito(default)]
     pub quorum_timeout_total: u64,
+    /// Total view changes triggered after stake-quorum timeouts (NPoS only).
+    #[norito(default)]
+    pub stake_quorum_timeout_total: u64,
     /// Total view changes triggered after DA availability aborts (unused when DA is advisory).
     #[norito(default)]
     pub da_gate_total: u64,
@@ -1007,6 +1077,9 @@ pub struct SumeragiViewChangeCauseStatus {
     /// Milliseconds since UNIX epoch when a quorum-timeout cause was last recorded.
     #[norito(default)]
     pub last_quorum_timeout_timestamp_ms: u64,
+    /// Milliseconds since UNIX epoch when a stake-quorum-timeout cause was last recorded.
+    #[norito(default)]
+    pub last_stake_quorum_timeout_timestamp_ms: u64,
     /// Milliseconds since UNIX epoch when a DA-gate cause was last recorded.
     #[norito(default)]
     pub last_da_gate_timestamp_ms: u64,
@@ -1108,6 +1181,129 @@ pub struct SumeragiPeerKeyPolicyStatus {
     /// Milliseconds since UNIX epoch when the last reject was recorded.
     #[norito(default)]
     pub last_timestamp_ms: u64,
+}
+
+/// Consensus message drop/deferral counter entry.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiConsensusMessageHandlingEntry {
+    /// Message kind label (e.g., `block_created`).
+    pub kind: String,
+    /// Handling outcome label (e.g., `dropped` or `deferred`).
+    pub outcome: String,
+    /// Drop/deferral reason label.
+    pub reason: String,
+    /// Total observed for the `(kind,outcome,reason)` tuple.
+    pub total: u64,
+}
+
+/// Consensus message drop/deferral counters surfaced via Sumeragi status.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiConsensusMessageHandlingStatus {
+    /// Per-kind drop/deferral counters (best-effort).
+    #[norito(default)]
+    pub entries: Vec<SumeragiConsensusMessageHandlingEntry>,
+}
+
+/// Vote validation drop entry with roster context.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiVoteValidationDropEntry {
+    /// Drop reason label.
+    pub reason: String,
+    /// Vote height.
+    pub height: u64,
+    /// Vote view.
+    pub view: u64,
+    /// Vote epoch.
+    pub epoch: u64,
+    /// Signer index from the vote payload.
+    pub signer_index: u32,
+    /// Peer ID resolved from the validation roster (if any).
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub peer_id: Option<PeerId>,
+    /// Validator roster hash used for validation (if any).
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub roster_hash: Option<HashOf<Vec<PeerId>>>,
+    /// Validator roster length used for validation (if known).
+    pub roster_len: u32,
+    /// Block hash referenced by the vote.
+    pub block_hash: HashOf<BlockHeader>,
+    /// Milliseconds since UNIX epoch when the drop was recorded.
+    pub timestamp_ms: u64,
+}
+
+/// Aggregated count for a vote-validation drop reason.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiVoteValidationDropReasonCount {
+    /// Drop reason label.
+    pub reason: String,
+    /// Total drops recorded for the reason.
+    pub total: u64,
+}
+
+/// Aggregated vote validation drops for a peer/roster hash pairing.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiVoteValidationDropPeerEntry {
+    /// Peer associated with the drop counts.
+    pub peer_id: PeerId,
+    /// Validator roster hash used for validation (if any).
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub roster_hash: Option<HashOf<Vec<PeerId>>>,
+    /// Validator roster length used for validation (if known).
+    pub roster_len: u32,
+    /// Total drops recorded for this peer/roster pairing.
+    pub total: u64,
+    /// Per-reason drop counters.
+    #[norito(default)]
+    pub reasons: Vec<SumeragiVoteValidationDropReasonCount>,
+    /// Height associated with the last drop.
+    pub last_height: u64,
+    /// View associated with the last drop.
+    pub last_view: u64,
+    /// Epoch associated with the last drop.
+    pub last_epoch: u64,
+    /// Milliseconds since UNIX epoch when the last drop was recorded.
+    pub last_timestamp_ms: u64,
+}
+
+/// Vote validation drop snapshot surfaced via Sumeragi status.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiVoteValidationDropStatus {
+    /// Total vote validation drops recorded.
+    #[norito(default)]
+    pub total: u64,
+    /// Recent drop entries (newest-first, bounded).
+    #[norito(default)]
+    pub entries: Vec<SumeragiVoteValidationDropEntry>,
+    /// Aggregated drop counters per peer/roster pairing.
+    #[norito(default)]
+    pub peer_entries: Vec<SumeragiVoteValidationDropPeerEntry>,
 }
 
 /// Deterministic consensus configuration caps captured alongside status snapshots.
@@ -1474,6 +1670,12 @@ pub struct SumeragiStatusWire {
     pub block_created_hint_mismatch_total: u64,
     /// Total proposals rejected due to payload/header mismatches.
     pub block_created_proposal_mismatch_total: u64,
+    /// Consensus message drop/deferral counters (best-effort).
+    #[norito(default)]
+    pub consensus_message_handling: SumeragiConsensusMessageHandlingStatus,
+    /// Vote validation drop snapshot (best-effort).
+    #[norito(default)]
+    pub vote_validation_drops: SumeragiVoteValidationDropStatus,
     /// Total blocks rejected by the validation gate before voting.
     #[norito(default)]
     pub validation_reject_total: u64,
@@ -1510,6 +1712,9 @@ pub struct SumeragiStatusWire {
     /// RBC store snapshot.
     #[norito(default)]
     pub rbc_store: SumeragiRbcStoreStatus,
+    /// Per-peer RBC payload mismatch counters.
+    #[norito(default)]
+    pub rbc_mismatch: SumeragiRbcMismatchStatus,
     /// Pending RBC stash snapshot.
     #[norito(default)]
     pub pending_rbc: SumeragiPendingRbcStatus,
@@ -1711,6 +1916,10 @@ pub struct RbcInit {
     pub payload_hash: Hash,
     /// Merkle root of chunk digests for integrity proofs.
     pub chunk_root: Hash,
+    /// Full block header used to recover signed payloads without BlockCreated.
+    pub block_header: BlockHeader,
+    /// Leader signature over the block header.
+    pub leader_signature: BlockSignature,
 }
 
 /// RBC payload chunk.
@@ -1751,6 +1960,15 @@ pub struct RbcReady {
     pub signature: Vec<u8>,
 }
 
+/// READY signature included with RBC DELIVER to seed quorum recovery.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+pub struct RbcReadySignature {
+    /// Sender index within the active set.
+    pub sender: ValidatorIndex,
+    /// Signature authenticating the sender for this READY.
+    pub signature: Vec<u8>,
+}
+
 /// RBC DELIVER notification.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct RbcDeliver {
@@ -1770,6 +1988,8 @@ pub struct RbcDeliver {
     pub sender: ValidatorIndex,
     /// Signature authenticating the sender for this DELIVER.
     pub signature: Vec<u8>,
+    /// READY signatures observed by the sender for this session.
+    pub ready_signatures: Vec<RbcReadySignature>,
 }
 
 #[cfg(feature = "sumeragi-multiproof")]
@@ -1853,6 +2073,7 @@ impl_decode_from_slice_via_codec!(Reconfig);
 impl_decode_from_slice_via_codec!(RbcInit);
 impl_decode_from_slice_via_codec!(RbcChunk);
 impl_decode_from_slice_via_codec!(RbcReady);
+impl_decode_from_slice_via_codec!(RbcReadySignature);
 impl_decode_from_slice_via_codec!(RbcDeliver);
 #[cfg(feature = "sumeragi-multiproof")]
 impl_decode_from_slice_via_codec!(BlockMultiproof);
@@ -1894,7 +2115,9 @@ impl<'a> norito::core::DecodeFromSlice<'a> for LaneSettlementReceipt {
 
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, KeyPair, MerkleTree};
+    use std::num::NonZeroU64;
+
+    use iroha_crypto::{Algorithm, KeyPair, MerkleTree, SignatureOf};
     use norito::core::DecodeFromSlice;
 
     use super::*;
@@ -1916,7 +2139,7 @@ mod tests {
     }
 
     fn roster_hash(roster: &[PeerId]) -> Hash {
-        Hash::new(&roster.to_vec().encode())
+        Hash::new(roster.to_vec().encode())
     }
 
     fn sample_qc_ref() -> QcRef {
@@ -1967,8 +2190,22 @@ mod tests {
             .root()
             .map(Hash::from)
             .expect("chunk root");
+        let block_header = BlockHeader::new(
+            NonZeroU64::new(6).expect("block height must be non-zero"),
+            None,
+            None,
+            None,
+            0,
+            3,
+        );
+        let leader_key = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let (_, leader_private) = leader_key.into_parts();
+        let leader_signature = BlockSignature::new(
+            0,
+            SignatureOf::from_hash(&leader_private, block_header.hash()),
+        );
         RbcInit {
-            block_hash: dummy_hash(),
+            block_hash: block_header.hash(),
             height: 6,
             view: 3,
             epoch: 1,
@@ -1978,6 +2215,8 @@ mod tests {
             chunk_digests,
             payload_hash: Hash::new(b"payload_hash"),
             chunk_root,
+            block_header,
+            leader_signature,
         }
     }
 
@@ -2017,6 +2256,10 @@ mod tests {
             chunk_root: Hash::prehashed([0xAA; Hash::LENGTH]),
             sender: 2,
             signature: vec![0x21, 0x22],
+            ready_signatures: vec![RbcReadySignature {
+                sender: 1,
+                signature: vec![0x31, 0x32],
+            }],
         }
     }
 

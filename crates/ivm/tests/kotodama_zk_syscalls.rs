@@ -12,6 +12,7 @@ fn main() {
   let ok = zk_verify_transfer(norito_bytes("ENV1"));
   let ok2 = zk_verify_unshield(norito_bytes("ENV2"));
   execute_instruction(norito_bytes("IB0"));
+  execute_query(norito_bytes("QB0"));
 }
 "#;
     let code = ivm::kotodama::compiler::Compiler::new()
@@ -33,7 +34,10 @@ fn main() {
         scall,
         syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION as u8,
     );
+    let want_query =
+        encoding::wide::encode_sys(scall, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY as u8);
     assert!(words.contains(&want_verify_transfer));
     assert!(words.contains(&want_verify_unshield));
     assert!(words.contains(&want_exec));
+    assert!(words.contains(&want_query));
 }

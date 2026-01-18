@@ -5,8 +5,7 @@
 
 static NSString* kMSLSource = @"\n"
 "using namespace metal;\n"
-"constant ulong CRC64_POLY = 0x42F0E1EBA9EA3693ul;\n"
-"constant ulong CRC64_TOPBIT = 0x8000000000000000ul;\n"
+"constant ulong CRC64_POLY = 0xC96C5795D7870F42ul;\n"
 "constant ulong CRC64_CHUNK_SIZE = 16384ul;\n"
 "kernel void classify_json(\n"
 "    device const uchar* in  [[buffer(0)]],\n"
@@ -39,16 +38,21 @@ static NSString* kMSLSource = @"\n"
 "    ulong end = (n - start < CRC64_CHUNK_SIZE) ? n : (start + CRC64_CHUNK_SIZE);\n"
 "    ulong crc = 0ul;\n"
 "    for (ulong i = start; i < end; ++i) {\n"
-"        crc ^= ((ulong)in[i]) << 56;\n"
+"        crc ^= (ulong)in[i];\n"
 "        for (uint bit = 0u; bit < 8u; ++bit) {\n"
-"            bool carry = (crc & CRC64_TOPBIT) != 0ul;\n"
-"            crc = (crc << 1) ^ (carry ? CRC64_POLY : 0ul);\n"
+"            if ((crc & 1ul) != 0ul) {\n"
+"                crc = (crc >> 1) ^ CRC64_POLY;\n"
+"            } else {\n"
+"                crc >>= 1;\n"
+"            }\n"
 "        }\n"
 "    }\n"
 "    out[gid] = crc;\n"
 "}\n";
 
-static const uint64_t CRC64_POLY = 0x42F0E1EBA9EA3693ULL;
+static const uint64_t CRC64_POLY = 0xC96C5795D7870F42ULL;
+static const uint64_t CRC64_INIT = 0xFFFFFFFFFFFFFFFFULL;
+static const uint64_t CRC64_XOR_OUT = 0xFFFFFFFFFFFFFFFFULL;
 static const size_t CRC64_CHUNK_SIZE = 16ULL * 1024ULL;
 
 static uint64_t gf2_matrix_times(const uint64_t* mat, uint64_t vec) {
@@ -70,37 +74,40 @@ static void gf2_matrix_square(uint64_t* square, const uint64_t* mat) {
     }
 }
 
+static uint64_t crc64_shift(uint64_t crc1, size_t len2) {
+    if (len2 == 0) {
+        return crc1;
+    }
+    uint64_t mat[64];
+    uint64_t square[64];
+    uint64_t row = 1ULL;
+    mat[0] = CRC64_POLY;
+    for (int n = 1; n < 64; ++n) {
+        mat[n] = row;
+        row <<= 1;
+    }
+
+    size_t len = len2 * 8ULL;
+    while (len != 0) {
+        if (len & 1ULL) {
+            crc1 = gf2_matrix_times(mat, crc1);
+        }
+        gf2_matrix_square(square, mat);
+        for (int n = 0; n < 64; ++n) {
+            mat[n] = square[n];
+        }
+        len >>= 1;
+    }
+
+    return crc1;
+}
+
 static uint64_t crc64_combine(uint64_t crc1, uint64_t crc2, size_t len2) {
     if (len2 == 0) {
         return crc1;
     }
-    uint64_t odd[64];
-    uint64_t even[64];
-
-    odd[0] = CRC64_POLY;
-    for (int n = 1; n < 64; ++n) {
-        odd[n] = 1ULL << (63 - n);
-    }
-
-    gf2_matrix_square(even, odd);
-    size_t len = len2 * 8ULL;
-    while (len != 0) {
-        gf2_matrix_square(odd, even);
-        if (len & 1ULL) {
-            crc1 = gf2_matrix_times(odd, crc1);
-        }
-        len >>= 1;
-        if (len == 0) {
-            break;
-        }
-        gf2_matrix_square(even, odd);
-        if (len & 1ULL) {
-            crc1 = gf2_matrix_times(even, crc1);
-        }
-        len >>= 1;
-    }
-
-    return crc1 ^ crc2;
+    uint64_t shifted = crc64_shift(crc1, len2);
+    return shifted ^ crc2;
 }
 
 // CPU finalize: combine masks into tape offsets with correct escape + quote parity across blocks.
@@ -256,14 +263,14 @@ int norito_crc64_metal_impl(const uint8_t* input_ptr,
         [cb waitUntilCompleted];
 
         const uint64_t* out_ptr = (const uint64_t*)[outBuf contents];
-        uint64_t crc = 0;
+        uint64_t crc = CRC64_INIT;
         for (NSUInteger idx = 0; idx < chunks; ++idx) {
             size_t offset = (size_t)idx * CRC64_CHUNK_SIZE;
             size_t remaining = (offset < n) ? (n - offset) : 0;
             size_t seg_len = (remaining < CRC64_CHUNK_SIZE) ? remaining : CRC64_CHUNK_SIZE;
             crc = crc64_combine(crc, out_ptr[idx], seg_len);
         }
-        *out_crc = crc;
+        *out_crc = crc ^ CRC64_XOR_OUT;
         return 0;
     }
 }

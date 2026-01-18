@@ -129,14 +129,17 @@ pub fn sync_after_submission(
 
 fn best_effort_status_from_network(network: &Network) -> Option<Status> {
     let height = best_effort_block_height(network)?;
-    let mut status = Status::default();
-    status.blocks = height.total;
-    status.blocks_non_empty = height.non_empty;
-    status.peers = network
+    let peers = network
         .peers()
         .iter()
-        .find_map(|peer| peer.last_known_peers())
+        .find_map(iroha_test_network::NetworkPeer::last_known_peers)
         .unwrap_or_else(|| network.peers().len().saturating_sub(1) as u64);
+    let status = Status {
+        blocks: height.total,
+        blocks_non_empty: height.non_empty,
+        peers,
+        ..Status::default()
+    };
     Some(status)
 }
 
@@ -144,13 +147,10 @@ fn best_effort_block_height(network: &Network) -> Option<BlockHeight> {
     let mut best: Option<BlockHeight> = None;
     for peer in network.peers() {
         if let Some(height) = peer.best_effort_block_height() {
-            best = Some(match best {
-                None => height,
-                Some(current) => BlockHeight {
-                    total: current.total.max(height.total),
-                    non_empty: current.non_empty.max(height.non_empty),
-                },
-            });
+            best = Some(best.map_or(height, |current| BlockHeight {
+                total: current.total.max(height.total),
+                non_empty: current.non_empty.max(height.non_empty),
+            }));
         }
     }
     best
@@ -185,7 +185,7 @@ mod tests {
     use super::*;
     use iroha::client::Client;
     use iroha::config::{
-        Config, DEFAULT_TORII_API_MIN_PROOF_VERSION, default_connect_queue_root,
+        AnonymityPolicy, Config, DEFAULT_TORII_API_MIN_PROOF_VERSION, default_connect_queue_root,
         default_torii_api_version,
     };
     use iroha::data_model::ChainId;
@@ -257,8 +257,8 @@ mod tests {
             transaction_status_timeout: ttl,
             connect_queue_root: default_connect_queue_root(),
             sorafs_alias_cache: AliasCachePolicy::new(ttl, ttl, ttl, ttl, ttl, ttl, ttl, ttl),
-            sorafs_anonymity_policy: Default::default(),
-            sorafs_rollout_phase: Default::default(),
+            sorafs_anonymity_policy: AnonymityPolicy::default(),
+            sorafs_rollout_phase: iroha_config::parameters::actual::SorafsRolloutPhase::default(),
         };
         let mut client = Client::new(config);
         client.headers = HashMap::new();
@@ -293,11 +293,12 @@ mod tests {
 
     #[tokio::test]
     async fn status_retry_async_returns_error_for_unreachable_host() {
-        let _env_guard = lock_env_guard();
+        let env_guard = lock_env_guard();
         let _restore = EnvRestore::remove("IROHA_TEST_STATUS_RETRY_BUDGET_MS");
         set_env_var("IROHA_TEST_STATUS_RETRY_BUDGET_MS", "5ms");
 
         let client = dummy_client();
+        drop(env_guard);
         let result = get_status_with_retry_async(&client).await;
         assert!(result.is_err());
     }

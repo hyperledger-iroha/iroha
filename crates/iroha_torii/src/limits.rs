@@ -40,6 +40,7 @@ struct TokenBucket {
 }
 
 const DEFAULT_MAX_BUCKETS: usize = 4_096;
+const PREAUTH_NOFILE_RESERVE: u64 = 128;
 
 impl RateLimiter {
     /// Create a new limiter. If `rate_per_sec` is None or 0, the limiter allows all.
@@ -321,6 +322,59 @@ pub struct PreAuthConfig {
     pub ban_duration: Option<Duration>,
     pub allow_nets: Vec<IpNet>,
     pub scheme_limits: Vec<SchemeLimit>,
+}
+
+#[cfg(unix)]
+#[allow(unsafe_code)]
+pub(crate) fn nofile_soft_limit() -> Option<u64> {
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: libc::getrlimit expects a valid, mutable rlimit pointer.
+    let result = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) };
+    if result != 0 {
+        return None;
+    }
+    let soft = limit.rlim_cur as u64;
+    if soft == libc::RLIM_INFINITY as u64 || soft == 0 {
+        return None;
+    }
+    Some(soft)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn nofile_soft_limit() -> Option<u64> {
+    None
+}
+
+fn preauth_budget_from_nofile(nofile_soft: u64) -> u64 {
+    let reserve = PREAUTH_NOFILE_RESERVE.min(nofile_soft.saturating_sub(1));
+    let budget = nofile_soft.saturating_sub(reserve);
+    (budget / 2).max(1)
+}
+
+pub(crate) fn clamp_preauth_max_total(
+    configured: Option<usize>,
+    nofile_soft: Option<u64>,
+) -> Option<usize> {
+    let configured = configured?;
+    let Some(nofile_soft) = nofile_soft else {
+        return Some(configured);
+    };
+    let cap = preauth_budget_from_nofile(nofile_soft) as usize;
+    Some(configured.min(cap))
+}
+
+pub(crate) fn clamp_preauth_max_per_ip(
+    configured: Option<usize>,
+    max_total: Option<usize>,
+) -> Option<usize> {
+    let configured = configured?;
+    Some(match max_total {
+        Some(max_total) => configured.min(max_total),
+        None => configured,
+    })
 }
 
 /// Per-scheme concurrency limit description.
@@ -969,5 +1023,20 @@ mod tests {
 
         headers.insert(REMOTE_ADDR_HEADER, "2001:db8::99".parse().unwrap());
         assert!(is_allowed_by_cidr(&headers, None, &allow));
+    }
+
+    #[test]
+    fn clamp_preauth_max_total_respects_nofile_budget() {
+        let nofile_soft = Some(256);
+        assert_eq!(clamp_preauth_max_total(Some(200), nofile_soft), Some(64));
+        assert_eq!(clamp_preauth_max_total(Some(32), nofile_soft), Some(32));
+    }
+
+    #[test]
+    fn clamp_preauth_max_per_ip_caps_to_total() {
+        assert_eq!(clamp_preauth_max_per_ip(Some(100), Some(64)), Some(64));
+        assert_eq!(clamp_preauth_max_per_ip(Some(50), Some(64)), Some(50));
+        assert_eq!(clamp_preauth_max_per_ip(Some(50), None), Some(50));
+        assert_eq!(clamp_preauth_max_per_ip(None, Some(64)), None);
     }
 }

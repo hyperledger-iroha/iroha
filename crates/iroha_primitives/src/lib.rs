@@ -10,6 +10,7 @@
 pub mod addr;
 pub mod big_numeric;
 pub mod bigint;
+pub mod calendar;
 pub mod cmpext;
 #[cfg(not(feature = "ffi_import"))]
 pub mod const_vec;

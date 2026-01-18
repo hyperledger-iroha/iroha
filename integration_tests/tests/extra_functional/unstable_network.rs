@@ -565,9 +565,13 @@ async fn network_doesnt_start_without_relay_being_started() -> Result<()> {
         return Ok(());
     }
 
+    let client = network.client();
+    spawn_blocking(move || client.submit(Log::new(Level::INFO, "relay stalled".to_owned())))
+        .await??;
+
     let Err(_) = timeout(
         Duration::from_secs(3),
-        once_blocks_sync(network.peers().iter(), BlockHeight::predicate_total(2)),
+        once_blocks_sync(network.peers().iter(), BlockHeight::predicate_non_empty(2)),
     )
     .await
     else {
@@ -613,24 +617,37 @@ async fn suspending_works() -> Result<()> {
         return Ok(());
     }
 
-    // all peers except the last one should get the genesis
+    let client = network.client();
+    spawn_blocking(move || client.submit(Log::new(Level::INFO, "suspend tick".to_owned())))
+        .await??;
+
+    // all peers except the last one should get the non-empty block
     timeout(
         sync_timeout,
         once_blocks_sync(
             network.peers().iter().take(N_PEERS - 1),
-            BlockHeight::predicate_total(2),
+            BlockHeight::predicate_non_empty(2),
         ),
     )
     .await??;
-    if timeout(sync_probe, last_peer.once_block(2)).await.is_ok() {
+    if timeout(
+        sync_probe,
+        last_peer.once_block_with(BlockHeight::predicate_non_empty(2)),
+    )
+    .await
+    .is_ok()
+    {
         return Err(eyre!("suspending_works: peer caught up while suspended"));
     }
 
     // unsuspend, the last peer should get the block too
     suspend.deactivate();
-    timeout(sync_timeout, last_peer.once_block(2))
-        .await
-        .map_err(|_| eyre!("suspending_works: timed out waiting for peer to catch up"))?;
+    timeout(
+        sync_timeout,
+        last_peer.once_block_with(BlockHeight::predicate_non_empty(2)),
+    )
+    .await
+    .map_err(|_| eyre!("suspending_works: timed out waiting for peer to catch up"))?;
 
     Ok(())
 }

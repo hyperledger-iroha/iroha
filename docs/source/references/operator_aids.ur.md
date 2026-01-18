@@ -42,7 +42,7 @@ translation_last_reviewed: 2026-01-01
   - آن‑چین Sumeragi پیرامیٹرز کا سنیپ شاٹ `{ block_time_ms, commit_time_ms, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`۔
   - جب `da_enabled` true ہو تو دستیابی کی گواہی (`availability evidence` یا RBC `READY`) ٹریک ہوتی ہے مگر commit اس کا انتظار نہیں کرتا؛ لوکل RBC `DELIVER` بھی لازمی نہیں۔ آپریٹرز نیچے دیے گئے RBC endpoints سے payload ٹرانسپورٹ ہیلتھ کی تصدیق کر سکتے ہیں۔
 - GET `/v1/sumeragi/rbc`
-  - Reliable Broadcast کے مجموعی کاؤنٹرز: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, deliver_broadcasts_total, payload_bytes_delivered_total }`۔
+  - Reliable Broadcast کے مجموعی کاؤنٹرز: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, ready_rebroadcasts_skipped_total, deliver_broadcasts_total, payload_bytes_delivered_total, payload_rebroadcasts_skipped_total }`۔
 - GET `/v1/sumeragi/rbc/sessions`
   - ہر سیشن کی حالت کا سنیپ شاٹ (بلاک ہیش، height/view، chunk کاؤنٹس، delivered فلیگ، `invalid` مارکر، payload ہیش، recovered boolean) تاکہ RBC ڈلیوری میں رکاوٹ کی تشخیص ہو اور ری اسٹارٹ کے بعد ریکورڈ سیشنز نمایاں ہوں۔
   - CLI شارٹ کٹ: `iroha sumeragi rbc sessions --summary` `hash`, `height/view`, chunk پروگریس، ready کاؤنٹس اور invalid/delivered فلیگز پرنٹ کرتا ہے۔

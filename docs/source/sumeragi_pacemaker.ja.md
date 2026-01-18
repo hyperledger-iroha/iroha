@@ -17,7 +17,7 @@ translator: manual
 実装状況: EMA による基準ウィンドウ、バックオフ、RTT フロア、および設定可能なジッタ帯（`sumeragi.pacemaker_jitter_frac_permille`）が導入済み。ジッタはノードと `(height, view)` ごとに決定的に適用されます。
 
 ## 概念
-- **基準ウィンドウ**: 観測したコンセンサスフェーズ（`propose`, `collect_da`, `collect_prevote`, `collect_precommit`, `collect_aggregator`, `commit`）の指数移動平均。EMA は `sumeragi.npos.timeouts.*` からシードされ、十分なサンプルが集まるまでは設定値とほぼ一致します。実行フェーズと witness フェーズの EMA は可観測性のため公開されていますが、ペースメーカーウィンドウには未統合。平滑値は `sumeragi_phase_latency_ema_ms{phase=…}` で確認できます。
+- **基準ウィンドウ**: 観測したコンセンサスフェーズ（`propose`, `collect_da`, `collect_prevote`, `collect_precommit`, `commit`）の指数移動平均。EMA は `sumeragi.npos.timeouts.*` からシードされ、十分なサンプルが集まるまでは設定値とほぼ一致します。`collect_aggregator` の EMA は可観測性のため公開されていますが、ペースメーカーウィンドウには含まれません。平滑値は `sumeragi_phase_latency_ema_ms{phase=…}` で確認できます。
 - **バックオフ乗数**: `sumeragi.pacemaker_backoff_multiplier`（既定 1）。タイムアウトが発生するたびに `window += base * multiplier`。
 - **RTT フロア**: `avg_rtt_ms * sumeragi.pacemaker_rtt_floor_multiplier`（既定 2）。高レイテンシリンクでタイムアウトが攻撃的になりすぎるのを防ぎます。
 - **上限**: `sumeragi.pacemaker_max_backoff_ms`（既定 60,000 ms）。ウィンドウのハード上限。

@@ -120,7 +120,9 @@ merge_qc_digest = blake2b32(
 ## 4. 実装ノート
 
 - `crates/iroha_core/src/state.rs`: `State::commit_merge_entry` が縮約を検証し、レーン／グローバルメタデータを世界状態へ連携。クエリや観測者がマージヒントと正規グローバルハッシュへアクセス可能。
-- `crates/iroha_core/src/block.rs`: 検証フェーズで空ブロックを `BlockValidationError::EmptyBlock`
+- `crates/iroha_core/src/block.rs`: 検証フェーズで、外部トランザクションや
+  タイムトリガーのエントリポイントを持たず、DA バンドルなどの決定的
+  アーティファクトもないブロックを `BlockValidationError::EmptyBlock`
   として拒否し、署名要求より前に非空方針を強制したうえでマージレジャーへ
   参照を渡します。
 - 決定的縮約ヘルパーはマージサービスに実装済み。Poseidon2 fold による `reduce_merge_hint_roots`

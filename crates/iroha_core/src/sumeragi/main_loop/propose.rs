@@ -1,10 +1,11 @@
 //! Proposal assembly and pacemaker-driven propose path.
 
-use iroha_logger::prelude::*;
-use iroha_primitives::time::TimeSource;
-
+use super::proposals::block_payload_bytes;
 use super::*;
-
+use crate::smartcontracts::isi::triggers::set::SetReadOnly;
+use crate::smartcontracts::isi::triggers::specialized::LoadedActionTrait;
+use iroha_data_model::events::EventFilter;
+use iroha_data_model::prelude::Repeats;
 pub(super) fn resolve_prev_block_for_proposal(
     proposal_height: u64,
     highest_qc: &crate::sumeragi::consensus::QcHeaderRef,
@@ -54,7 +55,221 @@ fn precommit_qc_for_view_change(
     }
 }
 
+fn trim_batch_for_size_cap<T, U>(
+    tx_batch: &mut Vec<T>,
+    routing_batch: &mut Vec<U>,
+    sizes: &mut Vec<usize>,
+    removed: &mut Vec<T>,
+    mut excess_bytes: usize,
+) -> usize {
+    debug_assert_eq!(tx_batch.len(), routing_batch.len());
+    debug_assert_eq!(tx_batch.len(), sizes.len());
+    let mut removed_count = 0usize;
+    while excess_bytes > 0 && tx_batch.len() > 1 {
+        let tx = match tx_batch.pop() {
+            Some(tx) => tx,
+            None => break,
+        };
+        let _ = routing_batch.pop();
+        let size = sizes.pop().unwrap_or(1).max(1);
+        excess_bytes = excess_bytes.saturating_sub(size);
+        removed.push(tx);
+        removed_count = removed_count.saturating_add(1);
+    }
+    removed_count
+}
+
+const PROPOSAL_TIME_PADDING: std::time::Duration = std::time::Duration::from_millis(1);
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct InternalProposalWork {
+    pub(super) time_triggers: bool,
+    pub(super) da_commitments: bool,
+    pub(super) da_pin_intents: bool,
+}
+
+impl InternalProposalWork {
+    pub(super) const fn has_work(self) -> bool {
+        self.time_triggers || self.da_commitments || self.da_pin_intents
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ProposalBackpressure {
+    pub(super) queue_state: BackpressureState,
+    pub(super) active_pending: bool,
+    pub(super) rbc_backlog: bool,
+    pub(super) relay_backpressure: bool,
+}
+
+impl ProposalBackpressure {
+    pub(super) fn should_defer(self) -> bool {
+        self.queue_state.is_saturated()
+            || self.active_pending
+            || self.rbc_backlog
+            || self.relay_backpressure
+    }
+
+    pub(super) fn only_queue_saturation(self) -> bool {
+        self.queue_state.is_saturated()
+            && !(self.active_pending || self.rbc_backlog || self.relay_backpressure)
+    }
+}
+
+fn da_payload_budget(
+    rbc_chunk_max_bytes: usize,
+    rbc_pending_max_bytes: usize,
+    rbc_pending_max_chunks: usize,
+    block_max_payload_bytes: Option<NonZeroUsize>,
+    consensus_payload_frame_cap: usize,
+) -> usize {
+    let rbc_budget = rbc_chunk_max_bytes
+        .max(1)
+        .saturating_mul(usize::try_from(RBC_MAX_TOTAL_CHUNKS).expect("fits in usize"));
+    let pending_budget = rbc_pending_max_bytes.min(
+        rbc_chunk_max_bytes
+            .max(1)
+            .saturating_mul(rbc_pending_max_chunks.max(1)),
+    );
+    let payload_budget =
+        non_rbc_payload_budget(block_max_payload_bytes, consensus_payload_frame_cap);
+    payload_budget.min(rbc_budget).min(pending_budget)
+}
+
 impl Actor {
+    pub(super) fn internal_proposal_work(
+        &mut self,
+        proposal_height: u64,
+        prev_block: Option<&SignedBlock>,
+    ) -> InternalProposalWork {
+        let time_triggers = self.proposal_time_triggers_due(proposal_height, prev_block);
+        if !self.runtime_da_enabled() {
+            return InternalProposalWork {
+                time_triggers,
+                da_commitments: false,
+                da_pin_intents: false,
+            };
+        }
+        let (da_commitments, da_pin_intents) = self.proposal_da_spool_work();
+        InternalProposalWork {
+            time_triggers,
+            da_commitments,
+            da_pin_intents,
+        }
+    }
+
+    fn proposal_time_triggers_due(
+        &self,
+        proposal_height: u64,
+        prev_block: Option<&SignedBlock>,
+    ) -> bool {
+        let now = iroha_primitives::time::TimeSource::new_system().get_unix_time();
+        let prev_block_time = prev_block.map_or(std::time::Duration::ZERO, |block| {
+            block.header().creation_time()
+        });
+        let creation_time = std::cmp::max(
+            now,
+            std::cmp::max(
+                prev_block_time.saturating_add(PROPOSAL_TIME_PADDING),
+                PROPOSAL_TIME_PADDING,
+            ),
+        );
+        let view = self.state.view();
+        let since = view
+            .latest_block()
+            .map_or(creation_time, |block| block.header().creation_time());
+        let (since, length) = creation_time
+            .checked_sub(since)
+            .map_or((creation_time, std::time::Duration::ZERO), |length| {
+                (since, length)
+            });
+        let event = iroha_data_model::events::time::TimeEvent {
+            interval: iroha_data_model::events::time::TimeInterval::new(since, length),
+        };
+        let key_height = "__registered_block_height"
+            .parse::<iroha_data_model::name::Name>()
+            .ok();
+        view.world()
+            .triggers()
+            .time_triggers()
+            .iter()
+            .filter(|(_, action)| {
+                crate::smartcontracts::isi::triggers::trigger_is_enabled(action.metadata())
+            })
+            .any(|(_, action)| {
+                let mut count = action.filter.count_matches(&event);
+                if let Repeats::Exactly(repeats) = action.repeats {
+                    count = std::cmp::min(repeats, count);
+                }
+                if count == 0 {
+                    return false;
+                }
+                let registered_height = key_height
+                    .as_ref()
+                    .and_then(|key| action.metadata().get(key))
+                    .and_then(|json| json.try_into_any_norito::<u64>().ok());
+                registered_height.is_some_and(|height| height != proposal_height)
+            })
+    }
+
+    fn proposal_da_spool_work(&mut self) -> (bool, bool) {
+        let da_rbc = &mut self.subsystems.da_rbc;
+        let commitment_has = match da_rbc.spool_cache.load_commitment_bundle(&da_rbc.spool_dir) {
+            Ok((value, cache_outcome)) => {
+                #[cfg(feature = "telemetry")]
+                self.telemetry.note_da_spool_cache(
+                    crate::telemetry::DaSpoolCacheKind::Commitments,
+                    cache_outcome.as_telemetry(),
+                );
+                #[cfg(not(feature = "telemetry"))]
+                let _ = cache_outcome;
+                value.is_some_and(|bundle| {
+                    bundle.commitments.iter().any(|record| {
+                        let key =
+                            iroha_data_model::da::commitment::DaCommitmentKey::from_record(record);
+                        !da_rbc.da.sealed_commitments.contains(&key)
+                    })
+                })
+            }
+            Err(err) => {
+                warn!(
+                    ?err,
+                    spool = %da_rbc.spool_dir.display(),
+                    "failed to load DA commitments from spool; proceeding without DA bundle"
+                );
+                false
+            }
+        };
+
+        let pin_intent_has = match da_rbc.spool_cache.load_pin_bundle(&da_rbc.spool_dir) {
+            Ok((value, cache_outcome)) => {
+                #[cfg(feature = "telemetry")]
+                self.telemetry.note_da_spool_cache(
+                    crate::telemetry::DaSpoolCacheKind::PinIntents,
+                    cache_outcome.as_telemetry(),
+                );
+                #[cfg(not(feature = "telemetry"))]
+                let _ = cache_outcome;
+                value.is_some_and(|bundle| {
+                    bundle.intents.iter().any(|intent| {
+                        let key = (intent.lane_id.as_u32(), intent.epoch, intent.sequence);
+                        !da_rbc.da.sealed_pin_intents.contains(&key)
+                    })
+                })
+            }
+            Err(err) => {
+                warn!(
+                    ?err,
+                    spool = %da_rbc.spool_dir.display(),
+                    "failed to load DA pin intents from spool; proceeding without pin bundle"
+                );
+                false
+            }
+        };
+
+        (commitment_has, pin_intent_has)
+    }
+
     pub(super) fn max_tx_budget(
         queue_len: usize,
         block_param_limit: u64,
@@ -75,46 +290,48 @@ impl Actor {
         (max_tx_target, max_in_block)
     }
 
-    pub(super) fn add_heartbeat_if_empty(
+    pub(super) fn pull_transactions_for_proposal(
         &self,
-        proposal_height: u64,
-        time_source: &TimeSource,
-        tx_batch: &mut Vec<AcceptedTransaction<'static>>,
-        routing_batch: &mut Vec<RoutingDecision>,
-    ) -> Result<()> {
-        if !tx_batch.is_empty() {
-            return Ok(());
+        state_view: &StateView,
+        max_in_block: NonZeroUsize,
+        scan_budget: usize,
+        tx_guards: &mut Vec<crate::queue::TransactionGuard>,
+        height: u64,
+        view: u64,
+    ) -> Vec<AcceptedTransaction<'static>> {
+        let mut lane_consumption: BTreeMap<LaneId, u64> = BTreeMap::new();
+        let mut deferred_accumulator: Vec<AcceptedTransaction<'static>> = Vec::new();
+        let mut fetched_total = 0usize;
+        let scan_budget = scan_budget.max(1);
+
+        loop {
+            let remaining_budget = scan_budget.saturating_sub(fetched_total);
+            if remaining_budget == 0 {
+                debug!(
+                    height,
+                    view, scan_budget, fetched_total, "proposal queue scan budget reached"
+                );
+                break;
+            }
+            let fetch_cap = NonZeroUsize::new(remaining_budget.min(max_in_block.get()))
+                .expect("non-zero by construction");
+            let before_fetch = tx_guards.len();
+            self.queue
+                .get_transactions_for_block(state_view, fetch_cap, tx_guards);
+            let fetched = tx_guards.len().saturating_sub(before_fetch);
+            if fetched == 0 {
+                break;
+            }
+            fetched_total = fetched_total.saturating_add(fetched);
+            let deferred = self
+                .queue
+                .enforce_lane_teu_limits_with_consumption(tx_guards, &mut lane_consumption);
+            if !deferred.is_empty() {
+                deferred_accumulator.extend(deferred);
+            }
         }
-        let view = self.state.view();
-        let params = view.world().parameters();
-        let tx_params = params.transaction();
-        let max_clock_drift = params.sumeragi().max_clock_drift();
-        let crypto_cfg = view.crypto.clone();
-        let heartbeat = crate::tx::build_heartbeat_transaction_with_time_source(
-            self.common_config.chain.clone(),
-            &self.common_config.key_pair,
-            &tx_params,
-            proposal_height,
-            time_source,
-        );
-        let accepted = AcceptedTransaction::accept_with_time_source(
-            heartbeat,
-            &self.common_config.chain,
-            max_clock_drift,
-            tx_params,
-            crypto_cfg.as_ref(),
-            time_source,
-        )
-        .map_err(|err| eyre!("failed to accept heartbeat transaction: {err}"))?;
-        let routing = crate::queue::evaluate_policy_with_catalog(
-            &view.nexus.routing_policy,
-            &view.nexus.lane_catalog,
-            &view.nexus.dataspace_catalog,
-            &accepted,
-        );
-        tx_batch.push(accepted);
-        routing_batch.push(routing);
-        Ok(())
+
+        deferred_accumulator
     }
 
     pub(super) fn drop_stale_pending_block(
@@ -144,10 +361,7 @@ impl Actor {
             .propose
             .proposal_cache
             .pop_proposal(height, view);
-        self.subsystems
-            .propose
-            .proposals_seen
-            .remove(&(height, view));
+        // Keep proposals_seen so we don't re-propose in the same view after dropping a stale block.
 
         Some((tx_count, requeued, failures, duplicate_failures))
     }
@@ -204,7 +418,7 @@ impl Actor {
             return Ok(false);
         }
 
-        let queue_len = self.queue.tx_len();
+        let queue_len = self.queue.queued_len();
         let mut tx_guards = Vec::new();
         let (
             _block_digest,
@@ -220,6 +434,7 @@ impl Actor {
                 block_max_param.get(),
                 self.config.block_max_transactions,
             );
+            let scan_budget = self.proposal_scan_budget(max_in_block);
             debug!(
                 height,
                 view,
@@ -227,26 +442,19 @@ impl Actor {
                 max_tx_param = block_max_param.get(),
                 max_tx_target,
                 max_in_block = max_in_block.get(),
+                scan_budget,
+                scan_multiplier = self.config.proposal_queue_scan_multiplier.get(),
                 "proposal assembly budget"
             );
-            let mut lane_consumption: BTreeMap<LaneId, u64> = BTreeMap::new();
-            let mut deferred_accumulator: Vec<AcceptedTransaction<'static>> = Vec::new();
-            loop {
-                let before_fetch = tx_guards.len();
-                self.queue
-                    .get_transactions_for_block(&state_view, max_in_block, &mut tx_guards);
-                let fetched_new = tx_guards.len() > before_fetch;
-                if !fetched_new {
-                    break;
-                }
-                let deferred = self.queue.enforce_lane_teu_limits_with_consumption(
-                    &mut tx_guards,
-                    &mut lane_consumption,
-                );
-                if !deferred.is_empty() {
-                    deferred_accumulator.extend(deferred);
-                }
-            }
+            // Bound queue scanning to keep proposal assembly from stalling under sustained load.
+            let deferred_accumulator = self.pull_transactions_for_proposal(
+                &state_view,
+                max_in_block,
+                scan_budget,
+                &mut tx_guards,
+                height,
+                view,
+            );
             let committed_height =
                 u64::try_from(state_view.height()).expect("committed height exceeds u64::MAX");
             let next_height = committed_height
@@ -301,33 +509,38 @@ impl Actor {
             }
         }
 
-        let queue_len_after_pop = self.queue.tx_len();
-        if empty_block_disfavored(
-            transactions.len(),
-            queue_len_after_pop,
-            self.has_nonempty_pending_at_height(proposal_height),
-        ) {
-            info!(
-                height,
-                view,
-                queue_len = queue_len_after_pop,
-                "deferring empty proposal while transactions are queued"
-            );
-            return Ok(false);
+        let queue_len_after_pop = self.queue.queued_len();
+        let mut internal_work = None;
+        if transactions.is_empty() {
+            let work = self.internal_proposal_work(proposal_height, prev_block.as_deref());
+            if !work.has_work() {
+                info!(
+                    height,
+                    view,
+                    queue_len = queue_len_after_pop,
+                    "skipping empty proposal; empty blocks are disallowed"
+                );
+                return Ok(false);
+            }
+            internal_work = Some(work);
         }
 
         let da_enabled = self.runtime_da_enabled();
         let mut overflow_transactions = Vec::new();
         let mut tx_batch;
         let mut routing_batch;
+        let mut tx_sizes;
         if da_enabled {
-            let mut remaining_budget = self
-                .config
-                .rbc_chunk_max_bytes
-                .max(1)
-                .saturating_mul(usize::try_from(RBC_MAX_TOTAL_CHUNKS).expect("fits in usize"));
+            let mut remaining_budget = da_payload_budget(
+                self.config.rbc_chunk_max_bytes,
+                self.config.rbc_pending_max_bytes,
+                self.config.rbc_pending_max_chunks,
+                self.config.block_max_payload_bytes,
+                self.consensus_payload_frame_cap,
+            );
             tx_batch = Vec::with_capacity(transactions.len());
             routing_batch = Vec::with_capacity(routing_decisions.len());
+            tx_sizes = Vec::with_capacity(transactions.len());
             for (tx, routing) in transactions.into_iter().zip(routing_decisions.into_iter()) {
                 let encoded_len = tx.as_ref().encode().len();
                 if encoded_len > remaining_budget {
@@ -335,16 +548,18 @@ impl Actor {
                     continue;
                 }
                 remaining_budget = remaining_budget.saturating_sub(encoded_len);
+                tx_sizes.push(encoded_len);
                 tx_batch.push(tx);
                 routing_batch.push(routing);
             }
         } else {
             let mut payload_budget = Some(non_rbc_payload_budget(
                 self.config.block_max_payload_bytes,
-                self.consensus_frame_cap,
+                self.consensus_payload_frame_cap,
             ));
             tx_batch = Vec::with_capacity(transactions.len());
             routing_batch = Vec::with_capacity(routing_decisions.len());
+            tx_sizes = Vec::with_capacity(transactions.len());
             for (tx, routing) in transactions.into_iter().zip(routing_decisions.into_iter()) {
                 if let Some(budget) = payload_budget {
                     let encoded_len = tx.as_ref().encode().len();
@@ -353,6 +568,7 @@ impl Actor {
                         continue;
                     }
                     payload_budget = Some(budget.saturating_sub(encoded_len));
+                    tx_sizes.push(encoded_len);
                 }
                 tx_batch.push(tx);
                 routing_batch.push(routing);
@@ -363,24 +579,55 @@ impl Actor {
             if let Some(admin_idx) = tx_batch.iter().position(Self::is_peer_admin_transaction) {
                 let admin_tx = tx_batch.remove(admin_idx);
                 let admin_route = routing_batch.remove(admin_idx);
+                let admin_size = tx_sizes.remove(admin_idx);
                 overflow_transactions.append(&mut tx_batch);
+                routing_batch.clear();
+                tx_sizes.clear();
                 tx_batch.push(admin_tx);
                 routing_batch.push(admin_route);
+                tx_sizes.push(admin_size);
             }
         }
 
+        if tx_batch.is_empty() {
+            tx_guards.clear();
+            for tx in overflow_transactions.drain(..) {
+                if let Err(err) = self.queue.push(tx, self.state.view()) {
+                    warn!(?err.err, "failed to requeue oversized transaction");
+                }
+            }
+            let has_internal_work = internal_work
+                .map(InternalProposalWork::has_work)
+                .unwrap_or_else(|| {
+                    let work = self.internal_proposal_work(proposal_height, prev_block.as_deref());
+                    internal_work = Some(work);
+                    work.has_work()
+                });
+            if !has_internal_work {
+                info!(
+                    height = proposal_height,
+                    view,
+                    queue_len = queue_len_after_pop,
+                    "deferring proposal: no transactions fit within payload budget"
+                );
+                return Ok(false);
+            }
+            debug!(
+                height = proposal_height,
+                view, "assembling proposal without external transactions"
+            );
+        }
+
         let original_for_requeue = tx_batch.clone();
-        let heartbeat_time_source = TimeSource::new_system();
         let mut removed_for_chunk_cap: Vec<AcceptedTransaction<'static>> = Vec::new();
         let mut removed_for_frame_cap: Vec<AcceptedTransaction<'static>> = Vec::new();
 
         let assembly_result: Result<()> = (|| {
-            self.add_heartbeat_if_empty(
-                proposal_height,
-                &heartbeat_time_source,
-                &mut tx_batch,
-                &mut routing_batch,
-            )?;
+            if tx_sizes.len() < tx_batch.len() {
+                for tx in tx_batch.iter().skip(tx_sizes.len()) {
+                    tx_sizes.push(tx.as_ref().encode().len());
+                }
+            }
             let (
                 signed_block,
                 block_created_msg,
@@ -399,7 +646,7 @@ impl Actor {
 
                 let receipt_plan = if nexus_enabled {
                     let cursor_snapshot = self.state.da_receipt_cursor_snapshot();
-                    let (receipts, _cache_outcome) = {
+                    let (receipts, cache_outcome) = {
                         let da_rbc = &mut self.subsystems.da_rbc;
                         crate::da::receipts::prune_spool(&da_rbc.spool_dir, &cursor_snapshot);
                         da_rbc
@@ -410,8 +657,10 @@ impl Actor {
                     #[cfg(feature = "telemetry")]
                     self.telemetry.note_da_spool_cache(
                         crate::telemetry::DaSpoolCacheKind::Receipts,
-                        _cache_outcome.as_telemetry(),
+                        cache_outcome.as_telemetry(),
                     );
+                    #[cfg(not(feature = "telemetry"))]
+                    let _ = cache_outcome;
                     crate::da::receipts::plan_committable_receipts(
                         &lane_config,
                         &cursor_snapshot,
@@ -426,12 +675,14 @@ impl Actor {
                 let mut bundle_opt = {
                     let da_rbc = &mut self.subsystems.da_rbc;
                     match da_rbc.spool_cache.load_commitment_bundle(&da_rbc.spool_dir) {
-                        Ok((value, _cache_outcome)) => {
+                        Ok((value, cache_outcome)) => {
                             #[cfg(feature = "telemetry")]
                             self.telemetry.note_da_spool_cache(
                                 crate::telemetry::DaSpoolCacheKind::Commitments,
-                                _cache_outcome.as_telemetry(),
+                                cache_outcome.as_telemetry(),
                             );
+                            #[cfg(not(feature = "telemetry"))]
+                            let _ = cache_outcome;
                             value
                         }
                         Err(err) => {
@@ -465,7 +716,7 @@ impl Actor {
                                 continue;
                             }
                             let policy = lane_config.manifest_policy(record.lane_id);
-                            let (available, _cache_outcome) =
+                            let (available, cache_outcome) =
                                 crate::sumeragi::main_loop::manifest_available_for_commitment(
                                     &mut da_rbc.manifest_cache,
                                     &da_rbc.spool_dir,
@@ -474,7 +725,9 @@ impl Actor {
                                 );
                             #[cfg(feature = "telemetry")]
                             self.telemetry
-                                .note_da_manifest_cache(_cache_outcome.as_telemetry());
+                                .note_da_manifest_cache(cache_outcome.as_telemetry());
+                            #[cfg(not(feature = "telemetry"))]
+                            let _ = cache_outcome;
                             if available {
                                 kept.push(record.clone());
                             }
@@ -556,12 +809,14 @@ impl Actor {
                 let pin_bundle_opt = {
                     let da_rbc = &mut self.subsystems.da_rbc;
                     match da_rbc.spool_cache.load_pin_bundle(&da_rbc.spool_dir) {
-                        Ok((value, _cache_outcome)) => {
+                        Ok((value, cache_outcome)) => {
                             #[cfg(feature = "telemetry")]
                             self.telemetry.note_da_spool_cache(
                                 crate::telemetry::DaSpoolCacheKind::PinIntents,
-                                _cache_outcome.as_telemetry(),
+                                cache_outcome.as_telemetry(),
                             );
+                            #[cfg(not(feature = "telemetry"))]
+                            let _ = cache_outcome;
                             value
                         }
                         Err(err) => {
@@ -679,6 +934,7 @@ impl Actor {
                         }
                         if let Some(removed_tx) = tx_batch.pop() {
                             let _ = routing_batch.pop();
+                            let _ = tx_sizes.pop();
                             removed_for_chunk_cap.push(removed_tx);
                             continue;
                         }
@@ -689,26 +945,38 @@ impl Actor {
                     self.common_config.peer.id(),
                     &block_created_msg,
                 );
-                if frame_len > self.consensus_frame_cap {
+                if frame_len > self.consensus_payload_frame_cap {
                     if tx_batch.len() <= 1 {
                         warn!(
                             height = proposal_height,
                             view,
                             frame_len,
-                            cap = self.consensus_frame_cap,
+                            cap = self.consensus_payload_frame_cap,
                             da_enabled,
-                            "BlockCreated frame exceeds consensus cap; unable to assemble proposal"
+                            "BlockCreated frame exceeds consensus payload cap; unable to assemble proposal"
                         );
                         return Err(eyre!(
-                            "proposal frame size {frame_len} exceeds consensus cap {}",
-                            self.consensus_frame_cap
+                            "proposal frame size {frame_len} exceeds consensus payload cap {}",
+                            self.consensus_payload_frame_cap
                         ));
                     }
-                    if let Some(removed_tx) = tx_batch.pop() {
-                        let _ = routing_batch.pop();
-                        removed_for_frame_cap.push(removed_tx);
-                        continue;
+                    let excess = frame_len.saturating_sub(self.consensus_payload_frame_cap);
+                    let removed = trim_batch_for_size_cap(
+                        &mut tx_batch,
+                        &mut routing_batch,
+                        &mut tx_sizes,
+                        &mut removed_for_frame_cap,
+                        excess,
+                    );
+                    if removed == 0 {
+                        if let Some(removed_tx) = tx_batch.pop() {
+                            let _ = routing_batch.pop();
+                            let _ = tx_sizes.pop();
+                            removed_for_frame_cap.push(removed_tx);
+                            continue;
+                        }
                     }
+                    continue;
                 }
                 let payload_hash = Hash::new(&payload_bytes);
                 let proposal = Self::build_consensus_proposal(
@@ -722,7 +990,7 @@ impl Actor {
                 self.subsystems
                     .propose
                     .proposal_cache
-                    .insert_proposal(proposal.clone());
+                    .insert_proposal(proposal);
 
                 let proposal_hint = super::message::ProposalHint {
                     block_hash,
@@ -772,7 +1040,7 @@ impl Actor {
 
             // Loop back consensus messages locally so the leader participates immediately.
             self.handle_proposal_hint(proposal_hint)?;
-            self.handle_proposal(proposal.clone())?;
+            self.handle_proposal(proposal)?;
 
             let topology_peers = topology.as_ref();
             let local_peer_id = self.common_config.peer.id().clone();
@@ -782,16 +1050,7 @@ impl Actor {
                 }
                 self.schedule_background(BackgroundRequest::Post {
                     peer: peer.clone(),
-                    msg: BlockMessage::ProposalHint(proposal_hint),
-                });
-            }
-            for peer in topology_peers {
-                if peer == &local_peer_id {
-                    continue;
-                }
-                self.schedule_background(BackgroundRequest::Post {
-                    peer: peer.clone(),
-                    msg: BlockMessage::Proposal(proposal.clone()),
+                    msg: BlockMessage::Proposal(proposal),
                 });
             }
             for peer in topology_peers {
@@ -805,7 +1064,7 @@ impl Actor {
             }
 
             if let BlockMessage::BlockCreated(block_msg) = block_created_msg.clone() {
-                self.handle_block_created(block_msg)?;
+                self.handle_block_created(block_msg, None)?;
             }
 
             if let Some(plan) = rbc_plan.take() {
@@ -837,7 +1096,7 @@ impl Actor {
         })();
 
         if let Err(err) = assembly_result {
-            drop(tx_guards);
+            tx_guards.clear();
             for tx in original_for_requeue {
                 if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
                     continue;
@@ -846,7 +1105,7 @@ impl Actor {
                     warn!(?push_err.err, "failed to requeue transaction after assembly failure");
                 }
             }
-            for tx in overflow_transactions {
+            for tx in overflow_transactions.drain(..) {
                 if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
                     continue;
                 }
@@ -876,8 +1135,8 @@ impl Actor {
             return Err(err);
         }
 
-        drop(tx_guards);
-        for tx in overflow_transactions {
+        tx_guards.clear();
+        for tx in overflow_transactions.drain(..) {
             if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
                 continue;
             }
@@ -923,7 +1182,7 @@ impl Actor {
 
         for record in &bundle.commitments {
             let policy = lane_config.manifest_policy(record.lane_id);
-            let (outcome, _cache_outcome) = {
+            let (outcome, cache_outcome) = {
                 let da_rbc = &mut self.subsystems.da_rbc;
                 manifest_guard_outcome(
                     &mut da_rbc.manifest_cache,
@@ -934,7 +1193,9 @@ impl Actor {
             };
             #[cfg(feature = "telemetry")]
             self.telemetry
-                .note_da_manifest_cache(_cache_outcome.as_telemetry());
+                .note_da_manifest_cache(cache_outcome.as_telemetry());
+            #[cfg(not(feature = "telemetry"))]
+            let _ = cache_outcome;
             match outcome {
                 ManifestGuardOutcome::Pass => {}
                 ManifestGuardOutcome::Warn(err) => warn!(
@@ -1008,8 +1269,34 @@ impl Actor {
         }
     }
 
-    pub(super) fn should_defer_proposal(&mut self) -> bool {
-        self.subsystems.propose.backpressure_gate.should_defer()
+    pub(super) fn proposal_backpressure(&mut self) -> ProposalBackpressure {
+        self.proposal_backpressure_at(Instant::now())
+    }
+
+    pub(super) fn proposal_backpressure_at(&mut self, now: Instant) -> ProposalBackpressure {
+        self.subsystems.propose.backpressure_gate.refresh();
+        let queue_state = self.subsystems.propose.backpressure_gate.state();
+        let active_pending = self.has_blocking_pending_blocks();
+        let mut rbc_backlog = self.has_unresolved_rbc_backlog();
+        let mut relay_backpressure =
+            self.relay_backpressure_active(now, self.rebroadcast_cooldown());
+        if self.backpressure_override_due(now) {
+            // Liveness override: don't let prolonged relay/RBC backpressure stall proposals.
+            rbc_backlog = false;
+            relay_backpressure = false;
+        }
+        ProposalBackpressure {
+            queue_state,
+            active_pending,
+            rbc_backlog,
+            relay_backpressure,
+        }
+    }
+
+    pub(super) fn proposal_scan_budget(&self, max_in_block: NonZeroUsize) -> usize {
+        max_in_block
+            .get()
+            .saturating_mul(self.config.proposal_queue_scan_multiplier.get())
     }
 
     pub(super) fn on_pacemaker_backpressure_deferral(
@@ -1017,6 +1304,9 @@ impl Actor {
         now: Instant,
         state: BackpressureState,
     ) {
+        let active_pending = self.has_blocking_pending_blocks();
+        let rbc_backlog = self.has_unresolved_rbc_backlog();
+        let relay_backpressure = self.relay_backpressure_active(now, self.rebroadcast_cooldown());
         super::status::inc_pacemaker_backpressure_deferrals();
         #[cfg(feature = "telemetry")]
         {
@@ -1026,7 +1316,10 @@ impl Actor {
             ?now,
             tx_queue_depth = state.queued(),
             tx_queue_capacity = state.capacity().get(),
-            "Pacemaker deferred proposal assembly due to saturated transaction queue"
+            active_pending,
+            rbc_backlog,
+            relay_backpressure,
+            "Pacemaker deferred proposal assembly due to backpressure"
         );
     }
 
@@ -1036,7 +1329,7 @@ impl Actor {
         let prev_attempt = self.subsystems.propose.last_pacemaker_attempt.replace(now);
         let view_snapshot = self.state.view();
         let mut topology_peers = self.effective_commit_topology_from_view(&view_snapshot);
-        let pending_queue_len = self.queue.tx_len();
+        let pending_queue_len = self.queue.queued_len();
         let active_pending = self.active_pending_blocks_len();
         let view_height = view_snapshot.height();
         let committed_height = view_height as u64;
@@ -1049,11 +1342,6 @@ impl Actor {
             .new_view_tracker
             .prune(committed_height);
 
-        let empty_child_ctx = if pending_queue_len == 0 {
-            self.empty_child_fallback(now)
-        } else {
-            None
-        };
         let da_enabled = self.runtime_da_enabled();
         let committed_qc = self.latest_committed_qc();
         let precommit_qc = precommit_qc_for_view_change(self.highest_qc, committed_qc);
@@ -1094,10 +1382,11 @@ impl Actor {
         let local_idx = self.local_validator_index_for_topology(&topology);
         let local_peer = local_idx.map(|_| local_peer_id.clone());
 
-        if da_enabled && pending_queue_len == 0 && empty_child_ctx.is_none() {
+        let has_queue_work = pending_queue_len > 0;
+        if da_enabled && !has_queue_work {
             trace!(
                 da_enabled,
-                "DA enabled and transaction queue is empty; proposing heartbeat"
+                "DA enabled and transaction queue is empty; checking internal work"
             );
         }
 
@@ -1149,7 +1438,14 @@ impl Actor {
         }
         let offline_grace = self.commit_quorum_timeout();
         let offline_grace_expired = view_age.is_some_and(|age| age >= offline_grace);
-        if online_total < required && !offline_grace_expired {
+        let should_defer_online = super::should_defer_for_online_peers(
+            online_total,
+            required,
+            offline_grace_expired,
+            online_peers,
+            self.subsystems.propose.last_successful_proposal,
+        );
+        if should_defer_online {
             if pending_queue_len > 0 {
                 iroha_logger::info!(
                     queue_len = pending_queue_len,
@@ -1195,6 +1491,8 @@ impl Actor {
                                 && current.phase != crate::sumeragi::consensus::Phase::Commit)
                     }) {
                         self.highest_qc = Some(qc);
+                        super::status::set_highest_qc(qc.height, qc.view);
+                        super::status::set_highest_qc_hash(qc.subject_block_hash);
                     }
                     self.subsystems.propose.new_view_tracker.record(
                         qc.height.saturating_add(1),
@@ -1222,7 +1520,6 @@ impl Actor {
                 );
             }
         }
-
         let new_view_summary: Vec<String> = self
             .subsystems
             .propose
@@ -1282,19 +1579,6 @@ impl Actor {
             }
         }
 
-        if let Some(ref ctx) = empty_child_ctx {
-            if candidate
-                .as_ref()
-                .is_none_or(|selection| selection.key.0 <= ctx.highest_qc.height)
-            {
-                candidate = Some(NewViewSelection {
-                    key: (ctx.target_height, ctx.target_view),
-                    quorum: required,
-                    highest_qc: ctx.highest_qc,
-                });
-            }
-        }
-
         let Some(selection) = candidate.or_else(|| {
             // Fallback: bootstrap the first view using the latest committed QC when no NEW_VIEW
             // quorum has been observed yet. This prevents the pacemaker from stalling indefinitely
@@ -1333,9 +1617,6 @@ impl Actor {
         let (height, view_idx) = selection.key;
         let quorum = selection.quorum;
         let mut highest_qc = selection.highest_qc;
-        let empty_child_selected = empty_child_ctx
-            .as_ref()
-            .is_some_and(|ctx| ctx.target_height == height && ctx.target_view == view_idx);
 
         debug!(
             height,
@@ -1347,18 +1628,6 @@ impl Actor {
             new_view_slots = ?new_view_summary,
             "selected NEW_VIEW candidate"
         );
-        if empty_child_selected {
-            if let Some(ctx) = empty_child_ctx.as_ref() {
-                iroha_logger::info!(
-                    height = ctx.target_height,
-                    view = ctx.target_view,
-                    parent = %ctx.highest_qc.subject_block_hash,
-                    payload = %ctx.parent_payload_hash,
-                    "selected empty-child fallback to finalize locked parent"
-                );
-            }
-        }
-
         let epoch = self.epoch_for_height(height);
         let precommit_votes_at_view = self
             .vote_log
@@ -1512,6 +1781,8 @@ impl Actor {
             (highest_qc.height, highest_qc.view) > (current.height, current.view)
         }) {
             self.highest_qc = Some(highest_qc);
+            super::status::set_highest_qc(highest_qc.height, highest_qc.view);
+            super::status::set_highest_qc_hash(highest_qc.subject_block_hash);
         }
 
         if let Err(reason) = ensure_locked_qc_allows(self.locked_qc, highest_qc) {
@@ -1533,7 +1804,8 @@ impl Actor {
                 LockedQcRejection::HashMismatch { .. } => {
                     let locked_hash = self.locked_qc.map(|qc| qc.subject_block_hash);
                     let locked_missing =
-                        locked_hash.is_some_and(|hash| !self.block_known_locally(hash));
+                        locked_hash.is_some_and(|hash| !self.block_known_for_lock(hash));
+                    let highest_missing = !self.block_known_for_lock(highest_qc.subject_block_hash);
                     if locked_missing {
                         iroha_logger::warn!(
                             ?reason,
@@ -1544,6 +1816,25 @@ impl Actor {
                             "clearing locked QC that is missing from kura"
                         );
                         self.locked_qc = Some(highest_qc);
+                        super::status::set_locked_qc(
+                            highest_qc.height,
+                            highest_qc.view,
+                            Some(highest_qc.subject_block_hash),
+                        );
+                    } else if highest_missing {
+                        let Some(lock) = self.locked_qc else {
+                            return false;
+                        };
+                        iroha_logger::info!(
+                            ?reason,
+                            height,
+                            view = view_idx,
+                            queue_len = pending_queue_len,
+                            highest_hash = ?highest_qc.subject_block_hash,
+                            locked_hash = ?locked_hash,
+                            "highest QC missing locally; proposing on locked chain"
+                        );
+                        highest_qc = lock;
                     } else {
                         iroha_logger::info!(
                             ?reason,
@@ -1728,6 +2019,27 @@ impl Actor {
             return false;
         };
 
+        let has_internal_work = if !has_queue_work {
+            let prev_block = resolve_prev_block_for_proposal(
+                height,
+                &highest_qc,
+                &self.kura,
+                &self.pending.pending_blocks,
+            );
+            self.internal_proposal_work(height, prev_block.as_deref())
+                .has_work()
+        } else {
+            false
+        };
+        if !has_queue_work && !has_internal_work {
+            trace!(
+                height,
+                view = view_idx,
+                "deferring proposal: no queued transactions or internal work"
+            );
+            return false;
+        }
+
         debug!(
             height,
             view = view_idx,
@@ -1750,12 +2062,6 @@ impl Actor {
             highest_view = highest_qc.view,
             "starting proposal assembly"
         );
-
-        if empty_child_selected {
-            if let Some(ctx) = empty_child_ctx.as_ref() {
-                self.record_empty_child_attempt(ctx.parent_payload_hash, now);
-            }
-        }
 
         let assembled = match self.assemble_and_broadcast_proposal(
             height,
@@ -1795,5 +2101,65 @@ impl Actor {
             .remove(height, view_idx);
         self.subsystems.propose.last_successful_proposal = Some(now);
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{da_payload_budget, trim_batch_for_size_cap};
+    use std::num::NonZeroUsize;
+
+    #[test]
+    fn da_payload_budget_caps_to_rbc_budget() {
+        let budget = da_payload_budget(1, 8 * 1024, 1024, None, 64 * 1024);
+        let rbc_budget =
+            usize::try_from(super::super::RBC_MAX_TOTAL_CHUNKS).expect("fits in usize");
+        assert_eq!(budget, rbc_budget.min(8 * 1024));
+    }
+
+    #[test]
+    fn da_payload_budget_honors_block_payload_cap() {
+        let cap = NonZeroUsize::new(4096).expect("non-zero");
+        let budget = da_payload_budget(256 * 1024, 32 * 1024, 1024, Some(cap), 64 * 1024);
+        assert_eq!(budget, 4096);
+    }
+
+    #[test]
+    fn da_payload_budget_honors_pending_caps() {
+        let budget = da_payload_budget(256 * 1024, 4 * 1024, 1, None, 64 * 1024);
+        assert_eq!(budget, 4 * 1024);
+    }
+
+    #[test]
+    fn trim_batch_for_size_cap_removes_multiple_entries() {
+        let mut txs = vec![1, 2, 3, 4];
+        let mut routes = vec![10, 11, 12, 13];
+        let mut sizes = vec![10, 10, 10, 10];
+        let mut removed = Vec::new();
+
+        let removed_count =
+            trim_batch_for_size_cap(&mut txs, &mut routes, &mut sizes, &mut removed, 15);
+
+        assert_eq!(removed_count, 2);
+        assert_eq!(txs, vec![1, 2]);
+        assert_eq!(routes, vec![10, 11]);
+        assert_eq!(sizes, vec![10, 10]);
+        assert_eq!(removed.len(), 2);
+    }
+
+    #[test]
+    fn trim_batch_for_size_cap_keeps_single_entry() {
+        let mut txs = vec![1, 2, 3];
+        let mut routes = vec![10, 11, 12];
+        let mut sizes = vec![5, 5, 5];
+        let mut removed = Vec::new();
+
+        let removed_count =
+            trim_batch_for_size_cap(&mut txs, &mut routes, &mut sizes, &mut removed, 100);
+
+        assert_eq!(removed_count, 2);
+        assert_eq!(txs.len(), 1);
+        assert_eq!(routes.len(), 1);
+        assert_eq!(sizes.len(), 1);
     }
 }

@@ -171,7 +171,7 @@ class NoritoDecoder:
         return bool(self.flags & header.COMPACT_LEN)
 
     def compact_seq_len_active(self) -> bool:
-        return bool(self.flags & header.COMPACT_SEQ_LEN)
+        return False
 
     def remaining(self) -> int:
         return len(self.data) - self.offset
@@ -392,8 +392,7 @@ class SequenceAdapter(Generic[T], TypeAdapter[List[T]]):
     def encode(self, encoder: NoritoEncoder, value: Iterable[T]) -> None:
         elements = list(value)
         length = len(elements)
-        compact_len = bool(encoder.flags & header.COMPACT_SEQ_LEN)
-        encoder.write_length(length, compact=compact_len)
+        encoder.write_length(length, compact=False)
 
         if encoder.flags & header.PACKED_SEQ:
             self._encode_packed(encoder, elements)
@@ -408,23 +407,18 @@ class SequenceAdapter(Generic[T], TypeAdapter[List[T]]):
             self.element.encode(child, element)
             encoded_parts.append(child.finish())
 
-        varint_offsets = bool(encoder.flags & header.VARINT_OFFSETS)
-        if varint_offsets:
-            for chunk in encoded_parts:
-                encoder.extend(encode_varint(len(chunk)))
-        else:
-            offsets = [0]
-            total = 0
-            for chunk in encoded_parts:
-                total += len(chunk)
-                offsets.append(total)
-            for offset in offsets:
-                encoder.extend(offset.to_bytes(8, "little"))
+        offsets = [0]
+        total = 0
+        for chunk in encoded_parts:
+            total += len(chunk)
+            offsets.append(total)
+        for offset in offsets:
+            encoder.extend(offset.to_bytes(8, "little"))
         for chunk in encoded_parts:
             encoder.extend(chunk)
 
     def decode(self, decoder: NoritoDecoder) -> List[T]:
-        length = decoder.read_length(compact=decoder.compact_seq_len_active())
+        length = decoder.read_length(compact=False)
 
         if decoder.flags & header.PACKED_SEQ:
             return self._decode_packed(decoder, length)
@@ -432,7 +426,6 @@ class SequenceAdapter(Generic[T], TypeAdapter[List[T]]):
         return [self.element.decode(decoder) for _ in range(length)]
 
     def _decode_packed(self, decoder: NoritoDecoder, length: int) -> List[T]:
-        varint_offsets = bool(decoder.flags & header.VARINT_OFFSETS)
         if length == 0:
             # Compat Rust encoders appended a single zero offset tail even when the
             # sequence contained no elements. Accept and skip those bytes so older
@@ -445,14 +438,8 @@ class SequenceAdapter(Generic[T], TypeAdapter[List[T]]):
                 return []
             raise DecodeError("packed sequence declared zero length but carried trailing data")
 
-        element_sizes: List[int] = []
-        if varint_offsets:
-            for _ in range(length):
-                size, decoder.offset = decode_varint(decoder.data, decoder.offset)
-                element_sizes.append(size)
-        else:
-            offsets = [decoder.read_uint(64) for _ in range(length + 1)]
-            element_sizes = [b - a for a, b in zip(offsets, offsets[1:])]
+        offsets = [decoder.read_uint(64) for _ in range(length + 1)]
+        element_sizes = [b - a for a, b in zip(offsets, offsets[1:])]
 
         outputs: List[T] = []
         for size in element_sizes:
@@ -504,8 +491,9 @@ class TupleAdapter(TypeAdapter[Tuple[Any, ...]]):
         return tuple(adapter.decode(decoder) for adapter in self.elements)
 
     def fixed_size(self) -> Optional[int]:
-        if all((size := adapter.fixed_size()) is not None for adapter in self.elements):
-            return sum(adapter.fixed_size() or 0 for adapter in self.elements)
+        sizes = [adapter.fixed_size() for adapter in self.elements]
+        if all(size is not None for size in sizes):
+            return sum(size or 0 for size in sizes)
         return None
 
     def is_self_delimiting(self) -> bool:
@@ -638,14 +626,12 @@ class StructAdapter(TypeAdapter[Any]):
 # ---------------------------------------------------------------------------
 
 
-_BASE_FLAGS = 0
+_BASE_FLAGS = header.MINOR_VERSION
 DEFAULT_FLAGS = _BASE_FLAGS | _DYNAMIC_FLAGS_MASK
 
 
 def _combine_flags(flags: int, hint: int) -> int:
-    flags &= 0xFF
-    hint &= 0xFF
-    return hint if flags == 0 else (flags | hint) & 0xFF
+    return flags & 0xFF
 
 
 def _apply_adaptive_flags(flags: int, payload_len: int) -> int:
@@ -779,13 +765,58 @@ def reset_decode_state() -> None:
 
 
 def effective_decode_flags() -> Optional[int]:
-    if _decode_flags_stack:
-        hint = _decode_flags_hint_stack[-1] if _decode_flags_hint_stack else header.MINOR_VERSION
-        return _combine_flags(_decode_flags_stack[-1], hint)
     if _decode_context_stack:
         flags, hint = _decode_context_stack[-1]
         return _combine_flags(flags, hint)
+    if _decode_flags_stack:
+        hint = _decode_flags_hint_stack[-1] if _decode_flags_hint_stack else header.MINOR_VERSION
+        return _combine_flags(_decode_flags_stack[-1], hint)
     return None
+
+
+@dataclass(frozen=True)
+class ArchiveView:
+    """Validated view over an archived payload with header flags."""
+
+    _payload: bytes
+    _flags: int
+    _flags_hint: int
+
+    def as_bytes(self) -> bytes:
+        return self._payload
+
+    @property
+    def flags(self) -> int:
+        return self._flags
+
+    @property
+    def flags_hint(self) -> int:
+        return self._flags_hint
+
+    def decode(self, adapter: TypeAdapter[Any]) -> Any:
+        with _RootGuard(self._payload, self._flags, self._flags_hint):
+            decoder = NoritoDecoder(self._payload, self._flags, self._flags_hint)
+            value = adapter.decode(decoder)
+            if decoder.remaining() != 0:
+                raise DecodeError("trailing bytes after Norito decode")
+            return value
+
+
+def from_bytes_view(
+    data: bytes, *, schema: SchemaDescriptor | None = None
+) -> ArchiveView:
+    """Validate a framed archive and return a view over the payload."""
+
+    reset_decode_state()
+    expected_hash = schema.hash_bytes() if schema is not None else None
+    norito_header, payload = header.NoritoHeader.decode(
+        data,
+        expected_schema_hash=expected_hash,
+    )
+    if norito_header.compression != header.COMPRESSION_NONE:
+        raise UnsupportedCompressionError(norito_header.compression)
+    norito_header.validate_checksum(payload)
+    return ArchiveView(payload, norito_header.flags, norito_header.minor)
 
 
 def decode_adaptive(data: bytes, adapter: TypeAdapter[Any]) -> Any:

@@ -1189,7 +1189,7 @@ fn derive_struct_serialize(
     // Build encoded_len_exact body depending on layout:
     // - packed-struct hybrid: bitset bytes + sum(exact) for self-delim or fixed +
     //   sum(prefix_len(exact)+exact) for needs-size fields
-    // - compat: sum(prefix_len + exact) per field (varint offsets when enabled)
+    // - compat: sum(prefix_len + exact) per field (compact lengths when enabled)
     let len_exact_body: TokenStream2 = match fields {
         Fields::Named(named) => {
             let mut parts: Vec<TokenStream2> = Vec::new();
@@ -1205,14 +1205,7 @@ fn derive_struct_serialize(
                 let part = if needs_size {
                     quote! {
                         let __e = norito::core::NoritoSerialize::encoded_len_exact(&self.#name)?;
-                        let __prefix_len = if norito::core::use_packed_struct()
-                            && !norito::core::use_field_bitset()
-                            && norito::core::use_varint_offsets()
-                        {
-                            norito::core::varint_len_prefix_len(__e)
-                        } else {
-                            norito::core::len_prefix_len(__e)
-                        };
+                        let __prefix_len = norito::core::len_prefix_len(__e);
                         __sum = __sum.saturating_add(__prefix_len + __e);
                     }
                 } else {
@@ -1247,14 +1240,7 @@ fn derive_struct_serialize(
                 let part = if needs_size {
                     quote! {
                         let __e = norito::core::NoritoSerialize::encoded_len_exact(&self.#idx)?;
-                        let __prefix_len = if norito::core::use_packed_struct()
-                            && !norito::core::use_field_bitset()
-                            && norito::core::use_varint_offsets()
-                        {
-                            norito::core::varint_len_prefix_len(__e)
-                        } else {
-                            norito::core::len_prefix_len(__e)
-                        };
+                        let __prefix_len = norito::core::len_prefix_len(__e);
                         __sum = __sum.saturating_add(__prefix_len + __e);
                     }
                 } else {
@@ -1491,18 +1477,11 @@ fn derive_struct_serialize(
                         #(
                             { #packed_field_stage_stmts }
                         )*
-                        if norito::core::use_varint_offsets() {
-                            norito::core::note_varint_offsets_emitted();
-                            for __buf in &__field_bufs {
-                                norito::core::write_varint_len(&mut writer, __buf.len() as u64)?;
-                            }
-                        } else {
-                            let mut __acc: usize = 0;
-                            writer.write_u64::<norito::core::LittleEndian>(0)?;
-                            for __buf in &__field_bufs {
-                                __acc = __acc.saturating_add(__buf.len());
-                                writer.write_u64::<norito::core::LittleEndian>(__acc as u64)?;
-                            }
+                        let mut __acc: usize = 0;
+                        writer.write_u64::<norito::core::LittleEndian>(0)?;
+                        for __buf in &__field_bufs {
+                            __acc = __acc.saturating_add(__buf.len());
+                            writer.write_u64::<norito::core::LittleEndian>(__acc as u64)?;
                         }
                         for __buf in __field_bufs { writer.write_all(&__buf)?; }
                         Ok(())
@@ -2338,9 +2317,9 @@ fn derive_struct_deserialize(
                         let __value = if norito::core::use_packed_struct() {
                             let mut __o = 0usize;
                             let __count: usize = #packed_named_count;
-                            // Hybrid packed-struct is indicated by the presence of the
-                            // field-bitset flag. VARINT_OFFSETS governs packed-seq only;
-                            // sizes in the hybrid path are read according to COMPACT_LEN.
+                            // Hybrid packed-struct is indicated by the field-bitset flag.
+                            // Packed-struct sizes follow COMPACT_LEN; packed-seq offsets
+                            // are fixed-width in v1.
                             if #field_bitset_enabled_decode_named {
                                 // Hybrid: read bitset, then sizes for needed fields; decode sequentially.
                                 let __bitset_len: usize = (#packed_named_count).div_ceil(8);
@@ -2737,8 +2716,8 @@ fn derive_struct_deserialize(
                         let __value = if norito::core::use_packed_struct() {
                             let mut __o = 0usize;
                             let __count: usize = #packed_unnamed_count;
-                            // Hybrid packed-struct is signaled by FIELD_BITSET; do not
-                            // overload VARINT_OFFSETS here (that flag applies to sequences).
+                            // Hybrid packed-struct is signaled by FIELD_BITSET; packed-seq
+                            // offset flags are reserved and unused for structs.
                             if #field_bitset_enabled_decode_unnamed {
                                 // Read the presence bitset for unnamed fields (hybrid decoding)
                                 let __bitset_len: usize = __count.div_ceil(8);
@@ -3123,14 +3102,7 @@ fn derive_enum_serialize(
                     } else {
                         quote! {
                             let __e = norito::core::NoritoSerialize::encoded_len_exact(#b)?;
-                            let __prefix_len = if norito::core::use_packed_struct()
-                                && !norito::core::use_field_bitset()
-                                && norito::core::use_varint_offsets()
-                            {
-                                norito::core::varint_len_prefix_len(__e)
-                            } else {
-                                norito::core::len_prefix_len(__e)
-                            };
+                            let __prefix_len = norito::core::len_prefix_len(__e);
                             __sum = __sum.saturating_add(__prefix_len + __e);
                         }
                     };
@@ -3256,14 +3228,7 @@ fn derive_enum_serialize(
                     } else {
                         quote! {
                             let __e = norito::core::NoritoSerialize::encoded_len_exact(#name)?;
-                            let __prefix_len = if norito::core::use_packed_struct()
-                                && !norito::core::use_field_bitset()
-                                && norito::core::use_varint_offsets()
-                            {
-                                norito::core::varint_len_prefix_len(__e)
-                            } else {
-                                norito::core::len_prefix_len(__e)
-                            };
+                            let __prefix_len = norito::core::len_prefix_len(__e);
                             __sum = __sum.saturating_add(__prefix_len + __e);
                         }
                     };

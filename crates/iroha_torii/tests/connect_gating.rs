@@ -75,6 +75,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             relay_hub_address: None,
             relay_ttl: iroha_config::parameters::defaults::network::RELAY_TTL,
             peer_gossip_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
+            peer_gossip_max_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
             trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
             trust_penalty_bad_gossip: iroha_config::parameters::defaults::network::TRUST_PENALTY_BAD_GOSSIP,
             trust_penalty_unknown_peer: iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
@@ -105,6 +106,33 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             p2p_queue_cap_high: nonzero!(128usize),
             p2p_queue_cap_low: nonzero!(512usize),
             p2p_post_queue_cap: nonzero!(128usize),
+            p2p_subscriber_queue_cap: nonzero!(128usize),
+            consensus_ingress_rate_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
+            consensus_ingress_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
+            consensus_ingress_bytes_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
+            consensus_ingress_bytes_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+            consensus_ingress_critical_rate_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
+            consensus_ingress_critical_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
+            consensus_ingress_critical_bytes_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
+            consensus_ingress_critical_bytes_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
+            consensus_ingress_rbc_session_limit:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
+            consensus_ingress_penalty_threshold:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
+            consensus_ingress_penalty_window: core::time::Duration::from_millis(
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
+            ),
+            consensus_ingress_penalty_cooldown: core::time::Duration::from_millis(
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
+            ),
             happy_eyeballs_stagger: core::time::Duration::from_millis(100),
             addr_ipv6_first: false,
             max_incoming: None,
@@ -166,6 +194,8 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             // minimal defaults
             query_rate_per_authority_per_sec: None,
             query_burst_per_authority: None,
+            tx_rate_per_authority_per_sec: None,
+            tx_burst_per_authority: None,
             deploy_rate_per_origin_per_sec: None,
             deploy_burst_per_origin: None,
             proof_api: A::ProofApi {
@@ -335,6 +365,18 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 iroha_config::parameters::defaults::sumeragi::MEMBERSHIP_MISMATCH_ALERT_THRESHOLD,
             membership_mismatch_fail_closed:
                 iroha_config::parameters::defaults::sumeragi::MEMBERSHIP_MISMATCH_FAIL_CLOSED,
+            consensus_future_height_window:
+                iroha_config::parameters::defaults::sumeragi::CONSENSUS_FUTURE_HEIGHT_WINDOW,
+            consensus_future_view_window:
+                iroha_config::parameters::defaults::sumeragi::CONSENSUS_FUTURE_VIEW_WINDOW,
+            invalid_sig_penalty_threshold:
+                iroha_config::parameters::defaults::sumeragi::INVALID_SIG_PENALTY_THRESHOLD,
+            invalid_sig_penalty_window: std::time::Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::INVALID_SIG_PENALTY_WINDOW_MS,
+            ),
+            invalid_sig_penalty_cooldown: std::time::Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::INVALID_SIG_PENALTY_COOLDOWN_MS,
+            ),
             role: A::NodeRole::Validator,
             allow_view0_slack: false,
             collectors_k: 1,
@@ -350,6 +392,8 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_TRANSACTIONS,
             block_max_payload_bytes:
                 iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES,
+            proposal_queue_scan_multiplier:
+                iroha_config::parameters::defaults::sumeragi::PROPOSAL_QUEUE_SCAN_MULTIPLIER,
             msg_channel_cap_votes:
                 iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_VOTES,
             msg_channel_cap_block_payload:
@@ -381,9 +425,14 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             require_precommit_qc:
                 iroha_config::parameters::defaults::sumeragi::REQUIRE_PRECOMMIT_QC,
             rbc_chunk_max_bytes: iroha_config::parameters::defaults::sumeragi::RBC_CHUNK_MAX_BYTES,
+            rbc_chunk_fanout: iroha_config::parameters::defaults::sumeragi::RBC_CHUNK_FANOUT,
             rbc_session_ttl: core::time::Duration::from_secs(
                 iroha_config::parameters::defaults::sumeragi::RBC_SESSION_TTL_SECS,
             ),
+            rbc_rebroadcast_sessions_per_tick:
+                iroha_config::parameters::defaults::sumeragi::RBC_REBROADCAST_SESSIONS_PER_TICK,
+            rbc_payload_chunks_per_tick:
+                iroha_config::parameters::defaults::sumeragi::RBC_PAYLOAD_CHUNKS_PER_TICK,
             rbc_store_max_sessions:
                 iroha_config::parameters::defaults::sumeragi::RBC_STORE_MAX_SESSIONS,
             rbc_store_soft_sessions:
@@ -431,11 +480,13 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
         },
         block_sync: A::BlockSync {
             gossip_period: core::time::Duration::from_millis(200),
+            gossip_max_period: core::time::Duration::from_millis(200),
             gossip_size: nonzero!(32u32),
         },
         transaction_gossiper: A::TransactionGossiper {
             gossip_period: core::time::Duration::from_millis(200),
             gossip_size: nonzero!(32u32),
+            gossip_resend_ticks: iroha_config::parameters::defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
             dataspace: A::DataspaceGossip::default(),
         },
         live_query_store: A::LiveQueryStore::default(),
@@ -519,6 +570,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             quarantine_tx_max_millis:
                 iroha_config::parameters::defaults::pipeline::QUARANTINE_TX_MAX_MILLIS,
             query_default_cursor_mode: iroha_config::parameters::actual::QueryCursorMode::Ephemeral,
+            query_max_fetch_size: iroha_config::parameters::defaults::pipeline::QUERY_MAX_FETCH_SIZE,
             query_stored_min_gas_units: 0,
             amx_per_dataspace_budget_ms:
                 iroha_config::parameters::defaults::pipeline::AMX_PER_DATASPACE_BUDGET_MS,
@@ -777,10 +829,6 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             zstd_level_large: iroha_config::parameters::defaults::norito::ZSTD_LEVEL_LARGE,
             zstd_level_gpu: iroha_config::parameters::defaults::norito::ZSTD_LEVEL_GPU,
             large_threshold: iroha_config::parameters::defaults::norito::LARGE_THRESHOLD,
-            enable_compact_seq_len_up_to:
-                iroha_config::parameters::defaults::norito::ENABLE_COMPACT_SEQ_LEN_UP_TO,
-            enable_varint_offsets_up_to:
-                iroha_config::parameters::defaults::norito::ENABLE_VARINT_OFFSETS_UP_TO,
             allow_gpu_compression:
                 iroha_config::parameters::defaults::norito::ALLOW_GPU_COMPRESSION,
             aos_ncb_small_n: iroha_config::parameters::defaults::norito::AOS_NCB_SMALL_N,
@@ -1030,6 +1078,7 @@ fn build_torii(cfg: &iroha_config::parameters::actual::Root) -> iroha_torii::Tor
         capacity: nonzero!(1usize),
         capacity_per_user: nonzero!(1usize),
         transaction_time_to_live: core::time::Duration::from_secs(1),
+        ..Default::default()
     };
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(Queue::from_config(queue_cfg, events_sender));

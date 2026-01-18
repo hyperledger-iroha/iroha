@@ -56,7 +56,7 @@ Data Spaces モデル
 Dataspace-aware gossip
 - トランザクション gossip バッチは lane catalog 由来の plane tag（public vs restricted）を持つ。restricted バッチは `transaction_gossip_restricted_target_cap` を尊重して現在の commit topology のオンライン・ピアに unicast、public バッチは `transaction_gossip_public_target_cap` を使用（broadcast は `null`）。ターゲット選定は `transaction_gossip_public_target_reshuffle_ms` と `transaction_gossip_restricted_target_reshuffle_ms`（既定: `transaction_gossip_period_ms`）に従い再シャッフルされる。commit topology にオンライン・ピアがいないとき、`transaction_gossip_restricted_public_payload`（既定 `refuse`）で public overlay へ転送するか拒否するかを選べる。テレメトリは fallback 試行、forward/drop カウント、設定ポリシー、および dataspace ごとのターゲット選定を公開する。
 - `transaction_gossip_drop_unknown_dataspace` が有効なら未知 dataspace は再キュー、無効なら漏洩回避のため restricted targeting にフォールバック。
-- 受信側検証で、lane/dataspace がローカル catalog と一致しないバッチ、または plane tag が可視性に合わないバッチは破棄される。
+- 受信側検証で、lane/dataspace がローカル catalog と一致しないエントリ、plane tag が可視性に合わないエントリ、または advertised route がローカルで再導出した routing 決定と一致しないエントリは破棄される。
 
 Capability manifests と UAID
 - Universal accounts: 各参加者に決定論的 UAID（`crates/iroha_data_model/src/nexus/manifest.rs` の `UniversalAccountId`）を付与。Capability manifests（`AssetPermissionManifest`）は UAID を dataspace、activation/expiry epoch、allow/deny `ManifestEntry` ルール（`dataspace`, `program_id`, `method`, `asset`, optional AMX roles）に結び付ける。deny が優先され、評価は `ManifestVerdict::Denied`（監査理由付き）または `Allowed`（該当 allowance metadata 付き）を返す。

@@ -50,12 +50,12 @@ mod model {
         /// Hash of the previous block in the chain.
         #[getset(get_copy = "pub", set = "pub")]
         pub prev_block_hash: Option<HashOf<BlockHeader>>,
-        /// Merkle root of this block's transactions.
-        /// None if there are no transactions (empty block).
+        /// Merkle root of this block's external transaction entrypoints.
+        /// None if there are no external transactions.
         #[getset(get_copy = "pub")]
         pub merkle_root: Option<HashOf<MerkleTree<TransactionEntrypoint>>>,
-        /// Merkle root of this block's transaction results.
-        /// None if there are no transactions (empty block).
+        /// Merkle root of this block's transaction results (external transactions + time triggers).
+        /// None if there are no entrypoints.
         #[getset(get_copy = "pub")]
         pub result_merkle_root: Option<HashOf<MerkleTree<TransactionResult>>>,
         /// Optional hash covering the DA proof policy bundle embedded in the block payload.

@@ -10,10 +10,11 @@ import math
 import os
 import re
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from enum import Enum
 from types import ModuleType
 from typing import (
+    TYPE_CHECKING,
     Any,
     Callable,
     Dict,
@@ -24,49 +25,57 @@ from typing import (
     Optional,
     Sequence,
     Tuple,
-    TYPE_CHECKING,
     Union,
 )
-
-from urllib.parse import urlencode, urlparse, urlunparse, quote
+from urllib.parse import quote, urlencode, urlparse, urlunparse
 
 import requests
-
 from iroha_torii_client.client import (
-    ToriiClient as _BaseToriiClient,
-    ConfigurationSnapshot,
     ConfidentialGasSchedule,
+    ConfigurationSnapshot,
+    NetworkTimeRttBucket,
+    NetworkTimeSample,
     NetworkTimeSnapshot,
     NetworkTimeStatus,
-    NetworkTimeSample,
-    NetworkTimeRttBucket,
     OfflineAllowanceDeadline,
     OfflineAllowanceListItem,
     OfflineAllowanceListPage,
+    OfflineSummaryListItem,
+    OfflineSummaryListPage,
     OfflineTransferHistoryEntry,
     OfflineTransferListItem,
     OfflineTransferListPage,
-    OfflineSummaryListItem,
-    OfflineSummaryListPage,
+    SubscriptionActionResult,
+    SubscriptionCreateResult,
+    SubscriptionListItem,
+    SubscriptionListPage,
+    SubscriptionPlanCreateResult,
+    SubscriptionPlanListItem,
+    SubscriptionPlanListPage,
 )
-from .repo import RepoAgreementListPage
+from iroha_torii_client.client import (
+    ToriiClient as _BaseToriiClient,
+)
 
+from .address import AccountAddress, AccountAddressError, AccountAddressFormat, DomainSelector
+from .connect import ConnectSessionInfo
+from .event_filter import DataEventFilter, ensure_event_filter
 from .query import (
     account_query_envelope,
     asset_definitions_query_envelope,
     asset_holders_query_envelope,
     domain_query_envelope,
 )
-from .event_filter import DataEventFilter, ensure_event_filter
-from .connect import ConnectSessionInfo
+from .repo import RepoAgreementListPage
 from .sorafs import (
-    SorafsAliasPolicy,
-    SorafsAliasEvaluation,
-    SorafsAliasWarning,
     SorafsAliasError,
+    SorafsAliasEvaluation,
+    SorafsAliasPolicy,
+    SorafsAliasWarning,
+)
+from .sorafs import (
     enforce_alias_policy as enforce_sorafs_alias_policy,
 )
-from .address import AccountAddress, AccountAddressError, AccountAddressFormat, DomainSelector
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .connect import _ConnectControlBase as ConnectControlBase  # noqa: F401
@@ -331,6 +340,20 @@ def _normalize_hex_string(
     except ValueError as exc:
         raise ValueError(f"{context} must contain valid hexadecimal characters") from exc
     return trimmed
+
+
+def _normalize_hash_hex(value: Any, context: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{context} must be a hex string")
+    trimmed = value.strip().lower()
+    if trimmed.startswith("0x"):
+        trimmed = trimmed[2:].strip()
+    if ":" in trimmed:
+        scheme, rest = trimmed.split(":", 1)
+        if scheme and scheme != "blake2b32":
+            raise ValueError(f"{context} must use blake2b32 hex encoding")
+        trimmed = rest.strip()
+    return _normalize_hex_string(trimmed, context, expected_length=64)
 
 
 def _normalize_uaid_literal(value: Any, *, context: str = "uaid") -> str:
@@ -708,26 +731,26 @@ def _ensure_governance_owner_canonical(owner: Any, *, context: str) -> None:
     if owner is None:
         return
     if not isinstance(owner, str):
-        raise ValueError(f"{context}.owner must be a canonical account id")
+        raise ValueError(f"{context}.owner must be in canonical account id form")
     trimmed = owner.strip()
     if not trimmed or trimmed != owner:
-        raise ValueError(f"{context}.owner must be a canonical account id")
+        raise ValueError(f"{context}.owner must be in canonical account id form")
     if any(ch.isspace() for ch in trimmed):
-        raise ValueError(f"{context}.owner must be a canonical account id")
+        raise ValueError(f"{context}.owner must be in canonical account id form")
     parts = trimmed.split("@")
     if len(parts) != 2 or not parts[0] or not parts[1]:
-        raise ValueError(f"{context}.owner must be a canonical account id")
+        raise ValueError(f"{context}.owner must be in canonical account id form")
     address_part, domain_part = parts
     if domain_part.isascii() and domain_part.lower() != domain_part:
-        raise ValueError(f"{context}.owner must be a canonical account id")
+        raise ValueError(f"{context}.owner must be in canonical account id form")
     try:
         address, fmt = AccountAddress.parse_any(
             address_part, expected_prefix=DEFAULT_IH58_PREFIX
         )
     except AccountAddressError as exc:
-        raise ValueError(f"{context}.owner must be a canonical account id") from exc
+        raise ValueError(f"{context}.owner must be in canonical account id form") from exc
     if fmt is not AccountAddressFormat.IH58:
-        raise ValueError(f"{context}.owner must be a canonical account id")
+        raise ValueError(f"{context}.owner must be in canonical account id form")
     if address.domain != DomainSelector.from_domain(domain_part):
         raise ValueError(f"{context}.owner must be a canonical account id")
     canonical = f"{address.to_ih58(DEFAULT_IH58_PREFIX)}@{domain_part}"
@@ -1871,20 +1894,17 @@ class GovernanceProposalDeployContract:
     def from_payload(cls, payload: Mapping[str, Any]) -> "GovernanceProposalDeployContract":
         if not isinstance(payload, Mapping):
             raise TypeError("DeployContract payload must be an object")
-        namespace = payload.get("namespace")
-        contract_id = payload.get("contract_id")
-        code_hash_hex = payload.get("code_hash_hex")
-        abi_hash_hex = payload.get("abi_hash_hex")
-        abi_version = payload.get("abi_version")
-        for field_name, field_value in [
-            ("namespace", namespace),
-            ("contract_id", contract_id),
-            ("code_hash_hex", code_hash_hex),
-            ("abi_hash_hex", abi_hash_hex),
-            ("abi_version", abi_version),
-        ]:
-            if not isinstance(field_value, str):
+        def _require_str(field_name: str) -> str:
+            value = payload.get(field_name)
+            if not isinstance(value, str):
                 raise TypeError(f"DeployContract payload missing string `{field_name}` field")
+            return value
+
+        namespace = _require_str("namespace")
+        contract_id = _require_str("contract_id")
+        code_hash_hex = _require_str("code_hash_hex")
+        abi_hash_hex = _require_str("abi_hash_hex")
+        abi_version = _require_str("abi_version")
         return cls(
             namespace=namespace,
             contract_id=contract_id,
@@ -1947,6 +1967,8 @@ class GovernanceProposalRecord:
         status_raw = payload.get("status")
         if not isinstance(status_raw, str):
             raise TypeError("proposal record missing string `status` field")
+        if created_height_raw is None:
+            raise TypeError("proposal record missing numeric `created_height` field")
         try:
             created_height = int(created_height_raw)
         except (TypeError, ValueError) as exc:
@@ -2002,16 +2024,22 @@ class GovernanceLockRecord:
         if not isinstance(owner, str):
             raise TypeError("governance lock record missing string `owner` field")
         amount_raw = payload.get("amount")
+        if amount_raw is None:
+            raise TypeError("governance lock record missing numeric `amount` field")
         try:
             amount = int(amount_raw)
         except (TypeError, ValueError) as exc:
             raise TypeError("governance lock record `amount` must be numeric") from exc
         expiry_raw = payload.get("expiry_height")
+        if expiry_raw is None:
+            raise TypeError("governance lock record missing numeric `expiry_height` field")
         try:
             expiry_height = int(expiry_raw)
         except (TypeError, ValueError) as exc:
             raise TypeError("governance lock record `expiry_height` must be numeric") from exc
         direction_raw = payload.get("direction")
+        if direction_raw is None:
+            raise TypeError("governance lock record missing numeric `direction` field")
         try:
             direction = int(direction_raw)
         except (TypeError, ValueError) as exc:
@@ -2077,13 +2105,19 @@ class GovernanceUnlockStats:
     def from_payload(cls, payload: Mapping[str, Any]) -> "GovernanceUnlockStats":
         if not isinstance(payload, Mapping):
             raise TypeError("unlock stats payload must be an object")
-        try:
-            height_current = int(payload.get("height_current"))
-            expired_locks_now = int(payload.get("expired_locks_now"))
-            referenda_with_expired = int(payload.get("referenda_with_expired"))
-            last_sweep_height = int(payload.get("last_sweep_height"))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("unlock stats fields must be numeric") from exc
+        def _require_int(name: str) -> int:
+            value = payload.get(name)
+            if value is None:
+                raise TypeError(f"unlock stats missing `{name}` field")
+            try:
+                return int(value)
+            except (TypeError, ValueError) as exc:
+                raise TypeError(f"unlock stats `{name}` must be numeric") from exc
+
+        height_current = _require_int("height_current")
+        expired_locks_now = _require_int("expired_locks_now")
+        referenda_with_expired = _require_int("referenda_with_expired")
+        last_sweep_height = _require_int("last_sweep_height")
         return cls(
             height_current=height_current,
             expired_locks_now=expired_locks_now,
@@ -3239,6 +3273,8 @@ class SpaceDirectoryManifestList:
         if not isinstance(uaid, str) or not uaid:
             raise TypeError("manifest list payload missing `uaid` string")
         total = payload.get("total")
+        if total is None:
+            raise TypeError("manifest list missing numeric `total` field")
         try:
             total_int = int(total)
         except (TypeError, ValueError) as exc:
@@ -3654,10 +3690,15 @@ class SumeragiEvidenceRecord:
         kind = payload.get("kind")
         if not isinstance(kind, str):
             raise TypeError("sumeragi evidence record missing string `kind` field")
+        height_raw = payload.get("recorded_height")
+        view_raw = payload.get("recorded_view")
+        recorded_ms_raw = payload.get("recorded_ms")
+        if height_raw is None or view_raw is None or recorded_ms_raw is None:
+            raise TypeError("sumeragi evidence record missing timing fields")
         try:
-            recorded_height = int(payload.get("recorded_height"))
-            recorded_view = int(payload.get("recorded_view"))
-            recorded_ms = int(payload.get("recorded_ms"))
+            recorded_height = int(height_raw)
+            recorded_view = int(view_raw)
+            recorded_ms = int(recorded_ms_raw)
         except (TypeError, ValueError) as exc:
             raise TypeError("sumeragi evidence timing fields must be numeric") from exc
         extras = {
@@ -3724,6 +3765,208 @@ class SumeragiQcSummary:
         else:
             raise TypeError("QC summary `subject_block_hash` must be a string when present")
         return cls(height=height, view=view, subject_block_hash=subject_hash)
+
+
+@dataclass(frozen=True)
+class SumeragiCommitQcSummary:
+    """Commit QC summary returned by `/v1/sumeragi/status`."""
+
+    height: int
+    view: int
+    epoch: int
+    block_hash: Optional[str]
+    validator_set_hash: Optional[str]
+    validator_set_len: int
+    signatures_total: int
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiCommitQcSummary":
+        if not isinstance(payload, Mapping):
+            raise TypeError("commit_qc must be an object")
+        try:
+            height = int(payload.get("height", 0))
+            view = int(payload.get("view", 0))
+            epoch = int(payload.get("epoch", 0))
+            validator_set_len = int(payload.get("validator_set_len", 0))
+            signatures_total = int(payload.get("signatures_total", 0))
+        except (TypeError, ValueError) as exc:
+            raise TypeError("commit_qc numeric fields must be numeric") from exc
+        block_hash_raw = payload.get("block_hash")
+        if block_hash_raw is None:
+            block_hash = None
+        elif isinstance(block_hash_raw, str):
+            block_hash = block_hash_raw
+        else:
+            raise TypeError("commit_qc `block_hash` must be a string when present")
+        validator_set_hash_raw = payload.get("validator_set_hash")
+        if validator_set_hash_raw is None:
+            validator_set_hash = None
+        elif isinstance(validator_set_hash_raw, str):
+            validator_set_hash = validator_set_hash_raw
+        else:
+            raise TypeError("commit_qc `validator_set_hash` must be a string when present")
+        return cls(
+            height=height,
+            view=view,
+            epoch=epoch,
+            block_hash=block_hash,
+            validator_set_hash=validator_set_hash,
+            validator_set_len=validator_set_len,
+            signatures_total=signatures_total,
+        )
+
+
+@dataclass(frozen=True)
+class SumeragiCommitQc:
+    """Commit QC record returned by `/v1/sumeragi/commit_qc/{hash}`."""
+
+    phase: str
+    parent_state_root: str
+    post_state_root: str
+    height: int
+    view: int
+    epoch: int
+    mode_tag: str
+    validator_set_hash: str
+    validator_set_hash_version: int
+    validator_set: List[str]
+    signers_bitmap: str
+    bls_aggregate_signature: str
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiCommitQc":
+        if not isinstance(payload, Mapping):
+            raise TypeError("commit_qc payload must be an object")
+        phase = payload.get("phase")
+        mode_tag = payload.get("mode_tag")
+        if not isinstance(phase, str):
+            raise TypeError("commit_qc `phase` must be a string")
+        if not isinstance(mode_tag, str):
+            raise TypeError("commit_qc `mode_tag` must be a string")
+        try:
+            height = int(payload.get("height", 0))
+            view = int(payload.get("view", 0))
+            epoch = int(payload.get("epoch", 0))
+            validator_set_hash_version = int(payload.get("validator_set_hash_version", 0))
+        except (TypeError, ValueError) as exc:
+            raise TypeError("commit_qc numeric fields must be numeric") from exc
+        parent_state_root = _normalize_hex_string(
+            payload.get("parent_state_root"),
+            "commit_qc.parent_state_root",
+            expected_length=64,
+        )
+        post_state_root = _normalize_hex_string(
+            payload.get("post_state_root"),
+            "commit_qc.post_state_root",
+            expected_length=64,
+        )
+        validator_set_hash = _normalize_hex_string(
+            payload.get("validator_set_hash"),
+            "commit_qc.validator_set_hash",
+            expected_length=64,
+        )
+        validator_set_value = payload.get("validator_set")
+        if not isinstance(validator_set_value, list):
+            raise TypeError("commit_qc `validator_set` must be a list")
+        validator_set: List[str] = []
+        for index, entry in enumerate(validator_set_value):
+            if not isinstance(entry, str):
+                raise TypeError(f"commit_qc validator_set entry {index} must be a string")
+            validator_set.append(entry)
+        signers_bitmap = _normalize_hex_string(
+            payload.get("signers_bitmap"),
+            "commit_qc.signers_bitmap",
+        )
+        bls_aggregate_signature = _normalize_hex_string(
+            payload.get("bls_aggregate_signature"),
+            "commit_qc.bls_aggregate_signature",
+        )
+        return cls(
+            phase=phase,
+            parent_state_root=parent_state_root,
+            post_state_root=post_state_root,
+            height=height,
+            view=view,
+            epoch=epoch,
+            mode_tag=mode_tag,
+            validator_set_hash=validator_set_hash,
+            validator_set_hash_version=validator_set_hash_version,
+            validator_set=validator_set,
+            signers_bitmap=signers_bitmap,
+            bls_aggregate_signature=bls_aggregate_signature,
+        )
+
+
+@dataclass(frozen=True)
+class SumeragiCommitQcRecord:
+    """Commit QC response wrapper returned by `/v1/sumeragi/commit_qc/{hash}`."""
+
+    subject_block_hash: str
+    commit_qc: Optional[SumeragiCommitQc]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiCommitQcRecord":
+        if not isinstance(payload, Mapping):
+            raise TypeError("commit_qc response must be an object")
+        subject_block_hash = _normalize_hex_string(
+            payload.get("subject_block_hash"),
+            "commit_qc.subject_block_hash",
+            expected_length=64,
+        )
+        commit_qc_payload = payload.get("commit_qc")
+        if commit_qc_payload is None:
+            commit_qc = None
+        elif isinstance(commit_qc_payload, Mapping):
+            commit_qc = SumeragiCommitQc.from_payload(commit_qc_payload)
+        else:
+            raise TypeError("commit_qc response `commit_qc` must be an object or null")
+        return cls(subject_block_hash=subject_block_hash, commit_qc=commit_qc)
+
+
+@dataclass(frozen=True)
+class SumeragiCommitQuorumSummary:
+    """Commit quorum snapshot returned by `/v1/sumeragi/status`."""
+
+    height: int
+    view: int
+    block_hash: Optional[str]
+    signatures_present: int
+    signatures_counted: int
+    signatures_set_b: int
+    signatures_required: int
+    last_updated_ms: int
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiCommitQuorumSummary":
+        if not isinstance(payload, Mapping):
+            raise TypeError("commit_quorum must be an object")
+        try:
+            height = int(payload.get("height", 0))
+            view = int(payload.get("view", 0))
+            signatures_present = int(payload.get("signatures_present", 0))
+            signatures_counted = int(payload.get("signatures_counted", 0))
+            signatures_set_b = int(payload.get("signatures_set_b", 0))
+            signatures_required = int(payload.get("signatures_required", 0))
+            last_updated_ms = int(payload.get("last_updated_ms", 0))
+        except (TypeError, ValueError) as exc:
+            raise TypeError("commit_quorum numeric fields must be numeric") from exc
+        block_hash_raw = payload.get("block_hash")
+        if block_hash_raw is None:
+            block_hash = None
+        elif isinstance(block_hash_raw, str):
+            block_hash = block_hash_raw
+        else:
+            raise TypeError("commit_quorum `block_hash` must be a string when present")
+        return cls(
+            height=height,
+            view=view,
+            block_hash=block_hash,
+            signatures_present=signatures_present,
+            signatures_counted=signatures_counted,
+            signatures_set_b=signatures_set_b,
+            signatures_required=signatures_required,
+            last_updated_ms=last_updated_ms,
+        )
 
 
 @dataclass(frozen=True)
@@ -4104,13 +4347,13 @@ class SumeragiLaneSettlementCommitment:
 
 @dataclass(frozen=True)
 class SumeragiLaneRelayEnvelope:
-    """Relay envelope capturing block header, DA hash, and settlement commitment."""
+    """Relay envelope capturing block header, QC, DA hash, and settlement commitment."""
 
     lane_id: int
     dataspace_id: int
     block_height: int
     block_header: Mapping[str, Any]
-    execution_qc: Optional[Mapping[str, Any]]
+    qc: Optional[Mapping[str, Any]]
     da_commitment_hash: Optional[str]
     settlement_commitment: SumeragiLaneSettlementCommitment
     settlement_hash: str
@@ -4130,9 +4373,9 @@ class SumeragiLaneRelayEnvelope:
         block_header = payload.get("block_header")
         if not isinstance(block_header, Mapping):
             raise TypeError("lane relay `block_header` must be an object")
-        execution_qc = payload.get("execution_qc")
-        if execution_qc is not None and not isinstance(execution_qc, Mapping):
-            raise TypeError("lane relay `execution_qc` must be an object when present")
+        qc = payload.get("qc")
+        if qc is not None and not isinstance(qc, Mapping):
+            raise TypeError("lane relay `qc` must be an object when present")
         da_commitment_hash = payload.get("da_commitment_hash")
         if da_commitment_hash is not None and not isinstance(da_commitment_hash, str):
             raise TypeError("lane relay `da_commitment_hash` must be a string when present")
@@ -4148,7 +4391,7 @@ class SumeragiLaneRelayEnvelope:
             dataspace_id=dataspace_id,
             block_height=block_height,
             block_header=block_header,
-            execution_qc=execution_qc,
+            qc=qc,
             da_commitment_hash=da_commitment_hash,
             settlement_commitment=settlement_commitment,
             settlement_hash=settlement_hash,
@@ -4248,6 +4491,8 @@ class SumeragiStatusSnapshot:
     view_change_install_total: int
     highest_qc: SumeragiQcSummary
     locked_qc: SumeragiQcSummary
+    commit_qc: SumeragiCommitQcSummary
+    commit_quorum: SumeragiCommitQuorumSummary
     tx_queue: SumeragiTxQueueStatus
     epoch: SumeragiEpochSchedule
     gossip_fallback_total: int
@@ -4307,6 +4552,8 @@ class SumeragiStatusSnapshot:
             raise TypeError("sumeragi status counters must be numeric") from exc
         highest_qc_payload = payload.get("highest_qc")
         locked_qc_payload = payload.get("locked_qc")
+        commit_qc_payload = payload.get("commit_qc")
+        commit_quorum_payload = payload.get("commit_quorum")
         tx_queue_payload = payload.get("tx_queue")
         epoch_payload = payload.get("epoch")
         rbc_store_payload = payload.get("rbc_store")
@@ -4315,6 +4562,8 @@ class SumeragiStatusSnapshot:
         for field_name, field_payload in [
             ("highest_qc", highest_qc_payload),
             ("locked_qc", locked_qc_payload),
+            ("commit_qc", commit_qc_payload),
+            ("commit_quorum", commit_quorum_payload),
             ("tx_queue", tx_queue_payload),
             ("epoch", epoch_payload),
             ("rbc_store", rbc_store_payload),
@@ -4323,6 +4572,15 @@ class SumeragiStatusSnapshot:
         ]:
             if not isinstance(field_payload, Mapping):
                 raise TypeError(f"sumeragi status missing object `{field_name}` field")
+        assert isinstance(highest_qc_payload, Mapping)
+        assert isinstance(locked_qc_payload, Mapping)
+        assert isinstance(commit_qc_payload, Mapping)
+        assert isinstance(commit_quorum_payload, Mapping)
+        assert isinstance(tx_queue_payload, Mapping)
+        assert isinstance(epoch_payload, Mapping)
+        assert isinstance(rbc_store_payload, Mapping)
+        assert isinstance(prf_payload, Mapping)
+        assert isinstance(membership_payload, Mapping)
         lane_commitments_payload = payload.get("lane_commitments", [])
         if not isinstance(lane_commitments_payload, list):
             raise TypeError("sumeragi status `lane_commitments` must be a list")
@@ -4391,6 +4649,8 @@ class SumeragiStatusSnapshot:
             view_change_install_total=view_change_install_total,
             highest_qc=SumeragiQcSummary.from_payload(highest_qc_payload),
             locked_qc=SumeragiQcSummary.from_payload(locked_qc_payload),
+            commit_qc=SumeragiCommitQcSummary.from_payload(commit_qc_payload),
+            commit_quorum=SumeragiCommitQuorumSummary.from_payload(commit_quorum_payload),
             tx_queue=SumeragiTxQueueStatus.from_payload(tx_queue_payload),
             epoch=SumeragiEpochSchedule.from_payload(epoch_payload),
             gossip_fallback_total=gossip_fallback_total,
@@ -4431,9 +4691,13 @@ class SumeragiNewViewReceipt:
     def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiNewViewReceipt":
         if not isinstance(payload, Mapping):
             raise TypeError("new_view entry must be an object")
+        height_raw = payload.get("height")
+        view_raw = payload.get("view")
+        if height_raw is None or view_raw is None:
+            raise TypeError("new_view entry missing height/view fields")
         try:
-            height = int(payload.get("height"))
-            view = int(payload.get("view"))
+            height = int(height_raw)
+            view = int(view_raw)
             count = int(payload.get("count", 0))
         except (TypeError, ValueError) as exc:
             raise TypeError("new_view entry fields must be numeric") from exc
@@ -4540,15 +4804,14 @@ class SumeragiRbcSession:
         except (TypeError, ValueError) as exc:
             raise TypeError("rbc session counters must be numeric") from exc
         delivered = payload.get("delivered")
+        if not isinstance(delivered, bool):
+            raise TypeError("rbc session `delivered` field must be boolean")
         invalid = payload.get("invalid")
+        if not isinstance(invalid, bool):
+            raise TypeError("rbc session `invalid` field must be boolean")
         recovered = payload.get("recovered")
-        for name, flag in [
-            ("delivered", delivered),
-            ("invalid", invalid),
-            ("recovered", recovered),
-        ]:
-            if not isinstance(flag, bool):
-                raise TypeError(f"rbc session `{name}` field must be boolean")
+        if not isinstance(recovered, bool):
+            raise TypeError("rbc session `recovered` field must be boolean")
         return cls(
             block_hash=block_hash,
             height=height,
@@ -4824,8 +5087,6 @@ class SumeragiPhasesEmaSnapshot:
     collect_prevote_ms: int
     collect_precommit_ms: int
     collect_aggregator_ms: int
-    collect_exec_ms: int
-    collect_witness_ms: int
     commit_ms: int
     pipeline_total_ms: int
 
@@ -4840,8 +5101,6 @@ class SumeragiPhasesEmaSnapshot:
                 collect_prevote_ms=int(payload.get("collect_prevote_ms", 0)),
                 collect_precommit_ms=int(payload.get("collect_precommit_ms", 0)),
                 collect_aggregator_ms=int(payload.get("collect_aggregator_ms", 0)),
-                collect_exec_ms=int(payload.get("collect_exec_ms", 0)),
-                collect_witness_ms=int(payload.get("collect_witness_ms", 0)),
                 commit_ms=int(payload.get("commit_ms", 0)),
                 pipeline_total_ms=int(payload.get("pipeline_total_ms", 0)),
             )
@@ -4858,8 +5117,6 @@ class SumeragiPhasesSnapshot:
     collect_prevote_ms: int
     collect_precommit_ms: int
     collect_aggregator_ms: int
-    collect_exec_ms: int
-    collect_witness_ms: int
     commit_ms: int
     pipeline_total_ms: int
     collect_aggregator_gossip_total: int
@@ -4882,8 +5139,6 @@ class SumeragiPhasesSnapshot:
                 collect_prevote_ms=int(payload.get("collect_prevote_ms", 0)),
                 collect_precommit_ms=int(payload.get("collect_precommit_ms", 0)),
                 collect_aggregator_ms=int(payload.get("collect_aggregator_ms", 0)),
-                collect_exec_ms=int(payload.get("collect_exec_ms", 0)),
-                collect_witness_ms=int(payload.get("collect_witness_ms", 0)),
                 commit_ms=int(payload.get("commit_ms", 0)),
                 pipeline_total_ms=int(payload.get("pipeline_total_ms", 0)),
                 collect_aggregator_gossip_total=int(
@@ -5227,10 +5482,15 @@ class RuntimeUpgradeManifest:
         abi_hash_hex = payload.get("abi_hash")
         if not isinstance(abi_hash_hex, str):
             raise TypeError("runtime upgrade manifest missing string `abi_hash` field")
+        abi_version_raw = payload.get("abi_version")
+        start_height_raw = payload.get("start_height")
+        end_height_raw = payload.get("end_height")
+        if abi_version_raw is None or start_height_raw is None or end_height_raw is None:
+            raise TypeError("runtime upgrade manifest missing numeric fields")
         try:
-            abi_version = int(payload.get("abi_version"))
-            start_height = int(payload.get("start_height"))
-            end_height = int(payload.get("end_height"))
+            abi_version = int(abi_version_raw)
+            start_height = int(start_height_raw)
+            end_height = int(end_height_raw)
         except (TypeError, ValueError) as exc:
             raise TypeError("runtime upgrade manifest numeric fields must be integers") from exc
         added_syscalls = _coerce_int_list(
@@ -5287,8 +5547,11 @@ class RuntimeUpgradeRecord:
         proposer = payload.get("proposer")
         if not isinstance(proposer, str):
             raise TypeError("runtime upgrade record missing string `proposer` field")
+        created_height_raw = payload.get("created_height")
+        if created_height_raw is None:
+            raise TypeError("runtime upgrade record missing numeric `created_height` field")
         try:
-            created_height = int(payload.get("created_height"))
+            created_height = int(created_height_raw)
         except (TypeError, ValueError) as exc:
             raise TypeError("runtime upgrade record `created_height` must be numeric") from exc
         manifest = RuntimeUpgradeManifest.from_payload(manifest_payload)
@@ -6402,6 +6665,7 @@ def _parse_retry_statuses(value: Any) -> Optional[set[int]]:
     if value is None or value == "":
         return None
     statuses: set[int] = set()
+    parts: Iterable[Any]
     if isinstance(value, str):
         parts = [part.strip() for part in value.split(",") if part.strip()]
     elif isinstance(value, (list, tuple, set)):
@@ -6417,6 +6681,7 @@ def _parse_retry_methods(value: Any) -> Optional[set[str]]:
     if value is None or value == "":
         return None
     methods: set[str] = set()
+    entries: Iterable[Any]
     if isinstance(value, str):
         entries = [part.strip() for part in value.split(",") if part.strip()]
     elif isinstance(value, (list, tuple, set)):
@@ -6444,7 +6709,7 @@ def _require_crypto() -> ModuleType:
     if _CRYPTO_MODULE is not None:
         return _CRYPTO_MODULE
     try:
-        from . import crypto as _crypto  # type: ignore import
+        from . import crypto as _crypto
     except RuntimeError as exc:  # pragma: no cover - optional runtime dependency
         raise RuntimeError(
             "iroha_python._crypto extension module is required for transaction helpers. "
@@ -6499,6 +6764,21 @@ __all__ = [
     "AssetHolderListPage",
     "AccountPermissionRecord",
     "AccountPermissionListPage",
+    "OfflineAllowanceDeadline",
+    "OfflineAllowanceListItem",
+    "OfflineAllowanceListPage",
+    "OfflineTransferHistoryEntry",
+    "OfflineTransferListItem",
+    "OfflineTransferListPage",
+    "OfflineSummaryListItem",
+    "OfflineSummaryListPage",
+    "SubscriptionPlanCreateResult",
+    "SubscriptionPlanListItem",
+    "SubscriptionPlanListPage",
+    "SubscriptionCreateResult",
+    "SubscriptionListItem",
+    "SubscriptionListPage",
+    "SubscriptionActionResult",
     "SumeragiEvidenceRecord",
     "SumeragiEvidenceListPage",
     "SumeragiQcSummary",
@@ -6551,9 +6831,9 @@ _DEFAULT_RETRY_STATUSES = frozenset({502, 503, 504})
 _DEFAULT_RETRY_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 try:  # pragma: no cover - optional dependency
-    import websocket  # type: ignore[import-not-found]
+    import websocket
 except ImportError:  # pragma: no cover - optional dependency
-    websocket = None  # type: ignore
+    websocket = None
 
 
 class TransactionStatusError(RuntimeError):
@@ -8379,7 +8659,7 @@ class ToriiClient(_BaseToriiClient):
         self._sorafs_alias_metrics[label] = self._sorafs_alias_metrics.get(label, 0) + 1
         return evaluation
 
-    def _request(  # type: ignore[override]
+    def _request(
         self,
         method: str,
         path: str,
@@ -8398,6 +8678,7 @@ class ToriiClient(_BaseToriiClient):
         if headers:
             final_headers.update(headers)
 
+        payload: Optional[bytes]
         if json_body is not None:
             payload = json.dumps(json_body).encode("utf-8")
             final_headers.setdefault("Content-Type", "application/json")
@@ -8525,6 +8806,8 @@ class ToriiClient(_BaseToriiClient):
             "/v1/pipeline/transactions/status",
             params={"hash": hash_hex},
         )
+        if response.status_code == 404:
+            return None
         self._expect_status(response, {200, 202, 204})
         return self._maybe_json(response)
 
@@ -9228,7 +9511,7 @@ class ToriiClient(_BaseToriiClient):
         for key, value in combined_headers.items():
             header_list.append(f"{key}: {value}")
 
-        return websocket.create_connection(  # type: ignore[call-arg]
+        return websocket.create_connection(
             ws_url,
             timeout=timeout,
             header=header_list or None,
@@ -9438,357 +9721,6 @@ class ToriiClient(_BaseToriiClient):
         return ConnectAdmissionManifest.from_payload(payload)
 
 
-@dataclass(frozen=True)
-class ConnectAppPolicyControls:
-    """Runtime-configurable Connect policy toggles."""
-
-    relay_enabled: Optional[bool]
-    ws_max_sessions: Optional[int]
-    ws_per_ip_max_sessions: Optional[int]
-    ws_rate_per_ip_per_min: Optional[int]
-    session_ttl_ms: Optional[int]
-    frame_max_bytes: Optional[int]
-    session_buffer_max_bytes: Optional[int]
-    ping_interval_ms: Optional[int]
-    ping_miss_tolerance: Optional[int]
-    ping_min_interval_ms: Optional[int]
-    extra: Mapping[str, Any] = field(default_factory=dict, repr=False)
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "ConnectAppPolicyControls":
-        if not isinstance(payload, Mapping):
-            raise TypeError("connect app policy payload must be an object")
-        data = dict(payload)
-
-        def _coerce_optional_int(name: str) -> Optional[int]:
-            value = data.get(name)
-            if value is None:
-                return None
-            try:
-                return int(value)
-            except (TypeError, ValueError) as exc:
-                raise TypeError(f"connect app policy field `{name}` must be numeric") from exc
-
-        relay_enabled_raw = data.get("relay_enabled")
-        relay_enabled: Optional[bool]
-        if relay_enabled_raw is None:
-            relay_enabled = None
-        elif isinstance(relay_enabled_raw, bool):
-            relay_enabled = relay_enabled_raw
-        else:
-            raise TypeError("connect app policy `relay_enabled` must be boolean when present")
-
-        recognized = {
-            "relay_enabled",
-            "ws_max_sessions",
-            "ws_per_ip_max_sessions",
-            "ws_rate_per_ip_per_min",
-            "session_ttl_ms",
-            "frame_max_bytes",
-            "session_buffer_max_bytes",
-            "ping_interval_ms",
-            "ping_miss_tolerance",
-            "ping_min_interval_ms",
-        }
-
-        extra = {k: v for k, v in data.items() if k not in recognized}
-        return cls(
-            relay_enabled=relay_enabled,
-            ws_max_sessions=_coerce_optional_int("ws_max_sessions"),
-            ws_per_ip_max_sessions=_coerce_optional_int("ws_per_ip_max_sessions"),
-            ws_rate_per_ip_per_min=_coerce_optional_int("ws_rate_per_ip_per_min"),
-            session_ttl_ms=_coerce_optional_int("session_ttl_ms"),
-            frame_max_bytes=_coerce_optional_int("frame_max_bytes"),
-            session_buffer_max_bytes=_coerce_optional_int("session_buffer_max_bytes"),
-            ping_interval_ms=_coerce_optional_int("ping_interval_ms"),
-            ping_miss_tolerance=_coerce_optional_int("ping_miss_tolerance"),
-            ping_min_interval_ms=_coerce_optional_int("ping_min_interval_ms"),
-            extra=extra,
-        )
-
-    def to_payload(self) -> Dict[str, Any]:
-        """Serialize the policy controls back to a JSON-serializable mapping."""
-
-        payload: Dict[str, Any] = dict(self.extra)
-        if self.relay_enabled is not None:
-            payload["relay_enabled"] = self.relay_enabled
-        if self.ws_max_sessions is not None:
-            payload["ws_max_sessions"] = self.ws_max_sessions
-        if self.ws_per_ip_max_sessions is not None:
-            payload["ws_per_ip_max_sessions"] = self.ws_per_ip_max_sessions
-        if self.ws_rate_per_ip_per_min is not None:
-            payload["ws_rate_per_ip_per_min"] = self.ws_rate_per_ip_per_min
-        if self.session_ttl_ms is not None:
-            payload["session_ttl_ms"] = self.session_ttl_ms
-        if self.frame_max_bytes is not None:
-            payload["frame_max_bytes"] = self.frame_max_bytes
-        if self.session_buffer_max_bytes is not None:
-            payload["session_buffer_max_bytes"] = self.session_buffer_max_bytes
-        if self.ping_interval_ms is not None:
-            payload["ping_interval_ms"] = self.ping_interval_ms
-        if self.ping_miss_tolerance is not None:
-            payload["ping_miss_tolerance"] = self.ping_miss_tolerance
-        if self.ping_min_interval_ms is not None:
-            payload["ping_min_interval_ms"] = self.ping_min_interval_ms
-        return payload
-
-
-@dataclass(frozen=True)
-class ConnectAppRecord:
-    """Registered Connect application metadata."""
-
-    app_id: str
-    display_name: Optional[str]
-    description: Optional[str]
-    icon_url: Optional[str]
-    namespaces: Sequence[str]
-    metadata: Mapping[str, Any]
-    policy: Mapping[str, Any]
-    extra: Mapping[str, Any] = field(default_factory=dict, repr=False)
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "ConnectAppRecord":
-        if not isinstance(payload, Mapping):
-            raise TypeError("connect app entry must be an object")
-        data = dict(payload)
-        app_id = data.get("app_id")
-        if not isinstance(app_id, str) or not app_id:
-            raise TypeError("connect app entry requires string `app_id` field")
-
-        def _coerce_optional_str(name: str) -> Optional[str]:
-            value = data.get(name)
-            if value is None:
-                return None
-            if isinstance(value, str):
-                return value
-            raise TypeError(f"connect app entry `{name}` must be a string when present")
-
-        namespaces_raw = data.get("namespaces") or []
-        if namespaces_raw is None:
-            namespaces_raw = []
-        if not isinstance(namespaces_raw, list):
-            raise TypeError("connect app entry `namespaces` must be a list")
-        namespaces: List[str] = []
-        for item in namespaces_raw:
-            if not isinstance(item, str):
-                raise TypeError("connect app entry `namespaces` must contain strings")
-            namespaces.append(item)
-
-        metadata_raw = data.get("metadata") or {}
-        if metadata_raw is None:
-            metadata_raw = {}
-        if not isinstance(metadata_raw, Mapping):
-            raise TypeError("connect app entry `metadata` must be an object")
-
-        policy_raw = data.get("policy") or {}
-        if policy_raw is None:
-            policy_raw = {}
-        if not isinstance(policy_raw, Mapping):
-            raise TypeError("connect app entry `policy` must be an object")
-
-        recognized = {
-            "app_id",
-            "display_name",
-            "description",
-            "icon_url",
-            "namespaces",
-            "metadata",
-            "policy",
-        }
-
-        extra = {k: v for k, v in data.items() if k not in recognized}
-        return cls(
-            app_id=app_id,
-            display_name=_coerce_optional_str("display_name"),
-            description=_coerce_optional_str("description"),
-            icon_url=_coerce_optional_str("icon_url"),
-            namespaces=tuple(namespaces),
-            metadata=dict(metadata_raw),
-            policy=dict(policy_raw),
-            extra=extra,
-        )
-
-    def to_payload(self) -> Dict[str, Any]:
-        """Serialize the record back into a JSON-friendly mapping."""
-
-        payload: Dict[str, Any] = dict(self.extra)
-        payload["app_id"] = self.app_id
-        if self.display_name is not None:
-            payload["display_name"] = self.display_name
-        if self.description is not None:
-            payload["description"] = self.description
-        if self.icon_url is not None:
-            payload["icon_url"] = self.icon_url
-        payload["namespaces"] = list(self.namespaces)
-        payload["metadata"] = dict(self.metadata)
-        payload["policy"] = dict(self.policy)
-        return payload
-
-
-@dataclass(frozen=True)
-class ConnectAppRegistryPage:
-    """Paginated Connect application registry results."""
-
-    items: Sequence[ConnectAppRecord]
-    total: Optional[int]
-    next_cursor: Optional[str]
-    extra: Mapping[str, Any] = field(default_factory=dict, repr=False)
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "ConnectAppRegistryPage":
-        if not isinstance(payload, Mapping):
-            raise TypeError("connect app registry payload must be an object")
-        data = dict(payload)
-        items_raw = data.get("items") or []
-        if items_raw is None:
-            items_raw = []
-        if not isinstance(items_raw, list):
-            raise TypeError("connect app registry `items` must be a list")
-        items = [ConnectAppRecord.from_payload(entry) for entry in items_raw]
-
-        total_raw = data.get("total")
-        total: Optional[int]
-        if total_raw is None:
-            total = None
-        else:
-            try:
-                total = int(total_raw)
-            except (TypeError, ValueError) as exc:
-                raise TypeError("connect app registry `total` must be numeric when present") from exc
-
-        cursor_raw = data.get("next_cursor")
-        if cursor_raw is not None and not isinstance(cursor_raw, str):
-            raise TypeError("connect app registry cursor must be a string when present")
-
-        recognized = {"items", "total", "next_cursor"}
-        extra = {k: v for k, v in data.items() if k not in recognized}
-        return cls(items=tuple(items), total=total, next_cursor=cursor_raw, extra=extra)
-
-
-@dataclass(frozen=True)
-class ConnectAdmissionManifestEntry:
-    """Admission control record for a Connect application."""
-
-    app_id: str
-    namespaces: Sequence[str]
-    metadata: Mapping[str, Any]
-    policy: Mapping[str, Any]
-    extra: Mapping[str, Any] = field(default_factory=dict, repr=False)
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "ConnectAdmissionManifestEntry":
-        if not isinstance(payload, Mapping):
-            raise TypeError("connect admission entry must be an object")
-        data = dict(payload)
-        app_id = data.get("app_id")
-        if not isinstance(app_id, str) or not app_id:
-            raise TypeError("connect admission entry requires string `app_id` field")
-
-        namespaces_raw = data.get("namespaces") or []
-        if namespaces_raw is None:
-            namespaces_raw = []
-        if not isinstance(namespaces_raw, list):
-            raise TypeError("connect admission entry `namespaces` must be a list")
-        namespaces: List[str] = []
-        for item in namespaces_raw:
-            if not isinstance(item, str):
-                raise TypeError("connect admission entry `namespaces` values must be strings")
-            namespaces.append(item)
-
-        metadata_raw = data.get("metadata") or {}
-        if metadata_raw is None:
-            metadata_raw = {}
-        if not isinstance(metadata_raw, Mapping):
-            raise TypeError("connect admission entry `metadata` must be an object")
-
-        policy_raw = data.get("policy") or {}
-        if policy_raw is None:
-            policy_raw = {}
-        if not isinstance(policy_raw, Mapping):
-            raise TypeError("connect admission entry `policy` must be an object")
-
-        recognized = {"app_id", "namespaces", "metadata", "policy"}
-        extra = {k: v for k, v in data.items() if k not in recognized}
-        return cls(
-            app_id=app_id,
-            namespaces=tuple(namespaces),
-            metadata=dict(metadata_raw),
-            policy=dict(policy_raw),
-            extra=extra,
-        )
-
-
-@dataclass(frozen=True)
-class ConnectAdmissionManifest:
-    """Connect admission manifest describing allowed applications."""
-
-    version: Optional[int]
-    entries: Sequence[ConnectAdmissionManifestEntry]
-    manifest_hash: Optional[str]
-    updated_at: Optional[str]
-    extra: Mapping[str, Any] = field(default_factory=dict, repr=False)
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "ConnectAdmissionManifest":
-        if not isinstance(payload, Mapping):
-            raise TypeError("connect admission manifest payload must be an object")
-        data = dict(payload)
-        entries_raw = data.get("entries") or []
-        if entries_raw is None:
-            entries_raw = []
-        if not isinstance(entries_raw, list):
-            raise TypeError("connect admission manifest `entries` must be a list")
-        entries = [ConnectAdmissionManifestEntry.from_payload(item) for item in entries_raw]
-
-        version_raw = data.get("version")
-        if version_raw is None:
-            version: Optional[int] = None
-        else:
-            try:
-                version = int(version_raw)
-            except (TypeError, ValueError) as exc:
-                raise TypeError("connect admission manifest `version` must be numeric") from exc
-
-        manifest_hash = data.get("manifest_hash")
-        if manifest_hash is not None and not isinstance(manifest_hash, str):
-            raise TypeError("connect admission manifest `manifest_hash` must be a string when present")
-        updated_at = data.get("updated_at")
-        if updated_at is not None and not isinstance(updated_at, str):
-            raise TypeError("connect admission manifest `updated_at` must be a string when present")
-
-        recognized = {"entries", "version", "manifest_hash", "updated_at"}
-        extra = {k: v for k, v in data.items() if k not in recognized}
-        return cls(
-            version=version,
-            entries=tuple(entries),
-            manifest_hash=manifest_hash,
-            updated_at=updated_at,
-            extra=extra,
-        )
-
-    def to_payload(self) -> Dict[str, Any]:
-        """Serialize the manifest to a JSON-serializable mapping."""
-
-        payload: Dict[str, Any] = dict(self.extra)
-        payload["entries"] = [
-            {
-                "app_id": entry.app_id,
-                "namespaces": list(entry.namespaces),
-                "metadata": dict(entry.metadata),
-                "policy": dict(entry.policy),
-                **dict(entry.extra),
-            }
-            for entry in self.entries
-        ]
-        if self.version is not None:
-            payload["version"] = self.version
-        if self.manifest_hash is not None:
-            payload["manifest_hash"] = self.manifest_hash
-        if self.updated_at is not None:
-            payload["updated_at"] = self.updated_at
-        return payload
-
-    # ------------------------------------------------------------------
     # Telemetry & Sumeragi helpers
     # ------------------------------------------------------------------
     def get_sumeragi_telemetry(self) -> Optional[Any]:
@@ -9983,6 +9915,24 @@ class ConnectAdmissionManifest:
         if not isinstance(payload, Mapping):
             raise TypeError("qc response must be a JSON object")
         return SumeragiQcSnapshot.from_payload(payload)
+
+    def get_sumeragi_commit_qc(self, block_hash_hex: str) -> Optional[Any]:
+        """Fetch commit QC details for a block hash (`GET /v1/sumeragi/commit_qc/{hash}`)."""
+
+        normalized = _normalize_hash_hex(block_hash_hex, "block_hash_hex")
+        return self.request_json(
+            "GET",
+            f"/v1/sumeragi/commit_qc/{normalized}",
+            expected_status=(200,),
+        )
+
+    def get_sumeragi_commit_qc_typed(self, block_hash_hex: str) -> SumeragiCommitQcRecord:
+        """Typed wrapper for :meth:`get_sumeragi_commit_qc`."""
+
+        payload = self.get_sumeragi_commit_qc(block_hash_hex)
+        if not isinstance(payload, Mapping):
+            raise TypeError("commit_qc response must be a JSON object")
+        return SumeragiCommitQcRecord.from_payload(payload)
 
     def get_sumeragi_leader(self) -> Optional[Any]:
         """Fetch leader index snapshot (`GET /v1/sumeragi/leader`)."""
@@ -11281,13 +11231,352 @@ def create_torii_client(
     )
 
 
-if not hasattr(ToriiClient, "_maybe_json"):
-    def _torii_client_maybe_json(response: requests.Response) -> Optional[Any]:
-        if not response.content:
-            return None
-        try:
-            return response.json()
-        except ValueError:
-            return response.text or None
+@dataclass(frozen=True)
+class ConnectAppRecord:
+    """Registered Connect application metadata."""
 
-    ToriiClient._maybe_json = staticmethod(_torii_client_maybe_json)
+    app_id: str
+    display_name: Optional[str]
+    description: Optional[str]
+    icon_url: Optional[str]
+    namespaces: Sequence[str]
+    metadata: Mapping[str, Any]
+    policy: Mapping[str, Any]
+    extra: Mapping[str, Any] = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "ConnectAppRecord":
+        if not isinstance(payload, Mapping):
+            raise TypeError("connect app entry must be an object")
+        data = dict(payload)
+        app_id = data.get("app_id")
+        if not isinstance(app_id, str) or not app_id:
+            raise TypeError("connect app entry requires string `app_id` field")
+
+        def _coerce_optional_str(name: str) -> Optional[str]:
+            value = data.get(name)
+            if value is None:
+                return None
+            if isinstance(value, str):
+                return value
+            raise TypeError(f"connect app entry `{name}` must be a string when present")
+
+        namespaces_raw = data.get("namespaces") or []
+        if namespaces_raw is None:
+            namespaces_raw = []
+        if not isinstance(namespaces_raw, list):
+            raise TypeError("connect app entry `namespaces` must be a list")
+        namespaces: List[str] = []
+        for item in namespaces_raw:
+            if not isinstance(item, str):
+                raise TypeError("connect app entry `namespaces` must contain strings")
+            namespaces.append(item)
+
+        metadata_raw = data.get("metadata") or {}
+        if metadata_raw is None:
+            metadata_raw = {}
+        if not isinstance(metadata_raw, Mapping):
+            raise TypeError("connect app entry `metadata` must be an object")
+
+        policy_raw = data.get("policy") or {}
+        if policy_raw is None:
+            policy_raw = {}
+        if not isinstance(policy_raw, Mapping):
+            raise TypeError("connect app entry `policy` must be an object")
+
+        recognized = {
+            "app_id",
+            "display_name",
+            "description",
+            "icon_url",
+            "namespaces",
+            "metadata",
+            "policy",
+        }
+
+        extra = {k: v for k, v in data.items() if k not in recognized}
+        return cls(
+            app_id=app_id,
+            display_name=_coerce_optional_str("display_name"),
+            description=_coerce_optional_str("description"),
+            icon_url=_coerce_optional_str("icon_url"),
+            namespaces=tuple(namespaces),
+            metadata=dict(metadata_raw),
+            policy=dict(policy_raw),
+            extra=extra,
+        )
+
+    def to_payload(self) -> Dict[str, Any]:
+        """Serialize the record back into a JSON-friendly mapping."""
+
+        payload: Dict[str, Any] = dict(self.extra)
+        payload["app_id"] = self.app_id
+        if self.display_name is not None:
+            payload["display_name"] = self.display_name
+        if self.description is not None:
+            payload["description"] = self.description
+        if self.icon_url is not None:
+            payload["icon_url"] = self.icon_url
+        payload["namespaces"] = list(self.namespaces)
+        payload["metadata"] = dict(self.metadata)
+        payload["policy"] = dict(self.policy)
+        return payload
+
+
+@dataclass(frozen=True)
+class ConnectAppRegistryPage:
+    """Paginated Connect application registry results."""
+
+    items: Sequence[ConnectAppRecord]
+    total: Optional[int]
+    next_cursor: Optional[str]
+    extra: Mapping[str, Any] = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "ConnectAppRegistryPage":
+        if not isinstance(payload, Mapping):
+            raise TypeError("connect app registry payload must be an object")
+        data = dict(payload)
+        items_raw = data.get("items") or []
+        if items_raw is None:
+            items_raw = []
+        if not isinstance(items_raw, list):
+            raise TypeError("connect app registry `items` must be a list")
+        items = [ConnectAppRecord.from_payload(entry) for entry in items_raw]
+
+        total_raw = data.get("total")
+        total: Optional[int]
+        if total_raw is None:
+            total = None
+        else:
+            try:
+                total = int(total_raw)
+            except (TypeError, ValueError) as exc:
+                raise TypeError("connect app registry `total` must be numeric when present") from exc
+
+        cursor_raw = data.get("next_cursor")
+        if cursor_raw is not None and not isinstance(cursor_raw, str):
+            raise TypeError("connect app registry cursor must be a string when present")
+
+        recognized = {"items", "total", "next_cursor"}
+        extra = {k: v for k, v in data.items() if k not in recognized}
+        return cls(items=tuple(items), total=total, next_cursor=cursor_raw, extra=extra)
+
+
+@dataclass(frozen=True)
+class ConnectAdmissionManifestEntry:
+    """Admission control record for a Connect application."""
+
+    app_id: str
+    namespaces: Sequence[str]
+    metadata: Mapping[str, Any]
+    policy: Mapping[str, Any]
+    extra: Mapping[str, Any] = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "ConnectAdmissionManifestEntry":
+        if not isinstance(payload, Mapping):
+            raise TypeError("connect admission entry must be an object")
+        data = dict(payload)
+        app_id = data.get("app_id")
+        if not isinstance(app_id, str) or not app_id:
+            raise TypeError("connect admission entry requires string `app_id` field")
+
+        namespaces_raw = data.get("namespaces") or []
+        if namespaces_raw is None:
+            namespaces_raw = []
+        if not isinstance(namespaces_raw, list):
+            raise TypeError("connect admission entry `namespaces` must be a list")
+        namespaces: List[str] = []
+        for item in namespaces_raw:
+            if not isinstance(item, str):
+                raise TypeError("connect admission entry `namespaces` values must be strings")
+            namespaces.append(item)
+
+        metadata_raw = data.get("metadata") or {}
+        if metadata_raw is None:
+            metadata_raw = {}
+        if not isinstance(metadata_raw, Mapping):
+            raise TypeError("connect admission entry `metadata` must be an object")
+
+        policy_raw = data.get("policy") or {}
+        if policy_raw is None:
+            policy_raw = {}
+        if not isinstance(policy_raw, Mapping):
+            raise TypeError("connect admission entry `policy` must be an object")
+
+        recognized = {"app_id", "namespaces", "metadata", "policy"}
+        extra = {k: v for k, v in data.items() if k not in recognized}
+        return cls(
+            app_id=app_id,
+            namespaces=tuple(namespaces),
+            metadata=dict(metadata_raw),
+            policy=dict(policy_raw),
+            extra=extra,
+        )
+
+
+@dataclass(frozen=True)
+class ConnectAdmissionManifest:
+    """Connect admission manifest describing allowed applications."""
+
+    version: Optional[int]
+    entries: Sequence[ConnectAdmissionManifestEntry]
+    manifest_hash: Optional[str]
+    updated_at: Optional[str]
+    extra: Mapping[str, Any] = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "ConnectAdmissionManifest":
+        if not isinstance(payload, Mapping):
+            raise TypeError("connect admission manifest payload must be an object")
+        data = dict(payload)
+        entries_raw = data.get("entries") or []
+        if entries_raw is None:
+            entries_raw = []
+        if not isinstance(entries_raw, list):
+            raise TypeError("connect admission manifest `entries` must be a list")
+        entries = [ConnectAdmissionManifestEntry.from_payload(item) for item in entries_raw]
+
+        version_raw = data.get("version")
+        if version_raw is None:
+            version: Optional[int] = None
+        else:
+            try:
+                version = int(version_raw)
+            except (TypeError, ValueError) as exc:
+                raise TypeError("connect admission manifest `version` must be numeric") from exc
+
+        manifest_hash = data.get("manifest_hash")
+        if manifest_hash is not None and not isinstance(manifest_hash, str):
+            raise TypeError("connect admission manifest `manifest_hash` must be a string when present")
+        updated_at = data.get("updated_at")
+        if updated_at is not None and not isinstance(updated_at, str):
+            raise TypeError("connect admission manifest `updated_at` must be a string when present")
+
+        recognized = {"entries", "version", "manifest_hash", "updated_at"}
+        extra = {k: v for k, v in data.items() if k not in recognized}
+        return cls(
+            version=version,
+            entries=tuple(entries),
+            manifest_hash=manifest_hash,
+            updated_at=updated_at,
+            extra=extra,
+        )
+
+    def to_payload(self) -> Dict[str, Any]:
+        """Serialize the manifest to a JSON-serializable mapping."""
+
+        payload: Dict[str, Any] = dict(self.extra)
+        payload["entries"] = [
+            {
+                "app_id": entry.app_id,
+                "namespaces": list(entry.namespaces),
+                "metadata": dict(entry.metadata),
+                "policy": dict(entry.policy),
+                **dict(entry.extra),
+            }
+            for entry in self.entries
+        ]
+        if self.version is not None:
+            payload["version"] = self.version
+        if self.manifest_hash is not None:
+            payload["manifest_hash"] = self.manifest_hash
+        if self.updated_at is not None:
+            payload["updated_at"] = self.updated_at
+        return payload
+
+    # ------------------------------------------------------------------
+@dataclass(frozen=True)
+class ConnectAppPolicyControls:
+    """Runtime-configurable Connect policy toggles."""
+
+    relay_enabled: Optional[bool]
+    ws_max_sessions: Optional[int]
+    ws_per_ip_max_sessions: Optional[int]
+    ws_rate_per_ip_per_min: Optional[int]
+    session_ttl_ms: Optional[int]
+    frame_max_bytes: Optional[int]
+    session_buffer_max_bytes: Optional[int]
+    ping_interval_ms: Optional[int]
+    ping_miss_tolerance: Optional[int]
+    ping_min_interval_ms: Optional[int]
+    extra: Mapping[str, Any] = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "ConnectAppPolicyControls":
+        if not isinstance(payload, Mapping):
+            raise TypeError("connect app policy payload must be an object")
+        data = dict(payload)
+
+        def _coerce_optional_int(name: str) -> Optional[int]:
+            value = data.get(name)
+            if value is None:
+                return None
+            try:
+                return int(value)
+            except (TypeError, ValueError) as exc:
+                raise TypeError(f"connect app policy field `{name}` must be numeric") from exc
+
+        relay_enabled_raw = data.get("relay_enabled")
+        relay_enabled: Optional[bool]
+        if relay_enabled_raw is None:
+            relay_enabled = None
+        elif isinstance(relay_enabled_raw, bool):
+            relay_enabled = relay_enabled_raw
+        else:
+            raise TypeError("connect app policy `relay_enabled` must be boolean when present")
+
+        recognized = {
+            "relay_enabled",
+            "ws_max_sessions",
+            "ws_per_ip_max_sessions",
+            "ws_rate_per_ip_per_min",
+            "session_ttl_ms",
+            "frame_max_bytes",
+            "session_buffer_max_bytes",
+            "ping_interval_ms",
+            "ping_miss_tolerance",
+            "ping_min_interval_ms",
+        }
+
+        extra = {k: v for k, v in data.items() if k not in recognized}
+        return cls(
+            relay_enabled=relay_enabled,
+            ws_max_sessions=_coerce_optional_int("ws_max_sessions"),
+            ws_per_ip_max_sessions=_coerce_optional_int("ws_per_ip_max_sessions"),
+            ws_rate_per_ip_per_min=_coerce_optional_int("ws_rate_per_ip_per_min"),
+            session_ttl_ms=_coerce_optional_int("session_ttl_ms"),
+            frame_max_bytes=_coerce_optional_int("frame_max_bytes"),
+            session_buffer_max_bytes=_coerce_optional_int("session_buffer_max_bytes"),
+            ping_interval_ms=_coerce_optional_int("ping_interval_ms"),
+            ping_miss_tolerance=_coerce_optional_int("ping_miss_tolerance"),
+            ping_min_interval_ms=_coerce_optional_int("ping_min_interval_ms"),
+            extra=extra,
+        )
+
+    def to_payload(self) -> Dict[str, Any]:
+        """Serialize the policy controls back to a JSON-serializable mapping."""
+
+        payload: Dict[str, Any] = dict(self.extra)
+        if self.relay_enabled is not None:
+            payload["relay_enabled"] = self.relay_enabled
+        if self.ws_max_sessions is not None:
+            payload["ws_max_sessions"] = self.ws_max_sessions
+        if self.ws_per_ip_max_sessions is not None:
+            payload["ws_per_ip_max_sessions"] = self.ws_per_ip_max_sessions
+        if self.ws_rate_per_ip_per_min is not None:
+            payload["ws_rate_per_ip_per_min"] = self.ws_rate_per_ip_per_min
+        if self.session_ttl_ms is not None:
+            payload["session_ttl_ms"] = self.session_ttl_ms
+        if self.frame_max_bytes is not None:
+            payload["frame_max_bytes"] = self.frame_max_bytes
+        if self.session_buffer_max_bytes is not None:
+            payload["session_buffer_max_bytes"] = self.session_buffer_max_bytes
+        if self.ping_interval_ms is not None:
+            payload["ping_interval_ms"] = self.ping_interval_ms
+        if self.ping_miss_tolerance is not None:
+            payload["ping_miss_tolerance"] = self.ping_miss_tolerance
+        if self.ping_min_interval_ms is not None:
+            payload["ping_min_interval_ms"] = self.ping_min_interval_ms
+        return payload

@@ -22,6 +22,7 @@ use iroha_data_model::{
         },
     },
     nexus::LaneId,
+    parameter::system::SumeragiNposParameters,
     sorafs::pin_registry::StorageClass,
     taikai::TaikaiAvailabilityClass,
 };
@@ -57,15 +58,21 @@ async fn da_replication_policy_is_enforced() -> Result<()> {
         governance_tag: "da.test.taikai",
     };
 
-    let builder = NetworkBuilder::new().with_config_layer(|layer| {
-        configure_da_ingest_layer(
-            layer,
-            manifest_dir.path(),
-            replay_dir.path(),
-            &default_policy,
-            &override_policy,
-        );
-    });
+    let stake_amount = SumeragiNposParameters::default().min_self_bond();
+    let builder = NetworkBuilder::new()
+        .with_peers(4)
+        .with_auto_populated_trusted_peers()
+        .with_npos_genesis_bootstrap(stake_amount)
+        .with_data_availability_enabled(true)
+        .with_config_layer(|layer| {
+            configure_da_ingest_layer(
+                layer,
+                manifest_dir.path(),
+                replay_dir.path(),
+                &default_policy,
+                &override_policy,
+            );
+        });
     let Some(network) = start_network_async_or_skip(builder, TEST_NAME).await? else {
         return Ok(());
     };
@@ -103,15 +110,21 @@ async fn da_manifest_sampling_plan_matches_assignment_hash() -> Result<()> {
     };
     let override_policy = default_policy;
 
-    let builder = NetworkBuilder::new().with_config_layer(|layer| {
-        configure_da_ingest_layer(
-            layer,
-            manifest_dir.path(),
-            replay_dir.path(),
-            &default_policy,
-            &override_policy,
-        );
-    });
+    let stake_amount = SumeragiNposParameters::default().min_self_bond();
+    let builder = NetworkBuilder::new()
+        .with_peers(4)
+        .with_auto_populated_trusted_peers()
+        .with_npos_genesis_bootstrap(stake_amount)
+        .with_data_availability_enabled(true)
+        .with_config_layer(|layer| {
+            configure_da_ingest_layer(
+                layer,
+                manifest_dir.path(),
+                replay_dir.path(),
+                &default_policy,
+                &override_policy,
+            );
+        });
     let Some(network) =
         start_network_async_or_skip(builder, "da_manifest_sampling_plan_matches_assignment_hash")
             .await?
@@ -404,6 +417,8 @@ fn configure_da_ingest_layer<'a>(
     override_policy: &PolicyNumbers,
 ) {
     layer
+        .write(["nexus", "enabled"], true)
+        .write(["sumeragi", "consensus_mode"], "npos")
         .write(
             ["torii", "da_ingest", "manifest_store_dir"],
             manifest_dir.display().to_string(),

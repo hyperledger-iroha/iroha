@@ -7,7 +7,16 @@ use super::*;
 impl Actor {
     #[allow(clippy::too_many_lines)]
     pub(super) fn reschedule_stale_pending_blocks(&mut self) -> bool {
-        if self.active_pending_blocks_len() == 0 {
+        if self.pending.pending_blocks.is_empty() {
+            return false;
+        }
+        // Allow pruning aborted payloads even when no active pending blocks remain.
+        let has_aborted = self
+            .pending
+            .pending_blocks
+            .values()
+            .any(|pending| pending.aborted);
+        if !has_aborted && self.active_pending_blocks_len() == 0 {
             return false;
         }
 
@@ -17,6 +26,7 @@ impl Actor {
         let da_enabled = self.runtime_da_enabled();
         let quorum_timeout = self.quorum_timeout(da_enabled);
         let quorum_reschedule_cooldown = quorum_timeout.max(QUORUM_RESCHEDULE_COOLDOWN);
+        let availability_timeout = self.availability_timeout(quorum_timeout, da_enabled);
         // Keep aborted payloads long enough for missing-block fetches after reschedule drops.
         let retention_factor = self
             .config
@@ -25,28 +35,24 @@ impl Actor {
             .max(4);
         let aborted_retention = quorum_reschedule_cooldown.saturating_mul(retention_factor);
         let now = Instant::now();
+        let relay_backpressure = self.relay_backpressure_active(now, self.rebroadcast_cooldown());
         let (tip_height, tip_hash) = {
             let view = self.state.view();
             (view.height(), view.latest_block_hash())
         };
-        let tip_height_u64 = u64::try_from(tip_height).unwrap_or(u64::MAX);
 
         let mut stale_pending = Vec::new();
         let mut aborted_expired = Vec::new();
         let mut to_reschedule = Vec::new();
         let mut prevote_timeouts = Vec::new();
         let mut reschedule_backoff_skipped = 0usize;
+        let mut missing_data_backoff_skipped = 0usize;
         let mut stale_removed = 0usize;
         let mut aborted_removed = 0usize;
         for (hash, pending) in &self.pending.pending_blocks {
             if pending.aborted {
                 if self.kura.get_block_height_by_hash(*hash).is_some() {
                     aborted_expired.push((*hash, pending.height, pending.view));
-                    continue;
-                }
-                if pending.height > tip_height_u64 {
-                    // Keep aborted payloads above the committed tip so missing-block fetches can
-                    // recover across view changes at the current height.
                     continue;
                 }
                 let has_votes = self.vote_log.values().any(|vote| {
@@ -95,7 +101,7 @@ impl Actor {
             let mut commit_roster =
                 self.roster_for_vote_with_mode(*hash, pending.height, pending.view, consensus_mode);
             if commit_roster.is_empty() {
-                commit_roster = active_roster.clone();
+                commit_roster.clone_from(&active_roster);
             }
             if commit_roster.is_empty() {
                 debug!(
@@ -136,17 +142,39 @@ impl Actor {
                 prevote_timeouts.push((key, pending_age, qc_any, commit_roster));
                 continue;
             }
-            let (vote_count, quorum_reached) = if pending.commit_qc_seen || commit_qc_cached {
-                (0, true)
-            } else {
-                self.commit_vote_quorum_status_for_block(*hash, pending.height, pending.view)
-            };
+            let (vote_count, quorum_reached, stake_quorum_missing) =
+                if pending.commit_qc_seen || commit_qc_cached {
+                    (0, true, false)
+                } else {
+                    let status = self.commit_vote_quorum_status_for_block_detail(
+                        *hash,
+                        pending.height,
+                        pending.view,
+                    );
+                    (
+                        status.vote_count,
+                        status.quorum_reached,
+                        status.stake_quorum_missing,
+                    )
+                };
             if missing_quorum_stale(pending_age, quorum_timeout, quorum_reached) {
+                if matches!(pending.last_gate, Some(GateReason::MissingLocalData))
+                    && pending_age < availability_timeout
+                {
+                    missing_data_backoff_skipped = missing_data_backoff_skipped.saturating_add(1);
+                    continue;
+                }
                 if !pending.reschedule_due(now, quorum_reschedule_cooldown) {
                     reschedule_backoff_skipped = reschedule_backoff_skipped.saturating_add(1);
                     continue;
                 }
-                to_reschedule.push((key, pending_age, vote_count, min_votes_for_commit));
+                to_reschedule.push((
+                    key,
+                    pending_age,
+                    vote_count,
+                    min_votes_for_commit,
+                    stake_quorum_missing,
+                ));
             }
         }
         let scan_done = Instant::now();
@@ -179,7 +207,6 @@ impl Actor {
                         && matches!(phase, crate::sumeragi::consensus::Phase::Commit))
             });
             self.pending.pending_blocks.remove(&hash);
-            self.pending.pending_replay_last_sent.remove(&hash);
             aborted_removed = aborted_removed.saturating_add(1);
         }
 
@@ -194,7 +221,7 @@ impl Actor {
         }
 
         let mut progress = aborted_removed > 0;
-        for (key, age, vote_count, min_votes) in to_reschedule {
+        for (key, age, vote_count, min_votes, stake_quorum_missing) in to_reschedule {
             if let Some(pending) = self.pending.pending_blocks.remove(&key.0) {
                 self.reschedule_pending_quorum_block(
                     pending,
@@ -208,7 +235,7 @@ impl Actor {
                 self.trigger_view_change_with_cause(
                     key.1,
                     key.2,
-                    view_change_cause_for_quorum(vote_count),
+                    view_change_cause_for_quorum(vote_count, stake_quorum_missing),
                 );
                 progress = true;
             }
@@ -223,20 +250,17 @@ impl Actor {
                 let txs: Vec<SignedTransaction> = pending.block.transactions_vec().clone();
                 let (requeued, failures, _duplicate_failures, _gossip_hashes) =
                     requeue_block_transactions(self.queue.as_ref(), self.state.as_ref(), txs);
-                let msg = BlockMessage::BlockCreated(super::message::BlockCreated {
-                    block: pending.block.clone(),
-                });
-                for peer in &commit_roster {
-                    if peer == &local_peer_id {
-                        continue;
-                    }
-                    self.schedule_background(BackgroundRequest::Post {
-                        peer: peer.clone(),
-                        msg: msg.clone(),
+                if relay_backpressure {
+                    debug!(
+                        height = key.1,
+                        view = key.2,
+                        block = %key.0,
+                        "skipping prevote-timeout rebroadcast due to relay backpressure"
+                    );
+                } else {
+                    let msg = BlockMessage::BlockCreated(super::message::BlockCreated {
+                        block: pending.block.clone(),
                     });
-                }
-                if let Some(qc) = qc {
-                    let msg = BlockMessage::Qc(qc.clone());
                     for peer in &commit_roster {
                         if peer == &local_peer_id {
                             continue;
@@ -245,6 +269,18 @@ impl Actor {
                             peer: peer.clone(),
                             msg: msg.clone(),
                         });
+                    }
+                    if let Some(qc) = qc {
+                        let msg = BlockMessage::Qc(qc.clone());
+                        for peer in &commit_roster {
+                            if peer == &local_peer_id {
+                                continue;
+                            }
+                            self.schedule_background(BackgroundRequest::Post {
+                                peer: peer.clone(),
+                                msg: msg.clone(),
+                            });
+                        }
                     }
                 }
                 #[cfg(feature = "telemetry")]
@@ -289,7 +325,7 @@ impl Actor {
                 self.trigger_view_change_with_cause(
                     key.1,
                     key.2,
-                    view_change_cause_for_quorum(vote_count),
+                    view_change_cause_for_quorum(vote_count, false),
                 );
                 progress = true;
             }
@@ -300,6 +336,7 @@ impl Actor {
         if total_cost >= RESCHEDULE_TIMING_LOG_THRESHOLD
             || progress
             || reschedule_backoff_skipped > 0
+            || missing_data_backoff_skipped > 0
             || aborted_removed > 0
         {
             iroha_logger::info!(
@@ -309,6 +346,7 @@ impl Actor {
                 stale_removed,
                 aborted_removed,
                 backoff_skipped = reschedule_backoff_skipped,
+                missing_data_skipped = missing_data_backoff_skipped,
                 scan_ms = scan_cost.as_millis(),
                 total_ms = total_cost.as_millis(),
                 "reschedule sweep timing"
@@ -318,7 +356,7 @@ impl Actor {
         progress
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     pub(super) fn reschedule_pending_quorum_block(
         &mut self,
         mut pending: PendingBlock,
@@ -343,7 +381,7 @@ impl Actor {
             expected_epoch,
         )
         .is_some();
-        let _queue_depth = self.queue.tx_len();
+        let _queue_depth = self.queue.queued_len();
         let (state_height, tip_hash) = {
             let state_view = self.state.view();
             (state_view.height(), state_view.latest_block_hash())
@@ -398,15 +436,14 @@ impl Actor {
         if topology_peers.is_empty() {
             topology_peers = self.effective_commit_topology();
         }
-        let local_peer_id = self.common_config.peer.id().clone();
         let rebroadcast = self.rebroadcast_pending_block_updates(
-            &pending,
+            &mut pending,
             block_hash,
             height,
             view,
             drop_pending,
             &topology_peers,
-            &local_peer_id,
+            now,
         );
 
         if drop_pending {
@@ -425,7 +462,6 @@ impl Actor {
             });
             pending.mark_aborted();
             pending.tx_batch = None;
-            self.pending.pending_replay_last_sent.remove(&block_hash);
             self.pending.pending_blocks.insert(block_hash, pending);
         } else {
             // Keep the pending block and cached certificates so late commit certificates
@@ -447,7 +483,6 @@ impl Actor {
             rebroadcasted_votes = rebroadcast.votes,
             rebroadcasted_block = rebroadcast.block,
             rebroadcasted_block_sync = rebroadcast.block_sync,
-            rebroadcasted_hint = rebroadcast.hint,
             drop_pending,
             precommit_votes = precommit_vote_count,
             commit_votes = commit_vote_count,
@@ -460,23 +495,35 @@ impl Actor {
     #[allow(clippy::too_many_arguments)]
     fn rebroadcast_pending_block_updates(
         &mut self,
-        pending: &PendingBlock,
+        pending: &mut PendingBlock,
         block_hash: HashOf<BlockHeader>,
         height: u64,
         view: u64,
         drop_pending: bool,
         topology_peers: &[PeerId],
-        local_peer_id: &PeerId,
+        now: Instant,
     ) -> RescheduleRebroadcast {
+        if self.relay_backpressure_active(now, self.rebroadcast_cooldown()) {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                "skipping reschedule rebroadcast due to relay backpressure"
+            );
+            return RescheduleRebroadcast {
+                votes: 0,
+                block_sync: false,
+                block: false,
+            };
+        }
         let votes = self.rebroadcast_block_votes(
             crate::sumeragi::consensus::Phase::Commit,
             block_hash,
             height,
             view,
         );
-        let block_sync = if drop_pending || topology_peers.is_empty() {
-            false
-        } else {
+        let mut block_sync = false;
+        if !drop_pending && !topology_peers.is_empty() {
             let mut update = block_sync_update_with_roster(
                 &pending.block,
                 self.state.as_ref(),
@@ -484,6 +531,7 @@ impl Actor {
                 self.config.consensus_mode,
                 self.common_config.trusted_peers.value(),
                 self.common_config.peer.id(),
+                &self.roster_validation_cache,
             );
             let expected_epoch = self.epoch_for_height(height);
             Self::apply_cached_qcs_to_block_sync_update(
@@ -497,69 +545,61 @@ impl Actor {
                 self.state.as_ref(),
                 self.config.consensus_mode,
             );
-            let (consensus_mode, _, _) = self.consensus_context_for_height(height);
-            if self.prepare_block_sync_update_for_broadcast(&mut update, consensus_mode) {
-                for peer in topology_peers {
-                    self.schedule_background(BackgroundRequest::Post {
-                        peer: peer.clone(),
-                        msg: BlockMessage::BlockSyncUpdate(update.clone()),
-                    });
+            let commit_votes = update.commit_votes.len();
+            let has_commit_qc = update.commit_qc.is_some();
+            if pending.should_broadcast_block_sync_update(view, commit_votes, has_commit_qc) {
+                let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+                if self.prepare_block_sync_update_for_broadcast(&mut update, consensus_mode) {
+                    self.broadcast_block_sync_update(update, topology_peers);
+                    block_sync = true;
+                } else {
+                    debug!(
+                        height,
+                        view,
+                        block = %block_hash,
+                        "skipping block sync update rebroadcast: no verifiable roster"
+                    );
                 }
+            } else {
+                debug!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    commit_votes,
+                    has_commit_qc,
+                    "skipping block sync update rebroadcast: no new commit evidence"
+                );
+            }
+        }
+        // Keep and rebroadcast the pending block so late payload requests can still succeed while
+        // allowing a fresh proposal to be assembled from the requeued transactions.
+        let block = if drop_pending {
+            false
+        } else {
+            let cooldown = self.payload_rebroadcast_cooldown();
+            if self
+                .payload_rebroadcast_log
+                .allow(block_hash, now, cooldown)
+            {
+                self.broadcast_block_created_for_block_sync(
+                    super::message::BlockCreated::from(&pending.block),
+                    topology_peers,
+                );
                 true
             } else {
                 debug!(
                     height,
                     view,
                     block = %block_hash,
-                    "skipping block sync update rebroadcast: no verifiable roster"
+                    cooldown_ms = cooldown.as_millis(),
+                    "skipping pending block rebroadcast due to cooldown"
                 );
                 false
             }
         };
-        let hint = if drop_pending {
-            false
-        } else {
-            self.subsystems
-                .propose
-                .proposal_cache
-                .get_hint(height, view)
-                .copied()
-                .is_some_and(|hint| {
-                    for peer in topology_peers {
-                        if peer == local_peer_id {
-                            continue;
-                        }
-                        self.schedule_background(BackgroundRequest::Post {
-                            peer: peer.clone(),
-                            msg: BlockMessage::ProposalHint(hint),
-                        });
-                    }
-                    true
-                })
-        };
-        // Keep and rebroadcast the pending block so late payload requests can still succeed while
-        // allowing a fresh proposal to be assembled from the requeued transactions.
-        let block = if drop_pending {
-            false
-        } else {
-            let msg = BlockMessage::BlockCreated(super::message::BlockCreated {
-                block: pending.block.clone(),
-            });
-            for peer in topology_peers {
-                if peer == local_peer_id {
-                    continue;
-                }
-                self.schedule_background(BackgroundRequest::Post {
-                    peer: peer.clone(),
-                    msg: msg.clone(),
-                });
-            }
-            true
-        };
         RescheduleRebroadcast {
             votes,
             block_sync,
-            hint,
             block,
         }
     }
@@ -569,6 +609,5 @@ impl Actor {
 struct RescheduleRebroadcast {
     votes: usize,
     block_sync: bool,
-    hint: bool,
     block: bool,
 }

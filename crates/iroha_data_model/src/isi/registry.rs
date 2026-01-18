@@ -76,6 +76,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<offline::RegisterOfflineAllowance>,
     InstructionRegistry::register::<offline::SubmitOfflineToOnlineTransfer>,
     InstructionRegistry::register::<offline::RegisterOfflineVerdictRevocation>,
+    InstructionRegistry::register::<crate::isi::staking::RegisterPublicLaneValidator>,
     InstructionRegistry::register::<crate::isi::staking::ActivatePublicLaneValidator>,
     InstructionRegistry::register::<crate::isi::staking::ExitPublicLaneValidator>,
     InstructionRegistry::register::<nexus::SetLaneRelayEmergencyValidators>,
@@ -170,6 +171,19 @@ const ALL_REGISTRARS: &[Registrar] = &[
 pub fn default() -> InstructionRegistry {
     let registry = apply_registrars(ALL_REGISTRARS.iter().copied());
     with_stable_ids(registry)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_registry_registers_public_lane_validator() {
+        let registry = default();
+        assert!(registry.contains(std::any::type_name::<
+            crate::isi::staking::RegisterPublicLaneValidator,
+        >()));
+    }
 }
 
 /// Apply every [`Registrar`] from the provided iterator to build an [`InstructionRegistry`].

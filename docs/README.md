@@ -56,7 +56,7 @@ efficiency — it is Norito, not SCALE.
 Latest state:
 
 - Deterministic encoding/decoding with a fixed header (magic, version, 16‑byte schema, compression, length, CRC64, flags).
-- CRC64‑ECMA checksum with runtime‑selected acceleration:
+- CRC64-XZ checksum with runtime‑selected acceleration:
   - x86_64 PCLMULQDQ (carry‑less multiply) + Barrett reduction, folded over 32‑byte chunks.
   - aarch64 PMULL with matching folding.
   - Slicing‑by‑8 and bitwise fallbacks for portability.

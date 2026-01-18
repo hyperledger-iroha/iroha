@@ -1,6 +1,5 @@
 #![allow(clippy::too_many_arguments)]
 
-#[cfg(feature = "ml-dsa")]
 pub mod dilithium3 {
     use core::{
         convert::TryFrom,

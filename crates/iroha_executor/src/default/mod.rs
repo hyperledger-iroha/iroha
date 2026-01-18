@@ -31,10 +31,10 @@ use iroha_smart_contract::data_model::{
         CompleteReplicationOrder, ExitPublicLaneValidator, IssueReplicationOrder,
         RecordCapacityTelemetry, RecordReplicationReceipt, RegisterCapacityDeclaration,
         RegisterCapacityDispute, RegisterOfflineAllowance, RegisterPeerWithPop,
-        RegisterPinManifest, RegisterProviderOwner, RemoveAssetKeyValue, RetirePinManifest,
-        SetAssetKeyValue, SetLaneRelayEmergencyValidators, SetPricingSchedule,
-        SubmitOfflineToOnlineTransfer, UnregisterProviderOwner, UpsertProviderCredit,
-        bridge::RecordBridgeReceipt,
+        RegisterPinManifest, RegisterProviderOwner, RegisterPublicLaneValidator,
+        RemoveAssetKeyValue, RetirePinManifest, SetAssetKeyValue,
+        SetLaneRelayEmergencyValidators, SetPricingSchedule, SubmitOfflineToOnlineTransfer,
+        UnregisterProviderOwner, UpsertProviderCredit, bridge::RecordBridgeReceipt,
     },
     prelude::*,
     visit::Visit,
@@ -62,7 +62,10 @@ pub use role::{
     visit_revoke_account_role, visit_revoke_role_permission, visit_unregister_role,
 };
 /// Re-export staking visitor helpers used by the default executor.
-pub use staking::{visit_activate_public_lane_validator, visit_exit_public_lane_validator};
+pub use staking::{
+    visit_activate_public_lane_validator, visit_exit_public_lane_validator,
+    visit_register_public_lane_validator,
+};
 mod offline;
 
 /// Re-export offline settlement visitor helper.
@@ -180,6 +183,10 @@ impl InstructionDispatch for InstructionBox {
         }
         if let Some(isi) = any.downcast_ref::<RemoveAssetKeyValue>() {
             visit_remove_asset_key_value(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<RegisterPublicLaneValidator>() {
+            visit_register_public_lane_validator(executor, isi);
             return;
         }
         if let Some(isi) = any.downcast_ref::<ActivatePublicLaneValidator>() {
@@ -325,6 +332,20 @@ pub mod staking {
     use iroha_executor_data_model::permission::peer::CanManagePeers;
 
     use super::*;
+
+    /// Register a public-lane validator when the caller is authorised or during genesis.
+    pub fn visit_register_public_lane_validator<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &RegisterPublicLaneValidator,
+    ) {
+        if executor.context().curr_block.is_genesis() {
+            execute!(executor, isi);
+        }
+        if CanManagePeers.is_owned_by(&executor.context().authority, executor.host()) {
+            execute!(executor, isi);
+        }
+        deny!(executor, "Can't register public-lane validator");
+    }
 
     /// Activate a pending public-lane validator when the caller is authorised or during genesis.
     pub fn visit_activate_public_lane_validator<V: Execute + Visit + ?Sized>(
@@ -1557,11 +1578,12 @@ pub mod asset {
                 bridge::BridgeReceipt,
                 domain::DomainId,
                 executor::Result as ExecResult,
-                isi::{InstructionBox, bridge::RecordBridgeReceipt},
+                isi::{InstructionBox, RegisterPublicLaneValidator, bridge::RecordBridgeReceipt},
+                metadata::Metadata,
                 name::Name,
                 nexus::LaneId,
                 peer::PeerId,
-                prelude::Json,
+                prelude::{Json, Numeric},
             },
             prelude::{Context, Visit},
         };
@@ -1701,6 +1723,27 @@ pub mod asset {
             assert!(
                 executor.verdict().is_ok(),
                 "register peer with pop should succeed during genesis"
+            );
+        }
+
+        #[test]
+        fn visit_instruction_dispatches_register_public_lane_validator() {
+            let (mut executor, asset) = StubExecutor::new(1);
+            let validator = asset.account().clone();
+            let instruction = RegisterPublicLaneValidator::new(
+                LaneId::SINGLE,
+                validator.clone(),
+                validator,
+                Numeric::from(1u64),
+                Metadata::default(),
+            );
+            let instruction_box: InstructionBox = instruction.into();
+
+            visit_instruction(&mut executor, &instruction_box);
+
+            assert!(
+                executor.verdict().is_ok(),
+                "register public-lane validator should succeed during genesis"
             );
         }
 

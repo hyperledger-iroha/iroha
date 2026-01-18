@@ -2,6 +2,7 @@
 
 use std::{
     fs,
+    io::ErrorKind,
     num::NonZeroU64,
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -16,14 +17,18 @@ use iroha::{
         Level,
         consensus::Qc,
         isi::{Log, SetParameter, Unregister},
-        parameter::{Parameter, SumeragiParameter, TransactionParameter},
+        parameter::{
+            Parameter, SumeragiParameter, TransactionParameter, system::SumeragiNposParameters,
+        },
         prelude::QueryBuilderExt,
+        query::block::prelude::FindBlocks,
         query::peer::prelude::FindPeers,
     },
 };
+use iroha_config::parameters::actual::LaneConfig;
 use iroha_config_base::toml::Writer as TomlWriter;
 use iroha_core::sumeragi::rbc_status;
-use iroha_test_network::{Network, NetworkBuilder};
+use iroha_test_network::{Network, NetworkBuilder, NetworkPeer};
 use norito::json::{self, Value};
 use rand::{Rng, SeedableRng, distr::Alphanumeric};
 use rand_chacha::ChaCha8Rng;
@@ -69,6 +74,8 @@ struct SumeragiSnapshot {
     view_change_proof_stale_total: u64,
     view_change_proof_rejected_total: u64,
     da_reschedule_total: u64,
+    rbc_deliver_defer_ready_total: u64,
+    rbc_deliver_defer_chunks_total: u64,
 }
 
 impl SumeragiSnapshot {
@@ -79,7 +86,32 @@ impl SumeragiSnapshot {
             view_change_proof_stale_total: json_u64(value, "view_change_proof_stale_total"),
             view_change_proof_rejected_total: json_u64(value, "view_change_proof_rejected_total"),
             da_reschedule_total: json_u64(value, "da_reschedule_total"),
+            rbc_deliver_defer_ready_total: json_u64(value, "rbc_deliver_defer_ready_total"),
+            rbc_deliver_defer_chunks_total: json_u64(value, "rbc_deliver_defer_chunks_total"),
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct PendingRbcStashCounters {
+    stash_ready_total: u64,
+    stash_ready_init_missing_total: u64,
+    stash_ready_roster_missing_total: u64,
+    stash_ready_roster_hash_mismatch_total: u64,
+    stash_ready_roster_unverified_total: u64,
+    stash_deliver_total: u64,
+    stash_deliver_init_missing_total: u64,
+    stash_deliver_roster_missing_total: u64,
+    stash_deliver_roster_hash_mismatch_total: u64,
+    stash_deliver_roster_unverified_total: u64,
+    stash_chunk_total: u64,
+}
+
+impl PendingRbcStashCounters {
+    fn total(&self) -> u64 {
+        self.stash_ready_total
+            .saturating_add(self.stash_deliver_total)
+            .saturating_add(self.stash_chunk_total)
     }
 }
 
@@ -113,6 +145,62 @@ fn json_u64(root: &Value, key: &str) -> u64 {
         .and_then(|obj| obj.get(key))
         .and_then(Value::as_u64)
         .unwrap_or_default()
+}
+
+fn parse_pending_rbc_stash_counters(root: &Value) -> Result<PendingRbcStashCounters> {
+    let pending = root
+        .as_object()
+        .and_then(|obj| obj.get("pending_rbc"))
+        .and_then(Value::as_object);
+    let Some(pending) = pending else {
+        return Ok(PendingRbcStashCounters::default());
+    };
+    Ok(PendingRbcStashCounters {
+        stash_ready_total: pending
+            .get("stash_ready_total")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        stash_ready_init_missing_total: pending
+            .get("stash_ready_init_missing_total")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        stash_ready_roster_missing_total: pending
+            .get("stash_ready_roster_missing_total")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        stash_ready_roster_hash_mismatch_total: pending
+            .get("stash_ready_roster_hash_mismatch_total")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        stash_ready_roster_unverified_total: pending
+            .get("stash_ready_roster_unverified_total")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        stash_deliver_total: pending
+            .get("stash_deliver_total")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        stash_deliver_init_missing_total: pending
+            .get("stash_deliver_init_missing_total")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        stash_deliver_roster_missing_total: pending
+            .get("stash_deliver_roster_missing_total")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        stash_deliver_roster_hash_mismatch_total: pending
+            .get("stash_deliver_roster_hash_mismatch_total")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        stash_deliver_roster_unverified_total: pending
+            .get("stash_deliver_roster_unverified_total")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        stash_chunk_total: pending
+            .get("stash_chunk_total")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+    })
 }
 
 // Keep the payload light to avoid overwhelming Torii/queue on constrained hosts.
@@ -271,6 +359,236 @@ async fn sumeragi_rbc_background_queue_synchronous() -> Result<()> {
     if sandbox::handle_result(result, "sumeragi_rbc_background_queue_synchronous")?.is_none() {
         return Ok(());
     }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
+    let scenario_name = stringify!(sumeragi_da_kura_eviction_rehydrates_from_da_store);
+    let payload_bytes = 128 * 1024;
+    let tx_limit =
+        u64::try_from(torii_max_content_len_for_payload(payload_bytes)).unwrap_or(u64::MAX);
+    let tx_limit_nz =
+        NonZeroU64::new(tx_limit).ok_or_else(|| eyre!("tx_limit must be non-zero"))?;
+    let rbc_chunk_max_bytes = i64::try_from(payload_bytes).unwrap_or(i64::MAX);
+    let stake_amount = SumeragiNposParameters::default().min_self_bond();
+
+    let mut config_table = toml::Table::new();
+    {
+        let mut writer = TomlWriter::new(&mut config_table);
+        writer
+            .write("telemetry_enabled", true)
+            .write("telemetry_profile", "full")
+            .write(["logger", "level"], "WARN")
+            .write(["network", "max_frame_bytes"], CONSENSUS_FRAME_BUDGET_BYTES)
+            .write(
+                ["network", "max_frame_bytes_consensus"],
+                CONSENSUS_FRAME_BUDGET_BYTES,
+            )
+            .write(
+                ["network", "max_frame_bytes_control"],
+                CONSENSUS_FRAME_BUDGET_BYTES,
+            )
+            .write(
+                ["network", "max_frame_bytes_block_sync"],
+                CONSENSUS_FRAME_BUDGET_BYTES,
+            )
+            .write(
+                ["network", "max_frame_bytes_other"],
+                CONSENSUS_FRAME_BUDGET_BYTES,
+            )
+            .write(["network", "p2p_queue_cap_high"], P2P_QUEUE_CAP_HIGH)
+            .write(["network", "p2p_queue_cap_low"], P2P_QUEUE_CAP_LOW)
+            .write(["network", "p2p_post_queue_cap"], P2P_POST_QUEUE_CAP)
+            .write(
+                ["network", "max_frame_bytes_tx_gossip"],
+                P2P_TX_FRAME_BUDGET_BYTES,
+            )
+            .write(["sumeragi", "consensus_mode"], "npos")
+            .write(["sumeragi", "rbc_chunk_max_bytes"], rbc_chunk_max_bytes)
+            .write(
+                ["sumeragi", "debug", "rbc", "force_deliver_quorum_one"],
+                true,
+            )
+            .write(
+                ["torii", "max_content_len"],
+                torii_max_content_len_for_payload(payload_bytes),
+            )
+            .write(["kura", "blocks_in_memory"], 1_i64);
+    }
+
+    let mut nexus = toml::map::Map::new();
+    nexus.insert("enabled".into(), toml::Value::Boolean(true));
+    nexus.insert("lane_count".into(), toml::Value::Integer(1));
+
+    let mut lane = toml::map::Map::new();
+    lane.insert("alias".into(), toml::Value::String("lane0".into()));
+    lane.insert("index".into(), toml::Value::Integer(0));
+    let mut metadata = toml::map::Map::new();
+    metadata.insert(
+        "scheduler.teu_capacity".into(),
+        toml::Value::String("262144".into()),
+    );
+    lane.insert("metadata".into(), toml::Value::Table(metadata));
+    nexus.insert(
+        "lane_catalog".into(),
+        toml::Value::Array(vec![toml::Value::Table(lane)]),
+    );
+
+    let mut fusion = toml::map::Map::new();
+    fusion.insert("floor_teu".into(), toml::Value::Integer(131_072));
+    fusion.insert("exit_teu".into(), toml::Value::Integer(262_144));
+    nexus.insert("fusion".into(), toml::Value::Table(fusion));
+
+    let da_sample = 1_i64;
+    let da_threshold = 1_i64;
+    let mut da = toml::map::Map::new();
+    da.insert(
+        "q_in_slot_total".into(),
+        toml::Value::Integer(da_sample.max(1)),
+    );
+    da.insert("q_in_slot_per_ds_min".into(), toml::Value::Integer(1));
+    da.insert("sample_size_base".into(), toml::Value::Integer(da_sample));
+    da.insert("sample_size_max".into(), toml::Value::Integer(da_sample));
+    da.insert("threshold_base".into(), toml::Value::Integer(da_threshold));
+    da.insert("per_attester_shards".into(), toml::Value::Integer(1));
+    let mut audit = toml::map::Map::new();
+    audit.insert("sample_size".into(), toml::Value::Integer(da_sample));
+    audit.insert("window_count".into(), toml::Value::Integer(1));
+    audit.insert("interval_ms".into(), toml::Value::Integer(60_000));
+    da.insert("audit".into(), toml::Value::Table(audit));
+    nexus.insert("da".into(), toml::Value::Table(da));
+
+    let mut storage = toml::map::Map::new();
+    storage.insert("max_disk_usage_bytes".into(), toml::Value::Integer(400_000));
+    let mut weights = toml::map::Map::new();
+    weights.insert("kura_blocks_bps".into(), toml::Value::Integer(9_000));
+    weights.insert("wsv_snapshots_bps".into(), toml::Value::Integer(500));
+    weights.insert("sorafs_bps".into(), toml::Value::Integer(250));
+    weights.insert("soranet_spool_bps".into(), toml::Value::Integer(200));
+    weights.insert("soravpn_spool_bps".into(), toml::Value::Integer(50));
+    storage.insert("disk_budget_weights".into(), toml::Value::Table(weights));
+    nexus.insert("storage".into(), toml::Value::Table(storage));
+
+    {
+        let mut writer = TomlWriter::new(&mut config_table);
+        writer.write("nexus", toml::Value::Table(nexus));
+    }
+
+    let builder = NetworkBuilder::new()
+        .with_peers(4)
+        .with_auto_populated_trusted_peers()
+        .with_npos_genesis_bootstrap(stake_amount)
+        .with_data_availability_enabled(true)
+        .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
+            TransactionParameter::MaxTxBytes(tx_limit_nz),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
+            TransactionParameter::MaxDecompressedBytes(tx_limit_nz),
+        )))
+        .with_config_table(config_table);
+    let Some(network) = sandbox::start_network_async_or_skip(builder, scenario_name).await? else {
+        return Ok(());
+    };
+
+    let result: Result<()> = async {
+        let mut client = network.client();
+        let status_timeout = Duration::from_secs(120);
+        client.transaction_status_timeout = status_timeout;
+        client.transaction_ttl = Some(status_timeout + Duration::from_secs(5));
+        set_sumeragi_parameter(&client, SumeragiParameter::DaEnabled(true)).await?;
+
+        let status_before = fetch_status(&client).await?;
+        let blocks_to_submit = 4_u64;
+        let expected_height = status_before.blocks + blocks_to_submit;
+
+        for idx in 0..blocks_to_submit {
+            let message =
+                generate_incompressible_payload(&format!("{scenario_name}-{idx}"), payload_bytes);
+            client
+                .submit_blocking(Log::new(Level::INFO, message))
+                .wrap_err("submit heavy log")?;
+        }
+
+        network
+            .ensure_blocks_with(|height| height.total >= expected_height)
+            .await?;
+
+        let peer = network.peer();
+        let store_dir = peer.kura_store_dir();
+        let lane_config = LaneConfig::default();
+        let primary_lane = lane_config.primary();
+        let candidate_blocks_dir = primary_lane.blocks_dir(&store_dir);
+        let blocks_dir = if candidate_blocks_dir.join("blocks.index").exists() {
+            candidate_blocks_dir
+        } else {
+            store_dir.clone()
+        };
+
+        let index_path = blocks_dir.join("blocks.index");
+        let hashes_path = blocks_dir.join("blocks.hashes");
+        let da_blocks_dir = blocks_dir.join("da_blocks");
+
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let evicted_height = loop {
+            let bytes = fs::read(&index_path).wrap_err("read blocks.index")?;
+            ensure!(
+                bytes.len() % 16 == 0,
+                "blocks.index size is not aligned to 16-byte entries"
+            );
+            let mut evicted = None;
+            for (idx, chunk) in bytes.chunks_exact(16).enumerate() {
+                if idx == 0 {
+                    continue;
+                }
+                let start = u64::from_le_bytes(chunk[0..8].try_into().expect("block index start"));
+                if start == u64::MAX {
+                    evicted = Some(idx as u64 + 1);
+                    break;
+                }
+            }
+            if let Some(height) = evicted {
+                break height;
+            }
+            ensure!(
+                Instant::now() < deadline,
+                "timed out waiting for DA-backed Kura eviction to mark blocks.index"
+            );
+            sleep(Duration::from_millis(200)).await;
+        };
+
+        let da_path = da_blocks_dir.join(format!("{evicted_height:020}.norito"));
+        ensure!(da_path.exists(), "expected DA block body at {da_path:?}");
+
+        let hashes = fs::read(&hashes_path).wrap_err("read blocks.hashes")?;
+        ensure!(
+            hashes.len() % 32 == 0,
+            "blocks.hashes size is not aligned to 32-byte entries"
+        );
+        let hash_offset = (evicted_height - 1) as usize * 32;
+        let expected_hash = hashes
+            .get(hash_offset..hash_offset + 32)
+            .ok_or_else(|| eyre!("missing hash for evicted height {evicted_height}"))?;
+
+        let blocks = client.query(FindBlocks).execute_all()?;
+        let evicted_block = blocks
+            .iter()
+            .find(|block| block.header().height().get() == evicted_height)
+            .ok_or_else(|| eyre!("missing block at evicted height {evicted_height}"))?;
+        ensure!(
+            expected_hash == evicted_block.hash().as_ref(),
+            "rehydrated block hash mismatch at height {evicted_height}"
+        );
+
+        network.shutdown().await;
+        Ok(())
+    }
+    .await;
+
+    if sandbox::handle_result(result, scenario_name)?.is_none() {
+        return Ok(());
+    }
+
     Ok(())
 }
 
@@ -788,11 +1106,449 @@ async fn sumeragi_da_payload_loss_does_not_block_commit() -> Result<()> {
                 .all(|(after, baseline)| after.da_reschedule_total == baseline.da_reschedule_total),
             "expected da_reschedule_total to remain unchanged when DA is advisory"
         );
+        let deferral_observed = after_sumeragi_snapshots
+            .iter()
+            .zip(&baseline_sumeragi_snapshots)
+            .any(|(after, baseline)| {
+                after.rbc_deliver_defer_ready_total > baseline.rbc_deliver_defer_ready_total
+                    || after.rbc_deliver_defer_chunks_total > baseline.rbc_deliver_defer_chunks_total
+            });
+        ensure!(
+            deferral_observed,
+            "expected RBC DELIVER deferrals under payload loss; before={baseline_sumeragi_snapshots:?}, after={after_sumeragi_snapshots:?}"
+        );
 
         network.shutdown().await;
         Ok(())
     }
     .await;
+    if sandbox::handle_result(result, scenario_name)?.is_none() {
+        return Ok(());
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)]
+async fn sumeragi_rbc_unverified_roster_stash_requests_missing_block() -> Result<()> {
+    let scenario_name = stringify!(sumeragi_rbc_unverified_roster_stash_requests_missing_block);
+    let payload_bytes = LARGE_PAYLOAD_BYTES;
+    let tx_limit =
+        u64::try_from(torii_max_content_len_for_payload(payload_bytes)).unwrap_or(u64::MAX);
+    let tx_limit_nz =
+        NonZeroU64::new(tx_limit).ok_or_else(|| eyre!("tx_limit must be non-zero"))?;
+
+    let builder = NetworkBuilder::new()
+        .with_peers(4)
+        .with_auto_populated_trusted_peers()
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::DaEnabled(true),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
+            TransactionParameter::MaxTxBytes(tx_limit_nz),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
+            TransactionParameter::MaxDecompressedBytes(tx_limit_nz),
+        )))
+        .with_config_layer(|layer| {
+            layer
+                .write("telemetry_enabled", true)
+                .write("telemetry_profile", "full")
+                .write(["logger", "level"], "INFO")
+                .write(["network", "max_frame_bytes"], CONSENSUS_FRAME_BUDGET_BYTES)
+                .write(
+                    ["network", "max_frame_bytes_consensus"],
+                    CONSENSUS_FRAME_BUDGET_BYTES,
+                )
+                .write(
+                    ["network", "max_frame_bytes_control"],
+                    CONSENSUS_FRAME_BUDGET_BYTES,
+                )
+                .write(
+                    ["network", "max_frame_bytes_block_sync"],
+                    CONSENSUS_FRAME_BUDGET_BYTES,
+                )
+                .write(
+                    ["network", "max_frame_bytes_other"],
+                    CONSENSUS_FRAME_BUDGET_BYTES,
+                )
+                .write(["network", "p2p_queue_cap_high"], P2P_QUEUE_CAP_HIGH)
+                .write(["network", "p2p_queue_cap_low"], P2P_QUEUE_CAP_LOW)
+                .write(["network", "p2p_post_queue_cap"], P2P_POST_QUEUE_CAP)
+                .write(
+                    ["network", "max_frame_bytes_tx_gossip"],
+                    P2P_TX_FRAME_BUDGET_BYTES,
+                )
+                .write(
+                    ["torii", "max_content_len"],
+                    torii_max_content_len_for_payload(payload_bytes),
+                )
+                .write(["sumeragi", "da_enabled"], true)
+                .write(["sumeragi", "rbc_chunk_max_bytes"], RBC_CHUNK_SIZE_BYTES);
+        });
+
+    let Some(network) = sandbox::start_network_async_or_skip(builder, scenario_name).await? else {
+        return Ok(());
+    };
+
+    let result: Result<()> = async {
+        network
+            .ensure_blocks_with(|height| height.total >= 1)
+            .await?;
+
+        let peers = network.peers();
+        let primary_peer = &peers[0];
+        let lagging_peer = &peers[1];
+        let config_layers: Vec<ConfigLayer> = network
+            .config_layers()
+            .map(|cow| ConfigLayer(cow.into_owned()))
+            .collect();
+
+        let client = primary_peer.client();
+        let http = reqwest::Client::new();
+
+        let status_url = client
+            .torii_url
+            .join("status")
+            .wrap_err("compose status URL")?;
+        let lagging_status_url =
+            reqwest::Url::parse(&format!("{}/status", lagging_peer.torii_url()))
+                .wrap_err("compose lagging status URL")?;
+        let peer_sumeragi_urls: Vec<reqwest::Url> = peers
+            .iter()
+            .map(|peer| {
+                reqwest::Url::parse(&format!("{}/v1/sumeragi/status", peer.torii_url()))
+            })
+            .collect::<Result<_, _>>()
+            .wrap_err("compose peer sumeragi status URLs")?;
+        let peer_metrics_urls: Vec<reqwest::Url> = peers
+            .iter()
+            .map(|peer| reqwest::Url::parse(&format!("{}/metrics", peer.torii_url())))
+            .collect::<Result<_, _>>()
+            .wrap_err("compose peer metrics URLs")?;
+
+        let status_before = fetch_status(&client).await?;
+        let mut expected_height = status_before.blocks;
+
+        lagging_peer.shutdown().await;
+
+        let advance_blocks = 3u64;
+        for idx in 0..advance_blocks {
+            expected_height = expected_height.saturating_add(1);
+            let payload = generate_incompressible_payload(
+                &format!("{scenario_name}-advance-{idx}"),
+                payload_bytes,
+            );
+            let submit_client = client.clone();
+            tokio::task::spawn_blocking(move || {
+                submit_client.submit(Log::new(Level::INFO, payload))
+            })
+            .await
+            .wrap_err("submit log instruction")??;
+            let _ = wait_for_height(
+                http.clone(),
+                status_url.clone(),
+                expected_height,
+                Instant::now(),
+            )
+            .await?;
+        }
+
+        if sandbox::handle_result(
+            lagging_peer
+                .start_checked(config_layers.clone().into_iter(), None)
+                .await,
+            "sumeragi_rbc_unverified_roster_stash_requests_missing_block_restart",
+        )?
+        .is_none()
+        {
+            return Ok(());
+        }
+
+        let mut baseline_stash = Vec::with_capacity(peer_sumeragi_urls.len());
+        let mut baseline_fetch_totals = Vec::with_capacity(peer_metrics_urls.len());
+        let baseline_deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            baseline_stash.clear();
+            baseline_fetch_totals.clear();
+            let mut ready = true;
+            for (idx, url) in peer_sumeragi_urls.iter().enumerate() {
+                let response = http
+                    .get(url.clone())
+                    .header("Accept", "application/json")
+                    .send()
+                    .await
+                    .wrap_err("fetch baseline sumeragi status")?;
+                if !response.status().is_success() {
+                    ready = false;
+                    break;
+                }
+                let body = response.text().await.wrap_err("baseline sumeragi status body")?;
+                let status_value: Value = json::from_str(&body)
+                    .wrap_err("parse baseline sumeragi status JSON")?;
+                baseline_stash.push(parse_pending_rbc_stash_counters(&status_value)?);
+
+                let response = http
+                    .get(peer_metrics_urls[idx].clone())
+                    .send()
+                    .await
+                    .wrap_err("fetch baseline metrics")?;
+                if !response.status().is_success() {
+                    ready = false;
+                    break;
+                }
+                let body = response.text().await.wrap_err("baseline metrics body")?;
+                let reader = MetricsReader::new(&body);
+                baseline_fetch_totals.push(
+                    reader
+                        .max_with_prefix("sumeragi_missing_block_fetch_target_total")
+                        .unwrap_or(0.0),
+                );
+            }
+            if ready && baseline_stash.len() == peer_sumeragi_urls.len() {
+                break;
+            }
+            if Instant::now() > baseline_deadline {
+                return Err(eyre!("timed out collecting baseline Sumeragi/metrics snapshots"));
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+
+        expected_height = expected_height.saturating_add(1);
+        let payload =
+            generate_incompressible_payload(&format!("{scenario_name}-trigger"), payload_bytes);
+        let submit_client = client.clone();
+        tokio::task::spawn_blocking(move || submit_client.submit(Log::new(Level::INFO, payload)))
+            .await
+            .wrap_err("submit trigger log instruction")??;
+
+        let baseline_stash_totals: Vec<u64> = baseline_stash
+            .iter()
+            .map(PendingRbcStashCounters::total)
+            .collect();
+        let mut last_stash_totals = baseline_stash_totals.clone();
+        let mut last_fetch_totals = baseline_fetch_totals.clone();
+        let pending_deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if Instant::now() > pending_deadline {
+                return Err(eyre!(
+                    "timed out waiting for pending RBC stash + missing-block fetch; stash_baseline={baseline_stash_totals:?}, stash_last={last_stash_totals:?}, fetch_baseline={baseline_fetch_totals:?}, fetch_last={last_fetch_totals:?}"
+                ));
+            }
+            let mut stash_observed = false;
+            let mut fetch_observed = false;
+            for (idx, url) in peer_sumeragi_urls.iter().enumerate() {
+                let response = http
+                    .get(url.clone())
+                    .header("Accept", "application/json")
+                    .send()
+                    .await
+                    .wrap_err("fetch sumeragi status")?;
+                if response.status().is_success() {
+                    let body = response.text().await.wrap_err("sumeragi status body")?;
+                    let status_value: Value =
+                        json::from_str(&body).wrap_err("parse sumeragi status JSON")?;
+                    let counters = parse_pending_rbc_stash_counters(&status_value)?;
+                    let total = counters.total();
+                    last_stash_totals[idx] = total;
+                    if total > baseline_stash_totals[idx] {
+                        stash_observed = true;
+                    }
+                }
+
+                let response = http
+                    .get(peer_metrics_urls[idx].clone())
+                    .send()
+                    .await
+                    .wrap_err("fetch metrics")?;
+                if response.status().is_success() {
+                    let body = response.text().await.wrap_err("metrics body")?;
+                    let reader = MetricsReader::new(&body);
+                    let target_total = reader
+                        .max_with_prefix("sumeragi_missing_block_fetch_target_total")
+                        .unwrap_or(0.0);
+                    last_fetch_totals[idx] = target_total;
+                    if target_total > baseline_fetch_totals[idx] {
+                        fetch_observed = true;
+                    }
+                }
+            }
+            if stash_observed && fetch_observed {
+                break;
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+
+        let _ = wait_for_height(
+            http.clone(),
+            lagging_status_url,
+            expected_height,
+            Instant::now(),
+        )
+        .await?;
+
+        network.shutdown().await;
+        Ok(())
+    }
+    .await;
+    if sandbox::handle_result(result, scenario_name)?.is_none() {
+        return Ok(());
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sumeragi_idle_view_change_recovers_after_leader_shutdown() -> Result<()> {
+    let scenario_name = stringify!(sumeragi_idle_view_change_recovers_after_leader_shutdown);
+    let builder = NetworkBuilder::new()
+        .with_peers(4)
+        .with_auto_populated_trusted_peers()
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::DaEnabled(true),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::BlockTimeMs(500),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::CommitTimeMs(1_000),
+        )))
+        .with_config_layer(|layer| {
+            layer
+                .write(["sumeragi", "consensus_mode"], "permissioned")
+                .write(["sumeragi", "npos", "timeouts", "propose_ms"], 200_i64)
+                .write(["sumeragi", "npos", "timeouts", "prevote_ms"], 400_i64)
+                .write(["sumeragi", "npos", "timeouts", "precommit_ms"], 600_i64)
+                .write(["sumeragi", "npos", "timeouts", "commit_ms"], 800_i64)
+                .write(["sumeragi", "npos", "timeouts", "da_ms"], 400_i64)
+                .write(["sumeragi", "pacemaker_max_backoff_ms"], 2_000_i64)
+                .write(["sumeragi", "pacemaker_rtt_floor_multiplier"], 1_i64);
+        });
+
+    let Some(network) = sandbox::start_network_async_or_skip(builder, scenario_name).await? else {
+        return Ok(());
+    };
+
+    let result: Result<()> = async {
+        network
+            .ensure_blocks_with(|height| height.total >= 1)
+            .await?;
+
+        let peers = network.peers();
+        let primary_peer = peers
+            .first()
+            .ok_or_else(|| eyre!("network must have at least one peer"))?;
+        let status_before = fetch_status(&primary_peer.client()).await?;
+        let leader_index = status_before
+            .sumeragi
+            .as_ref()
+            .map(|sumeragi| sumeragi.leader_index)
+            .ok_or_else(|| eyre!("status missing leader_index"))?;
+        let leader_idx = usize::try_from(leader_index)
+            .wrap_err("leader_index does not fit into usize")?;
+
+        let leader_peer = peers.get(leader_idx).cloned().ok_or_else(|| {
+            eyre!(
+                "leader_index {leader_idx} out of bounds for topology size {}",
+                peers.len()
+            )
+        })?;
+
+        let mut baseline_view_changes = Vec::with_capacity(peers.len());
+        for peer in peers.iter() {
+            let status = peer.status().await?;
+            let view_changes = status
+                .sumeragi
+                .as_ref()
+                .ok_or_else(|| eyre!("status missing sumeragi snapshot"))?
+                .view_change_install_total;
+            baseline_view_changes.push(view_changes);
+        }
+
+        leader_peer.shutdown().await;
+        sleep(Duration::from_millis(500)).await;
+
+        let running: Vec<NetworkPeer> = peers
+            .iter()
+            .filter(|peer| peer.is_running())
+            .cloned()
+            .collect();
+        ensure!(
+            running.len() >= 3,
+            "expected at least 3 running peers after leader shutdown, got {}",
+            running.len()
+        );
+
+        let submit_peer = running
+            .first()
+            .ok_or_else(|| eyre!("no running peers available for submission"))?;
+        let submit_client = submit_peer.client();
+        let payload = format!("{scenario_name}-liveness");
+        tokio::task::spawn_blocking(move || submit_client.submit(Log::new(Level::INFO, payload)))
+            .await
+            .wrap_err("submit log instruction")??;
+
+        let target_height = status_before.blocks + 1;
+        let view_change_deadline = Duration::from_secs(30);
+
+        let status_url = submit_peer
+            .client()
+            .torii_url
+            .join("status")
+            .wrap_err("compose status URL")?;
+        let start = Instant::now();
+        let elapsed =
+            wait_for_height(reqwest::Client::new(), status_url, target_height, start).await?;
+        ensure!(
+            elapsed <= view_change_deadline,
+            "expected view change to recover within bound; elapsed={elapsed:?}"
+        );
+
+        let http = reqwest::Client::new();
+        for (idx, peer) in peers.iter().enumerate() {
+            if !peer.is_running() {
+                continue;
+            }
+            let status_url = peer
+                .client()
+                .torii_url
+                .join("status")
+                .wrap_err("compose status URL")?;
+            timeout(
+                view_change_deadline,
+                wait_for_height(http.clone(), status_url, target_height, Instant::now()),
+            )
+            .await
+            .wrap_err_with(|| {
+                format!(
+                    "timed out waiting for peer {idx} to reach height {target_height}"
+                )
+            })??;
+        }
+
+        for (idx, peer) in peers.iter().enumerate() {
+            if !peer.is_running() {
+                continue;
+            }
+            let status = peer.status().await?;
+            let view_changes = status
+                .sumeragi
+                .as_ref()
+                .ok_or_else(|| eyre!("status missing sumeragi snapshot"))?
+                .view_change_install_total;
+            let baseline = baseline_view_changes[idx];
+            ensure!(
+                view_changes >= baseline.saturating_add(1),
+                "expected peer {idx} view_change_install_total to advance after leader shutdown: before={baseline}, after={view_changes}",
+            );
+        }
+
+        network.shutdown().await;
+        Ok(())
+    }
+    .await;
+
     if sandbox::handle_result(result, scenario_name)?.is_none() {
         return Ok(());
     }
@@ -1059,6 +1815,7 @@ where
     let tx_limit_nz =
         NonZeroU64::new(tx_limit).ok_or_else(|| eyre!("tx_limit must be non-zero"))?;
     let rbc_chunk_max_bytes = i64::try_from(payload_bytes).unwrap_or(i64::MAX);
+    let stake_amount = SumeragiNposParameters::default().min_self_bond();
     let mut config_table = toml::Table::new();
     {
         let mut writer = TomlWriter::new(&mut config_table);
@@ -1090,6 +1847,7 @@ where
                 ["network", "max_frame_bytes_tx_gossip"],
                 P2P_TX_FRAME_BUDGET_BYTES,
             )
+            .write(["sumeragi", "consensus_mode"], "npos")
             .write(["sumeragi", "rbc_chunk_max_bytes"], rbc_chunk_max_bytes)
             .write(["sumeragi", "rbc_store_max_sessions"], 2_048i64)
             .write(["sumeragi", "rbc_store_soft_sessions"], 1_536i64)
@@ -1158,6 +1916,7 @@ where
     let builder = NetworkBuilder::new()
         .with_peers(peer_count)
         .with_auto_populated_trusted_peers()
+        .with_npos_genesis_bootstrap(stake_amount)
         // Enable DA (RBC + availability QC gating) in the base config so runtime parameters and
         // handshake agree.
         .with_data_availability_enabled(true)
@@ -1641,6 +2400,39 @@ fn metrics_reader_max_with_prefix_handles_labels() {
 }
 
 #[test]
+fn parse_pending_rbc_stash_counters_reads_fields() {
+    let raw = r#"{
+        "pending_rbc": {
+            "stash_ready_total": 2,
+            "stash_ready_init_missing_total": 1,
+            "stash_ready_roster_missing_total": 0,
+            "stash_ready_roster_hash_mismatch_total": 1,
+            "stash_ready_roster_unverified_total": 0,
+            "stash_deliver_total": 3,
+            "stash_deliver_init_missing_total": 1,
+            "stash_deliver_roster_missing_total": 1,
+            "stash_deliver_roster_hash_mismatch_total": 0,
+            "stash_deliver_roster_unverified_total": 1,
+            "stash_chunk_total": 4
+        }
+    }"#;
+    let value: Value = json::from_str(raw).expect("parse JSON");
+    let counters = parse_pending_rbc_stash_counters(&value).expect("parse pending rbc");
+    assert_eq!(counters.stash_ready_total, 2);
+    assert_eq!(counters.stash_ready_init_missing_total, 1);
+    assert_eq!(counters.stash_ready_roster_missing_total, 0);
+    assert_eq!(counters.stash_ready_roster_hash_mismatch_total, 1);
+    assert_eq!(counters.stash_ready_roster_unverified_total, 0);
+    assert_eq!(counters.stash_deliver_total, 3);
+    assert_eq!(counters.stash_deliver_init_missing_total, 1);
+    assert_eq!(counters.stash_deliver_roster_missing_total, 1);
+    assert_eq!(counters.stash_deliver_roster_hash_mismatch_total, 0);
+    assert_eq!(counters.stash_deliver_roster_unverified_total, 1);
+    assert_eq!(counters.stash_chunk_total, 4);
+    assert_eq!(counters.total(), 9);
+}
+
+#[test]
 fn torii_max_content_len_adds_headroom() {
     let payload = 10 * 1024 * 1024;
     let limit = torii_max_content_len_for_payload(payload);
@@ -1700,6 +2492,74 @@ async fn wait_for_height(
             && height >= target_height
         {
             return Ok(start.elapsed());
+        }
+        sleep(Duration::from_millis(200)).await;
+    }
+}
+
+fn collect_da_block_files(root: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == ErrorKind::NotFound => continue,
+            Err(err) => {
+                return Err(err)
+                    .wrap_err_with(|| format!("failed to read directory {}", dir.display()));
+            }
+        };
+        for entry in entries {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            let path = entry.path();
+            if file_type.is_dir() {
+                if entry.file_name() == std::ffi::OsStr::new("da_blocks") {
+                    let da_entries = match fs::read_dir(&path) {
+                        Ok(entries) => entries,
+                        Err(err) if err.kind() == ErrorKind::NotFound => continue,
+                        Err(err) => {
+                            return Err(err).wrap_err_with(|| {
+                                format!("failed to read directory {}", path.display())
+                            });
+                        }
+                    };
+                    for da_entry in da_entries {
+                        let da_entry = da_entry?;
+                        let da_path = da_entry.path();
+                        if da_entry.file_type()?.is_file()
+                            && da_path.extension().and_then(|ext| ext.to_str()) == Some("norito")
+                        {
+                            files.push(da_path);
+                        }
+                    }
+                } else {
+                    stack.push(path);
+                }
+            }
+        }
+    }
+    Ok(files)
+}
+
+fn da_block_height(path: &Path) -> Option<u64> {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .and_then(|stem| stem.parse::<u64>().ok())
+}
+
+async fn wait_for_da_block_files(root: PathBuf, timeout: Duration) -> Result<Vec<PathBuf>> {
+    let start = Instant::now();
+    loop {
+        let files = collect_da_block_files(&root)?;
+        if !files.is_empty() {
+            return Ok(files);
+        }
+        if start.elapsed() > timeout {
+            return Err(eyre!(
+                "timed out waiting for DA-evicted blocks under {}",
+                root.display()
+            ));
         }
         sleep(Duration::from_millis(200)).await;
     }
@@ -1925,6 +2785,155 @@ async fn wait_for_recovered_flag(
         }
         sleep(Duration::from_millis(200)).await;
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
+    let scenario_name = stringify!(sumeragi_da_eviction_rehydrates_block_bodies);
+    let payload_bytes = 128 * 1024;
+    let tx_limit =
+        u64::try_from(torii_max_content_len_for_payload(payload_bytes)).unwrap_or(u64::MAX);
+    let tx_limit_nz =
+        NonZeroU64::new(tx_limit).ok_or_else(|| eyre!("tx_limit must be non-zero"))?;
+    let stake_amount = SumeragiNposParameters::default().min_self_bond();
+
+    let builder = NetworkBuilder::new()
+        .with_peers(4)
+        .with_auto_populated_trusted_peers()
+        .with_npos_genesis_bootstrap(stake_amount)
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::DaEnabled(true),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
+            TransactionParameter::MaxTxBytes(tx_limit_nz),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
+            TransactionParameter::MaxDecompressedBytes(tx_limit_nz),
+        )))
+        .with_config_layer(|layer| {
+            layer
+                .write("telemetry_enabled", true)
+                .write("telemetry_profile", "full")
+                .write(["logger", "level"], "INFO")
+                .write(
+                    ["torii", "max_content_len"],
+                    torii_max_content_len_for_payload(payload_bytes),
+                )
+                .write(["sumeragi", "da_enabled"], true)
+                .write(["sumeragi", "consensus_mode"], "npos")
+                .write(["nexus", "enabled"], true)
+                .write(["nexus", "storage", "max_disk_usage_bytes"], 1_000_000i64)
+                .write(
+                    ["nexus", "storage", "disk_budget_weights", "kura_blocks_bps"],
+                    9_000i64,
+                )
+                .write(
+                    [
+                        "nexus",
+                        "storage",
+                        "disk_budget_weights",
+                        "wsv_snapshots_bps",
+                    ],
+                    500i64,
+                )
+                .write(
+                    ["nexus", "storage", "disk_budget_weights", "sorafs_bps"],
+                    300i64,
+                )
+                .write(
+                    [
+                        "nexus",
+                        "storage",
+                        "disk_budget_weights",
+                        "soranet_spool_bps",
+                    ],
+                    100i64,
+                )
+                .write(
+                    [
+                        "nexus",
+                        "storage",
+                        "disk_budget_weights",
+                        "soravpn_spool_bps",
+                    ],
+                    100i64,
+                )
+                .write(["kura", "blocks_in_memory"], 2i64);
+        });
+
+    let Some(network) = sandbox::start_network_async_or_skip(builder, scenario_name).await? else {
+        return Ok(());
+    };
+
+    let result: Result<()> = async {
+        network
+            .ensure_blocks_with(|height| height.total >= 1)
+            .await?;
+
+        let peers = network.peers();
+        let primary_peer = &peers[0];
+        let client = primary_peer.client();
+        let http = reqwest::Client::new();
+        let status_url = client
+            .torii_url
+            .join("status")
+            .wrap_err("compose status URL")?;
+
+        let status_before = fetch_status(&client).await?;
+        let mut expected_height = status_before.blocks;
+        for idx in 0..10u64 {
+            expected_height = expected_height.saturating_add(1);
+            let payload = generate_incompressible_payload(
+                &format!("{scenario_name}-payload-{idx}"),
+                payload_bytes,
+            );
+            let submit_client = client.clone();
+            tokio::task::spawn_blocking(move || {
+                submit_client.submit(Log::new(Level::INFO, payload))
+            })
+            .await
+            .wrap_err("submit log instruction")??;
+            let _ = wait_for_height(
+                http.clone(),
+                status_url.clone(),
+                expected_height,
+                Instant::now(),
+            )
+            .await?;
+        }
+
+        let da_files =
+            wait_for_da_block_files(primary_peer.kura_store_dir(), Duration::from_secs(30)).await?;
+        ensure!(
+            !da_files.is_empty(),
+            "expected DA-evicted block files under Kura storage"
+        );
+        let evicted_height = da_files
+            .iter()
+            .filter_map(|path| da_block_height(path))
+            .min()
+            .ok_or_else(|| eyre!("failed to parse DA block heights"))?;
+
+        let blocks = client.query(FindBlocks).execute_all()?;
+        let evicted_block = blocks
+            .iter()
+            .find(|block| block.header().height().get() == evicted_height)
+            .ok_or_else(|| eyre!("missing block at evicted height {evicted_height}"))?;
+        ensure!(
+            evicted_block.external_transactions().len() > 0,
+            "expected rehydrated block to include transactions at height {evicted_height}"
+        );
+
+        network.shutdown().await;
+        Ok(())
+    }
+    .await;
+
+    if sandbox::handle_result(result, scenario_name)?.is_none() {
+        return Ok(());
+    }
+
+    Ok(())
 }
 
 struct RbcSessionSnapshot {

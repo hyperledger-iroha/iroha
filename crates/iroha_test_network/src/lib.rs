@@ -46,7 +46,10 @@ use iroha_data_model::{
     ChainId,
     account::AccountId,
     block::consensus::{ConsensusGenesisParams, NposGenesisParams},
-    isi::{InstructionBox, SetParameter, set_instruction_registry},
+    isi::{
+        InstructionBox, SetParameter, set_instruction_registry,
+        staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
+    },
     parameter::{SmartContractParameter, SumeragiParameter, system::SumeragiNposParameters},
     transaction::Executable,
 };
@@ -67,7 +70,7 @@ use norito::json::{self, Value as JsonValue};
 use rand::prelude::IteratorRandom;
 use tokio::{
     fs::File,
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader},
     process::Child,
     runtime::{self, Runtime},
     sync::{Mutex, Notify, broadcast, oneshot, watch},
@@ -735,10 +738,10 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 
 fn add_target_dir_to_ignore(root: &Path, ignore: &mut IgnoreList) {
     let target_dir = resolve_target_dir(root);
-    if let Ok(relative) = target_dir.strip_prefix(root) {
-        if !relative.as_os_str().is_empty() {
-            ignore.dirs.insert(relative.to_path_buf());
-        }
+    if let Ok(relative) = target_dir.strip_prefix(root)
+        && !relative.as_os_str().is_empty()
+    {
+        ignore.dirs.insert(relative.to_path_buf());
     }
 }
 
@@ -1337,7 +1340,7 @@ fn test_concurrency_threads() -> usize {
     let peers = DEFAULT_NETWORK_PARALLELISM_PEERS.max(1);
     let total_peers = networks.saturating_mul(peers).max(1);
     let oversub = TEST_CONCURRENCY_OVERSUBSCRIPTION.max(1);
-    let min_threads = cores.min(TEST_CONCURRENCY_MIN_THREADS).max(1);
+    let min_threads = cores.clamp(1, TEST_CONCURRENCY_MIN_THREADS);
     cores
         .saturating_mul(oversub)
         .saturating_div(total_peers)
@@ -1397,10 +1400,10 @@ fn try_acquire_file_permit(limit: usize) -> Option<FilePermit> {
 }
 
 fn permit_is_stale(path: &Path) -> bool {
-    if let Some(pid) = read_permit_pid(path) {
-        if let Some(alive) = pid_alive(pid) {
-            return !alive;
-        }
+    if let Some(pid) = read_permit_pid(path)
+        && let Some(alive) = pid_alive(pid)
+    {
+        return !alive;
     }
     let Ok(metadata) = fs::metadata(path) else {
         return false;
@@ -1418,12 +1421,11 @@ fn read_permit_pid(path: &Path) -> Option<u32> {
     let contents = fs::read_to_string(path).ok()?;
     for line in contents.lines() {
         let line = line.trim();
-        if let Some(value) = line.strip_prefix("pid=") {
-            if let Ok(pid) = value.trim().parse::<u32>() {
-                if pid > 0 {
-                    return Some(pid);
-                }
-            }
+        if let Some(value) = line.strip_prefix("pid=")
+            && let Ok(pid) = value.trim().parse::<u32>()
+            && pid > 0
+        {
+            return Some(pid);
         }
     }
     None
@@ -1490,6 +1492,7 @@ pub struct Network {
     genesis_key_pair: KeyPair,
 
     genesis_isi: Vec<Vec<InstructionBox>>,
+    genesis_post_topology_isi: Vec<Vec<InstructionBox>>,
     // Cache a single, deterministic genesis block per network instance to ensure
     // all peers that submit genesis use byte-for-byte identical content.
     cached_genesis: OnceLock<GenesisBlock>,
@@ -2140,13 +2143,14 @@ impl Network {
 
     /// Network genesis block.
     ///
-    /// It uses the basic [`genesis_factory`] with [`Self::genesis_isi`] +
-    /// topology of the network peers.
+    /// It uses the basic [`genesis_factory`] with [`Self::genesis_isi`],
+    /// post-topology bootstrap instructions, and the network peer topology.
     pub fn genesis(&self) -> GenesisBlock {
         self.cached_genesis
             .get_or_init(|| {
-                config::genesis_with_keypair(
+                config::genesis_with_keypair_and_post_topology(
                     self.genesis_isi.clone(),
+                    self.genesis_post_topology_isi.clone(),
                     self.peers.iter().map(NetworkPeer::id).collect(),
                     self.topology_entries.clone(),
                     self.genesis_key_pair.clone(),
@@ -2184,7 +2188,7 @@ impl Network {
             .collect()
     }
 
-    /// Resolves when all _running_ peers have at least N non-empty blocks
+    /// Resolves when all _running_ peers have at least N blocks (non-empty in current policy)
     /// # Errors
     /// If this doesn't happen within a timeout.
     pub async fn ensure_blocks(&self, height: u64) -> Result<&Self> {
@@ -2626,6 +2630,64 @@ fn sanitize_preview_for_display(value: &str) -> String {
     snapshot_snippet(&value.replace('\n', "\\n"))
 }
 
+async fn drain_log_lines<R, F>(
+    output: R,
+    mut file: File,
+    mut fatal_rx: watch::Receiver<bool>,
+    is_running: Arc<AtomicBool>,
+    mut on_line: F,
+    ready_notify: Option<Arc<Notify>>,
+    label: &'static str,
+) where
+    R: AsyncRead + Unpin,
+    F: FnMut(&str),
+{
+    let mut lines = BufReader::new(output).lines();
+    loop {
+        if *fatal_rx.borrow() || !is_running.load(Ordering::Relaxed) {
+            break;
+        }
+        tokio::select! {
+            line = lines.next_line() => match line {
+                Ok(Some(line)) => {
+                    on_line(&line);
+                    if let Err(err) = file.write_all(line.as_bytes()).await {
+                        error!(?err, log = label, "writing log line failed");
+                        break;
+                    }
+                    if let Err(err) = file.write_all(b"\n").await {
+                        error!(?err, log = label, "writing log newline failed");
+                        break;
+                    }
+                    if let Err(err) = file.flush().await {
+                        error!(?err, log = label, "flushing log file failed");
+                        break;
+                    }
+                }
+                Ok(None) => break,
+                Err(err) => {
+                    error!(?err, log = label, "reading log stream failed");
+                    break;
+                }
+            },
+            changed = fatal_rx.changed() => {
+                if changed.is_err() {
+                    break;
+                }
+                if *fatal_rx.borrow() {
+                    break;
+                }
+            },
+        }
+    }
+    if let Err(err) = file.flush().await {
+        error!(?err, log = label, "flushing log file failed");
+    }
+    if let Some(notify) = ready_notify {
+        notify.notify_waiters();
+    }
+}
+
 /// Builder of [`Network`]
 pub struct NetworkBuilder {
     env: Environment,
@@ -2641,6 +2703,7 @@ pub struct NetworkBuilder {
     sumeragi_parameters: Vec<SumeragiParameter>,
     sumeragi_da_enabled: Option<bool>,
     auto_populate_trusted_peer_pops: bool,
+    npos_genesis_bootstrap_stake: Option<u64>,
 }
 
 fn bool_env_override(key: &str) -> Option<bool> {
@@ -2940,6 +3003,7 @@ impl NetworkBuilder {
             sumeragi_parameters: Vec::new(),
             sumeragi_da_enabled: None,
             auto_populate_trusted_peer_pops: true,
+            npos_genesis_bootstrap_stake: None,
         };
         if let Some(value) = bool_env_override(DA_ENABLED_ENV) {
             debug!(
@@ -3071,6 +3135,16 @@ impl NetworkBuilder {
         self
     }
 
+    /// Inject NPoS bootstrap staking instructions into genesis.
+    ///
+    /// This registers Nexus/IVM domains, a gas account, the default stake asset, and per-peer
+    /// validator accounts funded with the requested stake amount, then activates them.
+    pub fn with_npos_genesis_bootstrap(mut self, stake_amount: u64) -> Self {
+        assert!(stake_amount > 0, "stake_amount must be non-zero");
+        self.npos_genesis_bootstrap_stake = Some(stake_amount);
+        self
+    }
+
     /// Override the genesis signing key pair used to sign the manifest.
     pub fn with_genesis_keypair(mut self, key_pair: KeyPair) -> Self {
         self.genesis_key_pair = key_pair;
@@ -3179,7 +3253,7 @@ impl NetworkBuilder {
         let NetworkBuilder {
             env,
             n_peers,
-            config_layers,
+            mut config_layers,
             pipeline_time,
             ivm_fuel,
             mut genesis_isi,
@@ -3190,6 +3264,7 @@ impl NetworkBuilder {
             sumeragi_parameters,
             sumeragi_da_enabled,
             auto_populate_trusted_peer_pops,
+            npos_genesis_bootstrap_stake,
         } = self;
 
         let mut sumeragi_parameters = sumeragi_parameters;
@@ -3352,6 +3427,84 @@ impl NetworkBuilder {
                 .first_mut()
                 .expect("at least one genesis transaction exists");
             first_tx.splice(0..0, parameter_prefix);
+        }
+
+        let mut genesis_post_topology_isi = Vec::new();
+        let npos_bootstrap =
+            npos_genesis_bootstrap_stake.filter(|_| matches!(consensus_mode, ConsensusMode::Npos));
+        if let Some(stake_amount) = npos_bootstrap {
+            let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
+            let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
+            let stake_asset_id: AssetDefinitionId =
+                "xor#nexus".parse().expect("stake asset definition");
+            let gas_account_id =
+                AccountId::new(ivm_domain.clone(), genesis_key_pair.public_key().clone());
+            let gas_account_address = gas_account_id
+                .to_canonical_hex()
+                .unwrap_or_else(|_| genesis_key_pair.public_key().to_string());
+            let gas_account_str = format!("{gas_account_address}@{ivm_domain}");
+
+            let mut bootstrap_layer = Table::new();
+            let mut writer = TomlWriter::new(&mut bootstrap_layer);
+            writer
+                .write(
+                    ["nexus", "staking", "stake_asset_id"],
+                    stake_asset_id.to_string(),
+                )
+                .write(
+                    ["nexus", "staking", "stake_escrow_account_id"],
+                    gas_account_str.clone(),
+                )
+                .write(
+                    ["nexus", "staking", "slash_sink_account_id"],
+                    gas_account_str,
+                );
+            config_layers.push(bootstrap_layer);
+
+            let definition = AssetDefinition::new(stake_asset_id.clone(), NumericSpec::default())
+                .with_metadata(Metadata::default());
+
+            let mut bootstrap_tx = Vec::new();
+            bootstrap_tx.push(Register::domain(Domain::new(nexus_domain.clone())).into());
+            bootstrap_tx.push(Register::domain(Domain::new(ivm_domain.clone())).into());
+            bootstrap_tx.push(Register::account(Account::new(gas_account_id.clone())).into());
+            bootstrap_tx.push(Register::asset_definition(definition).into());
+
+            for peer in &peer_ids {
+                let validator_id = AccountId::new(nexus_domain.clone(), peer.public_key().clone());
+                bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
+                bootstrap_tx.push(
+                    Mint::asset_numeric(
+                        stake_amount,
+                        AssetId::new(stake_asset_id.clone(), validator_id.clone()),
+                    )
+                    .into(),
+                );
+            }
+            genesis_post_topology_isi.push(bootstrap_tx);
+
+            let mut validator_tx = Vec::new();
+            for peer in &peer_ids {
+                let validator_id = AccountId::new(nexus_domain.clone(), peer.public_key().clone());
+                validator_tx.push(
+                    RegisterPublicLaneValidator {
+                        lane_id: LaneId::SINGLE,
+                        validator: validator_id.clone(),
+                        stake_account: validator_id.clone(),
+                        initial_stake: Numeric::from(stake_amount),
+                        metadata: Metadata::default(),
+                    }
+                    .into(),
+                );
+                validator_tx.push(
+                    ActivatePublicLaneValidator {
+                        lane_id: LaneId::SINGLE,
+                        validator: validator_id,
+                    }
+                    .into(),
+                );
+            }
+            genesis_post_topology_isi.push(validator_tx);
         }
 
         // Build a preview genesis so we can derive the consensus fingerprint from the
@@ -3548,6 +3701,7 @@ impl NetworkBuilder {
             consensus_profile,
             genesis_key_pair,
             genesis_isi,
+            genesis_post_topology_isi,
             cached_genesis,
             config_layers: Some(base_layer).into_iter().chain(config_layers).collect(),
             sumeragi_overrides,
@@ -3622,7 +3776,7 @@ impl Signatory {
 struct PeerRun {
     tasks: JoinSet<()>,
     shutdown: oneshot::Sender<()>,
-    fatal_notify: Arc<Notify>,
+    fatal_tx: watch::Sender<bool>,
     pid: Option<u32>,
 }
 
@@ -3784,7 +3938,7 @@ impl NetworkPeer {
         let mut child = cmd.spawn().wrap_err("failed to spawn `irohad`")?;
         let pid = child.id();
         let stderr_log_ready = Arc::new(Notify::new());
-        let fatal_notify = Arc::new(Notify::new());
+        let (fatal_tx, fatal_rx) = watch::channel(false);
         self.is_running.store(true, Ordering::Relaxed);
         let _ = self.events.send(PeerLifecycleEvent::Spawned);
 
@@ -3792,36 +3946,26 @@ impl NetworkPeer {
 
         {
             let tasks = &mut tasks;
+            let fatal_rx = fatal_rx.clone();
+            let is_running = self.is_running.clone();
             let output = child
                 .stdout
                 .take()
                 .ok_or_else(|| eyre!("failed to capture child stdout"))?;
             let path = self.dir.join(format!("run-{run_num}-stdout.log"));
-            let mut file = File::create(path)
+            let file = File::create(path)
                 .await
                 .wrap_err("failed to create stdout log file")?;
             tasks.spawn(async move {
-                let mut lines = BufReader::new(output).lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    if let Err(err) = file.write_all(line.as_bytes()).await {
-                        error!(?err, "writing logs to file failed");
-                        break;
-                    }
-                    if let Err(err) = file.write_all("\n".as_bytes()).await {
-                        error!(?err, "writing logs to file failed");
-                        break;
-                    }
-                    if let Err(err) = file.flush().await {
-                        error!(?err, "flushing logs to file failed");
-                        break;
-                    }
-                }
+                drain_log_lines(output, file, fatal_rx, is_running, |_| {}, None, "stdout").await;
                 // stdout logs are best-effort; no synchronization needed.
             });
         }
         {
             let tasks = &mut tasks;
             let span = span.clone();
+            let fatal_rx = fatal_rx.clone();
+            let is_running = self.is_running.clone();
             let output = child
                 .stderr
                 .take()
@@ -3832,8 +3976,7 @@ impl NetworkPeer {
             let stderr_live = Arc::clone(&self.stderr_live);
             tasks.spawn(async move {
                 let buffer = PeerStderrBuffer::new(span, log_path, stderr_live);
-                let mut lines = BufReader::new(output).lines();
-                let mut file = match File::create(&path).await {
+                let file = match File::create(&path).await {
                     Ok(file) => file,
                     Err(err) => {
                         error!(?err, ?path, "failed to create stderr log file");
@@ -3842,22 +3985,16 @@ impl NetworkPeer {
                     }
                 };
 
-                while let Ok(Some(line)) = lines.next_line().await {
-                    buffer.push_line(&line);
-                    if let Err(err) = file.write_all(line.as_bytes()).await {
-                        error!(?err, "failed to write stderr log line");
-                        break;
-                    }
-                    if let Err(err) = file.write_all(b"\n").await {
-                        error!(?err, "failed to write stderr newline");
-                        break;
-                    }
-                }
-
-                if let Err(err) = file.flush().await {
-                    error!(?err, "failed to flush stderr log");
-                }
-                stderr_log_ready.notify_waiters();
+                drain_log_lines(
+                    output,
+                    file,
+                    fatal_rx,
+                    is_running,
+                    |line| buffer.push_line(line),
+                    Some(stderr_log_ready),
+                    "stderr",
+                )
+                .await;
             });
         }
 
@@ -3870,7 +4007,7 @@ impl NetworkPeer {
             is_normal_shutdown_started: is_normal_shutdown_started.clone(),
             events: self.events.clone(),
             block_height: self.block_height.clone(),
-            fatal_notify: fatal_notify.clone(),
+            fatal_rx: fatal_rx.clone(),
             stderr_log_ready,
             stderr_live: self.stderr_live.clone(),
         };
@@ -3893,7 +4030,8 @@ impl NetworkPeer {
             let events_tx = self.events.clone();
             let block_height_tx = self.block_height.clone();
             let is_running = self.is_running.clone();
-            let fatal_notify = fatal_notify.clone();
+            let fatal_tx = fatal_tx.clone();
+            let mut fatal_rx = fatal_rx.clone();
             let torii_addr = self.api_address().to_literal();
             let startup_probe = Arc::clone(&self.startup_probe);
             let startup_warn_gate = StartupWarnGate::new(STARTUP_STATUS_WARN_GRACE);
@@ -3908,7 +4046,18 @@ impl NetworkPeer {
                     let mut http_gate = HttpStartGate::default();
                     let http_seen = Arc::new(AtomicBool::new(false));
                     if STARTUP_STATUS_WARN_GRACE > Duration::ZERO {
-                        tokio::time::sleep(STARTUP_STATUS_WARN_GRACE).await;
+                        tokio::select! {
+                            _ = tokio::time::sleep(STARTUP_STATUS_WARN_GRACE) => {}
+                            changed = fatal_rx.changed() => {
+                                if changed.is_ok() && *fatal_rx.borrow() {
+                                    debug!("fatal notify received during startup grace");
+                                }
+                                return;
+                            }
+                        }
+                    }
+                    if *fatal_rx.borrow() {
+                        return;
                     }
                     let warn_gate = startup_warn_gate.clone();
                     // Retry get_status with exponential backoff (50ms ..= 1s); abort if it takes
@@ -3999,9 +4148,26 @@ impl NetworkPeer {
                         }
                     };
                     let (status, source) = if status_timeout == Duration::ZERO {
-                        retry_with_backoff(status_backoff).await
+                        tokio::select! {
+                            status = retry_with_backoff(status_backoff) => status,
+                            changed = fatal_rx.changed() => {
+                                if changed.is_ok() && *fatal_rx.borrow() {
+                                    debug!("fatal notify received while waiting for initial status");
+                                }
+                                return;
+                            }
+                        }
                     } else {
-                        match retry_with_backoff_for(status_timeout, status_backoff).await {
+                        let status = tokio::select! {
+                            status = retry_with_backoff_for(status_timeout, status_backoff) => status,
+                            changed = fatal_rx.changed() => {
+                                if changed.is_ok() && *fatal_rx.borrow() {
+                                    debug!("fatal notify received while waiting for initial status");
+                                }
+                                return;
+                            }
+                        };
+                        match status {
                             Ok(status) => status,
                             Err(_) => {
                                 warn!(
@@ -4082,11 +4248,18 @@ impl NetworkPeer {
                                     if !is_running.load(Ordering::Relaxed) {
                                         break;
                                     }
-                                    let poll_result = spawn_blocking({
-                                        let client = poll_client.clone();
-                                        move || client.get_status()
-                                    })
-                                    .await;
+                                    let poll_result = tokio::select! {
+                                        result = spawn_blocking({
+                                            let client = poll_client.clone();
+                                            move || client.get_status()
+                                        }) => result,
+                                        changed = fatal_rx.changed() => {
+                                            if changed.is_ok() && *fatal_rx.borrow() {
+                                                debug!("fatal notify received during status poll");
+                                            }
+                                            return;
+                                        }
+                                    };
                                     let status = match poll_result {
                                         Ok(result) => result,
                                         Err(err) => {
@@ -4177,14 +4350,14 @@ impl NetworkPeer {
                                                 ?status_timeout,
                                                 "Torii HTTP never became reachable; requesting shutdown"
                                             );
-                                            fatal_notify.notify_waiters();
+                                            let _ = fatal_tx.send(true);
                                             return;
                                         }
                                         if status_timeout != Duration::ZERO
                                             && last_progress.elapsed() >= status_timeout
                                         {
                                             warn!(?status_timeout, "status watchdog expired; requesting shutdown");
-                                            fatal_notify.notify_waiters();
+                                            let _ = fatal_tx.send(true);
                                             return;
                                         }
                                         continue;
@@ -4205,8 +4378,10 @@ impl NetworkPeer {
                                         });
                                     }
                                 }
-                                _ = fatal_notify.notified() => {
-                                    debug!("fatal notify received in blocks watchdog");
+                                changed = fatal_rx.changed() => {
+                                    if changed.is_ok() && *fatal_rx.borrow() {
+                                        debug!("fatal notify received in blocks watchdog");
+                                    }
                                     return;
                                 }
                             }
@@ -4228,7 +4403,7 @@ impl NetworkPeer {
         *run_guard = Some(PeerRun {
             tasks,
             shutdown: shutdown_tx,
-            fatal_notify: fatal_notify.clone(),
+            fatal_tx: fatal_tx.clone(),
             pid,
         });
         Ok(())
@@ -4246,7 +4421,7 @@ impl NetworkPeer {
         // Immediately drop the running flag so watchdog loops and status polls exit promptly.
         self.is_running.store(false, Ordering::Relaxed);
         // Wake any background watchers so they stop promptly during shutdown.
-        run.fatal_notify.notify_waiters();
+        let _ = run.fatal_tx.send(true);
         let _ = run.shutdown.send(());
         let join_all = async {
             while let Some(res) = run.tasks.join_next().await {
@@ -5251,6 +5426,8 @@ mod shutdown_tests {
     use std::process::Stdio;
 
     use tempfile::tempdir;
+    use tokio::fs::File;
+    use tokio::io::{AsyncWriteExt, duplex};
     use tokio::process::Command;
 
     use super::*;
@@ -5270,6 +5447,7 @@ mod shutdown_tests {
 
         let (events, _rx) = broadcast::channel(4);
         let (block_height, _rx) = watch::channel(None);
+        let (_fatal_tx, fatal_rx) = watch::channel(false);
         let mut peer_exit = PeerExit {
             child,
             span: tracing::Span::none(),
@@ -5277,7 +5455,7 @@ mod shutdown_tests {
             is_normal_shutdown_started: Arc::new(AtomicBool::new(false)),
             events,
             block_height,
-            fatal_notify: Arc::new(Notify::new()),
+            fatal_rx,
             stderr_log_ready: Arc::new(Notify::new()),
             stderr_live: Arc::new(StdMutex::new(LiveStderrState::default())),
         };
@@ -5297,6 +5475,35 @@ mod shutdown_tests {
             !log.contains("SIGQUIT"),
             "SIGQUIT should not be used for a responsive shutdown, log: {log:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn log_drain_exits_on_shutdown_notify() {
+        let dir = tempdir().expect("tempdir");
+        let log_path = dir.path().join("stdout.log");
+        let file = File::create(&log_path).await.expect("create log file");
+        let (mut writer, reader) = duplex(64);
+        let (fatal_tx, fatal_rx) = watch::channel(false);
+        let is_running = Arc::new(AtomicBool::new(true));
+        let handle = tokio::spawn(drain_log_lines(
+            reader,
+            file,
+            fatal_rx,
+            is_running.clone(),
+            |_| {},
+            None,
+            "stdout",
+        ));
+
+        writer.write_all(b"hello\n").await.expect("write line");
+        writer.flush().await.expect("flush");
+        is_running.store(false, Ordering::Relaxed);
+        let _ = fatal_tx.send(true);
+
+        tokio::time::timeout(Duration::from_secs(1), handle)
+            .await
+            .expect("log task should exit")
+            .expect("log task should not panic");
     }
 }
 
@@ -5467,19 +5674,27 @@ struct PeerExit {
     is_normal_shutdown_started: Arc<AtomicBool>,
     events: broadcast::Sender<PeerLifecycleEvent>,
     block_height: watch::Sender<Option<BlockHeight>>,
-    fatal_notify: Arc<Notify>,
+    fatal_rx: watch::Receiver<bool>,
     stderr_log_ready: Arc<Notify>,
     stderr_live: Arc<StdMutex<LiveStderrState>>,
 }
 
 impl PeerExit {
     async fn monitor(mut self, shutdown: oneshot::Receiver<()>) -> Result<()> {
-        let status = tokio::select! {
-            status = self.child.wait() => status?,
-            _ = shutdown => self.shutdown_or_kill().await?,
-            _ = self.fatal_notify.notified() => {
-                self.span.in_scope(|| warn!("forcing peer shutdown after fatal signal"));
-                self.shutdown_or_kill().await?
+        let status = if *self.fatal_rx.borrow() {
+            self.span
+                .in_scope(|| warn!("forcing peer shutdown after fatal signal"));
+            self.shutdown_or_kill().await?
+        } else {
+            tokio::select! {
+                status = self.child.wait() => status?,
+                _ = shutdown => self.shutdown_or_kill().await?,
+                changed = self.fatal_rx.changed() => {
+                    if changed.is_ok() && *self.fatal_rx.borrow() {
+                        self.span.in_scope(|| warn!("forcing peer shutdown after fatal signal"));
+                    }
+                    self.shutdown_or_kill().await?
+                }
             }
         };
 
@@ -6192,19 +6407,19 @@ mod tests {
 
         let (shutdown_tx, _shutdown_rx) = tokio::sync::oneshot::channel();
         let tasks = tokio::task::JoinSet::new();
-        let fatal_notify = Arc::new(Notify::new());
+        let (fatal_tx, mut fatal_rx) = watch::channel(false);
         {
             let mut guard = peer.run.lock().await;
             *guard = Some(PeerRun {
                 tasks,
                 shutdown: shutdown_tx,
-                fatal_notify: fatal_notify.clone(),
+                fatal_tx: fatal_tx.clone(),
                 pid: None,
             });
         }
         peer.is_running.store(true, Ordering::Relaxed);
 
-        let notify_wait = fatal_notify.notified();
+        let notify_wait = fatal_rx.changed();
         tokio::pin!(notify_wait);
         peer.shutdown().await;
 
@@ -6212,7 +6427,8 @@ mod tests {
         assert!(peer.run.lock().await.is_none());
         tokio::time::timeout(Duration::from_secs(1), &mut notify_wait)
             .await
-            .expect("shutdown should notify fatal listeners");
+            .expect("shutdown should notify fatal listeners")
+            .expect("fatal signal should be delivered");
     }
 
     impl Drop for EnvVarGuard {
@@ -7478,6 +7694,87 @@ exit 0
         assert!(
             has_da_enabled_set_parameter,
             "default builder must inject DA enablement parameter"
+        );
+    }
+
+    #[test]
+    fn npos_bootstrap_adds_validator_instructions() {
+        init_instruction_registry();
+        let stake_amount = SumeragiNposParameters::default().min_self_bond();
+        let network = NetworkBuilder::new()
+            .with_peers(2)
+            .with_auto_populated_trusted_peers()
+            .with_npos_genesis_bootstrap(stake_amount)
+            .with_config_layer(|layer| {
+                layer.write(["sumeragi", "consensus_mode"], "npos");
+            })
+            .build();
+        let genesis = network.genesis();
+        let mut has_register = false;
+        let mut has_activate = false;
+        for tx in genesis.0.transactions_vec() {
+            if let Executable::Instructions(instructions) = tx.instructions() {
+                for instruction in instructions {
+                    if instruction
+                        .as_any()
+                        .downcast_ref::<RegisterPublicLaneValidator>()
+                        .is_some()
+                    {
+                        has_register = true;
+                    }
+                    if instruction
+                        .as_any()
+                        .downcast_ref::<ActivatePublicLaneValidator>()
+                        .is_some()
+                    {
+                        has_activate = true;
+                    }
+                }
+            }
+        }
+        assert!(
+            has_register && has_activate,
+            "npos bootstrap should register and activate validators in genesis"
+        );
+    }
+
+    #[test]
+    fn npos_bootstrap_overrides_stake_accounts_in_config() {
+        let stake_amount = SumeragiNposParameters::default().min_self_bond();
+        let network = NetworkBuilder::new()
+            .with_peers(1)
+            .with_auto_populated_trusted_peers()
+            .with_npos_genesis_bootstrap(stake_amount)
+            .with_config_layer(|layer| {
+                layer.write(["sumeragi", "consensus_mode"], "npos");
+            })
+            .build();
+
+        let mut merged = Table::new();
+        for layer in network.config_layers() {
+            merge_tables(&mut merged, layer.as_ref());
+        }
+
+        let stake_escrow = get_nested_value(
+            &merged,
+            &["nexus", "staking", "stake_escrow_account_id"],
+        )
+        .and_then(Value::as_str)
+        .expect("stake_escrow_account_id should be present");
+        let slash_sink = get_nested_value(
+            &merged,
+            &["nexus", "staking", "slash_sink_account_id"],
+        )
+        .and_then(Value::as_str)
+        .expect("slash_sink_account_id should be present");
+
+        assert!(
+            stake_escrow.parse::<AccountId>().is_ok(),
+            "stake_escrow_account_id must parse as AccountId; got {stake_escrow}"
+        );
+        assert!(
+            slash_sink.parse::<AccountId>().is_ok(),
+            "slash_sink_account_id must parse as AccountId; got {slash_sink}"
         );
     }
 

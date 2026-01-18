@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, Mapping, Optional
-from typing import Final
+from typing import TYPE_CHECKING, Any, Dict, Final, Iterable, Mapping, Optional
+
+from typing_extensions import TypeAlias
 
 from ._native import load_crypto_extension
 
@@ -76,15 +77,21 @@ __all__ = [
     "sm2_fixture_from_seed",
 ]
 
-Instruction = _crypto.Instruction
-SignedTransactionEnvelope = _crypto.SignedTransactionEnvelope
-TransactionBuilder = _crypto.TransactionBuilder
+if TYPE_CHECKING:
+    Instruction: TypeAlias = Any
+    SignedTransactionEnvelope: TypeAlias = Any
+    TransactionBuilder: TypeAlias = Any
+else:
+    Instruction = _crypto.Instruction
+    SignedTransactionEnvelope = _crypto.SignedTransactionEnvelope
+    TransactionBuilder = _crypto.TransactionBuilder
 verify_signed_transaction_versioned = _crypto.verify_signed_transaction_versioned
 DomainId = _crypto.DomainId
 AccountId = _crypto.AccountId
 AssetDefinitionId = _crypto.AssetDefinitionId
 AssetId = _crypto.AssetId
-SignedTransactionEnvelope.__doc__ = """Signed transaction envelope produced by the Python SDK."""
+if not TYPE_CHECKING:
+    SignedTransactionEnvelope.__doc__ = """Signed transaction envelope produced by the Python SDK."""
 
 
 def signed_transaction_envelope_from_json(payload: str) -> SignedTransactionEnvelope:
@@ -528,7 +535,7 @@ def build_signed_transaction(
     if nonce is not None:
         builder.set_nonce(int(nonce))
     if metadata is not None:
-        builder.set_metadata(metadata)  # type: ignore[arg-type]
+        builder.set_metadata(metadata)
     for instruction in instructions:
         builder.add_instruction(instruction)
     if lane_privacy_attachments is not None:

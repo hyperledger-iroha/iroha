@@ -248,63 +248,111 @@ pub mod json_wrappers {
         Canonical(SignedQueryCanonicalJson),
     }
 
+    /// Convert a JSON-wrapped query request into the native query request.
+    ///
+    /// # Errors
+    /// Returns an error string when required fields are missing or the payload
+    /// cannot be decoded into a query request.
+    pub fn query_request_from_json(req: QueryRequestJson) -> Result<QueryRequest, &'static str> {
+        match req {
+            QueryRequestJson::Singular(q) => Ok(QueryRequest::Singular(q)),
+            QueryRequestJson::Continue(c) => Ok(QueryRequest::Continue(c)),
+            QueryRequestJson::Start(s) => {
+                #[cfg(not(feature = "fast_dsl"))]
+                {
+                    let wire = s.wire.ok_or("missing wire id")?;
+                    let payload_b64 = s.payload_b64.ok_or("missing payload")?;
+                    let bytes = base64_decode(&payload_b64).map_err(|()| "invalid payload_b64")?;
+                    let qb = super::query_registry()
+                        .decode(&wire, &bytes)
+                        .ok_or("unknown query wire id")?
+                        .map_err(|_| "failed to decode query payload")?;
+                    Ok(QueryRequest::Start(QueryWithParams {
+                        query: qb,
+                        params: s.params,
+                    }))
+                }
+                #[cfg(feature = "fast_dsl")]
+                {
+                    let item = s.item_kind.ok_or("missing item_kind")?;
+                    let query_payload = s.query_payload_b64.ok_or("missing query_payload_b64")?;
+                    let predicate_b64 = s.predicate_b64.ok_or("missing predicate_b64")?;
+                    let selector_b64 = s.selector_b64.ok_or("missing selector_b64")?;
+                    let qp = base64_decode(&query_payload).map_err(|()| "bad query_payload_b64")?;
+                    let pr = base64_decode(&predicate_b64).map_err(|()| "bad predicate_b64")?;
+                    let se = base64_decode(&selector_b64).map_err(|()| "bad selector_b64")?;
+                    Ok(QueryRequest::Start(QueryWithParams {
+                        query: (),
+                        query_payload: qp,
+                        item,
+                        predicate_bytes: pr,
+                        selector_bytes: se,
+                        params: s.params,
+                    }))
+                }
+            }
+        }
+    }
+
+    /// Convert a query request into its JSON wrapper form.
+    pub fn query_request_to_json(req: &QueryRequest) -> QueryRequestJson {
+        match req {
+            QueryRequest::Singular(q) => QueryRequestJson::Singular(q.clone()),
+            QueryRequest::Continue(c) => QueryRequestJson::Continue(c.clone()),
+            QueryRequest::Start(qwp) => {
+                #[cfg(not(feature = "fast_dsl"))]
+                {
+                    qwp.query_box().map_or_else(
+                        || {
+                            // Fallback: emit params only
+                            QueryRequestJson::Start(QueryWithParamsJson {
+                                params: qwp.params.clone(),
+                                wire: None,
+                                payload_b64: None,
+                            })
+                        },
+                        |qb| {
+                            let wire = (**qb).type_name_key().to_string();
+                            let payload = (**qb).encode_bytes();
+                            QueryRequestJson::Start(QueryWithParamsJson {
+                                params: qwp.params.clone(),
+                                wire: Some(wire),
+                                payload_b64: Some(base64_encode(&payload)),
+                                #[cfg(feature = "fast_dsl")]
+                                item_kind: None,
+                                #[cfg(feature = "fast_dsl")]
+                                query_payload_b64: None,
+                                #[cfg(feature = "fast_dsl")]
+                                predicate_b64: None,
+                                #[cfg(feature = "fast_dsl")]
+                                selector_b64: None,
+                            })
+                        },
+                    )
+                }
+                #[cfg(feature = "fast_dsl")]
+                {
+                    QueryRequestJson::Start(QueryWithParamsJson {
+                        params: qwp.params.clone(),
+                        wire: None,
+                        payload_b64: None,
+                        item_kind: Some(qwp.item),
+                        query_payload_b64: Some(base64_encode(&qwp.query_payload)),
+                        predicate_b64: Some(base64_encode(&qwp.predicate_bytes)),
+                        selector_b64: Some(base64_encode(&qwp.selector_bytes)),
+                    })
+                }
+            }
+        }
+    }
+
     impl TryFrom<SignedQueryJson> for SignedQuery {
         type Error = &'static str;
         fn try_from(v: SignedQueryJson) -> Result<Self, Self::Error> {
             match v {
                 SignedQueryJson::Canonical(v1) => {
-                    fn request_from_json(
-                        req: QueryRequestJson,
-                    ) -> Result<QueryRequest, &'static str> {
-                        match req {
-                            QueryRequestJson::Singular(q) => Ok(QueryRequest::Singular(q)),
-                            QueryRequestJson::Continue(c) => Ok(QueryRequest::Continue(c)),
-                            QueryRequestJson::Start(s) => {
-                                #[cfg(not(feature = "fast_dsl"))]
-                                {
-                                    let wire = s.wire.ok_or("missing wire id")?;
-                                    let payload_b64 = s.payload_b64.ok_or("missing payload")?;
-                                    let bytes = base64_decode(&payload_b64)
-                                        .map_err(|()| "invalid payload_b64")?;
-                                    let qb = super::query_registry()
-                                        .decode(&wire, &bytes)
-                                        .ok_or("unknown query wire id")?
-                                        .map_err(|_| "failed to decode query payload")?;
-                                    Ok(QueryRequest::Start(QueryWithParams {
-                                        query: qb,
-                                        params: s.params,
-                                    }))
-                                }
-                                #[cfg(feature = "fast_dsl")]
-                                {
-                                    let item = s.item_kind.ok_or("missing item_kind")?;
-                                    let query_payload =
-                                        s.query_payload_b64.ok_or("missing query_payload_b64")?;
-                                    let predicate_b64 =
-                                        s.predicate_b64.ok_or("missing predicate_b64")?;
-                                    let selector_b64 =
-                                        s.selector_b64.ok_or("missing selector_b64")?;
-                                    let qp = base64_decode(&query_payload)
-                                        .map_err(|()| "bad query_payload_b64")?;
-                                    let pr = base64_decode(&predicate_b64)
-                                        .map_err(|()| "bad predicate_b64")?;
-                                    let se = base64_decode(&selector_b64)
-                                        .map_err(|()| "bad selector_b64")?;
-                                    Ok(QueryRequest::Start(QueryWithParams {
-                                        query: (),
-                                        query_payload: qp,
-                                        item,
-                                        predicate_bytes: pr,
-                                        selector_bytes: se,
-                                        params: s.params,
-                                    }))
-                                }
-                            }
-                        }
-                    }
-
                     // Validate signature against the reconstructed payload
-                    let request_for_verify = request_from_json(v1.payload.request.clone())?;
+                    let request_for_verify = query_request_from_json(v1.payload.request.clone())?;
                     let QuerySignature(sig) = &v1.signature;
                     sig.verify(
                         v1.payload.authority.signatory(),
@@ -315,7 +363,7 @@ pub mod json_wrappers {
                     )
                     .map_err(|_| "invalid SignedQuery signature")?;
 
-                    let request = request_from_json(v1.payload.request)?;
+                    let request = query_request_from_json(v1.payload.request)?;
 
                     // Build canonical SignedQuery
                     Ok(SignedQuery {
@@ -332,54 +380,7 @@ pub mod json_wrappers {
 
     impl From<&SignedQuery> for SignedQueryJson {
         fn from(sq: &SignedQuery) -> Self {
-            let req_json = match &sq.payload.request {
-                QueryRequest::Singular(q) => QueryRequestJson::Singular(q.clone()),
-                QueryRequest::Continue(c) => QueryRequestJson::Continue(c.clone()),
-                QueryRequest::Start(qwp) => {
-                    #[cfg(not(feature = "fast_dsl"))]
-                    {
-                        qwp.query_box().map_or_else(
-                            || {
-                                // Fallback: emit params only
-                                QueryRequestJson::Start(QueryWithParamsJson {
-                                    params: qwp.params.clone(),
-                                    wire: None,
-                                    payload_b64: None,
-                                })
-                            },
-                            |qb| {
-                                let wire = (**qb).type_name_key().to_string();
-                                let payload = (**qb).encode_bytes();
-                                QueryRequestJson::Start(QueryWithParamsJson {
-                                    params: qwp.params.clone(),
-                                    wire: Some(wire),
-                                    payload_b64: Some(base64_encode(&payload)),
-                                    #[cfg(feature = "fast_dsl")]
-                                    item_kind: None,
-                                    #[cfg(feature = "fast_dsl")]
-                                    query_payload_b64: None,
-                                    #[cfg(feature = "fast_dsl")]
-                                    predicate_b64: None,
-                                    #[cfg(feature = "fast_dsl")]
-                                    selector_b64: None,
-                                })
-                            },
-                        )
-                    }
-                    #[cfg(feature = "fast_dsl")]
-                    {
-                        QueryRequestJson::Start(QueryWithParamsJson {
-                            params: qwp.params.clone(),
-                            wire: None,
-                            payload_b64: None,
-                            item_kind: Some(qwp.item),
-                            query_payload_b64: Some(base64_encode(&qwp.query_payload)),
-                            predicate_b64: Some(base64_encode(&qwp.predicate_bytes)),
-                            selector_b64: Some(base64_encode(&qwp.selector_bytes)),
-                        })
-                    }
-                }
-            };
+            let req_json = query_request_to_json(&sq.payload.request);
             SignedQueryJson::Canonical(SignedQueryCanonicalJson {
                 signature: sq.signature.clone(),
                 payload: QueryRequestWithAuthorityJson {
@@ -2224,7 +2225,14 @@ mod json_roundtrip_tests {
     use super::*;
     #[cfg(not(feature = "fast_dsl"))]
     use crate::query::domain::prelude::FindDomains;
-    use crate::{account::AccountId, domain::Domain, query::json_wrappers::SignedQueryJson};
+    use crate::{
+        account::AccountId,
+        domain::Domain,
+        query::{
+            executor::prelude::FindParameters,
+            json_wrappers::{SignedQueryJson, query_request_from_json, query_request_to_json},
+        },
+    };
 
     static ALICE_ID: LazyLock<AccountId> = LazyLock::new(|| {
         format!("{}@{}", ALICE_KEYPAIR.public_key(), "wonderland")
@@ -2242,6 +2250,17 @@ mod json_roundtrip_tests {
         )
         .unwrap()
     });
+
+    #[test]
+    fn query_request_json_roundtrip_singular() {
+        let req = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters));
+        let json = query_request_to_json(&req);
+        let back = query_request_from_json(json).expect("json->request");
+        match back {
+            QueryRequest::Singular(SingularQueryBox::FindParameters(_)) => {}
+            _ => panic!("expected FindParameters singular query"),
+        }
+    }
 
     #[cfg(not(feature = "fast_dsl"))]
     #[test]
@@ -3403,6 +3422,8 @@ pub mod error {
             CursorDone,
             /// `fetch_size` must not exceed [`MAX_FETCH_SIZE`](crate::query::parameters::MAX_FETCH_SIZE).
             FetchSizeTooBig,
+            /// Query execution exceeded the configured gas/materialization budget.
+            GasBudgetExceeded,
             /// Some of the specified parameters (`filter/pagination/fetch_size/sorting`) are not applicable to singular queries
             InvalidSingularParameters,
             /// Reached the limit of parallel queries. Either wait for previous queries to complete, or increase the limit in the config.

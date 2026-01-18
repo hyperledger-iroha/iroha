@@ -150,7 +150,110 @@ fn minimal_config_snapshot() {
                         others: UniqueVec(
                             [],
                         ),
-                        pops: {},
+                        pops: {
+                            PublicKey(
+                                bls_normal(
+                                    "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2",
+                                ),
+                            ): [
+                                133,
+                                21,
+                                218,
+                                117,
+                                15,
+                                129,
+                                24,
+                                42,
+                                171,
+                                165,
+                                194,
+                                47,
+                                201,
+                                240,
+                                58,
+                                1,
+                                232,
+                                30,
+                                216,
+                                94,
+                                68,
+                                149,
+                                162,
+                                202,
+                                107,
+                                41,
+                                167,
+                                28,
+                                12,
+                                133,
+                                73,
+                                83,
+                                126,
+                                49,
+                                231,
+                                156,
+                                221,
+                                246,
+                                255,
+                                40,
+                                91,
+                                158,
+                                34,
+                                208,
+                                217,
+                                220,
+                                23,
+                                206,
+                                15,
+                                70,
+                                231,
+                                208,
+                                207,
+                                120,
+                                178,
+                                239,
+                                159,
+                                234,
+                                181,
+                                12,
+                                132,
+                                154,
+                                30,
+                                168,
+                                225,
+                                228,
+                                240,
+                                126,
+                                150,
+                                111,
+                                97,
+                                19,
+                                250,
+                                168,
+                                169,
+                                153,
+                                49,
+                                117,
+                                69,
+                                217,
+                                241,
+                                17,
+                                184,
+                                224,
+                                138,
+                                114,
+                                115,
+                                145,
+                                55,
+                                16,
+                                180,
+                                58,
+                                32,
+                                177,
+                                156,
+                                8,
+                            ],
+                        },
                     },
                     origin: File {
                         id: ParameterId(trusted_peers),
@@ -200,13 +303,13 @@ fn minimal_config_snapshot() {
                         },
                     },
                     client_capabilities: WithOrigin {
-                        value_hex: "010100020101010200020101010400030203010202000200047f100004deadbeef7f110004cafebabe",
+                        value_hex: "0101000201010102000201010104000282030202000200047f100004deadbeef7f110004cafebabe",
                         origin: Default {
                             id: ParameterId(network.soranet_handshake.client_capabilities),
                         },
                     },
                     relay_capabilities: WithOrigin {
-                        value_hex: "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f0104000302030102010001010202000200047f12000412345678",
+                        value_hex: "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002820302010001010202000200047f12000412345678",
                         origin: Default {
                             id: ParameterId(network.soranet_handshake.relay_capabilities),
                         },
@@ -247,6 +350,7 @@ fn minimal_config_snapshot() {
                 require_sm_openssl_preview_match: true,
                 idle_timeout: 300s,
                 peer_gossip_period: 1s,
+                peer_gossip_max_period: 30s,
                 trust_gossip: true,
                 trust_decay_half_life: 300s,
                 trust_penalty_bad_gossip: 5,
@@ -261,6 +365,35 @@ fn minimal_config_snapshot() {
                 p2p_queue_cap_high: 8192,
                 p2p_queue_cap_low: 32768,
                 p2p_post_queue_cap: 2048,
+                p2p_subscriber_queue_cap: 8192,
+                consensus_ingress_rate_per_sec: Some(
+                    300,
+                ),
+                consensus_ingress_burst: Some(
+                    300,
+                ),
+                consensus_ingress_bytes_per_sec: Some(
+                    67108864,
+                ),
+                consensus_ingress_bytes_burst: Some(
+                    67108864,
+                ),
+                consensus_ingress_critical_rate_per_sec: Some(
+                    300,
+                ),
+                consensus_ingress_critical_burst: Some(
+                    300,
+                ),
+                consensus_ingress_critical_bytes_per_sec: Some(
+                    134217728,
+                ),
+                consensus_ingress_critical_bytes_burst: Some(
+                    134217728,
+                ),
+                consensus_ingress_rbc_session_limit: 64,
+                consensus_ingress_penalty_threshold: 32,
+                consensus_ingress_penalty_window: 5s,
+                consensus_ingress_penalty_cooldown: 10s,
                 happy_eyeballs_stagger: 100ms,
                 addr_ipv6_first: false,
                 max_incoming: None,
@@ -283,14 +416,14 @@ fn minimal_config_snapshot() {
                 allow_cidrs: [],
                 deny_cidrs: [],
                 disconnect_on_post_overflow: true,
-                max_frame_bytes: 1048576,
+                max_frame_bytes: 16777216,
                 tcp_nodelay: true,
                 tcp_keepalive: Some(
                     60s,
                 ),
-                max_frame_bytes_consensus: 1048576,
+                max_frame_bytes_consensus: 16777216,
                 max_frame_bytes_control: 131072,
-                max_frame_bytes_block_sync: 1048576,
+                max_frame_bytes_block_sync: 16777216,
                 max_frame_bytes_tx_gossip: 131072,
                 max_frame_bytes_peer_gossip: 65536,
                 max_frame_bytes_health: 32768,
@@ -344,6 +477,12 @@ fn minimal_config_snapshot() {
                 query_burst_per_authority: Some(
                     50,
                 ),
+                tx_rate_per_authority_per_sec: Some(
+                    10000,
+                ),
+                tx_burst_per_authority: Some(
+                    20000,
+                ),
                 deploy_rate_per_origin_per_sec: Some(
                     4,
                 ),
@@ -378,8 +517,8 @@ fn minimal_config_snapshot() {
                 operator_auth: ToriiOperatorAuth {
                     enabled: false,
                     require_mtls: false,
-                    token_fallback: OperatorTokenFallback::Bootstrap,
-                    token_source: OperatorTokenSource::OperatorTokens,
+                    token_fallback: Bootstrap,
+                    token_source: OperatorTokens,
                     tokens: [],
                     rate_per_minute: Some(
                         30,
@@ -396,7 +535,9 @@ fn minimal_config_snapshot() {
                     },
                     webauthn: None,
                 },
-                preauth_max_connections: None,
+                preauth_max_connections: Some(
+                    1024,
+                ),
                 preauth_max_connections_per_ip: None,
                 preauth_rate_per_ip_per_sec: Some(
                     20,
@@ -413,6 +554,7 @@ fn minimal_config_snapshot() {
                 api_high_load_stream_threshold: None,
                 api_high_load_subscription_threshold: None,
                 events_buffer_capacity: 10000,
+                ws_message_timeout: 10s,
                 attachments_ttl_secs: 604800,
                 attachments_max_bytes: 4194304,
                 attachments_per_tenant_max_count: 128,
@@ -794,7 +936,9 @@ fn minimal_config_snapshot() {
                         id: ParameterId(kura.store_dir),
                     },
                 },
-                max_disk_usage_bytes: Bytes(0),
+                max_disk_usage_bytes: Bytes(
+                    82463372085,
+                ),
                 blocks_in_memory: 1024,
                 block_sync_roster_retention: 7200,
                 roster_sidecar_retention: 512,
@@ -823,6 +967,7 @@ fn minimal_config_snapshot() {
                 collectors_redundant_send_r: 1,
                 block_max_transactions: None,
                 block_max_payload_bytes: None,
+                proposal_queue_scan_multiplier: 4,
                 msg_channel_cap_votes: 8192,
                 msg_channel_cap_block_payload: 128,
                 msg_channel_cap_rbc_chunks: 1024,
@@ -840,17 +985,25 @@ fn minimal_config_snapshot() {
                 missing_block_signer_fallback_attempts: 1,
                 membership_mismatch_alert_threshold: 1,
                 membership_mismatch_fail_closed: false,
+                consensus_future_height_window: 8,
+                consensus_future_view_window: 8,
+                invalid_sig_penalty_threshold: 3,
+                invalid_sig_penalty_window: 5s,
+                invalid_sig_penalty_cooldown: 15s,
                 da_max_commitments_per_block: 16,
                 da_max_proof_openings_per_block: 128,
                 proof_policy: Off,
                 commit_cert_history_cap: 512,
                 zk_finality_k: 0,
                 require_precommit_qc: true,
-                rbc_chunk_max_bytes: 65536,
+                rbc_chunk_max_bytes: 262144,
+                rbc_chunk_fanout: None,
                 rbc_pending_max_chunks: 128,
                 rbc_pending_max_bytes: 8388608,
                 rbc_pending_ttl: 30s,
                 rbc_session_ttl: 120s,
+                rbc_rebroadcast_sessions_per_tick: 8,
+                rbc_payload_chunks_per_tick: 64,
                 rbc_store_max_sessions: 1024,
                 rbc_store_soft_sessions: 768,
                 rbc_store_max_bytes: 536870912,
@@ -925,11 +1078,13 @@ fn minimal_config_snapshot() {
             },
             block_sync: BlockSync {
                 gossip_period: 10s,
+                gossip_max_period: 30s,
                 gossip_size: 4,
             },
             transaction_gossiper: TransactionGossiper {
                 gossip_period: 1s,
                 gossip_size: 500,
+                gossip_resend_ticks: 3,
                 dataspace: DataspaceGossip {
                     drop_unknown_dataspace: false,
                     restricted_target_cap: None,
@@ -957,10 +1112,25 @@ fn minimal_config_snapshot() {
                 capacity: 65536,
                 capacity_per_user: 65536,
                 transaction_time_to_live: 86400s,
+                expired_cull_interval: 1s,
             },
             nexus: Nexus {
                 enabled: true,
-                storage: NexusStorage::default(),
+                storage: NexusStorage {
+                    max_disk_usage_bytes: Bytes(
+                        274877906944,
+                    ),
+                    max_wsv_memory_bytes: Bytes(
+                        8589934592,
+                    ),
+                    disk_budget_weights: NexusStorageWeights {
+                        kura_blocks_bps: 3000,
+                        wsv_snapshots_bps: 2000,
+                        sorafs_bps: 4000,
+                        soranet_spool_bps: 500,
+                        soravpn_spool_bps: 500,
+                    },
+                },
                 staking: NexusStaking {
                     public_validator_mode: StakeElected,
                     restricted_validator_mode: AdminManaged,
@@ -1189,6 +1359,7 @@ fn minimal_config_snapshot() {
                 quarantine_tx_max_cycles: 0,
                 quarantine_tx_max_millis: 0,
                 query_default_cursor_mode: Ephemeral,
+                query_max_fetch_size: 500,
                 query_stored_min_gas_units: 0,
                 amx_per_dataspace_budget_ms: 30,
                 amx_group_budget_ms: 140,
@@ -1197,14 +1368,20 @@ fn minimal_config_snapshot() {
                 amx_per_syscall_ns: 120,
             },
             tiered_state: TieredState {
-                enabled: false,
+                enabled: true,
                 hot_retained_keys: 0,
-                hot_retained_bytes: Bytes(0),
+                hot_retained_bytes: Bytes(
+                    8589934592,
+                ),
                 hot_retained_grace_snapshots: 1,
-                cold_store_root: None,
+                cold_store_root: Some(
+                    "./storage/tiered_state",
+                ),
                 da_store_root: None,
                 max_snapshots: 2,
-                max_cold_bytes: Bytes(0),
+                max_cold_bytes: Bytes(
+                    54975581388,
+                ),
             },
             compute: Compute {
                 enabled: false,
@@ -1406,10 +1583,8 @@ fn minimal_config_snapshot() {
                 zstd_level_large: 3,
                 zstd_level_gpu: 1,
                 large_threshold: 32768,
-                enable_compact_seq_len_up_to: 18446744073709551615,
-                enable_varint_offsets_up_to: 18446744073709551615,
                 allow_gpu_compression: true,
-                max_archive_len: 67108864,
+                max_archive_len: 536870912,
                 aos_ncb_small_n: 64,
             },
             hijiri: Hijiri {
@@ -1512,6 +1687,13 @@ fn minimal_config_snapshot() {
                 debug_trace_pipeline: false,
                 jdg_signature_schemes: {
                     SimpleThreshold,
+                },
+                runtime_upgrade_provenance: RuntimeUpgradeProvenancePolicy {
+                    mode: Optional,
+                    require_sbom: false,
+                    require_slsa: false,
+                    trusted_signers: {},
+                    signature_threshold: 0,
                 },
                 citizen_service: CitizenServiceDiscipline {
                     seat_cooldown_blocks: 10000,
@@ -2049,6 +2231,22 @@ fn nexus_lane_overrides_rejected_when_disabled() {
 fn sumeragi_rejects_zero_rbc_chunk_max_bytes() {
     let result = load_config_from_fixtures("bad.sumeragi_rbc_chunk_max_bytes_zero.toml");
     assert!(result.is_err(), "zero chunk size must be rejected");
+}
+
+#[test]
+fn sumeragi_rejects_zero_rbc_rebroadcast_sessions_per_tick() {
+    let result =
+        load_config_from_fixtures("bad.sumeragi_rbc_rebroadcast_sessions_per_tick_zero.toml");
+    assert!(result.is_err(), "zero rebroadcast budget must be rejected");
+}
+
+#[test]
+fn sumeragi_rejects_zero_rbc_payload_chunks_per_tick() {
+    let result = load_config_from_fixtures("bad.sumeragi_rbc_payload_chunks_per_tick_zero.toml");
+    assert!(
+        result.is_err(),
+        "zero payload chunk budget must be rejected"
+    );
 }
 
 #[test]

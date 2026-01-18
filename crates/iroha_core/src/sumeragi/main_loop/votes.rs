@@ -1,12 +1,15 @@
 //! Vote handling for consensus messages.
 
+use std::{collections::btree_map::Entry, time::Instant};
+
 use iroha_logger::prelude::*;
 
 use crate::sumeragi::consensus::Phase;
 
+use super::locked_qc::qc_extends_locked_with_lookup;
 use super::*;
 
-type VoteLogKey = (
+pub(super) type VoteLogKey = (
     crate::sumeragi::consensus::Phase,
     u64,
     u64,
@@ -27,32 +30,83 @@ fn vote_duplicate(
         .is_some_and(|existing| existing.block_hash == vote.block_hash)
 }
 
+fn record_vote_drop_without_roster(
+    vote: &crate::sumeragi::consensus::Vote,
+    reason: super::status::VoteValidationDropReason,
+) {
+    super::status::record_vote_validation_drop(super::status::VoteValidationDropRecord {
+        reason,
+        height: vote.height,
+        view: vote.view,
+        epoch: vote.epoch,
+        signer_index: vote.signer,
+        peer_id: None,
+        roster_hash: None,
+        roster_len: 0,
+        block_hash: vote.block_hash,
+    });
+}
+
 impl Actor {
     pub(super) fn consensus_context_for_height(
         &self,
         height: u64,
     ) -> (ConsensusMode, &'static str, Option<[u8; 32]>) {
-        let view = self.state.view();
-        let consensus_mode =
-            super::effective_consensus_mode_for_height(&view, height, self.config.consensus_mode);
+        let world = self.state.world.view();
+        let consensus_mode = super::effective_consensus_mode_for_height_from_world(
+            &world,
+            height,
+            self.config.consensus_mode,
+        );
         let mode_tag = match consensus_mode {
             ConsensusMode::Permissioned => super::consensus::PERMISSIONED_TAG,
             ConsensusMode::Npos => super::consensus::NPOS_TAG,
         };
         let prf_seed = if matches!(consensus_mode, ConsensusMode::Npos) {
-            Some(super::npos_seed_for_height(&view, height))
+            Some(super::npos_seed_for_height_from_world(
+                &world,
+                &self.chain_id,
+                height,
+            ))
         } else {
             None
         };
+        drop(world);
         (consensus_mode, mode_tag, prf_seed)
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) fn handle_vote(&mut self, vote: crate::sumeragi::consensus::Vote) {
         let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
         let stale_view = self.stale_view(vote.height, vote.view);
         if self.drop_vote_for_height_or_view(&vote, committed_height, stale_view)
             || self.drop_precommit_vote_for_lock(&vote)
         {
+            return;
+        }
+        if self.invalid_sig_penalty.is_suppressed(
+            InvalidSigKind::Vote,
+            vote.signer.into(),
+            Instant::now(),
+        ) {
+            debug!(
+                phase = ?vote.phase,
+                height = vote.height,
+                view = vote.view,
+                signer = vote.signer,
+                block_hash = %vote.block_hash,
+                kind = InvalidSigKind::Vote.as_str(),
+                "dropping vote from penalized signer"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::QcVote,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::PenalizedSender,
+            );
+            record_vote_drop_without_roster(
+                &vote,
+                super::status::VoteValidationDropReason::PenalizedSender,
+            );
             return;
         }
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(vote.height);
@@ -67,14 +121,14 @@ impl Actor {
             self.roster_for_vote_with_mode(vote.block_hash, vote.height, vote.view, consensus_mode)
         };
         if topology_peers.is_empty() {
-            warn!(
-                phase = ?vote.phase,
-                height = vote.height,
-                view = vote.view,
-                signer = vote.signer,
-                block_hash = %vote.block_hash,
-                "dropping vote: empty commit topology"
+            if matches!(vote.phase, Phase::Prepare | Phase::Commit) {
+                self.maybe_request_missing_block_for_unresolved_roster(&vote);
+            }
+            record_vote_drop_without_roster(
+                &vote,
+                super::status::VoteValidationDropReason::RosterMissing,
             );
+            self.defer_vote_for_roster(vote, "commit topology missing");
             return;
         }
         let topology = super::network_topology::Topology::new(topology_peers.clone());
@@ -90,6 +144,17 @@ impl Actor {
         if !self.validate_and_record_vote(&vote, &signature_topology, &evidence_context, mode_tag) {
             return;
         }
+        if !matches!(vote.phase, Phase::NewView) {
+            // NEW_VIEW votes reference the highest QC block hash; caching would poison rosters for
+            // subsequent PREPARE/COMMIT votes on that block.
+            self.cache_vote_roster(
+                vote.block_hash,
+                vote.height,
+                vote.view,
+                topology.as_ref().to_vec(),
+            );
+        }
+        self.prune_vote_caches_horizon(committed_height);
         match vote.phase {
             Phase::Prepare | Phase::Commit => {
                 self.try_form_qc_from_votes(
@@ -98,7 +163,7 @@ impl Actor {
                     vote.height,
                     vote.view,
                     vote.epoch,
-                    topology,
+                    &topology,
                 );
                 if matches!(vote.phase, Phase::Commit) {
                     if let Some(pending) = self.pending.pending_blocks.get(&vote.block_hash) {
@@ -111,61 +176,86 @@ impl Actor {
                             );
                             return;
                         }
-                        let block_time = {
-                            let state_view = self.state.view();
-                            self.block_time_for_mode(&state_view, consensus_mode)
-                        };
-                        let cooldown = block_time.max(REBROADCAST_COOLDOWN_FLOOR);
-                        if self.block_sync_rebroadcast_log.allow(
-                            vote.block_hash,
-                            std::time::Instant::now(),
-                            cooldown,
-                        ) {
-                            let mut update = self.block_sync_update_for_precommit_vote(
-                                &pending.block,
-                                self.state.as_ref(),
-                                self.kura.as_ref(),
-                                &self.qc_cache,
-                                &self.vote_log,
-                                &vote,
-                            );
-                            if self.prepare_block_sync_update_for_broadcast(
-                                &mut update,
-                                consensus_mode,
-                            ) {
-                                self.broadcast_block_sync_update(update, &topology_peers);
-                                iroha_logger::info!(
-                                    height = vote.height,
-                                    view = vote.view,
-                                    block = %vote.block_hash,
-                                    signer = vote.signer,
-                                    targets = topology_peers.len(),
-                                    "sending block sync update with cached precommit votes to commit topology after recording vote"
-                                );
-                            } else {
-                                self.broadcast_block_created_for_block_sync(
-                                    super::message::BlockCreated::from(&pending.block),
-                                    &topology_peers,
-                                );
-                                iroha_logger::info!(
-                                    height = vote.height,
-                                    view = vote.view,
-                                    block = %vote.block_hash,
-                                    signer = vote.signer,
-                                    targets = topology_peers.len(),
-                                    "sending BlockCreated payload to commit topology (no verifiable roster yet)"
-                                );
-                            }
-                        } else {
+                    }
+                    let block = match self.pending.pending_blocks.get(&vote.block_hash) {
+                        Some(pending) => pending.block.clone(),
+                        None => return,
+                    };
+                    let block_time = {
+                        let current_view = self.state.view();
+                        self.block_time_for_mode(&current_view, consensus_mode)
+                    };
+                    let cooldown = block_time.max(REBROADCAST_COOLDOWN_FLOOR);
+                    if self.block_sync_rebroadcast_log.allow(
+                        vote.block_hash,
+                        std::time::Instant::now(),
+                        cooldown,
+                    ) {
+                        let mut update = self.block_sync_update_for_precommit_vote(
+                            &block,
+                            self.state.as_ref(),
+                            self.kura.as_ref(),
+                            &self.qc_cache,
+                            &self.vote_log,
+                            &vote,
+                        );
+                        let commit_votes = update.commit_votes.len();
+                        let has_commit_qc = update.commit_qc.is_some();
+                        let should_broadcast =
+                            match self.pending.pending_blocks.get_mut(&vote.block_hash) {
+                                Some(pending) => pending.should_broadcast_block_sync_update(
+                                    vote.view,
+                                    commit_votes,
+                                    has_commit_qc,
+                                ),
+                                None => false,
+                            };
+                        if !should_broadcast {
                             iroha_logger::trace!(
                                 height = vote.height,
                                 view = vote.view,
                                 block = %vote.block_hash,
                                 signer = vote.signer,
-                                cooldown_ms = cooldown.as_millis(),
-                                "skipping block sync update broadcast due to cooldown"
+                                commit_votes,
+                                has_commit_qc,
+                                "skipping block sync update broadcast: no new commit votes"
+                            );
+                            return;
+                        }
+                        if self.prepare_block_sync_update_for_broadcast(&mut update, consensus_mode)
+                        {
+                            self.broadcast_block_sync_update(update, &topology_peers);
+                            iroha_logger::info!(
+                                height = vote.height,
+                                view = vote.view,
+                                block = %vote.block_hash,
+                                signer = vote.signer,
+                                targets = topology_peers.len(),
+                                "sending block sync update with cached precommit votes to commit topology after recording vote"
+                            );
+                        } else {
+                            self.broadcast_block_created_for_block_sync(
+                                super::message::BlockCreated::from(&block),
+                                &topology_peers,
+                            );
+                            iroha_logger::info!(
+                                height = vote.height,
+                                view = vote.view,
+                                block = %vote.block_hash,
+                                signer = vote.signer,
+                                targets = topology_peers.len(),
+                                "sending BlockCreated payload to commit topology (no verifiable roster yet)"
                             );
                         }
+                    } else {
+                        iroha_logger::trace!(
+                            height = vote.height,
+                            view = vote.view,
+                            block = %vote.block_hash,
+                            signer = vote.signer,
+                            cooldown_ms = cooldown.as_millis(),
+                            "skipping block sync update broadcast due to cooldown"
+                        );
                     }
                 }
             }
@@ -212,7 +302,7 @@ impl Actor {
                 let count = self.subsystems.propose.new_view_tracker.record(
                     vote.height,
                     vote.view,
-                    signer_peer.clone(),
+                    signer_peer,
                     highest,
                 );
                 debug!(
@@ -228,10 +318,56 @@ impl Actor {
                     vote.height,
                     vote.view,
                     vote.epoch,
-                    topology,
+                    &topology,
                 );
             }
         }
+    }
+
+    pub(super) fn prune_vote_caches_horizon(&mut self, committed_height: u64) {
+        let highest_commit = self
+            .highest_qc
+            .filter(|qc| qc.phase == crate::sumeragi::consensus::Phase::Commit);
+        let anchor_height =
+            highest_commit.map_or(committed_height, |qc| qc.height.max(committed_height));
+        let active_height = anchor_height.saturating_add(1);
+        let min_height = active_height.saturating_sub(super::VOTE_CACHE_HEIGHT_WINDOW);
+        let max_height = active_height.saturating_add(super::VOTE_CACHE_HEIGHT_WINDOW);
+        let current_view = self.phase_tracker.current_view(active_height);
+        let min_view = current_view.map(|view| view.saturating_sub(super::VOTE_CACHE_VIEW_WINDOW));
+        let max_view = current_view.map(|view| view.saturating_add(super::VOTE_CACHE_VIEW_WINDOW));
+        let should_keep = |height: u64, view: u64| -> bool {
+            if height <= committed_height || height < min_height || height > max_height {
+                return false;
+            }
+            if height == active_height {
+                if let Some(min_view) = min_view {
+                    if view < min_view {
+                        return false;
+                    }
+                }
+                if let Some(max_view) = max_view {
+                    if view > max_view {
+                        return false;
+                    }
+                }
+            }
+            true
+        };
+        self.vote_log
+            .retain(|(_, height, view, _, _), _| should_keep(*height, *view));
+        self.qc_cache
+            .retain(|(_, _, height, view, _), _| should_keep(*height, *view));
+        self.qc_signer_tally
+            .retain(|(_, _, height, view, _), _| should_keep(*height, *view));
+        self.vote_roster_cache
+            .retain(|_, entry| should_keep(entry.height, entry.view));
+        self.deferred_qcs
+            .retain(|(_, _, height, view, _), _| should_keep(*height, *view));
+        self.deferred_votes.retain(|_, votes| {
+            votes.retain(|(_, height, view, _, _), _| should_keep(*height, *view));
+            !votes.is_empty()
+        });
     }
 
     fn drop_vote_for_height_or_view(
@@ -270,6 +406,15 @@ impl Actor {
                     committed_height,
                     "dropping stale vote below committed height"
                 );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::QcVote,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::StaleHeight,
+                );
+                record_vote_drop_without_roster(
+                    vote,
+                    super::status::VoteValidationDropReason::StaleHeight,
+                );
                 return true;
             }
         }
@@ -284,6 +429,15 @@ impl Actor {
                 signer = vote.signer,
                 block_hash = %vote.block_hash,
                 "dropping vote with mismatched epoch"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::QcVote,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::EpochMismatch,
+            );
+            record_vote_drop_without_roster(
+                vote,
+                super::status::VoteValidationDropReason::EpochMismatch,
             );
             return true;
         }
@@ -322,12 +476,22 @@ impl Actor {
                     kind = "Vote",
                     "dropping consensus message for stale view"
                 );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::QcVote,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::StaleView,
+                );
+                record_vote_drop_without_roster(
+                    vote,
+                    super::status::VoteValidationDropReason::StaleView,
+                );
                 return true;
             }
         }
         false
     }
 
+    #[allow(clippy::too_many_lines)]
     fn observe_new_view_highest_qc(&mut self, highest: crate::sumeragi::consensus::QcHeaderRef) {
         let should_update = self.highest_qc.is_none_or(|current| {
             let incoming = (highest.height, highest.view);
@@ -391,6 +555,10 @@ impl Actor {
             _ => 0,
         };
         self.note_missing_block_fetch_metrics(&decision, retry_window, targets_len, dwell);
+        super::status::record_missing_block_fetch(
+            targets_len,
+            dwell.as_millis().try_into().unwrap_or(u64::MAX),
+        );
         match decision {
             MissingBlockFetchDecision::Requested {
                 targets,
@@ -440,7 +608,7 @@ impl Actor {
         let Some(lock) = self.locked_qc else {
             return false;
         };
-        if !self.block_known_locally(lock.subject_block_hash) {
+        if !self.block_known_for_lock(lock.subject_block_hash) {
             return false;
         }
         if vote.height < lock.height {
@@ -453,6 +621,11 @@ impl Actor {
                 locked_height = lock.height,
                 locked_hash = %lock.subject_block_hash,
                 "dropping precommit vote below locked height"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::QcVote,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::LockedQc,
             );
             return true;
         }
@@ -468,6 +641,15 @@ impl Actor {
                     locked_hash = %lock.subject_block_hash,
                     "dropping precommit vote that conflicts with locked block"
                 );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::QcVote,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::LockedQc,
+                );
+                record_vote_drop_without_roster(
+                    vote,
+                    super::status::VoteValidationDropReason::LockedQc,
+                );
                 return true;
             }
         }
@@ -479,10 +661,9 @@ impl Actor {
                 view: vote.view,
                 epoch: vote.epoch,
             };
-            let extends_locked =
-                super::qc_extends_locked_with_lookup(lock, candidate, |hash, height| {
-                    self.parent_hash_for(hash, height)
-                });
+            let extends_locked = qc_extends_locked_with_lookup(lock, candidate, |hash, height| {
+                self.parent_hash_for(hash, height)
+            });
             if !extends_locked {
                 iroha_logger::debug!(
                     height = vote.height,
@@ -494,12 +675,22 @@ impl Actor {
                     locked_hash = %lock.subject_block_hash,
                     "dropping precommit vote that does not extend locked chain"
                 );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::QcVote,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::LockedQc,
+                );
+                record_vote_drop_without_roster(
+                    vote,
+                    super::status::VoteValidationDropReason::LockedQc,
+                );
                 return true;
             }
         }
         false
     }
 
+    #[allow(clippy::too_many_lines)]
     fn validate_and_record_vote(
         &mut self,
         vote: &crate::sumeragi::consensus::Vote,
@@ -507,6 +698,24 @@ impl Actor {
         evidence_context: &super::evidence::EvidenceValidationContext<'_>,
         mode_tag: &str,
     ) -> bool {
+        let roster_len = u32::try_from(signature_topology.as_ref().len()).unwrap_or(u32::MAX);
+        let roster_hash = iroha_crypto::HashOf::new(&signature_topology.as_ref().to_vec());
+        let peer_id = usize::try_from(vote.signer)
+            .ok()
+            .and_then(|idx| signature_topology.as_ref().get(idx).cloned());
+        let record_drop = |reason| {
+            super::status::record_vote_validation_drop(super::status::VoteValidationDropRecord {
+                reason,
+                height: vote.height,
+                view: vote.view,
+                epoch: vote.epoch,
+                signer_index: vote.signer,
+                peer_id: peer_id.clone(),
+                roster_hash: Some(roster_hash.clone()),
+                roster_len,
+                block_hash: vote.block_hash,
+            });
+        };
         if vote_duplicate(&self.vote_log, vote) {
             iroha_logger::debug!(
                 phase = ?vote.phase,
@@ -517,6 +726,12 @@ impl Actor {
                 block_hash = %vote.block_hash,
                 "dropping duplicate vote already recorded"
             );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::QcVote,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::Duplicate,
+            );
+            record_drop(super::status::VoteValidationDropReason::Duplicate);
             return false;
         }
         match vote_signature_check(
@@ -541,7 +756,10 @@ impl Actor {
                         view = vote.view,
                         signer = vote.signer,
                         block_hash = %vote.block_hash,
+                        peer = ?peer_id,
                         roster_len,
+                        roster_hash = %roster_hash,
+                        mode_tag,
                         ?err,
                         "dropping vote with invalid signature"
                     );
@@ -552,11 +770,31 @@ impl Actor {
                         view = vote.view,
                         signer = vote.signer,
                         block_hash = %vote.block_hash,
+                        peer = ?peer_id,
                         roster_len,
+                        roster_hash = %roster_hash,
+                        mode_tag,
                         ?err,
                         "suppressing repeated invalid vote signature log"
                     );
                 }
+                let drop_reason = match err {
+                    super::VoteSignatureError::SignerIndexOverflow(_) => {
+                        super::status::VoteValidationDropReason::SignerIndexOverflow
+                    }
+                    super::VoteSignatureError::SignerOutOfRange { .. } => {
+                        super::status::VoteValidationDropReason::SignerOutOfRange
+                    }
+                    super::VoteSignatureError::SignatureInvalid => {
+                        super::status::VoteValidationDropReason::SignatureInvalid
+                    }
+                };
+                record_drop(drop_reason);
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::QcVote,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::InvalidSignature,
+                );
                 return false;
             }
         }
@@ -569,6 +807,12 @@ impl Actor {
                     signer = vote.signer,
                     "dropping NEW_VIEW vote missing highest certificate reference"
                 );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::QcVote,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::MissingHighestQc,
+                );
+                record_drop(super::status::VoteValidationDropReason::MissingHighestQc);
                 return false;
             };
             let expected_epoch = self.epoch_for_height(highest.height);
@@ -582,6 +826,12 @@ impl Actor {
                     expected_epoch,
                     "dropping NEW_VIEW vote with mismatched highest QC epoch"
                 );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::QcVote,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::EpochMismatch,
+                );
+                record_drop(super::status::VoteValidationDropReason::EpochMismatch);
                 return false;
             }
             if highest.phase != Phase::Commit {
@@ -594,6 +844,12 @@ impl Actor {
                     phase = ?highest.phase,
                     "dropping NEW_VIEW vote with non-commit highest certificate"
                 );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::QcVote,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::HighestQcMismatch,
+                );
+                record_drop(super::status::VoteValidationDropReason::HighestQcMismatch);
                 return false;
             }
             if highest.subject_block_hash != vote.block_hash {
@@ -605,6 +861,12 @@ impl Actor {
                     highest_hash = %highest.subject_block_hash,
                     "dropping NEW_VIEW vote with mismatched highest block hash"
                 );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::QcVote,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::HighestQcMismatch,
+                );
+                record_drop(super::status::VoteValidationDropReason::HighestQcMismatch);
                 return false;
             }
             let expected_height = highest.height.saturating_add(1);
@@ -617,6 +879,12 @@ impl Actor {
                     expected_height,
                     "dropping NEW_VIEW vote with mismatched height"
                 );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::QcVote,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::HighestQcMismatch,
+                );
+                record_drop(super::status::VoteValidationDropReason::HighestQcMismatch);
                 return false;
             }
             if let Some((local_height, local_view)) =
@@ -633,6 +901,12 @@ impl Actor {
                         local_view,
                         "dropping NEW_VIEW vote with highest QC that mismatches local block metadata"
                     );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::QcVote,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::HighestQcMismatch,
+                    );
+                    record_drop(super::status::VoteValidationDropReason::HighestQcMismatch);
                     return false;
                 }
             }
@@ -649,6 +923,7 @@ impl Actor {
                     block_hash = %vote.block_hash,
                     "dropping duplicate vote already recorded"
                 );
+                record_drop(super::status::VoteValidationDropReason::Duplicate);
                 return false;
             }
             self.note_double_vote(Some(&existing), vote, evidence_context);
@@ -680,6 +955,12 @@ impl Actor {
                 existing_block = %existing.block_hash,
                 "dropping conflicting vote for signer"
             );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::QcVote,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::ConflictingVote,
+            );
+            record_drop(super::status::VoteValidationDropReason::ConflictingVote);
             return false;
         }
         let previous = self.vote_log.insert(key, vote.clone());
@@ -713,6 +994,247 @@ impl Actor {
             }
         }
         true
+    }
+
+    pub(super) fn cache_vote_roster(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        roster: Vec<PeerId>,
+    ) {
+        if roster.is_empty() {
+            return;
+        }
+        let entry = VoteRosterCacheEntry {
+            roster,
+            height,
+            view,
+        };
+        match self.vote_roster_cache.entry(block_hash) {
+            Entry::Vacant(slot) => {
+                slot.insert(entry);
+            }
+            Entry::Occupied(existing) => {
+                let cached = existing.get();
+                if cached.roster != entry.roster {
+                    warn!(
+                        block = %block_hash,
+                        cached = cached.roster.len(),
+                        observed = entry.roster.len(),
+                        "vote roster mismatch; keeping cached roster to preserve vote validity"
+                    );
+                } else if cached.height != entry.height || cached.view != entry.view {
+                    warn!(
+                        block = %block_hash,
+                        cached_height = cached.height,
+                        cached_view = cached.view,
+                        observed_height = entry.height,
+                        observed_view = entry.view,
+                        "vote roster height/view mismatch; keeping cached roster to preserve vote validity"
+                    );
+                }
+            }
+        }
+        self.replay_deferred_votes_for_block(block_hash);
+    }
+
+    fn defer_vote_for_roster(
+        &mut self,
+        vote: crate::sumeragi::consensus::Vote,
+        reason: &'static str,
+    ) {
+        let key = vote_key(&vote);
+        let phase = vote.phase;
+        let height = vote.height;
+        let view = vote.view;
+        let signer = vote.signer;
+        let block_hash = vote.block_hash;
+        let deferred = {
+            let entry = self.deferred_votes.entry(block_hash).or_default();
+            if entry.contains_key(&key) {
+                debug!(
+                    phase = ?phase,
+                    height,
+                    view,
+                    signer,
+                    block_hash = %block_hash,
+                    reason,
+                    "deferring duplicate vote while roster is unresolved"
+                );
+                return;
+            }
+            entry.insert(key, vote);
+            entry.len()
+        };
+        self.record_consensus_message_handling(
+            super::status::ConsensusMessageKind::QcVote,
+            super::status::ConsensusMessageOutcome::Deferred,
+            super::status::ConsensusMessageReason::RosterMissing,
+        );
+        info!(
+            phase = ?phase,
+            height,
+            view,
+            signer,
+            block_hash = %block_hash,
+            deferred,
+            reason,
+            "deferring vote until commit roster is available"
+        );
+    }
+
+    fn maybe_request_missing_block_for_unresolved_roster(
+        &mut self,
+        vote: &crate::sumeragi::consensus::Vote,
+    ) {
+        if self.block_known_locally(vote.block_hash) {
+            return;
+        }
+        let roster = self.effective_commit_topology();
+        if roster.is_empty() {
+            debug!(
+                height = vote.height,
+                view = vote.view,
+                phase = ?vote.phase,
+                block_hash = %vote.block_hash,
+                "skipping missing-block fetch: empty commit topology"
+            );
+            return;
+        }
+        let topology = super::network_topology::Topology::new(roster);
+        let retry_window = self.quorum_timeout(self.runtime_da_enabled());
+        let now = Instant::now();
+        let signers = BTreeSet::new();
+        let decision = plan_missing_block_fetch(
+            &mut self.pending.missing_block_requests,
+            vote.block_hash,
+            vote.height,
+            vote.view,
+            vote.phase,
+            MissingBlockPriority::Consensus,
+            &signers,
+            &topology,
+            now,
+            retry_window,
+            None,
+            self.config.missing_block_signer_fallback_attempts,
+        );
+        let dwell = self
+            .pending
+            .missing_block_requests
+            .get(&vote.block_hash)
+            .map(|stats| now.saturating_duration_since(stats.first_seen))
+            .unwrap_or_default();
+        let dwell_ms = dwell.as_millis();
+        let targets_len = match &decision {
+            MissingBlockFetchDecision::Requested { targets, .. } => targets.len(),
+            _ => 0,
+        };
+        self.note_missing_block_fetch_metrics(&decision, retry_window, targets_len, dwell);
+        super::status::record_missing_block_fetch(
+            targets_len,
+            dwell.as_millis().try_into().unwrap_or(u64::MAX),
+        );
+        match decision {
+            MissingBlockFetchDecision::Requested {
+                targets,
+                target_kind,
+            } => {
+                self.request_missing_block(vote.block_hash, &targets);
+                iroha_logger::info!(
+                    height = vote.height,
+                    view = vote.view,
+                    phase = ?vote.phase,
+                    block = ?vote.block_hash,
+                    targets = ?targets,
+                    target_kind = target_kind.label(),
+                    retry_window_ms = retry_window.as_millis(),
+                    dwell_ms,
+                    "requested missing block payload after empty commit topology"
+                );
+            }
+            MissingBlockFetchDecision::NoTargets => {
+                iroha_logger::warn!(
+                    height = vote.height,
+                    view = vote.view,
+                    phase = ?vote.phase,
+                    block = ?vote.block_hash,
+                    retry_window_ms = retry_window.as_millis(),
+                    dwell_ms,
+                    targets = targets_len,
+                    "unable to request missing block payload after empty commit topology: no peers available"
+                );
+            }
+            MissingBlockFetchDecision::Backoff => {
+                iroha_logger::info!(
+                    height = vote.height,
+                    view = vote.view,
+                    phase = ?vote.phase,
+                    block = ?vote.block_hash,
+                    retry_window_ms = retry_window.as_millis(),
+                    dwell_ms,
+                    targets = targets_len,
+                    "skipping missing-block fetch after empty commit topology during backoff"
+                );
+            }
+        }
+    }
+
+    fn replay_deferred_votes_for_block(&mut self, block_hash: HashOf<BlockHeader>) {
+        let Some(deferred) = self.deferred_votes.remove(&block_hash) else {
+            return;
+        };
+        let count = deferred.len();
+        if count == 0 {
+            return;
+        }
+        info!(
+            block = %block_hash,
+            deferred = count,
+            "replaying deferred votes after roster resolution"
+        );
+        for (_, vote) in deferred {
+            self.handle_vote(vote);
+        }
+    }
+
+    pub(super) fn try_replay_deferred_votes(&mut self) -> bool {
+        if self.deferred_votes.is_empty() {
+            return false;
+        }
+        let mut resolved = Vec::new();
+        for (block_hash, votes) in &self.deferred_votes {
+            let Some(vote) = votes.values().next() else {
+                continue;
+            };
+            let (consensus_mode, _, _) = self.consensus_context_for_height(vote.height);
+            let roster = if matches!(vote.phase, Phase::NewView) {
+                self.roster_for_new_view_with_mode(
+                    *block_hash,
+                    vote.height,
+                    vote.view,
+                    consensus_mode,
+                )
+            } else {
+                self.roster_for_vote_with_mode(*block_hash, vote.height, vote.view, consensus_mode)
+            };
+            if !roster.is_empty() {
+                resolved.push((*block_hash, roster));
+            }
+        }
+        let replayed = !resolved.is_empty();
+        for (block_hash, roster) in resolved {
+            let Some(sample) = self
+                .deferred_votes
+                .get(&block_hash)
+                .and_then(|votes| votes.values().next().map(|vote| (vote.height, vote.view)))
+            else {
+                continue;
+            };
+            self.cache_vote_roster(block_hash, sample.0, sample.1, roster);
+        }
+        replayed
     }
 
     fn note_double_vote(
@@ -770,6 +1292,7 @@ impl Actor {
             self.config.consensus_mode,
             self.common_config.trusted_peers.value(),
             self.common_config.peer.id(),
+            &self.roster_validation_cache,
         );
         Self::apply_cached_qcs_to_block_sync_update(
             &mut update,
@@ -821,6 +1344,7 @@ impl Actor {
         Some(hashes)
     }
 
+    #[allow(clippy::unused_self)]
     fn roster_from_commit_qc_history(&self, height: u64) -> Option<Vec<PeerId>> {
         let parent_height = height.checked_sub(1)?;
         let cert = super::status::commit_qc_history()
@@ -877,11 +1401,8 @@ impl Actor {
             }
         }
         let candidate_matches_known_chain = |candidate: &crate::sumeragi::consensus::Qc| {
-            if let Some(known_hash) = known_hash_for_height(candidate.height) {
-                known_hash == candidate.subject_block_hash
-            } else {
-                true
-            }
+            known_hash_for_height(candidate.height)
+                .is_none_or(|known_hash| known_hash == candidate.subject_block_hash)
         };
         let cert = target_parent_hash
             .and_then(|target_hash| {
@@ -940,7 +1461,7 @@ impl Actor {
         None
     }
 
-    // Prefer the roster tied to a committed block to keep signatures valid across roster changes.
+    // Prefer the cached roster once votes are validated to keep signatures stable across roster changes.
     pub(super) fn roster_for_vote_with_mode(
         &self,
         block_hash: HashOf<BlockHeader>,
@@ -948,6 +1469,11 @@ impl Actor {
         view: u64,
         consensus_mode: ConsensusMode,
     ) -> Vec<PeerId> {
+        if let Some(cached) = self.vote_roster_cache.get(&block_hash) {
+            if !cached.roster.is_empty() {
+                return cached.roster.clone();
+            }
+        }
         let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
         let mut roster_height = height;
         let mut roster_view = None;
@@ -968,14 +1494,16 @@ impl Actor {
                 roster_height,
                 block_hash,
                 roster_view,
+                &self.roster_validation_cache,
             )
             .or_else(|| {
                 super::block_sync_history_roster_for_block(
-                    self.state.as_ref(),
                     consensus_mode,
                     block_hash,
                     roster_height,
                     roster_view,
+                    &self.chain_id,
+                    &self.roster_validation_cache,
                 )
             })
         };
@@ -993,7 +1521,14 @@ impl Actor {
                 }
             }
         }
-        let active = self.effective_commit_topology();
+        let view = self.state.view();
+        let active = super::roster::derive_active_topology_for_mode(
+            &view,
+            self.common_config.trusted_peers.value(),
+            self.common_config.peer.id(),
+            consensus_mode,
+        );
+        drop(view);
         if height <= committed_height.saturating_add(1) && !active.is_empty() {
             if let Some(selection) = roster_selection() {
                 if !selection.roster.is_empty() {
@@ -1177,6 +1712,10 @@ mod tests {
         > = BTreeMap::new();
 
         let (trusted, me_id) = trusted_self();
+        let roster_cache = {
+            let view = state.view();
+            super::RosterValidationCache::from_world(view.world(), super::EPOCH_LENGTH_BLOCKS, None)
+        };
         let mut update = super::block_sync_update_with_roster(
             &block,
             &state,
@@ -1184,6 +1723,7 @@ mod tests {
             ConsensusMode::Permissioned,
             &trusted,
             &me_id,
+            &roster_cache,
         );
         Actor::apply_cached_qcs_to_block_sync_update(
             &mut update,

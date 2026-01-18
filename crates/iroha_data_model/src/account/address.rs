@@ -5,6 +5,7 @@ use core::{
     str::FromStr,
 };
 use std::{
+    cell::Cell,
     io::Write,
     sync::{
         Arc, Condvar, LazyLock, Mutex, OnceLock, RwLock,
@@ -185,10 +186,14 @@ pub(crate) fn default_domain_guard(label: Option<&str>) -> DefaultDomainGuard {
     DefaultDomainGuard::enter(label)
 }
 
-/// Obtain the currently configured chain discriminant (IH58 network prefix).
+/// Obtain the currently configured chain discriminant (IH58 network prefix),
+/// honoring any thread-local override.
 #[must_use]
 pub fn chain_discriminant() -> u16 {
-    CHAIN_DISCRIMINANT.load(Ordering::Relaxed)
+    CHAIN_DISCRIMINANT_OVERRIDE.with(|cell| {
+        cell.get()
+            .unwrap_or_else(|| CHAIN_DISCRIMINANT.load(Ordering::Relaxed))
+    })
 }
 
 /// Set the global chain discriminant / IH58 prefix, returning the previous value.
@@ -209,6 +214,31 @@ const COMPRESSED_BASE: u32 = COMPRESSED_BASE_U8 as u32;
 const DEFAULT_CHAIN_DISCRIMINANT: u16 = 0x02F1;
 
 static CHAIN_DISCRIMINANT: AtomicU16 = AtomicU16::new(DEFAULT_CHAIN_DISCRIMINANT);
+thread_local! {
+    static CHAIN_DISCRIMINANT_OVERRIDE: Cell<Option<u16>> = const { Cell::new(None) };
+}
+
+/// Scoped chain discriminant override for the current thread.
+#[derive(Debug)]
+pub struct ChainDiscriminantGuard(Option<u16>);
+
+impl ChainDiscriminantGuard {
+    /// Override the chain discriminant for the current thread.
+    pub fn enter(discriminant: u16) -> Self {
+        let previous = CHAIN_DISCRIMINANT_OVERRIDE.with(|cell| {
+            let prev = cell.get();
+            cell.set(Some(discriminant));
+            prev
+        });
+        Self(previous)
+    }
+}
+
+impl Drop for ChainDiscriminantGuard {
+    fn drop(&mut self) {
+        CHAIN_DISCRIMINANT_OVERRIDE.with(|cell| cell.set(self.0));
+    }
+}
 
 /// Canonical representation of an account address payload.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1689,6 +1719,16 @@ mod tests {
             output.push_str(alphabet[usize::from(digit)]);
         }
         output
+    }
+
+    #[test]
+    fn chain_discriminant_guard_scopes_override() {
+        let original = chain_discriminant();
+        {
+            let _guard = ChainDiscriminantGuard::enter(original.wrapping_add(1));
+            assert_eq!(chain_discriminant(), original.wrapping_add(1));
+        }
+        assert_eq!(chain_discriminant(), original);
     }
 
     fn ascii_payload_to_fullwidth(compressed: &str) -> Option<String> {

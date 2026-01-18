@@ -116,9 +116,10 @@ merge_qc_digest = blake2b32(
 
 ## 4. הערות יישום
 - `crates/iroha_core/src/state.rs`: ‏`State::commit_merge_entry` מאמת את ההפחתה ומשלב מטא-נתונים גלובליים במצב העולם.
-- `crates/iroha_core/src/block.rs`: שכבת האימות דוחה בלוקים ריקים עם
-  `BlockValidationError::EmptyBlock`, כך שהמדיניות הלא-ריקה נאכפת לפני בקשת
-  חתימות והפניה למרשם המיזוג.
+- `crates/iroha_core/src/block.rs`: שכבת האימות דוחה בלוקים שאין בהם נקודות
+  כניסה (טרנזקציות חיצוניות או טריגרי-זמן) ואין בהם ארטיפקטים דטרמיניסטיים
+  כגון חבילות DA, עם `BlockValidationError::EmptyBlock`, כך שהמדיניות הלא-ריקה
+  נאכפת לפני בקשת חתימות והפניה למרשם המיזוג.
 - עזר ההפחתה הדטרמיניסטי ממומש בשרות המיזוג: `reduce_merge_hint_roots`
   (`crates/iroha_core/src/merge.rs`) מטמיע קיפול Poseidon2; חיבורי האצה חומרתית
   עוד בדרך, אך מסלול הסקאלר שומר על דטרמיניזם.

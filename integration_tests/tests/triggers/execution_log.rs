@@ -56,11 +56,18 @@ async fn client_verifies_transaction_entrypoint_and_result_proofs() -> Result<()
     let test_client = network.client();
 
     // Subscribe to committed block headers.
-    let mut events = test_client
-        .listen_for_events_async([BlockEventFilter::new()
+    let mut events = timeout(
+        network.sync_timeout(),
+        test_client.listen_for_events_async([BlockEventFilter::new()
             .for_height(nonzero!(2u64))
-            .for_status(BlockStatus::Committed)])
-        .await?;
+            .for_status(BlockStatus::Committed)]),
+    )
+    .await
+    .map_err(|_| {
+        eyre::eyre!(
+            "client_verifies_transaction_entrypoint_and_result_proofs: timed out opening block event stream"
+        )
+    })??;
 
     // Submit the user transaction and derive its entrypoint hash.
     let tx_hash: HashOf<SignedTransaction> =
@@ -73,7 +80,7 @@ async fn client_verifies_transaction_entrypoint_and_result_proofs() -> Result<()
     // Wait for the block to be committed and retrieve its header.
     // NOTE: header verification is out of scope for this test.
     let event_timeout = network.sync_timeout();
-    let header = timeout(event_timeout, async move {
+    let header = timeout(event_timeout, async {
         let EventBox::Pipeline(PipelineEventBox::Block(event)) =
             events.next().await.unwrap().unwrap()
         else {
@@ -82,6 +89,7 @@ async fn client_verifies_transaction_entrypoint_and_result_proofs() -> Result<()
         *event.header()
     })
     .await?;
+    events.close().await;
     let block_hash = header.hash();
 
     // Query the committed transaction by its entrypoint hash.

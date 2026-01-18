@@ -58,7 +58,7 @@ Data Spaces Model
 Dataspace-aware gossip
 - Gossip batches اب plane tag (public vs restricted) لاتے ہیں؛ restricted batches commit topology کے online peers کو unicast ہوتے ہیں (`transaction_gossip_restricted_target_cap`) جبکہ public batches `transaction_gossip_public_target_cap` استعمال کرتے ہیں (`null` = broadcast)۔ Targets کی reshuffle cadence `transaction_gossip_public_target_reshuffle_ms` اور `transaction_gossip_restricted_target_reshuffle_ms` سے آتی ہے۔ جب commit topology میں online peers نہیں ہوں تو `transaction_gossip_restricted_public_payload` (default `refuse`) کے ذریعے restricted payloads کو public overlay پر forward یا refuse کیا جا سکتا ہے۔ Telemetry fallback attempts، forward/drop counts اور policy دکھاتا ہے۔
 - Unknown dataspaces اگر `transaction_gossip_drop_unknown_dataspace` enable ہو تو re-queue ہوتے ہیں؛ ورنہ restricted targeting پر fall back۔
-- Receive-side validation غلط lane/dataspace یا plane tag mismatch والی batches drop کرتی ہے۔
+- Receive-side validation ایسے entries drop کرتی ہے جن میں lane/dataspace مقامی catalog سے نہیں ملتے، plane tag derived visibility سے mismatch ہو، یا advertised route مقامی طور پر re-derive کی گئی routing decision سے match نہ کرے۔
 
 Capability manifests & UAID
 - Universal accounts: ہر participant کیلئے deterministic UAID (`UniversalAccountId` in `crates/iroha_data_model/src/nexus/manifest.rs`) جو تمام dataspaces پر لاگو ہوتا ہے۔ `AssetPermissionManifest` UAID کو dataspace، activation/expiry epochs اور allow/deny `ManifestEntry` rules سے bind کرتا ہے۔ Deny rules ہمیشہ جیتتے ہیں؛ `ManifestVerdict::Denied` یا `Allowed` grant metadata کے ساتھ نکلتا ہے۔

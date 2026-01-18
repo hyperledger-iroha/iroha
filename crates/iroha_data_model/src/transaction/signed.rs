@@ -15,7 +15,7 @@ use std::{
 #[cfg(feature = "fault_injection")]
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use derive_more::{Deref, Display, From, TryInto};
-use iroha_crypto::{Algorithm, HashOf, PublicKey, Signature, SignatureOf};
+use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, Signature, SignatureOf};
 use iroha_data_model_derive::model;
 use iroha_primitives::{const_vec::ConstVec, json::Json, time::TimeSource};
 use iroha_schema::IntoSchema;
@@ -431,13 +431,20 @@ impl SignedTransaction {
             .transpose()
     }
 
-    /// Hash for this external transaction.
+    /// Canonical hash for this external transaction.
+    ///
+    /// The canonical hash is defined as the hash of the corresponding
+    /// `TransactionEntrypoint::External` wrapper so it matches the entrypoint
+    /// hash used in blocks and proofs.
     #[inline]
     pub fn hash(&self) -> HashOf<Self> {
-        HashOf::new(self)
+        let entry_hash = self.hash_as_entrypoint();
+        HashOf::from_untyped_unchecked(Hash::from(entry_hash))
     }
 
     /// Hash for this external transaction as `TransactionEntrypoint`.
+    ///
+    /// This matches the canonical transaction hash returned by [`Self::hash`].
     #[inline]
     pub fn hash_as_entrypoint(&self) -> HashOf<TransactionEntrypoint> {
         HashOf::new(&TransactionEntrypoint::External(self.clone()))
@@ -1073,6 +1080,7 @@ mod tests {
         let entry = TransactionEntrypoint::External(tx.clone());
         assert_eq!(HashOf::new(&entry), entry.hash());
         assert_eq!(tx.hash_as_entrypoint(), entry.hash());
+        assert_eq!(Hash::from(tx.hash()), Hash::from(tx.hash_as_entrypoint()));
 
         let time_entry = TimeTriggerEntrypoint {
             id: "trigger".parse().unwrap(),
@@ -1649,5 +1657,178 @@ impl TransactionResult {
     #[inline]
     pub fn hash_from_inner(inner: &TransactionResultInner) -> HashOf<Self> {
         HashOf::new(&TransactionResult(inner.clone()))
+    }
+}
+
+#[cfg(test)]
+mod norito_rpc_fixture_tests {
+    use super::*;
+    use crate::account::address::{AccountAddress, AccountAddressFormat, ChainDiscriminantGuard};
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+    use iroha_crypto::Hash;
+    use norito::{
+        core::DecodeFromSlice,
+        json::{self, Value},
+    };
+    use std::{fs, path::PathBuf};
+
+    fn manifest_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("fixtures")
+            .join("norito_rpc")
+            .join("transaction_fixtures.manifest.json")
+    }
+
+    fn require_object<'a>(value: &'a Value, context: &str) -> &'a json::Map {
+        value
+            .as_object()
+            .unwrap_or_else(|| panic!("{context} must be a JSON object"))
+    }
+
+    fn require_array<'a>(value: &'a Value, context: &str) -> &'a Vec<Value> {
+        value
+            .as_array()
+            .unwrap_or_else(|| panic!("{context} must be a JSON array"))
+    }
+
+    fn require_str<'a>(map: &'a json::Map, key: &str, context: &str) -> &'a str {
+        map.get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("{context}: missing {key} string"))
+    }
+
+    fn require_u64(map: &json::Map, key: &str, context: &str) -> u64 {
+        map.get(key)
+            .and_then(Value::as_u64)
+            .unwrap_or_else(|| panic!("{context}: missing {key} integer"))
+    }
+
+    fn optional_u64(map: &json::Map, key: &str, context: &str) -> Option<u64> {
+        match map.get(key) {
+            Some(Value::Null) => None,
+            Some(Value::Number(number)) => number
+                .as_u64()
+                .or_else(|| panic!("{context}: {key} must be an integer or null")),
+            Some(_) => panic!("{context}: {key} must be an integer or null"),
+            None => panic!("{context}: missing {key} field"),
+        }
+    }
+
+    fn authority_prefix(authority: &str) -> Option<u16> {
+        let (address_part, _) = authority
+            .split_once('@')
+            .unwrap_or_else(|| panic!("{authority}: missing @ separator"));
+        match AccountAddress::parse_any(address_part, None) {
+            Ok((_, AccountAddressFormat::IH58 { network_prefix })) => Some(network_prefix),
+            Ok(_) => None,
+            Err(_) => {
+                if address_part.parse::<iroha_crypto::PublicKey>().is_ok() {
+                    return None;
+                }
+                panic!("{authority}: unsupported authority address format");
+            }
+        }
+    }
+
+    #[test]
+    fn norito_rpc_fixture_manifest_roundtrips() {
+        let path = manifest_path();
+        let raw = fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read {path:?}: {err}"));
+        let manifest: Value =
+            json::from_str(&raw).unwrap_or_else(|err| panic!("manifest JSON: {err}"));
+        let manifest_obj = require_object(&manifest, "manifest");
+        let fixtures = manifest_obj
+            .get("fixtures")
+            .map(|value| require_array(value, "manifest.fixtures"))
+            .unwrap_or_else(|| panic!("manifest missing fixtures array"));
+
+        for fixture in fixtures {
+            let entry = require_object(fixture, "fixture");
+            let name = require_str(entry, "name", "fixture");
+            let payload_base64 = require_str(entry, "payload_base64", name);
+            let signed_base64 = require_str(entry, "signed_base64", name);
+            let payload_hash = require_str(entry, "payload_hash", name);
+            let signed_hash = require_str(entry, "signed_hash", name);
+            let encoded_len = require_u64(entry, "encoded_len", name);
+            let signed_len = require_u64(entry, "signed_len", name);
+            let chain = require_str(entry, "chain", name);
+            let authority = require_str(entry, "authority", name);
+            let _chain_guard = authority_prefix(authority).map(ChainDiscriminantGuard::enter);
+            let creation_time_ms = require_u64(entry, "creation_time_ms", name);
+            let time_to_live_ms = optional_u64(entry, "time_to_live_ms", name);
+            let nonce = optional_u64(entry, "nonce", name);
+
+            let payload_bytes = BASE64
+                .decode(payload_base64.as_bytes())
+                .unwrap_or_else(|err| panic!("{name}: invalid payload_base64: {err}"));
+            let signed_bytes = BASE64
+                .decode(signed_base64.as_bytes())
+                .unwrap_or_else(|err| panic!("{name}: invalid signed_base64: {err}"));
+            assert_eq!(
+                payload_bytes.len() as u64,
+                encoded_len,
+                "{name}: encoded_len mismatch"
+            );
+            assert_eq!(
+                signed_bytes.len() as u64,
+                signed_len,
+                "{name}: signed_len mismatch"
+            );
+
+            let computed_payload_hash = Hash::new(&payload_bytes).to_string();
+            assert_eq!(
+                computed_payload_hash, payload_hash,
+                "{name}: payload_hash mismatch"
+            );
+
+            let (signed_tx, used) = SignedTransaction::decode_from_slice(&signed_bytes)
+                .unwrap_or_else(|err| panic!("{name}: decode signed transaction: {err}"));
+            assert_eq!(
+                used,
+                signed_bytes.len(),
+                "{name}: signed transaction has trailing bytes"
+            );
+            assert_eq!(signed_tx.chain().as_str(), chain, "{name}: chain mismatch");
+            assert_eq!(
+                signed_tx.authority().to_string(),
+                authority,
+                "{name}: authority mismatch"
+            );
+            assert_eq!(
+                signed_tx.creation_time().as_millis() as u64,
+                creation_time_ms,
+                "{name}: creation_time_ms mismatch"
+            );
+            assert_eq!(
+                signed_tx.time_to_live().map(|ttl| ttl.as_millis() as u64),
+                time_to_live_ms,
+                "{name}: time_to_live_ms mismatch"
+            );
+            assert_eq!(
+                signed_tx.nonce().map(NonZeroU32::get).map(u64::from),
+                nonce,
+                "{name}: nonce mismatch"
+            );
+
+            let signed_payload_bytes = norito::codec::encode_adaptive(signed_tx.payload());
+            assert_eq!(
+                signed_payload_bytes, payload_bytes,
+                "{name}: payload_base64 mismatch vs signed payload"
+            );
+            let signed_reencoded = norito::codec::encode_adaptive(&signed_tx);
+            assert_eq!(
+                signed_reencoded, signed_bytes,
+                "{name}: signed bytes mismatch after re-encode"
+            );
+
+            let computed_signed_hash = HashOf::<SignedTransaction>::new(&signed_tx).to_string();
+            assert_eq!(
+                computed_signed_hash, signed_hash,
+                "{name}: signed_hash mismatch"
+            );
+        }
     }
 }

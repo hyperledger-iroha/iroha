@@ -5,7 +5,12 @@ use std::sync::Arc;
 #[cfg(feature = "telemetry")]
 use iroha_core::telemetry::StateTelemetry;
 use iroha_core::{
-    block::ValidBlock, kura::Kura, prelude::*, query::store::LiveQueryStore, state::State,
+    block::{BlockValidationError, ValidBlock},
+    da::proof_policy_bundle,
+    kura::Kura,
+    prelude::*,
+    query::store::LiveQueryStore,
+    state::State,
     sumeragi::network_topology::Topology,
 };
 use iroha_crypto::{Algorithm, KeyPair};
@@ -52,7 +57,10 @@ fn seed_genesis(state: &State) -> (HashOf<BlockHeader>, KeyPair, PeerId) {
     let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let peer = PeerId::from(kp.public_key().clone());
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-    let block = BlockBuilder::new(header).build_with_signature(0, kp.private_key());
+    let mut builder = BlockBuilder::new(header);
+    let proof_policies = proof_policy_bundle(&state.view().nexus().lane_config);
+    builder.set_da_proof_policies(Some(proof_policies));
+    let block = builder.build_with_signature(0, kp.private_key());
     let mut state_block = state.block(block.header());
     let valid = ValidBlock::validate_unchecked(block, &mut state_block).unpack(|_| {});
     let committed = valid.commit_unchecked().unpack(|_| {});
@@ -95,6 +103,8 @@ fn bls_batch_block_validates_with_pop() {
     let header = BlockHeader::new(nonzero!(2_u64), Some(genesis_hash), None, None, 1, 0);
     let mut builder = BlockBuilder::new(header);
     builder.push_transaction(tx);
+    let proof_policies = proof_policy_bundle(&state.view().nexus().lane_config);
+    builder.set_da_proof_policies(Some(proof_policies));
     let block = builder.build_with_signature(0, peer_kp.private_key());
 
     let mut state_block = state.block(block.header());
@@ -119,6 +129,8 @@ fn bls_batch_block_validates_without_pop_fallback() {
     let header = BlockHeader::new(nonzero!(2_u64), Some(genesis_hash), None, None, 1, 0);
     let mut builder = BlockBuilder::new(header);
     builder.push_transaction(tx);
+    let proof_policies = proof_policy_bundle(&state.view().nexus().lane_config);
+    builder.set_da_proof_policies(Some(proof_policies));
     let block = builder.build_with_signature(0, peer_kp.private_key());
 
     let mut state_block = state.block(block.header());
@@ -134,4 +146,32 @@ fn bls_batch_block_validates_without_pop_fallback() {
     )
     .unpack(|_| {})
     .expect("block validation must succeed without PoP (per-signature fallback)");
+}
+
+#[test]
+fn bls_batch_block_rejects_missing_proof_policy_hash() {
+    let (state, chain, account, kp) = mk_state_with_bls_batch();
+    let (genesis_hash, peer_kp, peer) = seed_genesis(&state);
+    let tx = make_tx(&chain, &account, &kp, true);
+    let header = BlockHeader::new(nonzero!(2_u64), Some(genesis_hash), None, None, 1, 0);
+    let mut builder = BlockBuilder::new(header);
+    builder.push_transaction(tx);
+    let block = builder.build_with_signature(0, peer_kp.private_key());
+
+    let mut state_block = state.block(block.header());
+    let topology = Topology::new(vec![peer]);
+    let err = ValidBlock::validate(
+        block,
+        &topology,
+        &chain,
+        &account,
+        &TimeSource::new_system(),
+        &mut state_block,
+    )
+    .unpack(|_| {})
+    .expect_err("block validation must reject missing DA proof policy hash");
+    assert!(matches!(
+        *err.1,
+        BlockValidationError::ProofPolicyHashMismatch { .. }
+    ));
 }

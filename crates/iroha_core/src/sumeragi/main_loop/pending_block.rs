@@ -41,6 +41,13 @@ pub(super) struct GateComputation {
     pub(super) changed: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct BlockSyncUpdateState {
+    view: u64,
+    commit_votes: usize,
+    has_commit_qc: bool,
+}
+
 #[derive(Debug)]
 #[allow(clippy::struct_excessive_bools)]
 pub(super) struct PendingBlock {
@@ -67,6 +74,7 @@ pub(super) struct PendingBlock {
     pub(super) aborted: bool,
     pub(super) last_quorum_reschedule: Option<Instant>,
     pub(super) last_precommit_rebroadcast: Option<Instant>,
+    last_block_sync_update: Option<BlockSyncUpdateState>,
 }
 
 impl PendingBlock {
@@ -93,6 +101,7 @@ impl PendingBlock {
             aborted: false,
             last_quorum_reschedule: None,
             last_precommit_rebroadcast: None,
+            last_block_sync_update: None,
         }
     }
 
@@ -142,7 +151,35 @@ impl PendingBlock {
             self.aborted = false;
             self.parent_state_root = None;
             self.post_state_root = None;
+            self.last_block_sync_update = None;
         }
+    }
+
+    pub(super) fn revive_after_abort(
+        &mut self,
+        block: SignedBlock,
+        payload_hash: Hash,
+        height: u64,
+        view: u64,
+    ) {
+        self.block = block;
+        self.payload_hash = payload_hash;
+        self.height = height;
+        self.view = view;
+        self.aborted = false;
+        self.inserted_at = Instant::now();
+        self.validation_status = ValidationStatus::Pending;
+        self.precommit_vote_sent = false;
+        self.commit_qc_seen = false;
+        self.commit_qc_epoch = None;
+        self.last_gate = None;
+        self.last_gate_satisfied = None;
+        self.reset_kura_retry();
+        self.last_precommit_rebroadcast = None;
+        self.last_quorum_reschedule = None;
+        self.parent_state_root = None;
+        self.post_state_root = None;
+        self.last_block_sync_update = None;
     }
 
     pub(super) fn reschedule_due(&self, now: Instant, backoff: Duration) -> bool {
@@ -201,6 +238,31 @@ impl PendingBlock {
         self.last_precommit_rebroadcast = None;
         self.parent_state_root = None;
         self.post_state_root = None;
+        self.last_block_sync_update = None;
+    }
+
+    pub(super) fn should_broadcast_block_sync_update(
+        &mut self,
+        view: u64,
+        commit_votes: usize,
+        has_commit_qc: bool,
+    ) -> bool {
+        let candidate = BlockSyncUpdateState {
+            view,
+            commit_votes,
+            has_commit_qc,
+        };
+        let Some(previous) = self.last_block_sync_update else {
+            self.last_block_sync_update = Some(candidate);
+            return true;
+        };
+        let progressed = commit_votes > previous.commit_votes
+            || (has_commit_qc && !previous.has_commit_qc)
+            || view != previous.view;
+        if progressed {
+            self.last_block_sync_update = Some(candidate);
+        }
+        progressed
     }
 
     pub(super) fn note_kura_failure(
@@ -220,22 +282,21 @@ impl PendingBlock {
         let backoff_shift = self.kura_retry_attempts.saturating_sub(1).min(16);
         let multiplier = 1u32.checked_shl(backoff_shift).unwrap_or(u32::MAX).max(1);
         let backoff = interval.saturating_mul(multiplier);
-        let deadline = match now.checked_add(backoff) {
-            Some(deadline) => deadline,
-            None => {
-                warn!(
-                    height = self.height,
-                    view = self.view,
-                    attempts = self.kura_retry_attempts,
-                    backoff_ms = backoff.as_millis(),
-                    "kura retry backoff overflow; aborting retries"
-                );
-                self.kura_aborted = true;
-                self.next_kura_retry = None;
-                return KuraRetryDecision::Abort {
-                    attempts: self.kura_retry_attempts,
-                };
-            }
+        let deadline = if let Some(deadline) = now.checked_add(backoff) {
+            deadline
+        } else {
+            warn!(
+                height = self.height,
+                view = self.view,
+                attempts = self.kura_retry_attempts,
+                backoff_ms = backoff.as_millis(),
+                "kura retry backoff overflow; aborting retries"
+            );
+            self.kura_aborted = true;
+            self.next_kura_retry = None;
+            return KuraRetryDecision::Abort {
+                attempts: self.kura_retry_attempts,
+            };
         };
         self.next_kura_retry = Some(deadline);
 
@@ -378,5 +439,33 @@ mod tests {
         pending.mark_aborted();
         assert!(pending.parent_state_root.is_none());
         assert!(pending.post_state_root.is_none());
+    }
+
+    #[test]
+    fn revive_after_abort_resets_tracking_and_validation() {
+        let mut pending =
+            PendingBlock::new(sample_block(1), Hash::prehashed([0x11; Hash::LENGTH]), 1, 0);
+        pending.validation_status = ValidationStatus::Valid;
+        pending.kura_persisted = true;
+        pending.last_quorum_reschedule = Some(Instant::now());
+        pending.mark_aborted();
+
+        pending.revive_after_abort(sample_block(1), Hash::prehashed([0x22; Hash::LENGTH]), 1, 0);
+
+        assert!(!pending.aborted);
+        assert_eq!(pending.validation_status, ValidationStatus::Pending);
+        assert!(pending.kura_persisted);
+        assert!(pending.last_quorum_reschedule.is_none());
+    }
+
+    #[test]
+    fn block_sync_update_broadcasts_on_progress() {
+        let mut pending =
+            PendingBlock::new(sample_block(1), Hash::prehashed([0x11; Hash::LENGTH]), 1, 0);
+        assert!(pending.should_broadcast_block_sync_update(0, 1, false));
+        assert!(!pending.should_broadcast_block_sync_update(0, 1, false));
+        assert!(pending.should_broadcast_block_sync_update(0, 2, false));
+        assert!(pending.should_broadcast_block_sync_update(0, 2, true));
+        assert!(pending.should_broadcast_block_sync_update(1, 2, true));
     }
 }

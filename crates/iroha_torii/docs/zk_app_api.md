@@ -82,7 +82,9 @@ Access control and rate limiting:
 - `torii.require_api_token` (bool) and `torii.api_tokens` (list of strings)
   - When enabled and tokens are provided, app API routes require `x-api-token: <token>` header. Unknown/missing tokens are rejected.
 - `torii.query_rate_per_authority_per_sec` (Option<u32>) and `torii.query_burst_per_authority` (Option<u32>)
-  - Per‑address rate limiter shared with other app API endpoints, applied to attachments and prover routes.
+  - Per-authority rate limiter for app API endpoints (attachments and prover routes).
+- `torii.tx_rate_per_authority_per_sec` (Option<u32>) and `torii.tx_burst_per_authority` (Option<u32>)
+  - Per-authority transaction submission rate limiter for `/v1/transaction` and other tx-producing endpoints.
 - `torii.api_allow_cidrs` (list of CIDRs)
   - Requests from these networks bypass the rate limiter (still subject to body size limits and tokens, if enabled).
 

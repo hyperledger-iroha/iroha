@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .tx import NumericLike
@@ -71,7 +71,7 @@ class SettlementLeg:
     metadata: Optional[Mapping[str, Any]] = None
 
     def to_payload(self) -> Mapping[str, Any]:
-        payload = {
+        payload: Dict[str, Any] = {
             "asset_definition_id": self.asset_definition_id,
             "quantity": _normalize_quantity(self.quantity),
             "from": self.from_account,

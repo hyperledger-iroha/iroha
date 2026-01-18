@@ -3,15 +3,19 @@
 use std::{
     collections::BTreeSet,
     sync::{Arc, mpsc},
+    time::Instant,
 };
 
 use iroha_crypto::blake2::{Blake2b512, Digest as BlakeDigest};
 use iroha_data_model::Encode as _;
 use iroha_logger::prelude::*;
 
+use super::locked_qc::qc_extends_locked_with_lookup;
 use super::pacing::{Pacemaker, PacemakerBackpressure, PacemakerBackpressureAction};
+use super::propose::ProposalBackpressure;
 use super::*;
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(super) enum EpochRefreshPhase {
     PreCommit,
     PostCommit,
@@ -68,11 +72,19 @@ pub(super) struct CommitWorkerHandle {
     pub(super) join_handle: std::thread::JoinHandle<()>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct CommitQuorumStatus {
+    pub vote_count: usize,
+    pub quorum_reached: bool,
+    pub stake_quorum_missing: bool,
+}
+
 pub(super) fn spawn_commit_worker(
     state: Arc<State>,
     kura: Arc<Kura>,
     chain_id: ChainId,
     genesis_account: AccountId,
+    wake_tx: Option<mpsc::SyncSender<()>>,
 ) -> CommitWorkerHandle {
     let (work_tx, work_rx) = mpsc::sync_channel::<CommitWork>(COMMIT_WORK_QUEUE_CAP);
     let (result_tx, result_rx) = mpsc::sync_channel::<CommitResult>(COMMIT_RESULT_QUEUE_CAP);
@@ -90,6 +102,9 @@ pub(super) fn spawn_commit_worker(
                 );
                 if result_tx.send(CommitResult { id, outcome }).is_err() {
                     break;
+                }
+                if let Some(wake) = wake_tx.as_ref() {
+                    let _ = wake.try_send(());
                 }
             }
         })
@@ -185,11 +200,12 @@ fn has_commit_quorum_signers(
     qc_signers: Option<&BTreeSet<ValidatorIndex>>,
     min_votes_for_commit: usize,
 ) -> bool {
-    qc_signers.map_or(false, |signers| signers.len() >= min_votes_for_commit)
+    qc_signers.is_some_and(|signers| signers.len() >= min_votes_for_commit)
 }
 
 impl Actor {
     /// Attach cached commit certificates and votes for the given block to a `BlockSyncUpdate`.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn apply_cached_qcs_to_block_sync_update(
         update: &mut super::message::BlockSyncUpdate,
         qc_cache: &BTreeMap<QcVoteKey, crate::sumeragi::consensus::Qc>,
@@ -241,7 +257,7 @@ impl Actor {
                     ) {
                         update.commit_qc = Some(derived);
                         if update.stake_snapshot.is_none() {
-                            update.stake_snapshot = record.stake_snapshot.clone();
+                            update.stake_snapshot.clone_from(&record.stake_snapshot);
                         }
                     }
                 }
@@ -289,6 +305,7 @@ impl Actor {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn precommit_signer_record_from_cached_qc(
         qc: &crate::sumeragi::consensus::Qc,
         commit_topology: &[PeerId],
@@ -355,9 +372,7 @@ impl Actor {
                     let Ok(idx) = usize::try_from(*signer) else {
                         return None;
                     };
-                    let Some(peer) = commit_topology.get(idx) else {
-                        return None;
-                    };
+                    let peer = commit_topology.get(idx)?;
                     signer_peers.insert(peer.clone());
                 }
                 match super::stake_snapshot::stake_quorum_reached_for_snapshot(
@@ -403,20 +418,6 @@ impl Actor {
             validator_set: commit_topology.to_vec(),
             stake_snapshot,
         })
-    }
-
-    pub(super) fn find_child_qc_extending_lock(
-        &self,
-        lock: crate::sumeragi::consensus::QcHeaderRef,
-    ) -> Option<crate::sumeragi::consensus::QcHeaderRef> {
-        child_qc_extending_lock(
-            lock,
-            self.qc_cache
-                .values()
-                .filter(|qc| qc.phase == crate::sumeragi::consensus::Phase::Commit)
-                .map(Self::qc_to_header_ref),
-            |hash, height| self.parent_hash_for(hash, height),
-        )
     }
 
     fn drain_commit_results(&mut self) -> bool {
@@ -601,7 +602,9 @@ impl Actor {
         let view_signers = qc_signers.as_ref().and_then(|signers| {
             let mapped =
                 super::normalize_signer_indices_to_view(signers, &topology, &canonical_topology);
-            if mapped.len() != signers.len() {
+            if mapped.len() == signers.len() {
+                Some(mapped)
+            } else {
                 warn!(
                     height = pending_height,
                     view = pending_view,
@@ -610,8 +613,6 @@ impl Actor {
                     "skipping vote aggregation: signer mapping to view topology incomplete"
                 );
                 None
-            } else {
-                Some(mapped)
             }
         });
 
@@ -880,6 +881,7 @@ impl Actor {
                     self.config.consensus_mode,
                     self.common_config.trusted_peers.value(),
                     self.common_config.peer.id(),
+                    &self.roster_validation_cache,
                 );
                 let expected_epoch = self.epoch_for_height(pending_height);
                 Self::apply_cached_qcs_to_block_sync_update(
@@ -1043,6 +1045,9 @@ impl Actor {
                 let pending_age = pending.age();
                 let vote_count = sig_indices.len();
                 let quorum_timeout = self.quorum_timeout(da_enabled);
+                let availability_timeout = self.availability_timeout(quorum_timeout, da_enabled);
+                let missing_local_data =
+                    matches!(pending.last_gate, Some(GateReason::MissingLocalData));
                 let quorum_reached = has_quorum_signers || vote_count >= min_votes_for_commit;
 
                 if commit_signatures_missing
@@ -1051,7 +1056,18 @@ impl Actor {
                 {
                     let reschedule_backoff = quorum_timeout.max(QUORUM_RESCHEDULE_COOLDOWN);
                     let now = Instant::now();
-                    if pending.reschedule_due(now, reschedule_backoff) {
+                    if missing_local_data && pending_age < availability_timeout {
+                        debug!(
+                            height = pending_height,
+                            view = pending_view,
+                            block = ?block_hash,
+                            pending_age_ms = pending_age.as_millis(),
+                            availability_timeout_ms = availability_timeout.as_millis(),
+                            "deferring quorum reschedule while awaiting local payload"
+                        );
+                        pending.block = failed_block;
+                        self.pending.pending_blocks.insert(block_hash, pending);
+                    } else if pending.reschedule_due(now, reschedule_backoff) {
                         reschedule_quorum = Some((
                             pending,
                             pending_age,
@@ -1239,7 +1255,7 @@ impl Actor {
             self.trigger_view_change_with_cause(
                 pending_height,
                 pending_view,
-                view_change_cause_for_quorum(vote_count),
+                view_change_cause_for_quorum(vote_count, false),
             );
         }
         if committed {
@@ -1293,11 +1309,11 @@ impl Actor {
                 super::status::set_highest_qc_hash(lock.subject_block_hash);
             }
 
-            let _ = kickstart_pacemaker_after_commit(
-                self.queue.tx_len(),
-                self.subsystems.propose.backpressure_gate.should_defer(),
-                |now| self.on_pacemaker_propose_ready(now),
-            );
+            let backpressure = self.proposal_backpressure_at(Instant::now());
+            let _ =
+                kickstart_pacemaker_after_commit(self.queue.queued_len(), backpressure, |now| {
+                    self.on_pacemaker_propose_ready(now)
+                });
 
             self.prune_descendants_not_on_tip(pending_height, block_hash);
 
@@ -1339,6 +1355,7 @@ impl Actor {
             let retention_floor = pending_height.saturating_sub(1);
             self.vote_log
                 .retain(|(_, height, _, _, _), _| *height >= retention_floor);
+            self.try_replay_deferred_votes();
 
             if let Some(child_qc) = post_commit_qc {
                 let previous_lock = self.locked_qc;
@@ -1466,6 +1483,21 @@ impl Actor {
                 view = pending_view,
                 block = %block_hash,
                 "commit certificate missing; deferring finalize"
+            );
+            self.pending.pending_blocks.insert(block_hash, pending);
+            return false;
+        }
+        if !super::pending_extends_tip(
+            pending_height,
+            pending.block.header().prev_block_hash(),
+            state_height,
+            state_tip_hash,
+        ) {
+            debug!(
+                height = pending_height,
+                view = pending_view,
+                block = %block_hash,
+                "commit certificate received before tip; deferring finalize"
             );
             self.pending.pending_blocks.insert(block_hash, pending);
             return false;
@@ -1634,6 +1666,7 @@ impl Actor {
             );
         }
         pending.mark_aborted();
+        pending.tx_batch = None;
         self.clean_rbc_sessions_for_block(block_hash, height);
         self.qc_cache
             .retain(|(_, hash, _, _, _), _| hash != &block_hash);
@@ -1647,11 +1680,7 @@ impl Actor {
             .propose
             .proposal_cache
             .pop_proposal(height, view);
-        self.subsystems
-            .propose
-            .proposals_seen
-            .remove(&(height, view));
-        self.pending.pending_replay_last_sent.remove(&block_hash);
+        // Keep proposals_seen so we don't re-propose in the same view after timeout.
         let session_key = Self::session_key(&block_hash, height, view);
         self.subsystems
             .da_rbc
@@ -1663,7 +1692,13 @@ impl Actor {
             .rbc
             .ready_rebroadcast_last_sent
             .remove(&session_key);
-        drop(pending);
+        self.subsystems
+            .da_rbc
+            .rbc
+            .deliver_deferral
+            .remove(&session_key);
+        // Retain the aborted payload so late commit QCs can still recover via block sync.
+        self.pending.pending_blocks.insert(block_hash, pending);
         super::status::record_commit_inflight_timeout(height, view, block_hash, elapsed);
         super::status::record_commit_inflight_finish(inflight.id);
         self.trigger_view_change_after_commit_failure(height, view);
@@ -1678,6 +1713,7 @@ impl Actor {
         true
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn handle_validation_reject(
         &mut self,
         invalid_hash: HashOf<BlockHeader>,
@@ -2018,10 +2054,7 @@ impl Actor {
             let finalize_start = Instant::now();
             if enable_qc_pipeline && emit_precommit {
                 let parent_hash = pending.block.header().prev_block_hash();
-                let pending_roots = pending
-                    .parent_state_root
-                    .clone()
-                    .zip(pending.post_state_root.clone());
+                let pending_roots = pending.parent_state_root.zip(pending.post_state_root);
                 if self.emit_precommit_vote(
                     hash,
                     pending_height,
@@ -2038,7 +2071,10 @@ impl Actor {
                         vote_epoch,
                         &topology,
                     ) {
-                        self.maybe_broadcast_block_sync_update_for_precommit_vote(&pending, &vote);
+                        self.maybe_broadcast_block_sync_update_for_precommit_vote(
+                            &mut pending,
+                            &vote,
+                        );
                     }
                 }
             }
@@ -2113,7 +2149,7 @@ impl Actor {
 
     pub(super) fn maybe_broadcast_block_sync_update_for_precommit_vote(
         &mut self,
-        pending: &PendingBlock,
+        pending: &mut PendingBlock,
         vote: &crate::sumeragi::consensus::Vote,
     ) {
         if pending.aborted {
@@ -2143,6 +2179,19 @@ impl Actor {
                 &self.vote_log,
                 vote,
             );
+            let commit_votes = update.commit_votes.len();
+            let has_commit_qc = update.commit_qc.is_some();
+            if !pending.should_broadcast_block_sync_update(vote.view, commit_votes, has_commit_qc) {
+                iroha_logger::trace!(
+                    height = vote.height,
+                    view = vote.view,
+                    block = %vote.block_hash,
+                    commit_votes,
+                    has_commit_qc,
+                    "skipping block sync update broadcast: no new commit votes"
+                );
+                return;
+            }
             let (consensus_mode, _, _) = self.consensus_context_for_height(vote.height);
             let mut topology_peers = self.roster_for_vote_with_mode(
                 vote.block_hash,
@@ -2192,6 +2241,7 @@ impl Actor {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_vote(
         &self,
         phase: crate::sumeragi::consensus::Phase,
@@ -2205,17 +2255,16 @@ impl Actor {
     ) -> Option<crate::sumeragi::consensus::Vote> {
         let (parent_state_root, post_state_root) =
             if phase == crate::sumeragi::consensus::Phase::Commit {
-                match roots {
-                    Some(roots) => roots,
-                    None => {
-                        warn!(
-                            height,
-                            view,
-                            block = %block_hash,
-                            "missing execution roots; skipping commit vote"
-                        );
-                        return None;
-                    }
+                if let Some(roots) = roots {
+                    roots
+                } else {
+                    warn!(
+                        height,
+                        view,
+                        block = %block_hash,
+                        "missing execution roots; skipping commit vote"
+                    );
+                    return None;
                 }
             } else {
                 let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
@@ -2241,6 +2290,7 @@ impl Actor {
     }
 
     #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn emit_precommit_vote(
         &mut self,
         block_hash: HashOf<BlockHeader>,
@@ -2332,7 +2382,7 @@ impl Actor {
             return false;
         }
         if let Some(lock) = self.locked_qc {
-            if !self.block_known_locally(lock.subject_block_hash) {
+            if !self.block_known_for_lock(lock.subject_block_hash) {
                 warn!(
                     height,
                     view,
@@ -2461,7 +2511,7 @@ impl Actor {
             return false;
         }
         let epoch = self.epoch_for_height(height);
-        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(height);
+        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let signature_topology = topology_for_view(topology, height, view, mode_tag, prf_seed);
         let Some(local_idx) = self.local_validator_index_for_topology(&signature_topology) else {
             warn!(
@@ -2509,23 +2559,58 @@ impl Actor {
 
         let vote_msg = BlockMessage::QcVote(vote);
         let local_peer_id = self.common_config.peer.id().clone();
-        let mut targets: Vec<_> = signature_topology
-            .as_ref()
-            .iter()
-            .filter(|peer| *peer != &local_peer_id)
-            .cloned()
-            .collect();
+        let leader = signature_topology.leader().clone();
+        let (collectors_k, _) = self.collector_plan_params_for_mode(consensus_mode);
+        let mut targets = if collectors_k == 0 {
+            Vec::new()
+        } else {
+            super::collectors::deterministic_collectors(
+                &signature_topology,
+                consensus_mode,
+                collectors_k,
+                prf_seed,
+                height,
+                view,
+            )
+        };
+        let required = signature_topology.min_votes_for_commit();
+        let mut fallback_to_topology = false;
+        if targets.is_empty() {
+            fallback_to_topology = true;
+            targets = signature_topology.as_ref().to_vec();
+        }
+        targets.retain(|peer| peer != &local_peer_id);
+        if targets.len() < required {
+            fallback_to_topology = true;
+            targets = signature_topology.as_ref().to_vec();
+            targets.retain(|peer| peer != &local_peer_id);
+        }
+        if leader != local_peer_id && !targets.contains(&leader) {
+            targets.push(leader.clone());
+        }
         if targets.is_empty() {
             return true;
         }
-        info!(
-            height,
-            view,
-            signer = local_idx,
-            targets = targets.len(),
-            "sending NEW_VIEW vote to view-aligned commit topology"
-        );
-        for peer in targets.drain(..) {
+        if fallback_to_topology {
+            info!(
+                height,
+                view,
+                signer = local_idx,
+                leader = %leader,
+                targets = targets.len(),
+                "sending NEW_VIEW vote to commit topology (collector plan empty or below quorum)"
+            );
+        } else {
+            info!(
+                height,
+                view,
+                signer = local_idx,
+                leader = %leader,
+                targets = targets.len(),
+                "sending NEW_VIEW vote to collectors"
+            );
+        }
+        for peer in targets {
             self.schedule_background(BackgroundRequest::Post {
                 peer,
                 msg: vote_msg.clone(),
@@ -2534,17 +2619,21 @@ impl Actor {
         true
     }
 
-    pub(super) fn commit_vote_quorum_status_for_block(
+    pub(super) fn commit_vote_quorum_status_for_block_detail(
         &self,
         block_hash: HashOf<BlockHeader>,
         height: u64,
         view: u64,
-    ) -> (usize, bool) {
+    ) -> CommitQuorumStatus {
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let commit_topology =
             self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
         if commit_topology.is_empty() {
-            return (0, false);
+            return CommitQuorumStatus {
+                vote_count: 0,
+                quorum_reached: false,
+                stake_quorum_missing: false,
+            };
         }
         let topology = super::network_topology::Topology::new(commit_topology.clone());
         let signature_topology = topology_for_view(&topology, height, view, mode_tag, prf_seed);
@@ -2569,33 +2658,59 @@ impl Actor {
             signers = filtered;
         }
         let vote_count = signers.len();
+        let mut stake_result: Option<Result<bool, super::stake_snapshot::StakeQuorumError>> = None;
         let quorum_reached = match consensus_mode {
             ConsensusMode::Permissioned => vote_count >= signature_topology.min_votes_for_commit(),
             ConsensusMode::Npos => {
-                let roster_set: BTreeSet<_> = commit_topology.iter().cloned().collect();
-                let mut signer_peers = BTreeSet::new();
-                for signer in &signers {
-                    let Ok(idx) = usize::try_from(*signer) else {
-                        return (vote_count, false);
-                    };
-                    let Some(peer) = signature_topology.as_ref().get(idx) else {
-                        return (vote_count, false);
-                    };
-                    if !roster_set.contains(peer) {
-                        return (vote_count, false);
+                let result = (|| {
+                    let roster_set: BTreeSet<_> = commit_topology.iter().cloned().collect();
+                    let mut signer_peers = BTreeSet::new();
+                    for signer in &signers {
+                        let idx = usize::try_from(*signer).map_err(|_| {
+                            super::stake_snapshot::StakeQuorumError::SignerOutOfRoster
+                        })?;
+                        let peer = signature_topology
+                            .as_ref()
+                            .get(idx)
+                            .ok_or(super::stake_snapshot::StakeQuorumError::SignerOutOfRoster)?;
+                        if !roster_set.contains(peer) {
+                            return Err(super::stake_snapshot::StakeQuorumError::SignerOutOfRoster);
+                        }
+                        signer_peers.insert(peer.clone());
                     }
-                    signer_peers.insert(peer.clone());
-                }
-                let view = self.state.view();
-                super::stake_snapshot::stake_quorum_reached_for_peers(
-                    &view,
-                    &commit_topology,
-                    &signer_peers,
-                )
-                .unwrap_or(false)
+                    let view = self.state.view();
+                    super::stake_snapshot::stake_quorum_reached_for_peers(
+                        &view,
+                        &commit_topology,
+                        &signer_peers,
+                    )
+                })();
+                stake_result = Some(result);
+                stake_result
+                    .as_ref()
+                    .and_then(|result| result.ok())
+                    .unwrap_or(false)
             }
         };
-        (vote_count, quorum_reached)
+        let stake_quorum_missing = matches!(consensus_mode, ConsensusMode::Npos)
+            && vote_count > 0
+            && matches!(stake_result, Some(Ok(false) | Err(_)));
+        CommitQuorumStatus {
+            vote_count,
+            quorum_reached,
+            stake_quorum_missing,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn commit_vote_quorum_status_for_block(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> (usize, bool) {
+        let status = self.commit_vote_quorum_status_for_block_detail(block_hash, height, view);
+        (status.vote_count, status.quorum_reached)
     }
 
     pub(super) fn apply_commit_qc(
@@ -2650,6 +2765,16 @@ impl Actor {
         height: u64,
         view: u64,
     ) -> usize {
+        if self.relay_backpressure_active(Instant::now(), self.rebroadcast_cooldown()) {
+            debug!(
+                height,
+                view,
+                block = ?block_hash,
+                phase = ?phase,
+                "skipping vote rebroadcast due to relay backpressure"
+            );
+            return 0;
+        }
         let votes: Vec<_> = self
             .vote_log
             .values()
@@ -3029,6 +3154,7 @@ impl Actor {
         gate
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     pub(super) fn broadcast_block_sync_update(
         &mut self,
         update: super::message::BlockSyncUpdate,
@@ -3037,18 +3163,23 @@ impl Actor {
         let online_peers = self
             .network
             .online_peers(|set| set.iter().map(|peer| peer.id().clone()).collect::<Vec<_>>());
+        let registered_peers = {
+            let view = self.state.view();
+            view.world().peers().iter().cloned().collect::<Vec<_>>()
+        };
         let seed = update.block.hash();
         let targets = Self::block_sync_update_targets_for_peers(
             self.common_config.peer.id(),
             self.block_sync_gossip_limit,
             peers,
+            &registered_peers,
             &online_peers,
             seed.as_ref(),
         );
         if targets.is_empty() {
             trace!(
                 height = update.block.header().height().get(),
-                view = u64::from(update.block.header().view_change_index()),
+                view = update.block.header().view_change_index(),
                 block = ?update.block.hash(),
                 "skipping block sync update gossip: no targets"
             );
@@ -3062,6 +3193,7 @@ impl Actor {
         }
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     pub(super) fn broadcast_block_created_for_block_sync(
         &mut self,
         created: super::message::BlockCreated,
@@ -3070,18 +3202,23 @@ impl Actor {
         let online_peers = self
             .network
             .online_peers(|set| set.iter().map(|peer| peer.id().clone()).collect::<Vec<_>>());
+        let registered_peers = {
+            let view = self.state.view();
+            view.world().peers().iter().cloned().collect::<Vec<_>>()
+        };
         let seed = created.block.hash();
         let targets = Self::block_sync_update_targets_for_peers(
             self.common_config.peer.id(),
             self.block_sync_gossip_limit,
             peers,
+            &registered_peers,
             &online_peers,
             seed.as_ref(),
         );
         if targets.is_empty() {
             trace!(
                 height = created.block.header().height().get(),
-                view = u64::from(created.block.header().view_change_index()),
+                view = created.block.header().view_change_index(),
                 block = ?created.block.hash(),
                 "skipping block payload gossip: no targets"
             );
@@ -3099,6 +3236,7 @@ impl Actor {
         local_peer: &PeerId,
         gossip_limit: usize,
         peers: &[PeerId],
+        registered_peers: &[PeerId],
         online_peers: &[PeerId],
         seed: &[u8],
     ) -> Vec<PeerId> {
@@ -3107,9 +3245,13 @@ impl Actor {
         }
 
         let world_peers: BTreeSet<_> = peers.iter().cloned().collect();
+        // Only target online peers that remain registered (e.g., observers), not unregistered strays.
+        let registered: BTreeSet<_> = registered_peers.iter().cloned().collect();
         let strays: Vec<PeerId> = online_peers
             .iter()
-            .filter(|peer| *peer != local_peer && !world_peers.contains(*peer))
+            .filter(|peer| {
+                *peer != local_peer && !world_peers.contains(*peer) && registered.contains(*peer)
+            })
             .cloned()
             .collect();
         let world_online: Vec<PeerId> = online_peers
@@ -3128,12 +3270,18 @@ impl Actor {
         if remaining == 0 {
             return targets;
         }
+        let world_candidates_all = peers
+            .iter()
+            .filter(|peer| *peer != local_peer)
+            .cloned()
+            .collect::<Vec<_>>();
+        if remaining >= world_candidates_all.len() {
+            let ordered = Self::order_gossip_targets(world_candidates_all, seed, local_peer);
+            targets.extend(ordered);
+            return targets;
+        }
         let world_candidates = if world_online.is_empty() {
-            peers
-                .iter()
-                .filter(|peer| *peer != local_peer)
-                .cloned()
-                .collect::<Vec<_>>()
+            world_candidates_all
         } else {
             world_online
         };
@@ -3171,6 +3319,7 @@ impl Actor {
     }
 
     #[allow(dead_code)]
+    #[allow(clippy::needless_pass_by_value)]
     fn broadcast_block_created(&mut self, created: super::message::BlockCreated, peers: &[PeerId]) {
         for peer in peers {
             self.schedule_background(BackgroundRequest::Post {
@@ -3203,6 +3352,7 @@ impl Actor {
                 self.config.consensus_mode,
                 self.common_config.trusted_peers.value(),
                 self.common_config.peer.id(),
+                &self.roster_validation_cache,
             );
             let expected_epoch = qc.epoch;
             Self::apply_cached_qcs_to_block_sync_update(
@@ -3289,6 +3439,7 @@ impl Actor {
         self.rebroadcast_highest_qc_payload(qc, topology_peers);
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) fn materialize_qc_for_header(
         &mut self,
         qc: crate::sumeragi::consensus::QcHeaderRef,
@@ -3325,7 +3476,7 @@ impl Actor {
             qc.height,
             qc.view,
             qc.epoch,
-            topology.clone(),
+            &topology,
         );
         if let Some(formed) = self.qc_cache.get(&key).cloned() {
             return Some(formed);
@@ -3609,14 +3760,11 @@ impl Actor {
             }
         }
         for (height, view) in stale_hints {
+            // Keep proposals_seen so we don't re-propose in the same view after divergence.
             self.subsystems
                 .propose
                 .proposal_cache
                 .pop_hint(height, view);
-            self.subsystems
-                .propose
-                .proposals_seen
-                .remove(&(height, view));
         }
 
         let mut stale_proposals = Vec::new();
@@ -3642,14 +3790,11 @@ impl Actor {
             }
         }
         for (height, view) in stale_proposals {
+            // Keep proposals_seen so we don't re-propose in the same view after divergence.
             self.subsystems
                 .propose
                 .proposal_cache
                 .pop_proposal(height, view);
-            self.subsystems
-                .propose
-                .proposals_seen
-                .remove(&(height, view));
         }
 
         let mut stale_qcs: Vec<QcVoteKey> = Vec::new();
@@ -3691,6 +3836,9 @@ impl Actor {
             &self.subsystems.da_rbc.rbc.status_handle,
             chunk_store,
         );
+        self.deferred_votes.remove(&block_hash);
+        self.deferred_qcs
+            .retain(|(_, hash, _, _, _), _| *hash != block_hash);
         let payload_keys: Vec<_> = self
             .subsystems
             .da_rbc
@@ -3723,6 +3871,18 @@ impl Actor {
                 .ready_rebroadcast_last_sent
                 .remove(&key);
         }
+        let deferral_keys: Vec<_> = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .deliver_deferral
+            .keys()
+            .filter(|(hash, _, _)| *hash == block_hash)
+            .copied()
+            .collect();
+        for key in deferral_keys {
+            self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
+        }
         self.subsystems
             .da_rbc
             .rbc
@@ -3733,7 +3893,6 @@ impl Actor {
             .rbc
             .persist_inflight
             .retain(|(hash, _, _)| *hash != block_hash);
-        self.pending.pending_replay_last_sent.remove(&block_hash);
 
         let telemetry_ref = self.telemetry_handle();
         if !lane_totals.is_empty() || !dataspace_totals.is_empty() {
@@ -3873,32 +4032,38 @@ impl Actor {
 
     #[allow(clippy::too_many_lines)]
     pub(super) fn on_block_commit(&mut self, height: u64) -> Result<()> {
+        self.refresh_roster_validation_cache();
         self.subsystems.propose.new_view_tracker.prune(height);
-        self.subsystems
-            .propose
-            .proposals_seen
-            .retain(|(entry_height, _)| *entry_height > height);
+        self.prune_proposals_seen_horizon(height);
+        self.prune_vote_caches_horizon(height);
         self.subsystems.propose.forced_view_after_timeout = self
             .subsystems
             .propose
             .forced_view_after_timeout
             .filter(|(forced_height, _)| *forced_height > height);
         let _retention_floor = height.saturating_sub(1);
-        self.vote_log
-            .retain(|(_, vote_height, _, _, _), _| *vote_height > height);
         self.pending
             .missing_block_requests
             .retain(|_, request| request.height > height);
         self.refresh_p2p_topology();
         let commit_topology = self.effective_commit_topology();
-        let commit_topology_hash = HashOf::new(&commit_topology);
-        if self.refresh_commit_topology_state(commit_topology_hash) {
-            self.reset_consensus_state_for_roster_change();
-            debug!(
-                height,
-                roster_len = commit_topology.len(),
-                "commit topology changed; cleared consensus caches"
-            );
+        match self.refresh_commit_topology_state(&commit_topology) {
+            CommitTopologyChange::None => {}
+            CommitTopologyChange::Membership => {
+                self.reset_consensus_state_for_roster_change(false);
+                debug!(
+                    height,
+                    roster_len = commit_topology.len(),
+                    "commit topology changed; cleared consensus caches"
+                );
+            }
+            CommitTopologyChange::OrderOnly => {
+                debug!(
+                    height,
+                    roster_len = commit_topology.len(),
+                    "commit topology order changed; retaining consensus caches"
+                );
+            }
         }
         self.update_missing_block_gauges();
         let committed_block = usize::try_from(height)
@@ -3934,7 +4099,7 @@ impl Actor {
                 phase: crate::sumeragi::consensus::Phase::Commit,
                 subject_block_hash: block.hash(),
                 height,
-                view: u64::from(block.header().view_change_index()),
+                view: block.header().view_change_index(),
                 epoch: self.epoch_for_height(height),
             };
             if self
@@ -4105,6 +4270,7 @@ impl Actor {
         Ok(())
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     fn run_validator_election(
         &self,
         epoch: u64,
@@ -4190,6 +4356,7 @@ impl Actor {
         Some((activate_at, election.validator_set.clone(), apply_now))
     }
 
+    #[allow(clippy::unused_self)]
     fn collect_candidate_profiles(
         &self,
         view: &StateView<'_>,
@@ -4242,6 +4409,7 @@ impl Actor {
             .collect()
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     pub(super) fn install_elected_roster(&self, roster: &[PeerId]) -> Result<()> {
         if roster.is_empty() {
             return Ok(());
@@ -4269,33 +4437,65 @@ impl Actor {
         Ok(())
     }
 
-    pub(super) fn refresh_commit_topology_state(
-        &mut self,
-        topology_hash: HashOf<Vec<PeerId>>,
-    ) -> bool {
-        if self.last_commit_topology_hash == Some(topology_hash) {
-            return false;
-        }
-        self.last_commit_topology_hash = Some(topology_hash);
-        self.subsystems.propose.new_view_tracker = NewViewTracker::default();
-        self.subsystems.propose.forced_view_after_timeout = None;
-        true
+    fn refresh_roster_validation_cache(&mut self) {
+        let world = self.state.world.view();
+        self.roster_validation_cache.refresh_from_world(
+            &world,
+            self.config.epoch_length_blocks,
+            Some(&self.common_config.trusted_peers.value().pops),
+        );
+        drop(world);
     }
 
-    fn reset_consensus_state_for_roster_change(&mut self) {
+    pub(super) fn refresh_commit_topology_state(
+        &mut self,
+        topology: &[PeerId],
+    ) -> CommitTopologyChange {
+        let order_hash = HashOf::new(&topology.to_vec());
+        let mut membership = topology.to_vec();
+        membership.sort();
+        let membership_hash = HashOf::new(&membership);
+
+        if self.last_commit_topology_hash == Some(order_hash) {
+            return CommitTopologyChange::None;
+        }
+
+        let membership_changed = self.last_commit_topology_membership_hash != Some(membership_hash);
+        self.last_commit_topology_hash = Some(order_hash);
+        self.last_commit_topology_membership_hash = Some(membership_hash);
+
+        if membership_changed {
+            // Only reset view-change state when the validator set changes; order-only rotations
+            // are expected as part of leader selection.
+            self.subsystems.propose.new_view_tracker = NewViewTracker::default();
+            self.subsystems.propose.forced_view_after_timeout = None;
+            CommitTopologyChange::Membership
+        } else {
+            CommitTopologyChange::OrderOnly
+        }
+    }
+
+    /// Resets consensus caches when the validator roster changes.
+    pub(super) fn reset_consensus_state_for_roster_change(
+        &mut self,
+        preserve_proposals_seen: bool,
+    ) {
         self.pending.pending_blocks.clear();
-        self.pending.pending_replay_last_sent.clear();
         self.pending.missing_block_requests.clear();
         self.pending.pending_processing.set(None);
         self.pending.pending_processing_parent.set(None);
         self.vote_log.clear();
+        self.deferred_votes.clear();
+        self.deferred_qcs.clear();
+        self.vote_roster_cache.clear();
         self.qc_cache.clear();
         self.qc_signer_tally.clear();
         self.voting_block = None;
-        self.subsystems.propose.proposals_seen.clear();
+        if !preserve_proposals_seen {
+            self.subsystems.propose.proposals_seen.clear();
+        }
         self.subsystems.propose.proposal_cache = ProposalCache::new(PROPOSAL_CACHE_LIMIT);
         self.reset_collector_state();
-        self.subsystems.propose.last_empty_child_attempt = None;
         self.subsystems.da_rbc.rbc.pending.clear();
         self.subsystems.da_rbc.rbc.sessions.clear();
         self.subsystems.da_rbc.rbc.session_rosters.clear();
@@ -4310,6 +4510,7 @@ impl Actor {
             .rbc
             .ready_rebroadcast_last_sent
             .clear();
+        self.subsystems.da_rbc.rbc.deliver_deferral.clear();
         self.subsystems.da_rbc.rbc.persisted_full_sessions.clear();
         self.subsystems.da_rbc.rbc.persist_inflight.clear();
         self.subsystems.da_rbc.rbc.status_handle.clear();
@@ -4347,7 +4548,7 @@ impl Actor {
             self.queue.clear_all();
             // Keep existing connections so block sync can still fetch updates after removal.
             if current != self.last_advertised_topology {
-                self.last_advertised_topology = current.clone();
+                self.last_advertised_topology.clone_from(&current);
                 self.peers_gossiper
                     .update_topology(UpdateTopology(current.into_iter().collect()));
             }
@@ -4400,7 +4601,7 @@ impl Actor {
             );
         }
 
-        self.last_advertised_topology = advertise.clone();
+        self.last_advertised_topology.clone_from(&advertise);
         self.peers_gossiper
             .update_topology(UpdateTopology(advertise.into_iter().collect()));
     }
@@ -4421,28 +4622,32 @@ impl Actor {
     pub(super) fn evaluate_pacemaker(
         pacemaker: &mut Pacemaker,
         pacemaker_backpressure: &mut PacemakerBackpressure,
-        state: BackpressureState,
+        backpressure: ProposalBackpressure,
         now: Instant,
-        defer_on_fire: bool,
     ) -> (bool, bool, bool) {
-        let saturated = state.is_saturated();
-        let backpressure_action = pacemaker_backpressure.update(saturated);
+        let deferring = backpressure.should_defer();
+        let backpressure_action = pacemaker_backpressure.update(deferring);
         let log_initial_deferral =
             matches!(backpressure_action, PacemakerBackpressureAction::First);
         let should_fire_now = pacemaker.should_fire(now);
-        if defer_on_fire && saturated {
-            if should_fire_now {
-                // Allow proposals to proceed once the pacemaker deadline elapses even under
-                // saturation to avoid deadlock, but keep logging deferral.
-                return (log_initial_deferral, true, true);
+        if deferring {
+            if backpressure.only_queue_saturation() {
+                if should_fire_now {
+                    // Allow proposals to proceed once the pacemaker deadline elapses when queue
+                    // saturation is the only backpressure signal, but keep logging deferral.
+                    return (log_initial_deferral, true, true);
+                }
+                // Defer proposal assembly under backpressure, but still request a log on the first
+                // deferral of a saturation window even if the pacemaker deadline has not yet elapsed.
+                return (log_initial_deferral, log_initial_deferral, false);
             }
-            // Defer proposal assembly under backpressure, but still request a log on the first
-            // deferral of a saturation window even if the pacemaker deadline has not yet elapsed.
-            return (log_initial_deferral, log_initial_deferral, false);
+            // Non-queue backpressure keeps proposals deferred even when the pacemaker fires.
+            return (log_initial_deferral, should_fire_now, false);
         }
         (log_initial_deferral, false, should_fire_now)
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     pub(super) fn telemetry_handle(&self) -> Option<&crate::telemetry::Telemetry> {
         #[cfg(feature = "telemetry")]
         {
@@ -4460,7 +4665,8 @@ mod tests {
     use std::{
         collections::{BTreeMap, BTreeSet},
         net::SocketAddr,
-        sync::Arc,
+        sync::{Arc, mpsc},
+        time::Duration,
     };
 
     use super::*;
@@ -4569,6 +4775,133 @@ mod tests {
     }
 
     #[test]
+    fn commit_worker_wakes_on_result() {
+        let genesis_key = KeyPair::random();
+        let genesis_account_id =
+            AccountId::new(GENESIS_DOMAIN_ID.clone(), genesis_key.public_key().clone());
+        let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
+        let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
+        let world = World::with([genesis_domain], [genesis_account], []);
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(
+            world,
+            Arc::clone(&kura),
+            query_handle,
+        ));
+        let chain_id = state.view().chain_id().clone();
+        let (wake_tx, wake_rx) = mpsc::sync_channel(1);
+
+        let handle = spawn_commit_worker(
+            Arc::clone(&state),
+            Arc::clone(&kura),
+            chain_id.clone(),
+            genesis_account_id.clone(),
+            Some(wake_tx),
+        );
+
+        let tx = TransactionBuilder::new(chain_id.clone(), genesis_account_id.clone())
+            .with_instructions([Log::new(
+                Level::DEBUG,
+                "commit worker wake test".to_string(),
+            )])
+            .sign(genesis_key.private_key());
+        let block = SignedBlock::genesis(vec![tx], genesis_key.private_key(), None, None);
+        let peer_key = KeyPair::random();
+        let peer_id = PeerId::new(peer_key.public_key().clone());
+        let topology = vec![peer_id];
+        let (events_sender, _events_rx) = tokio::sync::broadcast::channel(16);
+        let work = CommitWork {
+            id: 42,
+            block,
+            commit_topology: topology.clone(),
+            signature_topology: topology,
+            qc_signers: None,
+            allow_quorum_bypass: false,
+            persist_required: false,
+            events_sender,
+        };
+
+        handle.work_tx.send(work).expect("send commit work");
+        handle
+            .result_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("commit result");
+        wake_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("wake signal");
+
+        drop(handle.work_tx);
+        if let Err(err) = handle.join_handle.join() {
+            panic!("commit worker panicked: {err:?}");
+        }
+    }
+
+    #[test]
+    fn commit_worker_does_not_block_on_full_wake_channel() {
+        let genesis_key = KeyPair::random();
+        let genesis_account_id =
+            AccountId::new(GENESIS_DOMAIN_ID.clone(), genesis_key.public_key().clone());
+        let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
+        let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
+        let world = World::with([genesis_domain], [genesis_account], []);
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(
+            world,
+            Arc::clone(&kura),
+            query_handle,
+        ));
+        let chain_id = state.view().chain_id().clone();
+        let (wake_tx, wake_rx) = mpsc::sync_channel(1);
+        wake_tx.try_send(()).expect("prefill wake");
+
+        let handle = spawn_commit_worker(
+            Arc::clone(&state),
+            Arc::clone(&kura),
+            chain_id.clone(),
+            genesis_account_id.clone(),
+            Some(wake_tx),
+        );
+
+        let tx = TransactionBuilder::new(chain_id.clone(), genesis_account_id.clone())
+            .with_instructions([Log::new(
+                Level::DEBUG,
+                "commit worker full wake test".to_string(),
+            )])
+            .sign(genesis_key.private_key());
+        let block = SignedBlock::genesis(vec![tx], genesis_key.private_key(), None, None);
+        let peer_key = KeyPair::random();
+        let peer_id = PeerId::new(peer_key.public_key().clone());
+        let topology = vec![peer_id];
+        let (events_sender, _events_rx) = tokio::sync::broadcast::channel(16);
+        let work = CommitWork {
+            id: 43,
+            block,
+            commit_topology: topology.clone(),
+            signature_topology: topology,
+            qc_signers: None,
+            allow_quorum_bypass: false,
+            persist_required: false,
+            events_sender,
+        };
+
+        handle.work_tx.send(work).expect("send commit work");
+        handle
+            .result_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("commit result");
+
+        assert!(wake_rx.try_recv().is_ok(), "prefilled wake should remain");
+        assert!(matches!(wake_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+
+        drop(handle.work_tx);
+        if let Err(err) = handle.join_handle.join() {
+            panic!("commit worker panicked: {err:?}");
+        }
+    }
+
+    #[test]
     fn commit_quorum_signers_requires_min_votes() {
         let min_votes_for_commit = 3;
         assert!(!has_commit_quorum_signers(None, min_votes_for_commit));
@@ -4597,8 +4930,9 @@ mod tests {
         online.extend(peers.clone());
         let seed = [0xB1; 32];
         let targets =
-            Actor::block_sync_update_targets_for_peers(&local, 3, &online, &online, &seed);
-        let repeat = Actor::block_sync_update_targets_for_peers(&local, 3, &online, &online, &seed);
+            Actor::block_sync_update_targets_for_peers(&local, 3, &online, &online, &online, &seed);
+        let repeat =
+            Actor::block_sync_update_targets_for_peers(&local, 3, &online, &online, &online, &seed);
 
         assert_eq!(targets, repeat);
         assert_eq!(targets.len(), 3);
@@ -4622,12 +4956,49 @@ mod tests {
         let mut world = Vec::with_capacity(world_peers.len() + 1);
         world.push(local.clone());
         world.extend(world_peers.clone());
+        let mut registered = world.clone();
+        registered.extend(stray_peers.clone());
         let seed = [0xCA; 32];
-        let targets = Actor::block_sync_update_targets_for_peers(&local, 2, &world, &online, &seed);
+        let targets = Actor::block_sync_update_targets_for_peers(
+            &local,
+            2,
+            &world,
+            &registered,
+            &online,
+            &seed,
+        );
 
         assert_eq!(targets.len(), 2);
         assert!(!targets.contains(&local));
         assert!(targets.iter().all(|peer| stray_peers.contains(peer)));
+    }
+
+    #[test]
+    fn block_sync_update_targets_skip_unregistered_strays() {
+        let local = PeerId::new(KeyPair::random().public_key().clone());
+        let world_peers: Vec<_> = (0..2)
+            .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
+            .collect();
+        let stray = PeerId::new(KeyPair::random().public_key().clone());
+        let mut online = Vec::new();
+        online.push(local.clone());
+        online.extend(world_peers.clone());
+        online.push(stray.clone());
+        let mut world = Vec::with_capacity(world_peers.len() + 1);
+        world.push(local.clone());
+        world.extend(world_peers.clone());
+        let registered = world.clone();
+        let seed = [0x5E; 32];
+        let targets = Actor::block_sync_update_targets_for_peers(
+            &local,
+            3,
+            &world,
+            &registered,
+            &online,
+            &seed,
+        );
+
+        assert!(!targets.contains(&stray));
     }
 
     #[test]
@@ -4639,7 +5010,8 @@ mod tests {
         let peers = vec![local.clone(), peer_a, peer_b.clone(), peer_c];
         let online = vec![local.clone(), peer_b.clone()];
         let seed = [0x12; 32];
-        let targets = Actor::block_sync_update_targets_for_peers(&local, 3, &peers, &online, &seed);
+        let targets =
+            Actor::block_sync_update_targets_for_peers(&local, 3, &peers, &peers, &online, &seed);
 
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0], peer_b);
@@ -4655,8 +5027,10 @@ mod tests {
         let peers = vec![local.clone(), peer_a.clone(), peer_b.clone()];
         let online = vec![local.clone()];
         let seed = [0xDE; 32];
-        let targets = Actor::block_sync_update_targets_for_peers(&local, 1, &peers, &online, &seed);
-        let repeat = Actor::block_sync_update_targets_for_peers(&local, 1, &peers, &online, &seed);
+        let targets =
+            Actor::block_sync_update_targets_for_peers(&local, 1, &peers, &peers, &online, &seed);
+        let repeat =
+            Actor::block_sync_update_targets_for_peers(&local, 1, &peers, &peers, &online, &seed);
 
         assert_eq!(targets, repeat);
         assert_eq!(targets.len(), 1);
@@ -4790,6 +5164,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn block_sync_update_has_roster_requires_stake_snapshot_in_npos() {
         let block = sample_block(4, 0);
         let mut update = super::super::message::BlockSyncUpdate::from(&block);
@@ -5019,7 +5394,7 @@ mod tests {
             LiveQueryStore::start_test(),
         );
         let height = block.header().height().get();
-        let view = u64::from(block.header().view_change_index());
+        let view = block.header().view_change_index();
         let epoch = 0;
         let keypairs = vec![
             KeyPair::random_with_algorithm(Algorithm::BlsNormal),
@@ -5098,7 +5473,7 @@ mod tests {
         let block = sample_block(8, 1);
         let block_hash = block.hash();
         let height = block.header().height().get();
-        let view = u64::from(block.header().view_change_index());
+        let view = block.header().view_change_index();
         let epoch = 0;
         let roster_len = 4;
         let signers_bitmap = vec![0b0000_0111];
@@ -5173,7 +5548,7 @@ mod tests {
             phase: crate::sumeragi::consensus::Phase::Commit,
             subject_block_hash: block_hash,
             height: block.header().height().get(),
-            view: u64::from(block.header().view_change_index()),
+            view: block.header().view_change_index(),
             epoch: 0,
         };
         let keypairs = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
@@ -5259,6 +5634,10 @@ mod tests {
         );
 
         let (trusted, me_id) = trusted_self();
+        let roster_cache = {
+            let view = state.view();
+            super::RosterValidationCache::from_world(view.world(), super::EPOCH_LENGTH_BLOCKS, None)
+        };
         let mut update = block_sync_update_with_roster(
             &block,
             &state,
@@ -5266,6 +5645,7 @@ mod tests {
             ConsensusMode::Permissioned,
             &trusted,
             &me_id,
+            &roster_cache,
         );
         let qc_cache: BTreeMap<
             (

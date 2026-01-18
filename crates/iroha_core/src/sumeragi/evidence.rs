@@ -355,12 +355,6 @@ pub enum EvidenceValidationError {
     BlockHashMatch,
     /// Double-vote evidence phase disagrees with its [`EvidenceKind`].
     PhaseKindMismatch,
-    /// Double execution vote evidence references different block hashes.
-    ExecBlockHashMismatch,
-    /// Double execution vote evidence references different epochs/views/heights/signers.
-    ExecMetadataMismatch,
-    /// Double execution vote evidence references identical post-state roots.
-    ExecPostStateRootMatch,
     /// Evidence references votes that lack the expected BLS signature payload.
     SignatureMissing,
     /// Evidence references votes whose signatures appear truncated or forged.
@@ -397,13 +391,6 @@ impl std::fmt::Display for EvidenceValidationError {
             SignerMismatch => "double-vote evidence signers must match",
             BlockHashMatch => "double-vote evidence must reference distinct block hashes",
             PhaseKindMismatch => "double-vote evidence phase disagrees with its kind",
-            ExecBlockHashMismatch => "double execution vote evidence must reference the same block",
-            ExecMetadataMismatch => {
-                "double execution vote evidence metadata (height/view/epoch/signer) must match"
-            }
-            ExecPostStateRootMatch => {
-                "double execution vote evidence must reference distinct post-state roots"
-            }
             SignatureMissing => "consensus vote BLS signature payload missing",
             SignatureTruncated => "consensus vote BLS signature payload truncated or forged",
             SignatureInvalid => "consensus vote BLS signature verification failed",

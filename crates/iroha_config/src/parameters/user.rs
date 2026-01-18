@@ -662,10 +662,11 @@ pub struct Root {
         default = "defaults::common::chain_discriminant()"
     )]
     chain_discriminant: WithOrigin<u16>,
-    /// Optional BLS Proof-of-Possession entries for trusted peers.
-    /// If provided, only peers with valid PoP will participate as validators.
-    #[config(default)]
-    trusted_peers_pop: Vec<TrustedPeerPop>,
+    /// BLS Proof-of-Possession entries for trusted peers.
+    /// PoP entries must cover every BLS validator in `trusted_peers` and are verified
+    /// during config parsing; incomplete or invalid PoPs are rejected.
+    #[config(env = "TRUSTED_PEERS_POP", default)]
+    trusted_peers_pop: TrustedPeerPops,
     #[config(nested)]
     genesis: Genesis,
     #[config(nested)]
@@ -784,6 +785,101 @@ pub enum ParseError {
 }
 
 impl Root {
+    fn parse_trusted_peer_pops(
+        entries: &[TrustedPeerPop],
+        emitter: &mut Emitter<ParseError>,
+    ) -> BTreeMap<PublicKey, Vec<u8>> {
+        let mut pops = BTreeMap::new();
+        for entry in entries {
+            let pk = &entry.public_key;
+            if pk.algorithm() != Algorithm::BlsNormal {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSumeragiConfig)
+                        .attach(format!("trusted_peers_pop entry uses non-BLS key: {pk}")),
+                );
+                continue;
+            }
+
+            let pop_bytes =
+                match hex::decode(entry.pop_hex.trim_start_matches("0x")) {
+                    Ok(bytes) => bytes,
+                    Err(err) => {
+                        emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                            format!("trusted_peers_pop entry has invalid hex for {pk}: {err}"),
+                        ));
+                        continue;
+                    }
+                };
+
+            if let Err(err) = iroha_crypto::bls_normal_pop_verify(pk, &pop_bytes) {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                        "trusted_peers_pop entry has invalid PoP for {pk}: {err}"
+                    )),
+                );
+                continue;
+            }
+
+            if pops.insert(pk.clone(), pop_bytes).is_some() {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSumeragiConfig)
+                        .attach(format!("trusted_peers_pop entry duplicated for {pk}")),
+                );
+            }
+        }
+        pops
+    }
+
+    fn validate_trusted_peer_pops(
+        trusted: &actual::TrustedPeers,
+        emitter: &mut Emitter<ParseError>,
+    ) {
+        let mut roster_keys: BTreeSet<PublicKey> = BTreeSet::new();
+        let mut non_bls: Vec<String> = Vec::new();
+        for peer in std::iter::once(&trusted.myself).chain(trusted.others.iter()) {
+            let pk = peer.id().public_key();
+            if pk.algorithm() == Algorithm::BlsNormal {
+                roster_keys.insert(pk.clone());
+            } else {
+                non_bls.push(pk.to_string());
+            }
+        }
+        if !non_bls.is_empty() {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                    "trusted_peers contains non-BLS validator keys: {non_bls:?}"
+                )),
+            );
+        }
+
+        let missing: Vec<_> = roster_keys
+            .iter()
+            .filter(|pk| !trusted.pops.contains_key(*pk))
+            .map(ToString::to_string)
+            .collect();
+        if !missing.is_empty() {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                    "trusted_peers_pop missing PoPs for roster keys: {missing:?}"
+                )),
+            );
+        }
+
+        let extras: Vec<_> = trusted
+            .pops
+            .keys()
+            .filter(|pk| !roster_keys.contains(*pk))
+            .map(ToString::to_string)
+            .collect();
+        if !extras.is_empty() {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                    "trusted_peers_pop contains keys not in trusted_peers: {extras:?}"
+                )),
+            );
+        }
+    }
+
     /// Parses user configuration view into the internal repr.
     ///
     /// # Errors
@@ -810,34 +906,24 @@ impl Root {
         }
 
         let (network, block_sync, transaction_gossiper) = self.network.parse();
-        let Some((peer, trusted_peers)) = key_pair.as_ref().map(|key_pair| {
-            let peer = Peer::new(
-                network.address.value().clone(),
-                key_pair.public_key().clone(),
-            );
-
-            (
-                peer.clone(),
-                self.trusted_peers.map(|x| {
-                    let others = x.0.into_iter().filter(|p| p.id() != peer.id()).collect();
-                    actual::TrustedPeers {
-                        myself: peer,
-                        others,
-                        pops: self
-                            .trusted_peers_pop
-                            .iter()
-                            .filter_map(|e| {
-                                hex::decode(e.pop_hex.trim_start_matches("0x"))
-                                    .ok()
-                                    .map(|bytes| (e.public_key.clone(), bytes))
-                            })
-                            .collect(),
-                    }
-                }),
-            )
-        }) else {
+        let Some(key_pair_ref) = key_pair.as_ref() else {
             panic!("Key pair is missing");
         };
+        let peer = Peer::new(
+            network.address.value().clone(),
+            key_pair_ref.public_key().clone(),
+        );
+        let trusted_peers = self.trusted_peers.map(|x| {
+            let others = x.0.into_iter().filter(|p| p.id() != peer.id()).collect();
+            let pops = Self::parse_trusted_peer_pops(&self.trusted_peers_pop.0, &mut emitter);
+            let trusted = actual::TrustedPeers {
+                myself: peer.clone(),
+                others,
+                pops,
+            };
+            Self::validate_trusted_peer_pops(&trusted, &mut emitter);
+            trusted
+        });
 
         let genesis = self.genesis.into();
 
@@ -2609,6 +2695,12 @@ pub struct Pipeline {
         default = "defaults::pipeline::QUERY_DEFAULT_CURSOR_MODE.parse().unwrap()"
     )]
     pub query_default_cursor_mode: QueryCursorMode,
+    /// Maximum fetch size for iterable queries executed inside the IVM.
+    #[config(
+        env = "PIPELINE_QUERY_MAX_FETCH_SIZE",
+        default = "defaults::pipeline::QUERY_MAX_FETCH_SIZE"
+    )]
+    pub query_max_fetch_size: u64,
     /// Minimum gas units required to use stored cursor mode (0 = disabled).
     #[config(
         env = "PIPELINE_QUERY_STORED_MIN_GAS_UNITS",
@@ -2662,7 +2754,7 @@ pub struct TieredState {
         default = "defaults::tiered_state::HOT_RETAINED_KEYS"
     )]
     pub hot_retained_keys: usize,
-    /// Hot-tier byte budget based on serialized Norito JSON size (0 = unlimited).
+    /// Hot-tier byte budget based on deterministic in-memory WSV sizing (0 = unlimited).
     /// Grace retention may temporarily exceed this budget.
     #[config(
         env = "TIERED_STATE_HOT_RETAINED_BYTES",
@@ -3359,6 +3451,7 @@ impl Pipeline {
             quarantine_tx_max_cycles: self.quarantine_tx_max_cycles,
             quarantine_tx_max_millis: self.quarantine_tx_max_millis,
             query_default_cursor_mode: self.query_default_cursor_mode.into_actual(),
+            query_max_fetch_size: self.query_max_fetch_size,
             query_stored_min_gas_units: self.query_stored_min_gas_units,
             amx_per_dataspace_budget_ms: self.amx_per_dataspace_budget_ms,
             amx_group_budget_ms: self.amx_group_budget_ms,
@@ -3447,6 +3540,7 @@ mod pipeline_tests {
             quarantine_tx_max_cycles: defaults::pipeline::QUARANTINE_TX_MAX_CYCLES,
             quarantine_tx_max_millis: defaults::pipeline::QUARANTINE_TX_MAX_MILLIS,
             query_default_cursor_mode: QueryCursorMode::Ephemeral,
+            query_max_fetch_size: defaults::pipeline::QUERY_MAX_FETCH_SIZE,
             query_stored_min_gas_units: defaults::pipeline::QUERY_STORED_MIN_GAS_UNITS,
             amx_per_dataspace_budget_ms: defaults::pipeline::AMX_PER_DATASPACE_BUDGET_MS,
             amx_group_budget_ms: defaults::pipeline::AMX_GROUP_BUDGET_MS,
@@ -3905,18 +3999,6 @@ pub struct Norito {
         default = "defaults::norito::LARGE_THRESHOLD"
     )]
     pub large_threshold: usize,
-    /// Enable varint-coded top-level sequence length up to this payload size.
-    #[config(
-        env = "NORITO_ENABLE_COMPACT_SEQ_LEN_UP_TO",
-        default = "defaults::norito::ENABLE_COMPACT_SEQ_LEN_UP_TO"
-    )]
-    pub enable_compact_seq_len_up_to: usize,
-    /// Enable varint-coded per-element sizes (packed sequences) up to this payload size.
-    #[config(
-        env = "NORITO_ENABLE_VARINT_OFFSETS_UP_TO",
-        default = "defaults::norito::ENABLE_VARINT_OFFSETS_UP_TO"
-    )]
-    pub enable_varint_offsets_up_to: usize,
     /// Allow GPU compression offload when compiled and available.
     #[config(
         env = "NORITO_ALLOW_GPU_COMPRESSION",
@@ -3946,8 +4028,6 @@ impl Norito {
             zstd_level_large: self.zstd_level_large,
             zstd_level_gpu: self.zstd_level_gpu,
             large_threshold: self.large_threshold,
-            enable_compact_seq_len_up_to: self.enable_compact_seq_len_up_to,
-            enable_varint_offsets_up_to: self.enable_varint_offsets_up_to,
             allow_gpu_compression: self.allow_gpu_compression,
             max_archive_len: self.max_archive_len,
             aos_ncb_small_n: self.aos_ncb_small_n,
@@ -5048,6 +5128,12 @@ pub struct Sumeragi {
     /// Optional cap on payload bytes per block when RBC is disabled (`None` = unlimited).
     #[config(env = "SUMERAGI_BLOCK_MAX_PAYLOAD_BYTES")]
     pub block_max_payload_bytes: Option<NonZeroUsize>,
+    /// Multiplier applied to the proposal queue scan budget (relative to max tx per block).
+    #[config(
+        env = "SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER",
+        default = "defaults::sumeragi::PROPOSAL_QUEUE_SCAN_MULTIPLIER"
+    )]
+    pub proposal_queue_scan_multiplier: NonZeroUsize,
     /// Capacity for the vote message channel.
     pub msg_channel_cap_votes: Option<NonZeroUsize>,
     /// Capacity for the block payload channel.
@@ -5126,6 +5212,36 @@ pub struct Sumeragi {
     /// Whether to drop consensus messages from peers with repeated membership mismatches.
     #[config(default = "defaults::sumeragi::MEMBERSHIP_MISMATCH_FAIL_CLOSED")]
     pub membership_mismatch_fail_closed: bool,
+    /// Maximum height delta accepted for inbound consensus messages (0 disables future gating).
+    #[config(
+        env = "SUMERAGI_CONSENSUS_FUTURE_HEIGHT_WINDOW",
+        default = "defaults::sumeragi::CONSENSUS_FUTURE_HEIGHT_WINDOW"
+    )]
+    pub consensus_future_height_window: u64,
+    /// Maximum view delta accepted for inbound consensus messages (0 disables future gating).
+    #[config(
+        env = "SUMERAGI_CONSENSUS_FUTURE_VIEW_WINDOW",
+        default = "defaults::sumeragi::CONSENSUS_FUTURE_VIEW_WINDOW"
+    )]
+    pub consensus_future_view_window: u64,
+    /// Invalid signature count before temporarily suppressing a signer (0 disables).
+    #[config(
+        env = "SUMERAGI_INVALID_SIG_PENALTY_THRESHOLD",
+        default = "defaults::sumeragi::INVALID_SIG_PENALTY_THRESHOLD"
+    )]
+    pub invalid_sig_penalty_threshold: u32,
+    /// Window (ms) for invalid signature penalty counting.
+    #[config(
+        env = "SUMERAGI_INVALID_SIG_PENALTY_WINDOW_MS",
+        default = "defaults::sumeragi::INVALID_SIG_PENALTY_WINDOW_MS"
+    )]
+    pub invalid_sig_penalty_window_ms: u64,
+    /// Cooldown (ms) applied after invalid signature penalties trigger.
+    #[config(
+        env = "SUMERAGI_INVALID_SIG_PENALTY_COOLDOWN_MS",
+        default = "defaults::sumeragi::INVALID_SIG_PENALTY_COOLDOWN_MS"
+    )]
+    pub invalid_sig_penalty_cooldown_ms: u64,
     /// Maximum DA commitments (blobs) permitted in a single block.
     #[config(
         env = "SUMERAGI_DA_MAX_COMMITMENTS_PER_BLOCK",
@@ -5144,6 +5260,9 @@ pub struct Sumeragi {
         default = "defaults::sumeragi::RBC_CHUNK_MAX_BYTES"
     )]
     pub rbc_chunk_max_bytes: usize,
+    /// Optional fanout cap for RBC chunk broadcasts (null = auto).
+    #[config(env = "SUMERAGI_RBC_CHUNK_FANOUT")]
+    pub rbc_chunk_fanout: Option<NonZeroUsize>,
     /// Maximum pending RBC chunks stashed before INIT is observed.
     #[config(
         env = "SUMERAGI_RBC_PENDING_MAX_CHUNKS",
@@ -5168,6 +5287,18 @@ pub struct Sumeragi {
         default = "defaults::sumeragi::RBC_SESSION_TTL_SECS"
     )]
     pub rbc_session_ttl_secs: u64,
+    /// Maximum RBC sessions rebroadcast per tick (prevents message storms).
+    #[config(
+        env = "SUMERAGI_RBC_REBROADCAST_SESSIONS_PER_TICK",
+        default = "defaults::sumeragi::RBC_REBROADCAST_SESSIONS_PER_TICK"
+    )]
+    pub rbc_rebroadcast_sessions_per_tick: usize,
+    /// Maximum RBC payload chunks broadcast per tick (limits burst fanout).
+    #[config(
+        env = "SUMERAGI_RBC_PAYLOAD_CHUNKS_PER_TICK",
+        default = "defaults::sumeragi::RBC_PAYLOAD_CHUNKS_PER_TICK"
+    )]
+    pub rbc_payload_chunks_per_tick: usize,
     /// Maximum number of RBC session summaries persisted to disk.
     #[config(
         env = "SUMERAGI_RBC_STORE_MAX_SESSIONS",
@@ -5520,6 +5651,29 @@ impl FromEnvStr for TrustedPeers {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+struct TrustedPeerPops(Vec<TrustedPeerPop>);
+
+impl json::JsonDeserialize for TrustedPeerPops {
+    fn json_deserialize(
+        parser: &mut json::Parser<'_>,
+    ) -> ::core::result::Result<Self, json::Error> {
+        let entries = Vec::<TrustedPeerPop>::json_deserialize(parser)?;
+        Ok(Self(entries))
+    }
+}
+
+impl FromEnvStr for TrustedPeerPops {
+    type Error = json::Error;
+
+    fn from_env_str(value: Cow<'_, str>) -> std::result::Result<Self, Self::Error>
+    where
+        Self: Sized,
+    {
+        norito::json::from_json(value.as_ref())
+    }
+}
+
 impl Default for TrustedPeers {
     fn default() -> Self {
         Self(UniqueVec::new())
@@ -5534,6 +5688,31 @@ pub struct TrustedPeerPop {
     pub public_key: iroha_crypto::PublicKey,
     /// `PoP` bytes as hex string (e.g., "0x...") or plain hex.
     pub pop_hex: String,
+}
+
+#[cfg(test)]
+mod trusted_peers_pop_env_tests {
+    use std::{borrow::Cow, str::FromStr};
+
+    use super::*;
+
+    const PUBLIC_KEY_HEX: &str = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2";
+
+    #[test]
+    fn trusted_peers_pop_from_env_parses_json() {
+        let json = format!(
+            r#"[{{"public_key":"{public_key}","pop_hex":"deadbeef"}}]"#,
+            public_key = PUBLIC_KEY_HEX
+        );
+        let parsed =
+            TrustedPeerPops::from_env_str(Cow::Owned(json)).expect("parse trusted_peers_pop env");
+        assert_eq!(parsed.0.len(), 1);
+        assert_eq!(
+            parsed.0[0].public_key,
+            iroha_crypto::PublicKey::from_str(PUBLIC_KEY_HEX).expect("public key")
+        );
+        assert_eq!(parsed.0[0].pop_hex, "deadbeef");
+    }
 }
 
 impl AdaptiveObservability {
@@ -5613,6 +5792,7 @@ impl Sumeragi {
             collectors_redundant_send_r,
             block_max_transactions,
             block_max_payload_bytes,
+            proposal_queue_scan_multiplier,
             msg_channel_cap_votes,
             msg_channel_cap_block_payload,
             msg_channel_cap_rbc_chunks,
@@ -5630,13 +5810,21 @@ impl Sumeragi {
             missing_block_signer_fallback_attempts,
             membership_mismatch_alert_threshold,
             membership_mismatch_fail_closed,
+            consensus_future_height_window,
+            consensus_future_view_window,
+            invalid_sig_penalty_threshold,
+            invalid_sig_penalty_window_ms,
+            invalid_sig_penalty_cooldown_ms,
             da_max_commitments_per_block,
             da_max_proof_openings_per_block,
             rbc_chunk_max_bytes,
+            rbc_chunk_fanout,
             rbc_pending_max_chunks,
             rbc_pending_max_bytes,
             rbc_pending_ttl_ms,
             rbc_session_ttl_secs,
+            rbc_rebroadcast_sessions_per_tick,
+            rbc_payload_chunks_per_tick,
             rbc_store_max_sessions,
             rbc_store_soft_sessions,
             rbc_store_max_bytes,
@@ -5820,6 +6008,24 @@ impl Sumeragi {
         } else {
             true
         };
+        let rbc_rebroadcast_budget_ok = if rbc_rebroadcast_sessions_per_tick == 0 {
+            emitter
+                .emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                    "sumeragi.rbc_rebroadcast_sessions_per_tick must be greater than zero",
+                ));
+            false
+        } else {
+            true
+        };
+        let rbc_payload_budget_ok = if rbc_payload_chunks_per_tick == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig)
+                    .attach("sumeragi.rbc_payload_chunks_per_tick must be greater than zero"),
+            );
+            false
+        } else {
+            true
+        };
 
         let adaptive_observability = adaptive_observability.parse(emitter)?;
         let npos = npos.parse(
@@ -5845,6 +6051,8 @@ impl Sumeragi {
             && da_availability_multiplier_ok
             && rbc_chunk_max_ok
             && pending_caps_ok
+            && rbc_rebroadcast_budget_ok
+            && rbc_payload_budget_ok
             && da_caps_ok
             && da_openings_ok
             && kura_retry_ok
@@ -5911,6 +6119,7 @@ impl Sumeragi {
             collectors_redundant_send_r,
             block_max_transactions,
             block_max_payload_bytes,
+            proposal_queue_scan_multiplier,
             msg_channel_cap_votes,
             msg_channel_cap_block_payload,
             msg_channel_cap_rbc_chunks,
@@ -5936,13 +6145,25 @@ impl Sumeragi {
             missing_block_signer_fallback_attempts,
             membership_mismatch_alert_threshold,
             membership_mismatch_fail_closed,
+            consensus_future_height_window,
+            consensus_future_view_window,
+            invalid_sig_penalty_threshold,
+            invalid_sig_penalty_window: std::time::Duration::from_millis(
+                invalid_sig_penalty_window_ms,
+            ),
+            invalid_sig_penalty_cooldown: std::time::Duration::from_millis(
+                invalid_sig_penalty_cooldown_ms,
+            ),
             da_max_commitments_per_block,
             da_max_proof_openings_per_block,
             rbc_chunk_max_bytes,
+            rbc_chunk_fanout,
             rbc_pending_max_chunks,
             rbc_pending_max_bytes,
             rbc_pending_ttl: std::time::Duration::from_millis(rbc_pending_ttl_ms),
             rbc_session_ttl: std::time::Duration::from_secs(rbc_session_ttl_secs),
+            rbc_rebroadcast_sessions_per_tick,
+            rbc_payload_chunks_per_tick,
             rbc_store_max_sessions,
             rbc_store_soft_sessions,
             rbc_store_max_bytes,
@@ -7057,9 +7278,15 @@ pub struct Network {
     /// Interval between block gossip batches in milliseconds (clamped to >= 100ms).
     #[config(default = "defaults::network::BLOCK_GOSSIP_PERIOD.into()")]
     pub block_gossip_period_ms: DurationMs,
+    /// Maximum interval between block gossip batches in milliseconds (clamped to >= block_gossip_period_ms).
+    #[config(default = "defaults::network::BLOCK_GOSSIP_MAX_PERIOD.into()")]
+    pub block_gossip_max_period_ms: DurationMs,
     /// Interval between peer gossip batches in milliseconds (clamped to >= 100ms).
     #[config(default = "defaults::network::PEER_GOSSIP_PERIOD.into()")]
     pub peer_gossip_period_ms: DurationMs,
+    /// Maximum interval between peer gossip batches in milliseconds (clamped to >= peer_gossip_period_ms).
+    #[config(default = "defaults::network::PEER_GOSSIP_MAX_PERIOD.into()")]
+    pub peer_gossip_max_period_ms: DurationMs,
     /// Advertise and accept signed trust gossip frames.
     #[config(default = "defaults::network::TRUST_GOSSIP")]
     pub trust_gossip: bool,
@@ -7081,6 +7308,9 @@ pub struct Network {
     /// Interval between transaction gossip batches in milliseconds (clamped to >= 100ms).
     #[config(default = "defaults::network::TRANSACTION_GOSSIP_PERIOD.into()")]
     pub transaction_gossip_period_ms: DurationMs,
+    /// Number of gossip periods to wait before re-sending the same transactions.
+    #[config(default = "defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS")]
+    pub transaction_gossip_resend_ticks: NonZeroU32,
     /// Drop transaction gossip for dataspaces missing from the lane catalog instead of falling
     /// back to restricted routing.
     #[config(default = "defaults::network::TX_GOSSIP_DROP_UNKNOWN_DATASPACE")]
@@ -7140,6 +7370,37 @@ pub struct Network {
     /// Capacity for the per-peer post queue (bounded mode only).
     #[config(default = "defaults::network::P2P_POST_QUEUE_CAP")]
     pub p2p_post_queue_cap: NonZeroUsize,
+    /// Capacity for the inbound P2P subscriber queue feeding the node relay.
+    #[config(default = "defaults::network::P2P_SUBSCRIBER_QUEUE_CAP")]
+    pub p2p_subscriber_queue_cap: NonZeroUsize,
+    /// Per-peer consensus ingress rate limit (msgs/sec). If unset, defaults apply.
+    pub consensus_ingress_rate_per_sec: Option<NonZeroU32>,
+    /// Per-peer consensus ingress burst (msgs). If unset, defaults apply.
+    pub consensus_ingress_burst: Option<NonZeroU32>,
+    /// Per-peer consensus ingress bytes/sec limit. If unset, defaults apply.
+    pub consensus_ingress_bytes_per_sec: Option<NonZeroU32>,
+    /// Per-peer consensus ingress bytes burst. If unset, defaults apply.
+    pub consensus_ingress_bytes_burst: Option<NonZeroU32>,
+    /// Per-peer critical consensus ingress rate limit (msgs/sec). If unset, defaults apply.
+    pub consensus_ingress_critical_rate_per_sec: Option<NonZeroU32>,
+    /// Per-peer critical consensus ingress burst (msgs). If unset, defaults apply.
+    pub consensus_ingress_critical_burst: Option<NonZeroU32>,
+    /// Per-peer critical consensus ingress bytes/sec limit. If unset, defaults apply.
+    pub consensus_ingress_critical_bytes_per_sec: Option<NonZeroU32>,
+    /// Per-peer critical consensus ingress bytes burst. If unset, defaults apply.
+    pub consensus_ingress_critical_bytes_burst: Option<NonZeroU32>,
+    /// Maximum concurrent RBC sessions accepted per peer before throttling (0 disables).
+    #[config(default = "defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT")]
+    pub consensus_ingress_rbc_session_limit: usize,
+    /// Drop threshold (per window) before temporarily suppressing consensus ingress (0 disables).
+    #[config(default = "defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD")]
+    pub consensus_ingress_penalty_threshold: u32,
+    /// Window size (ms) for consensus ingress penalty tracking.
+    #[config(default = "defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS")]
+    pub consensus_ingress_penalty_window_ms: u64,
+    /// Cooldown (ms) applied after consensus ingress penalties trigger.
+    #[config(default = "defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS")]
+    pub consensus_ingress_penalty_cooldown_ms: u64,
     /// Stagger between parallel address dial attempts (Happy Eyeballs)
     #[config(default = "defaults::network::HAPPY_EYEBALLS_STAGGER.into()")]
     pub happy_eyeballs_stagger_ms: DurationMs,
@@ -7264,7 +7525,9 @@ impl Network {
             require_sm_openssl_preview_match,
             block_gossip_size,
             block_gossip_period_ms: block_gossip_period,
+            block_gossip_max_period_ms: block_gossip_max_period,
             peer_gossip_period_ms: peer_gossip_period,
+            peer_gossip_max_period_ms: peer_gossip_max_period,
             trust_gossip,
             trust_decay_half_life_ms,
             trust_penalty_bad_gossip,
@@ -7272,6 +7535,7 @@ impl Network {
             trust_min_score,
             transaction_gossip_size,
             transaction_gossip_period_ms: transaction_gossip_period,
+            transaction_gossip_resend_ticks,
             transaction_gossip_drop_unknown_dataspace,
             transaction_gossip_restricted_target_cap,
             transaction_gossip_public_target_cap,
@@ -7288,6 +7552,19 @@ impl Network {
             p2p_queue_cap_high,
             p2p_queue_cap_low,
             p2p_post_queue_cap,
+            p2p_subscriber_queue_cap,
+            consensus_ingress_rate_per_sec,
+            consensus_ingress_burst,
+            consensus_ingress_bytes_per_sec,
+            consensus_ingress_bytes_burst,
+            consensus_ingress_critical_rate_per_sec,
+            consensus_ingress_critical_burst,
+            consensus_ingress_critical_bytes_per_sec,
+            consensus_ingress_critical_bytes_burst,
+            consensus_ingress_rbc_session_limit,
+            consensus_ingress_penalty_threshold,
+            consensus_ingress_penalty_window_ms,
+            consensus_ingress_penalty_cooldown_ms,
             happy_eyeballs_stagger_ms,
             addr_ipv6_first,
             max_incoming,
@@ -7330,6 +7607,36 @@ impl Network {
             .or(defaults::network::TX_GOSSIP_RESTRICTED_TARGET_CAP);
         let transaction_gossip_public_target_cap =
             transaction_gossip_public_target_cap.or(defaults::network::TX_GOSSIP_PUBLIC_TARGET_CAP);
+        let consensus_ingress_rate_per_sec =
+            consensus_ingress_rate_per_sec.or(defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC);
+        let consensus_ingress_burst = if consensus_ingress_rate_per_sec.is_some() {
+            consensus_ingress_burst.or(consensus_ingress_rate_per_sec)
+        } else {
+            None
+        };
+        let consensus_ingress_bytes_per_sec =
+            consensus_ingress_bytes_per_sec.or(defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC);
+        let consensus_ingress_bytes_burst = if consensus_ingress_bytes_per_sec.is_some() {
+            consensus_ingress_bytes_burst.or(consensus_ingress_bytes_per_sec)
+        } else {
+            None
+        };
+        let consensus_ingress_critical_rate_per_sec = consensus_ingress_critical_rate_per_sec
+            .or(defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC);
+        let consensus_ingress_critical_burst = if consensus_ingress_critical_rate_per_sec.is_some()
+        {
+            consensus_ingress_critical_burst.or(consensus_ingress_critical_rate_per_sec)
+        } else {
+            None
+        };
+        let consensus_ingress_critical_bytes_per_sec = consensus_ingress_critical_bytes_per_sec
+            .or(defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC);
+        let consensus_ingress_critical_bytes_burst =
+            if consensus_ingress_critical_bytes_per_sec.is_some() {
+                consensus_ingress_critical_bytes_burst.or(consensus_ingress_critical_bytes_per_sec)
+            } else {
+                None
+            };
 
         let soranet_handshake = soranet_handshake.parse();
         let soranet_privacy = user_soranet_privacy.parse();
@@ -7375,7 +7682,9 @@ impl Network {
         let min_interval = MIN_TIMER_INTERVAL;
         let idle_timeout = idle_timeout.get().max(min_interval);
         let peer_gossip_period = peer_gossip_period.get().max(min_interval);
+        let peer_gossip_max_period = peer_gossip_max_period.get().max(peer_gossip_period);
         let block_gossip_period = block_gossip_period.get().max(min_interval);
+        let block_gossip_max_period = block_gossip_max_period.get().max(block_gossip_period);
         let transaction_gossip_period = transaction_gossip_period.get().max(min_interval);
         let transaction_gossip_public_target_reshuffle =
             transaction_gossip_public_target_reshuffle_ms
@@ -7404,6 +7713,7 @@ impl Network {
                 relay_ttl,
                 idle_timeout,
                 peer_gossip_period,
+                peer_gossip_max_period,
                 trust_gossip,
                 trust_decay_half_life: trust_decay_half_life_ms.get(),
                 trust_penalty_bad_gossip,
@@ -7419,6 +7729,23 @@ impl Network {
                 p2p_queue_cap_high,
                 p2p_queue_cap_low,
                 p2p_post_queue_cap,
+                p2p_subscriber_queue_cap,
+                consensus_ingress_rate_per_sec,
+                consensus_ingress_burst,
+                consensus_ingress_bytes_per_sec,
+                consensus_ingress_bytes_burst,
+                consensus_ingress_critical_rate_per_sec,
+                consensus_ingress_critical_burst,
+                consensus_ingress_critical_bytes_per_sec,
+                consensus_ingress_critical_bytes_burst,
+                consensus_ingress_rbc_session_limit,
+                consensus_ingress_penalty_threshold,
+                consensus_ingress_penalty_window: std::time::Duration::from_millis(
+                    consensus_ingress_penalty_window_ms,
+                ),
+                consensus_ingress_penalty_cooldown: std::time::Duration::from_millis(
+                    consensus_ingress_penalty_cooldown_ms,
+                ),
                 happy_eyeballs_stagger: happy_eyeballs_stagger_ms.get(),
                 addr_ipv6_first,
                 max_incoming,
@@ -7460,11 +7787,13 @@ impl Network {
             },
             actual::BlockSync {
                 gossip_period: block_gossip_period,
+                gossip_max_period: block_gossip_max_period,
                 gossip_size: block_gossip_size,
             },
             actual::TransactionGossiper {
                 gossip_period: transaction_gossip_period,
                 gossip_size: transaction_gossip_size,
+                gossip_resend_ticks: transaction_gossip_resend_ticks,
                 dataspace: actual::DataspaceGossip {
                     drop_unknown_dataspace: transaction_gossip_drop_unknown_dataspace,
                     restricted_target_cap: transaction_gossip_restricted_target_cap,
@@ -7492,6 +7821,9 @@ pub struct Queue {
     /// The transaction will be dropped after this time if it is still in the queue.
     #[config(default = "defaults::queue::TRANSACTION_TIME_TO_LIVE.into()")]
     pub transaction_time_to_live_ms: DurationMs,
+    /// Minimum interval between expired-transaction sweeps.
+    #[config(default = "defaults::queue::EXPIRED_CULL_INTERVAL.into()")]
+    pub expired_cull_interval_ms: DurationMs,
 }
 
 impl Queue {
@@ -7501,11 +7833,13 @@ impl Queue {
             capacity,
             capacity_per_user,
             transaction_time_to_live_ms: transaction_time_to_live,
+            expired_cull_interval_ms: expired_cull_interval,
         } = self;
         actual::Queue {
             capacity,
             capacity_per_user,
             transaction_time_to_live: transaction_time_to_live.0,
+            expired_cull_interval: expired_cull_interval.0,
         }
     }
 }
@@ -9053,6 +9387,7 @@ impl NexusStorage {
 
 /// User-level configuration container for Nexus storage budget weights.
 #[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
+#[allow(clippy::struct_field_names)]
 pub struct NexusStorageWeights {
     /// Budget share for Kura block storage (basis points).
     #[config(default = "defaults::nexus::storage::KURA_BLOCKS_BPS")]
@@ -10745,15 +11080,14 @@ impl Nexus {
             .iter()
             .map(|lane| (lane.id, lane.dataspace_id))
             .collect();
-        let default_lane_dataspace = match lane_dataspaces.get(&default_lane) {
-            Some(id) => *id,
-            None => {
-                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                    "routing default lane {} is missing from lane_catalog",
-                    default_lane.as_u32()
-                )));
-                return None;
-            }
+        let default_lane_dataspace = if let Some(id) = lane_dataspaces.get(&default_lane) {
+            *id
+        } else {
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                "routing default lane {} is missing from lane_catalog",
+                default_lane.as_u32()
+            )));
+            return None;
         };
         if default_lane_dataspace != default_dataspace {
             emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
@@ -10809,16 +11143,15 @@ impl Nexus {
             } else {
                 None
             };
-            let lane_dataspace = match lane_dataspaces.get(&lane) {
-                Some(id) => *id,
-                None => {
-                    routing_errors = true;
-                    emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                        "routing rule[{idx}] references lane {} not present in lane_catalog",
-                        lane.as_u32()
-                    )));
-                    continue;
-                }
+            let lane_dataspace = if let Some(id) = lane_dataspaces.get(&lane) {
+                *id
+            } else {
+                routing_errors = true;
+                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                    "routing rule[{idx}] references lane {} not present in lane_catalog",
+                    lane.as_u32()
+                )));
+                continue;
             };
             let effective_dataspace = dataspace.unwrap_or(default_dataspace);
             if lane_dataspace != effective_dataspace {
@@ -11455,6 +11788,10 @@ pub struct Torii {
     pub query_rate_per_authority_per_sec: Option<u32>,
     /// Per-authority burst capacity (tokens). None disables.
     pub query_burst_per_authority: Option<u32>,
+    /// Per-authority transaction submission rate (tokens/sec). None disables.
+    pub tx_rate_per_authority_per_sec: Option<u32>,
+    /// Per-authority transaction submission burst (tokens). None disables.
+    pub tx_burst_per_authority: Option<u32>,
     /// Per-origin deploy rate (tokens/sec). None disables.
     pub deploy_rate_per_origin_per_sec: Option<u32>,
     /// Per-origin deploy burst tokens. None disables.
@@ -11935,6 +12272,14 @@ impl Torii {
                 .query_burst_per_authority
                 .or(super::defaults::torii::QUERY_BURST_PER_AUTHORITY)
                 .and_then(std::num::NonZeroU32::new),
+            tx_rate_per_authority_per_sec: self
+                .tx_rate_per_authority_per_sec
+                .or(super::defaults::torii::TX_RATE_PER_AUTHORITY_PER_SEC)
+                .and_then(std::num::NonZeroU32::new),
+            tx_burst_per_authority: self
+                .tx_burst_per_authority
+                .or(super::defaults::torii::TX_BURST_PER_AUTHORITY)
+                .and_then(std::num::NonZeroU32::new),
             deploy_rate_per_origin_per_sec: self
                 .deploy_rate_per_origin_per_sec
                 .or(super::defaults::torii::DEPLOY_RATE_PER_ORIGIN_PER_SEC)
@@ -11979,8 +12324,12 @@ impl Torii {
             strict_addresses: self.strict_addresses,
             debug_match_filters: self.debug_match_filters,
             operator_auth: self.operator_auth.parse(),
-            preauth_max_connections: self.preauth_max_connections,
-            preauth_max_connections_per_ip: self.preauth_max_connections_per_ip,
+            preauth_max_connections: self
+                .preauth_max_connections
+                .or(super::defaults::torii::PREAUTH_MAX_CONNECTIONS),
+            preauth_max_connections_per_ip: self
+                .preauth_max_connections_per_ip
+                .or(super::defaults::torii::PREAUTH_MAX_CONNECTIONS_PER_IP),
             preauth_rate_per_ip_per_sec: self
                 .preauth_rate_per_ip_per_sec
                 .or(super::defaults::torii::PREAUTH_RATE_PER_IP_PER_SEC)
@@ -14468,7 +14817,9 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .and_then(Value::as_table_mut)
             .expect("network table");
         network.insert("block_gossip_period_ms".into(), Value::Integer(0));
+        network.insert("block_gossip_max_period_ms".into(), Value::Integer(0));
         network.insert("peer_gossip_period_ms".into(), Value::Integer(0));
+        network.insert("peer_gossip_max_period_ms".into(), Value::Integer(0));
         network.insert("transaction_gossip_period_ms".into(), Value::Integer(0));
         network.insert(
             "transaction_gossip_public_target_reshuffle_ms".into(),
@@ -14482,6 +14833,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let actual = load_root(table);
         let min = StdDuration::from_millis(100);
         assert_eq!(actual.block_sync.gossip_period, min);
+        assert_eq!(actual.block_sync.gossip_max_period, min);
         assert_eq!(actual.transaction_gossiper.gossip_period, min);
         assert_eq!(
             actual
@@ -14498,6 +14850,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             min
         );
         assert_eq!(actual.network.peer_gossip_period, min);
+        assert_eq!(actual.network.peer_gossip_max_period, min);
         assert_eq!(actual.network.idle_timeout, min);
     }
 
@@ -14511,6 +14864,15 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         assert_eq!(
             actual.transaction_gossiper.dataspace.restricted_target_cap,
             defaults::network::TX_GOSSIP_RESTRICTED_TARGET_CAP
+        );
+    }
+
+    #[test]
+    fn network_defaults_apply_transaction_gossip_resend_ticks() {
+        let actual = load_root(base_table());
+        assert_eq!(
+            actual.transaction_gossiper.gossip_resend_ticks,
+            defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS
         );
     }
 

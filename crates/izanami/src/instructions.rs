@@ -624,6 +624,7 @@ impl ChaosState {
         &self.base_domain
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn new(
         base_domain: DomainId,
         treasury: AccountRecord,
@@ -687,6 +688,7 @@ impl ChaosState {
         self.users.push(record);
     }
 
+    #[allow(clippy::unused_self)]
     fn nexus_staking_expect_success(&self) -> bool {
         // TODO: flip to true once Izanami provisions Nexus staking assets, escrow/sink accounts,
         // and validator accounts backed by registered peers in chaos genesis.
@@ -2266,7 +2268,7 @@ impl ChaosState {
             order_id_bytes[0] = 1;
         }
         let issued_epoch = self.bump_replication();
-        let manifest_cid = format!("cid-{}", issued_epoch).into_bytes();
+        let manifest_cid = format!("cid-{issued_epoch}").into_bytes();
         let deadline_epoch = issued_epoch.saturating_add(60);
         let issued_at = now_ms() / 1_000;
         let deadline_at = issued_at.saturating_add(60);

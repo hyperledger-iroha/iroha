@@ -17,7 +17,7 @@ and supplies the schema hash and checksum needed for deterministic decoding.
 | Schema hash | 16 | FNV-1a hash of fully qualified type name (v1) |
 | Compression | 1 | `0 = None`, `1 = Zstd` |
 | Payload length | 8 | Uncompressed payload length (u64, little-endian) |
-| CRC64 | 8 | CRC64-ECMA over the payload |
+| CRC64 | 8 | CRC64-XZ (ECMA polynomial, reflected, init/xor all ones) over the payload |
 | Flags | 1 | Layout flags (see below) |
 
 Total header size: 40 bytes.
@@ -45,14 +45,13 @@ These flags are ORed into the final header byte. Unknown bits are rejected.
 | `PACKED_SEQ` | `0x01` | Packed sequence layout for variable-sized collections. |
 | `COMPACT_LEN` | `0x02` | Per-value length prefixes are compact varints. |
 | `PACKED_STRUCT` | `0x04` | Packed struct layout for derive-generated types. |
-| `VARINT_OFFSETS` | `0x08` | When `PACKED_SEQ` is set, element lengths are varint-coded; otherwise packed sequences use `(len + 1)` u64 offsets. |
-| `COMPACT_SEQ_LEN` | `0x10` | The outer sequence length header is a compact varint. |
+| `VARINT_OFFSETS` | `0x08` | Reserved in v1; packed sequences always use `(len + 1)` u64 offsets. |
+| `COMPACT_SEQ_LEN` | `0x10` | Reserved in v1; sequence length headers are fixed u64. |
 | `FIELD_BITSET` | `0x20` | Packed-struct hybrid uses a bitset indicating which fields carry explicit sizes (requires `PACKED_STRUCT` + `COMPACT_LEN`). |
 
 Flag scoping rules:
 - `COMPACT_LEN` affects per-value length prefixes only.
-- `COMPACT_SEQ_LEN` affects only the outer sequence length header.
-- `VARINT_OFFSETS` affects only packed-sequence offsets.
+- Reserved layout bits (`VARINT_OFFSETS`, `COMPACT_SEQ_LEN`) are rejected when decoding headers.
 
 These flags are independent; no heuristic cross-effects are permitted.
 
@@ -64,13 +63,9 @@ encoding:
 - Per-value prefixes (fields, elements, strings, blobs) use `COMPACT_LEN`.
   - If set: unsigned varint (7-bit continuation).
   - If not set: fixed 8-byte little-endian u64.
-- Sequence length headers use `COMPACT_SEQ_LEN`.
-  - If set: unsigned varint.
-  - If not set: fixed 8-byte little-endian u64.
-- Packed-sequence offsets use `VARINT_OFFSETS`.
-  - If set: `len` varints representing element sizes, followed by concatenated
-    data.
-  - If not set: `(len + 1)` u64 offsets, monotonic with the first offset 0.
+- Sequence length headers are fixed 8-byte little-endian u64 in v1.
+- Packed-sequence offsets are always `(len + 1)` u64 offsets, monotonic with the
+  first offset 0.
 
 Varint encodings must fit in `u64` and use the shortest (canonical) encoding;
 overflow or overlong encodings are rejected.
@@ -87,21 +82,35 @@ overflow or overlong encodings are rejected.
 apply nested-length heuristics or reinterpret string payloads based on their
 contents.
 
+## Numeric and BigInt
+
+`BigInt` encodes as:
+
+```
+[len_u32][twos_complement_le_bytes]
+```
+
+`len_u32` is a 4-byte little-endian length of the following payload. The bytes
+are little-endian two's complement and must fit within the 512-bit cap.
+
+`Numeric` encodes as a struct `(mantissa, scale)`:
+- `mantissa` is a `BigInt` containing the raw integer value (no decimal scale
+  is embedded in the integer).
+- `scale` is a `u32` count of fractional digits (e.g., `1.88` is mantissa `188`,
+  scale `2`).
+
 ## Map Encoding
 
 Maps encode deterministically with the same active layout flags:
 
-- Entry count uses the sequence length rules (`COMPACT_SEQ_LEN`).
+- Entry count uses a fixed 8-byte little-endian u64 header.
 - Compat layout (`PACKED_SEQ` unset): for each entry,
   `[key_len][key_payload][value_len][value_payload]` with key/value lengths
   encoded via `COMPACT_LEN`.
 - Packed layout (`PACKED_SEQ` set): key sizes and value sizes precede the data,
-  followed by concatenated key payloads and concatenated value payloads.
-  - If `VARINT_OFFSETS` set: `len` varints for key sizes, then `len` varints for
-    value sizes.
-  - If `VARINT_OFFSETS` unset: `(len + 1)` u64 offsets for keys, then
-    `(len + 1)` u64 offsets for values; offsets are monotonic with the first
-    offset 0.
+  followed by concatenated key payloads and concatenated value payloads. Uses
+  `(len + 1)` u64 offsets for keys, then `(len + 1)` u64 offsets for values;
+  offsets are monotonic with the first offset 0.
 - `HashMap` encodes entries in sorted key order for deterministic output;
   `BTreeMap` uses its natural ordering.
 

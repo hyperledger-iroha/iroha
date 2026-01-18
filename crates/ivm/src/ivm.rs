@@ -99,11 +99,7 @@ fn div_ceil_i64(num: i64, denom: i64) -> Result<i64, VMError> {
 }
 
 fn abs_i64_to_u64(value: i64) -> u64 {
-    if value == i64::MIN {
-        (i64::MAX as u64) + 1
-    } else {
-        value.abs() as u64
-    }
+    value.unsigned_abs()
 }
 
 fn gcd_i64(a: i64, b: i64) -> u64 {
@@ -1079,9 +1075,7 @@ impl IVM {
     const GAS_SHA256_BASE: u64 = 10;
     const GAS_SHA256_PER_BYTE: u64 = 1;
     const GAS_ED25519_VERIFY: u64 = 1000;
-    #[cfg(feature = "ed25519")]
     const GAS_ED25519_BATCH_PER_ENTRY: u64 = 500;
-    #[cfg(feature = "ed25519")]
     const MAX_ED25519_BATCH_ENTRIES: usize = 512;
     #[allow(dead_code)]
     const GAS_DILITHIUM_VERIFY: u64 = 5000;
@@ -1456,7 +1450,6 @@ impl IVM {
                 Self::GAS_SHA256_BASE + Self::GAS_SHA256_PER_BYTE * len
             }
             SimpleInstruction::Ed25519Verify { .. } => Self::GAS_ED25519_VERIFY,
-            #[cfg(feature = "ml-dsa")]
             SimpleInstruction::DilithiumVerify { .. } => Self::GAS_DILITHIUM_VERIFY,
             SimpleInstruction::Halt => 0,
         };
@@ -1755,7 +1748,6 @@ impl IVM {
                     }
                 }
             }
-            #[cfg(feature = "ml-dsa")]
             SimpleInstruction::DilithiumVerify {
                 level,
                 pubkey_addr,
@@ -1775,21 +1767,21 @@ impl IVM {
                         let sig_slice = self
                             .memory
                             .load_region(sig_addr, dilithium2::signature_bytes() as u64)?;
-                        let pk = match dilithium2::PublicKey::from_bytes(&pk_slice) {
+                        let pk = match dilithium2::PublicKey::from_bytes(pk_slice) {
                             Ok(p) => p,
                             Err(_) => {
                                 self.registers.set(result_reg as usize, 0);
                                 return Ok(());
                             }
                         };
-                        let sig = match dilithium2::DetachedSignature::from_bytes(&sig_slice) {
+                        let sig = match dilithium2::DetachedSignature::from_bytes(sig_slice) {
                             Ok(s) => s,
                             Err(_) => {
                                 self.registers.set(result_reg as usize, 0);
                                 return Ok(());
                             }
                         };
-                        dilithium2::verify_detached_signature(&sig, &msg, &pk).is_ok()
+                        dilithium2::verify_detached_signature(&sig, msg, &pk).is_ok()
                     }
                     3 => {
                         let pk_slice = self
@@ -1798,21 +1790,21 @@ impl IVM {
                         let sig_slice = self
                             .memory
                             .load_region(sig_addr, dilithium3::signature_bytes() as u64)?;
-                        let pk = match dilithium3::PublicKey::from_bytes(&pk_slice) {
+                        let pk = match dilithium3::PublicKey::from_bytes(pk_slice) {
                             Ok(p) => p,
                             Err(_) => {
                                 self.registers.set(result_reg as usize, 0);
                                 return Ok(());
                             }
                         };
-                        let sig = match dilithium3::DetachedSignature::from_bytes(&sig_slice) {
+                        let sig = match dilithium3::DetachedSignature::from_bytes(sig_slice) {
                             Ok(s) => s,
                             Err(_) => {
                                 self.registers.set(result_reg as usize, 0);
                                 return Ok(());
                             }
                         };
-                        dilithium3::verify_detached_signature(&sig, &msg, &pk).is_ok()
+                        dilithium3::verify_detached_signature(&sig, msg, &pk).is_ok()
                     }
                     5 => {
                         let pk_slice = self
@@ -1821,21 +1813,21 @@ impl IVM {
                         let sig_slice = self
                             .memory
                             .load_region(sig_addr, dilithium5::signature_bytes() as u64)?;
-                        let pk = match dilithium5::PublicKey::from_bytes(&pk_slice) {
+                        let pk = match dilithium5::PublicKey::from_bytes(pk_slice) {
                             Ok(p) => p,
                             Err(_) => {
                                 self.registers.set(result_reg as usize, 0);
                                 return Ok(());
                             }
                         };
-                        let sig = match dilithium5::DetachedSignature::from_bytes(&sig_slice) {
+                        let sig = match dilithium5::DetachedSignature::from_bytes(sig_slice) {
                             Ok(s) => s,
                             Err(_) => {
                                 self.registers.set(result_reg as usize, 0);
                                 return Ok(());
                             }
                         };
-                        dilithium5::verify_detached_signature(&sig, &msg, &pk).is_ok()
+                        dilithium5::verify_detached_signature(&sig, msg, &pk).is_ok()
                     }
                     _ => false,
                 };
@@ -2234,7 +2226,6 @@ impl IVM {
     /// - `None` if CUDA is disabled or unavailable (caller should fall back to CPU).
     /// - `Some(Ok(()))` if every entry verified successfully on the GPU.
     /// - `Some(Err(index))` if a malformed entry or invalid signature was detected.
-    #[cfg(feature = "ed25519")]
     fn verify_ed25519_batch_cuda(
         &self,
         request: &crate::signature::Ed25519BatchRequest,
@@ -2261,7 +2252,7 @@ impl IVM {
         Some(Ok(()))
     }
 
-    #[cfg(all(feature = "ed25519", feature = "metal", target_os = "macos"))]
+    #[cfg(all(feature = "metal", target_os = "macos"))]
     fn verify_ed25519_batch_metal(
         &self,
         request: &crate::signature::Ed25519BatchRequest,
@@ -2533,6 +2524,17 @@ impl IVM {
         self.registers.set(idx, value);
     }
 
+    /// Request a graceful halt after the current instruction.
+    pub fn request_exit(&mut self) {
+        self.halted = true;
+    }
+
+    /// Request an abort and mark the run as failed.
+    pub fn request_abort(&mut self) {
+        self.halted = true;
+        self.constraint_failed = true;
+    }
+
     /// Get a copy of a vector register (128-bit value as four 32-bit lanes).
     pub fn vector_register(&self, idx: usize) -> [u32; 4] {
         let stride = self.vector_length.max(1);
@@ -2659,6 +2661,21 @@ impl IVM {
     /// logged on every cycle so that a prover can later reconstruct a trace.
     /// The loop terminates on `HALT` or when an error is encountered.
     pub fn run(&mut self) -> Result<(), VMError> {
+        let mut host = self
+            .host
+            .take()
+            .expect("IVM host must be present while the VM runs");
+        let result = self.run_with_host_ref(host.as_mut());
+        self.host = Some(host);
+        result
+    }
+
+    /// Execute the loaded program using a borrowed host without storing it in the VM.
+    pub fn run_with_host(&mut self, host: &mut dyn IVMHost) -> Result<(), VMError> {
+        self.run_with_host_ref(host)
+    }
+
+    fn run_with_host_ref(&mut self, host: &mut dyn IVMHost) -> Result<(), VMError> {
         self.halted = false;
         self.constraint_failed = false;
         self.cycles = 0;
@@ -2798,15 +2815,7 @@ impl IVM {
                 }
                 instruction::wide::system::SCALL => {
                     let imm8 = instruction::wide::imm8(instr) as u8 as u32;
-                    let extra_cost = {
-                        let mut host_box = self
-                            .host
-                            .take()
-                            .expect("IVM host must be present while the VM runs");
-                        let r = host_box.syscall(imm8, self);
-                        self.host = Some(host_box);
-                        r
-                    };
+                    let extra_cost = host.syscall(imm8, self);
                     match extra_cost {
                         Ok(extra) => {
                             if self.gas_remaining < extra {
@@ -4384,104 +4393,68 @@ impl IVM {
                     if self.zk_mode && self.registers.tag(rs1) {
                         return Err(VMError::PrivacyViolation);
                     }
-                    #[cfg_attr(not(feature = "ed25519"), allow(unused_mut))]
                     let mut fail_index = 0u64;
                     let ok = if let Ok(tlv_req) = self.memory.validate_tlv(self.registers.get(rs1))
                     {
                         let is_norito = tlv_req.type_id_raw()
                             == crate::pointer_abi::PointerType::NoritoBytes as u16;
                         is_norito
-                            && {
-                                #[cfg(feature = "ed25519")]
-                                {
-                                    match norito::decode_from_bytes::<
-                                        crate::signature::Ed25519BatchRequest,
-                                    >(tlv_req.payload)
-                                    {
-                                        Ok(req) => {
-                                            if req.entries.is_empty() {
-                                                false
-                                            } else if req.entries.len()
-                                                > Self::MAX_ED25519_BATCH_ENTRIES
-                                            {
-                                                fail_index = req.entries.len() as u64;
-                                                false
-                                            } else {
-                                                let extra_cost = Self::GAS_ED25519_BATCH_PER_ENTRY
-                                                    .saturating_mul(req.entries.len() as u64);
-                                                if self.gas_remaining < extra_cost {
-                                                    return Err(VMError::OutOfGas);
-                                                }
-                                                self.gas_remaining -= extra_cost;
-
-                                                let batch_result = match self
-                                                    .verify_ed25519_batch_cuda(&req)
-                                                {
-                                                    Some(res) => Some(res),
-                                                    None => {
-                                                        #[cfg(all(
-                                                            feature = "metal",
-                                                            target_os = "macos"
-                                                        ))]
-                                                        {
-                                                            if let Some(res) = self
-                                                                .verify_ed25519_batch_metal(&req)
-                                                            {
-                                                                Some(res)
-                                                            } else {
-                                                                None
-                                                            }
-                                                        }
-                                                        #[cfg(not(all(
-                                                            feature = "metal",
-                                                            target_os = "macos"
-                                                        )))]
-                                                        {
-                                                            None
-                                                        }
-                                                    }
-                                                };
-
-                                                match batch_result {
-                                                    Some(Ok(())) => true,
-                                                    Some(Err(index)) => {
-                                                        fail_index = index as u64;
-                                                        false
-                                                    }
-                                                    None => {
-                                                        match crate::signature::verify_ed25519_batch(
-                                                            &req,
-                                                            Self::MAX_ED25519_BATCH_ENTRIES,
-                                                        ) {
-                                                            Ok(()) => true,
-                                                            Err(err) => {
-                                                                fail_index = match err {
-                                                                    crate::signature::Ed25519BatchError::Empty => 0,
-                                                                    crate::signature::Ed25519BatchError::TooMany { actual, .. } => {
-                                                                        actual as u64
-                                                                    }
-                                                                    crate::signature::Ed25519BatchError::InvalidEntry {
-                                                                        index,
-                                                                    } => index as u64,
-                                                                    crate::signature::Ed25519BatchError::SignatureFailed {
-                                                                        index,
-                                                                    } => index as u64,
-                                                                };
-                                                                false
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
+                            && match norito::decode_from_bytes::<
+                                crate::signature::Ed25519BatchRequest,
+                            >(tlv_req.payload)
+                            {
+                                Ok(req) => {
+                                    if req.entries.is_empty() {
+                                        false
+                                    } else if req.entries.len() > Self::MAX_ED25519_BATCH_ENTRIES {
+                                        fail_index = req.entries.len() as u64;
+                                        false
+                                    } else {
+                                        let extra_cost = Self::GAS_ED25519_BATCH_PER_ENTRY
+                                            .saturating_mul(req.entries.len() as u64);
+                                        if self.gas_remaining < extra_cost {
+                                            return Err(VMError::OutOfGas);
                                         }
-                                        Err(_) => false,
+                                        self.gas_remaining -= extra_cost;
+
+                                        #[cfg(all(feature = "metal", target_os = "macos"))]
+                                        let batch_result = self
+                                            .verify_ed25519_batch_cuda(&req)
+                                            .or_else(|| self.verify_ed25519_batch_metal(&req));
+                                        #[cfg(not(all(feature = "metal", target_os = "macos")))]
+                                        let batch_result = self.verify_ed25519_batch_cuda(&req);
+
+                                        match batch_result {
+                                            Some(Ok(())) => true,
+                                            Some(Err(index)) => {
+                                                fail_index = index as u64;
+                                                false
+                                            }
+                                            None => match crate::signature::verify_ed25519_batch(
+                                                &req,
+                                                Self::MAX_ED25519_BATCH_ENTRIES,
+                                            ) {
+                                                Ok(()) => true,
+                                                Err(err) => {
+                                                    fail_index = match err {
+                                                        crate::signature::Ed25519BatchError::Empty => 0,
+                                                        crate::signature::Ed25519BatchError::TooMany { actual, .. } => {
+                                                            actual as u64
+                                                        }
+                                                        crate::signature::Ed25519BatchError::InvalidEntry {
+                                                            index,
+                                                        } => index as u64,
+                                                        crate::signature::Ed25519BatchError::SignatureFailed {
+                                                            index,
+                                                        } => index as u64,
+                                                    };
+                                                    false
+                                                }
+                                            },
+                                        }
                                     }
                                 }
-                                #[cfg(not(feature = "ed25519"))]
-                                {
-                                    let _ = tlv_req;
-                                    false
-                                }
+                                Err(_) => false,
                             }
                     } else {
                         false
@@ -4520,21 +4493,13 @@ impl IVM {
                             && tlv_sig.type_id_raw()
                                 == crate::pointer_abi::PointerType::Blob as u16
                             && tlv_pk.type_id_raw() == crate::pointer_abi::PointerType::Blob as u16;
-                        types_ok && {
-                            #[cfg(feature = "ed25519")]
-                            {
-                                crate::signature::verify_signature(
-                                    crate::signature::SignatureScheme::Ed25519,
-                                    tlv_msg.payload,
-                                    tlv_sig.payload,
-                                    tlv_pk.payload,
-                                )
-                            }
-                            #[cfg(not(feature = "ed25519"))]
-                            {
-                                false
-                            }
-                        }
+                        types_ok
+                            && crate::signature::verify_signature(
+                                crate::signature::SignatureScheme::Ed25519,
+                                tlv_msg.payload,
+                                tlv_sig.payload,
+                                tlv_pk.payload,
+                            )
                     } else {
                         false
                     };
@@ -4570,21 +4535,13 @@ impl IVM {
                             && tlv_sig.type_id_raw()
                                 == crate::pointer_abi::PointerType::Blob as u16
                             && tlv_pk.type_id_raw() == crate::pointer_abi::PointerType::Blob as u16;
-                        types_ok && {
-                            #[cfg(feature = "secp256k1")]
-                            {
-                                crate::signature::verify_signature(
-                                    crate::signature::SignatureScheme::Secp256k1,
-                                    tlv_msg.payload,
-                                    tlv_sig.payload,
-                                    tlv_pk.payload,
-                                )
-                            }
-                            #[cfg(not(feature = "secp256k1"))]
-                            {
-                                false
-                            }
-                        }
+                        types_ok
+                            && crate::signature::verify_signature(
+                                crate::signature::SignatureScheme::Secp256k1,
+                                tlv_msg.payload,
+                                tlv_sig.payload,
+                                tlv_pk.payload,
+                            )
                     } else {
                         false
                     };
@@ -4620,21 +4577,13 @@ impl IVM {
                             && tlv_sig.type_id_raw()
                                 == crate::pointer_abi::PointerType::Blob as u16
                             && tlv_pk.type_id_raw() == crate::pointer_abi::PointerType::Blob as u16;
-                        types_ok && {
-                            #[cfg(feature = "ml-dsa")]
-                            {
-                                crate::signature::verify_signature(
-                                    crate::signature::SignatureScheme::MlDsa,
-                                    tlv_msg.payload,
-                                    tlv_sig.payload,
-                                    tlv_pk.payload,
-                                )
-                            }
-                            #[cfg(not(feature = "ml-dsa"))]
-                            {
-                                false
-                            }
-                        }
+                        types_ok
+                            && crate::signature::verify_signature(
+                                crate::signature::SignatureScheme::MlDsa,
+                                tlv_msg.payload,
+                                tlv_sig.payload,
+                                tlv_pk.payload,
+                            )
                     } else {
                         false
                     };
@@ -5217,7 +5166,6 @@ fn analyse_instruction(
             meta.writes.insert(result_reg);
             meta.mem_read = true;
         }
-        #[cfg(feature = "ml-dsa")]
         DilithiumVerify { result_reg, .. } => {
             meta.writes.insert(result_reg);
             meta.mem_read = true;
@@ -5265,7 +5213,6 @@ fn cost_of(instr: &SimpleInstruction, vl: usize) -> u64 {
             IVM::GAS_ALU * lanes as u64
         }
         SimpleInstruction::Ed25519Verify { .. } => IVM::GAS_ED25519_VERIFY,
-        #[cfg(feature = "ml-dsa")]
         SimpleInstruction::DilithiumVerify { .. } => IVM::GAS_DILITHIUM_VERIFY,
         SimpleInstruction::Halt => 0,
     }
@@ -5512,7 +5459,6 @@ fn compute_instruction(
                 tag: false,
             });
         }
-        #[cfg(feature = "ml-dsa")]
         DilithiumVerify {
             level,
             pubkey_addr,
@@ -5530,7 +5476,7 @@ fn compute_instruction(
                         mem.load_region(pubkey_addr, dilithium2::public_key_bytes() as u64)?;
                     let sig_slice =
                         mem.load_region(sig_addr, dilithium2::signature_bytes() as u64)?;
-                    let pk = match dilithium2::PublicKey::from_bytes(&pk_slice) {
+                    let pk = match dilithium2::PublicKey::from_bytes(pk_slice) {
                         Ok(p) => p,
                         Err(_) => {
                             res.push(ResultUpdate::Reg {
@@ -5541,7 +5487,7 @@ fn compute_instruction(
                             return Ok(res);
                         }
                     };
-                    let sig = match dilithium2::DetachedSignature::from_bytes(&sig_slice) {
+                    let sig = match dilithium2::DetachedSignature::from_bytes(sig_slice) {
                         Ok(s) => s,
                         Err(_) => {
                             res.push(ResultUpdate::Reg {
@@ -5552,14 +5498,14 @@ fn compute_instruction(
                             return Ok(res);
                         }
                     };
-                    dilithium2::verify_detached_signature(&sig, &msg, &pk).is_ok()
+                    dilithium2::verify_detached_signature(&sig, msg, &pk).is_ok()
                 }
                 3 => {
                     let pk_slice =
                         mem.load_region(pubkey_addr, dilithium3::public_key_bytes() as u64)?;
                     let sig_slice =
                         mem.load_region(sig_addr, dilithium3::signature_bytes() as u64)?;
-                    let pk = match dilithium3::PublicKey::from_bytes(&pk_slice) {
+                    let pk = match dilithium3::PublicKey::from_bytes(pk_slice) {
                         Ok(p) => p,
                         Err(_) => {
                             res.push(ResultUpdate::Reg {
@@ -5570,7 +5516,7 @@ fn compute_instruction(
                             return Ok(res);
                         }
                     };
-                    let sig = match dilithium3::DetachedSignature::from_bytes(&sig_slice) {
+                    let sig = match dilithium3::DetachedSignature::from_bytes(sig_slice) {
                         Ok(s) => s,
                         Err(_) => {
                             res.push(ResultUpdate::Reg {
@@ -5581,14 +5527,14 @@ fn compute_instruction(
                             return Ok(res);
                         }
                     };
-                    dilithium3::verify_detached_signature(&sig, &msg, &pk).is_ok()
+                    dilithium3::verify_detached_signature(&sig, msg, &pk).is_ok()
                 }
                 5 => {
                     let pk_slice =
                         mem.load_region(pubkey_addr, dilithium5::public_key_bytes() as u64)?;
                     let sig_slice =
                         mem.load_region(sig_addr, dilithium5::signature_bytes() as u64)?;
-                    let pk = match dilithium5::PublicKey::from_bytes(&pk_slice) {
+                    let pk = match dilithium5::PublicKey::from_bytes(pk_slice) {
                         Ok(p) => p,
                         Err(_) => {
                             res.push(ResultUpdate::Reg {
@@ -5599,7 +5545,7 @@ fn compute_instruction(
                             return Ok(res);
                         }
                     };
-                    let sig = match dilithium5::DetachedSignature::from_bytes(&sig_slice) {
+                    let sig = match dilithium5::DetachedSignature::from_bytes(sig_slice) {
                         Ok(s) => s,
                         Err(_) => {
                             res.push(ResultUpdate::Reg {
@@ -5610,7 +5556,7 @@ fn compute_instruction(
                             return Ok(res);
                         }
                     };
-                    dilithium5::verify_detached_signature(&sig, &msg, &pk).is_ok()
+                    dilithium5::verify_detached_signature(&sig, msg, &pk).is_ok()
                 }
                 _ => {
                     res.push(ResultUpdate::Reg {
@@ -5754,10 +5700,7 @@ impl IVM {
                     return Err(VMError::OutOfGas);
                 }
                 self.gas_remaining -= cost;
-                let updates = match result {
-                    Ok(updates) => updates,
-                    Err(e) => return Err(e),
-                };
+                let updates = result?;
                 for upd in updates {
                     match upd {
                         ResultUpdate::Reg { index, value, tag } => {

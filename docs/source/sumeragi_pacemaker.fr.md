@@ -17,12 +17,12 @@ Statut: fenetre de base derivee de l EMA, plancher RTT, et plafonds de jitter/ba
 
 ## Concepts
 - Fenetre de base: moyenne mobile exponentielle des phases de consensus observees
-  (propose, collect_da, collect_prevote, collect_precommit, collect_aggregator,
-  commit). L EMA est initialisee depuis `sumeragi.npos.timeouts.*`; jusqu a
-  suffisamment d echantillons elle correspond aux valeurs par defaut.
-  Les EMAs d execution et witness sont exportees pour l observabilite mais ne
-  sont pas encore incluses dans la fenetre pacemaker. Les valeurs lissees
-  apparaissent via `sumeragi_phase_latency_ema_ms{phase=...}`.
+  (propose, collect_da, collect_prevote, collect_precommit, commit). L EMA est
+  initialisee depuis `sumeragi.npos.timeouts.*`; jusqu a suffisamment
+  d echantillons elle correspond aux valeurs par defaut. L EMA de
+  `collect_aggregator` est exportee pour l observabilite mais n est pas incluse
+  dans la fenetre pacemaker. Les valeurs lissees apparaissent via
+  `sumeragi_phase_latency_ema_ms{phase=...}`.
 - Multiplicateur de backoff: `sumeragi.pacemaker_backoff_multiplier` (defaut 1). Chaque timeout ajoute `base * multiplier` a la fenetre courante.
 - Plancher RTT: `avg_rtt_ms * sumeragi.pacemaker_rtt_floor_multiplier` (defaut 2). Evite des timeouts trop agressifs sur des liens a latence elevee.
 - Cap: `sumeragi.pacemaker_max_backoff_ms` (defaut 60_000 ms). Plafond strict de la fenetre.

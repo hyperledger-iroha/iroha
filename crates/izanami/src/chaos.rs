@@ -302,8 +302,8 @@ impl IzanamiRunner {
             while !run_control.should_stop() {
                 tokio::select! {
                     _ = ticker.tick() => {},
-                    _ = stop_notify.notified() => break,
-                    _ = time::sleep_until(deadline.into()) => break,
+                    () = stop_notify.notified() => break,
+                    () = time::sleep_until(deadline.into()) => break,
                 }
                 drain_ready_submissions(&mut submissions);
                 if run_control.should_stop() {

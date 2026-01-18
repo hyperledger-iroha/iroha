@@ -41,6 +41,9 @@ impl HostMappingInput<'_> {
     }
 
     /// Produce direct-CAR endpoints for the supplied manifest digest.
+    ///
+    /// # Errors
+    /// Returns an error if the manifest digest or scheme cannot be mapped to a host.
     pub fn direct_car_locator(
         &self,
         scheme: &str,

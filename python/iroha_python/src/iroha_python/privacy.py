@@ -12,7 +12,7 @@ import json
 from contextlib import closing
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterator, List, Mapping, Optional, Union
+from typing import Any, Iterator, List, Mapping, Optional, Union
 
 import requests
 from requests import Response, Session
@@ -156,16 +156,18 @@ class PrivacyEvent:
     payload: PrivacyEventPayload
 
 
-def _require_int(obj: Mapping[str, object], field: str) -> int:
+def _require_int(obj: Mapping[str, Any], field: str) -> int:
     value = obj.get(field)
+    if value is None:
+        raise TypeError(f"{field} must be numeric")
     try:
-        coerced = int(value)  # type: ignore[arg-type]
+        coerced = int(value)
     except (TypeError, ValueError) as exc:
         raise TypeError(f"{field} must be numeric") from exc
     return coerced
 
 
-def _require_optional_int(obj: Mapping[str, object], field: str) -> Optional[int]:
+def _require_optional_int(obj: Mapping[str, Any], field: str) -> Optional[int]:
     value = obj.get(field)
     if value is None:
         return None
@@ -220,7 +222,7 @@ def _parse_payload(kind: PrivacyEventKind, payload: Optional[Mapping[str, object
     return None
 
 
-def parse_privacy_event(obj: Mapping[str, object]) -> PrivacyEvent:
+def parse_privacy_event(obj: Mapping[str, Any]) -> PrivacyEvent:
     """Parse a raw JSON object into :class:`PrivacyEvent`."""
 
     timestamp = _require_int(obj, "timestamp_unix")
@@ -237,10 +239,11 @@ def parse_privacy_event(obj: Mapping[str, object]) -> PrivacyEvent:
     except ValueError as exc:
         raise TypeError(f"unknown privacy event kind `{kind_value}`") from exc
 
-    payload_obj = obj.get("payload")
-    if payload_obj is not None and not isinstance(payload_obj, Mapping):
+    payload_obj_raw = obj.get("payload")
+    if payload_obj_raw is not None and not isinstance(payload_obj_raw, Mapping):
         raise TypeError("privacy event payload must be an object when present")
-    payload = _parse_payload(kind, payload_obj)  # type: ignore[arg-type]
+    payload_obj = payload_obj_raw if isinstance(payload_obj_raw, Mapping) else None
+    payload = _parse_payload(kind, payload_obj)
 
     return PrivacyEvent(
         timestamp_unix=timestamp,

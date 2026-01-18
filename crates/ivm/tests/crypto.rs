@@ -1,3 +1,5 @@
+//! Crypto opcode and helper regression tests.
+
 use ivm::{
     AccelerationConfig, ByteMerkleTree, IVM, Memory, SimdChoice, acceleration_runtime_status,
     ec::{ec_add_truncated, ec_mul_truncated},
@@ -325,11 +327,10 @@ fn ed25519_verify_instruction() {
     assert_eq!(vm.register(1), 0);
 }
 
-#[cfg(feature = "ml-dsa")]
 #[test]
 fn dilithium_verify_instruction() {
     use pqcrypto_dilithium::dilithium2;
-    use pqcrypto_traits::sign::{DetachedSignature, PublicKey, SecretKey};
+    use pqcrypto_traits::sign::{DetachedSignature, PublicKey};
 
     let (pk, sk) = dilithium2::keypair();
     let msg = b"hello";

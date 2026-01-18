@@ -1,13 +1,11 @@
-#[cfg(feature = "ed25519")]
+//! Signature verification opcode/syscall tests using TLVs.
+
 use ivm::signature::{Ed25519BatchEntry, Ed25519BatchRequest};
-#[cfg(any(feature = "ed25519", feature = "secp256k1", feature = "ml-dsa"))]
 use ivm::{IVM, Memory, PointerType, encoding, instruction};
 
 mod common;
-#[cfg(any(feature = "ed25519", feature = "secp256k1", feature = "ml-dsa"))]
 use common::assemble;
 
-#[cfg(any(feature = "ed25519", feature = "secp256k1", feature = "ml-dsa"))]
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     use iroha_crypto::Hash;
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
@@ -20,12 +18,10 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-#[cfg(feature = "ed25519")]
 fn ed25519_test_key(tag: u8) -> ed25519_dalek::SigningKey {
     ed25519_dalek::SigningKey::from_bytes(&[tag; 32])
 }
 
-#[cfg(feature = "secp256k1")]
 #[test]
 fn syscall_verify_signature_secp256k1_via_tlv() {
     use iroha_crypto::{EcdsaSecp256k1Sha256, KeyGenOption};
@@ -68,7 +64,6 @@ fn syscall_verify_signature_secp256k1_via_tlv() {
     assert_eq!(vm.register(10), 1);
 }
 
-#[cfg(feature = "ml-dsa")]
 #[test]
 fn syscall_verify_signature_dilithium_via_tlv() {
     use pqcrypto_dilithium::dilithium3 as dilithium;
@@ -110,7 +105,6 @@ fn syscall_verify_signature_dilithium_via_tlv() {
     assert_eq!(vm.register(10), 1);
 }
 
-#[cfg(feature = "ed25519")]
 #[test]
 fn opcode_verify_ed25519_via_tlv() {
     use ed25519_dalek::Signer;
@@ -146,7 +140,6 @@ fn opcode_verify_ed25519_via_tlv() {
     assert_eq!(vm.register(3), 1);
 }
 
-#[cfg(feature = "ed25519")]
 #[test]
 fn opcode_verify_ed25519_batch_via_tlv_success() {
     use ed25519_dalek::Signer;
@@ -186,7 +179,6 @@ fn opcode_verify_ed25519_batch_via_tlv_success() {
     assert_eq!(vm.register(2), 0, "failure index cleared on success");
 }
 
-#[cfg(feature = "ed25519")]
 #[test]
 fn opcode_verify_ed25519_batch_via_tlv_reports_failure_index() {
     use ed25519_dalek::Signer;
@@ -228,7 +220,6 @@ fn opcode_verify_ed25519_batch_via_tlv_reports_failure_index() {
     assert_eq!(vm.register(2), 1, "second entry flagged as failing");
 }
 
-#[cfg(feature = "secp256k1")]
 #[test]
 fn opcode_verify_secp256k1_via_tlv() {
     use iroha_crypto::{EcdsaSecp256k1Sha256, KeyGenOption};
@@ -264,7 +255,6 @@ fn opcode_verify_secp256k1_via_tlv() {
     assert_eq!(vm.register(3), 1);
 }
 
-#[cfg(feature = "secp256k1")]
 #[test]
 fn secp256k1_verify_rejects_high_s_signature() {
     use iroha_crypto::{EcdsaSecp256k1Sha256, KeyGenOption};
@@ -289,7 +279,6 @@ fn secp256k1_verify_rejects_high_s_signature() {
     );
 }
 
-#[cfg(feature = "ml-dsa")]
 #[test]
 fn opcode_verify_dilithium_via_tlv() {
     use pqcrypto_dilithium::dilithium3 as dilithium;
@@ -325,7 +314,6 @@ fn opcode_verify_dilithium_via_tlv() {
     assert_eq!(vm.register(3), 1);
 }
 
-#[cfg(feature = "ed25519")]
 #[test]
 fn syscall_verify_signature_ed25519_via_tlv() {
     use ed25519_dalek::Signer;

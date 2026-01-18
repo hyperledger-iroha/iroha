@@ -25,7 +25,7 @@ use tokio::sync::mpsc;
 
 use crate::{
     IrohaNetwork, NetworkMessage,
-    queue::{GossipBatchEntry, Queue},
+    queue::{GossipBatchEntry, Queue, RoutingDecision},
     state::State,
     tx::AcceptedTransaction,
 };
@@ -55,10 +55,13 @@ enum RestrictedTargetPlan {
 
 const DROP_REASON_NO_RESTRICTED_TARGETS: &str = "no_restricted_targets";
 const DROP_REASON_PUBLIC_OVERLAY_REFUSED: &str = "restricted_public_overlay_refused";
+const DROP_REASON_ROUTE_MISMATCH: &str = "route_mismatch";
 const OUTCOME_PUBLIC_OVERLAY_FORWARD: &str = "restricted_public_overlay_forward";
 const SURFACE_PUBLIC_OVERLAY: &str = "public_overlay";
 const GOSSIP_SEED_PUBLIC_DOMAIN: u64 = 0x5055_424C_4943_5F00;
 const GOSSIP_SEED_RESTRICTED_DOMAIN: u64 = 0x5245_5354_5249_4354;
+// Reserve headroom for NetworkMessage + RelayMessage overhead in tx gossip frames.
+const TX_GOSSIP_FRAME_HEADROOM_BYTES: usize = 512;
 
 fn splitmix64(mut state: u64) -> u64 {
     state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
@@ -176,6 +179,16 @@ pub struct TransactionGossiper {
     /// Maximum size of a batch that is being gossiped. Smaller size leads
     /// to longer time to synchronise, useful if you have high packet loss.
     gossip_size: NonZeroU32,
+    /// Number of gossip periods to wait before re-sending the same transactions.
+    gossip_resend_ticks: NonZeroU32,
+    /// Monotonic tick counter for gossip resend pacing.
+    gossip_tick: u64,
+    /// Deferred gossip hashes bucketed by resend tick.
+    gossip_deferred: Vec<Vec<HashOf<SignedTransaction>>>,
+    /// Subscriber-queue drop counter at the last backpressure observation.
+    last_drop_count: u64,
+    /// Timestamp of the last observed subscriber-queue drop.
+    last_drop_at: Option<Instant>,
     network: IrohaNetwork,
     queue: Arc<Queue>,
     state: Arc<State>,
@@ -204,6 +217,7 @@ impl TransactionGossiper {
         Config {
             gossip_period,
             gossip_size,
+            gossip_resend_ticks,
             dataspace,
         }: Config,
         network_cfg: &NetworkConfig,
@@ -220,15 +234,22 @@ impl TransactionGossiper {
             dataspace_cfg.restricted_target_reshuffle,
             now,
         );
-        // Keep gossip batches below the encrypted per-topic cap by reserving AEAD overhead.
-        let tx_frame_cap = iroha_p2p::frame_plaintext_cap(network_cfg.max_frame_bytes_tx_gossip);
+        // Keep gossip batches below the encrypted per-topic cap by reserving AEAD + envelope overhead.
+        let tx_frame_cap = iroha_p2p::frame_plaintext_cap(network_cfg.max_frame_bytes_tx_gossip)
+            .saturating_sub(TX_GOSSIP_FRAME_HEADROOM_BYTES);
+        let gossip_deferred = vec![Vec::new(); gossip_resend_ticks.get() as usize];
         Self {
             chain_id,
             gossip_period,
             gossip_size,
+            gossip_resend_ticks,
+            gossip_tick: 0,
+            gossip_deferred,
+            last_drop_count: 0,
+            last_drop_at: None,
             network,
             queue,
-            state,
+            state: Arc::clone(&state),
             tx_frame_cap,
             dataspace_cfg,
             public_seed,
@@ -257,19 +278,83 @@ impl TransactionGossiper {
         }
     }
 
-    fn gossip_transactions(&mut self) {
-        let state_view = self.state.view();
-        let lane_config = state_view.nexus.lane_config.clone();
-        let lane_catalog = state_view.nexus.lane_catalog.clone();
-        let entries = self.queue.gossip_batch(self.gossip_size.get(), &state_view);
+    fn deferred_index(&self) -> usize {
+        let len = u64::from(self.gossip_resend_ticks.get());
+        debug_assert!(len > 0, "gossip_resend_ticks must be non-zero");
+        debug_assert_eq!(
+            self.gossip_deferred.len(),
+            len as usize,
+            "gossip_deferred must match gossip_resend_ticks"
+        );
+        (self.gossip_tick % len) as usize
+    }
 
-        if entries.is_empty() {
+    fn backpressure_cooldown(&self) -> Duration {
+        self.gossip_period
+            .checked_mul(self.gossip_resend_ticks.get())
+            .unwrap_or(self.gossip_period)
+    }
+
+    fn gossip_backpressure_active(&mut self, now: Instant) -> bool {
+        let current = iroha_p2p::network::subscriber_queue_full_count();
+        if current > self.last_drop_count {
+            self.last_drop_count = current;
+            self.last_drop_at = Some(now);
+        }
+        let cooldown = self.backpressure_cooldown();
+        self.last_drop_at
+            .is_some_and(|last| now.saturating_duration_since(last) < cooldown)
+    }
+
+    fn release_deferred_gossip(&mut self) {
+        if self.gossip_deferred.is_empty() {
             return;
         }
+        let index = self.deferred_index();
+        let hashes = std::mem::take(&mut self.gossip_deferred[index]);
+        if hashes.is_empty() {
+            return;
+        }
+        self.queue.requeue_gossip_hashes(hashes);
+    }
 
-        let commit_topology: Vec<PeerId> = state_view.commit_topology().iter().cloned().collect();
-        drop(state_view);
+    fn defer_gossip_hashes(&mut self, hashes: impl IntoIterator<Item = HashOf<SignedTransaction>>) {
+        if self.gossip_deferred.is_empty() {
+            return;
+        }
+        let index = self.deferred_index();
+        self.gossip_deferred[index].extend(hashes);
+    }
+
+    fn advance_gossip_tick(&mut self) {
+        self.gossip_tick = self.gossip_tick.wrapping_add(1);
+    }
+
+    fn gossip_transactions(&mut self) {
         let now = Instant::now();
+        if self.gossip_backpressure_active(now) {
+            iroha_logger::trace!(
+                drops = self.last_drop_count,
+                cooldown_ms = self.backpressure_cooldown().as_millis(),
+                "transaction gossiper skipping gossip due to relay backpressure"
+            );
+            return;
+        }
+        self.release_deferred_gossip();
+        let (entries, lane_config, lane_catalog, commit_topology) = {
+            let state_view = self.state.view();
+            let lane_config = state_view.nexus.lane_config.clone();
+            let lane_catalog = state_view.nexus.lane_catalog.clone();
+            let entries = self.queue.gossip_batch(self.gossip_size.get(), &state_view);
+            let commit_topology: Vec<PeerId> =
+                state_view.commit_topology().iter().cloned().collect();
+            (entries, lane_config, lane_catalog, commit_topology)
+        };
+
+        if entries.is_empty() {
+            self.advance_gossip_tick();
+            return;
+        }
         let public_seed = self.public_seed.current(now);
         let restricted_seed = self.restricted_seed.current(now);
 
@@ -329,8 +414,7 @@ impl TransactionGossiper {
                     dataspace = %dataspace_id,
                     "dataspace missing from lane catalog; requeueing gossip batch"
                 );
-                self.queue
-                    .requeue_gossip_hashes(entries.iter().map(|entry| entry.tx.as_ref().hash()));
+                self.defer_gossip_hashes(entries.iter().map(|entry| entry.tx.as_ref().hash()));
                 self.record_drop_metric(
                     GossipPlane::Restricted,
                     dataspace_id,
@@ -359,11 +443,12 @@ impl TransactionGossiper {
                 ),
             }
         }
+        self.advance_gossip_tick();
     }
 
     #[allow(clippy::too_many_lines)]
     fn gossip_public(
-        &self,
+        &mut self,
         dataspace_id: DataSpaceId,
         lane_ids: &[LaneId],
         entries: Vec<GossipBatchEntry>,
@@ -384,7 +469,7 @@ impl TransactionGossiper {
         );
 
         if !requeue.is_empty() {
-            self.queue.requeue_gossip_hashes(requeue);
+            self.defer_gossip_hashes(requeue);
         }
 
         if message.txs.is_empty() {
@@ -425,7 +510,7 @@ impl TransactionGossiper {
                 dataspace = %dataspace_id,
                 "no online peers available for public gossip"
             );
-            self.queue.requeue_gossip_hashes(sent_hashes);
+            self.defer_gossip_hashes(sent_hashes);
             self.record_drop_metric(
                 GossipPlane::Public,
                 dataspace_id,
@@ -502,11 +587,11 @@ impl TransactionGossiper {
             );
         }
         // Re-enqueue sent hashes so gossip keeps circulating until the transaction is committed.
-        self.queue.requeue_gossip_hashes(sent_hashes);
+        self.defer_gossip_hashes(sent_hashes);
     }
 
     fn gossip_restricted(
-        &self,
+        &mut self,
         dataspace_id: DataSpaceId,
         lane_ids: &[LaneId],
         entries: Vec<GossipBatchEntry>,
@@ -529,7 +614,7 @@ impl TransactionGossiper {
         );
 
         if !requeue.is_empty() {
-            self.queue.requeue_gossip_hashes(requeue);
+            self.defer_gossip_hashes(requeue);
         }
 
         if message.txs.is_empty() {
@@ -573,7 +658,7 @@ impl TransactionGossiper {
                 fallback_surface,
                 targets,
             } => {
-                self.queue.requeue_gossip_hashes(sent_hashes);
+                self.defer_gossip_hashes(sent_hashes);
                 self.record_drop_metric(
                     GossipPlane::Restricted,
                     dataspace_id,
@@ -618,7 +703,7 @@ impl TransactionGossiper {
             fallback_surface,
             reason,
         );
-        self.queue.requeue_gossip_hashes(sent_hashes);
+        self.defer_gossip_hashes(sent_hashes);
     }
 
     #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
@@ -1013,8 +1098,34 @@ impl TransactionGossiper {
                 crypto_cfg.as_ref(),
             ) {
                 Ok(tx) => {
+                    let state_view = self.state.view();
+                    let advertised_route = RoutingDecision::new(route.lane_id, route.dataspace_id);
+                    let local_route = self.queue.route_for_gossip(&tx, &state_view);
                     let tx_hash = tx.as_ref().hash();
-                    match self.queue.push(tx, self.state.view()) {
+                    if local_route != advertised_route {
+                        iroha_logger::warn!(
+                            %tx_hash,
+                            advertised_lane_id = %route.lane_id,
+                            advertised_dataspace_id = %route.dataspace_id,
+                            expected_lane_id = %local_route.lane_id,
+                            expected_dataspace_id = %local_route.dataspace_id,
+                            "dropping transaction gossip entry due to routing mismatch"
+                        );
+                        self.record_drop_metric(
+                            plane,
+                            local_route.dataspace_id,
+                            &[local_route.lane_id],
+                            DROP_REASON_ROUTE_MISMATCH,
+                            false,
+                            None,
+                            &[],
+                            self.target_cap_for_plane(plane),
+                            1,
+                            0,
+                        );
+                        continue;
+                    }
+                    match self.queue.push(tx, state_view) {
                         Ok(()) => {
                             iroha_logger::info!(%tx_hash, "transaction enqueued from gossip");
                         }
@@ -1263,7 +1374,13 @@ fn partition_gossip_batch(
 
 #[cfg(test)]
 mod tests {
-    use std::{borrow::Cow, collections::BTreeSet, num::NonZeroUsize, sync::Arc, time::Duration};
+    use std::{
+        borrow::Cow,
+        collections::BTreeSet,
+        num::{NonZeroU32, NonZeroUsize},
+        sync::Arc,
+        time::Duration,
+    };
 
     use iroha_config::{
         kura::{FsyncMode, InitMode},
@@ -1278,7 +1395,12 @@ mod tests {
     };
     use iroha_config_base::WithOrigin;
     use iroha_crypto::KeyPair;
-    use iroha_data_model::{ChainId, Level, isi::Log, transaction::TransactionBuilder};
+    use iroha_data_model::{
+        ChainId, DataSpaceId, Level,
+        isi::Log,
+        nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneId, LaneVisibility},
+        transaction::TransactionBuilder,
+    };
     use iroha_primitives::{addr::socket_addr, time::TimeSource};
     use iroha_test_samples::{
         ALICE_ID, ALICE_KEYPAIR, BOB_KEYPAIR, CARPENTER_KEYPAIR, PEER_KEYPAIR,
@@ -1289,7 +1411,7 @@ mod tests {
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
-        queue::RoutingDecision,
+        queue::{LaneRouter, RoutingDecision},
         state::{State, World},
     };
 
@@ -1319,6 +1441,7 @@ mod tests {
             require_sm_openssl_preview_match: defaults::network::REQUIRE_SM_OPENSSL_PREVIEW_MATCH,
             idle_timeout: defaults::network::IDLE_TIMEOUT,
             peer_gossip_period: defaults::network::PEER_GOSSIP_PERIOD,
+            peer_gossip_max_period: defaults::network::PEER_GOSSIP_PERIOD,
             trust_gossip: defaults::network::TRUST_GOSSIP,
             trust_decay_half_life: defaults::network::TRUST_DECAY_HALF_LIFE,
             trust_penalty_bad_gossip: defaults::network::TRUST_PENALTY_BAD_GOSSIP,
@@ -1333,6 +1456,29 @@ mod tests {
             p2p_queue_cap_high: defaults::network::P2P_QUEUE_CAP_HIGH,
             p2p_queue_cap_low: defaults::network::P2P_QUEUE_CAP_LOW,
             p2p_post_queue_cap: defaults::network::P2P_POST_QUEUE_CAP,
+            p2p_subscriber_queue_cap: defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
+            consensus_ingress_rate_per_sec: defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
+            consensus_ingress_burst: defaults::network::CONSENSUS_INGRESS_BURST,
+            consensus_ingress_bytes_per_sec: defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
+            consensus_ingress_bytes_burst: defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+            consensus_ingress_critical_rate_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
+            consensus_ingress_critical_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
+            consensus_ingress_critical_bytes_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
+            consensus_ingress_critical_bytes_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
+            consensus_ingress_rbc_session_limit:
+                defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
+            consensus_ingress_penalty_threshold:
+                defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
+            consensus_ingress_penalty_window: Duration::from_millis(
+                defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
+            ),
+            consensus_ingress_penalty_cooldown: Duration::from_millis(
+                defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
+            ),
             happy_eyeballs_stagger: defaults::network::HAPPY_EYEBALLS_STAGGER,
             addr_ipv6_first: false,
             max_incoming: None,
@@ -1397,7 +1543,8 @@ mod tests {
         let mut network_cfg = test_network_config(socket_addr!(127.0.0.1:0));
         network_cfg.max_frame_bytes = 512;
         network_cfg.max_frame_bytes_tx_gossip = 1024;
-        let expected = iroha_p2p::frame_plaintext_cap(network_cfg.max_frame_bytes_tx_gossip);
+        let expected = iroha_p2p::frame_plaintext_cap(network_cfg.max_frame_bytes_tx_gossip)
+            .saturating_sub(TX_GOSSIP_FRAME_HEADROOM_BYTES);
 
         let (network, _child) = IrohaNetwork::start(
             KeyPair::random(),
@@ -1415,16 +1562,135 @@ mod tests {
             Config {
                 gossip_period: Duration::from_millis(1000),
                 gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+                gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
                 dataspace: DataspaceGossip::default(),
             },
             &network_cfg,
             network,
             queue,
-            state,
+            Arc::clone(&state),
         );
 
         assert_eq!(gossiper.tx_frame_cap, expected);
         shutdown.send();
+    }
+
+    #[test]
+    fn gossip_defers_requeue_until_resend_tick() {
+        let temp_dir = tempdir().expect("temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
+            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: FsyncMode::Batched,
+            fsync_interval: defaults::kura::FSYNC_INTERVAL,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
+        let live_query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        let queue = Arc::new(Queue::test(
+            QueueConfig::default(),
+            &TimeSource::new_system(),
+        ));
+
+        let (_signed, accepted) = build_transaction("defer");
+        queue
+            .push(accepted, state.view())
+            .expect("queue accepts tx");
+        let batch = queue.gossip_batch(1, &state.view());
+        assert_eq!(batch.len(), 1);
+        let hash = batch[0].tx.as_ref().hash();
+
+        let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
+        let now = Instant::now();
+        let mut gossiper = TransactionGossiper {
+            chain_id: "test-chain".parse().expect("chain id"),
+            gossip_period: Duration::from_millis(50),
+            gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+            gossip_resend_ticks: resend_ticks,
+            gossip_tick: 0,
+            gossip_deferred: vec![Vec::new(); resend_ticks.get() as usize],
+            last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
+            last_drop_at: None,
+            network: IrohaNetwork::closed_for_tests(),
+            queue: Arc::clone(&queue),
+            state: Arc::clone(&state),
+            tx_frame_cap: 1024,
+            dataspace_cfg: DataspaceGossip::default(),
+            public_seed: GossipTargetSeed::new(0xBEEF_0001, Duration::from_secs(1), now),
+            restricted_seed: GossipTargetSeed::new(0xBEEF_0002, Duration::from_secs(1), now),
+        };
+
+        gossiper.release_deferred_gossip();
+        gossiper.defer_gossip_hashes(vec![hash]);
+        gossiper.advance_gossip_tick();
+        assert!(queue.gossip_batch(1, &state.view()).is_empty());
+
+        gossiper.release_deferred_gossip();
+        gossiper.advance_gossip_tick();
+        assert!(queue.gossip_batch(1, &state.view()).is_empty());
+
+        gossiper.release_deferred_gossip();
+        let batch = queue.gossip_batch(1, &state.view());
+        assert_eq!(batch.len(), 1);
+    }
+
+    #[test]
+    fn gossip_backpressure_cooldown_respects_last_drop() {
+        let temp_dir = tempdir().expect("temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
+            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: FsyncMode::Batched,
+            fsync_interval: defaults::kura::FSYNC_INTERVAL,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
+        let live_query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        let queue = Arc::new(Queue::test(
+            QueueConfig::default(),
+            &TimeSource::new_system(),
+        ));
+
+        let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
+        let now = Instant::now();
+        let mut gossiper = TransactionGossiper {
+            chain_id: "test-chain".parse().expect("chain id"),
+            gossip_period: Duration::from_millis(50),
+            gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+            gossip_resend_ticks: resend_ticks,
+            gossip_tick: 0,
+            gossip_deferred: vec![Vec::new(); resend_ticks.get() as usize],
+            last_drop_count: u64::MAX,
+            last_drop_at: Some(now),
+            network: IrohaNetwork::closed_for_tests(),
+            queue,
+            state,
+            tx_frame_cap: 1024,
+            dataspace_cfg: DataspaceGossip::default(),
+            public_seed: GossipTargetSeed::new(0xBEEF_0001, Duration::from_secs(1), now),
+            restricted_seed: GossipTargetSeed::new(0xBEEF_0002, Duration::from_secs(1), now),
+        };
+
+        assert!(gossiper.gossip_backpressure_active(now));
+
+        let cooldown = gossiper.backpressure_cooldown();
+        let past = now
+            .checked_sub(cooldown.saturating_add(Duration::from_millis(1)))
+            .unwrap_or(now);
+        gossiper.last_drop_at = Some(past);
+        assert!(!gossiper.gossip_backpressure_active(now));
     }
 
     #[test]
@@ -1975,6 +2241,14 @@ mod tests {
             chain_id: "test-chain".parse().expect("chain id"),
             gossip_period: Duration::from_millis(50),
             gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+            gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
+            gossip_tick: 0,
+            gossip_deferred: vec![
+                Vec::new();
+                defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS.get() as usize
+            ],
+            last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
+            last_drop_at: None,
             network,
             queue: Arc::clone(&queue),
             state,
@@ -2000,7 +2274,230 @@ mod tests {
             plane: GossipPlane::Public,
         });
 
-        assert_eq!(queue.tx_len(), 1);
+        assert_eq!(queue.queued_len(), 1);
+        shutdown.send();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn gossip_drops_route_mismatch() {
+        struct FixedRouter {
+            lane: LaneId,
+            dataspace: DataSpaceId,
+        }
+
+        impl LaneRouter for FixedRouter {
+            fn route(
+                &self,
+                _tx: &crate::tx::AcceptedTransaction<'_>,
+                _state_view: &crate::state::StateView<'_>,
+            ) -> RoutingDecision {
+                RoutingDecision::new(self.lane, self.dataspace)
+            }
+        }
+
+        let temp_dir = tempdir().expect("temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
+            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: FsyncMode::Batched,
+            fsync_interval: defaults::kura::FSYNC_INTERVAL,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
+        let live_query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        let queue = Arc::new(Queue::test_with_router(
+            QueueConfig::default(),
+            &TimeSource::new_system(),
+            Arc::new(FixedRouter {
+                lane: LaneId::new(1),
+                dataspace: DataSpaceId::new(7),
+            }),
+        ));
+
+        let shutdown = ShutdownSignal::new();
+        let network_cfg = test_network_config(socket_addr!(127.0.0.1:0));
+        let (network, _child) = IrohaNetwork::start(
+            KeyPair::random(),
+            network_cfg,
+            None,
+            None,
+            None,
+            shutdown.clone(),
+        )
+        .await
+        .expect("network starts");
+
+        let now = Instant::now();
+        let gossiper = TransactionGossiper {
+            chain_id: "test-chain".parse().expect("chain id"),
+            gossip_period: Duration::from_millis(50),
+            gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+            gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
+            gossip_tick: 0,
+            gossip_deferred: vec![
+                Vec::new();
+                defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS.get() as usize
+            ],
+            last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
+            last_drop_at: None,
+            network,
+            queue: Arc::clone(&queue),
+            state,
+            tx_frame_cap: 1024,
+            dataspace_cfg: DataspaceGossip::default(),
+            public_seed: GossipTargetSeed::new(0xBEEF_0001, Duration::from_secs(1), now),
+            restricted_seed: GossipTargetSeed::new(0xBEEF_0002, Duration::from_secs(1), now),
+        };
+
+        let (signed, _) = build_transaction("route-mismatch");
+        let route = GossipRoute {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::GLOBAL,
+        };
+        gossiper.handle_transaction_gossip(TransactionGossip {
+            txs: vec![signed],
+            routes: vec![route],
+            plane: GossipPlane::Public,
+        });
+
+        assert_eq!(queue.queued_len(), 0);
+        shutdown.send();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn gossip_accepts_restricted_route_match() {
+        struct FixedRouter {
+            lane: LaneId,
+            dataspace: DataSpaceId,
+        }
+
+        impl LaneRouter for FixedRouter {
+            fn route(
+                &self,
+                _tx: &crate::tx::AcceptedTransaction<'_>,
+                _state_view: &crate::state::StateView<'_>,
+            ) -> RoutingDecision {
+                RoutingDecision::new(self.lane, self.dataspace)
+            }
+        }
+
+        let temp_dir = tempdir().expect("temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
+            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: FsyncMode::Batched,
+            fsync_interval: defaults::kura::FSYNC_INTERVAL,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
+        let live_query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+
+        let restricted_dataspace = DataSpaceId::new(7);
+        let restricted_lane = LaneId::new(1);
+        let lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(2).expect("nonzero lanes"),
+            vec![
+                iroha_data_model::nexus::LaneConfig {
+                    id: LaneId::SINGLE,
+                    alias: "public".to_string(),
+                    ..iroha_data_model::nexus::LaneConfig::default()
+                },
+                iroha_data_model::nexus::LaneConfig {
+                    id: restricted_lane,
+                    dataspace_id: restricted_dataspace,
+                    alias: "restricted".to_string(),
+                    visibility: LaneVisibility::Restricted,
+                    ..iroha_data_model::nexus::LaneConfig::default()
+                },
+            ],
+        )
+        .expect("lane catalog");
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: restricted_dataspace,
+                alias: "restricted".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        {
+            let mut nexus = state.nexus.write();
+            nexus.enabled = true;
+            nexus.lane_catalog = lane_catalog.clone();
+            nexus.lane_config = LaneGeometry::from_catalog(&lane_catalog);
+            nexus.dataspace_catalog = dataspace_catalog;
+        }
+
+        let queue = Arc::new(Queue::test_with_router(
+            QueueConfig::default(),
+            &TimeSource::new_system(),
+            Arc::new(FixedRouter {
+                lane: restricted_lane,
+                dataspace: restricted_dataspace,
+            }),
+        ));
+
+        let shutdown = ShutdownSignal::new();
+        let network_cfg = test_network_config(socket_addr!(127.0.0.1:0));
+        let (network, _child) = IrohaNetwork::start(
+            KeyPair::random(),
+            network_cfg,
+            None,
+            None,
+            None,
+            shutdown.clone(),
+        )
+        .await
+        .expect("network starts");
+
+        let now = Instant::now();
+        let gossiper = TransactionGossiper {
+            chain_id: "test-chain".parse().expect("chain id"),
+            gossip_period: Duration::from_millis(50),
+            gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+            gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
+            gossip_tick: 0,
+            gossip_deferred: vec![
+                Vec::new();
+                defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS.get() as usize
+            ],
+            last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
+            last_drop_at: None,
+            network,
+            queue: Arc::clone(&queue),
+            state,
+            tx_frame_cap: 1024,
+            dataspace_cfg: DataspaceGossip::default(),
+            public_seed: GossipTargetSeed::new(0xBEEF_0001, Duration::from_secs(1), now),
+            restricted_seed: GossipTargetSeed::new(0xBEEF_0002, Duration::from_secs(1), now),
+        };
+
+        let (signed, _) = build_transaction("restricted-route");
+        let route = GossipRoute {
+            lane_id: restricted_lane,
+            dataspace_id: restricted_dataspace,
+        };
+        gossiper.handle_transaction_gossip(TransactionGossip {
+            txs: vec![signed],
+            routes: vec![route],
+            plane: GossipPlane::Restricted,
+        });
+
+        assert_eq!(queue.queued_len(), 1);
         shutdown.send();
     }
 }

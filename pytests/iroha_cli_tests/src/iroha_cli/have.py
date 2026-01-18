@@ -3,7 +3,7 @@ This module contains functions for checking expected results in tests.
 """
 
 import json
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 import allure  # type: ignore
 

@@ -12,6 +12,8 @@
 
 use std::collections::{BTreeSet, HashMap};
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use indexmap::IndexSet;
 use iroha_crypto as _; // for Hash types in new APIs
 use iroha_data_model::{
@@ -25,6 +27,7 @@ use iroha_data_model::{
     smart_contract::manifest::{AccessSetHints, EntryPointKind, EntrypointDescriptor},
     trigger::{Trigger, TriggerId},
 };
+use norito::json;
 
 use super::{
     ast::{
@@ -549,8 +552,10 @@ mod tests {
 
     #[test]
     fn meta_max_cycles_zero_uses_compiler_default() {
-        let mut opts = CompilerOptions::default();
-        opts.max_cycles = 42;
+        let opts = CompilerOptions {
+            max_cycles: 42,
+            ..CompilerOptions::default()
+        };
         let compiler = Compiler::new_with_options(opts);
         let src = r#"
 seiyaku MyC {
@@ -802,6 +807,30 @@ seiyaku Test {
             .expect("expected access_set_hints");
         assert_eq!(hints.read_keys, vec!["state:Foo[*]".to_string()]);
         assert_eq!(hints.write_keys, vec!["state:Foo[*]".to_string()]);
+    }
+
+    #[test]
+    fn manifest_access_set_hints_include_create_trigger() {
+        let src = r#"
+seiyaku Test {
+  kotoage fn make() {
+    create_trigger(json("{\"id\":\"t1\"}"));
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile manifest");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected access_set_hints");
+        let expected = vec![
+            "trigger.repetitions:t1".to_string(),
+            "trigger:t1".to_string(),
+        ];
+        assert_eq!(hints.read_keys, expected);
+        assert_eq!(hints.write_keys, expected);
     }
 
     #[test]
@@ -1250,12 +1279,10 @@ impl Compiler {
                         op: UnaryOp::Neg,
                         operand,
                     } = instr
+                        && let Some(value) = int_const_map.get(&(func_idx, *operand)).copied()
+                        && let Some(neg) = value.checked_neg()
                     {
-                        if let Some(value) = int_const_map.get(&(func_idx, *operand)).copied() {
-                            if let Some(neg) = value.checked_neg() {
-                                int_const_map.insert((func_idx, *dest), neg);
-                            }
-                        }
+                        int_const_map.insert((func_idx, *dest), neg);
                     }
                     if let ir::Instr::DataRef { dest, kind, value } = instr {
                         // Track typed refs in string_map keyed by temp; kind is handled at use sites
@@ -1421,28 +1448,28 @@ impl Compiler {
         for (func_idx, func) in ir_prog.functions.iter().enumerate() {
             for bb in &func.blocks {
                 for instr in &bb.instrs {
-                    if let ir::Instr::PointerFromString { kind, src, .. } = instr {
-                        if !string_map.contains_key(&(func_idx, *src)) {
-                            let name = match kind {
-                                ir::DataRefKind::Account => "account_id",
-                                ir::DataRefKind::AssetDef => "asset_definition",
-                                ir::DataRefKind::AssetId => "asset_id",
-                                ir::DataRefKind::NftId => "nft_id",
-                                ir::DataRefKind::Name => "name",
-                                ir::DataRefKind::Json => "json",
-                                ir::DataRefKind::Domain => "domain",
-                                ir::DataRefKind::Blob => "blob",
-                                ir::DataRefKind::NoritoBytes => "norito_bytes",
-                                ir::DataRefKind::DataSpaceId => "dataspace_id",
-                                ir::DataRefKind::AxtDescriptor => "axt_descriptor",
-                                ir::DataRefKind::AssetHandle => "asset_handle",
-                                ir::DataRefKind::ProofBlob => "proof_blob",
-                            };
-                            let msg = format!(
-                                "{name} expects a string literal; pass a literal or Blob|bytes"
-                            );
-                            return Err(i18n::translate(self.lang, Message::SemanticError(&msg)));
-                        }
+                    if let ir::Instr::PointerFromString { kind, src, .. } = instr
+                        && !string_map.contains_key(&(func_idx, *src))
+                    {
+                        let name = match kind {
+                            ir::DataRefKind::Account => "account_id",
+                            ir::DataRefKind::AssetDef => "asset_definition",
+                            ir::DataRefKind::AssetId => "asset_id",
+                            ir::DataRefKind::NftId => "nft_id",
+                            ir::DataRefKind::Name => "name",
+                            ir::DataRefKind::Json => "json",
+                            ir::DataRefKind::Domain => "domain",
+                            ir::DataRefKind::Blob => "blob",
+                            ir::DataRefKind::NoritoBytes => "norito_bytes",
+                            ir::DataRefKind::DataSpaceId => "dataspace_id",
+                            ir::DataRefKind::AxtDescriptor => "axt_descriptor",
+                            ir::DataRefKind::AssetHandle => "asset_handle",
+                            ir::DataRefKind::ProofBlob => "proof_blob",
+                        };
+                        let msg = format!(
+                            "{name} expects a string literal; pass a literal or Blob|bytes"
+                        );
+                        return Err(i18n::translate(self.lang, Message::SemanticError(&msg)));
                     }
                 }
             }
@@ -2051,64 +2078,54 @@ impl Compiler {
                             amount,
                         } => {
                             // Pointer-ABI: accept literal pointers (from string_map) or runtime pointers.
-                            // Sentinel mode: x10=x11=0; host resolves authority and rose#wonderland.
-                            if int_const_map.get(&(func_idx, *account)) == Some(&0)
-                                && int_const_map.get(&(func_idx, *asset)) == Some(&0)
+                            if int_const_map.contains_key(&(func_idx, *account))
+                                || int_const_map.contains_key(&(func_idx, *asset))
                             {
-                                let r_amt = src_reg(amount, scratch1, &mut code)?;
-                                emit_addi(&mut code, 10, 0, 0);
-                                emit_addi(&mut code, 11, 0, 0);
-                                push_word(&mut code, encode_addi(12, r_amt, 0)?);
-                            } else {
-                                if int_const_map.contains_key(&(func_idx, *account))
-                                    || int_const_map.contains_key(&(func_idx, *asset))
-                                {
-                                    return Err(i18n::translate(
-                                        self.lang,
-                                        Message::UnsupportedBinaryOp(
-                                            "mint_asset expects (account, asset) as pointers or 0 sentinels",
-                                        ),
-                                    ));
-                                }
-                                // r10 = &AccountId
-                                if let Some(k_acc) = string_map
-                                    .get(&(func_idx, *account))
-                                    .map(|s| DataKey(DataKind::Account, s.clone()))
-                                {
-                                    emit_literal_stub(&mut code, &mut fixups, 10, k_acc);
-                                } else {
-                                    let r_acc = src_reg(account, scratch1, &mut code)?;
-                                    push_word(&mut code, encode_addi(10, r_acc, 0)?);
-                                }
-                                // r11 = &AssetDefinitionId
-                                if let Some(k_asset) = string_map
-                                    .get(&(func_idx, *asset))
-                                    .map(|s| DataKey(DataKind::AssetDef, s.clone()))
-                                {
-                                    emit_literal_stub(&mut code, &mut fixups, 11, k_asset);
-                                } else {
-                                    let r_asset = src_reg(asset, scratch2, &mut code)?;
-                                    push_word(&mut code, encode_addi(11, r_asset, 0)?);
-                                }
-                                // r12 = amount
-                                let r_amt = src_reg(amount, scratch1, &mut code)?;
-                                push_word(&mut code, encode_addi(12, r_amt, 0)?);
-
-                                // Mirror TLVs for r10 and r11 into INPUT to satisfy pointer‑ABI validation.
-                                let pub_word = encoding::wide::encode_sys(
-                                    instruction::wide::system::SCALL,
-                                    syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
-                                );
-                                // Publish r10 and preserve it in x13.
-                                code.extend_from_slice(&pub_word.to_le_bytes());
-                                push_word(&mut code, encode_addi(13, 10, 0)?);
-                                // Publish r11: x10 <- x11; publish; x11 <- x10.
-                                push_word(&mut code, encode_addi(10, 11, 0)?);
-                                code.extend_from_slice(&pub_word.to_le_bytes());
-                                push_word(&mut code, encode_addi(11, 10, 0)?);
-                                // Restore account pointer: x10 <- x13.
-                                push_word(&mut code, encode_addi(10, 13, 0)?);
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::UnsupportedBinaryOp(
+                                        "mint_asset expects (account, asset) pointers",
+                                    ),
+                                ));
                             }
+                            // r10 = &AccountId
+                            if let Some(k_acc) = string_map
+                                .get(&(func_idx, *account))
+                                .map(|s| DataKey(DataKind::Account, s.clone()))
+                            {
+                                emit_literal_stub(&mut code, &mut fixups, 10, k_acc);
+                            } else {
+                                let r_acc = src_reg(account, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r_acc, 0)?);
+                            }
+                            // r11 = &AssetDefinitionId
+                            if let Some(k_asset) = string_map
+                                .get(&(func_idx, *asset))
+                                .map(|s| DataKey(DataKind::AssetDef, s.clone()))
+                            {
+                                emit_literal_stub(&mut code, &mut fixups, 11, k_asset);
+                            } else {
+                                let r_asset = src_reg(asset, scratch2, &mut code)?;
+                                push_word(&mut code, encode_addi(11, r_asset, 0)?);
+                            }
+                            // r12 = amount
+                            let r_amt = src_reg(amount, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(12, r_amt, 0)?);
+
+                            // Mirror TLVs for r10 and r11 into INPUT to satisfy pointer-ABI validation.
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            // Publish r10 and preserve it in x13.
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(13, 10, 0)?);
+                            // Publish r11: x10 <- x11; publish; x11 <- x10.
+                            push_word(&mut code, encode_addi(10, 11, 0)?);
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            // Restore account pointer: x10 <- x13.
+                            push_word(&mut code, encode_addi(10, 13, 0)?);
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_MINT_ASSET as u8,
@@ -2568,6 +2585,43 @@ impl Compiler {
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                        }
+                        Instr::VendorExecuteQuery { dest, payload } => {
+                            if let Some(pstr) = string_map.get(&(func_idx, *payload)) {
+                                let key = DataKey(DataKind::NoritoBytes, pstr.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r = src_reg(payload, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            // Mirror into INPUT to satisfy pointer‑ABI validation
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::SubscriptionBill => {
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_SUBSCRIPTION_BILL as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                        }
+                        Instr::SubscriptionRecordUsage => {
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                         }
@@ -4073,14 +4127,17 @@ impl Compiler {
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
                             );
                             code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(scratch1, 10, 0)?);
                             if let Some(s) = string_map.get(&(func_idx, *json)) {
                                 let key = DataKey(DataKind::Json, s.clone());
-                                emit_literal_stub(&mut code, &mut fixups, 11, key);
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
                                 let r = src_reg(json, scratch2, &mut code)?;
-                                push_word(&mut code, encode_addi(11, r, 0)?);
+                                push_word(&mut code, encode_addi(10, r, 0)?);
                             }
                             code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, scratch1, 0)?);
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_SCHEMA_ENCODE as u8,
@@ -4112,14 +4169,17 @@ impl Compiler {
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
                             );
                             code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(scratch1, 10, 0)?);
                             if let Some(s) = string_map.get(&(func_idx, *blob)) {
                                 let key = DataKey(DataKind::NoritoBytes, s.clone());
-                                emit_literal_stub(&mut code, &mut fixups, 11, key);
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
                                 let r = src_reg(blob, scratch2, &mut code)?;
-                                push_word(&mut code, encode_addi(11, r, 0)?);
+                                push_word(&mut code, encode_addi(10, r, 0)?);
                             }
                             code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, scratch1, 0)?);
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_SCHEMA_DECODE as u8,
@@ -5212,6 +5272,9 @@ fn record_isi_access(
         ir::Instr::RegisterPeer { .. }
         | ir::Instr::UnregisterPeer { .. }
         | ir::Instr::VendorExecuteInstruction { .. }
+        | ir::Instr::VendorExecuteQuery { .. }
+        | ir::Instr::SubscriptionBill
+        | ir::Instr::SubscriptionRecordUsage
         | ir::Instr::BuildSubmitBallotInline { .. }
         | ir::Instr::BuildUnshieldInline { .. }
         | ir::Instr::AxtBegin { .. }
@@ -5263,8 +5326,19 @@ fn permission_name_from_json(raw: &str) -> Option<String> {
 }
 
 fn trigger_id_from_json(raw: &str) -> Option<TriggerId> {
-    let trigger: Trigger = norito::json::from_slice(raw.as_bytes()).ok()?;
-    Some(trigger.id().clone())
+    let value: json::Value = json::from_slice(raw.as_bytes()).ok()?;
+    match value {
+        json::Value::String(encoded) => {
+            let bytes = STANDARD.decode(encoded.as_bytes()).ok()?;
+            let trigger: Trigger = norito::decode_from_bytes(&bytes).ok()?;
+            Some(trigger.id().clone())
+        }
+        json::Value::Object(map) => {
+            let id = map.get("id")?.as_str()?;
+            id.parse().ok()
+        }
+        _ => None,
+    }
 }
 
 fn key_account(id: &AccountId) -> String {
@@ -5421,6 +5495,9 @@ fn instr_queues_isi(instr: &ir::Instr) -> bool {
             | ir::Instr::RevokeRole { .. }
             | ir::Instr::TransferDomain { .. }
             | ir::Instr::VendorExecuteInstruction { .. }
+            | ir::Instr::VendorExecuteQuery { .. }
+            | ir::Instr::SubscriptionBill
+            | ir::Instr::SubscriptionRecordUsage
             | ir::Instr::BuildSubmitBallotInline { .. }
             | ir::Instr::BuildUnshieldInline { .. }
             | ir::Instr::AxtBegin { .. }
@@ -5528,17 +5605,17 @@ fn build_entrypoint_descriptors(
         })
         .collect();
 
-    if entrypoints.is_empty() {
-        if let Some(func) = typed.items.iter().find_map(|item| match item {
+    if entrypoints.is_empty()
+        && let Some(func) = typed.items.iter().find_map(|item| match item {
             TypedItem::Function(func)
                 if func.modifiers.kind == FunctionKind::Free && func.name == "main" =>
             {
                 Some(func)
             }
             _ => None,
-        }) {
-            entrypoints.push(build_descriptor(func, EntryPointKind::Public));
-        }
+        })
+    {
+        entrypoints.push(build_descriptor(func, EntryPointKind::Public));
     }
 
     entrypoints

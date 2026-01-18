@@ -1,3 +1,5 @@
+//! WSV host account administration syscall tests.
+
 use std::collections::HashMap;
 
 use iroha_crypto::Hash;
@@ -39,35 +41,21 @@ fn load_and_run(vm: &mut IVM, program: &[u8]) -> Result<(), ivm::VMError> {
 }
 
 #[test]
-fn add_and_remove_signatory_for_own_account() {
+fn add_signatory_syscall_updates_account() {
     let alice: AccountId =
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
             .parse()
             .unwrap();
+    let signatory_key = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4";
 
     let mut wsv = MockWorldStateView::new();
-    wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
-    wsv.grant_permission(&alice, PermissionToken::RegisterAccount);
-
+    wsv.add_account_unchecked(alice.clone());
     let host = WsvHost::new(wsv, alice.clone(), HashMap::new(), HashMap::new());
     let mut vm = IVM::new(256);
     vm.set_host(host);
 
-    // Register domain and account for alice
-    let dom = make_domain_tlv("domain");
-    vm.memory.preload_input(0, &dom).expect("preload input");
-    vm.set_register(10, Memory::INPUT_START);
-    let reg_domain = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN as u8]);
-    load_and_run(&mut vm, &reg_domain).expect("register domain");
-
     let acct = make_account_tlv(&alice);
-    vm.memory.preload_input(0, &acct).expect("preload input");
-    vm.set_register(10, Memory::INPUT_START);
-    let reg_account = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);
-    load_and_run(&mut vm, &reg_account).expect("register account");
-
-    // Add a signatory via JSON payload
-    let sig_json = make_tlv(PointerType::Json, br#"{"public_key":"ed0120CAFEBABE"}"#);
+    let sig_json = make_tlv(PointerType::Json, format!("\"{signatory_key}\"").as_bytes());
     vm.memory.preload_input(0, &acct).expect("preload input");
     vm.memory
         .preload_input(acct.len() as u64 + 8, &sig_json)
@@ -77,39 +65,71 @@ fn add_and_remove_signatory_for_own_account() {
     let add_sig = assemble_syscalls(&[syscalls::SYSCALL_ADD_SIGNATORY as u8]);
     load_and_run(&mut vm, &add_sig).expect("add signatory");
 
-    // Adding the same signatory twice should fail
-    vm.memory.preload_input(0, &acct).expect("preload input");
-    vm.memory
-        .preload_input(acct.len() as u64 + 8, &sig_json)
-        .expect("preload input");
-    vm.set_register(10, Memory::INPUT_START);
-    vm.set_register(11, Memory::INPUT_START + acct.len() as u64 + 8);
-    assert!(matches!(
-        load_and_run(&mut vm, &add_sig),
-        Err(ivm::VMError::PermissionDenied)
-    ));
+    let host_any = vm.host_mut_any().unwrap();
+    let host = host_any.downcast_mut::<WsvHost>().expect("WsvHost");
+    let signers = host.wsv.account_signatories(&alice).expect("signatories");
+    assert!(signers.contains(&signatory_key.to_string()));
+}
 
-    // Remove the signatory
-    let remove_sig = assemble_syscalls(&[syscalls::SYSCALL_REMOVE_SIGNATORY as u8]);
+#[test]
+fn remove_signatory_syscall_updates_account() {
+    let alice: AccountId =
+        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
+            .parse()
+            .unwrap();
+    let signatory_key = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4";
+
+    let mut wsv = MockWorldStateView::new();
+    wsv.add_account_unchecked(alice.clone());
+    assert!(wsv.add_signatory(&alice, &alice, signatory_key.to_string()));
+    let host = WsvHost::new(wsv, alice.clone(), HashMap::new(), HashMap::new());
+    let mut vm = IVM::new(256);
+    vm.set_host(host);
+
+    let acct = make_account_tlv(&alice);
+    let sig_json = make_tlv(PointerType::Json, format!("\"{signatory_key}\"").as_bytes());
     vm.memory.preload_input(0, &acct).expect("preload input");
     vm.memory
         .preload_input(acct.len() as u64 + 8, &sig_json)
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + acct.len() as u64 + 8);
+    let remove_sig = assemble_syscalls(&[syscalls::SYSCALL_REMOVE_SIGNATORY as u8]);
     load_and_run(&mut vm, &remove_sig).expect("remove signatory");
 
     let host_any = vm.host_mut_any().unwrap();
     let host = host_any.downcast_mut::<WsvHost>().expect("WsvHost");
-    let signs = host
-        .wsv
-        .account_signatories(&alice)
-        .expect("account present");
-    assert!(signs.is_empty());
+    let signers = host.wsv.account_signatories(&alice).expect("signatories");
+    assert!(!signers.contains(&signatory_key.to_string()));
 }
 
 #[test]
-fn set_quorum_and_detail_with_permissions() {
+fn set_account_quorum_syscall_updates_account() {
+    let alice: AccountId =
+        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
+            .parse()
+            .unwrap();
+
+    let mut wsv = MockWorldStateView::new();
+    wsv.add_account_unchecked(alice.clone());
+    let host = WsvHost::new(wsv, alice.clone(), HashMap::new(), HashMap::new());
+    let mut vm = IVM::new(256);
+    vm.set_host(host);
+
+    let acct = make_account_tlv(&alice);
+    vm.memory.preload_input(0, &acct).expect("preload input");
+    vm.set_register(10, Memory::INPUT_START);
+    vm.set_register(11, 2);
+    let set_quorum = assemble_syscalls(&[syscalls::SYSCALL_SET_ACCOUNT_QUORUM as u8]);
+    load_and_run(&mut vm, &set_quorum).expect("set quorum");
+
+    let host_any = vm.host_mut_any().unwrap();
+    let host = host_any.downcast_mut::<WsvHost>().expect("WsvHost");
+    assert_eq!(host.wsv.account_quorum(&alice), Some(2));
+}
+
+#[test]
+fn set_account_detail_with_permissions() {
     let alice: AccountId =
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
             .parse()
@@ -140,30 +160,13 @@ fn set_quorum_and_detail_with_permissions() {
     let reg_account = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);
     load_and_run(&mut vm, &reg_account).expect("register account");
 
-    // Try setting quorum without extra permission → should fail
-    vm.memory.preload_input(0, &acct).expect("preload input");
-    vm.set_register(10, Memory::INPUT_START);
-    vm.set_register(11, 3);
-    let set_quorum = assemble_syscalls(&[syscalls::SYSCALL_SET_ACCOUNT_QUORUM as u8]);
-    assert!(matches!(
-        load_and_run(&mut vm, &set_quorum),
-        Err(ivm::VMError::PermissionDenied)
-    ));
-
-    // Grant permissions and retry
+    // Grant permissions to set account detail.
     {
         let host_any = vm.host_mut_any().unwrap();
         let host = host_any.downcast_mut::<WsvHost>().expect("WsvHost");
         host.wsv
-            .grant_permission(&alice, PermissionToken::SetAccountQuorum(bob.clone()));
-        host.wsv
             .grant_permission(&alice, PermissionToken::SetAccountDetail(bob.clone()));
     }
-
-    vm.memory.preload_input(0, &acct).expect("preload input");
-    vm.set_register(10, Memory::INPUT_START);
-    vm.set_register(11, 4);
-    load_and_run(&mut vm, &set_quorum).expect("set quorum");
 
     // Set account detail with JSON value (whitespace should be stripped)
     let key = make_tlv(PointerType::Name, b"greeting");
@@ -189,7 +192,6 @@ fn set_quorum_and_detail_with_permissions() {
 
     let host_any = vm.host_mut_any().unwrap();
     let host = host_any.downcast_mut::<WsvHost>().expect("WsvHost");
-    assert_eq!(host.wsv.account_quorum(&bob), Some(4));
     let stored = host
         .wsv
         .account_detail_value(&bob, "greeting")

@@ -2,7 +2,10 @@
 //! alongside functions for converting them into HTTP responses.
 
 use eyre::Result;
-use iroha_config::parameters::{actual::Torii as ToriiActual, defaults::torii as torii_defaults};
+use iroha_config::parameters::{
+    actual::{Pipeline as PipelineActual, Torii as ToriiActual},
+    defaults::pipeline as pipeline_defaults,
+};
 use iroha_data_model::{
     offline::{
         OfflineAllowanceRecord, OfflineCounterSummary, OfflineTransferRecord,
@@ -67,7 +70,7 @@ pub trait SortableQueryOutput {
     fn tiebreak_key(&self) -> Vec<u8>;
 }
 
-/// Query execution limits derived from Torii configuration.
+/// Query execution limits derived from configuration snapshots.
 #[derive(Debug, Copy, Clone)]
 pub struct QueryLimits {
     max_fetch_size: u64,
@@ -80,10 +83,16 @@ impl QueryLimits {
         Self::new(u64::from(cfg.app_api.max_fetch_size.get()))
     }
 
-    /// Construct limits from Torii defaults (used outside Torii contexts).
+    /// Construct limits from a Pipeline configuration snapshot.
+    #[must_use]
+    pub fn from_pipeline(cfg: &PipelineActual) -> Self {
+        Self::new(cfg.query_max_fetch_size)
+    }
+
+    /// Construct limits from pipeline defaults (used outside Torii contexts).
     #[must_use]
     pub fn from_defaults() -> Self {
-        Self::new(u64::from(torii_defaults::APP_API_MAX_FETCH_SIZE))
+        Self::new(pipeline_defaults::QUERY_MAX_FETCH_SIZE)
     }
 
     /// Construct limits from a maximum fetch size value.
@@ -479,6 +488,24 @@ where
     <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
     QueryOutputBatchBox: From<Vec<I::Item>>,
 {
+    let (output, _processed_items) =
+        apply_query_postprocessing_with_budget(iter, selector, params, limits, None)?;
+    Ok(output)
+}
+
+fn apply_query_postprocessing_with_budget<I>(
+    iter: I,
+    selector: SelectorTuple<I::Item>,
+    params: &QueryParams,
+    limits: QueryLimits,
+    budget_items: Option<u64>,
+) -> Result<(ErasedQueryIterator, u64), Error>
+where
+    I: Iterator<Item: SortableQueryOutput + Send + Sync + 'static>,
+    I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync + 'static,
+    <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
+    QueryOutputBatchBox: From<Vec<I::Item>>,
+{
     // Validate and pick the fetch (aka batch) size from params
     let fetch_size = params
         .fetch_size
@@ -490,15 +517,20 @@ where
     }
 
     // sort & paginate, erase the iterator with QueryBatchedErasedIterator
-    let output = if let Some(key) = params.sorting.sort_by_metadata_key.as_ref() {
+    let (output, processed_items) = if let Some(key) = params.sorting.sort_by_metadata_key.as_ref()
+    {
         // if sorting was requested, we need to retrieve all the results first
-        let mut pairs: Vec<(Option<Json>, Vec<u8>, I::Item)> = iter
-            .map(|value| {
-                let key = value.get_metadata_sorting_key(key);
-                let tb = value.tiebreak_key();
-                (key, tb, value)
-            })
-            .collect();
+        let mut count = 0_u64;
+        let mut pairs: Vec<(Option<Json>, Vec<u8>, I::Item)> = Vec::new();
+        for value in iter {
+            count = count.saturating_add(1);
+            if budget_items.is_some_and(|limit| count > limit) {
+                return Err(Error::GasBudgetExceeded);
+            }
+            let key = value.get_metadata_sorting_key(key);
+            let tb = value.tiebreak_key();
+            pairs.push((key, tb, value));
+        }
         // Stable sort by metadata value; missing keys always sort last.
         let order = params.sorting.order.unwrap_or(SortOrder::Asc);
         pairs.sort_by(|(a_key, a_tb, _), (b_key, b_tb, _)| {
@@ -528,25 +560,33 @@ where
             .paginate(params.pagination)
             .collect();
 
-        ErasedQueryIterator::new(output.into_iter(), selector, fetch_size)
+        (
+            ErasedQueryIterator::new(output.into_iter(), selector, fetch_size),
+            count,
+        )
     } else {
         // FP: this collect is very deliberate
         #[allow(clippy::needless_collect)]
-        let output = iter
-            .paginate(params.pagination)
-            // it should theoretically be possible to not collect the results into a vec and build the response lazily
-            // but:
-            // - the iterator is bound to the 'state lifetime and this lifetime should somehow be erased
-            // - `ErasedQueryIterator::new` requires an `ExactSizeIterator + 'static`, so we need to
-            //   materialize the items to drop the borrowed lifetime. Keeping them borrowed would
-            //   require a larger refactor of the erasure layer.
-            // - for small queries this might not be efficient
-            .collect::<Vec<_>>();
+        let mut count = 0_u64;
+        let output = {
+            let mut output = Vec::new();
+            for value in iter.paginate(params.pagination) {
+                count = count.saturating_add(1);
+                if budget_items.is_some_and(|limit| count > limit) {
+                    return Err(Error::GasBudgetExceeded);
+                }
+                output.push(value);
+            }
+            output
+        };
 
-        ErasedQueryIterator::new(output.into_iter(), selector, fetch_size)
+        (
+            ErasedQueryIterator::new(output.into_iter(), selector, fetch_size),
+            count,
+        )
     };
 
-    Ok(output)
+    Ok((output, processed_items))
 }
 
 fn validate_query_request_limits(
@@ -577,7 +617,7 @@ mod fetch_size_limit_tests {
         prelude::SelectorTuple,
         query::{
             QueryWithParams,
-            parameters::{FetchSize, QueryParams},
+            parameters::{FetchSize, Pagination, QueryParams, Sorting},
         },
     };
     use iroha_primitives::json::Json;
@@ -625,6 +665,42 @@ app_api_max_fetch_size = {max_fetch_size}
 
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+
+[streaming]
+identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
+identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
+"#
+        );
+        let mut file = NamedTempFile::new().expect("temp config file");
+        file.write_all(config.as_bytes()).expect("write config");
+        let source =
+            iroha_config::base::toml::TomlSource::from_file(file.path()).expect("read config");
+        ConfigRoot::from_toml_source(source).expect("load minimal config")
+    }
+
+    fn minimal_root_with_pipeline_max_fetch(max_fetch_size: u64) -> ConfigRoot {
+        let config = format!(
+            r#"
+chain = "00000000-0000-0000-0000-000000000000"
+public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
+private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
+
+[network]
+address = "addr:127.0.0.1:1337#8F78"
+public_address = "addr:127.0.0.1:1337#8F78"
+
+[torii]
+address = "addr:127.0.0.1:8080#8942"
+
+[pipeline]
+query_max_fetch_size = {max_fetch_size}
+
+[genesis]
+public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+
+[streaming]
+identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
+identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
 "#
         );
         let mut file = NamedTempFile::new().expect("temp config file");
@@ -686,6 +762,33 @@ public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B704
     }
 
     #[test]
+    fn postprocessing_reports_processed_items_for_sorted_queries() {
+        let key: iroha_data_model::name::Name = "rank".parse().expect("name");
+        let params = QueryParams {
+            pagination: Pagination::new(Some(nonzero!(1_u64)), 0),
+            sorting: Sorting::by_metadata_key(key),
+            fetch_size: FetchSize::new(Some(nonzero!(1_u64))),
+        };
+        let items = vec![
+            Permission::new("p1".to_owned(), Json::from(false)),
+            Permission::new("p2".to_owned(), Json::from(false)),
+            Permission::new("p3".to_owned(), Json::from(false)),
+        ];
+
+        let (iter, processed_items) = apply_query_postprocessing_with_budget(
+            items.into_iter(),
+            SelectorTuple::default(),
+            &params,
+            QueryLimits::new(10),
+            None,
+        )
+        .expect("postprocess sorted query");
+
+        assert_eq!(processed_items, 3);
+        assert_eq!(iter.remaining(), 1);
+    }
+
+    #[test]
     fn query_limits_new_clamps_to_one() {
         let request_ok = request_with_fetch_size(1);
         validate_query_request_limits(&request_ok, QueryLimits::new(0))
@@ -708,6 +811,20 @@ public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B704
         let request = request_with_fetch_size(4);
         let err = validate_query_request_limits(&request, limits)
             .expect_err("configured max fetch should be enforced");
+        assert!(matches!(
+            err,
+            ValidationFail::QueryFailed(Error::FetchSizeTooBig)
+        ));
+    }
+
+    #[test]
+    fn query_limits_from_pipeline_uses_configured_max_fetch() {
+        let root = minimal_root_with_pipeline_max_fetch(3);
+        let limits = QueryLimits::from_pipeline(&root.pipeline);
+
+        let request = request_with_fetch_size(4);
+        let err = validate_query_request_limits(&request, limits)
+            .expect_err("configured pipeline max fetch should be enforced");
         assert!(matches!(
             err,
             ValidationFail::QueryFailed(Error::FetchSizeTooBig)
@@ -786,6 +903,11 @@ impl ValidQueryRequest {
         limits: QueryLimits,
     ) -> Result<Self, ValidationFail> {
         ensure_query_registry_initialized();
+        if matches!(&query, QueryRequest::Continue(_)) {
+            return Err(ValidationFail::NotPermitted(
+                "QueryRequest::Continue is not supported in IVM".to_string(),
+            ));
+        }
         validate_query_request_limits(&query, limits)?;
         let authority = state.authority().clone();
         state.validate_query(&authority, &query)?;
@@ -2123,18 +2245,39 @@ impl ValidQueryRequest {
     ///
     /// # Errors
     /// Returns an error if the query execution fails.
-    #[allow(clippy::too_many_lines)]
     pub fn execute_ephemeral(
         self,
         live_query_store: &LiveQueryStoreHandle,
         state: &impl StateReadOnly,
         authority: &AccountId,
     ) -> Result<QueryResponse, Error> {
+        self.execute_ephemeral_with_stats(live_query_store, state, authority, None)
+            .map(|(response, _)| response)
+    }
+
+    pub(crate) fn execute_ephemeral_with_stats(
+        self,
+        live_query_store: &LiveQueryStoreHandle,
+        state: &impl StateReadOnly,
+        authority: &AccountId,
+        budget_items: Option<u64>,
+    ) -> Result<(QueryResponse, u64), Error> {
+        self.execute_ephemeral_inner_with_stats(live_query_store, state, authority, budget_items)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn execute_ephemeral_inner_with_stats(
+        self,
+        live_query_store: &LiveQueryStoreHandle,
+        state: &impl StateReadOnly,
+        authority: &AccountId,
+        budget_items: Option<u64>,
+    ) -> Result<(QueryResponse, u64), Error> {
         let Self { request, limits } = self;
         match request {
             QueryRequest::Singular(singular_query) => {
                 let output = singular_query.execute(state)?;
-                Ok(QueryResponse::Singular(output))
+                Ok((QueryResponse::Singular(output), 1))
             }
             QueryRequest::Start(iter_query) => {
                 use iroha_data_model::query;
@@ -2160,12 +2303,13 @@ impl ValidQueryRequest {
                     qbox: &query::QueryBox<query::QueryOutputBatchBox>,
                     params: &query::parameters::QueryParams,
                     limits: QueryLimits,
+                    budget_items: Option<u64>,
                     state: &impl StateReadOnly,
                     live_query_store: &LiveQueryStoreHandle,
                     _authority: &AccountId,
                     __stored_cursor_budget: Option<u64>,
                     decode: F,
-                ) -> Result<Option<QueryResponse>, Error>
+                ) -> Result<Option<(QueryResponse, u64)>, Error>
                 where
                     T: Send + Sync + 'static,
                     Q: super::super::ValidQuery<Item = T>,
@@ -2189,14 +2333,15 @@ impl ValidQueryRequest {
                         let iter = ValidQuery::execute(concrete, erased.predicate_cloned(), state)?;
 
                         // Postprocess: sort/paginate/project and return only the first batch (no cursor)
-                        let batched = apply_query_postprocessing(
+                        let (batched, processed_items) = apply_query_postprocessing_with_budget(
                             iter,
                             erased.selector_cloned(),
                             params,
                             limits,
+                            budget_items,
                         )?;
                         let output = live_query_store.handle_iter_start_ephemeral(batched)?;
-                        return Ok(Some(QueryResponse::Iterable(output)));
+                        return Ok(Some((QueryResponse::Iterable(output), processed_items)));
                     }
                     Ok(None)
                 }
@@ -2226,11 +2371,17 @@ impl ValidQueryRequest {
                                 let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
                                     dec(&iter_query.selector_bytes)?;
                                 let iter = ValidQuery::execute(<$find>::new(), pred, state)?;
-                                let batched =
-                                    apply_query_postprocessing(iter, sel, params, limits)?;
+                                let (batched, processed_items) =
+                                    apply_query_postprocessing_with_budget(
+                                        iter,
+                                        sel,
+                                        params,
+                                        limits,
+                                        budget_items,
+                                    )?;
                                 let output =
                                     live_query_store.handle_iter_start_ephemeral(batched)?;
-                                return Ok(QueryResponse::Iterable(output));
+                                return Ok((QueryResponse::Iterable(output), processed_items));
                             }};
                             // For queries that always require a payload (e.g., FindPermissionsByAccountId)
                             (require_payload $itemty:ty, $find:ty) => {{
@@ -2246,11 +2397,17 @@ impl ValidQueryRequest {
                                     Error::Conversion("missing or malformed query payload".into())
                                 })?;
                                 let iter = ValidQuery::execute(concrete, pred, state)?;
-                                let batched =
-                                    apply_query_postprocessing(iter, sel, params, limits)?;
+                                let (batched, processed_items) =
+                                    apply_query_postprocessing_with_budget(
+                                        iter,
+                                        sel,
+                                        params,
+                                        limits,
+                                        budget_items,
+                                    )?;
                                 let output =
                                     live_query_store.handle_iter_start_ephemeral(batched)?;
-                                return Ok(QueryResponse::Iterable(output));
+                                return Ok((QueryResponse::Iterable(output), processed_items));
                             }};
                         }
                         match iter_query.item {
@@ -2370,7 +2527,7 @@ impl ValidQueryRequest {
                     return Err(Error::Conversion("missing iterator payload".into()));
                 };
 
-                if let Some(resp) = run_dispatch::<
+                if let Some((resp, processed_items)) = run_dispatch::<
                     iroha_data_model::domain::Domain,
                     iroha_data_model::query::domain::prelude::FindDomains,
                     _,
@@ -2378,6 +2535,7 @@ impl ValidQueryRequest {
                     qbox,
                     params,
                     limits,
+                    budget_items,
                     state,
                     live_query_store,
                     authority,
@@ -2387,9 +2545,9 @@ impl ValidQueryRequest {
                             .or(Some(iroha_data_model::query::domain::prelude::FindDomains))
                     },
                 )? {
-                    return Ok(resp);
+                    return Ok((resp, processed_items));
                 }
-                if let Some(resp) = run_dispatch::<
+                if let Some((resp, processed_items)) = run_dispatch::<
                     iroha_data_model::account::Account,
                     iroha_data_model::query::account::prelude::FindAccounts,
                     _,
@@ -2397,6 +2555,7 @@ impl ValidQueryRequest {
                     qbox,
                     params,
                     limits,
+                    budget_items,
                     state,
                     live_query_store,
                     authority,
@@ -2410,9 +2569,9 @@ impl ValidQueryRequest {
                         ))
                     },
                 )? {
-                    return Ok(resp);
+                    return Ok((resp, processed_items));
                 }
-                if let Some(resp) = run_dispatch::<
+                if let Some((resp, processed_items)) = run_dispatch::<
                     iroha_data_model::account::Account,
                     iroha_data_model::query::account::prelude::FindAccountsWithAsset,
                     _,
@@ -2420,6 +2579,7 @@ impl ValidQueryRequest {
                     qbox,
                     params,
                     limits,
+                    budget_items,
                     state,
                     live_query_store,
                     authority,
@@ -2430,9 +2590,9 @@ impl ValidQueryRequest {
                         >(e)
                     },
                 )? {
-                    return Ok(resp);
+                    return Ok((resp, processed_items));
                 }
-                if let Some(resp) = run_dispatch::<
+                if let Some((resp, processed_items)) = run_dispatch::<
                     iroha_data_model::asset::value::Asset,
                     iroha_data_model::query::asset::prelude::FindAssets,
                     _,
@@ -2440,6 +2600,7 @@ impl ValidQueryRequest {
                     qbox,
                     params,
                     limits,
+                    budget_items,
                     state,
                     live_query_store,
                     authority,
@@ -2449,9 +2610,9 @@ impl ValidQueryRequest {
                             .or(Some(iroha_data_model::query::asset::prelude::FindAssets))
                     },
                 )? {
-                    return Ok(resp);
+                    return Ok((resp, processed_items));
                 }
-                if let Some(resp) = run_dispatch::<
+                if let Some((resp, processed_items)) = run_dispatch::<
                     iroha_data_model::asset::definition::AssetDefinition,
                     iroha_data_model::query::asset::prelude::FindAssetsDefinitions,
                     _,
@@ -2459,6 +2620,7 @@ impl ValidQueryRequest {
                     qbox,
                     params,
                     limits,
+                    budget_items,
                     state,
                     live_query_store,
                     authority,
@@ -2472,9 +2634,9 @@ impl ValidQueryRequest {
                         ))
                     },
                 )? {
-                    return Ok(resp);
+                    return Ok((resp, processed_items));
                 }
-                if let Some(resp) = run_dispatch::<
+                if let Some((resp, processed_items)) = run_dispatch::<
                     iroha_data_model::nft::Nft,
                     iroha_data_model::query::nft::prelude::FindNfts,
                     _,
@@ -2482,6 +2644,7 @@ impl ValidQueryRequest {
                     qbox,
                     params,
                     limits,
+                    budget_items,
                     state,
                     live_query_store,
                     authority,
@@ -2491,9 +2654,9 @@ impl ValidQueryRequest {
                             .or(Some(iroha_data_model::query::nft::prelude::FindNfts))
                     },
                 )? {
-                    return Ok(resp);
+                    return Ok((resp, processed_items));
                 }
-                if let Some(resp) = run_dispatch::<
+                if let Some((resp, processed_items)) = run_dispatch::<
                     iroha_data_model::role::Role,
                     iroha_data_model::query::role::prelude::FindRoles,
                     _,
@@ -2501,6 +2664,7 @@ impl ValidQueryRequest {
                     qbox,
                     params,
                     limits,
+                    budget_items,
                     state,
                     live_query_store,
                     authority,
@@ -2510,9 +2674,9 @@ impl ValidQueryRequest {
                             .or(Some(iroha_data_model::query::role::prelude::FindRoles))
                     },
                 )? {
-                    return Ok(resp);
+                    return Ok((resp, processed_items));
                 }
-                if let Some(resp) = run_dispatch::<
+                if let Some((resp, processed_items)) = run_dispatch::<
                     iroha_data_model::role::RoleId,
                     iroha_data_model::query::role::prelude::FindRoleIds,
                     _,
@@ -2520,6 +2684,7 @@ impl ValidQueryRequest {
                     qbox,
                     params,
                     limits,
+                    budget_items,
                     state,
                     live_query_store,
                     authority,
@@ -2529,9 +2694,9 @@ impl ValidQueryRequest {
                             .or(Some(iroha_data_model::query::role::prelude::FindRoleIds))
                     },
                 )? {
-                    return Ok(resp);
+                    return Ok((resp, processed_items));
                 }
-                if let Some(resp) = run_dispatch::<
+                if let Some((resp, processed_items)) = run_dispatch::<
                     iroha_data_model::peer::PeerId,
                     iroha_data_model::query::peer::prelude::FindPeers,
                     _,
@@ -2539,6 +2704,7 @@ impl ValidQueryRequest {
                     qbox,
                     params,
                     limits,
+                    budget_items,
                     state,
                     live_query_store,
                     authority,
@@ -2548,9 +2714,9 @@ impl ValidQueryRequest {
                             .or(Some(iroha_data_model::query::peer::prelude::FindPeers))
                     },
                 )? {
-                    return Ok(resp);
+                    return Ok((resp, processed_items));
                 }
-                if let Some(resp) = run_dispatch::<
+                if let Some((resp, processed_items)) = run_dispatch::<
                     iroha_data_model::trigger::TriggerId,
                     iroha_data_model::query::trigger::prelude::FindActiveTriggerIds,
                     _,
@@ -2558,6 +2724,7 @@ impl ValidQueryRequest {
                     qbox,
                     params,
                     limits,
+                    budget_items,
                     state,
                     live_query_store,
                     authority,
@@ -2571,9 +2738,9 @@ impl ValidQueryRequest {
                         ))
                     },
                 )? {
-                    return Ok(resp);
+                    return Ok((resp, processed_items));
                 }
-                if let Some(resp) = run_dispatch::<
+                if let Some((resp, processed_items)) = run_dispatch::<
                     iroha_data_model::trigger::Trigger,
                     iroha_data_model::query::trigger::prelude::FindTriggers,
                     _,
@@ -2581,6 +2748,7 @@ impl ValidQueryRequest {
                     qbox,
                     params,
                     limits,
+                    budget_items,
                     state,
                     live_query_store,
                     authority,
@@ -2594,9 +2762,9 @@ impl ValidQueryRequest {
                         ))
                     },
                 )? {
-                    return Ok(resp);
+                    return Ok((resp, processed_items));
                 }
-                if let Some(resp) = run_dispatch::<
+                if let Some((resp, processed_items)) = run_dispatch::<
                     iroha_data_model::query::CommittedTransaction,
                     iroha_data_model::query::transaction::prelude::FindTransactions,
                     _,
@@ -2604,6 +2772,7 @@ impl ValidQueryRequest {
                     qbox,
                     params,
                     limits,
+                    budget_items,
                     state,
                     live_query_store,
                     authority,
@@ -2617,9 +2786,9 @@ impl ValidQueryRequest {
                         ))
                     },
                 )? {
-                    return Ok(resp);
+                    return Ok((resp, processed_items));
                 }
-                if let Some(resp) = run_dispatch::<
+                if let Some((resp, processed_items)) = run_dispatch::<
                     iroha_data_model::block::SignedBlock,
                     iroha_data_model::query::block::prelude::FindBlocks,
                     _,
@@ -2627,6 +2796,7 @@ impl ValidQueryRequest {
                     qbox,
                     params,
                     limits,
+                    budget_items,
                     state,
                     live_query_store,
                     authority,
@@ -2636,9 +2806,9 @@ impl ValidQueryRequest {
                             .or(Some(iroha_data_model::query::block::prelude::FindBlocks))
                     },
                 )? {
-                    return Ok(resp);
+                    return Ok((resp, processed_items));
                 }
-                if let Some(resp) = run_dispatch::<
+                if let Some((resp, processed_items)) = run_dispatch::<
                     iroha_data_model::block::BlockHeader,
                     iroha_data_model::query::block::prelude::FindBlockHeaders,
                     _,
@@ -2646,6 +2816,7 @@ impl ValidQueryRequest {
                     qbox,
                     params,
                     limits,
+                    budget_items,
                     state,
                     live_query_store,
                     authority,
@@ -2659,9 +2830,9 @@ impl ValidQueryRequest {
                     ))
                     },
                 )? {
-                    return Ok(resp);
+                    return Ok((resp, processed_items));
                 }
-                if let Some(resp) = run_dispatch::<
+                if let Some((resp, processed_items)) = run_dispatch::<
                     iroha_data_model::proof::ProofRecord,
                     iroha_data_model::query::proof::prelude::FindProofRecords,
                     _,
@@ -2669,6 +2840,7 @@ impl ValidQueryRequest {
                     qbox,
                     params,
                     limits,
+                    budget_items,
                     state,
                     live_query_store,
                     authority,
@@ -2682,7 +2854,7 @@ impl ValidQueryRequest {
                             ))
                     },
                 )? {
-                    return Ok(resp);
+                    return Ok((resp, processed_items));
                 }
 
                 Err(Error::Conversion(
@@ -2699,8 +2871,16 @@ impl ValidQueryRequest {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::many_single_char_names)]
+    use core::time::Duration;
+    use std::borrow::Cow;
+
     use iroha_crypto::{Algorithm, Hash, KeyPair};
-    use iroha_data_model::query::{dsl::CompoundPredicate, prelude::FindParameters};
+    use iroha_data_model::{
+        AccountId, ChainId, DomainId, Level,
+        isi::Log,
+        query::{dsl::CompoundPredicate, prelude::FindParameters},
+        transaction::TransactionBuilder,
+    };
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, gen_account_in};
     use nonzero_ext::nonzero;
     use tokio::test;
@@ -2715,6 +2895,21 @@ mod tests {
         sumeragi::network_topology::Topology,
         tx::AcceptedTransaction,
     };
+
+    fn dummy_accepted_transaction() -> AcceptedTransaction<'static> {
+        let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
+            .parse()
+            .expect("valid chain id");
+        let domain_id: DomainId = "dummy".parse().expect("valid domain id");
+        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(domain_id, keypair.public_key().clone());
+        let mut builder = TransactionBuilder::new(chain_id, authority);
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx = builder
+            .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
+            .sign(keypair.private_key());
+        AcceptedTransaction::new_unchecked(Cow::Owned(tx))
+    }
 
     #[tokio::test]
     async fn sorting_by_metadata_key_and_fetch_size() {
@@ -2870,6 +3065,49 @@ mod tests {
         assert!(validator.validated);
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn validate_for_ivm_rejects_continue() {
+        use iroha_data_model::query::parameters::ForwardCursor;
+
+        struct DummyValidator {
+            authority: AccountId,
+        }
+
+        impl IvmQueryValidator for DummyValidator {
+            fn authority(&self) -> &AccountId {
+                &self.authority
+            }
+
+            fn validate_query(
+                &mut self,
+                _authority: &AccountId,
+                _query: &QueryRequest,
+            ) -> Result<(), ValidationFail> {
+                Ok(())
+            }
+        }
+
+        let mut validator = DummyValidator {
+            authority: ALICE_ID.clone(),
+        };
+        let cursor = ForwardCursor {
+            query: "ivm-cursor".to_string(),
+            cursor: nonzero!(1_u64),
+            gas_budget: None,
+        };
+        let request = QueryRequest::Continue(cursor);
+
+        let err = match ValidQueryRequest::validate_for_ivm(
+            request,
+            &mut validator,
+            QueryLimits::default(),
+        ) {
+            Ok(_) => panic!("IVM must reject query continuations"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, ValidationFail::NotPermitted(msg) if msg.contains("Continue")));
     }
 
     fn world_with_test_domains() -> World {
@@ -4517,13 +4755,13 @@ mod tests {
         SetKeyValue::domain(alpha_id.clone(), key.clone(), Json::new(2_u32))
             .execute(&ALICE_ID, &mut state_tx)?;
 
-        // Apply world changes and commit an empty block to satisfy transaction storage invariants
+        // Apply world changes and commit a minimal block to satisfy transaction storage invariants
         state_tx.apply();
 
         let (peer_pk, _) = bls_test_keypair().into_parts();
         let peer_id = PeerId::new(peer_pk);
         let topology = Topology::new(vec![peer_id]);
-        let unverified_block = BlockBuilder::new(Vec::new())
+        let unverified_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, parent_block.as_deref())
             .sign(ALICE_KEYPAIR.private_key())
             .unpack(|_| {});

@@ -50,6 +50,7 @@ const SENSITIVE_FIELD_KEYWORDS: &[&str] = &[
     "jwt",
     "bearer",
     "api_key",
+    "api_key_hash",
     "apikey",
     "private_key",
     "privkey",

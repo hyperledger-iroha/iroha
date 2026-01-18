@@ -302,6 +302,8 @@ __all__ = [
     "audio_frame_adapter",
     "FeedbackHintFrame",
     "feedback_hint_frame_adapter",
+    "SyncDiagnostics",
+    "sync_diagnostics_adapter",
     "ReceiverReport",
     "receiver_report_adapter",
     "EncryptionSuite",

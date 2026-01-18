@@ -7,6 +7,8 @@ payloads. Use `cargo xtask norito-rpc-fixtures` to regenerate the canonical set
 from `java/iroha_android/src/test/resources/transaction_payloads.json`, and run
 `cargo xtask norito-rpc-verify` to validate the hashes, lengths, and SDK copies
 whenever transaction layouts intentionally change.
+Fixture regeneration rewrites `transaction_payloads.json` with the freshly
+encoded payloads so SDK fixtures stay aligned with the current Norito encoding.
 
 `schema_hashes.json` lists the Norito schema hash for every DTO that the NRPC
 spec references (transactions, queries, and the SNS registrar payloads). It is

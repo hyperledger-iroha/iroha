@@ -14,7 +14,6 @@ pub mod hybrid;
 /// Key exchange protocols.
 pub mod kex;
 mod merkle;
-#[cfg(feature = "ml-dsa")]
 mod mldsa_seed;
 #[cfg(not(feature = "ffi_import"))]
 mod multihash;
@@ -54,7 +53,6 @@ pub mod vrf;
 pub mod sm;
 
 use core::{fmt, str::FromStr};
-#[cfg(feature = "ml-dsa")]
 use std::sync::Arc;
 use std::{
     borrow::ToOwned as _,
@@ -169,7 +167,6 @@ impl KeyPair {
             Algorithm::Secp256k1 => {
                 secp256k1::EcdsaSecp256k1Sha256::keypair(KeyGenOption::Random).into()
             }
-            #[cfg(feature = "ml-dsa")]
             Algorithm::MlDsa => {
                 use pqcrypto_dilithium::dilithium3 as dilithium;
                 use pqcrypto_traits::sign::PublicKey as _;
@@ -238,7 +235,6 @@ impl KeyPair {
             Algorithm::Secp256k1 => {
                 secp256k1::EcdsaSecp256k1Sha256::keypair(KeyGenOption::UseSeed(seed)).into()
             }
-            #[cfg(feature = "ml-dsa")]
             Algorithm::MlDsa => {
                 let (public, private) = mldsa_seed::dilithium3::keypair_from_seed(&seed)
                     .expect("seeded ML-DSA key generation must produce a valid key pair");
@@ -323,7 +319,6 @@ impl KeyPair {
                 .map_err(|err| Error::KeyGen(err.to_string()))?;
         }
 
-        #[cfg(feature = "ml-dsa")]
         if algorithm == Algorithm::MlDsa {
             use pqcrypto_dilithium::dilithium3 as dilithium;
             use pqcrypto_traits::sign::PublicKey as _;
@@ -466,7 +461,6 @@ impl From<(bls::BlsSmallPublicKey, bls::BlsSmallPrivateKey)> for KeyPair {
 enum PublicKeyFull {
     Ed25519(ed25519::PublicKey),
     Secp256k1(secp256k1::PublicKey),
-    #[cfg(feature = "ml-dsa")]
     MlDsa(Vec<u8>),
     #[cfg(feature = "gost")]
     Gost {
@@ -489,7 +483,6 @@ impl PublicKeyFull {
             }
             Algorithm::Secp256k1 => secp256k1::EcdsaSecp256k1Sha256::parse_public_key(payload)
                 .map(PublicKeyFull::Secp256k1),
-            #[cfg(feature = "ml-dsa")]
             Algorithm::MlDsa => {
                 use pqcrypto_dilithium::dilithium3 as dilithium;
                 use pqcrypto_traits::sign::PublicKey as _;
@@ -527,7 +520,6 @@ impl PublicKeyFull {
         match self {
             Self::Ed25519(key) => key.as_bytes().to_const_vec(),
             Self::Secp256k1(key) => key.to_sec1_bytes().to_const_vec(),
-            #[cfg(feature = "ml-dsa")]
             Self::MlDsa(key) => key.clone().to_const_vec(),
             #[cfg(feature = "gost")]
             Self::Gost { key, .. } => key.as_bytes().to_const_vec(),
@@ -552,7 +544,6 @@ impl PublicKeyFull {
         match self {
             Self::Ed25519(_) => Algorithm::Ed25519,
             Self::Secp256k1(_) => Algorithm::Secp256k1,
-            #[cfg(feature = "ml-dsa")]
             Self::MlDsa(_) => Algorithm::MlDsa,
             #[cfg(feature = "gost")]
             Self::Gost { algorithm, .. } => *algorithm,
@@ -644,12 +635,11 @@ pub fn secp256k1_verify_batch_deterministic(
 }
 
 /// Deterministic PQC (ML‑DSA Dilithium3) batch verification wrapper.
-/// Compiles only with the `ml-dsa` feature. Verifies each signature independently.
+/// Verifies each signature independently.
 ///
 /// # Errors
 /// Returns [`Error::BadSignature`] when the input is empty, the input lengths differ,
 /// or when signature validation fails.
-#[cfg(feature = "ml-dsa")]
 pub fn pqc_verify_batch_deterministic(
     messages: &[&[u8]],
     signatures: &[&[u8]],
@@ -776,7 +766,7 @@ fn bls_collect_pks_with_pop<'a>(
 }
 
 /// Attempt aggregate verification for BLS (normal) when all messages are identical.
-/// Requires a valid Proof-of-Possession (PoP) per public key to prevent rogue-key attacks.
+/// Requires a valid Proof-of-Possession (`PoP`) per public key to prevent rogue-key attacks.
 /// Fallback: per-signature verify inside this function. Deterministic and hardware-stable.
 ///
 /// # Errors
@@ -988,7 +978,7 @@ pub fn bls_small_verify_aggregate_multi_message(
     }
 }
 /// Attempt aggregate verification for BLS (small) when all messages are identical.
-/// Requires a valid Proof-of-Possession (PoP) per public key to prevent rogue-key attacks.
+/// Requires a valid Proof-of-Possession (`PoP`) per public key to prevent rogue-key attacks.
 /// Fallback: per-signature verify inside this function.
 ///
 /// # Errors
@@ -1029,7 +1019,7 @@ pub fn bls_normal_aggregate_signatures(signatures: &[&[u8]]) -> Result<Vec<u8>, 
 }
 
 /// Verify a pre-aggregated BLS (normal) signature for the same-message case against a set of public keys.
-/// Requires a valid Proof-of-Possession (PoP) per public key to prevent rogue-key attacks.
+/// Requires a valid Proof-of-Possession (`PoP`) per public key to prevent rogue-key attacks.
 ///
 /// # Errors
 /// Returns `Err(Error::BadSignature)` on parse/verify failure.
@@ -1178,7 +1168,6 @@ pub fn ed25519_verify_aggregate(
 ///
 /// # Errors
 /// Returns [`Error::BadSignature`] when the inputs are inconsistent or any signature fails verification.
-#[cfg(feature = "ml-dsa")]
 pub fn pqc_verify_aggregate(
     messages: &[&[u8]],
     signatures: &[&[u8]],
@@ -1209,7 +1198,6 @@ impl PublicKeyCompact {
         let algorithm: u8 = match algorithm {
             Algorithm::Ed25519 => 0,
             Algorithm::Secp256k1 => 1,
-            #[cfg(feature = "ml-dsa")]
             Algorithm::MlDsa => 4,
             #[cfg(feature = "gost")]
             Algorithm::Gost3410_2012_256ParamSetA => 5,
@@ -1605,7 +1593,6 @@ impl IntoSchema for PublicKey {
 impl From<PrivateKey> for PublicKey {
     fn from(private_key: PrivateKey) -> Self {
         use crate::secrecy::ExposeSecret;
-        #[cfg(feature = "ml-dsa")]
         if private_key.algorithm() == Algorithm::MlDsa {
             let derived = {
                 let secret = match private_key.0.expose_secret() {
@@ -1628,7 +1615,6 @@ impl From<PrivateKey> for PublicKey {
                 ))
                 .0,
             ),
-            #[cfg(feature = "ml-dsa")]
             PrivateKeyInner::MlDsa(_) => unreachable!("handled ML-DSA earlier"),
             #[cfg(feature = "gost")]
             PrivateKeyInner::Gost { algorithm, secret } => {
@@ -1655,18 +1641,15 @@ impl From<PrivateKey> for PublicKey {
     }
 }
 
-#[cfg(feature = "ml-dsa")]
 #[derive(Clone)]
 struct MlDsaSecretKey {
     inner: Arc<MlDsaSecretKeyInner>,
 }
 
-#[cfg(feature = "ml-dsa")]
 struct MlDsaSecretKeyInner {
     secret: pqcrypto_dilithium::dilithium3::SecretKey,
 }
 
-#[cfg(feature = "ml-dsa")]
 impl MlDsaSecretKey {
     fn new(inner: &pqcrypto_dilithium::dilithium3::SecretKey) -> Self {
         Self {
@@ -1698,13 +1681,12 @@ impl MlDsaSecretKey {
         sig.as_bytes().to_vec()
     }
 
-    #[cfg(all(test, feature = "ml-dsa"))]
+    #[cfg(test)]
     fn strong_count(&self) -> usize {
         Arc::strong_count(&self.inner)
     }
 }
 
-#[cfg(feature = "ml-dsa")]
 impl PartialEq for MlDsaSecretKey {
     fn eq(&self, other: &Self) -> bool {
         use pqcrypto_traits::sign::SecretKey as _;
@@ -1712,13 +1694,10 @@ impl PartialEq for MlDsaSecretKey {
     }
 }
 
-#[cfg(feature = "ml-dsa")]
 impl Eq for MlDsaSecretKey {}
 
-#[cfg(feature = "ml-dsa")]
 impl ZeroizeOnDrop for MlDsaSecretKey {}
 
-#[cfg(feature = "ml-dsa")]
 #[allow(unsafe_code)]
 impl Drop for MlDsaSecretKeyInner {
     fn drop(&mut self) {
@@ -1740,7 +1719,6 @@ impl Drop for MlDsaSecretKeyInner {
 enum PrivateKeyInner {
     Ed25519(ed25519::PrivateKey),
     Secp256k1(secp256k1::PrivateKey),
-    #[cfg(feature = "ml-dsa")]
     MlDsa(MlDsaSecretKey),
     #[cfg(feature = "gost")]
     Gost {
@@ -1775,7 +1753,6 @@ impl PartialEq for PrivateKey {
         match (self.0.expose_secret(), other.0.expose_secret()) {
             (PrivateKeyInner::Ed25519(l), PrivateKeyInner::Ed25519(r)) => l == r,
             (PrivateKeyInner::Secp256k1(l), PrivateKeyInner::Secp256k1(r)) => l == r,
-            #[cfg(feature = "ml-dsa")]
             (PrivateKeyInner::MlDsa(l), PrivateKeyInner::MlDsa(r)) => l == r,
             #[cfg(feature = "gost")]
             (
@@ -1818,7 +1795,6 @@ impl PrivateKey {
             }
             Algorithm::Secp256k1 => secp256k1::EcdsaSecp256k1Sha256::parse_private_key(payload)
                 .map(PrivateKeyInner::Secp256k1),
-            #[cfg(feature = "ml-dsa")]
             Algorithm::MlDsa => MlDsaSecretKey::from_bytes(payload).map(PrivateKeyInner::MlDsa),
             #[cfg(feature = "gost")]
             Algorithm::Gost3410_2012_256ParamSetA
@@ -1864,7 +1840,6 @@ impl PrivateKey {
         match self.0.expose_secret() {
             PrivateKeyInner::Ed25519(_) => Algorithm::Ed25519,
             PrivateKeyInner::Secp256k1(_) => Algorithm::Secp256k1,
-            #[cfg(feature = "ml-dsa")]
             PrivateKeyInner::MlDsa(_) => Algorithm::MlDsa,
             #[cfg(feature = "gost")]
             PrivateKeyInner::Gost { algorithm, .. } => *algorithm,
@@ -1883,7 +1858,6 @@ impl PrivateKey {
         match self.0.expose_secret() {
             PrivateKeyInner::Ed25519(key) => key.to_bytes().to_vec(),
             PrivateKeyInner::Secp256k1(key) => key.to_bytes().to_vec(),
-            #[cfg(feature = "ml-dsa")]
             PrivateKeyInner::MlDsa(key) => key.to_vec(),
             #[cfg(feature = "gost")]
             PrivateKeyInner::Gost { secret, .. } => secret.as_bytes().to_vec(),
@@ -1993,7 +1967,6 @@ impl Drop for PrivateKeyInner {
             PrivateKeyInner::Secp256k1(key) => {
                 assert_will_zeroize_on_drop(key);
             }
-            #[cfg(feature = "ml-dsa")]
             PrivateKeyInner::MlDsa(key) => {
                 assert_will_zeroize_on_drop(key);
             }
@@ -2388,10 +2361,7 @@ mod tests {
         #[cfg(not(feature = "gost"))]
         let gost_algorithms: [Algorithm; 0] = [];
 
-        #[cfg(feature = "ml-dsa")]
         let ml_dsa_algorithms = [Algorithm::MlDsa];
-        #[cfg(not(feature = "ml-dsa"))]
-        let ml_dsa_algorithms: [Algorithm; 0] = [];
 
         #[cfg(feature = "bls")]
         let bls_algorithms = [Algorithm::BlsNormal, Algorithm::BlsSmall];
@@ -2440,7 +2410,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "ml-dsa")]
     fn ml_dsa_secret_key_clone_shares_inner_arc() {
         use pqcrypto_traits::sign::SecretKey as _;
 
@@ -2467,7 +2436,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "ml-dsa")]
     fn ml_dsa_public_key_parse_rejects_invalid_length() {
         use pqcrypto_dilithium::dilithium3 as dilithium;
         use pqcrypto_traits::sign::PublicKey as _;

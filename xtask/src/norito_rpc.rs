@@ -43,7 +43,7 @@ const SDK_MANIFESTS: &[(&str, &str, bool)] = &[
     (
         "java",
         "java/iroha_android/src/test/resources/transaction_fixtures.manifest.json",
-        false,
+        true,
     ),
     (
         "swift",
@@ -385,7 +385,7 @@ pub fn generate_fixtures(options: FixtureOptions) -> Result<()> {
     })?;
     generated
         .validate(Some(temp_dir.path()))
-        .context("generated manifest failed validation")?;
+        .map_err(|err| eyre!("generated manifest failed validation: {err}"))?;
 
     let desired_names = if options.include_all {
         None
@@ -441,6 +441,7 @@ fn run_fixture_exporter(
         .arg("--")
         .arg("--fixtures")
         .arg(&resolved.fixtures_json)
+        .arg("--write-fixtures")
         .arg("--out-dir")
         .arg(out_dir)
         .arg("--manifest")
@@ -644,6 +645,7 @@ struct FixtureEntry {
     name: String,
     authority: String,
     chain: String,
+    creation_time_ms: u64,
     encoded_file: String,
     encoded_len: u64,
     signed_len: u64,
@@ -733,6 +735,7 @@ fn blake2b256_hex(bytes: &[u8]) -> String {
 struct FixtureComparable<'a> {
     authority: &'a str,
     chain: &'a str,
+    creation_time_ms: u64,
     encoded_file: &'a str,
     encoded_len: u64,
     signed_len: u64,
@@ -749,6 +752,7 @@ impl<'a> FixtureComparable<'a> {
         Self {
             authority: &entry.authority,
             chain: &entry.chain,
+            creation_time_ms: entry.creation_time_ms,
             encoded_file: &entry.encoded_file,
             encoded_len: entry.encoded_len,
             signed_len: entry.signed_len,
@@ -779,6 +783,7 @@ mod tests {
             name: name.to_string(),
             authority: "alice@wonderland".into(),
             chain: "00000001".into(),
+            creation_time_ms: 1_735_000_000_000,
             encoded_file: format!("{name}.norito"),
             encoded_len: 1,
             signed_len: 1,
@@ -845,6 +850,25 @@ mod tests {
         assert!(
             err.to_string().contains("unexpected fixture 'gamma'"),
             "error should mention unexpected fixture: {err}"
+        );
+    }
+
+    #[test]
+    fn compare_with_rejects_creation_time_drift() {
+        let canonical = Manifest {
+            fixtures: vec![fixture("alpha")],
+        };
+        let mut drift_entry = fixture("alpha");
+        drift_entry.creation_time_ms += 1;
+        let drift = Manifest {
+            fixtures: vec![drift_entry],
+        };
+        let err = drift
+            .compare_with(&canonical)
+            .expect_err("creation_time_ms drift should fail comparison");
+        assert!(
+            err.to_string().contains("fixture 'alpha' differs"),
+            "error should mention fixture mismatch: {err}"
         );
     }
 

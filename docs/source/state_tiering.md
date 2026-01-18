@@ -26,16 +26,20 @@ fast transaction validation.
   applies these knobs at startup via `State::set_tiered_backend`, and the default
   build keeps the feature disabled until operators opt in.
   When `cold_store_root` is unset, the cold tier stores snapshots under
-  `da_store_root`; reads check both roots so DA-backed payloads can be reused.
+  `da_store_root`. When both roots are set, snapshots land under
+  `cold_store_root` and older directories are offloaded to `da_store_root` once
+  `max_cold_bytes` is exceeded; reads hit the cold root first and rehydrate
+  payloads back into `cold_store_root` when DA-backed shards are accessed.
 - `hot_retained_bytes` enforces a hot-tier byte budget derived from deterministic
-  Norito payload sizing (used as an in-memory WSV size estimate). Grace retention may temporarily exceed
-  this budget; the overflow is reported via telemetry.
+  in-memory WSV sizing. Grace retention may temporarily exceed this budget; the
+  overflow is reported via telemetry.
 - `hot_retained_grace_snapshots` keeps newly hot entries pinned for a short
   window to reduce hot/cold churn when rankings fluctuate.
 - Cold payloads reuse the last persisted shard when the value hash is unchanged,
   avoiding redundant re-encoding work across snapshots.
 - `max_cold_bytes` prunes the oldest snapshot directories once total cold storage
-  exceeds the configured budget (always retaining the newest snapshot).
+  exceeds the configured budget, offloading to `da_store_root` when configured
+  (always retaining the newest snapshot).
 - Changing `cold_store_root` or `da_store_root` resets the in-memory tiering
   metadata and snapshot counter so new roots start with a clean hot/cold ordering.
 - `StateBlock::commit` records a fresh snapshot under the configured primary cold

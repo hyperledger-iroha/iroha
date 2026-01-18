@@ -33,7 +33,7 @@ pub fn gas_limit_for_meta(meta: &ivm::ProgramMetadata) -> u64 {
 
 /// Map a VM execution error into a user-facing validation failure.
 #[must_use]
-pub fn map_vm_error_to_validation(err: ivm::VMError) -> ValidationFail {
+pub fn map_vm_error_to_validation(err: &ivm::VMError) -> ValidationFail {
     ValidationFail::NotPermitted(err.to_string())
 }
 
@@ -68,7 +68,7 @@ mod tests {
 
     #[test]
     fn vm_error_maps_to_not_permitted() {
-        let err = map_vm_error_to_validation(ivm::VMError::OutOfGas);
+        let err = map_vm_error_to_validation(&ivm::VMError::OutOfGas);
         assert!(matches!(err, ValidationFail::NotPermitted(msg) if msg.contains("out of gas")));
     }
 }

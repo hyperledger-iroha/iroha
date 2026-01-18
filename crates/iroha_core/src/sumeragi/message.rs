@@ -48,6 +48,18 @@ pub enum BlockMessage {
     Qc(#[skip_try_from] super::consensus::Qc),
 }
 
+impl BlockMessage {
+    /// Network priority for this consensus message.
+    ///
+    /// RBC chunks are bulk payload data and should not preempt votes/control flow.
+    pub fn priority(&self) -> iroha_p2p::Priority {
+        match self {
+            Self::RbcChunk(_) => iroha_p2p::Priority::Low,
+            _ => iroha_p2p::Priority::High,
+        }
+    }
+}
+
 /// Control-flow signals exchanged between peers (pacemaker frames).
 #[derive(Debug, Clone, Decode, Encode, FromVariant)]
 pub enum ControlFlow {
@@ -180,22 +192,42 @@ pub struct FetchPendingBlock {
 
 #[cfg(test)]
 mod tests {
+    use std::{borrow::Cow, time::Duration};
+
     use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
     use iroha_data_model::{
+        AccountId, ChainId, DomainId, Level,
         da::{
             commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme, KzgCommitment},
             types::{BlobDigest, RetentionPolicy, StorageTicketId},
         },
+        isi::Log,
         nexus::LaneId,
         sorafs::pin_registry::ManifestDigest,
+        transaction::TransactionBuilder,
     };
 
     use super::*;
-    use crate::block::BlockBuilder;
+    use crate::{block::BlockBuilder, tx::AcceptedTransaction};
+
+    fn dummy_accepted_transaction() -> AcceptedTransaction<'static> {
+        let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
+            .parse()
+            .expect("valid chain id");
+        let domain_id: DomainId = "dummy".parse().expect("valid domain id");
+        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(domain_id, keypair.public_key().clone());
+        let mut builder = TransactionBuilder::new(chain_id, authority);
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx = builder
+            .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
+            .sign(keypair.private_key());
+        AcceptedTransaction::new_unchecked(Cow::Owned(tx))
+    }
 
     #[test]
     fn block_created_from_newblock_ref_and_move_equivalent() {
-        // Build an empty NewBlock (no transactions) and sign it.
+        // Build a minimal NewBlock and sign it.
         let kp = KeyPair::from_seed(b"seed-seed".to_vec(), Algorithm::Ed25519);
         let da_bundle = DaCommitmentBundle::new(vec![DaCommitmentRecord::new(
             LaneId::new(1),
@@ -211,7 +243,7 @@ mod tests {
             StorageTicketId::new([0x66; 32]),
             Signature::from_bytes(&[0x77; 64]),
         )]);
-        let new_block = BlockBuilder::new(Vec::new())
+        let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(da_bundle.clone()))
             .sign(kp.private_key())
@@ -263,6 +295,28 @@ mod tests {
         let bytes = cf.encode();
         // Only check that encoding succeeds and yields non-empty bytes.
         assert!(!bytes.is_empty());
+    }
+
+    #[test]
+    fn block_message_priority_marks_rbc_chunk_low() {
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([2u8; 32]));
+        let chunk = super::super::consensus::RbcChunk {
+            block_hash,
+            height: 1,
+            view: 0,
+            epoch: 0,
+            idx: 0,
+            bytes: vec![0u8; 1],
+        };
+        let msg = BlockMessage::RbcChunk(chunk);
+        assert_eq!(msg.priority(), iroha_p2p::Priority::Low);
+
+        let requester = PeerId::from(KeyPair::random().public_key().clone());
+        let fetch = BlockMessage::FetchPendingBlock(FetchPendingBlock {
+            requester,
+            block_hash,
+        });
+        assert_eq!(fetch.priority(), iroha_p2p::Priority::High);
     }
 
     #[cfg(feature = "bls")]

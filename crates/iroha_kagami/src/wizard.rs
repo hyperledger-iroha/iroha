@@ -1,15 +1,20 @@
 //! Interactive setup wizard for quickly preparing Iroha/Sora configs.
 
 use std::{
+    collections::{BTreeMap, BTreeSet},
     fmt, fs,
     io::{BufWriter, Write},
     path::PathBuf,
+    str::FromStr,
 };
 
 use clap::{Args as ClapArgs, ValueEnum};
-use color_eyre::eyre::{Context as _, Result};
+use color_eyre::eyre::{Context as _, Result, eyre};
 use inquire::{Select, Text};
-use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
+use iroha_crypto::{
+    Algorithm, ExposedPrivateKey, KeyPair, PublicKey, bls_normal_pop_prove, bls_normal_pop_verify,
+};
+use iroha_data_model::peer::PeerId;
 use norito::json::{self, Value as JsonValue};
 use toml::{Value as TomlValue, value::Table as TomlTable};
 
@@ -54,6 +59,9 @@ pub struct Args {
     /// Override the bootstrap peer (`pubkey@host:port`). Comma-separated for multiple entries.
     #[arg(long, value_name = "PEERS")]
     pub trusted_peers: Option<String>,
+    /// Comma-separated PoP entries for trusted peers (`pubkey=pop_hex`).
+    #[arg(long, value_name = "POPS")]
+    pub trusted_peers_pop: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -116,7 +124,7 @@ impl ProfileDefaults {
                 torii_port: 8080,
                 host: "nexus.mof2.sora.org",
                 trusted_peers: &[
-                    "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@nexus.mof2.sora.org:1337",
+                    "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2@nexus.mof2.sora.org:1337",
                 ],
                 config_template: Some("configs/soranexus/nexus/config.toml"),
                 genesis_template: "configs/soranexus/nexus/genesis.json",
@@ -127,7 +135,7 @@ impl ProfileDefaults {
                 torii_port: 18080,
                 host: "testus.mof3.sora.org",
                 trusted_peers: &[
-                    "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@testus.mof3.sora.org:1337",
+                    "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2@testus.mof3.sora.org:1337",
                 ],
                 config_template: Some("configs/soranexus/testus/config.toml"),
                 genesis_template: "configs/soranexus/testus/genesis.json",
@@ -140,11 +148,13 @@ impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         print_banner();
         let answers = gather_answers(&self)?;
-        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let trusted_pops = resolve_trusted_peers_pop(&self, &answers, &keypair)?;
 
         tui::status("Generating config and genesis files");
-        let (mut config, genesis_template_path) = load_config_template(&answers, &keypair)?;
-        apply_overrides(&mut config, &answers, &keypair)?;
+        let (mut config, genesis_template_path) =
+            load_config_template(&answers, &keypair, &trusted_pops)?;
+        apply_overrides(&mut config, &answers, &keypair, &trusted_pops)?;
         let genesis = load_and_patch_genesis(&genesis_template_path, &answers.chain)?;
 
         fs::create_dir_all(&answers.output_dir)
@@ -235,7 +245,7 @@ fn gather_answers(args: &Args) -> Result<Answers> {
         .as_deref()
         .unwrap_or(default_trusted.as_str());
     let trusted_prompt = resolve_text(
-        "Trusted peers (comma separated pubkey@host:port)",
+        "Trusted peers (comma separated pubkey@host:port; PoP required)",
         args.trusted_peers.clone(),
         trusted_default.to_string(),
         args.non_interactive,
@@ -259,6 +269,147 @@ fn gather_answers(args: &Args) -> Result<Answers> {
         relay_hub,
         output_dir: args.output_dir.clone(),
     })
+}
+
+fn resolve_trusted_peers_pop(
+    args: &Args,
+    answers: &Answers,
+    keypair: &KeyPair,
+) -> Result<BTreeMap<PublicKey, Vec<u8>>> {
+    let mut peers = sanitize_trusted_peers(&answers.trusted_peers);
+    let self_peer = format!(
+        "{}@{}",
+        keypair.public_key(),
+        addr_literal(&answers.p2p_host, answers.p2p_port)
+    );
+    if !peers.iter().any(|p| p == &self_peer) {
+        peers.push(self_peer);
+    }
+
+    let peer_ids = parse_trusted_peer_ids(&peers)?;
+    let roster_keys: BTreeSet<PublicKey> = peer_ids
+        .iter()
+        .map(|peer| peer.public_key().clone())
+        .collect();
+    for pk in &roster_keys {
+        if pk.algorithm() != Algorithm::BlsNormal {
+            return Err(eyre!("trusted peer {pk} must use a BLS-Normal key"));
+        }
+    }
+
+    let mut pops = parse_trusted_peers_pop_arg(args.trusted_peers_pop.as_deref())?;
+    if !pops.contains_key(keypair.public_key()) {
+        let pop = bls_normal_pop_prove(keypair.private_key())
+            .wrap_err("failed to build PoP for the local keypair")?;
+        pops.insert(keypair.public_key().clone(), pop);
+    }
+
+    let extras: Vec<_> = pops
+        .keys()
+        .filter(|pk| !roster_keys.contains(*pk))
+        .cloned()
+        .collect();
+    if !extras.is_empty() {
+        return Err(eyre!(
+            "trusted_peers_pop contains keys not in trusted_peers: {extras:?}"
+        ));
+    }
+
+    let missing: Vec<PublicKey> = roster_keys
+        .iter()
+        .filter(|pk| !pops.contains_key(*pk))
+        .cloned()
+        .collect();
+    if !missing.is_empty() {
+        if args.non_interactive {
+            return Err(eyre!(
+                "trusted_peers_pop missing PoPs for peers: {missing:?}"
+            ));
+        }
+        for pk in missing {
+            let pop = prompt_pop_for_peer(&pk)?;
+            pops.insert(pk, pop);
+        }
+    }
+
+    Ok(pops)
+}
+
+fn parse_trusted_peer_ids(peers: &[String]) -> Result<Vec<PeerId>> {
+    peers
+        .iter()
+        .map(|entry| {
+            PeerId::from_str(entry).wrap_err_with(|| format!("invalid trusted peer entry: {entry}"))
+        })
+        .collect()
+}
+
+fn parse_trusted_peers_pop_arg(raw: Option<&str>) -> Result<BTreeMap<PublicKey, Vec<u8>>> {
+    let mut pops = BTreeMap::new();
+    let Some(raw) = raw else {
+        return Ok(pops);
+    };
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(pops);
+    }
+    for entry in raw.split(',') {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let (pk_raw, pop_raw) = entry
+            .split_once('=')
+            .ok_or_else(|| eyre!("trusted_peers_pop entry must be pubkey=pop_hex: {entry}"))?;
+        let pk = PublicKey::from_str(pk_raw.trim()).wrap_err_with(|| {
+            format!("trusted_peers_pop entry has invalid public key: {pk_raw}")
+        })?;
+        if pk.algorithm() != Algorithm::BlsNormal {
+            return Err(eyre!("trusted_peers_pop entry uses non-BLS key: {pk}"));
+        }
+        let pop = decode_pop_hex(pop_raw.trim())
+            .wrap_err_with(|| format!("trusted_peers_pop entry has invalid hex for {pk}"))?;
+        if let Err(err) = bls_normal_pop_verify(&pk, &pop) {
+            return Err(eyre!(
+                "trusted_peers_pop entry has invalid PoP for {pk}: {err}"
+            ));
+        }
+        if pops.insert(pk, pop).is_some() {
+            return Err(eyre!("trusted_peers_pop entry duplicated for {entry}"));
+        }
+    }
+    Ok(pops)
+}
+
+fn decode_pop_hex(raw: &str) -> Result<Vec<u8>> {
+    let trimmed = raw.trim_start_matches("0x");
+    hex::decode(trimmed).wrap_err("invalid PoP hex")
+}
+
+fn prompt_pop_for_peer(public_key: &PublicKey) -> Result<Vec<u8>> {
+    loop {
+        let prompt = format!("PoP for {public_key} (hex)");
+        let input = Text::new(&prompt)
+            .prompt()
+            .wrap_err_with(|| format!("PoP prompt failed for {public_key}"))?;
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            tui::warn("PoP cannot be empty");
+            continue;
+        }
+        let pop = match decode_pop_hex(trimmed) {
+            Ok(pop) => pop,
+            Err(err) => {
+                tui::warn(format!("invalid PoP hex: {err}"));
+                continue;
+            }
+        };
+        if let Err(err) = bls_normal_pop_verify(public_key, &pop) {
+            tui::warn(format!("invalid PoP for {public_key}: {err}"));
+            continue;
+        }
+        return Ok(pop);
+    }
 }
 
 #[allow(clippy::needless_raw_string_hashes)]
@@ -338,7 +489,11 @@ fn resolve_number(prompt: &str, default: u16, non_interactive: bool) -> Result<u
         .wrap_err_with(|| format!("{prompt} must be a u16 port"))
 }
 
-fn load_config_template(answers: &Answers, keypair: &KeyPair) -> Result<(TomlValue, String)> {
+fn load_config_template(
+    answers: &Answers,
+    keypair: &KeyPair,
+    trusted_pops: &BTreeMap<PublicKey, Vec<u8>>,
+) -> Result<(TomlValue, String)> {
     let defaults = ProfileDefaults::for_profile(answers.profile);
     if let Some(path) = defaults.config_template {
         let raw = fs::read_to_string(path)
@@ -351,6 +506,7 @@ fn load_config_template(answers: &Answers, keypair: &KeyPair) -> Result<(TomlVal
             &answers.trusted_peers,
             &answers.p2p_host,
             answers.p2p_port,
+            trusted_pops,
         );
         return Ok((value, defaults.genesis_template.to_string()));
     }
@@ -363,12 +519,18 @@ fn load_config_template(answers: &Answers, keypair: &KeyPair) -> Result<(TomlVal
         &answers.torii_host,
         answers.torii_port,
         &answers.trusted_peers,
+        trusted_pops,
     );
     Ok((config, defaults.genesis_template.to_string()))
 }
 
 #[allow(clippy::unnecessary_wraps)]
-fn apply_overrides(config: &mut TomlValue, answers: &Answers, keypair: &KeyPair) -> Result<()> {
+fn apply_overrides(
+    config: &mut TomlValue,
+    answers: &Answers,
+    keypair: &KeyPair,
+    trusted_pops: &BTreeMap<PublicKey, Vec<u8>>,
+) -> Result<()> {
     set_string(config, "chain", &answers.chain);
     set_string(config, "public_key", &keypair.public_key().to_string());
     set_string(
@@ -388,6 +550,7 @@ fn apply_overrides(config: &mut TomlValue, answers: &Answers, keypair: &KeyPair)
         peers.push(self_peer);
     }
     set_array(config, "trusted_peers", peers);
+    set_trusted_peers_pop(config, trusted_pops);
 
     let mut network = table(config, "network");
     let network_template = network
@@ -495,6 +658,25 @@ fn set_array(config: &mut TomlValue, key: &str, values: Vec<String>) {
     }
 }
 
+fn set_trusted_peers_pop(config: &mut TomlValue, pops: &BTreeMap<PublicKey, Vec<u8>>) {
+    if let TomlValue::Table(root) = config {
+        root.insert("trusted_peers_pop".into(), trusted_peers_pop_value(pops));
+    }
+}
+
+fn trusted_peers_pop_value(pops: &BTreeMap<PublicKey, Vec<u8>>) -> TomlValue {
+    let entries = pops
+        .iter()
+        .map(|(pk, pop)| {
+            let mut entry = TomlTable::new();
+            entry.insert("public_key".into(), TomlValue::String(pk.to_string()));
+            entry.insert("pop_hex".into(), TomlValue::String(hex::encode(pop)));
+            TomlValue::Table(entry)
+        })
+        .collect();
+    TomlValue::Array(entries)
+}
+
 fn table(config: &TomlValue, path: &str) -> TomlTable {
     let mut table = TomlTable::new();
     let mut current = config;
@@ -538,6 +720,7 @@ fn ensure_trusted_peer_list(
     peers: &[String],
     host: &str,
     p2p_port: u16,
+    trusted_pops: &BTreeMap<PublicKey, Vec<u8>>,
 ) {
     let mut list = sanitize_trusted_peers(peers);
     let self_peer = format!("{}@{}", keypair.public_key(), addr_literal(host, p2p_port));
@@ -545,6 +728,7 @@ fn ensure_trusted_peer_list(
         list.push(self_peer);
     }
     set_array(config, "trusted_peers", list);
+    set_trusted_peers_pop(config, trusted_pops);
 }
 
 fn build_vanilla_config(
@@ -555,6 +739,7 @@ fn build_vanilla_config(
     torii_host: &str,
     torii_port: u16,
     peers: &[String],
+    trusted_pops: &BTreeMap<PublicKey, Vec<u8>>,
 ) -> TomlValue {
     let mut root = TomlTable::new();
     root.insert("chain".into(), TomlValue::String(chain.to_owned()));
@@ -569,6 +754,10 @@ fn build_vanilla_config(
     root.insert(
         "trusted_peers".into(),
         TomlValue::Array(peers.iter().map(|p| TomlValue::String(p.clone())).collect()),
+    );
+    root.insert(
+        "trusted_peers_pop".into(),
+        trusted_peers_pop_value(trusted_pops),
     );
 
     let mut network = TomlTable::new();
@@ -685,7 +874,11 @@ mod tests {
 
     #[test]
     fn vanilla_config_has_minimal_sections() {
-        let kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let pop = bls_normal_pop_prove(kp.private_key()).expect("pop");
+        let mut pops = BTreeMap::new();
+        pops.insert(kp.public_key().clone(), pop);
+        let peer = format!("{}@localhost:1337", kp.public_key());
         let config = build_vanilla_config(
             "chain-x",
             &kp,
@@ -693,7 +886,8 @@ mod tests {
             1337,
             "localhost",
             8080,
-            &["peer1@localhost:1337".to_string()],
+            &[peer],
+            &pops,
         );
         let table = config.as_table().expect("table");
         assert_eq!(
@@ -704,6 +898,7 @@ mod tests {
         assert!(table.get("torii").is_some());
         assert!(table.get("genesis").is_some());
         assert!(table.get("trusted_peers").is_some());
+        assert!(table.get("trusted_peers_pop").is_some());
     }
 
     #[test]
@@ -719,5 +914,33 @@ mod tests {
                 .unwrap_or(""),
             "new-chain"
         );
+    }
+
+    #[test]
+    fn trusted_peers_pop_missing_non_interactive_fails() {
+        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let other = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let answers = Answers {
+            profile: Profile::Iroha2,
+            chain: "chain-x".to_string(),
+            p2p_host: "127.0.0.1".to_string(),
+            p2p_port: 1337,
+            torii_host: "127.0.0.1".to_string(),
+            torii_port: 8080,
+            trusted_peers: vec![format!("{}@127.0.0.1:1338", other.public_key())],
+            relay_mode: RelayMode::Disabled,
+            relay_hub: None,
+            output_dir: PathBuf::from("out"),
+        };
+        let args = Args {
+            profile: None,
+            output_dir: PathBuf::from("out"),
+            non_interactive: true,
+            chain_id: None,
+            trusted_peers: None,
+            trusted_peers_pop: None,
+        };
+        let result = resolve_trusted_peers_pop(&args, &answers, &keypair);
+        assert!(result.is_err());
     }
 }
