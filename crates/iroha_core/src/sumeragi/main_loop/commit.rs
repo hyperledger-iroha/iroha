@@ -203,6 +203,39 @@ fn has_commit_quorum_signers(
     qc_signers.is_some_and(|signers| signers.len() >= min_votes_for_commit)
 }
 
+fn commit_qc_from_cache_or_history(
+    qc_cache: &BTreeMap<QcVoteKey, crate::sumeragi::consensus::Qc>,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    epoch: u64,
+    mode_tag: &str,
+    commit_topology: &[PeerId],
+) -> Option<crate::sumeragi::consensus::Qc> {
+    let key = (
+        crate::sumeragi::consensus::Phase::Commit,
+        block_hash,
+        height,
+        view,
+        epoch,
+    );
+    if let Some(qc) = qc_cache.get(&key) {
+        return Some(qc.clone());
+    }
+    super::status::commit_qc_history()
+        .into_iter()
+        .find(|qc| {
+            qc.phase == crate::sumeragi::consensus::Phase::Commit
+                && qc.subject_block_hash == block_hash
+                && qc.height == height
+                && qc.view == view
+                && qc.epoch == epoch
+                && qc.mode_tag == mode_tag
+                && qc.validator_set.as_slice() == commit_topology
+                && !qc.aggregate.bls_aggregate_signature.is_empty()
+        })
+}
+
 impl Actor {
     /// Attach cached commit certificates and votes for the given block to a `BlockSyncUpdate`.
     #[allow(clippy::too_many_arguments)]
@@ -641,68 +674,81 @@ impl Actor {
                     pending_view,
                     lock.epoch,
                 );
-                if !allow_quorum_bypass {
+                let (consensus_mode, mode_tag, _) =
+                    self.consensus_context_for_height(pending_height);
+                let mut cached_qc = commit_qc_from_cache_or_history(
+                    &self.qc_cache,
+                    block_hash,
+                    pending_height,
+                    pending_view,
+                    lock.epoch,
+                    mode_tag,
+                    &commit_topology,
+                );
+                if let Some(qc) = cached_qc.as_ref() {
                     if !self.qc_cache.contains_key(&qc_key) {
-                        if let (Some(signers), Some(view_signers)) =
-                            (qc_signers.as_ref(), view_signers.as_ref())
+                        self.qc_cache.insert(qc_key, qc.clone());
+                    }
+                }
+                if !allow_quorum_bypass && cached_qc.is_none() {
+                    if let (Some(signers), Some(view_signers)) =
+                        (qc_signers.as_ref(), view_signers.as_ref())
+                    {
+                        let aggregate_signature = match super::aggregate_vote_signatures(
+                            &self.vote_log,
+                            crate::sumeragi::consensus::Phase::Commit,
+                            block_hash,
+                            pending_height,
+                            pending_view,
+                            lock.epoch,
+                            view_signers,
+                        ) {
+                            Ok(signature) => signature,
+                            Err(err) => {
+                                warn!(
+                                    ?err,
+                                    height = pending_height,
+                                    view = pending_view,
+                                    block = %block_hash,
+                                    "failed to aggregate precommit signatures for cached QC"
+                                );
+                                Vec::new()
+                            }
+                        };
+                        let stake_snapshot = match consensus_mode {
+                            ConsensusMode::Permissioned => None,
+                            ConsensusMode::Npos => CommitStakeSnapshot::from_roster(
+                                self.state.view().world(),
+                                topology.as_ref(),
+                            ),
+                        };
+                        if let Some((parent_state_root, post_state_root)) =
+                            pending.parent_state_root.zip(pending.post_state_root)
                         {
-                            let aggregate_signature = match super::aggregate_vote_signatures(
-                                &self.vote_log,
-                                crate::sumeragi::consensus::Phase::Commit,
+                            if let Some(derived_qc) = super::derive_block_sync_qc_from_signers(
                                 block_hash,
                                 pending_height,
                                 pending_view,
                                 lock.epoch,
-                                view_signers,
+                                parent_state_root,
+                                post_state_root,
+                                topology.as_ref(),
+                                consensus_mode,
+                                stake_snapshot.as_ref(),
+                                mode_tag,
+                                signers,
+                                aggregate_signature,
                             ) {
-                                Ok(signature) => signature,
-                                Err(err) => {
-                                    warn!(
-                                        ?err,
-                                        height = pending_height,
-                                        view = pending_view,
-                                        block = %block_hash,
-                                        "failed to aggregate precommit signatures for cached QC"
-                                    );
-                                    Vec::new()
-                                }
-                            };
-                            let (consensus_mode, mode_tag, _) =
-                                self.consensus_context_for_height(pending_height);
-                            let stake_snapshot = match consensus_mode {
-                                ConsensusMode::Permissioned => None,
-                                ConsensusMode::Npos => CommitStakeSnapshot::from_roster(
-                                    self.state.view().world(),
-                                    topology.as_ref(),
-                                ),
-                            };
-                            if let Some((parent_state_root, post_state_root)) =
-                                pending.parent_state_root.zip(pending.post_state_root)
-                            {
-                                if let Some(derived_qc) = super::derive_block_sync_qc_from_signers(
-                                    block_hash,
-                                    pending_height,
-                                    pending_view,
-                                    lock.epoch,
-                                    parent_state_root,
-                                    post_state_root,
-                                    topology.as_ref(),
-                                    consensus_mode,
-                                    stake_snapshot.as_ref(),
-                                    mode_tag,
-                                    signers,
-                                    aggregate_signature,
-                                ) {
-                                    self.qc_cache.insert(qc_key, derived_qc);
-                                }
-                            } else {
-                                warn!(
-                                    height = pending_height,
-                                    view = pending_view,
-                                    block = %block_hash,
-                                    "skipping derived QC cache: missing execution roots"
-                                );
+                                self.qc_cache.insert(qc_key, derived_qc.clone());
+                                cached_qc = Some(derived_qc);
                             }
+                        } else {
+                            warn!(
+                                height = pending_height,
+                                view = pending_view,
+                                block = %block_hash,
+                                "skipping derived QC cache: missing execution roots"
+                            );
                         }
                     }
                 }
@@ -737,7 +783,6 @@ impl Actor {
                     exec_depth = params_snapshot.2,
                     "state parameters after commit"
                 );
-                let cached_qc = self.qc_cache.get(&qc_key).cloned();
                 if let Some(qc) = cached_qc.as_ref() {
                     super::status::record_commit_qc(qc.clone());
                 }
@@ -775,8 +820,6 @@ impl Actor {
                             .map(|qc| (qc.parent_state_root, qc.post_state_root))
                             .or_else(|| pending.parent_state_root.zip(pending.post_state_root));
                         if let Some((parent_state_root, post_state_root)) = roots {
-                            let (consensus_mode, mode_tag, _) =
-                                self.consensus_context_for_height(pending_height);
                             let stake_snapshot = match consensus_mode {
                                 ConsensusMode::Permissioned => None,
                                 ConsensusMode::Npos => CommitStakeSnapshot::from_roster(
@@ -810,7 +853,6 @@ impl Actor {
                         }
                     }
                 } else if let Some(qc) = cached_qc.as_ref() {
-                    let (consensus_mode, _, _) = self.consensus_context_for_height(pending_height);
                     let stake_snapshot = match consensus_mode {
                         ConsensusMode::Permissioned => None,
                         ConsensusMode::Npos => CommitStakeSnapshot::from_roster(
