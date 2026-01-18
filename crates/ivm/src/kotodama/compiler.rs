@@ -24,7 +24,9 @@ use iroha_data_model::{
     name::Name,
     nft::NftId,
     role::RoleId,
-    smart_contract::manifest::{AccessSetHints, EntryPointKind, EntrypointDescriptor},
+    smart_contract::manifest::{
+        AccessSetHints, EntryPointKind, EntrypointDescriptor, TriggerCallback, TriggerDescriptor,
+    },
     trigger::{Trigger, TriggerId},
 };
 use norito::json;
@@ -5560,6 +5562,25 @@ fn build_entrypoint_descriptors(
         hints_by_name.insert(&func.name, (&sets.reads, &sets.writes));
     }
 
+    let mut triggers_by_name: HashMap<String, Vec<TriggerDescriptor>> = HashMap::new();
+    for trigger in &typed.triggers {
+        let descriptor = TriggerDescriptor {
+            id: trigger.id.clone(),
+            repeats: trigger.repeats,
+            filter: trigger.filter.clone(),
+            authority: None,
+            metadata: trigger.metadata.clone(),
+            callback: TriggerCallback {
+                namespace: trigger.call.namespace.clone(),
+                entrypoint: trigger.call.entrypoint.clone(),
+            },
+        };
+        triggers_by_name
+            .entry(trigger.call.entrypoint.clone())
+            .or_default()
+            .push(descriptor);
+    }
+
     let build_descriptor =
         |func: &semantic::TypedFunction, kind: EntryPointKind| -> EntrypointDescriptor {
             let (mut reads, mut writes): (Vec<String>, Vec<String>) = if include_hints {
@@ -5585,12 +5606,17 @@ fn build_entrypoint_descriptors(
                     writes = fallback_writes.iter().cloned().collect();
                 }
             }
+            let triggers = triggers_by_name
+                .get(func.name.as_str())
+                .cloned()
+                .unwrap_or_default();
             EntrypointDescriptor {
                 name: func.name.clone(),
                 kind,
                 permission: func.modifiers.permission.clone(),
                 read_keys: reads,
                 write_keys: writes,
+                triggers,
             }
         };
 

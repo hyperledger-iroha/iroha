@@ -1826,6 +1826,41 @@ fn manifest_includes_entrypoints_and_features() {
 }
 
 #[test]
+fn manifest_includes_trigger_descriptors() {
+    use iroha_data_model::{
+        events::EventFilterBox,
+        trigger::action::Repeats,
+    };
+
+    let src = r#"
+        seiyaku Demo {
+            kotoage fn run() {}
+
+            register_trigger wake {
+                call run;
+                on time pre_commit;
+                repeats 2;
+                metadata { tag: "alpha"; }
+            }
+        }
+    "#;
+    let (_code, manifest) = Compiler::new()
+        .compile_source_with_manifest(src)
+        .expect("compile manifest with triggers");
+    let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
+    let run = entrypoints
+        .iter()
+        .find(|entry| entry.name == "run")
+        .expect("run entrypoint");
+    assert_eq!(run.triggers.len(), 1);
+    let trigger = &run.triggers[0];
+    assert_eq!(trigger.id.to_string(), "wake");
+    assert!(matches!(trigger.filter, EventFilterBox::Time(_)));
+    assert_eq!(trigger.repeats, Repeats::Exactly(2));
+    assert_eq!(trigger.callback.entrypoint, "run");
+}
+
+#[test]
 fn manifest_includes_isi_access_hints_for_static_targets() {
     use iroha_data_model::{
         account::AccountId,

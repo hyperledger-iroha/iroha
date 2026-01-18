@@ -2023,7 +2023,7 @@ mod measured_bytes_impls {
         },
         smart_contract::manifest::{
             AccessSetHints, ContractManifest, EntryPointKind, EntrypointDescriptor,
-            ManifestProvenance,
+            ManifestProvenance, TriggerCallback, TriggerDescriptor,
         },
         zk::BackendTag,
     };
@@ -2679,6 +2679,28 @@ mod measured_bytes_impls {
         }
     }
 
+    impl MeasuredBytes for TriggerCallback {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<TriggerCallback>();
+            total = total.saturating_add(self.namespace.measured_bytes_extra());
+            total = total.saturating_add(self.entrypoint.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for TriggerDescriptor {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<TriggerDescriptor>();
+            total = total.saturating_add(self.id.measured_bytes_extra());
+            total = total.saturating_add(self.repeats.measured_bytes_extra());
+            total = total.saturating_add(self.filter.measured_bytes_extra());
+            total = total.saturating_add(self.authority.measured_bytes_extra());
+            total = total.saturating_add(self.metadata.measured_bytes_extra());
+            total = total.saturating_add(self.callback.measured_bytes_extra());
+            total
+        }
+    }
+
     impl MeasuredBytes for EntrypointDescriptor {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<EntrypointDescriptor>();
@@ -2687,6 +2709,7 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.permission.measured_bytes_extra());
             total = total.saturating_add(self.read_keys.measured_bytes_extra());
             total = total.saturating_add(self.write_keys.measured_bytes_extra());
+            total = total.saturating_add(self.triggers.measured_bytes_extra());
             total
         }
     }

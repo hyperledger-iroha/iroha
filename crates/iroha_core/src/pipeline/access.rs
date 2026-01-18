@@ -1582,6 +1582,7 @@ mod tests {
                 permission: None,
                 read_keys: vec!["state:alpha".to_owned()],
                 write_keys: vec!["state:beta".to_owned()],
+                triggers: Vec::new(),
             },
             EntrypointDescriptor {
                 name: "run".to_owned(),
@@ -1589,6 +1590,7 @@ mod tests {
                 permission: None,
                 read_keys: vec!["state:run-read".to_owned()],
                 write_keys: vec!["state:run-write".to_owned()],
+                triggers: Vec::new(),
             },
         ];
         let manifest = ContractManifest {
@@ -1661,6 +1663,7 @@ mod tests {
             permission: None,
             read_keys: vec!["state:alpha".to_owned()],
             write_keys: vec!["state:beta".to_owned()],
+            triggers: Vec::new(),
         }];
         let manifest = ContractManifest {
             code_hash: Some(code_hash),
@@ -1731,6 +1734,7 @@ mod tests {
             permission: None,
             read_keys: vec![format!("account:{alice}")],
             write_keys: vec![format!("asset:{asset_id}")],
+            triggers: Vec::new(),
         }];
         let manifest = ContractManifest {
             code_hash: Some(code_hash),

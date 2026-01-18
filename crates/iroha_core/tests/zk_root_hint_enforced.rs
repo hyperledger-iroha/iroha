@@ -36,6 +36,10 @@ fn unshield_rejects_stale_root_hint_and_accepts_recent() {
             max_k: defaults::zk::halo2::MAX_K,
             verifier_budget_ms: defaults::zk::halo2::VERIFIER_BUDGET_MS,
             verifier_max_batch: defaults::zk::halo2::VERIFIER_MAX_BATCH,
+            max_envelope_bytes: defaults::zk::halo2::MAX_ENVELOPE_BYTES,
+            max_proof_bytes: defaults::zk::halo2::MAX_PROOF_BYTES,
+            max_transcript_label_len: defaults::zk::halo2::MAX_TRANSCRIPT_LABEL_LEN,
+            enforce_transcript_label_ascii: defaults::zk::halo2::ENFORCE_TRANSCRIPT_LABEL_ASCII,
         },
         fastpq: cfg::Fastpq {
             execution_mode: cfg::FastpqExecutionMode::Auto,
@@ -58,8 +62,16 @@ fn unshield_rejects_stale_root_hint_and_accepts_recent() {
         preverify_max_bytes: defaults::zk::preverify::MAX_BYTES,
         preverify_budget_bytes: defaults::zk::preverify::BUDGET_BYTES,
         proof_history_cap: defaults::zk::proof::RECORD_HISTORY_CAP,
+        proof_retention_grace_blocks: defaults::zk::proof::RETENTION_GRACE_BLOCKS,
+        proof_prune_batch: defaults::zk::proof::PRUNE_BATCH_SIZE,
+        bridge_proof_max_range_len: defaults::zk::proof::BRIDGE_MAX_RANGE_LEN,
+        bridge_proof_max_past_age_blocks: defaults::zk::proof::BRIDGE_MAX_PAST_AGE_BLOCKS,
+        bridge_proof_max_future_drift_blocks: defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
         poseidon_params_id: defaults::confidential::POSEIDON_PARAMS_ID,
         pedersen_params_id: defaults::confidential::PEDERSEN_PARAMS_ID,
+        kaigi_roster_join_vk: None,
+        kaigi_roster_leave_vk: None,
+        kaigi_usage_vk: None,
         max_proof_size_bytes: defaults::confidential::MAX_PROOF_SIZE_BYTES,
         max_nullifiers_per_tx: defaults::confidential::MAX_NULLIFIERS_PER_TX,
         max_commitments_per_tx: defaults::confidential::MAX_COMMITMENTS_PER_TX,
@@ -131,7 +143,7 @@ fn unshield_rejects_stale_root_hint_and_accepts_recent() {
             alice.clone(),
             1u128,
             note,
-            vec![],
+            iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
         )
         .into();
         stx.world
@@ -158,7 +170,7 @@ fn unshield_rejects_stale_root_hint_and_accepts_recent() {
             alice.clone(),
             1u128,
             note,
-            vec![],
+            iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
         )
         .into();
         stx.world
