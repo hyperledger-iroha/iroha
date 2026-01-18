@@ -13,7 +13,7 @@ mod zk_testkit;
     any(feature = "zk-halo2", feature = "zk-halo2-ipa")
 ))]
 mod tests {
-    use std::{collections::HashMap, sync::Arc};
+    use std::{collections::BTreeMap, sync::Arc};
 
     use iroha_core::{
         executor::Executor,
@@ -249,7 +249,7 @@ mod tests {
     }
 
     #[allow(clippy::disallowed_types)]
-    type PreverifiedMap = HashMap<[u8; 32], bool>;
+    type PreverifiedMap = BTreeMap<[u8; 32], bool>;
 
     fn grant_manage_vk(block: &mut iroha_core::state::StateBlock<'_>) {
         let mut stx = block.transaction();

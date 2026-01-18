@@ -1186,6 +1186,28 @@ mod tests {
                 .unwrap_or(false)
         });
         assert!(has_nexus_layer, "nexus config layer must be attached");
+        let lane_catalog = layers.iter().find_map(|layer| {
+            layer
+                .as_ref()
+                .get("nexus")
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get("lane_catalog"))
+                .and_then(toml::Value::as_array)
+        });
+        let Some(lane_catalog) = lane_catalog else {
+            return Err(eyre!("expected nexus lane_catalog in config layer"));
+        };
+        let missing_metadata = lane_catalog.iter().any(|entry| {
+            !entry
+                .as_table()
+                .and_then(|table| table.get("metadata"))
+                .and_then(toml::Value::as_table)
+                .is_some()
+        });
+        assert!(
+            !missing_metadata,
+            "nexus lane_catalog entries must include metadata"
+        );
 
         Ok(())
     }

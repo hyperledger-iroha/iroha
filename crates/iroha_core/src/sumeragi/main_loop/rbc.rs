@@ -1786,6 +1786,24 @@ impl Actor {
             );
             return false;
         }
+        if self.runtime_da_enabled() && !self.block_payload_available_locally(*block_hash) {
+            let committed_height = {
+                let view = self.state.view();
+                u64::try_from(view.height()).unwrap_or(u64::MAX)
+            };
+            if height > committed_height {
+                debug!(
+                    height,
+                    view,
+                    local_view,
+                    committed_height,
+                    block = %block_hash,
+                    kind,
+                    "accepting RBC message for stale view while payload is missing"
+                );
+                return false;
+            }
+        }
         if self.runtime_da_enabled() && self.rbc_rebroadcast_active(key) {
             debug!(
                 height,
@@ -2221,6 +2239,7 @@ impl Actor {
                 }
             }
         }
+        self.cache_vote_roster(init.block_hash, init.height, init.view, roster.clone());
         self.record_rbc_session_roster(key, roster, roster_source);
         if let Some(mut session) = self.subsystems.da_rbc.rbc.sessions.remove(&key) {
             if session.payload_hash().is_none() {
