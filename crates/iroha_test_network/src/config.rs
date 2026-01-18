@@ -681,6 +681,9 @@ fn rebuild_block_from_parts(
             SignatureOf::from_hash(genesis_key_pair.private_key(), header.hash()),
         )
     });
+    let da_commitments = template.da_commitments().cloned();
+    let da_proof_policies = template.da_proof_policies().cloned();
+    let da_pin_intents = template.da_pin_intents().cloned();
 
     let signer_index = initial_signature.index();
     let mut working = iroha_data_model::block::SignedBlock::presigned(
@@ -688,6 +691,9 @@ fn rebuild_block_from_parts(
         header,
         transactions.clone(),
     );
+    working.set_da_commitments(da_commitments.clone());
+    working.set_da_proof_policies(da_proof_policies.clone());
+    working.set_da_pin_intents(da_pin_intents.clone());
     working.set_transaction_results(time_triggers.clone(), &hashes, results.clone());
     let signature = iroha_data_model::block::BlockSignature::new(
         signer_index,
@@ -699,6 +705,9 @@ fn rebuild_block_from_parts(
         working.payload().header,
         transactions,
     );
+    rebuilt.set_da_commitments(da_commitments);
+    rebuilt.set_da_proof_policies(da_proof_policies);
+    rebuilt.set_da_pin_intents(da_pin_intents);
     rebuilt.set_transaction_results(time_triggers, &hashes, results);
     rebuilt
 }

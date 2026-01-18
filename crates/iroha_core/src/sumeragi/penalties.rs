@@ -747,6 +747,7 @@ mod tests {
             rbc_chunk_fanout: None,
             rbc_pending_max_chunks: 0,
             rbc_pending_max_bytes: 0,
+            rbc_pending_session_limit: 0,
             rbc_pending_ttl: Duration::from_secs(0),
             rbc_session_ttl: Duration::from_secs(0),
             rbc_rebroadcast_sessions_per_tick: 1,

@@ -376,9 +376,7 @@ pub fn commit_quorum_from_len(len: usize) -> usize {
     if len <= 3 {
         return len;
     }
-    ((len.saturating_sub(1)) / 3)
-        .saturating_mul(2)
-        .saturating_add(1)
+    len.saturating_mul(2).saturating_add(2) / 3
 }
 
 #[cfg(test)]

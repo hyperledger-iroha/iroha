@@ -32,8 +32,8 @@ use super::{
     Actor, DataspaceAllocation, InvalidSigKind, InvalidSigOutcome, LaneAllocation,
     MissingBlockFetchDecision, PipelinePhase, RBC_MAX_TOTAL_CHUNKS, RbcRosterSource, RbcSession,
     pending_rbc::{
-        PENDING_RBC_STASH_LIMIT, PendingChunkOutcome, PendingRbcDropReason, PendingRbcMessages,
-        rbc_deliver_stash_bytes, rbc_ready_stash_bytes,
+        PendingChunkOutcome, PendingRbcDropReason, PendingRbcMessages, rbc_deliver_stash_bytes,
+        rbc_ready_stash_bytes,
     },
     proposals::block_payload_bytes,
 };
@@ -103,6 +103,26 @@ pub(super) struct RbcPersistWorkerHandle {
     pub(super) join_handle: std::thread::JoinHandle<()>,
 }
 
+#[derive(Debug)]
+enum RbcError {
+    TransactionPayloadTooLarge { len: usize },
+}
+
+impl std::fmt::Display for RbcError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TransactionPayloadTooLarge { len } => {
+                write!(
+                    f,
+                    "transaction payload length {len} exceeds addressable range"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for RbcError {}
+
 fn spawn_rbc_persist_worker(
     cfg: crate::sumeragi::RbcStoreConfig,
     wake_tx: Option<mpsc::SyncSender<()>>,
@@ -141,11 +161,17 @@ fn spawn_rbc_persist_worker(
 
 pub(super) fn chunk_payload_bytes(payload: &[u8], chunk_size: usize) -> Vec<Vec<u8>> {
     let effective = chunk_size.max(1);
+    let chunk_total = chunk_count(payload.len(), chunk_size);
+    let mut chunks = Vec::with_capacity(chunk_total);
     if payload.is_empty() {
         // Represent empty payloads as a single empty chunk to avoid zero-length sessions.
-        return vec![Vec::new()];
+        chunks.push(Vec::new());
+        return chunks;
     }
-    payload.chunks(effective).map(<[_]>::to_vec).collect()
+    for chunk in payload.chunks(effective) {
+        chunks.push(chunk.to_vec());
+    }
+    chunks
 }
 
 #[inline]
@@ -456,6 +482,32 @@ pub(super) fn distribute_chunks(total_chunks: u32, weights: &[u128]) -> Vec<u32>
     allocations
 }
 
+fn distribute_allocation_weights(total_chunks: u32, weights: &[u128]) -> Vec<u32> {
+    let mut allocations = distribute_chunks(total_chunks, weights);
+    if total_chunks == 0 {
+        return allocations;
+    }
+    for (allocation, weight) in allocations.iter_mut().zip(weights.iter()) {
+        if *allocation == 0 && *weight > 0 {
+            *allocation = 1;
+        }
+    }
+    let assigned_total: u32 = allocations.iter().copied().sum();
+    if assigned_total > total_chunks {
+        let mut excess = assigned_total - total_chunks;
+        for allocation in allocations.iter_mut().rev() {
+            if excess == 0 {
+                break;
+            }
+            if *allocation > 0 {
+                *allocation -= 1;
+                excess -= 1;
+            }
+        }
+    }
+    allocations
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -540,6 +592,18 @@ mod tests {
         let outsider = sample_roster(1).pop().expect("sample peer");
         assert!(!is_payload_rebroadcaster(&roster, &outsider, seed));
         assert!(!is_ready_rebroadcaster(&roster, &outsider, seed));
+    }
+
+    #[test]
+    fn distribute_allocation_weights_enforces_minimums() {
+        let allocations = distribute_allocation_weights(5, &[1, 100, 1]);
+        assert_eq!(allocations, vec![1, 4, 0]);
+    }
+
+    #[test]
+    fn distribute_allocation_weights_returns_zero_for_empty_total() {
+        let allocations = distribute_allocation_weights(0, &[1, 1, 1]);
+        assert_eq!(allocations, vec![0, 0, 0]);
     }
 }
 
@@ -894,7 +958,7 @@ impl Actor {
         for (tx, decision) in transactions.iter().zip(routing.iter()) {
             let encoded = tx.as_ref().encode();
             let len = u64::try_from(encoded.len())
-                .map_err(|_| eyre!("transaction payload exceeds addressable length"))?;
+                .map_err(|_| RbcError::TransactionPayloadTooLarge { len: encoded.len() })?;
             let teu = Queue::estimate_teu(tx);
 
             lane_map
@@ -945,30 +1009,9 @@ impl Actor {
             .iter()
             .map(|alloc| u128::from(alloc.rbc_bytes_total))
             .collect();
-        let lane_chunks = distribute_chunks(total_chunks, &lane_weights);
+        let lane_chunks = distribute_allocation_weights(total_chunks, &lane_weights);
         for (alloc, chunk_count) in lane_allocations.iter_mut().zip(lane_chunks.into_iter()) {
             alloc.total_chunks = chunk_count;
-            if alloc.total_chunks == 0 && alloc.rbc_bytes_total > 0 && total_chunks > 0 {
-                alloc.total_chunks = 1;
-            }
-        }
-
-        // Ensure total chunks remain bounded after enforcing minimums.
-        let assigned_total: u32 = lane_allocations
-            .iter()
-            .map(|alloc| alloc.total_chunks)
-            .sum();
-        if assigned_total > total_chunks && !lane_allocations.is_empty() {
-            let mut excess = assigned_total - total_chunks;
-            for alloc in lane_allocations.iter_mut().rev() {
-                if excess == 0 {
-                    break;
-                }
-                if alloc.total_chunks > 0 {
-                    alloc.total_chunks -= 1;
-                    excess -= 1;
-                }
-            }
         }
 
         let mut lane_chunk_map: StdBTreeMap<LaneId, u32> = StdBTreeMap::new();
@@ -989,32 +1032,12 @@ impl Actor {
                 .iter()
                 .map(|alloc| u128::from(alloc.rbc_bytes_total))
                 .collect();
-            let allocated = distribute_chunks(lane_total_chunks, &weights);
+            let allocated = distribute_allocation_weights(lane_total_chunks, &weights);
             for (alloc, chunk_count) in dataspace_allocations[idx..end]
                 .iter_mut()
                 .zip(allocated.into_iter())
             {
                 alloc.total_chunks = chunk_count;
-                if alloc.total_chunks == 0 && alloc.rbc_bytes_total > 0 && lane_total_chunks > 0 {
-                    alloc.total_chunks = 1;
-                }
-            }
-
-            let assigned: u32 = dataspace_allocations[idx..end]
-                .iter()
-                .map(|alloc| alloc.total_chunks)
-                .sum();
-            if assigned > lane_total_chunks {
-                let mut excess = assigned - lane_total_chunks;
-                for alloc in dataspace_allocations[idx..end].iter_mut().rev() {
-                    if excess == 0 {
-                        break;
-                    }
-                    if alloc.total_chunks > 0 {
-                        alloc.total_chunks -= 1;
-                        excess -= 1;
-                    }
-                }
             }
 
             idx = end;
@@ -2416,7 +2439,7 @@ impl Actor {
                 );
                 warn!(
                     ?key,
-                    limit = PENDING_RBC_STASH_LIMIT,
+                    limit = self.config.rbc_pending_session_limit,
                     dropped_bytes,
                     "dropping pending RBC chunk: stash session limit reached"
                 );
@@ -2652,7 +2675,7 @@ impl Actor {
                     );
                     warn!(
                         ?key,
-                        limit = PENDING_RBC_STASH_LIMIT,
+                        limit = self.config.rbc_pending_session_limit,
                         ready_sender,
                         ready_view,
                         dropped_bytes,
@@ -2749,7 +2772,7 @@ impl Actor {
                     );
                     warn!(
                         ?key,
-                        limit = PENDING_RBC_STASH_LIMIT,
+                        limit = actor.config.rbc_pending_session_limit,
                         reason,
                         ready_sender,
                         ready_view,
@@ -2945,17 +2968,39 @@ impl Actor {
         }
         let mut inferred_chunk_root: Option<Hash> = None;
         if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {
+            let ready_peer = usize::try_from(ready.sender)
+                .ok()
+                .and_then(|idx| signature_topology.as_ref().get(idx));
             match session.expected_chunk_root {
                 Some(expected) => {
                     if expected != ready.chunk_root {
-                        warn!(
-                            height = ready.height,
-                            view = ready.view,
-                            sender = ready.sender,
-                            ?expected,
-                            observed = ?ready.chunk_root,
-                            "dropping RBC READY with mismatched chunk root"
-                        );
+                        let log_outcome = ready_peer.map(|peer| {
+                            self.record_rbc_mismatch(
+                                peer,
+                                status::RbcMismatchKind::ChunkRoot,
+                                ready.height,
+                                ready.view,
+                            )
+                        });
+                        if log_outcome.map_or(true, |outcome| outcome.should_log()) {
+                            warn!(
+                                height = ready.height,
+                                view = ready.view,
+                                sender = ready.sender,
+                                ?expected,
+                                observed = ?ready.chunk_root,
+                                "dropping RBC READY with mismatched chunk root"
+                            );
+                        } else {
+                            debug!(
+                                height = ready.height,
+                                view = ready.view,
+                                sender = ready.sender,
+                                ?expected,
+                                observed = ?ready.chunk_root,
+                                "suppressing repeated RBC READY chunk-root mismatch log"
+                            );
+                        }
                         self.record_consensus_message_handling(
                             super::status::ConsensusMessageKind::RbcReady,
                             super::status::ConsensusMessageOutcome::Dropped,
@@ -2967,14 +3012,33 @@ impl Actor {
                 None => {
                     if let Some(computed) = session.chunk_root() {
                         if computed != ready.chunk_root {
-                            warn!(
-                                height = ready.height,
-                                view = ready.view,
-                                sender = ready.sender,
-                                ?computed,
-                                observed = ?ready.chunk_root,
-                                "dropping RBC READY with mismatched computed chunk root"
-                            );
+                            let log_outcome = ready_peer.map(|peer| {
+                                self.record_rbc_mismatch(
+                                    peer,
+                                    status::RbcMismatchKind::ChunkRoot,
+                                    ready.height,
+                                    ready.view,
+                                )
+                            });
+                            if log_outcome.map_or(true, |outcome| outcome.should_log()) {
+                                warn!(
+                                    height = ready.height,
+                                    view = ready.view,
+                                    sender = ready.sender,
+                                    ?computed,
+                                    observed = ?ready.chunk_root,
+                                    "dropping RBC READY with mismatched computed chunk root"
+                                );
+                            } else {
+                                debug!(
+                                    height = ready.height,
+                                    view = ready.view,
+                                    sender = ready.sender,
+                                    ?computed,
+                                    observed = ?ready.chunk_root,
+                                    "suppressing repeated RBC READY computed chunk-root mismatch log"
+                                );
+                            }
                             self.record_consensus_message_handling(
                                 super::status::ConsensusMessageKind::RbcReady,
                                 super::status::ConsensusMessageOutcome::Dropped,
@@ -3319,7 +3383,7 @@ impl Actor {
                     );
                     warn!(
                         ?key,
-                        limit = PENDING_RBC_STASH_LIMIT,
+                        limit = self.config.rbc_pending_session_limit,
                         dropped_bytes,
                         "dropping pending RBC DELIVER: stash session limit reached before INIT"
                     );
@@ -3423,7 +3487,7 @@ impl Actor {
                     );
                     warn!(
                         ?key,
-                        limit = PENDING_RBC_STASH_LIMIT,
+                        limit = actor.config.rbc_pending_session_limit,
                         reason,
                         dropped_bytes,
                         "dropping pending RBC DELIVER: stash session limit reached"
@@ -3829,7 +3893,7 @@ impl Actor {
                         height = key.1,
                         view = key.2,
                         sender,
-                        limit = PENDING_RBC_STASH_LIMIT,
+                        limit = self.config.rbc_pending_session_limit,
                         dropped_bytes,
                         "dropping deferred RBC DELIVER: stash session limit reached"
                     );
@@ -4168,6 +4232,9 @@ impl Actor {
                             ?key,
                             "RBC persist queue full; deferring session persistence"
                         );
+                        if let Some(telemetry) = self.telemetry_handle() {
+                            telemetry.inc_rbc_persist_drops();
+                        }
                     }
                     Err(mpsc::TrySendError::Disconnected(_work)) => {
                         warn!(
@@ -4480,7 +4547,8 @@ impl Actor {
         let (max_pending_chunks, max_pending_bytes) = pending_caps;
         let mut pending_snapshot = status::pending_rbc_snapshot();
         pending_snapshot.sessions = pending_stash_sessions;
-        pending_snapshot.session_cap = u64::try_from(PENDING_RBC_STASH_LIMIT).unwrap_or(u64::MAX);
+        pending_snapshot.session_cap =
+            u64::try_from(self.config.rbc_pending_session_limit).unwrap_or(u64::MAX);
         pending_snapshot.chunks = pending_stash_chunks;
         pending_snapshot.bytes = pending_stash_bytes;
         pending_snapshot.max_chunks_per_session =

@@ -633,6 +633,7 @@ Operators can pull deterministic telemetry snapshots over Torii or via the CLI.
 | `sumeragi_phase_latency_ema_ms{phase="collect_da_ms",…}` / `sumeragi_phase_total_ema_ms` | EMA latency per phase and across the full pipeline as rendered by `iroha sumeragi phases --summary`. | Trigger alerts when EMA totals exceed the configured view timeout, then correlate the offending phase with Torii/RBC logs to determine whether DA, vote-collection, or aggregator legs are stalling. |
 | `sumeragi_rbc_store_sessions` / `sumeragi_rbc_store_pressure` / `sumeragi_rbc_store_bytes` | Persisted RBC sessions and pressure level. `pressure=2` means the store is shedding sessions to remain within bounds. | Take `iroha sumeragi telemetry --summary` plus `iroha sumeragi rbc status` snapshots, prune stale payloads, and review disk I/O. If pressure stays high, increase the per-session cap or speed up delivery via `redundant_send_r`. |
 | `sumeragi_rbc_store_evictions_total` / `sumeragi_rbc_backpressure_deferrals_total` | Sessions evicted due to TTL/capacity enforcement and proposals deferred because the store refused new payloads. | Use `/v1/sumeragi/status.rbc_store.recent_evictions` and the CLI summary to pinpoint the affected height/view, re-ingest the payload if needed, and adjust `redundant_send_r` or store caps to avoid repeated evictions. |
+| `sumeragi_rbc_persist_drops_total` | Persist requests dropped because the async RBC persist queue is full. | Check disk throughput and queue saturation, then tune RBC store caps or reduce incoming load to avoid prolonged in-memory growth. |
 | `sumeragi_rbc_backlog_sessions_pending` / `sumeragi_rbc_backlog_chunks_total` / `sumeragi_rbc_backlog_chunks_max` | Number of payloads still missing chunks and the highest per-session backlog. | When `pending_sessions` or `chunks_total` plateaus, inspect `iroha sumeragi rbc sessions --summary` to find the stuck block hash, then check network logs for throttling or mismatched manifests. |
 | `sumeragi_rbc_rebroadcast_skipped_total{kind="payload|ready"}` | Local peer skipped a payload/READY rebroadcast because it was not in the deterministic f+1 sender subset. | Compare counts across peers to confirm the intended subset is rebroadcasting; if stalls persist and skips climb everywhere, verify roster hashes and the leader index ordering. |
 | `sumeragi_rbc_da_reschedule_total` | Legacy counter for DA deadline reschedules (no longer incremented when DA is advisory). | Keep at zero; use `sumeragi_da_gate_block_total{reason="missing_local_data"}` to monitor missing local payloads. |
@@ -648,13 +649,13 @@ networks to speed recovery, or lower it if P2P queues saturate during soak tests
 
 Before INIT arrives, RBC frames are bounded by per-session caps
 (`sumeragi.rbc_pending_max_chunks`, `sumeragi.rbc_pending_max_bytes`) and the
-hard stash limit `PENDING_RBC_STASH_LIMIT = 256` sessions. Entries also expire
-after `sumeragi.rbc_pending_ttl_ms` when the session is not yet active; once a
-session exists, pending READY/DELIVER frames are retained until the session is
-cleared so roster delays do not drop availability evidence. Session-cap
-evictions skip active sessions; if the cap is reached by active sessions, new
-pending frames are dropped and recorded as `session_cap` drops. The worst-case
-buffered payload before INIT is:
+session cap `sumeragi.rbc_pending_session_limit` (default 256). Entries also
+expire after `sumeragi.rbc_pending_ttl_ms` when the session is not yet active;
+once a session exists, pending READY/DELIVER frames are retained until the
+session is cleared so roster delays do not drop availability evidence.
+Session-cap evictions skip active sessions; if the cap is reached by active
+sessions, new pending frames are dropped and recorded as `session_cap` drops.
+The worst-case buffered payload before INIT is:
 
 When pending frames are dropped (cap, TTL, or session-cap), the node
 deterministically requests the missing `BlockCreated` from the cached roster
@@ -662,7 +663,8 @@ to preserve liveness; retries respect the standard backoff and roster-hash
 checks.
 
 ```
-session_cap * min(rbc_pending_max_bytes, rbc_chunk_max_bytes * RBC_MAX_TOTAL_CHUNKS)
+rbc_pending_session_limit
+  * min(rbc_pending_max_bytes, rbc_chunk_max_bytes * RBC_MAX_TOTAL_CHUNKS)
 ```
 
 Size `rbc_pending_max_bytes` to at least one chunk (`rbc_chunk_max_bytes`), and

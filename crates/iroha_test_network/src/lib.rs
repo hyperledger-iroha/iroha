@@ -2149,8 +2149,7 @@ impl Network {
     pub fn genesis(&self) -> GenesisBlock {
         self.cached_genesis
             .get_or_init(|| {
-                let config_layers: Vec<Table> =
-                    self.config_layers().map(Cow::into_owned).collect();
+                let config_layers: Vec<Table> = self.config_layers().map(Cow::into_owned).collect();
                 let da_proof_policies = self
                     .peers
                     .first()
@@ -2922,7 +2921,9 @@ fn resolve_da_proof_policies(
         }
     };
     match user.parse() {
-        Ok(config) => Some(iroha_core::da::proof_policy_bundle(&config.nexus.lane_config)),
+        Ok(config) => Some(iroha_core::da::proof_policy_bundle(
+            &config.nexus.lane_config,
+        )),
         Err(err) => {
             warn!(
                 ?err,
@@ -7395,22 +7396,56 @@ exit 0
         let network = NetworkBuilder::new()
             .with_peers(4)
             .with_config_layer(|layer| {
+                let mut lane0 = Table::new();
+                lane0.insert("index".into(), Value::Integer(0));
+                lane0.insert("alias".into(), Value::String("alpha".to_string()));
+                lane0.insert("metadata".into(), Value::Table(Table::new()));
+                let mut lane1 = Table::new();
+                lane1.insert("index".into(), Value::Integer(1));
+                lane1.insert("alias".into(), Value::String("beta".to_string()));
+                lane1.insert("metadata".into(), Value::Table(Table::new()));
+                let lane_catalog = Value::Array(vec![Value::Table(lane0), Value::Table(lane1)]);
                 layer
                     .write(["nexus", "enabled"], true)
-                    .write(["nexus", "lane_count"], 2i64);
+                    .write(["nexus", "lane_count"], 2i64)
+                    .write(["nexus", "lane_catalog"], lane_catalog);
             })
             .build();
 
-        let genesis = network.genesis();
-        let policies = genesis
-            .0
-            .da_proof_policies()
-            .expect("genesis should embed da proof policies");
+        let config_layers: Vec<Table> = network.config_layers().map(Cow::into_owned).collect();
+        let peer = network.peers().first().expect("network should have peers");
+        let mut merged = peer.base_config_table();
+        for layer in &config_layers {
+            merge_tables(&mut merged, layer);
+        }
+        let nexus = merged
+            .get("nexus")
+            .and_then(Value::as_table)
+            .expect("nexus table should exist");
+        assert_eq!(
+            nexus.get("enabled").and_then(Value::as_bool),
+            Some(true),
+            "config should enable nexus when lane_count is set"
+        );
+        assert_eq!(
+            nexus.get("lane_count").and_then(Value::as_integer),
+            Some(2),
+            "config should retain the overridden lane_count"
+        );
 
+        let policies = resolve_da_proof_policies(peer, &config_layers)
+            .expect("should resolve da proof policies");
         assert_eq!(policies.policies.len(), 2);
+
+        let genesis = network.genesis();
+        assert_eq!(
+            genesis.0.da_proof_policies(),
+            Some(&policies),
+            "genesis should embed da proof policies"
+        );
         assert_eq!(
             genesis.0.header().da_proof_policies_hash(),
-            Some(HashOf::new(policies))
+            Some(HashOf::new(&policies))
         );
     }
 

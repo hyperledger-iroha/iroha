@@ -6364,6 +6364,8 @@ pub struct Metrics {
     pub sumeragi_rbc_store_pressure: GenericGauge<AtomicU64>,
     /// Sumeragi RBC: session evictions due to TTL/capacity enforcement (cumulative)
     pub sumeragi_rbc_store_evictions_total: IntCounter,
+    /// Sumeragi RBC: persist requests dropped due to a full async queue (cumulative)
+    pub sumeragi_rbc_persist_drops_total: IntCounter,
     /// Sumeragi RBC: proposals deferred due to store back-pressure (cumulative)
     pub sumeragi_rbc_backpressure_deferrals_total: IntCounter,
     /// Sumeragi RBC: DELIVER deferrals waiting on READY quorum (cumulative)
@@ -9467,6 +9469,11 @@ impl Default for Metrics {
         let sumeragi_rbc_store_evictions_total = IntCounter::new(
             "sumeragi_rbc_store_evictions_total",
             "Sumeragi RBC persisted sessions evicted due to TTL or capacity limits",
+        )
+        .expect("Infallible");
+        let sumeragi_rbc_persist_drops_total = IntCounter::new(
+            "sumeragi_rbc_persist_drops_total",
+            "Sumeragi RBC persist requests dropped due to full async queue",
         )
         .expect("Infallible");
         let sumeragi_rbc_backpressure_deferrals_total = IntCounter::new(
@@ -12894,7 +12901,8 @@ impl Default for Metrics {
             sumeragi_rbc_store_sessions,
             sumeragi_rbc_store_bytes,
             sumeragi_rbc_store_pressure,
-            sumeragi_rbc_store_evictions_total
+            sumeragi_rbc_store_evictions_total,
+            sumeragi_rbc_persist_drops_total
         );
         register!(
             registry,
@@ -13354,6 +13362,7 @@ impl Default for Metrics {
             sumeragi_rbc_store_bytes,
             sumeragi_rbc_store_pressure,
             sumeragi_rbc_store_evictions_total,
+            sumeragi_rbc_persist_drops_total,
             sumeragi_rbc_backpressure_deferrals_total,
             sumeragi_rbc_deliver_defer_ready_total,
             sumeragi_rbc_deliver_defer_chunks_total,

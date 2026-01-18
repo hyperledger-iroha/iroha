@@ -6713,6 +6713,13 @@ impl Telemetry {
             .inc_by(count);
     }
 
+    /// Increment RBC persist-drop counter when the async queue is full.
+    pub fn inc_rbc_persist_drops(&self) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.sumeragi_rbc_persist_drops_total.inc();
+        }
+    }
+
     /// Increment kura persistence failure counter labeled by outcome.
     pub fn inc_kura_store_failure(&self, outcome: &'static str) {
         if self.enabled.load(Ordering::Relaxed) {
