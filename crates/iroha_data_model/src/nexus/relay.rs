@@ -1,6 +1,6 @@
 //! Lane relay envelope for cross-lane commitments (NX-4).
 //!
-//! This carries the lane block header, optional execution QC and DA digest,
+//! This carries the lane block header, optional QC and DA digest,
 //! plus the settlement commitment and its hash so the merge ledger can verify
 //! relay payloads deterministically.
 

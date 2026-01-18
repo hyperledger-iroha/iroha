@@ -2027,8 +2027,7 @@ impl Actor {
             );
             return Ok(());
         };
-        let expected_leader_index =
-            u64::try_from(expected_leader_index).unwrap_or(u64::MAX);
+        let expected_leader_index = u64::try_from(expected_leader_index).unwrap_or(u64::MAX);
         if init.leader_signature.index() != expected_leader_index {
             warn!(
                 height = init.height,

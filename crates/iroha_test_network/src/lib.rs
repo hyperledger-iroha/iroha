@@ -46,7 +46,10 @@ use iroha_data_model::{
     ChainId,
     account::AccountId,
     block::consensus::{ConsensusGenesisParams, NposGenesisParams},
-    isi::{InstructionBox, SetParameter, set_instruction_registry},
+    isi::{
+        InstructionBox, SetParameter, set_instruction_registry,
+        staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
+    },
     parameter::{SmartContractParameter, SumeragiParameter, system::SumeragiNposParameters},
     transaction::Executable,
 };
@@ -1489,6 +1492,7 @@ pub struct Network {
     genesis_key_pair: KeyPair,
 
     genesis_isi: Vec<Vec<InstructionBox>>,
+    genesis_post_topology_isi: Vec<Vec<InstructionBox>>,
     // Cache a single, deterministic genesis block per network instance to ensure
     // all peers that submit genesis use byte-for-byte identical content.
     cached_genesis: OnceLock<GenesisBlock>,
@@ -2139,13 +2143,14 @@ impl Network {
 
     /// Network genesis block.
     ///
-    /// It uses the basic [`genesis_factory`] with [`Self::genesis_isi`] +
-    /// topology of the network peers.
+    /// It uses the basic [`genesis_factory`] with [`Self::genesis_isi`],
+    /// post-topology bootstrap instructions, and the network peer topology.
     pub fn genesis(&self) -> GenesisBlock {
         self.cached_genesis
             .get_or_init(|| {
-                config::genesis_with_keypair(
+                config::genesis_with_keypair_and_post_topology(
                     self.genesis_isi.clone(),
+                    self.genesis_post_topology_isi.clone(),
                     self.peers.iter().map(NetworkPeer::id).collect(),
                     self.topology_entries.clone(),
                     self.genesis_key_pair.clone(),
@@ -2698,6 +2703,7 @@ pub struct NetworkBuilder {
     sumeragi_parameters: Vec<SumeragiParameter>,
     sumeragi_da_enabled: Option<bool>,
     auto_populate_trusted_peer_pops: bool,
+    npos_genesis_bootstrap_stake: Option<u64>,
 }
 
 fn bool_env_override(key: &str) -> Option<bool> {
@@ -2997,6 +3003,7 @@ impl NetworkBuilder {
             sumeragi_parameters: Vec::new(),
             sumeragi_da_enabled: None,
             auto_populate_trusted_peer_pops: true,
+            npos_genesis_bootstrap_stake: None,
         };
         if let Some(value) = bool_env_override(DA_ENABLED_ENV) {
             debug!(
@@ -3128,6 +3135,16 @@ impl NetworkBuilder {
         self
     }
 
+    /// Inject NPoS bootstrap staking instructions into genesis.
+    ///
+    /// This registers Nexus/IVM domains, a gas account, the default stake asset, and per-peer
+    /// validator accounts funded with the requested stake amount, then activates them.
+    pub fn with_npos_genesis_bootstrap(mut self, stake_amount: u64) -> Self {
+        assert!(stake_amount > 0, "stake_amount must be non-zero");
+        self.npos_genesis_bootstrap_stake = Some(stake_amount);
+        self
+    }
+
     /// Override the genesis signing key pair used to sign the manifest.
     pub fn with_genesis_keypair(mut self, key_pair: KeyPair) -> Self {
         self.genesis_key_pair = key_pair;
@@ -3236,7 +3253,7 @@ impl NetworkBuilder {
         let NetworkBuilder {
             env,
             n_peers,
-            config_layers,
+            mut config_layers,
             pipeline_time,
             ivm_fuel,
             mut genesis_isi,
@@ -3247,6 +3264,7 @@ impl NetworkBuilder {
             sumeragi_parameters,
             sumeragi_da_enabled,
             auto_populate_trusted_peer_pops,
+            npos_genesis_bootstrap_stake,
         } = self;
 
         let mut sumeragi_parameters = sumeragi_parameters;
@@ -3409,6 +3427,84 @@ impl NetworkBuilder {
                 .first_mut()
                 .expect("at least one genesis transaction exists");
             first_tx.splice(0..0, parameter_prefix);
+        }
+
+        let mut genesis_post_topology_isi = Vec::new();
+        let npos_bootstrap =
+            npos_genesis_bootstrap_stake.filter(|_| matches!(consensus_mode, ConsensusMode::Npos));
+        if let Some(stake_amount) = npos_bootstrap {
+            let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
+            let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
+            let stake_asset_id: AssetDefinitionId =
+                "xor#nexus".parse().expect("stake asset definition");
+            let gas_account_id =
+                AccountId::new(ivm_domain.clone(), genesis_key_pair.public_key().clone());
+            let gas_account_address = gas_account_id
+                .to_canonical_hex()
+                .unwrap_or_else(|_| genesis_key_pair.public_key().to_string());
+            let gas_account_str = format!("{gas_account_address}@{ivm_domain}");
+
+            let mut bootstrap_layer = Table::new();
+            let mut writer = TomlWriter::new(&mut bootstrap_layer);
+            writer
+                .write(
+                    ["nexus", "staking", "stake_asset_id"],
+                    stake_asset_id.to_string(),
+                )
+                .write(
+                    ["nexus", "staking", "stake_escrow_account_id"],
+                    gas_account_str.clone(),
+                )
+                .write(
+                    ["nexus", "staking", "slash_sink_account_id"],
+                    gas_account_str,
+                );
+            config_layers.push(bootstrap_layer);
+
+            let definition = AssetDefinition::new(stake_asset_id.clone(), NumericSpec::default())
+                .with_metadata(Metadata::default());
+
+            let mut bootstrap_tx = Vec::new();
+            bootstrap_tx.push(Register::domain(Domain::new(nexus_domain.clone())).into());
+            bootstrap_tx.push(Register::domain(Domain::new(ivm_domain.clone())).into());
+            bootstrap_tx.push(Register::account(Account::new(gas_account_id.clone())).into());
+            bootstrap_tx.push(Register::asset_definition(definition).into());
+
+            for peer in &peer_ids {
+                let validator_id = AccountId::new(nexus_domain.clone(), peer.public_key().clone());
+                bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
+                bootstrap_tx.push(
+                    Mint::asset_numeric(
+                        stake_amount,
+                        AssetId::new(stake_asset_id.clone(), validator_id.clone()),
+                    )
+                    .into(),
+                );
+            }
+            genesis_post_topology_isi.push(bootstrap_tx);
+
+            let mut validator_tx = Vec::new();
+            for peer in &peer_ids {
+                let validator_id = AccountId::new(nexus_domain.clone(), peer.public_key().clone());
+                validator_tx.push(
+                    RegisterPublicLaneValidator {
+                        lane_id: LaneId::SINGLE,
+                        validator: validator_id.clone(),
+                        stake_account: validator_id.clone(),
+                        initial_stake: Numeric::from(stake_amount),
+                        metadata: Metadata::default(),
+                    }
+                    .into(),
+                );
+                validator_tx.push(
+                    ActivatePublicLaneValidator {
+                        lane_id: LaneId::SINGLE,
+                        validator: validator_id,
+                    }
+                    .into(),
+                );
+            }
+            genesis_post_topology_isi.push(validator_tx);
         }
 
         // Build a preview genesis so we can derive the consensus fingerprint from the
@@ -3605,6 +3701,7 @@ impl NetworkBuilder {
             consensus_profile,
             genesis_key_pair,
             genesis_isi,
+            genesis_post_topology_isi,
             cached_genesis,
             config_layers: Some(base_layer).into_iter().chain(config_layers).collect(),
             sumeragi_overrides,
@@ -7597,6 +7694,87 @@ exit 0
         assert!(
             has_da_enabled_set_parameter,
             "default builder must inject DA enablement parameter"
+        );
+    }
+
+    #[test]
+    fn npos_bootstrap_adds_validator_instructions() {
+        init_instruction_registry();
+        let stake_amount = SumeragiNposParameters::default().min_self_bond();
+        let network = NetworkBuilder::new()
+            .with_peers(2)
+            .with_auto_populated_trusted_peers()
+            .with_npos_genesis_bootstrap(stake_amount)
+            .with_config_layer(|layer| {
+                layer.write(["sumeragi", "consensus_mode"], "npos");
+            })
+            .build();
+        let genesis = network.genesis();
+        let mut has_register = false;
+        let mut has_activate = false;
+        for tx in genesis.0.transactions_vec() {
+            if let Executable::Instructions(instructions) = tx.instructions() {
+                for instruction in instructions {
+                    if instruction
+                        .as_any()
+                        .downcast_ref::<RegisterPublicLaneValidator>()
+                        .is_some()
+                    {
+                        has_register = true;
+                    }
+                    if instruction
+                        .as_any()
+                        .downcast_ref::<ActivatePublicLaneValidator>()
+                        .is_some()
+                    {
+                        has_activate = true;
+                    }
+                }
+            }
+        }
+        assert!(
+            has_register && has_activate,
+            "npos bootstrap should register and activate validators in genesis"
+        );
+    }
+
+    #[test]
+    fn npos_bootstrap_overrides_stake_accounts_in_config() {
+        let stake_amount = SumeragiNposParameters::default().min_self_bond();
+        let network = NetworkBuilder::new()
+            .with_peers(1)
+            .with_auto_populated_trusted_peers()
+            .with_npos_genesis_bootstrap(stake_amount)
+            .with_config_layer(|layer| {
+                layer.write(["sumeragi", "consensus_mode"], "npos");
+            })
+            .build();
+
+        let mut merged = Table::new();
+        for layer in network.config_layers() {
+            merge_tables(&mut merged, layer.as_ref());
+        }
+
+        let stake_escrow = get_nested_value(
+            &merged,
+            &["nexus", "staking", "stake_escrow_account_id"],
+        )
+        .and_then(Value::as_str)
+        .expect("stake_escrow_account_id should be present");
+        let slash_sink = get_nested_value(
+            &merged,
+            &["nexus", "staking", "slash_sink_account_id"],
+        )
+        .and_then(Value::as_str)
+        .expect("slash_sink_account_id should be present");
+
+        assert!(
+            stake_escrow.parse::<AccountId>().is_ok(),
+            "stake_escrow_account_id must parse as AccountId; got {stake_escrow}"
+        );
+        assert!(
+            slash_sink.parse::<AccountId>().is_ok(),
+            "slash_sink_account_id must parse as AccountId; got {slash_sink}"
         );
     }
 

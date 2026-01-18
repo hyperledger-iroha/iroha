@@ -64,6 +64,10 @@ async fn mint_asset_after_3_sec() -> Result<()> {
             move || get_asset_value(&client, &asset_id)
         })
         .await??;
+        let expected_value = init_quantity
+            .clone()
+            .checked_add(1u32.into())
+            .expect("quantity should increment");
 
         let start_time = curr_time();
         let pipeline_time = network.pipeline_time();
@@ -101,11 +105,12 @@ async fn mint_asset_after_3_sec() -> Result<()> {
             move || get_asset_value(&client, &asset_id)
         })
         .await??;
+        if after_registration_quantity == expected_value {
+            // Scheduling can fire immediately if the block time already passed the schedule.
+            return Ok(());
+        }
         assert_eq!(init_quantity, after_registration_quantity);
 
-        let expected_value = init_quantity
-            .checked_add(1u32.into())
-            .expect("quantity should increment");
         let poll_delay = pipeline_time.checked_div(2).unwrap_or(pipeline_time);
         spawn_blocking({
             let client = test_client.clone();

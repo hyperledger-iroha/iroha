@@ -71,14 +71,12 @@ fn summarize_phases(v: &Value) -> String {
     let g = |k: &str| v.get(k).and_then(norito::json::Value::as_u64).unwrap_or(0);
     let pipeline_total = g("pipeline_total_ms");
     let base = format!(
-        "propose={} da={} prevote={} precommit={} aggregator={} exec={} witness={} commit={} pipeline_total={} ms",
+        "propose={} da={} prevote={} precommit={} aggregator={} commit={} pipeline_total={} ms",
         g("propose_ms"),
         g("collect_da_ms"),
         g("collect_prevote_ms"),
         g("collect_precommit_ms"),
         g("collect_aggregator_ms"),
-        g("collect_exec_ms"),
-        g("collect_witness_ms"),
         g("commit_ms"),
         pipeline_total
     );
@@ -114,14 +112,12 @@ fn summarize_phases(v: &Value) -> String {
                 };
                 let pipeline_total_ema = ge("pipeline_total_ms");
                 format!(
-                    "{base} | ema(propose={} da={} prevote={} precommit={} aggregator={} exec={} witness={} commit={} pipeline_total={}) | gossip_fallbacks={fallback} | block_created_drops={dropped} | block_created_hint_mismatch={hint} | block_created_proposal_mismatch={proposal}",
+                    "{base} | ema(propose={} da={} prevote={} precommit={} aggregator={} commit={} pipeline_total={}) | gossip_fallbacks={fallback} | block_created_drops={dropped} | block_created_hint_mismatch={hint} | block_created_proposal_mismatch={proposal}",
                     ge("propose_ms"),
                     ge("collect_da_ms"),
                     ge("collect_prevote_ms"),
                     ge("collect_precommit_ms"),
                     ge("collect_aggregator_ms"),
-                    ge("collect_exec_ms"),
-                    ge("collect_witness_ms"),
                     ge("commit_ms"),
                     pipeline_total_ema
                 )
@@ -186,8 +182,6 @@ mod tests {
             "collect_prevote_ms": 30,
             "collect_precommit_ms": 40,
             "collect_aggregator_ms": 50,
-            "collect_exec_ms": 60,
-            "collect_witness_ms": 70,
             "commit_ms": 80,
             "collect_aggregator_gossip_total": 2,
             "block_created_dropped_by_lock_total": 3,
@@ -199,14 +193,12 @@ mod tests {
                 "collect_prevote_ms": 31,
                 "collect_precommit_ms": 41,
                 "collect_aggregator_ms": 51,
-                "collect_exec_ms": 61,
-                "collect_witness_ms": 71,
                 "commit_ms": 81
             }
         });
         assert_eq!(
             summarize_phases(&value),
-            "propose=10 da=20 prevote=30 precommit=40 aggregator=50 exec=60 witness=70 commit=80 pipeline_total=0 ms | ema(propose=11 da=21 prevote=31 precommit=41 aggregator=51 exec=61 witness=71 commit=81 pipeline_total=0) | gossip_fallbacks=2 | block_created_drops=3 | block_created_hint_mismatch=4 | block_created_proposal_mismatch=5"
+            "propose=10 da=20 prevote=30 precommit=40 aggregator=50 commit=80 pipeline_total=0 ms | ema(propose=11 da=21 prevote=31 precommit=41 aggregator=51 commit=81 pipeline_total=0) | gossip_fallbacks=2 | block_created_drops=3 | block_created_hint_mismatch=4 | block_created_proposal_mismatch=5"
         );
     }
 

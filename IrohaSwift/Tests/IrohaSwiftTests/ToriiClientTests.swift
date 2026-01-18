@@ -3687,6 +3687,45 @@ id: 88
         XCTAssertEqual(governanceRaw.count, 1)
     }
 
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetSumeragiCommitQcParsesRecordAsync() async throws {
+        let blockHash = String(repeating: "a", count: 64)
+        let payload = """
+        {
+            "subject_block_hash": "\(blockHash)",
+            "commit_qc": {
+                "phase": "Commit",
+                "parent_state_root": "\(String(repeating: "b", count: 64))",
+                "post_state_root": "\(String(repeating: "c", count: 64))",
+                "height": 12,
+                "view": 3,
+                "epoch": 4,
+                "mode_tag": "iroha2-consensus::permissioned-sumeragi@v1",
+                "validator_set_hash": "\(String(repeating: "d", count: 64))",
+                "validator_set_hash_version": 1,
+                "validator_set": ["alice@test", "bob@test"],
+                "signers_bitmap": "0a",
+                "bls_aggregate_signature": "ff"
+            }
+        }
+        """.data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/sumeragi/commit_qc/\(blockHash)")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            return (response, payload)
+        }
+
+        let record = try await makeClient().getSumeragiCommitQc(blockHashHex: "0x\(blockHash)")
+        XCTAssertEqual(record.subjectBlockHash, blockHash)
+        XCTAssertEqual(record.commitQc?.postStateRoot, String(repeating: "c", count: 64))
+        XCTAssertEqual(record.commitQc?.validatorSet.count, 2)
+    }
+
     func testSumeragiMembershipDecodingWithoutViewHash() throws {
         let payload = """
         {"membership":{"height":5,"view":2,"epoch":1}}

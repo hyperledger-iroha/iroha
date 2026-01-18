@@ -326,16 +326,12 @@ static LAST_COLLECT_DA_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_COLLECT_PREVOTE_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_COLLECT_PRECOMMIT_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_COLLECT_AGG_MS: AtomicU64 = AtomicU64::new(0);
-static LAST_COLLECT_EXEC_MS: AtomicU64 = AtomicU64::new(0);
-static LAST_COLLECT_WITNESS_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_COMMIT_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_PROPOSE_EMA_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_COLLECT_DA_EMA_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_COLLECT_PREVOTE_EMA_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_COLLECT_PRECOMMIT_EMA_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_COLLECT_AGG_EMA_MS: AtomicU64 = AtomicU64::new(0);
-static LAST_COLLECT_EXEC_EMA_MS: AtomicU64 = AtomicU64::new(0);
-static LAST_COLLECT_WITNESS_EMA_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_COMMIT_EMA_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_PIPELINE_TOTAL_EMA_MS: AtomicU64 = AtomicU64::new(0);
 static GOSSIP_FALLBACK_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -3999,14 +3995,6 @@ pub fn set_phase_collect_precommit_ms(ms: u64) {
 pub fn set_phase_collect_aggregator_ms(ms: u64) {
     LAST_COLLECT_AGG_MS.store(ms, Ordering::Relaxed);
 }
-/// Set last observed latency for the execution QC collection phase (ms).
-pub fn set_phase_collect_exec_ms(ms: u64) {
-    LAST_COLLECT_EXEC_MS.store(ms, Ordering::Relaxed);
-}
-/// Set last observed latency for the witness availability QC collection phase (ms).
-pub fn set_phase_collect_witness_ms(ms: u64) {
-    LAST_COLLECT_WITNESS_MS.store(ms, Ordering::Relaxed);
-}
 /// Set last observed latency for the commit phase (ms).
 pub fn set_phase_commit_ms(ms: u64) {
     LAST_COMMIT_MS.store(ms, Ordering::Relaxed);
@@ -4031,14 +4019,6 @@ pub fn set_phase_collect_precommit_ema_ms(ms: u64) {
 /// Set EMA latency for redundant collector fan-out (ms).
 pub fn set_phase_collect_aggregator_ema_ms(ms: u64) {
     LAST_COLLECT_AGG_EMA_MS.store(ms, Ordering::Relaxed);
-}
-/// Set EMA latency for the execution QC collection phase (ms).
-pub fn set_phase_collect_exec_ema_ms(ms: u64) {
-    LAST_COLLECT_EXEC_EMA_MS.store(ms, Ordering::Relaxed);
-}
-/// Set EMA latency for the witness availability QC collection phase (ms).
-pub fn set_phase_collect_witness_ema_ms(ms: u64) {
-    LAST_COLLECT_WITNESS_EMA_MS.store(ms, Ordering::Relaxed);
 }
 /// Set EMA latency for the commit phase (ms).
 pub fn set_phase_commit_ema_ms(ms: u64) {
@@ -4159,6 +4139,20 @@ pub fn record_consensus_message_handling(
     *entry = entry.saturating_add(1);
 }
 
+fn should_log_vote_drop_count(count: u64) -> bool {
+    if count == 1 {
+        return true;
+    }
+    if count < 10 || count % 10 != 0 {
+        return false;
+    }
+    let mut value = count;
+    while value % 10 == 0 {
+        value /= 10;
+    }
+    value == 1
+}
+
 /// Record a vote-validation drop with roster context.
 pub fn record_vote_validation_drop(record: VoteValidationDropRecord) {
     #[cfg(test)]
@@ -4189,12 +4183,13 @@ pub fn record_vote_validation_drop(record: VoteValidationDropRecord) {
     let Some(peer_id) = peer_id else {
         return;
     };
+    let roster_hash = record.roster_hash.clone();
     let Some(mut registry) = vote_validation_drop_peer_registry() else {
         return;
     };
     let key = VoteValidationDropPeerKey {
-        peer_id,
-        roster_hash: record.roster_hash,
+        peer_id: peer_id.clone(),
+        roster_hash: roster_hash.clone(),
     };
     let entry = registry.entry(key).or_default();
     entry.total = entry.total.saturating_add(1);
@@ -4205,6 +4200,20 @@ pub fn record_vote_validation_drop(record: VoteValidationDropRecord) {
     entry.last_view = record.view;
     entry.last_epoch = record.epoch;
     entry.last_timestamp_ms = now_ms;
+    if should_log_vote_drop_count(entry.total) || should_log_vote_drop_count(*reason_total) {
+        iroha_logger::info!(
+            peer = ?peer_id,
+            roster_hash = ?roster_hash,
+            roster_len = entry.roster_len,
+            reason = record.reason.as_str(),
+            total = entry.total,
+            reason_total = *reason_total,
+            height = record.height,
+            view = record.view,
+            epoch = record.epoch,
+            "vote validation drop telemetry"
+        );
+    }
 }
 
 /// Increment `BlockCreated` drop counter when locked QC gate rejects a proposal.
@@ -4790,16 +4799,12 @@ pub fn phase_latencies_snapshot() -> PhaseLatenciesSnapshot {
     let collect_prevote_ms = LAST_COLLECT_PREVOTE_MS.load(Ordering::Relaxed);
     let collect_precommit_ms = LAST_COLLECT_PRECOMMIT_MS.load(Ordering::Relaxed);
     let collect_aggregator_ms = LAST_COLLECT_AGG_MS.load(Ordering::Relaxed);
-    let collect_exec_ms = LAST_COLLECT_EXEC_MS.load(Ordering::Relaxed);
-    let collect_witness_ms = LAST_COLLECT_WITNESS_MS.load(Ordering::Relaxed);
     let commit_ms = LAST_COMMIT_MS.load(Ordering::Relaxed);
     let propose_ema_ms = LAST_PROPOSE_EMA_MS.load(Ordering::Relaxed);
     let collect_da_ema_ms = LAST_COLLECT_DA_EMA_MS.load(Ordering::Relaxed);
     let collect_prevote_ema_ms = LAST_COLLECT_PREVOTE_EMA_MS.load(Ordering::Relaxed);
     let collect_precommit_ema_ms = LAST_COLLECT_PRECOMMIT_EMA_MS.load(Ordering::Relaxed);
     let collect_aggregator_ema_ms = LAST_COLLECT_AGG_EMA_MS.load(Ordering::Relaxed);
-    let collect_exec_ema_ms = LAST_COLLECT_EXEC_EMA_MS.load(Ordering::Relaxed);
-    let collect_witness_ema_ms = LAST_COLLECT_WITNESS_EMA_MS.load(Ordering::Relaxed);
     let commit_ema_ms = LAST_COMMIT_EMA_MS.load(Ordering::Relaxed);
 
     let pipeline_total_acc = (u128::from(propose_ms)
@@ -4815,16 +4820,12 @@ pub fn phase_latencies_snapshot() -> PhaseLatenciesSnapshot {
         collect_prevote_ms,
         collect_precommit_ms,
         collect_aggregator_ms,
-        collect_exec_ms,
-        collect_witness_ms,
         commit_ms,
         propose_ema_ms,
         collect_da_ema_ms,
         collect_prevote_ema_ms,
         collect_precommit_ema_ms,
         collect_aggregator_ema_ms,
-        collect_exec_ema_ms,
-        collect_witness_ema_ms,
         commit_ema_ms,
         pipeline_total_ms,
         pipeline_total_ema_ms: LAST_PIPELINE_TOTAL_EMA_MS.load(Ordering::Relaxed),
@@ -6326,10 +6327,6 @@ pub struct PhaseLatenciesSnapshot {
     pub collect_precommit_ms: u64,
     /// Last observed latency for redundant collector fan-out (ms).
     pub collect_aggregator_ms: u64,
-    /// Last observed latency for execution QC collection (ms).
-    pub collect_exec_ms: u64,
-    /// Last observed latency for witness-availability QC collection (ms).
-    pub collect_witness_ms: u64,
     /// Last observed latency for commit phase (ms).
     pub commit_ms: u64,
     /// EMA latency for the propose phase (ms).
@@ -6342,10 +6339,6 @@ pub struct PhaseLatenciesSnapshot {
     pub collect_precommit_ema_ms: u64,
     /// EMA latency for redundant collector fan-out (ms).
     pub collect_aggregator_ema_ms: u64,
-    /// EMA latency for execution QC collection (ms).
-    pub collect_exec_ema_ms: u64,
-    /// EMA latency for witness-availability QC collection (ms).
-    pub collect_witness_ema_ms: u64,
     /// EMA latency for commit (ms).
     pub commit_ema_ms: u64,
     /// Aggregate pipeline latency across propose/DA/prevote/precommit/commit (ms).
@@ -6674,6 +6667,18 @@ mod tests {
     }
 
     #[test]
+    fn vote_validation_drop_log_thresholds_are_decadic() {
+        assert!(super::should_log_vote_drop_count(1));
+        assert!(super::should_log_vote_drop_count(10));
+        assert!(super::should_log_vote_drop_count(100));
+        assert!(super::should_log_vote_drop_count(1_000));
+        assert!(!super::should_log_vote_drop_count(0));
+        assert!(!super::should_log_vote_drop_count(2));
+        assert!(!super::should_log_vote_drop_count(11));
+        assert!(!super::should_log_vote_drop_count(20));
+    }
+
+    #[test]
     fn commit_history_test_guard_is_reentrant() {
         let outer = super::commit_history_test_guard();
         assert_eq!(super::test_lock_depth(&super::COMMIT_HISTORY_TEST_LOCK), 1);
@@ -6888,7 +6893,7 @@ mod tests {
     }
 
     #[test]
-    fn phase_snapshot_exposes_exec_and_witness_ema() {
+    fn phase_snapshot_exposes_phase_ema() {
         super::reset_gossip_fallback_for_tests();
         super::set_phase_propose_ms(5);
         super::set_phase_collect_da_ms(6);
@@ -6901,19 +6906,11 @@ mod tests {
         super::set_phase_collect_precommit_ema_ms(7);
         super::set_phase_commit_ema_ms(8);
         super::set_phase_pipeline_total_ema_ms(30);
-        super::set_phase_collect_exec_ms(42);
-        super::set_phase_collect_witness_ms(84);
-        super::set_phase_collect_exec_ema_ms(21);
-        super::set_phase_collect_witness_ema_ms(63);
         super::set_phase_collect_aggregator_ms(11);
         super::set_phase_collect_aggregator_ema_ms(31);
         super::inc_gossip_fallback();
         super::inc_gossip_fallback();
         let snapshot = super::phase_latencies_snapshot();
-        assert_eq!(snapshot.collect_exec_ms, 42);
-        assert_eq!(snapshot.collect_witness_ms, 84);
-        assert_eq!(snapshot.collect_exec_ema_ms, 21);
-        assert_eq!(snapshot.collect_witness_ema_ms, 63);
         assert_eq!(snapshot.collect_aggregator_ms, 11);
         assert_eq!(snapshot.collect_aggregator_ema_ms, 31);
         assert_eq!(snapshot.pipeline_total_ms, 35);

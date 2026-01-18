@@ -223,6 +223,9 @@ mod tests {
         if "bls_small".parse::<Algorithm>().is_ok() {
             expected.insert("bls_small");
         }
+        if "ml-dsa".parse::<Algorithm>().is_ok() {
+            expected.insert("ml-dsa");
+        }
         for gost in &[
             "gost3410-2012-256-paramset-a",
             "gost3410-2012-256-paramset-b",

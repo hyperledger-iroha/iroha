@@ -250,8 +250,6 @@ async fn npos_baseline_1s_k3_captures_metrics() -> Result<()> {
         "collect_prevote",
         "collect_precommit",
         "collect_aggregator",
-        "collect_exec",
-        "collect_witness",
         "commit",
     ];
     let mut phase_samples: BTreeMap<&'static str, Vec<f64>> =

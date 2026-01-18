@@ -279,20 +279,7 @@ pub(super) fn derive_active_topology_for_mode(
     if matches!(consensus_mode, ConsensusMode::Npos) {
         let active_roster = active_validator_roster_from_world(view.world());
         if !active_roster.is_empty() {
-            let active_set: BTreeSet<_> = active_roster.iter().cloned().collect();
-            let mut roster = if use_commit {
-                commit_topology
-                    .iter()
-                    .filter(|peer| active_set.contains(*peer))
-                    .cloned()
-                    .collect()
-            } else {
-                active_roster.clone()
-            };
-            if roster.is_empty() {
-                roster = active_roster.clone();
-            }
-            if use_commit && roster.len() < active_roster.len() {
+            if use_commit {
                 let commit_set: BTreeSet<_> = commit_topology.iter().cloned().collect();
                 let missing: Vec<_> = active_roster
                     .iter()
@@ -304,11 +291,11 @@ pub(super) fn derive_active_topology_for_mode(
                         commit_topology_len = commit_topology.len(),
                         active_roster_len = active_roster.len(),
                         missing_len = missing.len(),
-                        "commit topology missing active validators; appending from active roster"
+                        "commit topology missing active validators; using active roster for NPoS"
                     );
-                    roster.extend(missing);
                 }
             }
+            let mut roster = active_roster.clone();
             roster = if trusted.pops.is_empty() {
                 roster
             } else {
@@ -326,11 +313,8 @@ pub(super) fn derive_active_topology_for_mode(
                     guard_pop_quorum(filtered, &roster, trusted.pops.len())
                 }
             };
-            roster = if use_commit {
-                dedup_preserving_order(roster)
-            } else {
-                canonicalize_roster(roster)
-            };
+            // NPoS needs a canonical roster order so signer indices stay consistent across peers.
+            roster = canonicalize_roster(roster);
             if !roster.is_empty() {
                 return roster;
             }
@@ -812,7 +796,7 @@ mod tests {
     }
 
     #[test]
-    fn active_topology_for_npos_appends_missing_commit_topology_peers() {
+    fn active_topology_for_npos_canonicalizes_commit_topology_order() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
@@ -869,10 +853,9 @@ mod tests {
         let view = state.view();
         let roster = derive_active_topology_for_mode(&view, &trusted, &peer_a, ConsensusMode::Npos);
 
-        assert_eq!(roster.len(), 3);
-        assert_eq!(roster[0], peer_b);
-        assert_eq!(roster[1], peer_a);
-        assert!(roster.contains(&peer_c));
+        let mut expected = vec![peer_a, peer_b, peer_c];
+        expected.sort();
+        assert_eq!(roster, expected);
     }
 
     #[test]

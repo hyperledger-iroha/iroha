@@ -10,7 +10,10 @@ use std::{
 };
 
 use iroha_crypto::{Hash, HashOf, MerkleTree};
-use iroha_data_model::{block::{BlockHeader, BlockSignature}, peer::PeerId};
+use iroha_data_model::{
+    block::{BlockHeader, BlockSignature},
+    peer::PeerId,
+};
 use iroha_logger::prelude::*;
 use norito::codec::{Decode, Encode};
 use norito::{decode_from_bytes, to_bytes};

@@ -6549,6 +6549,48 @@ public struct ToriiSumeragiStatusSnapshot: Decodable, Sendable {
     }
 }
 
+/// Commit QC record returned by `/v1/sumeragi/commit_qc/{hash}`.
+public struct ToriiSumeragiCommitQcRecord: Decodable, Sendable, Equatable {
+    public let subjectBlockHash: String
+    public let commitQc: ToriiSumeragiCommitQc?
+
+    private enum CodingKeys: String, CodingKey {
+        case subjectBlockHash = "subject_block_hash"
+        case commitQc = "commit_qc"
+    }
+}
+
+/// Full commit QC details returned by `/v1/sumeragi/commit_qc/{hash}`.
+public struct ToriiSumeragiCommitQc: Decodable, Sendable, Equatable {
+    public let phase: String
+    public let parentStateRoot: String
+    public let postStateRoot: String
+    public let height: UInt64
+    public let view: UInt64
+    public let epoch: UInt64
+    public let modeTag: String
+    public let validatorSetHash: String
+    public let validatorSetHashVersion: UInt16
+    public let validatorSet: [String]
+    public let signersBitmap: String
+    public let blsAggregateSignature: String
+
+    private enum CodingKeys: String, CodingKey {
+        case phase
+        case parentStateRoot = "parent_state_root"
+        case postStateRoot = "post_state_root"
+        case height
+        case view
+        case epoch
+        case modeTag = "mode_tag"
+        case validatorSetHash = "validator_set_hash"
+        case validatorSetHashVersion = "validator_set_hash_version"
+        case validatorSet = "validator_set"
+        case signersBitmap = "signers_bitmap"
+        case blsAggregateSignature = "bls_aggregate_signature"
+    }
+}
+
 /// Consensus handshake caps exposed by `/v1/sumeragi/status`.
 public struct ToriiConsensusCaps: Decodable, Sendable {
     public let collectorsK: UInt64
@@ -7279,6 +7321,12 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     @discardableResult
     public func getSumeragiStatus(completion: @escaping (Result<ToriiSumeragiStatusSnapshot, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.getSumeragiStatus() }
+    }
+
+    @discardableResult
+    public func getSumeragiCommitQc(blockHashHex: String,
+                                    completion: @escaping (Result<ToriiSumeragiCommitQcRecord, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.getSumeragiCommitQc(blockHashHex: blockHashHex) }
     }
 
     // MARK: - Governance (Completion)
@@ -8731,6 +8779,14 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       headers: ["Accept": "application/json"])
         let data = try await data(for: request)
         return try decodeJSON(ToriiSumeragiStatusSnapshot.self, from: data)
+    }
+
+    public func getSumeragiCommitQc(blockHashHex: String) async throws -> ToriiSumeragiCommitQcRecord {
+        let normalized = try ToriiClient.normalizeHex32(blockHashHex, field: "block_hash")
+        let request = try makeRequest(path: "/v1/sumeragi/commit_qc/\(normalized)",
+                                      headers: ["Accept": "application/json"])
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiSumeragiCommitQcRecord.self, from: data)
     }
 
     public func getStatusSnapshot() async throws -> ToriiStatusSnapshot {

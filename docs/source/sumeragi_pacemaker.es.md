@@ -17,11 +17,11 @@ Estado: implementada la ventana base derivada de EMA, el piso RTT y los topes co
 
 ## Conceptos
 - Ventana base: media movil exponencial de las fases de consenso observadas
-  (propose, collect_da, collect_prevote, collect_precommit, collect_aggregator,
-  commit). La EMA se inicia desde `sumeragi.npos.timeouts.*`; hasta que lleguen
-  suficientes muestras, coincide efectivamente con los valores por defecto.
-  Las EMAs de ejecucion y witness se exportan para observabilidad pero aun no
-  se incluyen en la ventana del pacemaker. Los valores suavizados aparecen via
+  (propose, collect_da, collect_prevote, collect_precommit, commit). La EMA se
+  inicia desde `sumeragi.npos.timeouts.*`; hasta que lleguen suficientes
+  muestras, coincide efectivamente con los valores por defecto. La EMA de
+  `collect_aggregator` se exporta para observabilidad pero no se incluye en la
+  ventana del pacemaker. Los valores suavizados aparecen via
   `sumeragi_phase_latency_ema_ms{phase=...}`.
 - Multiplicador de backoff: `sumeragi.pacemaker_backoff_multiplier` (por defecto 1). Cada timeout agrega `base * multiplier` a la ventana actual.
 - Piso RTT: `avg_rtt_ms * sumeragi.pacemaker_rtt_floor_multiplier` (por defecto 2). Evita timeouts demasiado agresivos en enlaces de alta latencia.

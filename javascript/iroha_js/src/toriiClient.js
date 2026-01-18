@@ -4299,6 +4299,38 @@ export class ToriiClient {
   }
 
   /**
+   * Fetch a commit QC record for a block hash (`GET /v1/sumeragi/commit_qc/{hash}`).
+   * @param {string} blockHashHex 32-byte block hash (hex; `0x`/`blake2b32:` prefixes accepted).
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<ToriiSumeragiCommitQcRecord>}
+   */
+  async getSumeragiCommitQc(blockHashHex, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(
+      options,
+      "getSumeragiCommitQc",
+    );
+    const normalizedHash = normalizeHex32String(
+      blockHashHex,
+      "getSumeragiCommitQc.blockHashHex",
+      { allowScheme: true },
+    );
+    const response = await this._request(
+      "GET",
+      `/v1/sumeragi/commit_qc/${normalizedHash}`,
+      {
+        headers: { Accept: "application/json" },
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      throw new Error("sumeragi commit_qc endpoint returned no payload");
+    }
+    return normalizeSumeragiCommitQcRecord(payload, "sumeragi commit_qc response");
+  }
+
+  /**
    * Fetch per-phase latency telemetry (`GET /v1/sumeragi/phases`).
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<ToriiSumeragiPhasesSnapshot>}
@@ -10266,10 +10298,8 @@ function parseLaneRelayEnvelopes(payload) {
     const context = `status.lane_relay_envelopes[${index}]`;
     const record = ensureRecord(entry, context);
     const blockHeader = ensureRecord(record.block_header, `${context}.block_header`);
-    const executionQc =
-      record.execution_qc === undefined || record.execution_qc === null
-        ? null
-        : ensureRecord(record.execution_qc, `${context}.execution_qc`);
+    const qc =
+      record.qc === undefined || record.qc === null ? null : ensureRecord(record.qc, `${context}.qc`);
     const settlementCommitments = parseLaneSettlementCommitments([
       record.settlement_commitment,
     ]);
@@ -10285,7 +10315,7 @@ function parseLaneRelayEnvelopes(payload) {
       dataspace_id: coerceNestedInt(record, "dataspace_id", context),
       block_height: coerceNestedInt(record, "block_height", context),
       block_header: blockHeader,
-      execution_qc: executionQc,
+      qc,
       da_commitment_hash:
         record.da_commitment_hash === undefined || record.da_commitment_hash === null
           ? null
@@ -10417,6 +10447,14 @@ function parseSumeragiStatusPayload(payload) {
   normalized.consensus_caps = record.consensus_caps
     ? parseConsensusCaps(record.consensus_caps)
     : null;
+  normalized.commit_qc =
+    record.commit_qc == null
+      ? null
+      : parseCommitQc(record.commit_qc, "sumeragi.commit_qc");
+  normalized.commit_quorum =
+    record.commit_quorum == null
+      ? null
+      : parseCommitQuorum(record.commit_quorum, "sumeragi.commit_quorum");
   normalized.lane_commitments = parseLaneCommitments(record.lane_commitments);
   normalized.dataspace_commitments = parseDataspaceCommitments(
     record.dataspace_commitments,
@@ -10471,6 +10509,133 @@ function parseConsensusCaps(value) {
       "sumeragi.consensus_caps.rbc_store_soft_bytes",
     ),
   });
+}
+
+function parseCommitQc(value, context) {
+  const record = ensureRecord(value, context);
+  return Object.freeze({
+    height: coerceInteger(record.height, `${context}.height`),
+    view: coerceInteger(record.view, `${context}.view`),
+    epoch: coerceInteger(record.epoch, `${context}.epoch`),
+    block_hash:
+      record.block_hash == null
+        ? null
+        : requireNonEmptyString(record.block_hash, `${context}.block_hash`),
+    validator_set_hash:
+      record.validator_set_hash == null
+        ? null
+        : requireNonEmptyString(
+            record.validator_set_hash,
+            `${context}.validator_set_hash`,
+          ),
+    validator_set_len: coerceInteger(
+      record.validator_set_len,
+      `${context}.validator_set_len`,
+    ),
+    signatures_total: coerceInteger(
+      record.signatures_total,
+      `${context}.signatures_total`,
+    ),
+  });
+}
+
+function parseCommitQuorum(value, context) {
+  const record = ensureRecord(value, context);
+  return Object.freeze({
+    height: coerceInteger(record.height, `${context}.height`),
+    view: coerceInteger(record.view, `${context}.view`),
+    block_hash:
+      record.block_hash == null
+        ? null
+        : requireNonEmptyString(record.block_hash, `${context}.block_hash`),
+    signatures_present: coerceInteger(
+      record.signatures_present,
+      `${context}.signatures_present`,
+    ),
+    signatures_counted: coerceInteger(
+      record.signatures_counted,
+      `${context}.signatures_counted`,
+    ),
+    signatures_set_b: coerceInteger(
+      record.signatures_set_b,
+      `${context}.signatures_set_b`,
+    ),
+    signatures_required: coerceInteger(
+      record.signatures_required,
+      `${context}.signatures_required`,
+    ),
+    last_updated_ms: coerceInteger(
+      record.last_updated_ms,
+      `${context}.last_updated_ms`,
+    ),
+  });
+}
+
+function normalizeSumeragiCommitQcRecord(payload, context) {
+  const record = ensureRecord(payload, context);
+  const subject_block_hash = normalizeHex32String(
+    record.subject_block_hash,
+    `${context}.subject_block_hash`,
+    { allowScheme: true },
+  );
+  if (record.commit_qc == null) {
+    return Object.freeze({ subject_block_hash, commit_qc: null });
+  }
+  return Object.freeze({
+    subject_block_hash,
+    commit_qc: normalizeSumeragiCommitQcPayload(record.commit_qc, `${context}.commit_qc`),
+  });
+}
+
+function normalizeSumeragiCommitQcPayload(payload, context) {
+  const record = ensureRecord(payload, context);
+  return Object.freeze({
+    phase: requireNonEmptyString(record.phase, `${context}.phase`),
+    parent_state_root: normalizeHex32String(
+      record.parent_state_root,
+      `${context}.parent_state_root`,
+      { allowScheme: true },
+    ),
+    post_state_root: normalizeHex32String(
+      record.post_state_root,
+      `${context}.post_state_root`,
+      { allowScheme: true },
+    ),
+    height: coerceInteger(record.height, `${context}.height`),
+    view: coerceInteger(record.view, `${context}.view`),
+    epoch: coerceInteger(record.epoch, `${context}.epoch`),
+    mode_tag: requireNonEmptyString(record.mode_tag, `${context}.mode_tag`),
+    validator_set_hash: normalizeHex32String(
+      record.validator_set_hash,
+      `${context}.validator_set_hash`,
+      { allowScheme: true },
+    ),
+    validator_set_hash_version: coerceInteger(
+      record.validator_set_hash_version,
+      `${context}.validator_set_hash_version`,
+    ),
+    validator_set: normalizeStringArray(
+      record.validator_set,
+      `${context}.validator_set`,
+    ),
+    signers_bitmap: normalizeArbitraryHex(
+      record.signers_bitmap,
+      `${context}.signers_bitmap`,
+    ),
+    bls_aggregate_signature: normalizeArbitraryHex(
+      record.bls_aggregate_signature,
+      `${context}.bls_aggregate_signature`,
+    ),
+  });
+}
+
+function normalizeStringArray(payload, context) {
+  if (!Array.isArray(payload)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  return payload.map((value, index) =>
+    requireNonEmptyString(value, `${context}[${index}]`),
+  );
 }
 
 function normalizeSumeragiPacemakerSnapshot(payload) {
@@ -10541,11 +10706,6 @@ function normalizeSumeragiPhasesSnapshot(payload) {
       record.collect_aggregator_ms,
       "sumeragi phases.collect_aggregator_ms",
     ),
-    collect_exec_ms: coerceInteger(record.collect_exec_ms, "sumeragi phases.collect_exec_ms"),
-    collect_witness_ms: coerceInteger(
-      record.collect_witness_ms,
-      "sumeragi phases.collect_witness_ms",
-    ),
     commit_ms: coerceInteger(record.commit_ms, "sumeragi phases.commit_ms"),
     pipeline_total_ms: coerceInteger(
       record.pipeline_total_ms,
@@ -10585,8 +10745,6 @@ function normalizeSumeragiPhasesEma(payload, context) {
       record.collect_aggregator_ms,
       `${context}.collect_aggregator_ms`,
     ),
-    collect_exec_ms: coerceInteger(record.collect_exec_ms, `${context}.collect_exec_ms`),
-    collect_witness_ms: coerceInteger(record.collect_witness_ms, `${context}.collect_witness_ms`),
     commit_ms: coerceInteger(record.commit_ms, `${context}.commit_ms`),
     pipeline_total_ms: coerceInteger(record.pipeline_total_ms, `${context}.pipeline_total_ms`),
   };
@@ -14562,25 +14720,6 @@ function normalizeHashLike32(value, name, options = {}) {
     return parseHashLiteralToHex(trimmed, name);
   }
   return normalizeHex32String(trimmed, name, options);
-}
-
-function normalizeStringArray(value, context) {
-  if (value === undefined || value === null) {
-    return [];
-  }
-  if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array of strings`);
-  }
-  return value.map((entry, index) => {
-    if (typeof entry !== "string") {
-      throw new TypeError(`${context}[${index}] must be a string`);
-    }
-    const trimmed = entry.trim();
-    if (!trimmed) {
-      throw new TypeError(`${context}[${index}] must be a non-empty string`);
-    }
-    return trimmed;
-  });
 }
 
 function parseHashLiteralToHex(literal, name) {

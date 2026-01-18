@@ -1,4 +1,4 @@
-//! Bounded-latency localnet smoke test for permissioned Sumeragi with DA enabled.
+//! Bounded-latency localnet smoke and throughput tests for permissioned and NPoS Sumeragi.
 
 use std::{
     cmp::Ordering,
@@ -9,14 +9,14 @@ use std::{
 };
 
 use blake3::Hasher as Blake3Hasher;
-use eyre::{Result, WrapErr, ensure, eyre};
+use eyre::{Result, WrapErr, bail, ensure, eyre};
 use futures_util::{StreamExt, TryStreamExt, future::try_join_all, stream};
 use integration_tests::sandbox;
 use iroha::data_model::{
     Level,
     block::consensus::SumeragiStatusWire,
     isi::{InstructionBox, Log, SetParameter},
-    parameter::{BlockParameter, Parameter, SumeragiParameter},
+    parameter::{BlockParameter, Parameter, SumeragiParameter, system::SumeragiNposParameters},
 };
 use iroha_test_network::{Network, NetworkBuilder, init_instruction_registry};
 use nonzero_ext::nonzero;
@@ -63,6 +63,11 @@ const THROUGHPUT_SLO_P99_MS: u64 = 2_000;
 const THROUGHPUT_SLO_VIEW_CHANGE_RATE_MAX: f64 = 0.1;
 const THROUGHPUT_SLO_BACKPRESSURE_RATE_MAX: f64 = 2.0;
 const THROUGHPUT_SLO_QUEUE_SAT_FRAC_MAX: f64 = 0.2;
+const THROUGHPUT_NPOS_SLO_P95_MS: u64 = 2_000;
+const THROUGHPUT_NPOS_SLO_P99_MS: u64 = 3_000;
+const THROUGHPUT_NPOS_SLO_VIEW_CHANGE_RATE_MAX: f64 = 0.2;
+const THROUGHPUT_NPOS_SLO_BACKPRESSURE_RATE_MAX: f64 = 3.0;
+const THROUGHPUT_NPOS_SLO_QUEUE_SAT_FRAC_MAX: f64 = 0.3;
 
 #[allow(unsafe_code)]
 fn set_env_var(key: &str, value: impl AsRef<std::ffi::OsStr>) {
@@ -1269,6 +1274,725 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
     if sandbox::handle_result(result, stringify!(permissioned_localnet_throughput_10k_tps))?
         .is_none()
     {
+        return Ok(());
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "long-running 7-peer localnet throughput regression (10k tps target, NPoS)"]
+#[allow(clippy::too_many_lines)]
+async fn npos_localnet_throughput_10k_tps() -> Result<()> {
+    init_instruction_registry();
+    let _guard = LOCALNET_SMOKE_GUARD
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .await;
+
+    let previous_ttl = std::env::var_os("IROHA_TEST_CLIENT_TTL_MS");
+    set_env_var(
+        "IROHA_TEST_CLIENT_TTL_MS",
+        THROUGHPUT_CLIENT_TTL.as_millis().to_string(),
+    );
+
+    let npos_params = SumeragiNposParameters {
+        block_time_ms: THROUGHPUT_BLOCK_TIME_MS,
+        k_aggregators: 3,
+        redundant_send_r: 2,
+        ..SumeragiNposParameters::default()
+    };
+
+    let builder = NetworkBuilder::new()
+        .with_peers(7)
+        .with_auto_populated_trusted_peers()
+        .with_real_genesis_keypair()
+        .with_pipeline_time(THROUGHPUT_PIPELINE_TIME)
+        .with_genesis_instruction(SetParameter::new(Parameter::Block(
+            BlockParameter::MaxTransactions(nonzero!(THROUGHPUT_BLOCK_MAX_TXS)),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::BlockTimeMs(THROUGHPUT_BLOCK_TIME_MS),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::CommitTimeMs(THROUGHPUT_COMMIT_TIME_MS),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::DaEnabled(true),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Custom(
+            npos_params.into_custom_parameter(),
+        )))
+        .with_config_layer(|layer| {
+            layer
+                .write(["sumeragi", "consensus_mode"], "npos")
+                .write(["sumeragi", "collectors_k"], 3_i64)
+                .write(["sumeragi", "collectors_redundant_send_r"], 2_i64)
+                .write(["network", "transaction_gossip_period_ms"], 200_i64)
+                .write(
+                    ["network", "transaction_gossip_restricted_fallback"],
+                    "public_overlay",
+                )
+                .write(
+                    ["network", "transaction_gossip_restricted_public_payload"],
+                    "forward",
+                )
+                // Give DA quorum extra breathing room under sustained load.
+                .write(["sumeragi", "da_quorum_timeout_multiplier"], 7_i64)
+                .write(["sumeragi", "da_availability_timeout_multiplier"], 3_i64)
+                .write(["sumeragi", "pacemaker_max_backoff_ms"], 5_000_i64)
+                .write(["sumeragi", "pacemaker_rtt_floor_multiplier"], 1_i64);
+        });
+
+    let result: Result<()> = async {
+        let Some(network) = sandbox::start_network_async_or_skip(
+            builder,
+            stringify!(npos_localnet_throughput_10k_tps),
+        )
+        .await?
+        else {
+            return Ok(());
+        };
+
+        let network_dir = network.env_dir().to_path_buf();
+        let http = HttpClient::new();
+
+        wait_for_status_responses(&network, Duration::from_secs(30)).await?;
+        let baseline_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
+        let baseline_non_empty = baseline_statuses
+            .iter()
+            .map(|status| status.blocks_non_empty)
+            .min()
+            .unwrap_or_default();
+        let baseline_approved = baseline_statuses
+            .iter()
+            .map(|status| status.txs_approved)
+            .min()
+            .unwrap_or_default();
+
+        let total_blocks_default =
+            THROUGHPUT_WARMUP_BLOCKS.saturating_add(THROUGHPUT_STEADY_BLOCKS);
+        let total_blocks =
+            env_or_default("IROHA_THROUGHPUT_TARGET_BLOCKS", total_blocks_default).max(1);
+        let warmup_blocks = env_or_default(
+            "IROHA_THROUGHPUT_WARMUP_BLOCKS",
+            THROUGHPUT_WARMUP_BLOCKS,
+        )
+        .min(total_blocks.saturating_sub(1).max(1));
+        let steady_blocks_default = total_blocks.saturating_sub(warmup_blocks).max(1);
+        let steady_blocks = env_or_default("IROHA_THROUGHPUT_STEADY_BLOCKS", steady_blocks_default)
+            .max(1);
+        let total_blocks = warmup_blocks.saturating_add(steady_blocks);
+        let submit_batch =
+            env_or_default("IROHA_THROUGHPUT_SUBMIT_BATCH", THROUGHPUT_SUBMIT_BATCH).max(1);
+        let submit_parallelism =
+            env_or_default("IROHA_THROUGHPUT_PARALLELISM", THROUGHPUT_SUBMIT_PARALLELISM)
+                .max(1)
+                .min(submit_batch);
+        let submit_parallelism = usize::try_from(submit_parallelism)
+            .wrap_err("submit parallelism exceeds host limits")?;
+        let queue_soft_limit = env_or_default(
+            "IROHA_THROUGHPUT_QUEUE_SOFT_LIMIT",
+            THROUGHPUT_QUEUE_SOFT_LIMIT,
+        );
+        let payload_bytes = env_or_default_usize(
+            "IROHA_THROUGHPUT_PAYLOAD_BYTES",
+            THROUGHPUT_PAYLOAD_BYTES,
+        )
+        .max(32);
+        let rng_seed = env_or_default("IROHA_THROUGHPUT_RNG_SEED", THROUGHPUT_RNG_SEED);
+        let warmup_target_height = baseline_non_empty.saturating_add(warmup_blocks);
+        let steady_target_height = warmup_target_height.saturating_add(steady_blocks);
+        let warmup_txs = warmup_blocks.saturating_mul(THROUGHPUT_BLOCK_MAX_TXS);
+        let steady_txs = steady_blocks.saturating_mul(THROUGHPUT_BLOCK_MAX_TXS);
+        let total_txs = warmup_txs.saturating_add(steady_txs);
+
+        let submit_peer = network
+            .peers()
+            .first()
+            .cloned()
+            .ok_or_else(|| eyre!("network must have at least one peer"))?;
+        let client = submit_peer.client();
+        eprintln!(
+            "localnet throughput recipe: peers={}, block_time_ms={}, commit_time_ms={}, block_max_txs={}, warmup_blocks={}, steady_blocks={}, total_blocks={}, payload_bytes={}, submit_batch={}, submit_parallelism={}, queue_soft_limit={}, rng_seed={}, baseline_non_empty={}, baseline_approved={}",
+            network.peers().len(),
+            THROUGHPUT_BLOCK_TIME_MS,
+            THROUGHPUT_COMMIT_TIME_MS,
+            THROUGHPUT_BLOCK_MAX_TXS,
+            warmup_blocks,
+            steady_blocks,
+            total_blocks,
+            payload_bytes,
+            submit_batch,
+            submit_parallelism,
+            queue_soft_limit,
+            rng_seed,
+            baseline_non_empty,
+            baseline_approved,
+        );
+
+        let warmup_submit_elapsed = submit_logs(
+            0,
+            warmup_txs,
+            &network,
+            &client,
+            submit_batch,
+            submit_parallelism,
+            queue_soft_limit,
+            payload_bytes,
+            rng_seed,
+        )
+        .await?;
+
+        let mut last_progress = Instant::now();
+        let mut last_min_non_empty = baseline_non_empty;
+        let mut last_log = Instant::now()
+            .checked_sub(THROUGHPUT_PROGRESS_LOG_INTERVAL)
+            .unwrap_or_else(Instant::now);
+        let mut last_snapshot: Vec<StatusSnapshot> = Vec::new();
+        loop {
+            if let Ok(statuses) = collect_statuses(&network, SOAK_STATUS_POLL_TIMEOUT).await {
+                let min_non_empty = statuses
+                    .iter()
+                    .map(|status| status.blocks_non_empty)
+                    .min()
+                    .unwrap_or_default();
+                let max_non_empty = statuses
+                    .iter()
+                    .map(|status| status.blocks_non_empty)
+                    .max()
+                    .unwrap_or_default();
+                last_snapshot = statuses
+                    .iter()
+                    .map(StatusSnapshot::from_status)
+                    .collect();
+                if min_non_empty >= warmup_target_height {
+                    break;
+                }
+                if min_non_empty > last_min_non_empty {
+                    last_min_non_empty = min_non_empty;
+                    last_progress = Instant::now();
+                }
+                if last_log.elapsed() >= THROUGHPUT_PROGRESS_LOG_INTERVAL {
+                    last_log = Instant::now();
+                    eprintln!(
+                        "localnet throughput warmup progress (target_non_empty={warmup_target_height}, min_non_empty={min_non_empty}, max_non_empty={max_non_empty}): {last_snapshot:?}"
+                    );
+                }
+            }
+            if last_progress.elapsed() >= THROUGHPUT_STALL_THRESHOLD {
+                bail!(
+                    "localnet throughput warmup stalled for {:?} (min_non_empty={last_min_non_empty}, target_non_empty={warmup_target_height}): last_snapshot={last_snapshot:?}",
+                    THROUGHPUT_STALL_THRESHOLD
+                );
+            }
+            sleep(THROUGHPUT_SAMPLE_INTERVAL).await;
+        }
+
+        let warmup_metrics =
+            collect_metrics_snapshots(&network, &http, THROUGHPUT_METRICS_TIMEOUT).await?;
+        let steady_start_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
+        let steady_start_sumeragi =
+            collect_sumeragi_statuses(&network, STATUS_POLL_TIMEOUT).await?;
+
+        let steady_submit_elapsed = submit_logs(
+            warmup_txs,
+            steady_txs,
+            &network,
+            &client,
+            submit_batch,
+            submit_parallelism,
+            queue_soft_limit,
+            payload_bytes,
+            rng_seed,
+        )
+        .await?;
+
+        let steady_start = Instant::now();
+        let mut samples: Vec<ThroughputSample> = Vec::new();
+        let mut last_progress = Instant::now();
+        let mut last_min_non_empty = warmup_target_height;
+        let mut last_log = Instant::now()
+            .checked_sub(THROUGHPUT_PROGRESS_LOG_INTERVAL)
+            .unwrap_or_else(Instant::now);
+        let mut last_snapshot: Vec<StatusSnapshot> = Vec::new();
+        loop {
+            if let Ok(statuses) = collect_statuses(&network, SOAK_STATUS_POLL_TIMEOUT).await {
+                let min_non_empty = statuses
+                    .iter()
+                    .map(|status| status.blocks_non_empty)
+                    .min()
+                    .unwrap_or_default();
+                let max_non_empty = statuses
+                    .iter()
+                    .map(|status| status.blocks_non_empty)
+                    .max()
+                    .unwrap_or_default();
+                last_snapshot = statuses
+                    .iter()
+                    .map(StatusSnapshot::from_status)
+                    .collect();
+                if min_non_empty >= steady_target_height {
+                    break;
+                }
+                if min_non_empty > last_min_non_empty {
+                    last_min_non_empty = min_non_empty;
+                    last_progress = Instant::now();
+                }
+                if last_log.elapsed() >= THROUGHPUT_PROGRESS_LOG_INTERVAL {
+                    last_log = Instant::now();
+                    eprintln!(
+                        "localnet throughput steady progress (target_non_empty={steady_target_height}, min_non_empty={min_non_empty}, max_non_empty={max_non_empty}): {last_snapshot:?}"
+                    );
+                }
+            }
+            if last_progress.elapsed() >= THROUGHPUT_STALL_THRESHOLD {
+                bail!(
+                    "localnet throughput stalled for {:?} (min_non_empty={last_min_non_empty}, target_non_empty={steady_target_height}): last_snapshot={last_snapshot:?}",
+                    THROUGHPUT_STALL_THRESHOLD
+                );
+            }
+            let statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
+            let sumeragi = collect_sumeragi_statuses(&network, STATUS_POLL_TIMEOUT).await?;
+            let status_snapshots: Vec<StatusSnapshot> =
+                statuses.iter().map(StatusSnapshot::from_status).collect();
+            let sumeragi_snapshots: Vec<SumeragiStatusSnapshot> = sumeragi
+                .iter()
+                .map(SumeragiStatusSnapshot::from_status)
+                .collect();
+            let timestamp_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            samples.push(ThroughputSample {
+                timestamp_ms: u64::try_from(timestamp_ms).unwrap_or(u64::MAX),
+                statuses: status_snapshots,
+                sumeragi: sumeragi_snapshots,
+            });
+            sleep(THROUGHPUT_SAMPLE_INTERVAL).await;
+        }
+
+        let steady_elapsed = steady_start.elapsed();
+        let after_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
+        let after_sumeragi = collect_sumeragi_statuses(&network, STATUS_POLL_TIMEOUT).await?;
+        let after_metrics =
+            collect_metrics_snapshots(&network, &http, THROUGHPUT_METRICS_TIMEOUT).await?;
+
+        let max_commit_time_ms = after_statuses
+            .iter()
+            .map(|status| status.commit_time_ms)
+            .max()
+            .unwrap_or_default();
+        let max_commit_time_allowed = THROUGHPUT_COMMIT_TIME_MS
+            .saturating_mul(THROUGHPUT_COMMIT_TIME_MAX_MULTIPLIER);
+        let mut min_commit_time_ms = u64::MAX;
+        let mut sum_commit_time_ms = 0_u128;
+        for status in &after_statuses {
+            let value = status.commit_time_ms;
+            min_commit_time_ms = min_commit_time_ms.min(value);
+            sum_commit_time_ms = sum_commit_time_ms.saturating_add(u128::from(value));
+        }
+        let avg_commit_time_ms = if after_statuses.is_empty() {
+            0_u64
+        } else {
+            (sum_commit_time_ms / u128::from(after_statuses.len() as u64)) as u64
+        };
+        let min_commit_time_ms = if min_commit_time_ms == u64::MAX {
+            0_u64
+        } else {
+            min_commit_time_ms
+        };
+
+        let (commit_p95_ms, commit_p99_ms, commit_hist_count) =
+            commit_time_quantiles(&warmup_metrics, &after_metrics);
+        let commit_p95_ms = commit_p95_ms.unwrap_or_default();
+        let commit_p99_ms = commit_p99_ms.unwrap_or_default();
+
+        let steady_approved = after_statuses
+            .iter()
+            .map(|status| status.txs_approved)
+            .min()
+            .unwrap_or_default()
+            .saturating_sub(
+                steady_start_statuses
+                    .iter()
+                    .map(|status| status.txs_approved)
+                    .min()
+                    .unwrap_or_default(),
+            );
+        let committed_approved = steady_approved.saturating_sub(baseline_approved);
+        let committed_tps = if steady_elapsed.as_secs_f64() > 0.0 {
+            committed_approved as f64 / steady_elapsed.as_secs_f64()
+        } else {
+            0.0
+        };
+        let submitted_tps = if steady_submit_elapsed.as_secs_f64() > 0.0 {
+            steady_txs as f64 / steady_submit_elapsed.as_secs_f64()
+        } else {
+            0.0
+        };
+
+        let (view_change_avg, view_change_max) = rate_summary(
+            steady_start_sumeragi
+                .iter()
+                .map(|status| status.view_change_install_total)
+                .collect::<Vec<u64>>()
+                .as_slice(),
+            after_sumeragi
+                .iter()
+                .map(|status| status.view_change_install_total)
+                .collect::<Vec<u64>>()
+                .as_slice(),
+            steady_elapsed,
+        );
+        let (backpressure_avg, backpressure_max) = rate_summary(
+            steady_start_sumeragi
+                .iter()
+                .map(|status| status.pacemaker_backpressure_deferrals_total)
+                .collect::<Vec<u64>>()
+                .as_slice(),
+            after_sumeragi
+                .iter()
+                .map(|status| status.pacemaker_backpressure_deferrals_total)
+                .collect::<Vec<u64>>()
+                .as_slice(),
+            steady_elapsed,
+        );
+
+        let mut saturated_samples = 0_u64;
+        let mut total_samples = 0_u64;
+        let mut max_queue_depth = 0_u64;
+        for sample in &samples {
+            for status in &sample.sumeragi {
+                total_samples = total_samples.saturating_add(1);
+                if status.tx_queue_saturated {
+                    saturated_samples = saturated_samples.saturating_add(1);
+                }
+                max_queue_depth = max_queue_depth.max(status.tx_queue_depth);
+            }
+        }
+        let queue_saturated_frac = if total_samples > 0 {
+            saturated_samples as f64 / total_samples as f64
+        } else {
+            0.0
+        };
+
+        eprintln!(
+            "localnet throughput metrics: peers={}, warmup_blocks={}, steady_blocks={}, warmup_txs={}, steady_txs={}, submit_batch={}, submit_parallelism={}, queue_soft_limit={}, payload_bytes={}, warmup_submit_elapsed={:?}, steady_submit_elapsed={:?}, steady_elapsed={:?}, submitted_tps={:.2}, committed_tps={:.2}, commit_hist_count={}, commit_time_ms(min/avg/max/p95/p99)={}/{}/{}/{}/{}, view_change_rate(avg/max)={:.4}/{:.4}, backpressure_rate(avg/max)={:.4}/{:.4}, queue_saturated_frac={:.2}, max_queue_depth={}",
+            network.peers().len(),
+            warmup_blocks,
+            steady_blocks,
+            warmup_txs,
+            steady_txs,
+            submit_batch,
+            submit_parallelism,
+            queue_soft_limit,
+            payload_bytes,
+            warmup_submit_elapsed,
+            steady_submit_elapsed,
+            steady_elapsed,
+            submitted_tps,
+            committed_tps,
+            commit_hist_count,
+            min_commit_time_ms,
+            avg_commit_time_ms,
+            max_commit_time_ms,
+            commit_p95_ms,
+            commit_p99_ms,
+            view_change_avg,
+            view_change_max,
+            backpressure_avg,
+            backpressure_max,
+            queue_saturated_frac,
+            max_queue_depth,
+        );
+        ensure!(
+            max_commit_time_ms <= max_commit_time_allowed,
+            "commit time exceeded target: max_commit_time_ms={max_commit_time_ms}, allowed={max_commit_time_allowed}",
+        );
+
+        let slo_p95_ms =
+            env_or_default("IROHA_THROUGHPUT_SLO_P95_MS", THROUGHPUT_NPOS_SLO_P95_MS);
+        let slo_p99_ms =
+            env_or_default("IROHA_THROUGHPUT_SLO_P99_MS", THROUGHPUT_NPOS_SLO_P99_MS);
+        let slo_view_change_rate = env_or_default_f64(
+            "IROHA_THROUGHPUT_SLO_VIEW_CHANGE_RATE",
+            THROUGHPUT_NPOS_SLO_VIEW_CHANGE_RATE_MAX,
+        );
+        let slo_backpressure_rate = env_or_default_f64(
+            "IROHA_THROUGHPUT_SLO_BACKPRESSURE_RATE",
+            THROUGHPUT_NPOS_SLO_BACKPRESSURE_RATE_MAX,
+        );
+        let slo_queue_saturation = env_or_default_f64(
+            "IROHA_THROUGHPUT_SLO_QUEUE_SAT_FRAC",
+            THROUGHPUT_NPOS_SLO_QUEUE_SAT_FRAC_MAX,
+        );
+
+        if commit_hist_count > 0 {
+            ensure!(
+                commit_p95_ms <= slo_p95_ms,
+                "p95 commit time exceeded SLO: p95_ms={commit_p95_ms}, slo_p95_ms={slo_p95_ms}",
+            );
+            ensure!(
+                commit_p99_ms <= slo_p99_ms,
+                "p99 commit time exceeded SLO: p99_ms={commit_p99_ms}, slo_p99_ms={slo_p99_ms}",
+            );
+        }
+        if slo_view_change_rate > 0.0 {
+            ensure!(
+                view_change_max <= slo_view_change_rate,
+                "view change rate exceeded SLO: max_rate={view_change_max:.4}, slo_rate={slo_view_change_rate:.4}",
+            );
+        }
+        if slo_backpressure_rate > 0.0 {
+            ensure!(
+                backpressure_max <= slo_backpressure_rate,
+                "backpressure deferral rate exceeded SLO: max_rate={backpressure_max:.4}, slo_rate={slo_backpressure_rate:.4}",
+            );
+        }
+        if slo_queue_saturation > 0.0 {
+            ensure!(
+                queue_saturated_frac <= slo_queue_saturation,
+                "queue saturation exceeded SLO: fraction={queue_saturated_frac:.2}, slo={slo_queue_saturation:.2}",
+            );
+        }
+
+        if let Some(artifact_root) = std::env::var_os("IROHA_THROUGHPUT_ARTIFACT_DIR") {
+            let root = PathBuf::from(artifact_root);
+            let timestamp_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            let run_dir = root.join(format!(
+                "throughput-{}",
+                u64::try_from(timestamp_ms).unwrap_or(u64::MAX)
+            ));
+            fs::create_dir_all(&run_dir).wrap_err("create throughput artifact dir")?;
+
+            let metrics_dir = run_dir.join("metrics");
+            fs::create_dir_all(&metrics_dir).wrap_err("create metrics dir")?;
+
+            for snapshot in &warmup_metrics {
+                let path = metrics_dir.join(format!("{}-warmup.prom", snapshot.peer));
+                fs::write(&path, &snapshot.payload)
+                    .wrap_err_with(|| format!("write warmup metrics {}", path.display()))?;
+            }
+            for snapshot in &after_metrics {
+                let path = metrics_dir.join(format!("{}-steady.prom", snapshot.peer));
+                fs::write(&path, &snapshot.payload)
+                    .wrap_err_with(|| format!("write steady metrics {}", path.display()))?;
+            }
+
+            let status_samples_value = Value::Array(
+                samples
+                    .iter()
+                    .map(|sample| {
+                        let mut map = Map::new();
+                        map.insert(
+                            "timestamp_ms".to_string(),
+                            Value::from(sample.timestamp_ms),
+                        );
+                        map.insert(
+                            "status".to_string(),
+                            Value::Array(
+                                sample
+                                    .statuses
+                                    .iter()
+                                    .map(|status| status_snapshot_value(status))
+                                    .collect(),
+                            ),
+                        );
+                        map.insert(
+                            "sumeragi".to_string(),
+                            Value::Array(
+                                sample
+                                    .sumeragi
+                                    .iter()
+                                    .map(|status| sumeragi_snapshot_value(status))
+                                    .collect(),
+                            ),
+                        );
+                        Value::Object(map)
+                    })
+                    .collect(),
+            );
+
+            let status_path = run_dir.join("status_samples.json");
+            let status_json = norito::json::to_json_pretty(&status_samples_value)
+                .map_err(|err| eyre!(err.to_string()))?;
+            fs::write(&status_path, status_json)
+                .wrap_err_with(|| format!("write {}", status_path.display()))?;
+
+            let config_fingerprint = config_fingerprint(&network_dir)?;
+
+            let mut summary = Map::new();
+            summary.insert(
+                "run_id".to_string(),
+                Value::String(
+                    run_dir
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string(),
+                ),
+            );
+            summary.insert(
+                "timestamp_ms".to_string(),
+                Value::from(u64::try_from(timestamp_ms).unwrap_or(u64::MAX)),
+            );
+            summary.insert(
+                "network_dir".to_string(),
+                Value::String(network_dir.to_string_lossy().to_string()),
+            );
+            summary.insert(
+                "config_fingerprint".to_string(),
+                config_fingerprint
+                    .map(Value::String)
+                    .unwrap_or(Value::Null),
+            );
+
+            let mut recipe = Map::new();
+            recipe.insert("peers".to_string(), Value::from(network.peers().len() as u64));
+            recipe.insert("block_time_ms".to_string(), Value::from(THROUGHPUT_BLOCK_TIME_MS));
+            recipe.insert("commit_time_ms".to_string(), Value::from(THROUGHPUT_COMMIT_TIME_MS));
+            recipe.insert("block_max_txs".to_string(), Value::from(THROUGHPUT_BLOCK_MAX_TXS));
+            recipe.insert("warmup_blocks".to_string(), Value::from(warmup_blocks));
+            recipe.insert("steady_blocks".to_string(), Value::from(steady_blocks));
+            recipe.insert("total_blocks".to_string(), Value::from(total_blocks));
+            recipe.insert("warmup_txs".to_string(), Value::from(warmup_txs));
+            recipe.insert("steady_txs".to_string(), Value::from(steady_txs));
+            recipe.insert("total_txs".to_string(), Value::from(total_txs));
+            recipe.insert("submit_batch".to_string(), Value::from(submit_batch));
+            recipe.insert(
+                "submit_parallelism".to_string(),
+                Value::from(submit_parallelism as u64),
+            );
+            recipe.insert("queue_soft_limit".to_string(), Value::from(queue_soft_limit));
+            recipe.insert("payload_bytes".to_string(), Value::from(payload_bytes as u64));
+            recipe.insert("rng_seed".to_string(), Value::from(rng_seed));
+            summary.insert("recipe".to_string(), Value::Object(recipe));
+
+            let mut slo = Map::new();
+            slo.insert("commit_p95_ms".to_string(), Value::from(slo_p95_ms));
+            slo.insert("commit_p99_ms".to_string(), Value::from(slo_p99_ms));
+            slo.insert(
+                "view_change_rate_max".to_string(),
+                Value::from(slo_view_change_rate),
+            );
+            slo.insert(
+                "backpressure_rate_max".to_string(),
+                Value::from(slo_backpressure_rate),
+            );
+            slo.insert(
+                "queue_saturation_max".to_string(),
+                Value::from(slo_queue_saturation),
+            );
+            summary.insert("slo".to_string(), Value::Object(slo));
+
+            let mut metrics = Map::new();
+            metrics.insert("submitted_tps".to_string(), Value::from(submitted_tps));
+            metrics.insert("committed_tps".to_string(), Value::from(committed_tps));
+            metrics.insert("commit_p95_ms".to_string(), Value::from(commit_p95_ms));
+            metrics.insert("commit_p99_ms".to_string(), Value::from(commit_p99_ms));
+            metrics.insert("commit_hist_count".to_string(), Value::from(commit_hist_count));
+            metrics.insert(
+                "commit_time_ms_min".to_string(),
+                Value::from(min_commit_time_ms),
+            );
+            metrics.insert(
+                "commit_time_ms_avg".to_string(),
+                Value::from(avg_commit_time_ms),
+            );
+            metrics.insert(
+                "commit_time_ms_max".to_string(),
+                Value::from(max_commit_time_ms),
+            );
+            metrics.insert(
+                "view_change_rate_avg".to_string(),
+                Value::from(view_change_avg),
+            );
+            metrics.insert(
+                "view_change_rate_max".to_string(),
+                Value::from(view_change_max),
+            );
+            metrics.insert(
+                "backpressure_rate_avg".to_string(),
+                Value::from(backpressure_avg),
+            );
+            metrics.insert(
+                "backpressure_rate_max".to_string(),
+                Value::from(backpressure_max),
+            );
+            metrics.insert(
+                "queue_saturated_frac".to_string(),
+                Value::from(queue_saturated_frac),
+            );
+            metrics.insert("max_queue_depth".to_string(), Value::from(max_queue_depth));
+            metrics.insert(
+                "steady_elapsed_ms".to_string(),
+                Value::from(steady_elapsed.as_millis() as u64),
+            );
+            metrics.insert(
+                "warmup_submit_elapsed_ms".to_string(),
+                Value::from(warmup_submit_elapsed.as_millis() as u64),
+            );
+            metrics.insert(
+                "steady_submit_elapsed_ms".to_string(),
+                Value::from(steady_submit_elapsed.as_millis() as u64),
+            );
+            summary.insert("metrics".to_string(), Value::Object(metrics));
+
+            let peer_logs: Vec<Value> = network
+                .peers()
+                .iter()
+                .enumerate()
+                .map(|(index, peer)| {
+                    let mut map = Map::new();
+                    map.insert("index".to_string(), Value::from(index as u64));
+                    map.insert("mnemonic".to_string(), Value::String(peer.mnemonic().to_string()));
+                    let stdout = peer
+                        .latest_stdout_log_path()
+                        .map(|path| Value::String(path.to_string_lossy().to_string()))
+                        .unwrap_or(Value::Null);
+                    let stderr = peer
+                        .latest_stderr_log_path()
+                        .map(|path| Value::String(path.to_string_lossy().to_string()))
+                        .unwrap_or(Value::Null);
+                    map.insert("stdout_log".to_string(), stdout);
+                    map.insert("stderr_log".to_string(), stderr);
+                    Value::Object(map)
+                })
+                .collect();
+
+            summary.insert("peer_logs".to_string(), Value::Array(peer_logs));
+            summary.insert(
+                "status_samples_path".to_string(),
+                Value::String(status_path.to_string_lossy().to_string()),
+            );
+            summary.insert(
+                "metrics_dir".to_string(),
+                Value::String(metrics_dir.to_string_lossy().to_string()),
+            );
+
+            let summary_value = Value::Object(summary);
+            let summary_path = run_dir.join("summary.json");
+            let summary_json = norito::json::to_json_pretty(&summary_value)
+                .map_err(|err| eyre!(err.to_string()))?;
+            fs::write(&summary_path, summary_json)
+                .wrap_err_with(|| format!("write {}", summary_path.display()))?;
+        }
+
+        network.shutdown().await;
+        Ok(())
+    }
+    .await;
+
+    if let Some(previous_ttl) = previous_ttl {
+        set_env_var("IROHA_TEST_CLIENT_TTL_MS", previous_ttl);
+    } else {
+        remove_env_var("IROHA_TEST_CLIENT_TTL_MS");
+    }
+
+    if sandbox::handle_result(result, stringify!(npos_localnet_throughput_10k_tps))?.is_none() {
         return Ok(());
     }
     Ok(())

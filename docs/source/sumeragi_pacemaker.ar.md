@@ -21,10 +21,10 @@ translation_last_reviewed: 2026-01-01
 
 ## المفاهيم
 - النافذة الاساسية: متوسط متحرك اسي لمراحل التوافق المرصودة
-  (propose, collect_da, collect_prevote, collect_precommit, collect_aggregator,
-  commit). يتم تهيئة EMA من `sumeragi.npos.timeouts.*`; حتى تتوفر عينات كافية
-  فهي تطابق القيم الافتراضية المهيأة عمليا. يتم تصدير EMA التنفيذ و witness
-  للملاحظة لكنها غير مدرجة بعد في نافذة pacemaker. تظهر القيم الملساء عبر
+  (propose, collect_da, collect_prevote, collect_precommit, commit). يتم تهيئة
+  EMA من `sumeragi.npos.timeouts.*`; حتى تتوفر عينات كافية فهي تطابق القيم
+  الافتراضية المهيأة عمليا. يتم تصدير EMA لـ `collect_aggregator` للملاحظة
+  لكنها غير مدرجة في نافذة pacemaker. تظهر القيم الملساء عبر
   `sumeragi_phase_latency_ema_ms{phase=...}`.
 - مضاعف backoff: `sumeragi.pacemaker_backoff_multiplier` (الافتراضي 1). كل timeout يضيف `base * multiplier` الى النافذة الحالية.
 - ارضية RTT: `avg_rtt_ms * sumeragi.pacemaker_rtt_floor_multiplier` (الافتراضي 2). تمنع timeouts العدوانية على الروابط عالية الكمون.

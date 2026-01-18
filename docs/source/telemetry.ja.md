@@ -118,10 +118,10 @@
 
 ## `/v1/sumeragi/phases` の利用
 
-- 返却値: `{ propose_ms, collect_da_ms, collect_prevote_ms, collect_precommit_ms, collect_aggregator_ms, collect_exec_ms, collect_witness_ms, commit_ms, pipeline_total_ms, ema_ms{…} }`
+- 返却値: `{ propose_ms, collect_da_ms, collect_prevote_ms, collect_precommit_ms, collect_aggregator_ms, commit_ms, pipeline_total_ms, ema_ms{…} }`
 - `collect_aggregator_ms` は冗長コレクタへのファンアウト遅延を示す。`sumeragi_redundant_sends_*` と組み合わせてアラート設定を調整。
-- `pipeline_total_ms` は Pacemaker が制御するフェーズ（propose/collect_da/collect_prevote/collect_precommit/commit）の合計遅延を表す。監視やしきい値調整に便利な単一指標として利用できる（execution/witness フェーズは参照用のまま保持）。
-- 付随情報として `block_created_dropped_by_lock_total`, `block_created_hint_mismatch_total`, `block_created_proposal_mismatch_total`, `pacemaker_backpressure_deferrals_total` も含まれる。
+- `pipeline_total_ms` は Pacemaker が制御するフェーズ（propose/collect_da/collect_prevote/collect_precommit/commit）の合計遅延を表す。監視やしきい値調整に便利な単一指標として利用できる（`collect_aggregator_ms` はファンアウト指標として別扱い）。
+- 付随情報として `block_created_dropped_by_lock_total`, `block_created_hint_mismatch_total`, `block_created_proposal_mismatch_total` も含まれる。
 
 ## Nexus メトリクス
 

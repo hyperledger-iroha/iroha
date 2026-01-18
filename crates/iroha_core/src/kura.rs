@@ -1519,8 +1519,11 @@ impl Kura {
             );
             let end_height = start_height + blocks_to_be_written.len();
             let start_height_u64 = u64::try_from(start_height).expect("start height fits in u64");
-            if let Err(error) =
-                block_store_guard.append_block_batch_at(start_height_u64, &blocks_to_be_written)
+            if let Err(error) = block_store_guard.append_block_batch_at(
+                start_height_u64,
+                &blocks_to_be_written,
+                kura.max_disk_usage_bytes,
+            )
             {
                 error!(?error, "Failed to store block batch");
                 panic!("Kura has encountered a fatal IO error.");
@@ -1766,6 +1769,20 @@ impl Kura {
             .saturating_add(SIZE_OF_BLOCK_HASH))
     }
 
+    fn evicted_block_required_bytes() -> u64 {
+        BlockIndex::SIZE.saturating_add(SIZE_OF_BLOCK_HASH)
+    }
+
+    // Budget accounting treats oversized blocks as evicted-on-write.
+    fn block_required_bytes_for_budget(block: &SignedBlock, limit: u64) -> Result<u64> {
+        let required = Self::block_required_bytes(block)?;
+        if limit > 0 && required > limit {
+            Ok(Self::evicted_block_required_bytes())
+        } else {
+            Ok(required)
+        }
+    }
+
     fn sidecar_bytes(store_dir: &Path) -> Result<u64> {
         if store_dir.as_os_str().is_empty() {
             return Ok(0);
@@ -1934,7 +1951,10 @@ impl Kura {
 
         let mut pending_bytes = 0u64;
         for block in pending_blocks {
-            pending_bytes = pending_bytes.saturating_add(Self::block_required_bytes(&block)?);
+            pending_bytes = pending_bytes.saturating_add(Self::block_required_bytes_for_budget(
+                &block,
+                self.max_disk_usage_bytes,
+            )?);
         }
         Ok(pending_bytes)
     }
@@ -1975,7 +1995,6 @@ impl Kura {
             return Ok(());
         }
 
-        let block_required = Self::block_required_bytes(block)?;
         let merge_entry_bytes = match merge_entry {
             Some(entry) => {
                 let encoded = Encode::encode(entry);
@@ -1988,6 +2007,7 @@ impl Kura {
         let (persisted_count, unindexed_bytes) = self.persisted_count_and_unindexed_bytes()?;
 
         let limit = self.max_disk_usage_bytes;
+        let block_required = Self::block_required_bytes_for_budget(block, limit)?;
         let mut used = self.kura_disk_usage_bytes()?;
         let pending_bytes = self.pending_block_bytes(persisted_count, unindexed_bytes)?;
         let mut budget_used = used.saturating_add(pending_bytes);
@@ -2079,8 +2099,9 @@ impl Kura {
             return self.check_storage_budget(block, None);
         };
 
-        let new_bytes = Self::block_required_bytes(block)?;
-        let old_bytes = Self::block_required_bytes(&old_block)?;
+        let limit = self.max_disk_usage_bytes;
+        let new_bytes = Self::block_required_bytes_for_budget(block, limit)?;
+        let old_bytes = Self::block_required_bytes_for_budget(&old_block, limit)?;
         let (persisted_count, unindexed_bytes) = self.persisted_count_and_unindexed_bytes()?;
         let pending_raw = self.pending_block_bytes_raw(persisted_count)?;
         let top_is_pending = block_count > persisted_count;
@@ -2091,7 +2112,6 @@ impl Kura {
         }
         pending_raw_after = pending_raw_after.saturating_add(new_bytes);
 
-        let limit = self.max_disk_usage_bytes;
         let pending_current = pending_raw.saturating_sub(unindexed_bytes);
         let mut used = self.kura_disk_usage_bytes()?;
         let mut budget_used = used.saturating_add(pending_current);
@@ -4975,7 +4995,7 @@ impl BlockStore {
     /// Propagates I/O and encoding errors.
     pub fn append_block_batch(&mut self, blocks: &[Arc<SignedBlock>]) -> Result<()> {
         let start_height = self.read_index_count()?;
-        self.append_block_batch_at(start_height, blocks)
+        self.append_block_batch_at(start_height, blocks, 0)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -4983,6 +5003,7 @@ impl BlockStore {
         &mut self,
         start_height: u64,
         blocks: &[Arc<SignedBlock>],
+        max_disk_usage_bytes: u64,
     ) -> Result<()> {
         if blocks.is_empty() {
             return Ok(());
@@ -4997,8 +5018,24 @@ impl BlockStore {
         let start_location_in_data_file = if start_height == 0 {
             0
         } else {
-            let ultimate_block = self.read_block_index(start_height - 1)?;
-            ultimate_block.start + ultimate_block.length
+            let mut idx = start_height.saturating_sub(1);
+            loop {
+                let entry = self.read_block_index(idx)?;
+                if !entry.is_evicted() {
+                    break entry
+                        .start
+                        .checked_add(entry.length)
+                        .ok_or(Error::CorruptedBlockRange {
+                            start: entry.start,
+                            length: entry.length,
+                            data_len: entry.start,
+                        })?;
+                }
+                if idx == 0 {
+                    break 0;
+                }
+                idx = idx.saturating_sub(1);
+            }
         };
         debug!(
             start_height,
@@ -5009,6 +5046,7 @@ impl BlockStore {
         let mut lengths = Vec::with_capacity(blocks.len());
         let mut offsets = Vec::with_capacity(blocks.len());
         let mut hashes = Vec::with_capacity(blocks.len());
+        let mut evicted = Vec::with_capacity(blocks.len());
 
         for (idx, block) in blocks.iter().enumerate() {
             debug!(
@@ -5019,14 +5057,20 @@ impl BlockStore {
             let wire = block.canonical_wire()?;
             let (frame, versioned) = wire.into_parts();
             let frame_len = u64::try_from(frame.len())?;
+            let required = frame_len
+                .saturating_add(BlockIndex::SIZE)
+                .saturating_add(SIZE_OF_BLOCK_HASH);
+            let evict = max_disk_usage_bytes > 0 && required > max_disk_usage_bytes;
             frames.push(frame);
             lengths.push(frame_len);
             hashes.push(block.hash());
+            evicted.push(evict);
             self.encode_scratch = versioned;
             debug!(
                 start_height,
                 block_idx = idx,
                 frame_len,
+                evict,
                 "append_block_batch encoded block"
             );
         }
@@ -5037,7 +5081,11 @@ impl BlockStore {
             "append_block_batch prepared frames"
         );
         let mut cursor = start_location_in_data_file;
-        for len in &lengths {
+        for (len, evict) in lengths.iter().zip(evicted.iter()) {
+            if *evict {
+                offsets.push(EVICTED_BLOCK_START);
+                continue;
+            }
             offsets.push(cursor);
             cursor = cursor.checked_add(*len).ok_or(Error::CorruptedBlockRange {
                 start: cursor,
@@ -5054,6 +5102,33 @@ impl BlockStore {
             "append_block_batch preparing to write data"
         );
 
+        if evicted.iter().any(|evict| *evict) {
+            self.ensure_da_blocks_dir()?;
+            for (idx, (frame, evict)) in frames.iter().zip(evicted.iter()).enumerate() {
+                if !*evict {
+                    continue;
+                }
+                let height = start_height.saturating_add(idx as u64).saturating_add(1);
+                let path = self.da_block_path(height);
+                let tmp_path = path.with_extension("norito.tmp");
+                if path.exists() {
+                    std::fs::remove_file(&path).map_err(|err| Error::IO(err, path.clone()))?;
+                }
+                let mut tmp_file = FileWrap::open_with(tmp_path.clone(), |opts| {
+                    opts.write(true).create(true).truncate(true);
+                })?;
+                tmp_file.try_io(|file| {
+                    file.write_all(frame)?;
+                    file.flush()?;
+                    file.sync_data()
+                })?;
+                std::fs::rename(&tmp_path, &path).map_err(|err| Error::IO(err, path.clone()))?;
+                if let Some(parent) = path.parent() {
+                    sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+                }
+            }
+        }
+
         let data_file = self.ensure_data_file()?;
         data_file.try_io(|file| {
             debug!(
@@ -5061,7 +5136,10 @@ impl BlockStore {
                 "append_block_batch writing frames to data file"
             );
             file.seek(SeekFrom::Start(start_location_in_data_file))?;
-            for frame in &frames {
+            for (frame, evict) in frames.iter().zip(evicted.iter()) {
+                if *evict {
+                    continue;
+                }
                 file.write_all(frame)?;
             }
             debug!(start_height, "append_block_batch flushing data file");
@@ -6151,7 +6229,81 @@ mod tests {
     }
 
     #[test]
-    fn replace_top_block_rejects_when_budget_exceeded() {
+    fn store_block_evicts_when_block_exceeds_budget() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: NonZeroUsize::new(1).expect("non-zero"),
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: FSYNC_INTERVAL,
+            block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+        };
+        let (mut kura, _) =
+            Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+        let used = kura.kura_disk_usage_bytes().expect("baseline usage");
+        let overhead = BlockIndex::SIZE.saturating_add(SIZE_OF_BLOCK_HASH);
+        let budget_limit = used.saturating_add(overhead.saturating_mul(2)).saturating_add(1);
+        Arc::get_mut(&mut kura)
+            .expect("exclusive kura handle")
+            .max_disk_usage_bytes = budget_limit;
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let _handle = {
+            let _rt_guard = rt.enter();
+            Kura::start(kura.clone(), ShutdownSignal::new())
+        };
+
+        let make_block =
+            |message: &str, prev: Option<&SignedBlock>| -> Arc<SignedBlock> {
+            let tx = TransactionBuilder::new(
+                ChainId::from("test"),
+                SAMPLE_GENESIS_ACCOUNT_ID.to_owned(),
+            )
+            .with_instructions([Log::new(Level::INFO, message.to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+            let acc = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+            Arc::new(
+                BlockBuilder::new(vec![acc])
+                    .chain(0, prev)
+                    .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
+                    .unpack(|_| {})
+                    .into(),
+            )
+        };
+
+        let payload = "x".repeat(4096);
+        let block1 = make_block(&payload, None);
+        let block2 = make_block(&payload, Some(block1.as_ref()));
+        let block1_required = Kura::block_required_bytes(&block1).expect("block1 bytes");
+        assert!(
+            block1_required > budget_limit,
+            "expected block to exceed budget"
+        );
+
+        kura.store_block(Arc::clone(&block1))
+            .expect("store oversized block1");
+        kura.store_block(Arc::clone(&block2))
+            .expect("store oversized block2");
+        wait_for_block_hash(&kura, 2, block2.hash());
+
+        let (index, da_path) = {
+            let mut store = kura.block_store.lock();
+            (store.read_block_index(0).expect("block index"), store.da_block_path(1))
+        };
+        assert!(index.is_evicted());
+        assert!(da_path.exists(), "expected DA payload for block1");
+
+        let height = NonZeroUsize::new(1).expect("non-zero");
+        let block = kura.get_block(height).expect("rehydrate block1");
+        assert_eq!(block.hash(), block1.hash());
+    }
+
+    #[test]
+    fn replace_top_block_evicts_when_budget_exceeded() {
         let temp_dir = TempDir::new().expect("create temp dir");
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
@@ -6167,9 +6319,6 @@ mod tests {
         };
         let (mut kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = StateTelemetry::new(metrics.clone(), true);
-        kura.attach_telemetry(telemetry);
 
         let make_block = |message: &str| -> SignedBlock {
             let tx = TransactionBuilder::new(
@@ -6200,42 +6349,27 @@ mod tests {
         Arc::get_mut(&mut kura)
             .expect("exclusive kura handle")
             .max_disk_usage_bytes = limit;
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let _handle = {
+            let _rt_guard = rt.enter();
+            Kura::start(kura.clone(), ShutdownSignal::new())
+        };
 
         kura.store_block(small_block).expect("store small block");
-        let (persisted_count, unindexed_bytes) = kura
-            .persisted_count_and_unindexed_bytes()
-            .expect("persisted count");
-        let pending_bytes = kura
-            .pending_block_bytes(persisted_count, unindexed_bytes)
-            .expect("pending bytes");
-        let used = kura.kura_disk_usage_bytes().expect("kura bytes");
-        let expected_used = used.saturating_add(pending_bytes);
 
-        let err = kura
-            .replace_top_block(large_block)
-            .expect_err("replacement should exceed budget");
-        assert!(matches!(err, Error::StorageBudgetExceeded { .. }));
-        assert_eq!(
-            metrics
-                .storage_budget_bytes_used
-                .with_label_values(&["kura"])
-                .get(),
-            expected_used
+        assert!(
+            large_bytes > limit,
+            "expected replacement block to exceed budget"
         );
-        assert_eq!(
-            metrics
-                .storage_budget_bytes_limit
-                .with_label_values(&["kura"])
-                .get(),
-            limit
-        );
-        assert_eq!(
-            metrics
-                .storage_budget_exceeded_total
-                .with_label_values(&["kura"])
-                .get(),
-            1
-        );
+        kura.replace_top_block(large_block.clone())
+            .expect("replacement should evict oversized block");
+        wait_for_block_hash(&kura, 1, large_block.hash());
+        let (index, da_path) = {
+            let mut store = kura.block_store.lock();
+            (store.read_block_index(0).expect("block index"), store.da_block_path(1))
+        };
+        assert!(index.is_evicted());
+        assert!(da_path.exists(), "expected DA payload for evicted block");
     }
 
     #[test]
@@ -6866,7 +7000,7 @@ mod tests {
         assert_ne!(replacement.hash(), block2.hash(), "replacement must differ");
 
         block_store
-            .append_block_batch_at(1, std::slice::from_ref(&replacement))
+            .append_block_batch_at(1, std::slice::from_ref(&replacement), 0)
             .unwrap();
 
         assert_eq!(block_store.read_index_count().unwrap(), 2);

@@ -80,7 +80,7 @@ translator: manual
 
 ## אירועי Witness להוצאה לפועל
 
-- לפני משלוח `ExecVote`, `PipelineEventBox::Witness` מפורסם עם `block_hash`, `height`, `view`, `epoch` והעדים (`reads`, `writes`).
+- לאחר אימות הצעה וקיבוע עד הביצוע (מקור ה-`parent_state_root`/`post_state_root` שמחויבים ב-commit QC), `PipelineEventBox::Witness` מפורסם עם `block_hash`, `height`, `view`, `epoch` והעדים (`reads`, `writes`).
 - Torii מציגה סיכומי counts; לקבלת המידע המלא יש להאזין לזרם Norito.
 - פילטרים ייעודיים (`for_block_hash`, `for_height`, `for_view`) מאפשרים ניטור ממוקד.
 

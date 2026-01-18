@@ -4330,6 +4330,19 @@ impl<QS> CoreHostImpl<QS> {
     pub(crate) fn set_block_time_ms(&mut self, time_ms: u64) {
         self.current_block_time_ms = Some(time_ms);
     }
+
+    fn amount_from_trigger_args(&self) -> Option<u64> {
+        let args = self.args.as_ref()?;
+        let value: json::Value = args.try_into_any_norito().ok()?;
+        match value {
+            json::Value::Number(number) => number.as_u64(),
+            json::Value::Object(map) => map.get("val").and_then(|val| match val {
+                json::Value::Number(number) => number.as_u64(),
+                _ => None,
+            }),
+            _ => None,
+        }
+    }
 }
 
 impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
@@ -4461,12 +4474,17 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             ivm::syscalls::SYSCALL_MINT_ASSET => {
                 let account_ptr = vm.register(10);
                 let asset_def_ptr = vm.register(11);
-                let amount = vm.register(12);
+                let mut amount = vm.register(12);
 
                 let account: AccountId =
                     Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
                 let asset_def: AssetDefinitionId =
                     Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
+                if amount == 0 {
+                    if let Some(from_args) = self.amount_from_trigger_args() {
+                        amount = from_args;
+                    }
+                }
                 let asset_id = AssetId::of(asset_def, account);
                 let isi = Mint::asset_numeric(amount, asset_id);
                 let instr = InstructionBox::from(MintBox::from(isi));
@@ -5443,6 +5461,7 @@ mod pointer_abi_tests {
     use iroha_crypto::{Hash as IrohaHash, KeyPair};
     use iroha_data_model::smart_contract::manifest::ContractManifest;
     use iroha_primitives::json::Json;
+    use iroha_test_samples::ALICE_ID;
     use ivm::{
         axt::{GroupBinding, HandleBudget, HandleSubject, SpendOp},
         syscalls as ivm_sys,
@@ -5551,7 +5570,7 @@ mod pointer_abi_tests {
     fn pointer_from_norito_wrong_type_is_rejected() {
         crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(10_000);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority = ALICE_ID.clone();
         let mut host = CoreHost::new(authority);
 
         let name_payload = Name::from_str("rose").unwrap().encode();
@@ -5580,7 +5599,7 @@ mod pointer_abi_tests {
             touches: Vec::new(),
         };
         let snapshot = make_policy_snapshot(dsid, manifest_root, 5);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority = ALICE_ID.clone();
         let mut host = CoreHost::new(authority).with_axt_policy_snapshot(&snapshot);
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
@@ -7507,6 +7526,43 @@ mod pointer_abi_tests {
         let isi = Mint::asset_numeric(5u64, asset_id);
         let expected = crate::gas::meter_instruction(&InstructionBox::from(MintBox::from(isi)));
         assert_eq!(gas, expected);
+    }
+
+    #[test]
+    fn mint_asset_syscall_uses_trigger_args_for_zero_amount() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority = ALICE_ID.clone();
+        let args = Json::new(norito::json!({"val": 42}));
+        let mut host: CoreHost =
+            CoreHostImpl::with_accounts_and_args(authority.clone(), Arc::new(vec![authority.clone()]), args);
+        vm.load_program(&ivm::ProgramMetadata::default().encode())
+            .expect("load header");
+
+        let account_tlv = make_tlv(PointerType::AccountId as u16, &authority.encode());
+        let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_tlv = make_tlv(PointerType::AssetDefinitionId as u16, &asset_def.encode());
+
+        vm.memory
+            .preload_input(0, &account_tlv)
+            .expect("preload account");
+        vm.memory
+            .preload_input(256, &asset_tlv)
+            .expect("preload asset def");
+        vm.set_register(10, ivm::Memory::INPUT_START);
+        vm.set_register(11, ivm::Memory::INPUT_START + 256);
+        vm.set_register(12, 0);
+
+        let gas = host
+            .syscall(ivm::syscalls::SYSCALL_MINT_ASSET, &mut vm)
+            .expect("mint syscall");
+        let asset_id = AssetId::of(asset_def, authority);
+        let isi = Mint::asset_numeric(42u64, asset_id);
+        let expected = crate::gas::meter_instruction(&InstructionBox::from(MintBox::from(isi.clone())));
+        assert_eq!(gas, expected);
+        assert_eq!(
+            host.queued,
+            vec![InstructionBox::from(MintBox::from(isi))]
+        );
     }
 
     #[test]

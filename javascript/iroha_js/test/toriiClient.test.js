@@ -6234,7 +6234,7 @@ test("getSumeragiStatus fetches consensus metrics", async () => {
             dataspace_id: 7,
             block_height: 11,
             block_header: { height: 11, view: 3 },
-            execution_qc: { subject_block_hash: "feedface" },
+            qc: { subject_block_hash: "feedface" },
             da_commitment_hash: "0xcafe",
             settlement_commitment: {
               block_height: 11,
@@ -6370,7 +6370,7 @@ test("getSumeragiStatus fetches consensus metrics", async () => {
         dataspace_id: 7,
         block_height: 11,
         block_header: { height: 11, view: 3 },
-        execution_qc: { subject_block_hash: "feedface" },
+        qc: { subject_block_hash: "feedface" },
         da_commitment_hash: "0xcafe",
         settlement_commitment: {
           block_height: 11,
@@ -6422,6 +6422,25 @@ test("getSumeragiStatusTyped normalizes governance seals", async () => {
           rbc_store_soft_sessions: "32",
           rbc_store_max_bytes: "4096",
           rbc_store_soft_bytes: "2048",
+        },
+        commit_qc: {
+          height: "41",
+          view: "2",
+          epoch: "5",
+          block_hash: "0xabc",
+          validator_set_hash: "0xdef",
+          validator_set_len: "4",
+          signatures_total: "3",
+        },
+        commit_quorum: {
+          height: "41",
+          view: "2",
+          block_hash: "0xabc",
+          signatures_present: "3",
+          signatures_counted: "3",
+          signatures_set_b: "2",
+          signatures_required: "3",
+          last_updated_ms: "1700",
         },
         leader_index: "5",
         lane_commitments: [
@@ -6492,6 +6511,25 @@ test("getSumeragiStatusTyped normalizes governance seals", async () => {
   assert.ok(payload.consensus_caps);
   assert.equal(payload.consensus_caps.collectors_k, 2);
   assert.equal(payload.consensus_caps.rbc_chunk_max_bytes, 1024);
+  assert.deepEqual(payload.commit_qc, {
+    height: 41,
+    view: 2,
+    epoch: 5,
+    block_hash: "0xabc",
+    validator_set_hash: "0xdef",
+    validator_set_len: 4,
+    signatures_total: 3,
+  });
+  assert.deepEqual(payload.commit_quorum, {
+    height: 41,
+    view: 2,
+    block_hash: "0xabc",
+    signatures_present: 3,
+    signatures_counted: 3,
+    signatures_set_b: 2,
+    signatures_required: 3,
+    last_updated_ms: 1700,
+  });
   assert.equal(payload.leader_index, "5");
   assert.deepEqual(payload.lane_commitments, [
     {
@@ -6597,7 +6635,7 @@ test("getSumeragiStatusTyped parses settlement and relay envelopes", async () =>
             dataspace_id: 9,
             block_height: 21,
             block_header: { height: 21 },
-            execution_qc: { subject_block_hash: "abcd" },
+            qc: { subject_block_hash: "abcd" },
             da_commitment_hash: null,
             settlement_commitment: {
               block_height: 21,
@@ -6802,6 +6840,40 @@ test("getSumeragiQc fetches QC snapshot", async () => {
   });
 });
 
+test("getSumeragiCommitQc fetches commit QC record", async () => {
+  const hashHex = "aa".repeat(32);
+  const fetchImpl = async (url, init) => {
+    assert.equal(url, `${BASE_URL}/v1/sumeragi/commit_qc/${hashHex}`);
+    assert.equal(init.headers.Accept, "application/json");
+    return createResponse({
+      status: 200,
+      jsonData: {
+        subject_block_hash: hashHex,
+        commit_qc: {
+          phase: "Commit",
+          parent_state_root: "bb".repeat(32),
+          post_state_root: "cc".repeat(32),
+          height: "12",
+          view: "3",
+          epoch: "4",
+          mode_tag: "iroha2-consensus::permissioned-sumeragi@v1",
+          validator_set_hash: "dd".repeat(32),
+          validator_set_hash_version: 1,
+          validator_set: ["alice@test", "bob@test"],
+          signers_bitmap: "0a",
+          bls_aggregate_signature: "ff",
+        },
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const record = await client.getSumeragiCommitQc(`0x${hashHex}`);
+  assert.equal(record.subject_block_hash, hashHex);
+  assert.equal(record.commit_qc?.parent_state_root, "bb".repeat(32));
+  assert.equal(record.commit_qc?.validator_set.length, 2);
+});
+
 test("getSumeragiPhases fetches latency metrics", async () => {
   const fetchImpl = async (url, init) => {
     assert.equal(url, `${BASE_URL}/v1/sumeragi/phases`);
@@ -6814,8 +6886,6 @@ test("getSumeragiPhases fetches latency metrics", async () => {
         collect_prevote_ms: "7",
         collect_precommit_ms: "8",
         collect_aggregator_ms: "9",
-        collect_exec_ms: "10",
-        collect_witness_ms: "11",
         commit_ms: "12",
         pipeline_total_ms: "58",
         collect_aggregator_gossip_total: "3",
@@ -6828,8 +6898,6 @@ test("getSumeragiPhases fetches latency metrics", async () => {
           collect_prevote_ms: "6",
           collect_precommit_ms: "7",
           collect_aggregator_ms: "8",
-          collect_exec_ms: "9",
-          collect_witness_ms: "10",
           commit_ms: "11",
           pipeline_total_ms: "50",
         },
@@ -6839,7 +6907,7 @@ test("getSumeragiPhases fetches latency metrics", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const phases = await client.getSumeragiPhases();
-  assert.equal(phases.collect_exec_ms, 10);
+  assert.equal(phases.collect_aggregator_ms, 9);
   assert.equal(phases.ema_ms.pipeline_total_ms, 50);
 });
 
