@@ -1,4 +1,4 @@
-"""Lightweight Torii HTTP client for attachments, prover, and governance endpoints."""
+"""Lightweight Torii HTTP client for subscriptions, attachments, prover, and governance endpoints."""
 
 from .client import (
     BallotSubmitResult,
@@ -27,6 +27,13 @@ from .client import (
     RbcChunkSample,
     RbcMerkleProof,
     RbcSample,
+    SubscriptionActionResult,
+    SubscriptionCreateResult,
+    SubscriptionListItem,
+    SubscriptionListPage,
+    SubscriptionPlanCreateResult,
+    SubscriptionPlanListItem,
+    SubscriptionPlanListPage,
     SumeragiCollectorEntry,
     SumeragiCollectorsSnapshot,
     SumeragiLeaderSnapshot,
@@ -76,6 +83,13 @@ __all__ = [
     "ProtectedNamespacesStatus",
     "VrfCandidate",
     "CouncilPersistResult",
+    "SubscriptionPlanCreateResult",
+    "SubscriptionPlanListItem",
+    "SubscriptionPlanListPage",
+    "SubscriptionCreateResult",
+    "SubscriptionListItem",
+    "SubscriptionListPage",
+    "SubscriptionActionResult",
     "TriggerRecord",
     "TriggerListPage",
     "SumeragiQcEntry",

@@ -1106,6 +1106,356 @@ public struct ToriiConnectAppListOptions: Sendable, Equatable {
     }
 }
 
+public typealias ToriiSubscriptionPlan = [String: ToriiJSONValue]
+public typealias ToriiSubscriptionState = [String: ToriiJSONValue]
+public typealias ToriiSubscriptionInvoice = [String: ToriiJSONValue]
+
+public enum ToriiSubscriptionStatus: String, Codable, Sendable, CaseIterable {
+    case active
+    case paused
+    case pastDue = "past_due"
+    case canceled
+    case suspended
+}
+
+public enum ToriiSubscriptionCancelMode: String, Codable, Sendable, CaseIterable {
+    case immediate
+    case periodEnd = "period_end"
+}
+
+public struct ToriiSubscriptionPlanCreateRequest: Encodable, Sendable {
+    public var authority: String
+    public var privateKey: String
+    public var planId: String
+    public var plan: ToriiSubscriptionPlan
+
+    public init(authority: String,
+                privateKey: String,
+                planId: String,
+                plan: ToriiSubscriptionPlan) {
+        self.authority = authority
+        self.privateKey = privateKey
+        self.planId = planId
+        self.plan = plan
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case authority
+        case privateKey = "private_key"
+        case planId = "plan_id"
+        case plan
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        let normalizedAuthority = try ToriiRequestValidation.normalizedNonEmpty(authority,
+                                                                                field: "authority")
+        let normalizedPrivateKey = try ToriiRequestValidation.normalizedNonEmpty(privateKey,
+                                                                                  field: "private_key")
+        let normalizedPlanId = try ToriiRequestValidation.normalizedNonEmpty(planId,
+                                                                             field: "plan_id")
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(normalizedAuthority, forKey: .authority)
+        try container.encode(normalizedPrivateKey, forKey: .privateKey)
+        try container.encode(normalizedPlanId, forKey: .planId)
+        try container.encode(plan, forKey: .plan)
+    }
+}
+
+public struct ToriiSubscriptionPlanCreateResponse: Decodable, Sendable {
+    public let ok: Bool
+    public let planId: String
+    public let txHashHex: String
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case planId = "plan_id"
+        case txHashHex = "tx_hash_hex"
+    }
+}
+
+public struct ToriiSubscriptionPlanListParams: Sendable, Equatable {
+    public var provider: String?
+    public var limit: UInt64?
+    public var offset: UInt64?
+
+    public init(provider: String? = nil,
+                limit: UInt64? = nil,
+                offset: UInt64? = nil) {
+        self.provider = provider
+        self.limit = limit
+        self.offset = offset
+    }
+
+    public func queryItems() throws -> [URLQueryItem]? {
+        var items: [URLQueryItem] = []
+        if let provider = provider?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !provider.isEmpty {
+            items.append(URLQueryItem(name: "provider", value: provider))
+        }
+        if let limit {
+            items.append(URLQueryItem(name: "limit", value: String(limit)))
+        }
+        if let offset {
+            items.append(URLQueryItem(name: "offset", value: String(offset)))
+        }
+        return items.isEmpty ? nil : items
+    }
+}
+
+public struct ToriiSubscriptionPlanListItem: Decodable, Sendable {
+    public let planId: String
+    public let plan: ToriiSubscriptionPlan
+
+    private enum CodingKeys: String, CodingKey {
+        case planId = "plan_id"
+        case plan
+    }
+}
+
+public struct ToriiSubscriptionPlanListResponse: Decodable, Sendable {
+    public let items: [ToriiSubscriptionPlanListItem]
+    public let total: UInt64
+}
+
+public struct ToriiSubscriptionCreateRequest: Encodable, Sendable {
+    public var authority: String
+    public var privateKey: String
+    public var subscriptionId: String
+    public var planId: String
+    public var billingTriggerId: String?
+    public var usageTriggerId: String?
+    public var firstChargeMs: UInt64?
+    public var grantUsageToProvider: Bool?
+
+    public init(authority: String,
+                privateKey: String,
+                subscriptionId: String,
+                planId: String,
+                billingTriggerId: String? = nil,
+                usageTriggerId: String? = nil,
+                firstChargeMs: UInt64? = nil,
+                grantUsageToProvider: Bool? = nil) {
+        self.authority = authority
+        self.privateKey = privateKey
+        self.subscriptionId = subscriptionId
+        self.planId = planId
+        self.billingTriggerId = billingTriggerId
+        self.usageTriggerId = usageTriggerId
+        self.firstChargeMs = firstChargeMs
+        self.grantUsageToProvider = grantUsageToProvider
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case authority
+        case privateKey = "private_key"
+        case subscriptionId = "subscription_id"
+        case planId = "plan_id"
+        case billingTriggerId = "billing_trigger_id"
+        case usageTriggerId = "usage_trigger_id"
+        case firstChargeMs = "first_charge_ms"
+        case grantUsageToProvider = "grant_usage_to_provider"
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        let normalizedAuthority = try ToriiRequestValidation.normalizedNonEmpty(authority,
+                                                                                field: "authority")
+        let normalizedPrivateKey = try ToriiRequestValidation.normalizedNonEmpty(privateKey,
+                                                                                  field: "private_key")
+        let normalizedSubscriptionId = try ToriiRequestValidation.normalizedNonEmpty(subscriptionId,
+                                                                                     field: "subscription_id")
+        let normalizedPlanId = try ToriiRequestValidation.normalizedNonEmpty(planId,
+                                                                             field: "plan_id")
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(normalizedAuthority, forKey: .authority)
+        try container.encode(normalizedPrivateKey, forKey: .privateKey)
+        try container.encode(normalizedSubscriptionId, forKey: .subscriptionId)
+        try container.encode(normalizedPlanId, forKey: .planId)
+        if let billingTriggerId = try ToriiRequestValidation.normalizedOptionalNonEmpty(billingTriggerId,
+                                                                                        field: "billing_trigger_id") {
+            try container.encode(billingTriggerId, forKey: .billingTriggerId)
+        }
+        if let usageTriggerId = try ToriiRequestValidation.normalizedOptionalNonEmpty(usageTriggerId,
+                                                                                      field: "usage_trigger_id") {
+            try container.encode(usageTriggerId, forKey: .usageTriggerId)
+        }
+        try container.encodeIfPresent(firstChargeMs, forKey: .firstChargeMs)
+        try container.encodeIfPresent(grantUsageToProvider, forKey: .grantUsageToProvider)
+    }
+}
+
+public struct ToriiSubscriptionCreateResponse: Decodable, Sendable {
+    public let ok: Bool
+    public let subscriptionId: String
+    public let billingTriggerId: String
+    public let usageTriggerId: String?
+    public let firstChargeMs: UInt64
+    public let txHashHex: String
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case subscriptionId = "subscription_id"
+        case billingTriggerId = "billing_trigger_id"
+        case usageTriggerId = "usage_trigger_id"
+        case firstChargeMs = "first_charge_ms"
+        case txHashHex = "tx_hash_hex"
+    }
+}
+
+public struct ToriiSubscriptionListParams: Sendable, Equatable {
+    public var ownedBy: String?
+    public var provider: String?
+    public var status: ToriiSubscriptionStatus?
+    public var limit: UInt64?
+    public var offset: UInt64?
+
+    public init(ownedBy: String? = nil,
+                provider: String? = nil,
+                status: ToriiSubscriptionStatus? = nil,
+                limit: UInt64? = nil,
+                offset: UInt64? = nil) {
+        self.ownedBy = ownedBy
+        self.provider = provider
+        self.status = status
+        self.limit = limit
+        self.offset = offset
+    }
+
+    public func queryItems() throws -> [URLQueryItem]? {
+        var items: [URLQueryItem] = []
+        if let ownedBy = ownedBy?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !ownedBy.isEmpty {
+            items.append(URLQueryItem(name: "owned_by", value: ownedBy))
+        }
+        if let provider = provider?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !provider.isEmpty {
+            items.append(URLQueryItem(name: "provider", value: provider))
+        }
+        if let status {
+            items.append(URLQueryItem(name: "status", value: status.rawValue))
+        }
+        if let limit {
+            items.append(URLQueryItem(name: "limit", value: String(limit)))
+        }
+        if let offset {
+            items.append(URLQueryItem(name: "offset", value: String(offset)))
+        }
+        return items.isEmpty ? nil : items
+    }
+}
+
+public struct ToriiSubscriptionRecord: Decodable, Sendable {
+    public let subscriptionId: String
+    public let subscription: ToriiSubscriptionState
+    public let invoice: ToriiSubscriptionInvoice?
+    public let plan: ToriiSubscriptionPlan?
+
+    private enum CodingKeys: String, CodingKey {
+        case subscriptionId = "subscription_id"
+        case subscription
+        case invoice
+        case plan
+    }
+}
+
+public struct ToriiSubscriptionListResponse: Decodable, Sendable {
+    public let items: [ToriiSubscriptionRecord]
+    public let total: UInt64
+}
+
+public struct ToriiSubscriptionActionRequest: Encodable, Sendable {
+    public var authority: String
+    public var privateKey: String
+    public var chargeAtMs: UInt64?
+    public var cancelMode: ToriiSubscriptionCancelMode?
+
+    public init(authority: String,
+                privateKey: String,
+                chargeAtMs: UInt64? = nil,
+                cancelMode: ToriiSubscriptionCancelMode? = nil) {
+        self.authority = authority
+        self.privateKey = privateKey
+        self.chargeAtMs = chargeAtMs
+        self.cancelMode = cancelMode
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case authority
+        case privateKey = "private_key"
+        case chargeAtMs = "charge_at_ms"
+        case cancelMode = "cancel_mode"
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        let normalizedAuthority = try ToriiRequestValidation.normalizedNonEmpty(authority,
+                                                                                field: "authority")
+        let normalizedPrivateKey = try ToriiRequestValidation.normalizedNonEmpty(privateKey,
+                                                                                  field: "private_key")
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(normalizedAuthority, forKey: .authority)
+        try container.encode(normalizedPrivateKey, forKey: .privateKey)
+        try container.encodeIfPresent(chargeAtMs, forKey: .chargeAtMs)
+        try container.encodeIfPresent(cancelMode, forKey: .cancelMode)
+    }
+}
+
+public struct ToriiSubscriptionUsageRequest: Encodable, Sendable {
+    public var authority: String
+    public var privateKey: String
+    public var unitKey: String
+    public var delta: String
+    public var usageTriggerId: String?
+
+    public init(authority: String,
+                privateKey: String,
+                unitKey: String,
+                delta: String,
+                usageTriggerId: String? = nil) {
+        self.authority = authority
+        self.privateKey = privateKey
+        self.unitKey = unitKey
+        self.delta = delta
+        self.usageTriggerId = usageTriggerId
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case authority
+        case privateKey = "private_key"
+        case unitKey = "unit_key"
+        case delta
+        case usageTriggerId = "usage_trigger_id"
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        let normalizedAuthority = try ToriiRequestValidation.normalizedNonEmpty(authority,
+                                                                                field: "authority")
+        let normalizedPrivateKey = try ToriiRequestValidation.normalizedNonEmpty(privateKey,
+                                                                                  field: "private_key")
+        let normalizedUnitKey = try ToriiRequestValidation.normalizedNonEmpty(unitKey, field: "unit_key")
+        let normalizedDelta = try ToriiRequestValidation.normalizedNonEmpty(delta, field: "delta")
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(normalizedAuthority, forKey: .authority)
+        try container.encode(normalizedPrivateKey, forKey: .privateKey)
+        try container.encode(normalizedUnitKey, forKey: .unitKey)
+        try container.encode(normalizedDelta, forKey: .delta)
+        if let usageTriggerId = try ToriiRequestValidation.normalizedOptionalNonEmpty(usageTriggerId,
+                                                                                      field: "usage_trigger_id") {
+            try container.encode(usageTriggerId, forKey: .usageTriggerId)
+        }
+    }
+}
+
+public struct ToriiSubscriptionActionResponse: Decodable, Sendable {
+    public let ok: Bool
+    public let subscriptionId: String
+    public let txHashHex: String
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case subscriptionId = "subscription_id"
+        case txHashHex = "tx_hash_hex"
+    }
+}
+
 public struct ToriiOfflineAllowanceItem: Decodable, Sendable {
     public let certificateIdHex: String
     public let controllerId: String
@@ -6255,6 +6605,48 @@ public struct ToriiSumeragiStatusSnapshot: Decodable, Sendable {
     }
 }
 
+/// Commit QC record returned by `/v1/sumeragi/commit_qc/{hash}`.
+public struct ToriiSumeragiCommitQcRecord: Decodable, Sendable, Equatable {
+    public let subjectBlockHash: String
+    public let commitQc: ToriiSumeragiCommitQc?
+
+    private enum CodingKeys: String, CodingKey {
+        case subjectBlockHash = "subject_block_hash"
+        case commitQc = "commit_qc"
+    }
+}
+
+/// Full commit QC details returned by `/v1/sumeragi/commit_qc/{hash}`.
+public struct ToriiSumeragiCommitQc: Decodable, Sendable, Equatable {
+    public let phase: String
+    public let parentStateRoot: String
+    public let postStateRoot: String
+    public let height: UInt64
+    public let view: UInt64
+    public let epoch: UInt64
+    public let modeTag: String
+    public let validatorSetHash: String
+    public let validatorSetHashVersion: UInt16
+    public let validatorSet: [String]
+    public let signersBitmap: String
+    public let blsAggregateSignature: String
+
+    private enum CodingKeys: String, CodingKey {
+        case phase
+        case parentStateRoot = "parent_state_root"
+        case postStateRoot = "post_state_root"
+        case height
+        case view
+        case epoch
+        case modeTag = "mode_tag"
+        case validatorSetHash = "validator_set_hash"
+        case validatorSetHashVersion = "validator_set_hash_version"
+        case validatorSet = "validator_set"
+        case signersBitmap = "signers_bitmap"
+        case blsAggregateSignature = "bls_aggregate_signature"
+    }
+}
+
 /// Consensus handshake caps exposed by `/v1/sumeragi/status`.
 public struct ToriiConsensusCaps: Decodable, Sendable {
     public let collectorsK: UInt64
@@ -6434,13 +6826,18 @@ public extension ToriiTransactionSubmitting where Self: Sendable {
 }
 
 public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable {
+    /// Base URL for all requests. Normalized to directory URL (ends with "/") to ensure
+    /// correct relative URL resolution per RFC 3986.
     public let baseURL: URL
     private let session: URLSession
     private var statusState = ToriiStatusState()
     private static let defaultListPageSize = 100
 
     public init(baseURL: URL, session: URLSession = .shared) {
-        self.baseURL = baseURL
+        // Normalize to directory URL for correct relative URL resolution.
+        // Without trailing slash, URL(string:relativeTo:) replaces the last path component
+        // instead of appending (per RFC 3986).
+        self.baseURL = baseURL.hasDirectoryPath ? baseURL : baseURL.appendingPathComponent("")
         self.session = session
     }
 
@@ -6489,6 +6886,77 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func listDomains(options: ToriiListOptions = ToriiListOptions(),
                             completion: @escaping (Result<ToriiDomainListPage, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.listDomains(options: options) }
+    }
+
+    @discardableResult
+    public func listSubscriptionPlans(params: ToriiSubscriptionPlanListParams? = nil,
+                                      completion: @escaping (Result<ToriiSubscriptionPlanListResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.listSubscriptionPlans(params: params) }
+    }
+
+    @discardableResult
+    public func createSubscriptionPlan(_ requestBody: ToriiSubscriptionPlanCreateRequest,
+                                       completion: @escaping (Result<ToriiSubscriptionPlanCreateResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.createSubscriptionPlan(requestBody) }
+    }
+
+    @discardableResult
+    public func listSubscriptions(params: ToriiSubscriptionListParams? = nil,
+                                  completion: @escaping (Result<ToriiSubscriptionListResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.listSubscriptions(params: params) }
+    }
+
+    @discardableResult
+    public func createSubscription(_ requestBody: ToriiSubscriptionCreateRequest,
+                                   completion: @escaping (Result<ToriiSubscriptionCreateResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.createSubscription(requestBody) }
+    }
+
+    @discardableResult
+    public func getSubscription(subscriptionId: String,
+                                completion: @escaping (Result<ToriiSubscriptionRecord?, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.getSubscription(subscriptionId: subscriptionId) }
+    }
+
+    @discardableResult
+    public func pauseSubscription(subscriptionId: String,
+                                  requestBody: ToriiSubscriptionActionRequest,
+                                  completion: @escaping (Result<ToriiSubscriptionActionResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.pauseSubscription(subscriptionId: subscriptionId, requestBody: requestBody) }
+    }
+
+    @discardableResult
+    public func resumeSubscription(subscriptionId: String,
+                                   requestBody: ToriiSubscriptionActionRequest,
+                                   completion: @escaping (Result<ToriiSubscriptionActionResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.resumeSubscription(subscriptionId: subscriptionId, requestBody: requestBody) }
+    }
+
+    @discardableResult
+    public func cancelSubscription(subscriptionId: String,
+                                   requestBody: ToriiSubscriptionActionRequest,
+                                   completion: @escaping (Result<ToriiSubscriptionActionResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.cancelSubscription(subscriptionId: subscriptionId, requestBody: requestBody) }
+    }
+
+    public func keepSubscription(subscriptionId: String,
+                                 requestBody: ToriiSubscriptionActionRequest,
+                                 completion: @escaping (Result<ToriiSubscriptionActionResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.keepSubscription(subscriptionId: subscriptionId, requestBody: requestBody) }
+    }
+
+    @discardableResult
+    public func chargeSubscriptionNow(subscriptionId: String,
+                                      requestBody: ToriiSubscriptionActionRequest,
+                                      completion: @escaping (Result<ToriiSubscriptionActionResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.chargeSubscriptionNow(subscriptionId: subscriptionId, requestBody: requestBody) }
+    }
+
+    @discardableResult
+    public func recordSubscriptionUsage(subscriptionId: String,
+                                        requestBody: ToriiSubscriptionUsageRequest,
+                                        completion: @escaping (Result<ToriiSubscriptionActionResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.recordSubscriptionUsage(subscriptionId: subscriptionId, requestBody: requestBody) }
     }
 
     @discardableResult
@@ -6911,6 +7379,12 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         runTask(completion) { try await self.getSumeragiStatus() }
     }
 
+    @discardableResult
+    public func getSumeragiCommitQc(blockHashHex: String,
+                                    completion: @escaping (Result<ToriiSumeragiCommitQcRecord, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.getSumeragiCommitQc(blockHashHex: blockHashHex) }
+    }
+
     // MARK: - Governance (Completion)
 
     @discardableResult
@@ -7037,6 +7511,106 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         iterateList(options: options, pageSize: pageSize, maxItems: maxItems) { opts in
             try await self.listDomains(options: opts)
         }
+    }
+
+    public func listSubscriptionPlans(params: ToriiSubscriptionPlanListParams? = nil) async throws -> ToriiSubscriptionPlanListResponse {
+        let request = try makeRequest(path: "/v1/subscriptions/plans", queryItems: try params?.queryItems())
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiSubscriptionPlanListResponse.self, from: data)
+    }
+
+    public func createSubscriptionPlan(_ requestBody: ToriiSubscriptionPlanCreateRequest) async throws -> ToriiSubscriptionPlanCreateResponse {
+        let encoder = JSONEncoder()
+        let body = try encoder.encode(requestBody)
+        let request = try makeRequest(path: "/v1/subscriptions/plans",
+                                      method: .post,
+                                      body: body,
+                                      headers: ["Content-Type": "application/json"])
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiSubscriptionPlanCreateResponse.self, from: data)
+    }
+
+    public func listSubscriptions(params: ToriiSubscriptionListParams? = nil) async throws -> ToriiSubscriptionListResponse {
+        let request = try makeRequest(path: "/v1/subscriptions", queryItems: try params?.queryItems())
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiSubscriptionListResponse.self, from: data)
+    }
+
+    public func createSubscription(_ requestBody: ToriiSubscriptionCreateRequest) async throws -> ToriiSubscriptionCreateResponse {
+        let encoder = JSONEncoder()
+        let body = try encoder.encode(requestBody)
+        let request = try makeRequest(path: "/v1/subscriptions",
+                                      method: .post,
+                                      body: body,
+                                      headers: ["Content-Type": "application/json"])
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiSubscriptionCreateResponse.self, from: data)
+    }
+
+    public func getSubscription(subscriptionId: String) async throws -> ToriiSubscriptionRecord? {
+        let normalizedId = try ToriiRequestValidation.normalizedNonEmpty(subscriptionId,
+                                                                         field: "subscriptionId")
+        let encoded = encodePathComponent(normalizedId)
+        let request = try makeRequest(path: "/v1/subscriptions/\(encoded)")
+        let (data, response) = try await send(request)
+        if response.statusCode == 404 {
+            return nil
+        }
+        try ensureStatus(response, equals: 200)
+        if data.isEmpty {
+            throw ToriiClientError.emptyBody
+        }
+        return try decodeJSON(ToriiSubscriptionRecord.self, from: data)
+    }
+
+    public func pauseSubscription(subscriptionId: String,
+                                  requestBody: ToriiSubscriptionActionRequest) async throws -> ToriiSubscriptionActionResponse {
+        return try await executeSubscriptionAction(pathSuffix: "pause",
+                                                   subscriptionId: subscriptionId,
+                                                   requestBody: requestBody)
+    }
+
+    public func resumeSubscription(subscriptionId: String,
+                                   requestBody: ToriiSubscriptionActionRequest) async throws -> ToriiSubscriptionActionResponse {
+        return try await executeSubscriptionAction(pathSuffix: "resume",
+                                                   subscriptionId: subscriptionId,
+                                                   requestBody: requestBody)
+    }
+
+    public func cancelSubscription(subscriptionId: String,
+                                   requestBody: ToriiSubscriptionActionRequest) async throws -> ToriiSubscriptionActionResponse {
+        return try await executeSubscriptionAction(pathSuffix: "cancel",
+                                                   subscriptionId: subscriptionId,
+                                                   requestBody: requestBody)
+    }
+
+    public func keepSubscription(subscriptionId: String,
+                                 requestBody: ToriiSubscriptionActionRequest) async throws -> ToriiSubscriptionActionResponse {
+        return try await executeSubscriptionAction(pathSuffix: "keep",
+                                                   subscriptionId: subscriptionId,
+                                                   requestBody: requestBody)
+    }
+
+    public func chargeSubscriptionNow(subscriptionId: String,
+                                      requestBody: ToriiSubscriptionActionRequest) async throws -> ToriiSubscriptionActionResponse {
+        return try await executeSubscriptionAction(pathSuffix: "charge-now",
+                                                   subscriptionId: subscriptionId,
+                                                   requestBody: requestBody)
+    }
+
+    public func recordSubscriptionUsage(subscriptionId: String,
+                                        requestBody: ToriiSubscriptionUsageRequest) async throws -> ToriiSubscriptionActionResponse {
+        let normalizedId = try ToriiRequestValidation.normalizedNonEmpty(subscriptionId,
+                                                                         field: "subscriptionId")
+        let encoded = encodePathComponent(normalizedId)
+        let encoder = JSONEncoder()
+        let body = try encoder.encode(requestBody)
+        let request = try makeRequest(path: "/v1/subscriptions/\(encoded)/usage",
+                                      method: .post,
+                                      body: body,
+                                      headers: ["Content-Type": "application/json"])
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiSubscriptionActionResponse.self, from: data)
     }
 
     public func getUaidPortfolio(uaid: String) async throws -> ToriiUaidPortfolioResponse {
@@ -8227,6 +8801,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
             queryItems: [URLQueryItem(name: "hash", value: hashHex)]
         )
         let (data, response) = try await send(request)
+        if response.statusCode == 404 { return nil }
         try ensureStatus(response, in: 200..<300)
         guard !data.isEmpty else { return nil }
         return try decodeJSON(ToriiPipelineTransactionStatus.self, from: data)
@@ -8262,6 +8837,14 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return try decodeJSON(ToriiSumeragiStatusSnapshot.self, from: data)
     }
 
+    public func getSumeragiCommitQc(blockHashHex: String) async throws -> ToriiSumeragiCommitQcRecord {
+        let normalized = try ToriiClient.normalizeHex32(blockHashHex, field: "block_hash")
+        let request = try makeRequest(path: "/v1/sumeragi/commit_qc/\(normalized)",
+                                      headers: ["Accept": "application/json"])
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiSumeragiCommitQcRecord.self, from: data)
+    }
+
     public func getStatusSnapshot() async throws -> ToriiStatusSnapshot {
         let sequence = statusState.reserveSequence()
         let request = try makeRequest(path: "/v1/status",
@@ -8270,6 +8853,22 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         let payload = try decodeJSON(ToriiStatusPayload.self, from: data)
         let metrics = statusState.record(payload, sequence: sequence)
         return ToriiStatusSnapshot(timestamp: Date(), status: payload, metrics: metrics)
+    }
+
+    private func executeSubscriptionAction(pathSuffix: String,
+                                           subscriptionId: String,
+                                           requestBody: ToriiSubscriptionActionRequest) async throws -> ToriiSubscriptionActionResponse {
+        let normalizedId = try ToriiRequestValidation.normalizedNonEmpty(subscriptionId,
+                                                                         field: "subscriptionId")
+        let encoded = encodePathComponent(normalizedId)
+        let encoder = JSONEncoder()
+        let body = try encoder.encode(requestBody)
+        let request = try makeRequest(path: "/v1/subscriptions/\(encoded)/\(pathSuffix)",
+                                      method: .post,
+                                      body: body,
+                                      headers: ["Content-Type": "application/json"])
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiSubscriptionActionResponse.self, from: data)
     }
 
     private func makeListQueryItems(options: ToriiListOptions,
@@ -8378,7 +8977,9 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     // MARK: - Async helpers
 
     private func pipelineEndpoints(for _: PipelineEndpointMode) -> (submit: String, status: String) {
-        ("/v1/pipeline/transactions", "/v1/pipeline/transactions/status")
+        // Iroha 3 uses /transaction for Norito binary submission
+        // and /v1/pipeline/transactions/status for JSON status queries
+        ("/transaction", "/v1/pipeline/transactions/status")
     }
 
     private enum HTTPMethod: String {
@@ -8451,29 +9052,29 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return body.lowercased()
     }
 
-    private func normalizedPath(_ path: String) -> String {
-        path.hasPrefix("/") ? String(path.dropFirst()) : path
-    }
-
     private func makeRequest(path: String,
                              method: HTTPMethod = .get,
                              queryItems: [URLQueryItem]? = nil,
                              body: Data? = nil,
                              headers: [String: String] = [:]) throws -> URLRequest {
-        let components = URLComponents(
-            url: baseURL.appendingPathComponent(normalizedPath(path)),
-            resolvingAgainstBaseURL: false
-        )
-        guard var urlComponents = components else {
+        // Remove leading slash to make path relative (required for URL(string:relativeTo:))
+        let relativePath = path.hasPrefix("/") ? String(path.dropFirst()) : path
+
+        // URL(string:relativeTo:) preserves percent-encoding without double-encoding.
+        // baseURL is normalized to directory URL in init, so relative resolution works correctly.
+        guard let url = URL(string: relativePath, relativeTo: baseURL),
+              var urlComponents = URLComponents(url: url, resolvingAgainstBaseURL: true) else {
             throw ToriiClientError.invalidURL(path)
         }
+
         if let items = queryItems, !items.isEmpty {
             urlComponents.queryItems = items
         }
-        guard let url = urlComponents.url else {
+        guard let finalURL = urlComponents.url else {
             throw ToriiClientError.invalidURL(path)
         }
-        var request = URLRequest(url: url)
+
+        var request = URLRequest(url: finalURL)
         request.httpMethod = method.rawValue
         request.httpBody = body
         headers.forEach { key, value in

@@ -6,7 +6,8 @@ use integration_tests::sandbox;
 use iroha::{
     client::{Client, SumeragiEvidenceListFilter},
     data_model::{
-        isi::SetParameter,
+        Level,
+        isi::{Log, SetParameter},
         parameter::{
             Parameter,
             system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
@@ -84,7 +85,10 @@ fn valid_double_prepare_evidence(network: &Network) -> (Evidence, Vote, Vote) {
         .peers()
         .iter()
         .enumerate()
-        .find_map(|(idx, peer)| peer.bls_key_pair().map(|kp| (idx as u32, kp)))
+        .find_map(|(idx, peer)| {
+            peer.bls_key_pair()
+                .and_then(|kp| u32::try_from(idx).ok().map(|idx| (idx, kp)))
+        })
         .expect("network should expose at least one BLS keypair");
     let chain_id = network.chain_id();
     let v1 = signed_vote(0x90, signer_idx, &chain_id, signer_kp, 10, 0, 0);
@@ -110,6 +114,21 @@ fn set_evidence_horizon(client: &Client, horizon: u64) -> Result<()> {
     client.submit_blocking(SetParameter::new(Parameter::Custom(
         params.into_custom_parameter(),
     )))?;
+    Ok(())
+}
+
+fn advance_to_height(
+    runtime: &Runtime,
+    network: &Network,
+    client: &Client,
+    target: u64,
+    label: &str,
+) -> Result<()> {
+    let status = client.get_status()?;
+    for idx in status.blocks..target {
+        client.submit_blocking(Log::new(Level::INFO, format!("{label} tick {idx}")))?;
+    }
+    runtime.block_on(network.ensure_blocks_with(|height| height.total >= target))?;
     Ok(())
 }
 
@@ -411,7 +430,13 @@ fn mode_activation_height_requires_next_mode_and_future_height() -> Result<()> {
         .sign(ALICE_KEYPAIR.private_key());
     client.submit_transaction_blocking(&staged_tx)?;
 
-    runtime.block_on(network.ensure_blocks_with(|height| height.total >= desired_height))?;
+    advance_to_height(
+        &runtime,
+        &network,
+        &client,
+        desired_height,
+        "mode activation staged",
+    )?;
     let params = client.get_sumeragi_params_json()?;
     ensure!(
         params
@@ -465,7 +490,13 @@ fn joint_consensus_switches_mode_at_activation_height() -> Result<()> {
         .sign(ALICE_KEYPAIR.private_key());
     client.submit_transaction_blocking(&switch_tx)?;
 
-    runtime.block_on(network.ensure_blocks_with(|height| height.total > activation_height))?;
+    advance_to_height(
+        &runtime,
+        &network,
+        &client,
+        activation_height.saturating_add(1),
+        "joint consensus activation",
+    )?;
     wait_for_collectors_mode(&client, "npos", 40, Duration::from_millis(200))?;
 
     let final_snapshot = client.get_sumeragi_collectors_json()?;
@@ -487,11 +518,11 @@ fn posting_stale_evidence_is_not_persisted() -> Result<()> {
     else {
         return Ok(());
     };
-    runtime.block_on(network.ensure_blocks_with(|height| height.total >= 3))?;
     let client = network.client();
+    advance_to_height(&runtime, &network, &client, 3, "stale evidence seed")?;
 
     set_evidence_horizon(&client, 1)?;
-    runtime.block_on(network.ensure_blocks_with(|height| height.total >= 4))?;
+    advance_to_height(&runtime, &network, &client, 4, "stale evidence horizon")?;
 
     let before = evidence_count(&client.get_sumeragi_evidence_count_json()?);
 
@@ -499,7 +530,10 @@ fn posting_stale_evidence_is_not_persisted() -> Result<()> {
         .peers()
         .iter()
         .enumerate()
-        .find_map(|(idx, peer)| peer.bls_key_pair().map(|kp| (idx as u32, kp)))
+        .find_map(|(idx, peer)| {
+            peer.bls_key_pair()
+                .and_then(|kp| u32::try_from(idx).ok().map(|idx| (idx, kp)))
+        })
         .expect("network should expose at least one BLS keypair");
     let chain_id = network.chain_id();
     let v1 = signed_vote(0x61, signer_idx, &chain_id, signer_kp, 0, 0, 0);
@@ -513,8 +547,13 @@ fn posting_stale_evidence_is_not_persisted() -> Result<()> {
     client.post_sumeragi_evidence_hex(&hex::encode(evidence.encode()))?;
 
     let status_before = client.get_status()?;
-    runtime
-        .block_on(network.ensure_blocks_with(|height| height.total > status_before.blocks + 1))?;
+    advance_to_height(
+        &runtime,
+        &network,
+        &client,
+        status_before.blocks.saturating_add(2),
+        "stale evidence advance",
+    )?;
 
     let after = evidence_count(&client.get_sumeragi_evidence_count_json()?);
     ensure!(
@@ -673,7 +712,20 @@ fn posting_valid_double_vote_evidence_is_persisted_for_slashing() -> Result<()> 
 }
 
 fn start_network(context: &'static str) -> Result<Option<(sandbox::SerializedNetwork, Runtime)>> {
-    sandbox::start_network_blocking_or_skip(NetworkBuilder::new(), context)
+    let Some((network, runtime)) =
+        sandbox::start_network_blocking_or_skip(NetworkBuilder::new(), context)?
+    else {
+        return Ok(None);
+    };
+    let client = network.client();
+    advance_to_height(
+        &runtime,
+        &network,
+        &client,
+        2,
+        "sumeragi negative bootstrap",
+    )?;
+    Ok(Some((network, runtime)))
 }
 
 fn collectors_consensus_mode(value: &Value) -> Option<&str> {

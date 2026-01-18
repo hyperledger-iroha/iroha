@@ -422,13 +422,13 @@ impl RowGenerator {
             None
         };
         let sender = StateTransition::new(
-            format!("asset/{}/{}", asset_definition, from_account).into_bytes(),
+            format!("asset/{asset_definition}/{from_account}").into_bytes(),
             encode_u64(from_pre),
             encode_u64(from_post),
             OperationKind::Transfer,
         );
         let receiver = StateTransition::new(
-            format!("asset/{}/{}", asset_definition, to_account).into_bytes(),
+            format!("asset/{asset_definition}/{to_account}").into_bytes(),
             encode_u64(to_pre),
             encode_u64(to_post),
             OperationKind::Transfer,

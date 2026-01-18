@@ -1,5 +1,9 @@
+use std::collections::BTreeMap;
+
 use iroha_crypto::{Hash, HashOf, MerkleProof};
-use ivm::{IVM, VMError, encoding, instruction, syscalls};
+use iroha_data_model::{name::Name, prelude::AccountId};
+use ivm::{IVM, PointerType, VMError, encoding, instruction, syscalls};
+use norito::codec::Encode as NoritoEncode;
 mod common;
 use common::assemble;
 
@@ -13,25 +17,25 @@ fn assemble_syscall(syscall: u8) -> Vec<u8> {
     assemble(&code)
 }
 
+fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(7 + payload.len() + 32);
+    out.extend_from_slice(&type_id.to_be_bytes());
+    out.push(1);
+    out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    out.extend_from_slice(payload);
+    let h: [u8; 32] = Hash::new(payload).into();
+    out.extend_from_slice(&h);
+    out
+}
+
 #[test]
-fn test_syscall_propagation() {
+fn debug_print_is_handled_by_default_host() {
     let mut vm = IVM::new(u64::MAX);
     // Program: SCALL 0x00; HALT
     let prog = assemble_syscall(syscalls::SYSCALL_DEBUG_PRINT as u8);
     vm.load_program(&prog).unwrap();
-    // By default, DefaultHost returns UnknownSyscall for any call.
     let result = vm.run();
-    assert!(
-        matches!(result, Err(VMError::UnknownSyscall(_))),
-        "Expected UnknownSyscall error"
-    );
-    if let Err(VMError::UnknownSyscall(num)) = result {
-        assert_eq!(
-            num,
-            syscalls::SYSCALL_DEBUG_PRINT,
-            "Syscall number should propagate"
-        );
-    }
+    assert!(result.is_ok(), "debug_print should be handled");
 }
 
 #[test]
@@ -53,6 +57,176 @@ fn syscall_policy_gating_allows_known_and_rejects_unknown_v1() {
     vm2.load_program(&bad).unwrap();
     let res = vm2.run();
     assert!(matches!(res, Err(VMError::UnknownSyscall(0xAB))));
+}
+
+#[test]
+fn syscall_exit_halts_execution() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_register(10, 5);
+    let mut code = Vec::new();
+    let exit_sys = encoding::wide::encode_sys(
+        instruction::wide::system::SCALL,
+        syscalls::SYSCALL_EXIT as u8,
+    );
+    code.extend_from_slice(&exit_sys.to_le_bytes());
+    let addi = encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 10, 0, 9);
+    code.extend_from_slice(&addi.to_le_bytes());
+    code.extend_from_slice(&HALT);
+    let prog = assemble(&code);
+    vm.load_program(&prog).unwrap();
+    vm.run().expect("exit syscall should halt");
+    assert_eq!(vm.register(10), 5);
+}
+
+#[test]
+fn syscall_abort_marks_failure() {
+    let mut vm = IVM::new(u64::MAX);
+    let prog = assemble_syscall(syscalls::SYSCALL_ABORT as u8);
+    vm.load_program(&prog).unwrap();
+    let result = vm.run();
+    assert!(matches!(result, Err(VMError::AssertionFailed)));
+}
+
+#[test]
+fn debug_log_accepts_json_tlv() {
+    let mut vm = IVM::new(u64::MAX);
+    let payload = br#"{"msg":"hello"}"#;
+    let tlv = make_tlv(PointerType::Json as u16, payload);
+    let ptr = vm.alloc_input_tlv(&tlv).expect("alloc tlv");
+    vm.set_register(10, ptr);
+    let prog = assemble_syscall(syscalls::SYSCALL_DEBUG_LOG as u8);
+    vm.load_program(&prog).unwrap();
+    vm.run().expect("debug log should succeed");
+}
+
+#[test]
+fn get_public_input_returns_named_tlv() {
+    let mut vm = IVM::new(u64::MAX);
+    let name: Name = "public_key".parse().unwrap();
+    let payload = b"hello".to_vec();
+    let value_tlv = make_tlv(PointerType::Blob as u16, &payload);
+    let mut inputs = BTreeMap::new();
+    inputs.insert(name.clone(), value_tlv);
+    let mut host = ivm::host::DefaultHost::new().with_public_inputs(BTreeMap::new());
+    host.set_public_inputs(inputs);
+    vm.set_host(host);
+
+    let name_payload = name.encode();
+    let name_tlv = make_tlv(PointerType::Name as u16, &name_payload);
+    let ptr = vm.alloc_input_tlv(&name_tlv).expect("alloc tlv");
+    vm.set_register(10, ptr);
+    let prog = assemble_syscall(syscalls::SYSCALL_GET_PUBLIC_INPUT as u8);
+    vm.load_program(&prog).unwrap();
+    vm.run().expect("get public input should succeed");
+
+    let out_ptr = vm.register(10);
+    let out_tlv = vm.memory.validate_tlv(out_ptr).expect("validate output");
+    assert_eq!(out_tlv.type_id, PointerType::Blob);
+    assert_eq!(out_tlv.payload, payload.as_slice());
+}
+
+#[test]
+fn get_public_input_missing_name_errors() {
+    let mut vm = IVM::new(u64::MAX);
+    let name: Name = "missing_key".parse().unwrap();
+    vm.set_host(ivm::host::DefaultHost::new());
+
+    let name_payload = name.encode();
+    let name_tlv = make_tlv(PointerType::Name as u16, &name_payload);
+    let ptr = vm.alloc_input_tlv(&name_tlv).expect("alloc tlv");
+    vm.set_register(10, ptr);
+    let prog = assemble_syscall(syscalls::SYSCALL_GET_PUBLIC_INPUT as u8);
+    vm.load_program(&prog).unwrap();
+    let res = vm.run();
+    assert!(matches!(res, Err(VMError::PermissionDenied)));
+}
+
+#[test]
+fn get_public_input_zero_pointer_errors() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(ivm::host::DefaultHost::new());
+    vm.set_register(10, 0);
+    let prog = assemble_syscall(syscalls::SYSCALL_GET_PUBLIC_INPUT as u8);
+    vm.load_program(&prog).unwrap();
+    let res = vm.run();
+    assert!(matches!(res, Err(VMError::NoritoInvalid)));
+}
+
+#[test]
+fn add_signatory_syscall_accepts_account_and_json() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(ivm::host::DefaultHost::new());
+    let account: AccountId =
+        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
+            .parse()
+            .unwrap();
+    let account_tlv = make_tlv(PointerType::AccountId as u16, &account.encode());
+    let account_ptr = vm.alloc_input_tlv(&account_tlv).expect("alloc account");
+    let signatory_key = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4";
+    let signatory_json = format!("\"{signatory_key}\"");
+    let signatory_tlv = make_tlv(PointerType::Json as u16, signatory_json.as_bytes());
+    let signatory_ptr = vm.alloc_input_tlv(&signatory_tlv).expect("alloc signatory");
+    vm.set_register(10, account_ptr);
+    vm.set_register(11, signatory_ptr);
+    let prog = assemble_syscall(syscalls::SYSCALL_ADD_SIGNATORY as u8);
+    vm.load_program(&prog).unwrap();
+    vm.run().expect("add signatory should succeed");
+}
+
+#[test]
+fn remove_signatory_syscall_accepts_account_and_json() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(ivm::host::DefaultHost::new());
+    let account: AccountId =
+        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
+            .parse()
+            .unwrap();
+    let account_tlv = make_tlv(PointerType::AccountId as u16, &account.encode());
+    let account_ptr = vm.alloc_input_tlv(&account_tlv).expect("alloc account");
+    let signatory_key = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4";
+    let signatory_json = format!("\"{signatory_key}\"");
+    let signatory_tlv = make_tlv(PointerType::Json as u16, signatory_json.as_bytes());
+    let signatory_ptr = vm.alloc_input_tlv(&signatory_tlv).expect("alloc signatory");
+    vm.set_register(10, account_ptr);
+    vm.set_register(11, signatory_ptr);
+    let prog = assemble_syscall(syscalls::SYSCALL_REMOVE_SIGNATORY as u8);
+    vm.load_program(&prog).unwrap();
+    vm.run().expect("remove signatory should succeed");
+}
+
+#[test]
+fn set_account_quorum_accepts_nonzero() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(ivm::host::DefaultHost::new());
+    let account: AccountId =
+        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
+            .parse()
+            .unwrap();
+    let account_tlv = make_tlv(PointerType::AccountId as u16, &account.encode());
+    let account_ptr = vm.alloc_input_tlv(&account_tlv).expect("alloc account");
+    vm.set_register(10, account_ptr);
+    vm.set_register(11, 2);
+    let prog = assemble_syscall(syscalls::SYSCALL_SET_ACCOUNT_QUORUM as u8);
+    vm.load_program(&prog).unwrap();
+    vm.run().expect("set account quorum should succeed");
+}
+
+#[test]
+fn set_account_quorum_rejects_zero() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(ivm::host::DefaultHost::new());
+    let account: AccountId =
+        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
+            .parse()
+            .unwrap();
+    let account_tlv = make_tlv(PointerType::AccountId as u16, &account.encode());
+    let account_ptr = vm.alloc_input_tlv(&account_tlv).expect("alloc account");
+    vm.set_register(10, account_ptr);
+    vm.set_register(11, 0);
+    let prog = assemble_syscall(syscalls::SYSCALL_SET_ACCOUNT_QUORUM as u8);
+    vm.load_program(&prog).unwrap();
+    let res = vm.run();
+    assert!(matches!(res, Err(VMError::DecodeError)));
 }
 
 struct AddHost;

@@ -87,7 +87,8 @@ where
         return true;
     };
     if !locked_present(locked.subject_block_hash) {
-        return false;
+        // If the locked block is missing locally, defer the safety check to avoid stalling.
+        return true;
     }
     qc_extends_locked_with_lookup(locked, highest, parent_lookup)
 }

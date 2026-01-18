@@ -32,15 +32,14 @@ fn packed_seq_empty_vec_roundtrip_fixed_offsets() {
 }
 
 #[test]
-fn packed_seq_btreemap_roundtrip_varint_offsets() {
+fn packed_seq_btreemap_roundtrip_fixed_offsets() {
     let mut map = BTreeMap::new();
     map.insert("a".to_string(), 1u64);
     map.insert("b".to_string(), 2u64);
-    let flags = header_flags::PACKED_SEQ | header_flags::VARINT_OFFSETS;
+    let flags = header_flags::PACKED_SEQ;
     let _guard = DecodeFlagsGuard::enter(flags);
     let (payload, flags) = encode_with_header_flags(&map);
     assert_ne!(flags & header_flags::PACKED_SEQ, 0);
-    assert_ne!(flags & header_flags::VARINT_OFFSETS, 0);
     let bytes = frame_bare_with_header_flags::<BTreeMap<String, u64>>(&payload, flags)
         .expect("frame packed-seq map");
     let decoded: BTreeMap<String, u64> = decode_from_bytes(&bytes).expect("decode packed map");

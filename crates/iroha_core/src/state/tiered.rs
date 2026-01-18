@@ -26,6 +26,13 @@ use norito::{
 use sha2::{Digest as _, Sha256};
 
 use super::World;
+use crate::telemetry::StateTelemetry;
+
+const WSV_COLD_COMPONENT: &str = "wsv_cold";
+const DA_CACHE_HIT: &str = "hit";
+const DA_CACHE_MISS: &str = "miss";
+const DA_CHURN_EVICTED: &str = "evicted";
+const DA_CHURN_REHYDRATED: &str = "rehydrated";
 
 /// Lightweight handle describing a hot/cold storage split.
 #[derive(Debug, Clone, Default)]
@@ -34,7 +41,7 @@ pub struct TieredStateBackend {
     enabled: bool,
     /// Maximum number of keys to keep hot (0 = unlimited).
     hot_retained_keys: usize,
-    /// Hot-tier byte budget based on deterministic WSV payload sizing (0 = unlimited).
+    /// Hot-tier byte budget based on deterministic in-memory WSV sizing (0 = unlimited).
     hot_retained_bytes: u64,
     /// Minimum snapshots to retain newly hot entries before demotion (0 = disabled).
     hot_retained_grace_snapshots: u64,
@@ -54,6 +61,8 @@ pub struct TieredStateBackend {
     entries: BTreeMap<TieredEntryId, EntryMetadata>,
     /// Cached manifest of the latest snapshot for diagnostics.
     last_manifest: Option<TieredSnapshotManifest>,
+    /// Optional telemetry sink for DA-backed cold storage activity.
+    telemetry: Option<StateTelemetry>,
 }
 
 #[derive(Debug)]
@@ -81,6 +90,7 @@ struct CollectContext<'a> {
 impl TieredStateBackend {
     /// Construct a backend with explicit limits.
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         enabled: bool,
         hot_retained_keys: usize,
@@ -104,12 +114,18 @@ impl TieredStateBackend {
             snapshot_counter_seeded: false,
             entries: BTreeMap::new(),
             last_manifest: None,
+            telemetry: None,
         };
         if backend.enabled {
             backend.ensure_cold_roots().ok();
             let _ = backend.seed_snapshot_counter_if_needed();
         }
         backend
+    }
+
+    /// Attach a telemetry sink for DA-backed cold storage activity.
+    pub fn attach_telemetry(&mut self, telemetry: StateTelemetry) {
+        self.telemetry = Some(telemetry);
     }
 
     /// Record a snapshot of the current world.
@@ -125,29 +141,39 @@ impl TieredStateBackend {
             return Ok(());
         }
 
-        let Some(root) = self.primary_cold_root().cloned() else {
+        let roots = self.cold_roots();
+        if roots.is_empty() {
             self.snapshot_counter_seeded = true;
             return Ok(());
-        };
+        }
 
         self.ensure_cold_roots()
             .wrap_err("failed to prepare cold tier root directory")?;
-        self.recover_snapshot_artifacts(&root)?;
+        for root in &roots {
+            if root.exists() {
+                self.recover_snapshot_artifacts(root)?;
+            }
+        }
 
         let mut max_idx = 0u64;
-        for entry in fs::read_dir(&root).wrap_err_with(|| {
-            format!(
-                "failed to read cold tier root {path}",
-                path = root.display()
-            )
-        })? {
-            let entry = entry?;
-            let file_type = entry.file_type()?;
-            if !file_type.is_dir() {
+        for root in roots {
+            if !root.exists() {
                 continue;
             }
-            if let Some(idx) = Self::parse_snapshot_dir_name(&entry.file_name()) {
-                max_idx = max_idx.max(idx);
+            for entry in fs::read_dir(root).wrap_err_with(|| {
+                format!(
+                    "failed to read cold tier root {path}",
+                    path = root.display()
+                )
+            })? {
+                let entry = entry?;
+                let file_type = entry.file_type()?;
+                if !file_type.is_dir() {
+                    continue;
+                }
+                if let Some(idx) = Self::parse_snapshot_dir_name(&entry.file_name()) {
+                    max_idx = max_idx.max(idx);
+                }
             }
         }
 
@@ -156,6 +182,8 @@ impl TieredStateBackend {
         Ok(())
     }
 
+    #[allow(clippy::unused_self)]
+    #[allow(clippy::too_many_lines)]
     fn recover_snapshot_artifacts(&self, root: &Path) -> Result<()> {
         #[derive(Default)]
         struct SnapshotArtifacts {
@@ -279,6 +307,7 @@ impl TieredStateBackend {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     fn plan_world_snapshot(&mut self, world: &World) -> Result<Option<TieredSnapshotPlan>> {
         if !self.enabled {
             return Ok(None);
@@ -346,6 +375,7 @@ impl TieredStateBackend {
         };
         let max_bytes = self.hot_retained_bytes;
 
+        #[allow(clippy::too_many_arguments)]
         fn try_select_entry(
             entry: &EntryScore,
             entries: &BTreeMap<TieredEntryId, EntryMetadata>,
@@ -578,42 +608,40 @@ impl TieredStateBackend {
                 }
             }
 
-            let payload_len = match payload_len {
-                Some(bytes) => bytes,
-                None => {
-                    let payload = cold.entry.encode_value(world).with_context(|| {
-                        format!(
-                            "failed to encode value for cold shard {path}",
-                            path = abs_path.display()
-                        )
-                    })?;
-                    let mut file =
-                        BufWriter::new(fs::File::create(&abs_path).wrap_err_with(|| {
-                            format!(
-                                "failed to open cold shard {path} for writing",
-                                path = abs_path.display()
-                            )
-                        })?);
-                    file.write_all(&payload).wrap_err_with(|| {
-                        format!(
-                            "failed to persist cold shard {path}",
-                            path = abs_path.display()
-                        )
-                    })?;
-                    file.flush().wrap_err_with(|| {
-                        format!(
-                            "failed to flush cold shard {path}",
-                            path = abs_path.display()
-                        )
-                    })?;
-                    file.get_ref().sync_all().wrap_err_with(|| {
-                        format!(
-                            "failed to sync cold shard {path}",
-                            path = abs_path.display()
-                        )
-                    })?;
-                    payload.len() as u64
-                }
+            let payload_len = if let Some(bytes) = payload_len {
+                bytes
+            } else {
+                let payload = cold.entry.encode_value(world).with_context(|| {
+                    format!(
+                        "failed to encode value for cold shard {path}",
+                        path = abs_path.display()
+                    )
+                })?;
+                let mut file = BufWriter::new(fs::File::create(&abs_path).wrap_err_with(|| {
+                    format!(
+                        "failed to open cold shard {path} for writing",
+                        path = abs_path.display()
+                    )
+                })?);
+                file.write_all(&payload).wrap_err_with(|| {
+                    format!(
+                        "failed to persist cold shard {path}",
+                        path = abs_path.display()
+                    )
+                })?;
+                file.flush().wrap_err_with(|| {
+                    format!(
+                        "failed to flush cold shard {path}",
+                        path = abs_path.display()
+                    )
+                })?;
+                file.get_ref().sync_all().wrap_err_with(|| {
+                    format!(
+                        "failed to sync cold shard {path}",
+                        path = abs_path.display()
+                    )
+                })?;
+                payload.len() as u64
             };
             cold_bytes_total = cold_bytes_total.saturating_add(payload_len);
             if reused {
@@ -730,8 +758,24 @@ impl TieredStateBackend {
         self.max_cold_bytes
     }
 
-    fn cold_roots(&self) -> impl Iterator<Item = &PathBuf> {
-        self.cold_store_root.iter().chain(self.da_store_root.iter())
+    fn cold_roots(&self) -> Vec<&PathBuf> {
+        let mut roots = Vec::new();
+        if let Some(root) = self.cold_store_root.as_ref() {
+            roots.push(root);
+        }
+        if let Some(root) = self.da_store_root.as_ref()
+            && !roots.iter().any(|existing| *existing == root)
+        {
+            roots.push(root);
+        }
+        roots
+    }
+
+    fn da_store_root_for_offload(&self) -> Option<&PathBuf> {
+        match (&self.cold_store_root, &self.da_store_root) {
+            (Some(cold_root), Some(da_root)) if cold_root != da_root => Some(da_root),
+            _ => None,
+        }
     }
 
     fn primary_cold_root(&self) -> Option<&PathBuf> {
@@ -794,11 +838,56 @@ impl TieredStateBackend {
         let Some(rel_path) = entry.spill_path.as_ref() else {
             return Ok(None);
         };
-        for root in self.cold_roots() {
+        let cache_enabled = self.da_store_root_for_offload().is_some();
+        let cold_root = self.cold_store_root.as_ref();
+        if let Some(root) = cold_root {
             let path = root.join(format!("{snapshot_index:020}")).join(rel_path);
             match fs::read(&path) {
-                Ok(bytes) => return Ok(Some(bytes)),
-                Err(err) if err.kind() == ErrorKind::NotFound => continue,
+                Ok(bytes) => {
+                    if cache_enabled {
+                        self.record_da_cache(DA_CACHE_HIT);
+                    }
+                    return Ok(Some(bytes));
+                }
+                Err(err) if err.kind() == ErrorKind::NotFound => {}
+                Err(err) => {
+                    return Err(err).wrap_err_with(|| {
+                        format!("failed to read cold payload {path}", path = path.display())
+                    });
+                }
+            }
+        }
+
+        let da_root = self.da_store_root.as_ref();
+        let same_root = match (cold_root, da_root) {
+            (Some(cold), Some(da)) => cold == da,
+            _ => false,
+        };
+        if let Some(root) = da_root
+            && !same_root
+        {
+            let path = root.join(format!("{snapshot_index:020}")).join(rel_path);
+            match fs::read(&path) {
+                Ok(bytes) => {
+                    if cache_enabled {
+                        self.record_da_cache(DA_CACHE_MISS);
+                        match self.try_rehydrate_cold_payload(snapshot_index, rel_path, &bytes) {
+                            Ok(Some(written)) => {
+                                self.record_da_churn(DA_CHURN_REHYDRATED, written);
+                            }
+                            Ok(None) => {}
+                            Err(err) => {
+                                iroha_logger::warn!(
+                                    ?err,
+                                    path = %path.display(),
+                                    "tiered-state: failed to rehydrate cold payload"
+                                );
+                            }
+                        }
+                    }
+                    return Ok(Some(bytes));
+                }
+                Err(err) if err.kind() == ErrorKind::NotFound => {}
                 Err(err) => {
                     return Err(err).wrap_err_with(|| {
                         format!("failed to read cold payload {path}", path = path.display())
@@ -809,7 +898,102 @@ impl TieredStateBackend {
         Ok(None)
     }
 
+    fn try_rehydrate_cold_payload(
+        &self,
+        snapshot_index: u64,
+        rel_path: &Path,
+        payload: &[u8],
+    ) -> Result<Option<u64>> {
+        let Some(cold_root) = self.cold_store_root.as_ref() else {
+            return Ok(None);
+        };
+        if let Some(da_root) = self.da_store_root.as_ref()
+            && da_root == cold_root
+        {
+            return Ok(None);
+        }
+        let snapshot_dir = cold_root.join(format!("{snapshot_index:020}"));
+        let dest = snapshot_dir.join(rel_path);
+        if dest.exists() {
+            return Ok(None);
+        }
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent).wrap_err_with(|| {
+                format!(
+                    "failed to create cold shard directory {dir}",
+                    dir = parent.display()
+                )
+            })?;
+        }
+        let tmp_path = dest.with_extension("rehydrate.tmp");
+        let mut file = match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp_path)
+        {
+            Ok(file) => file,
+            Err(err) if err.kind() == ErrorKind::AlreadyExists => return Ok(None),
+            Err(err) => {
+                return Err(err).wrap_err_with(|| {
+                    format!(
+                        "failed to open temp cold shard {path} for rehydration",
+                        path = tmp_path.display()
+                    )
+                });
+            }
+        };
+        file.write_all(payload).wrap_err_with(|| {
+            format!(
+                "failed to write cold shard {path} during rehydration",
+                path = tmp_path.display()
+            )
+        })?;
+        file.flush().wrap_err_with(|| {
+            format!(
+                "failed to flush cold shard {path} during rehydration",
+                path = tmp_path.display()
+            )
+        })?;
+        file.sync_all().wrap_err_with(|| {
+            format!(
+                "failed to sync cold shard {path} during rehydration",
+                path = tmp_path.display()
+            )
+        })?;
+        fs::rename(&tmp_path, &dest).wrap_err_with(|| {
+            format!(
+                "failed to persist cold shard {path} during rehydration",
+                path = dest.display()
+            )
+        })?;
+        if let Some(parent) = dest.parent() {
+            Self::sync_dir(parent).wrap_err_with(|| {
+                format!(
+                    "failed to sync cold shard directory {path}",
+                    path = parent.display()
+                )
+            })?;
+        }
+        Ok(Some(u64::try_from(payload.len()).unwrap_or(u64::MAX)))
+    }
+
+    fn record_da_cache(&self, outcome: &'static str) {
+        if let Some(telemetry) = self.telemetry.as_ref() {
+            telemetry.inc_storage_da_cache(WSV_COLD_COMPONENT, outcome);
+        }
+    }
+
+    fn record_da_churn(&self, event: &'static str, bytes: u64) {
+        if bytes == 0 {
+            return;
+        }
+        if let Some(telemetry) = self.telemetry.as_ref() {
+            telemetry.add_storage_da_churn_bytes(WSV_COLD_COMPONENT, event, bytes);
+        }
+    }
+
     /// Update configuration knobs at runtime.
+    #[allow(clippy::too_many_arguments)]
     pub fn reconfigure(
         &mut self,
         enabled: bool,
@@ -925,6 +1109,7 @@ impl TieredStateBackend {
     }
 
     /// Relabel snapshot directories when lane aliases (and therefore slugs) change.
+    #[allow(clippy::too_many_lines)]
     pub fn relabel_lane_geometry(
         &mut self,
         migrations: &[(&LaneConfigEntry, &LaneConfigEntry)],
@@ -1276,7 +1461,7 @@ impl TieredStateBackend {
     ) -> Result<()>
     where
         K: norito::codec::Encode,
-        V: json::JsonSerialize + NoritoSerialize,
+        V: json::JsonSerialize + NoritoSerialize + MeasuredBytes,
     {
         let key_encoded = norito::codec::Encode::encode(key);
         self.collect_entry_with_encoded_key(segment, key_handle, key_encoded, value, ctx)
@@ -1291,7 +1476,7 @@ impl TieredStateBackend {
         ctx: &mut CollectContext,
     ) -> Result<()>
     where
-        V: json::JsonSerialize + NoritoSerialize,
+        V: json::JsonSerialize + NoritoSerialize + MeasuredBytes,
     {
         let key_hash = sha256(&key_encoded);
         let id = TieredEntryId::new(segment, key_hash);
@@ -1365,6 +1550,17 @@ impl TieredStateBackend {
         })
     }
 
+    /// Prune cold snapshots to fit within an explicit byte budget.
+    pub(crate) fn prune_cold_snapshots_to_bytes(&self, max_bytes: u64) -> Result<()> {
+        let Some(root) = self.primary_cold_root().cloned() else {
+            return Ok(());
+        };
+        if !root.exists() {
+            return Ok(());
+        }
+        self.prune_snapshots_to_bytes(&root, max_bytes)
+    }
+
     fn prune_old_snapshots(&self, root: &Path) -> Result<()> {
         if self.max_snapshots == 0 {
             return Ok(());
@@ -1383,7 +1579,7 @@ impl TieredStateBackend {
                 entry
                     .file_type()
                     .ok()
-                    .filter(|ft| ft.is_dir())
+                    .filter(std::fs::FileType::is_dir)
                     .and_then(|_| Self::parse_snapshot_dir_name(&entry.file_name()))
                     .map(|idx| (idx, entry))
             })
@@ -1416,6 +1612,13 @@ impl TieredStateBackend {
         if self.max_cold_bytes == 0 {
             return Ok(());
         }
+        self.prune_snapshots_to_bytes(root, self.max_cold_bytes)
+    }
+
+    fn prune_snapshots_to_bytes(&self, root: &Path, max_bytes: u64) -> Result<()> {
+        if max_bytes == 0 && !root.exists() {
+            return Ok(());
+        }
 
         let mut entries = Vec::new();
         for entry in fs::read_dir(root).wrap_err_with(|| {
@@ -1445,22 +1648,27 @@ impl TieredStateBackend {
         }
 
         let mut pruned = false;
-        while total_bytes > self.max_cold_bytes && sizes.len() > 1 {
-            let (_, path, size) = sizes.remove(0);
-            fs::remove_dir_all(&path).wrap_err_with(|| {
-                format!(
-                    "failed to prune tiered snapshot directory {path}",
-                    path = path.display()
-                )
-            })?;
+        while total_bytes > max_bytes && sizes.len() > 1 {
+            let (idx, path, size) = sizes.remove(0);
+            if let Some(da_root) = self.da_store_root_for_offload() {
+                self.offload_snapshot_dir(&path, da_root, idx)?;
+                self.record_da_churn(DA_CHURN_EVICTED, size);
+            } else {
+                fs::remove_dir_all(&path).wrap_err_with(|| {
+                    format!(
+                        "failed to prune tiered snapshot directory {path}",
+                        path = path.display()
+                    )
+                })?;
+            }
             total_bytes = total_bytes.saturating_sub(size);
             pruned = true;
         }
 
-        if total_bytes > self.max_cold_bytes && sizes.len() == 1 {
+        if total_bytes > max_bytes && sizes.len() == 1 {
             let (_, path, size) = &sizes[0];
             iroha_logger::warn!(
-                budget = self.max_cold_bytes,
+                budget = max_bytes,
                 remaining = *size,
                 path = %path.display(),
                 "tiered-state: cold snapshot exceeds configured byte budget"
@@ -1496,6 +1704,137 @@ impl TieredStateBackend {
             }
         }
         Ok(total)
+    }
+
+    fn copy_dir_recursive(source: &Path, dest: &Path) -> Result<()> {
+        fs::create_dir_all(dest).wrap_err_with(|| {
+            format!(
+                "failed to create snapshot offload directory {path}",
+                path = dest.display()
+            )
+        })?;
+        for entry in fs::read_dir(source).wrap_err_with(|| {
+            format!(
+                "failed to read snapshot directory {path}",
+                path = source.display()
+            )
+        })? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            let from = entry.path();
+            let to = dest.join(entry.file_name());
+            if file_type.is_dir() {
+                Self::copy_dir_recursive(&from, &to)?;
+            } else if file_type.is_file() {
+                if to.exists() {
+                    fs::remove_file(&to).wrap_err_with(|| {
+                        format!("failed to remove existing file {path}", path = to.display())
+                    })?;
+                }
+                fs::copy(&from, &to).wrap_err_with(|| {
+                    format!(
+                        "failed to copy snapshot file from {from} to {to}",
+                        from = from.display(),
+                        to = to.display()
+                    )
+                })?;
+            } else {
+                iroha_logger::warn!(
+                    path = %from.display(),
+                    "tiered-state: skipping unsupported snapshot entry during offload"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn is_cross_device_link(err: &std::io::Error) -> bool {
+        #[cfg(unix)]
+        {
+            return err.raw_os_error() == Some(18);
+        }
+        #[cfg(windows)]
+        {
+            return err.raw_os_error() == Some(17);
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = err;
+            return false;
+        }
+    }
+
+    fn offload_snapshot_dir(&self, source: &Path, dest_root: &Path, idx: u64) -> Result<()> {
+        fs::create_dir_all(dest_root).wrap_err_with(|| {
+            format!(
+                "failed to prepare DA snapshot root {path}",
+                path = dest_root.display()
+            )
+        })?;
+        let dest = dest_root.join(format!("{idx:020}"));
+        if dest.exists() {
+            fs::remove_dir_all(&dest).wrap_err_with(|| {
+                format!(
+                    "failed to remove existing DA snapshot directory {path}",
+                    path = dest.display()
+                )
+            })?;
+        }
+
+        match fs::rename(source, &dest) {
+            Ok(()) => {}
+            Err(err) if Self::is_cross_device_link(&err) => {
+                let staging = dest.with_extension("staging");
+                if staging.exists() {
+                    fs::remove_dir_all(&staging).wrap_err_with(|| {
+                        format!(
+                            "failed to clear DA snapshot staging directory {path}",
+                            path = staging.display()
+                        )
+                    })?;
+                }
+                Self::copy_dir_recursive(source, &staging)?;
+                fs::rename(&staging, &dest).wrap_err_with(|| {
+                    format!(
+                        "failed to promote DA snapshot directory {path}",
+                        path = dest.display()
+                    )
+                })?;
+                fs::remove_dir_all(source).wrap_err_with(|| {
+                    format!(
+                        "failed to remove cold snapshot directory {path}",
+                        path = source.display()
+                    )
+                })?;
+            }
+            Err(err) => {
+                return Err(err).wrap_err_with(|| {
+                    format!(
+                        "failed to offload snapshot directory {path}",
+                        path = source.display()
+                    )
+                });
+            }
+        }
+
+        if let Some(parent) = dest.parent() {
+            Self::sync_dir(parent).wrap_err_with(|| {
+                format!(
+                    "failed to sync DA snapshot root {path}",
+                    path = parent.display()
+                )
+            })?;
+        }
+        if let Some(parent) = source.parent() {
+            Self::sync_dir(parent).wrap_err_with(|| {
+                format!(
+                    "failed to sync cold snapshot root {path}",
+                    path = parent.display()
+                )
+            })?;
+        }
+
+        Ok(())
     }
 
     fn try_reuse_cold_payload(source: &Path, dest: &Path) -> Result<Option<u64>> {
@@ -1571,7 +1910,7 @@ impl TieredStateBackend {
 
     fn parse_snapshot_dir_name(name: &std::ffi::OsStr) -> Option<u64> {
         let name = name.to_str()?;
-        if name.len() != 20 || !name.as_bytes().iter().all(|b| b.is_ascii_digit()) {
+        if name.len() != 20 || !name.as_bytes().iter().all(u8::is_ascii_digit) {
             return None;
         }
         name.parse::<u64>().ok()
@@ -1600,14 +1939,1322 @@ fn compute_json_hash(value: &impl json::JsonSerialize) -> Result<([u8; 32], usiz
     Ok((sha256(&encoded), encoded.len()))
 }
 
-fn compute_hot_bytes(value: &impl NoritoSerialize) -> Result<usize> {
-    if let Some(exact) = value.encoded_len_exact() {
-        return Ok(exact);
+trait MeasuredBytes {
+    fn measured_bytes(&self) -> usize;
+
+    fn measured_bytes_extra(&self) -> usize
+    where
+        Self: Sized,
+    {
+        self.measured_bytes()
+            .saturating_sub(std::mem::size_of::<Self>())
     }
-    if let Some(hint) = value.encoded_len_hint() {
-        return Ok(hint);
+}
+
+#[allow(clippy::unnecessary_wraps)]
+fn compute_hot_bytes(value: &impl MeasuredBytes) -> Result<usize> {
+    Ok(value.measured_bytes())
+}
+
+mod measured_bytes_impls {
+    use super::MeasuredBytes;
+    use std::{
+        collections::{BTreeMap, BTreeSet, VecDeque},
+        mem::size_of,
+        sync::Arc,
+    };
+
+    use iroha_crypto::{
+        Hash, HashOf, LaneCommitmentId, MerkleProof, MerkleTree, PublicKey, Signature, SignatureOf,
+    };
+    use iroha_data_model::{
+        account::{
+            AccountController, AccountDetails, AccountId, AccountLabel, AccountRekeyRecord,
+            MultisigMember, MultisigPolicy,
+        },
+        asset::{
+            AssetDefinition, AssetDefinitionId, AssetId,
+            definition::{
+                AssetConfidentialPolicy, ConfidentialPolicyMode, ConfidentialPolicyTransition,
+                Mintable,
+            },
+        },
+        bridge::{
+            BridgeHashFunction, BridgeIcsProof, BridgeProof, BridgeProofPayload, BridgeProofRange,
+            BridgeProofRecord, BridgeTransparentProof,
+        },
+        common::Owned,
+        confidential::ConfidentialStatus,
+        consensus::{CertPhase, Qc, QcAggregate, QcRef},
+        domain::{Domain, DomainId},
+        governance::types::{
+            AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal,
+            ParliamentBodies, ParliamentBody, ParliamentRoster, ProposalKind,
+        },
+        ipfs::IpfsPath,
+        isi::governance::CouncilDerivationKind,
+        isi::zk::ZkAssetMode,
+        metadata::Metadata,
+        name::Name,
+        nexus::{
+            LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacySnarkWitness,
+            LanePrivacyWitness, UniversalAccountId,
+        },
+        nft::NftData,
+        offline::{
+            AggregateProofEnvelope, AndroidMarkerKeyProof, AndroidProvisionedProof,
+            AppleAppAttestProof, OfflineAllowanceCommitment, OfflineAllowanceRecord,
+            OfflineBalanceProof, OfflineCounterState, OfflinePlatformProof,
+            OfflinePlatformTokenSnapshot, OfflineSpendReceipt, OfflineToOnlineTransfer,
+            OfflineTransferLifecycleEntry, OfflineTransferRecord, OfflineTransferStatus,
+            OfflineVerdictRevocation, OfflineVerdictRevocationReason, OfflineVerdictSnapshot,
+            OfflineWalletCertificate, OfflineWalletPolicy, PoseidonDigest,
+        },
+        peer::PeerId,
+        permission::Permission,
+        proof::{
+            ProofAttachment, ProofAttachmentList, ProofBox, ProofId, ProofRecord, ProofStatus,
+            VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord,
+        },
+        role::{Role, RoleId},
+        runtime::{
+            RuntimeUpgradeId, RuntimeUpgradeManifest, RuntimeUpgradeRecord,
+            RuntimeUpgradeSbomDigest, RuntimeUpgradeStatus,
+        },
+        smart_contract::manifest::{
+            AccessSetHints, ContractManifest, EntryPointKind, EntrypointDescriptor,
+            ManifestProvenance,
+        },
+        zk::BackendTag,
+    };
+    use iroha_primitives::{
+        bigint::BigInt,
+        const_vec::ConstVec,
+        conststr::ConstString,
+        json::Json,
+        numeric::{Numeric, NumericSpec},
+    };
+
+    use crate::{
+        governance::state::ParliamentTerm,
+        state::{
+            ElectionState, FrontierCheckpoint, GovernanceLockRecord, GovernanceLocksForReferendum,
+            GovernancePipeline, GovernanceProposalRecord, GovernanceProposalStatus,
+            GovernanceReferendumMode, GovernanceReferendumRecord, GovernanceReferendumStatus,
+            GovernanceSlashEntry, GovernanceSlashLedger, GovernanceStage, GovernanceStageApproval,
+            GovernanceStageApprovals, GovernanceStageFailure, GovernanceStageRecord, ZkAssetState,
+            ZkAssetVerifierBinding,
+        },
+    };
+
+    macro_rules! impl_measured_bytes_copy {
+        ($($ty:ty),+ $(,)?) => {
+            $(
+                impl MeasuredBytes for $ty {
+                    fn measured_bytes(&self) -> usize {
+                        size_of::<$ty>()
+                    }
+                }
+            )+
+        };
     }
-    Ok(norito::codec::Encode::encode(value).len())
+
+    fn slice_bytes<T: MeasuredBytes>(slice: &[T]) -> usize {
+        let mut total = slice.len().saturating_mul(size_of::<T>());
+        for item in slice {
+            total = total.saturating_add(item.measured_bytes_extra());
+        }
+        total
+    }
+
+    impl_measured_bytes_copy!(
+        (),
+        bool,
+        char,
+        u8,
+        u16,
+        u32,
+        u64,
+        u128,
+        usize,
+        i8,
+        i16,
+        i32,
+        i64,
+        i128,
+        isize,
+        AbiVersion,
+        BackendTag,
+        BridgeHashFunction,
+        CertPhase,
+        ConfidentialPolicyMode,
+        ConfidentialPolicyTransition,
+        ConfidentialStatus,
+        ContractAbiHash,
+        ContractCodeHash,
+        CouncilDerivationKind,
+        EntryPointKind,
+        GovernanceReferendumMode,
+        GovernanceReferendumStatus,
+        GovernanceProposalStatus,
+        GovernanceStage,
+        GovernanceStageFailure,
+        LaneCommitmentId,
+        Mintable,
+        NumericSpec,
+        OfflineTransferStatus,
+        OfflineVerdictRevocationReason,
+        ParliamentBody,
+        ProofStatus,
+        QcRef,
+        RuntimeUpgradeId,
+        RuntimeUpgradeStatus,
+        ZkAssetMode,
+    );
+
+    impl<T: MeasuredBytes, const N: usize> MeasuredBytes for [T; N] {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<[T; N]>();
+            for item in self {
+                total = total.saturating_add(item.measured_bytes_extra());
+            }
+            total
+        }
+    }
+
+    impl<T: MeasuredBytes> MeasuredBytes for Option<T> {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<Option<T>>();
+            if let Some(value) = self {
+                total = total.saturating_add(value.measured_bytes_extra());
+            }
+            total
+        }
+    }
+
+    impl<T: MeasuredBytes> MeasuredBytes for Owned<T> {
+        fn measured_bytes(&self) -> usize {
+            size_of::<Owned<T>>().saturating_add(self.0.measured_bytes_extra())
+        }
+    }
+
+    impl<T: MeasuredBytes> MeasuredBytes for Vec<T> {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<Vec<T>>();
+            total = total.saturating_add(self.capacity().saturating_mul(size_of::<T>()));
+            for item in self {
+                total = total.saturating_add(item.measured_bytes_extra());
+            }
+            total
+        }
+    }
+
+    impl<T: MeasuredBytes> MeasuredBytes for VecDeque<T> {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<VecDeque<T>>();
+            total = total.saturating_add(self.capacity().saturating_mul(size_of::<T>()));
+            for item in self {
+                total = total.saturating_add(item.measured_bytes_extra());
+            }
+            total
+        }
+    }
+
+    impl<K: MeasuredBytes, V: MeasuredBytes> MeasuredBytes for BTreeMap<K, V> {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<BTreeMap<K, V>>();
+            for (key, value) in self {
+                total = total.saturating_add(size_of::<K>());
+                total = total.saturating_add(key.measured_bytes_extra());
+                total = total.saturating_add(size_of::<V>());
+                total = total.saturating_add(value.measured_bytes_extra());
+            }
+            total
+        }
+    }
+
+    impl<T: MeasuredBytes> MeasuredBytes for BTreeSet<T> {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<BTreeSet<T>>();
+            for item in self {
+                total = total.saturating_add(size_of::<T>());
+                total = total.saturating_add(item.measured_bytes_extra());
+            }
+            total
+        }
+    }
+
+    impl<T: MeasuredBytes> MeasuredBytes for Box<T> {
+        fn measured_bytes(&self) -> usize {
+            size_of::<Box<T>>().saturating_add((**self).measured_bytes())
+        }
+    }
+
+    impl<T: MeasuredBytes> MeasuredBytes for Arc<T> {
+        fn measured_bytes(&self) -> usize {
+            size_of::<Arc<T>>().saturating_add((**self).measured_bytes())
+        }
+    }
+
+    impl<T: MeasuredBytes> MeasuredBytes for ConstVec<T> {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<ConstVec<T>>();
+            total = total.saturating_add(self.len().saturating_mul(size_of::<T>()));
+            for item in self.iter() {
+                total = total.saturating_add(item.measured_bytes_extra());
+            }
+            total
+        }
+    }
+
+    impl MeasuredBytes for ConstString {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<ConstString>();
+            if !self.is_inlined() {
+                total = total.saturating_add(self.len());
+            }
+            total
+        }
+    }
+
+    impl MeasuredBytes for String {
+        fn measured_bytes(&self) -> usize {
+            size_of::<String>().saturating_add(self.capacity())
+        }
+    }
+
+    impl MeasuredBytes for Json {
+        fn measured_bytes(&self) -> usize {
+            size_of::<Json>().saturating_add(self.get().capacity())
+        }
+    }
+
+    impl MeasuredBytes for BigInt {
+        fn measured_bytes(&self) -> usize {
+            let bits = self.bit_len();
+            let bytes = bits.saturating_add(7) / 8;
+            size_of::<BigInt>().saturating_add(bytes)
+        }
+    }
+
+    impl MeasuredBytes for Numeric {
+        fn measured_bytes(&self) -> usize {
+            size_of::<Numeric>().saturating_add(self.mantissa().measured_bytes_extra())
+        }
+    }
+
+    impl<T> MeasuredBytes for HashOf<T> {
+        fn measured_bytes(&self) -> usize {
+            size_of::<HashOf<T>>()
+        }
+    }
+
+    impl MeasuredBytes for Hash {
+        fn measured_bytes(&self) -> usize {
+            size_of::<Hash>()
+        }
+    }
+
+    impl MeasuredBytes for PublicKey {
+        fn measured_bytes(&self) -> usize {
+            let payload_len = self.to_bytes().1.len();
+            size_of::<PublicKey>().saturating_add(payload_len)
+        }
+    }
+
+    impl MeasuredBytes for Signature {
+        fn measured_bytes(&self) -> usize {
+            size_of::<Signature>().saturating_add(self.payload().len())
+        }
+    }
+
+    impl<T> MeasuredBytes for SignatureOf<T> {
+        fn measured_bytes(&self) -> usize {
+            size_of::<SignatureOf<T>>().saturating_add((**self).measured_bytes_extra())
+        }
+    }
+
+    impl<T> MeasuredBytes for MerkleProof<T> {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<MerkleProof<T>>();
+            total = total.saturating_add(
+                self.audit_path()
+                    .len()
+                    .saturating_mul(size_of::<Option<HashOf<T>>>()),
+            );
+            total
+        }
+    }
+
+    impl<T> MeasuredBytes for MerkleTree<T> {
+        fn measured_bytes(&self) -> usize {
+            let depth = self.depth();
+            let nodes = if depth as usize >= usize::BITS as usize - 1 {
+                usize::MAX
+            } else {
+                (1_usize << (depth + 1)) - 1
+            };
+            size_of::<MerkleTree<T>>()
+                .saturating_add(nodes.saturating_mul(size_of::<Option<HashOf<T>>>()))
+        }
+    }
+
+    impl MeasuredBytes for Name {
+        fn measured_bytes(&self) -> usize {
+            size_of::<Name>().saturating_add(self.as_ref().len())
+        }
+    }
+
+    impl MeasuredBytes for IpfsPath {
+        fn measured_bytes(&self) -> usize {
+            size_of::<IpfsPath>().saturating_add(self.as_ref().len())
+        }
+    }
+
+    impl MeasuredBytes for DomainId {
+        fn measured_bytes(&self) -> usize {
+            size_of::<DomainId>().saturating_add(self.name.measured_bytes_extra())
+        }
+    }
+
+    impl MeasuredBytes for AccountLabel {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<AccountLabel>();
+            total = total.saturating_add(self.domain.measured_bytes_extra());
+            total = total.saturating_add(self.label.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for UniversalAccountId {
+        fn measured_bytes(&self) -> usize {
+            size_of::<UniversalAccountId>()
+        }
+    }
+
+    impl MeasuredBytes for AccountController {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<AccountController>();
+            match self {
+                AccountController::Single(key) => {
+                    total = total.saturating_add(key.measured_bytes_extra());
+                }
+                AccountController::Multisig(policy) => {
+                    total = total.saturating_add(policy.measured_bytes_extra());
+                }
+            }
+            total
+        }
+    }
+
+    impl MeasuredBytes for MultisigMember {
+        fn measured_bytes(&self) -> usize {
+            size_of::<MultisigMember>().saturating_add(self.public_key().measured_bytes_extra())
+        }
+    }
+
+    impl MeasuredBytes for MultisigPolicy {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<MultisigPolicy>();
+            total = total.saturating_add(slice_bytes(self.members()));
+            total
+        }
+    }
+
+    impl MeasuredBytes for AccountId {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<AccountId>();
+            total = total.saturating_add(self.domain.measured_bytes_extra());
+            total = total.saturating_add(self.controller.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for AssetDefinitionId {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<AssetDefinitionId>();
+            total = total.saturating_add(self.domain.measured_bytes_extra());
+            total = total.saturating_add(self.name.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for AssetId {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<AssetId>();
+            total = total.saturating_add(self.account.measured_bytes_extra());
+            total = total.saturating_add(self.definition.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for RoleId {
+        fn measured_bytes(&self) -> usize {
+            size_of::<RoleId>().saturating_add(self.name.measured_bytes_extra())
+        }
+    }
+
+    impl MeasuredBytes for PeerId {
+        fn measured_bytes(&self) -> usize {
+            size_of::<PeerId>().saturating_add(self.public_key.measured_bytes_extra())
+        }
+    }
+
+    impl MeasuredBytes for Metadata {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<Metadata>();
+            for (key, value) in self.iter() {
+                total = total.saturating_add(size_of::<Name>());
+                total = total.saturating_add(key.measured_bytes_extra());
+                total = total.saturating_add(size_of::<Json>());
+                total = total.saturating_add(value.measured_bytes_extra());
+            }
+            total
+        }
+    }
+
+    impl MeasuredBytes for Permission {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<Permission>();
+            total = total.saturating_add(self.name.measured_bytes_extra());
+            total = total.saturating_add(self.payload.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for AccountDetails {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<AccountDetails>();
+            total = total.saturating_add(self.metadata.measured_bytes_extra());
+            total = total.saturating_add(self.label.measured_bytes_extra());
+            total = total.saturating_add(self.uaid.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for AccountRekeyRecord {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<AccountRekeyRecord>();
+            total = total.saturating_add(self.label.measured_bytes_extra());
+            total = total.saturating_add(self.active_signatory.measured_bytes_extra());
+            total = total.saturating_add(self.previous_signatories.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for AssetConfidentialPolicy {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<AssetConfidentialPolicy>();
+            total = total.saturating_add(self.mode.measured_bytes_extra());
+            total = total.saturating_add(self.vk_set_hash.measured_bytes_extra());
+            total = total.saturating_add(self.poseidon_params_id.measured_bytes_extra());
+            total = total.saturating_add(self.pedersen_params_id.measured_bytes_extra());
+            total = total.saturating_add(self.pending_transition.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for AssetDefinition {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<AssetDefinition>();
+            total = total.saturating_add(self.id.measured_bytes_extra());
+            total = total.saturating_add(self.spec.measured_bytes_extra());
+            total = total.saturating_add(self.mintable.measured_bytes_extra());
+            total = total.saturating_add(self.logo.measured_bytes_extra());
+            total = total.saturating_add(self.metadata.measured_bytes_extra());
+            total = total.saturating_add(self.owned_by.measured_bytes_extra());
+            total = total.saturating_add(self.total_quantity.measured_bytes_extra());
+            total = total.saturating_add(self.confidential_policy.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for Domain {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<Domain>();
+            total = total.saturating_add(self.id.measured_bytes_extra());
+            total = total.saturating_add(self.logo.measured_bytes_extra());
+            total = total.saturating_add(self.metadata.measured_bytes_extra());
+            total = total.saturating_add(self.owned_by.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for NftData {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<NftData>();
+            total = total.saturating_add(self.content.measured_bytes_extra());
+            total = total.saturating_add(self.owned_by.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for Role {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<Role>();
+            total = total.saturating_add(self.id.measured_bytes_extra());
+            total = total.saturating_add(self.permissions.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for VerifyingKeyId {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<VerifyingKeyId>();
+            total = total.saturating_add(self.backend.measured_bytes_extra());
+            total = total.saturating_add(self.name.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for VerifyingKeyBox {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<VerifyingKeyBox>();
+            total = total.saturating_add(self.backend.measured_bytes_extra());
+            total = total.saturating_add(self.bytes.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for VerifyingKeyRecord {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<VerifyingKeyRecord>();
+            total = total.saturating_add(self.circuit_id.measured_bytes_extra());
+            total = total.saturating_add(self.owner_manifest_id.measured_bytes_extra());
+            total = total.saturating_add(self.namespace.measured_bytes_extra());
+            total = total.saturating_add(self.backend.measured_bytes_extra());
+            total = total.saturating_add(self.curve.measured_bytes_extra());
+            total = total.saturating_add(self.public_inputs_schema_hash.measured_bytes_extra());
+            total = total.saturating_add(self.commitment.measured_bytes_extra());
+            total = total.saturating_add(self.vk_len.measured_bytes_extra());
+            total = total.saturating_add(self.max_proof_bytes.measured_bytes_extra());
+            total = total.saturating_add(self.gas_schedule_id.measured_bytes_extra());
+            total = total.saturating_add(self.metadata_uri_cid.measured_bytes_extra());
+            total = total.saturating_add(self.vk_bytes_cid.measured_bytes_extra());
+            total = total.saturating_add(self.activation_height.measured_bytes_extra());
+            total = total.saturating_add(self.withdraw_height.measured_bytes_extra());
+            total = total.saturating_add(self.key.measured_bytes_extra());
+            total = total.saturating_add(self.status.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for ProofBox {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<ProofBox>();
+            total = total.saturating_add(self.backend.measured_bytes_extra());
+            total = total.saturating_add(self.bytes.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for ProofId {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<ProofId>();
+            total = total.saturating_add(self.backend.measured_bytes_extra());
+            total = total.saturating_add(self.proof_hash.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for BridgeIcsProof {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<BridgeIcsProof>();
+            total = total.saturating_add(self.state_root.measured_bytes_extra());
+            total = total.saturating_add(self.leaf_hash.measured_bytes_extra());
+            total = total.saturating_add(self.proof.measured_bytes_extra());
+            total = total.saturating_add(self.hash_function.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for BridgeTransparentProof {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<BridgeTransparentProof>();
+            total = total.saturating_add(self.proof.measured_bytes_extra());
+            total = total.saturating_add(self.recursion_depth.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for BridgeProofPayload {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<BridgeProofPayload>();
+            match self {
+                BridgeProofPayload::Ics(proof) => {
+                    total = total.saturating_add(proof.measured_bytes_extra());
+                }
+                BridgeProofPayload::TransparentZk(proof) => {
+                    total = total.saturating_add(proof.measured_bytes_extra());
+                }
+            }
+            total
+        }
+    }
+
+    impl MeasuredBytes for BridgeProofRange {
+        fn measured_bytes(&self) -> usize {
+            size_of::<BridgeProofRange>()
+        }
+    }
+
+    impl MeasuredBytes for BridgeProof {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<BridgeProof>();
+            total = total.saturating_add(self.range.measured_bytes_extra());
+            total = total.saturating_add(self.manifest_hash.measured_bytes_extra());
+            total = total.saturating_add(self.payload.measured_bytes_extra());
+            total = total.saturating_add(self.pinned.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for BridgeProofRecord {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<BridgeProofRecord>();
+            total = total.saturating_add(self.proof.measured_bytes_extra());
+            total = total.saturating_add(self.commitment.measured_bytes_extra());
+            total = total.saturating_add(self.size_bytes.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for ProofRecord {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<ProofRecord>();
+            total = total.saturating_add(self.id.measured_bytes_extra());
+            total = total.saturating_add(self.vk_ref.measured_bytes_extra());
+            total = total.saturating_add(self.vk_commitment.measured_bytes_extra());
+            total = total.saturating_add(self.status.measured_bytes_extra());
+            total = total.saturating_add(self.verified_at_height.measured_bytes_extra());
+            total = total.saturating_add(self.bridge.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for RuntimeUpgradeSbomDigest {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<RuntimeUpgradeSbomDigest>();
+            total = total.saturating_add(self.algorithm.measured_bytes_extra());
+            total = total.saturating_add(self.digest.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for RuntimeUpgradeManifest {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<RuntimeUpgradeManifest>();
+            total = total.saturating_add(self.name.measured_bytes_extra());
+            total = total.saturating_add(self.description.measured_bytes_extra());
+            total = total.saturating_add(self.abi_version.measured_bytes_extra());
+            total = total.saturating_add(self.abi_hash.measured_bytes_extra());
+            total = total.saturating_add(self.added_syscalls.measured_bytes_extra());
+            total = total.saturating_add(self.added_pointer_types.measured_bytes_extra());
+            total = total.saturating_add(self.start_height.measured_bytes_extra());
+            total = total.saturating_add(self.end_height.measured_bytes_extra());
+            total = total.saturating_add(self.sbom_digests.measured_bytes_extra());
+            total = total.saturating_add(self.slsa_attestation.measured_bytes_extra());
+            total = total.saturating_add(self.provenance.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for RuntimeUpgradeRecord {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<RuntimeUpgradeRecord>();
+            total = total.saturating_add(self.manifest.measured_bytes_extra());
+            total = total.saturating_add(self.status.measured_bytes_extra());
+            total = total.saturating_add(self.proposer.measured_bytes_extra());
+            total = total.saturating_add(self.created_height.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for AccessSetHints {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<AccessSetHints>();
+            total = total.saturating_add(self.read_keys.measured_bytes_extra());
+            total = total.saturating_add(self.write_keys.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for EntrypointDescriptor {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<EntrypointDescriptor>();
+            total = total.saturating_add(self.name.measured_bytes_extra());
+            total = total.saturating_add(self.kind.measured_bytes_extra());
+            total = total.saturating_add(self.permission.measured_bytes_extra());
+            total = total.saturating_add(self.read_keys.measured_bytes_extra());
+            total = total.saturating_add(self.write_keys.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for ManifestProvenance {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<ManifestProvenance>();
+            total = total.saturating_add(self.signer.measured_bytes_extra());
+            total = total.saturating_add(self.signature.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for ContractManifest {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<ContractManifest>();
+            total = total.saturating_add(self.code_hash.measured_bytes_extra());
+            total = total.saturating_add(self.abi_hash.measured_bytes_extra());
+            total = total.saturating_add(self.compiler_fingerprint.measured_bytes_extra());
+            total = total.saturating_add(self.features_bitmap.measured_bytes_extra());
+            total = total.saturating_add(self.access_set_hints.measured_bytes_extra());
+            total = total.saturating_add(self.entrypoints.measured_bytes_extra());
+            total = total.saturating_add(self.provenance.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for QcAggregate {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<QcAggregate>();
+            total = total.saturating_add(self.signers_bitmap.measured_bytes_extra());
+            total = total.saturating_add(self.bls_aggregate_signature.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for Qc {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<Qc>();
+            total = total.saturating_add(self.phase.measured_bytes_extra());
+            total = total.saturating_add(self.subject_block_hash.measured_bytes_extra());
+            total = total.saturating_add(self.parent_state_root.measured_bytes_extra());
+            total = total.saturating_add(self.post_state_root.measured_bytes_extra());
+            total = total.saturating_add(self.height.measured_bytes_extra());
+            total = total.saturating_add(self.view.measured_bytes_extra());
+            total = total.saturating_add(self.epoch.measured_bytes_extra());
+            total = total.saturating_add(self.mode_tag.measured_bytes_extra());
+            total = total.saturating_add(self.highest_qc.measured_bytes_extra());
+            total = total.saturating_add(self.validator_set_hash.measured_bytes_extra());
+            total = total.saturating_add(self.validator_set_hash_version.measured_bytes_extra());
+            total = total.saturating_add(self.validator_set.measured_bytes_extra());
+            total = total.saturating_add(self.aggregate.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for ZkAssetVerifierBinding {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<ZkAssetVerifierBinding>();
+            total = total.saturating_add(self.id.measured_bytes_extra());
+            total = total.saturating_add(self.commitment.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for FrontierCheckpoint {
+        fn measured_bytes(&self) -> usize {
+            size_of::<FrontierCheckpoint>()
+        }
+    }
+
+    impl MeasuredBytes for ZkAssetState {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<ZkAssetState>();
+            total = total.saturating_add(self.mode.measured_bytes_extra());
+            total = total.saturating_add(self.allow_shield.measured_bytes_extra());
+            total = total.saturating_add(self.allow_unshield.measured_bytes_extra());
+            total = total.saturating_add(self.commitments.measured_bytes_extra());
+            total = total.saturating_add(self.root_history.measured_bytes_extra());
+            total = total.saturating_add(self.nullifiers.measured_bytes_extra());
+            total = total.saturating_add(self.vk_transfer.measured_bytes_extra());
+            total = total.saturating_add(self.vk_unshield.measured_bytes_extra());
+            total = total.saturating_add(self.vk_shield.measured_bytes_extra());
+            total = total.saturating_add(self.frontier_checkpoints.measured_bytes_extra());
+            total = total.saturating_add(self.tree.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for ElectionState {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<ElectionState>();
+            total = total.saturating_add(self.options.measured_bytes_extra());
+            total = total.saturating_add(self.eligible_root.measured_bytes_extra());
+            total = total.saturating_add(self.start_ts.measured_bytes_extra());
+            total = total.saturating_add(self.end_ts.measured_bytes_extra());
+            total = total.saturating_add(self.finalized.measured_bytes_extra());
+            total = total.saturating_add(self.tally.measured_bytes_extra());
+            total = total.saturating_add(self.ballot_nullifiers.measured_bytes_extra());
+            total = total.saturating_add(self.ciphertexts.measured_bytes_extra());
+            total = total.saturating_add(self.vk_ballot.measured_bytes_extra());
+            total = total.saturating_add(self.vk_ballot_commitment.measured_bytes_extra());
+            total = total.saturating_add(self.vk_tally.measured_bytes_extra());
+            total = total.saturating_add(self.vk_tally_commitment.measured_bytes_extra());
+            total = total.saturating_add(self.domain_tag.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for DeployContractProposal {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<DeployContractProposal>();
+            total = total.saturating_add(self.namespace.measured_bytes_extra());
+            total = total.saturating_add(self.contract_id.measured_bytes_extra());
+            total = total.saturating_add(self.code_hash_hex.measured_bytes_extra());
+            total = total.saturating_add(self.abi_hash_hex.measured_bytes_extra());
+            total = total.saturating_add(self.abi_version.measured_bytes_extra());
+            total = total.saturating_add(self.manifest_provenance.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for ProposalKind {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<ProposalKind>();
+            match self {
+                ProposalKind::DeployContract(payload) => {
+                    total = total.saturating_add(payload.measured_bytes_extra());
+                }
+            }
+            total
+        }
+    }
+
+    impl MeasuredBytes for GovernanceStageApproval {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<GovernanceStageApproval>();
+            total = total.saturating_add(self.approvers.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for GovernanceStageRecord {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<GovernanceStageRecord>();
+            total = total.saturating_add(self.stage.measured_bytes_extra());
+            total = total.saturating_add(self.started_at.measured_bytes_extra());
+            total = total.saturating_add(self.deadline.measured_bytes_extra());
+            total = total.saturating_add(self.completed_at.measured_bytes_extra());
+            total = total.saturating_add(self.failure.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for GovernanceStageApprovals {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<GovernanceStageApprovals>();
+            total = total.saturating_add(self.stages.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for GovernancePipeline {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<GovernancePipeline>();
+            total = total.saturating_add(self.stages.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for GovernanceProposalRecord {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<GovernanceProposalRecord>();
+            total = total.saturating_add(self.proposer.measured_bytes_extra());
+            total = total.saturating_add(self.kind.measured_bytes_extra());
+            total = total.saturating_add(self.created_height.measured_bytes_extra());
+            total = total.saturating_add(self.status.measured_bytes_extra());
+            total = total.saturating_add(self.pipeline.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for GovernanceReferendumRecord {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<GovernanceReferendumRecord>();
+            total = total.saturating_add(self.h_start.measured_bytes_extra());
+            total = total.saturating_add(self.h_end.measured_bytes_extra());
+            total = total.saturating_add(self.status.measured_bytes_extra());
+            total = total.saturating_add(self.mode.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for GovernanceLockRecord {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<GovernanceLockRecord>();
+            total = total.saturating_add(self.owner.measured_bytes_extra());
+            total = total.saturating_add(self.amount.measured_bytes_extra());
+            total = total.saturating_add(self.slashed.measured_bytes_extra());
+            total = total.saturating_add(self.expiry_height.measured_bytes_extra());
+            total = total.saturating_add(self.direction.measured_bytes_extra());
+            total = total.saturating_add(self.duration_blocks.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for GovernanceLocksForReferendum {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<GovernanceLocksForReferendum>();
+            total = total.saturating_add(self.locks.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for GovernanceSlashEntry {
+        fn measured_bytes(&self) -> usize {
+            size_of::<GovernanceSlashEntry>()
+        }
+    }
+
+    impl MeasuredBytes for GovernanceSlashLedger {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<GovernanceSlashLedger>();
+            total = total.saturating_add(self.slashes.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for ParliamentRoster {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<ParliamentRoster>();
+            total = total.saturating_add(self.body.measured_bytes_extra());
+            total = total.saturating_add(self.epoch.measured_bytes_extra());
+            total = total.saturating_add(self.members.measured_bytes_extra());
+            total = total.saturating_add(self.alternates.measured_bytes_extra());
+            total = total.saturating_add(self.verified.measured_bytes_extra());
+            total = total.saturating_add(self.candidate_count.measured_bytes_extra());
+            total = total.saturating_add(self.derived_by.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for ParliamentBodies {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<ParliamentBodies>();
+            total = total.saturating_add(self.selection_epoch.measured_bytes_extra());
+            total = total.saturating_add(self.rosters.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for ParliamentTerm {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<ParliamentTerm>();
+            total = total.saturating_add(self.epoch.measured_bytes_extra());
+            total = total.saturating_add(self.members.measured_bytes_extra());
+            total = total.saturating_add(self.alternates.measured_bytes_extra());
+            total = total.saturating_add(self.verified.measured_bytes_extra());
+            total = total.saturating_add(self.candidate_count.measured_bytes_extra());
+            total = total.saturating_add(self.derived_by.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for PoseidonDigest {
+        fn measured_bytes(&self) -> usize {
+            size_of::<PoseidonDigest>()
+        }
+    }
+
+    impl MeasuredBytes for OfflineAllowanceCommitment {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<OfflineAllowanceCommitment>();
+            total = total.saturating_add(self.asset.measured_bytes_extra());
+            total = total.saturating_add(self.amount.measured_bytes_extra());
+            total = total.saturating_add(self.commitment.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for OfflineWalletPolicy {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<OfflineWalletPolicy>();
+            total = total.saturating_add(self.max_balance.measured_bytes_extra());
+            total = total.saturating_add(self.max_tx_value.measured_bytes_extra());
+            total = total.saturating_add(self.expires_at_ms.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for OfflineWalletCertificate {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<OfflineWalletCertificate>();
+            total = total.saturating_add(self.controller.measured_bytes_extra());
+            total = total.saturating_add(self.allowance.measured_bytes_extra());
+            total = total.saturating_add(self.spend_public_key.measured_bytes_extra());
+            total = total.saturating_add(self.attestation_report.measured_bytes_extra());
+            total = total.saturating_add(self.issued_at_ms.measured_bytes_extra());
+            total = total.saturating_add(self.expires_at_ms.measured_bytes_extra());
+            total = total.saturating_add(self.policy.measured_bytes_extra());
+            total = total.saturating_add(self.operator_signature.measured_bytes_extra());
+            total = total.saturating_add(self.metadata.measured_bytes_extra());
+            total = total.saturating_add(self.verdict_id.measured_bytes_extra());
+            total = total.saturating_add(self.attestation_nonce.measured_bytes_extra());
+            total = total.saturating_add(self.refresh_at_ms.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for OfflineCounterState {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<OfflineCounterState>();
+            total = total.saturating_add(self.apple_key_counters.measured_bytes_extra());
+            total = total.saturating_add(self.android_series_counters.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for OfflineAllowanceRecord {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<OfflineAllowanceRecord>();
+            total = total.saturating_add(self.certificate.measured_bytes_extra());
+            total = total.saturating_add(self.current_commitment.measured_bytes_extra());
+            total = total.saturating_add(self.registered_at_ms.measured_bytes_extra());
+            total = total.saturating_add(self.remaining_amount.measured_bytes_extra());
+            total = total.saturating_add(self.counter_state.measured_bytes_extra());
+            total = total.saturating_add(self.verdict_id.measured_bytes_extra());
+            total = total.saturating_add(self.attestation_nonce.measured_bytes_extra());
+            total = total.saturating_add(self.refresh_at_ms.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for AppleAppAttestProof {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<AppleAppAttestProof>();
+            total = total.saturating_add(self.key_id.measured_bytes_extra());
+            total = total.saturating_add(self.counter.measured_bytes_extra());
+            total = total.saturating_add(self.assertion.measured_bytes_extra());
+            total = total.saturating_add(self.challenge_hash.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for AndroidMarkerKeyProof {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<AndroidMarkerKeyProof>();
+            total = total.saturating_add(self.series.measured_bytes_extra());
+            total = total.saturating_add(self.counter.measured_bytes_extra());
+            total = total.saturating_add(self.marker_public_key.measured_bytes_extra());
+            total = total.saturating_add(self.marker_signature.measured_bytes_extra());
+            total = total.saturating_add(self.attestation.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for AndroidProvisionedProof {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<AndroidProvisionedProof>();
+            total = total.saturating_add(self.manifest_schema.measured_bytes_extra());
+            total = total.saturating_add(self.manifest_version.measured_bytes_extra());
+            total = total.saturating_add(self.manifest_issued_at_ms.measured_bytes_extra());
+            total = total.saturating_add(self.challenge_hash.measured_bytes_extra());
+            total = total.saturating_add(self.counter.measured_bytes_extra());
+            total = total.saturating_add(self.device_manifest.measured_bytes_extra());
+            total = total.saturating_add(self.inspector_signature.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for OfflinePlatformProof {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<OfflinePlatformProof>();
+            match self {
+                OfflinePlatformProof::AppleAppAttest(payload) => {
+                    total = total.saturating_add(payload.measured_bytes_extra());
+                }
+                OfflinePlatformProof::AndroidMarkerKey(payload) => {
+                    total = total.saturating_add(payload.measured_bytes_extra());
+                }
+                OfflinePlatformProof::Provisioned(payload) => {
+                    total = total.saturating_add(payload.measured_bytes_extra());
+                }
+            }
+            total
+        }
+    }
+
+    impl MeasuredBytes for OfflineBalanceProof {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<OfflineBalanceProof>();
+            total = total.saturating_add(self.initial_commitment.measured_bytes_extra());
+            total = total.saturating_add(self.resulting_commitment.measured_bytes_extra());
+            total = total.saturating_add(self.claimed_delta.measured_bytes_extra());
+            total = total.saturating_add(self.zk_proof.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for OfflineSpendReceipt {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<OfflineSpendReceipt>();
+            total = total.saturating_add(self.tx_id.measured_bytes_extra());
+            total = total.saturating_add(self.from.measured_bytes_extra());
+            total = total.saturating_add(self.to.measured_bytes_extra());
+            total = total.saturating_add(self.asset.measured_bytes_extra());
+            total = total.saturating_add(self.amount.measured_bytes_extra());
+            total = total.saturating_add(self.issued_at_ms.measured_bytes_extra());
+            total = total.saturating_add(self.invoice_id.measured_bytes_extra());
+            total = total.saturating_add(self.platform_proof.measured_bytes_extra());
+            total = total.saturating_add(self.platform_snapshot.measured_bytes_extra());
+            total = total.saturating_add(self.sender_certificate.measured_bytes_extra());
+            total = total.saturating_add(self.sender_signature.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for AggregateProofEnvelope {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<AggregateProofEnvelope>();
+            total = total.saturating_add(self.version.measured_bytes_extra());
+            total = total.saturating_add(self.receipts_root.measured_bytes_extra());
+            total = total.saturating_add(self.proof_sum.measured_bytes_extra());
+            total = total.saturating_add(self.proof_counter.measured_bytes_extra());
+            total = total.saturating_add(self.proof_replay.measured_bytes_extra());
+            total = total.saturating_add(self.metadata.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for ProofAttachment {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<ProofAttachment>();
+            total = total.saturating_add(self.backend.measured_bytes_extra());
+            total = total.saturating_add(self.proof.measured_bytes_extra());
+            total = total.saturating_add(self.vk_ref.measured_bytes_extra());
+            total = total.saturating_add(self.vk_inline.measured_bytes_extra());
+            total = total.saturating_add(self.vk_commitment.measured_bytes_extra());
+            total = total.saturating_add(self.envelope_hash.measured_bytes_extra());
+            total = total.saturating_add(self.lane_privacy.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for ProofAttachmentList {
+        fn measured_bytes(&self) -> usize {
+            size_of::<ProofAttachmentList>().saturating_add(self.0.measured_bytes_extra())
+        }
+    }
+
+    impl MeasuredBytes for LanePrivacyMerkleWitness {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<LanePrivacyMerkleWitness>();
+            total = total.saturating_add(self.leaf.measured_bytes_extra());
+            total = total.saturating_add(self.proof.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for LanePrivacySnarkWitness {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<LanePrivacySnarkWitness>();
+            total = total.saturating_add(self.public_inputs.measured_bytes_extra());
+            total = total.saturating_add(self.proof.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for LanePrivacyWitness {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<LanePrivacyWitness>();
+            match self {
+                LanePrivacyWitness::Merkle(witness) => {
+                    total = total.saturating_add(witness.measured_bytes_extra());
+                }
+                LanePrivacyWitness::Snark(witness) => {
+                    total = total.saturating_add(witness.measured_bytes_extra());
+                }
+            }
+            total
+        }
+    }
+
+    impl MeasuredBytes for LanePrivacyProof {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<LanePrivacyProof>();
+            total = total.saturating_add(self.commitment_id.measured_bytes_extra());
+            total = total.saturating_add(self.witness.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for OfflinePlatformTokenSnapshot {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<OfflinePlatformTokenSnapshot>();
+            total = total.saturating_add(self.policy.measured_bytes_extra());
+            total = total.saturating_add(self.attestation_jws_b64.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for OfflineVerdictSnapshot {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<OfflineVerdictSnapshot>();
+            total = total.saturating_add(self.certificate_id.measured_bytes_extra());
+            total = total.saturating_add(self.verdict_id.measured_bytes_extra());
+            total = total.saturating_add(self.attestation_nonce.measured_bytes_extra());
+            total = total.saturating_add(self.refresh_at_ms.measured_bytes_extra());
+            total = total.saturating_add(self.certificate_expires_at_ms.measured_bytes_extra());
+            total = total.saturating_add(self.policy_expires_at_ms.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for OfflineTransferLifecycleEntry {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<OfflineTransferLifecycleEntry>();
+            total = total.saturating_add(self.status.measured_bytes_extra());
+            total = total.saturating_add(self.transitioned_at_ms.measured_bytes_extra());
+            total = total.saturating_add(self.verdict_snapshot.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for OfflineToOnlineTransfer {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<OfflineToOnlineTransfer>();
+            total = total.saturating_add(self.bundle_id.measured_bytes_extra());
+            total = total.saturating_add(self.receiver.measured_bytes_extra());
+            total = total.saturating_add(self.deposit_account.measured_bytes_extra());
+            total = total.saturating_add(self.receipts.measured_bytes_extra());
+            total = total.saturating_add(self.balance_proof.measured_bytes_extra());
+            total = total.saturating_add(self.aggregate_proof.measured_bytes_extra());
+            total = total.saturating_add(self.attachments.measured_bytes_extra());
+            total = total.saturating_add(self.platform_snapshot.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for OfflineTransferRecord {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<OfflineTransferRecord>();
+            total = total.saturating_add(self.transfer.measured_bytes_extra());
+            total = total.saturating_add(self.controller.measured_bytes_extra());
+            total = total.saturating_add(self.status.measured_bytes_extra());
+            total = total.saturating_add(self.recorded_at_ms.measured_bytes_extra());
+            total = total.saturating_add(self.recorded_at_height.measured_bytes_extra());
+            total = total.saturating_add(self.archived_at_height.measured_bytes_extra());
+            total = total.saturating_add(self.history.measured_bytes_extra());
+            total = total.saturating_add(self.pos_verdict_snapshots.measured_bytes_extra());
+            total = total.saturating_add(self.verdict_snapshot.measured_bytes_extra());
+            total = total.saturating_add(self.platform_snapshot.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for OfflineVerdictRevocation {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<OfflineVerdictRevocation>();
+            total = total.saturating_add(self.verdict_id.measured_bytes_extra());
+            total = total.saturating_add(self.issuer.measured_bytes_extra());
+            total = total.saturating_add(self.revoked_at_ms.measured_bytes_extra());
+            total = total.saturating_add(self.reason.measured_bytes_extra());
+            total = total.saturating_add(self.note.measured_bytes_extra());
+            total = total.saturating_add(self.metadata.measured_bytes_extra());
+            total
+        }
+    }
 }
 
 fn lane_snapshot_dir(root: &Path, entry: &LaneConfigEntry) -> PathBuf {
@@ -2117,11 +3764,48 @@ mod tests {
     }
 
     #[test]
-    fn hot_bytes_match_norito_payload_len() {
-        let value = vec![1_u8, 2, 3, 4, 5, 6, 7, 8];
-        let expected = norito::codec::Encode::encode(&value).len();
+    fn hot_bytes_account_for_vec_capacity() {
+        let mut value = Vec::with_capacity(12);
+        value.extend_from_slice(&[1_u8, 2, 3, 4, 5, 6, 7, 8]);
+        let expected =
+            std::mem::size_of::<Vec<u8>>() + value.capacity() * std::mem::size_of::<u8>();
         let measured = compute_hot_bytes(&value).expect("hot byte measurement");
         assert_eq!(measured, expected);
+    }
+
+    #[test]
+    fn measured_bytes_track_governance_approval_sizes() {
+        use std::{collections::BTreeSet, str::FromStr};
+
+        let mut approval = crate::state::GovernanceStageApproval {
+            epoch: 1,
+            approvers: BTreeSet::new(),
+            required: 2,
+            quorum_bps: 5000,
+        };
+        let empty_bytes = approval.measured_bytes();
+        let keypair = iroha_crypto::KeyPair::from_seed(
+            b"tiered-approval".to_vec(),
+            iroha_crypto::Algorithm::Ed25519,
+        );
+        let domain = iroha_data_model::domain::DomainId::from_str("wonderland").expect("domain");
+        approval
+            .approvers
+            .insert(iroha_data_model::account::AccountId::new(
+                domain,
+                keypair.public_key().clone(),
+            ));
+        let filled_bytes = approval.measured_bytes();
+        assert!(filled_bytes >= empty_bytes);
+
+        let mut approvals = crate::state::GovernanceStageApprovals::default();
+        let base_bytes = approvals.measured_bytes();
+        approvals.stages.insert(
+            iroha_data_model::governance::types::ParliamentBody::AgendaCouncil,
+            approval,
+        );
+        let updated_bytes = approvals.measured_bytes();
+        assert!(updated_bytes >= base_bytes);
     }
 
     fn dummy_qc(seed: u8) -> Qc {
@@ -2300,6 +3984,141 @@ mod tests {
     }
 
     #[test]
+    fn cold_snapshots_offload_to_da_root_and_rehydrate_on_read() {
+        let temp = tempdir().expect("tmpdir");
+        let cold_root = temp.path().join("cold");
+        let da_root = temp.path().join("da");
+        let mut backend = TieredStateBackend::new(
+            true,
+            1,
+            0,
+            0,
+            Some(cold_root.clone()),
+            Some(da_root.clone()),
+            0,
+            1,
+        );
+        let mut world = World::default();
+
+        let qc1 = dummy_qc(1);
+        let qc2 = dummy_qc(2);
+        world.commit_qcs.insert(qc1.subject_block_hash, qc1.clone());
+        world.commit_qcs.insert(qc2.subject_block_hash, qc2.clone());
+
+        backend
+            .record_world_snapshot(&world)
+            .expect("first snapshot");
+        let manifest1 = backend.last_manifest().expect("manifest recorded").clone();
+        assert!(
+            !manifest1.cold_entries.is_empty(),
+            "expected cold entries in first snapshot"
+        );
+        let first_index = manifest1.snapshot_index;
+
+        let mut updated = qc2.clone();
+        updated.view = 99;
+        world.commit_qcs.insert(updated.subject_block_hash, updated);
+
+        backend
+            .record_world_snapshot(&world)
+            .expect("second snapshot");
+        let second_index = backend
+            .last_manifest()
+            .expect("manifest recorded")
+            .snapshot_index;
+        assert_ne!(first_index, second_index);
+
+        let cold_dir = cold_root.join(format!("{first_index:020}"));
+        assert!(
+            !cold_dir.exists(),
+            "old snapshot should be offloaded from cold storage"
+        );
+        let da_dir = da_root.join(format!("{first_index:020}"));
+        assert!(
+            da_dir.exists(),
+            "offloaded snapshot should exist in DA root"
+        );
+
+        let cold_entry = &manifest1.cold_entries[0];
+        let spill_path = cold_entry
+            .spill_path
+            .as_ref()
+            .expect("cold entry has spill path");
+        let encoded = backend
+            .read_cold_payload(first_index, cold_entry)
+            .expect("read cold payload")
+            .expect("payload present");
+        let decoded: Qc = json::from_slice(&encoded).expect("cold payload decodes");
+        assert!(decoded == qc1 || decoded == qc2);
+
+        let rehydrated_path = cold_root
+            .join(format!("{first_index:020}"))
+            .join(spill_path);
+        assert!(
+            rehydrated_path.exists(),
+            "expected rehydrated cold payload in cold root"
+        );
+    }
+
+    #[test]
+    fn da_cold_payload_rehydrates_into_primary_root() {
+        let temp = tempdir().expect("tmpdir");
+        let cold_root = temp.path().join("cold");
+        let da_root = temp.path().join("da");
+        let mut backend = TieredStateBackend::new(
+            true,
+            1,
+            0,
+            0,
+            Some(cold_root.clone()),
+            Some(da_root.clone()),
+            0,
+            0,
+        );
+        let mut world = World::default();
+
+        let qc1 = dummy_qc(1);
+        let qc2 = dummy_qc(2);
+        let qc1_hash = qc1.subject_block_hash.clone();
+        let qc2_hash = qc2.subject_block_hash.clone();
+        world.commit_qcs.insert(qc1_hash.clone(), qc1);
+        world.commit_qcs.insert(qc2_hash.clone(), qc2);
+
+        backend
+            .record_world_snapshot(&world)
+            .expect("snapshot recorded");
+        let manifest = backend.last_manifest().expect("manifest recorded");
+        let cold_entry = &manifest.cold_entries[0];
+        let spill_path = cold_entry
+            .spill_path
+            .as_ref()
+            .expect("cold entry has spill path");
+
+        let snapshot_dir = cold_root.join(format!("{:020}", manifest.snapshot_index));
+        let cold_payload_path = snapshot_dir.join(spill_path);
+        assert!(cold_payload_path.exists(), "cold payload written");
+
+        let da_snapshot_dir = da_root.join(format!("{:020}", manifest.snapshot_index));
+        let da_payload_path = da_snapshot_dir.join(spill_path);
+        if let Some(parent) = da_payload_path.parent() {
+            fs::create_dir_all(parent).expect("da payload parent created");
+        }
+        fs::copy(&cold_payload_path, &da_payload_path).expect("cold payload copied to DA root");
+        fs::remove_file(&cold_payload_path).expect("cold payload evicted");
+
+        let encoded = backend
+            .read_cold_payload(manifest.snapshot_index, cold_entry)
+            .expect("read cold payload")
+            .expect("payload present");
+        let decoded: Qc = json::from_slice(&encoded).expect("cold payload decodes");
+        assert!(decoded.subject_block_hash == qc1_hash || decoded.subject_block_hash == qc2_hash);
+        assert!(
+            cold_payload_path.exists(),
+            "cold payload rehydrated into primary root"
+        );
+    }
+
+    #[test]
     fn hot_byte_budget_demotes_entries_to_cold() {
         let temp = tempdir().expect("tmpdir");
         let mut backend =
@@ -2315,7 +4134,7 @@ mod tests {
             .record_world_snapshot(&world)
             .expect("snapshot recorded");
         let manifest = backend.last_manifest().expect("manifest recorded");
-        assert!(manifest.cold_entries.len() > 0);
+        assert!(!manifest.cold_entries.is_empty());
         assert!(
             manifest.hot_entries.len() < manifest.total_entries,
             "byte budget should force some entries into cold tier"
@@ -2504,7 +4323,7 @@ mod tests {
             .expect("manifest recorded")
             .snapshot_index;
 
-        let mut updated = qc2;
+        let mut updated = qc2.clone();
         updated.view = 99;
         world.commit_qcs.insert(updated.subject_block_hash, updated);
 
@@ -2520,12 +4339,40 @@ mod tests {
             .unwrap()
             .filter_map(|entry| {
                 let entry = entry.ok()?;
-                TieredStateBackend::parse_snapshot_dir_name(&entry.file_name()).map(|idx| idx)
+                TieredStateBackend::parse_snapshot_dir_name(&entry.file_name())
             })
             .collect::<Vec<_>>();
         snapshots.sort_unstable();
         assert_eq!(snapshots, vec![second_index]);
         assert_ne!(first_index, second_index);
+    }
+
+    #[test]
+    fn prune_cold_snapshots_to_bytes_prunes_oldest_first() {
+        let temp = tempdir().expect("tmpdir");
+        let cold_root = temp.path().join("cold");
+        fs::create_dir_all(&cold_root).expect("create cold root");
+
+        for idx in 1..=3u64 {
+            let dir = cold_root.join(format!("{idx:020}"));
+            fs::create_dir_all(&dir).expect("create snapshot dir");
+            fs::write(dir.join("payload.norito"), vec![0u8; 50]).expect("write snapshot payload");
+        }
+
+        let backend = TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 0, 0);
+        backend
+            .prune_cold_snapshots_to_bytes(80)
+            .expect("prune snapshots to budget");
+
+        let mut snapshots = fs::read_dir(&cold_root)
+            .unwrap()
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                TieredStateBackend::parse_snapshot_dir_name(&entry.file_name())
+            })
+            .collect::<Vec<_>>();
+        snapshots.sort_unstable();
+        assert_eq!(snapshots, vec![3]);
     }
 
     #[test]
@@ -2544,6 +4391,23 @@ mod tests {
         let manifest = backend.last_manifest().expect("manifest recorded");
         assert_eq!(manifest.snapshot_index, 8);
         let new_dir = root.join(format!("{:020}", manifest.snapshot_index));
+        assert!(new_dir.exists(), "expected seeded snapshot directory");
+    }
+
+    #[test]
+    fn snapshot_counter_seeds_from_da_root_dirs() {
+        let temp = tempdir().expect("tmpdir");
+        let da_root = temp.path().join("da");
+        let snapshot_dir = da_root.join(format!("{:020}", 5_u64));
+        fs::create_dir_all(&snapshot_dir).expect("seed snapshot");
+
+        let mut backend = TieredStateBackend::new(true, 0, 0, 0, None, Some(da_root.clone()), 0, 0);
+        let world = World::default();
+
+        backend.record_world_snapshot(&world).expect("snapshot");
+        let manifest = backend.last_manifest().expect("manifest recorded");
+        assert_eq!(manifest.snapshot_index, 6);
+        let new_dir = da_root.join(format!("{:020}", manifest.snapshot_index));
         assert!(new_dir.exists(), "expected seeded snapshot directory");
     }
 

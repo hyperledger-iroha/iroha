@@ -170,9 +170,6 @@ class NoritoDecoder:
     def compact_len_active(self) -> bool:
         return bool(self.flags & header.COMPACT_LEN)
 
-    def compact_seq_len_active(self) -> bool:
-        return bool(self.flags & header.COMPACT_SEQ_LEN)
-
     def remaining(self) -> int:
         return len(self.data) - self.offset
 
@@ -392,8 +389,7 @@ class SequenceAdapter(Generic[T], TypeAdapter[List[T]]):
     def encode(self, encoder: NoritoEncoder, value: Iterable[T]) -> None:
         elements = list(value)
         length = len(elements)
-        compact_len = bool(encoder.flags & header.COMPACT_SEQ_LEN)
-        encoder.write_length(length, compact=compact_len)
+        encoder.write_length(length, compact=False)
 
         if encoder.flags & header.PACKED_SEQ:
             self._encode_packed(encoder, elements)
@@ -408,23 +404,18 @@ class SequenceAdapter(Generic[T], TypeAdapter[List[T]]):
             self.element.encode(child, element)
             encoded_parts.append(child.finish())
 
-        varint_offsets = bool(encoder.flags & header.VARINT_OFFSETS)
-        if varint_offsets:
-            for chunk in encoded_parts:
-                encoder.extend(encode_varint(len(chunk)))
-        else:
-            offsets = [0]
-            total = 0
-            for chunk in encoded_parts:
-                total += len(chunk)
-                offsets.append(total)
-            for offset in offsets:
-                encoder.extend(offset.to_bytes(8, "little"))
+        offsets = [0]
+        total = 0
+        for chunk in encoded_parts:
+            total += len(chunk)
+            offsets.append(total)
+        for offset in offsets:
+            encoder.extend(offset.to_bytes(8, "little"))
         for chunk in encoded_parts:
             encoder.extend(chunk)
 
     def decode(self, decoder: NoritoDecoder) -> List[T]:
-        length = decoder.read_length(compact=decoder.compact_seq_len_active())
+        length = decoder.read_length(compact=False)
 
         if decoder.flags & header.PACKED_SEQ:
             return self._decode_packed(decoder, length)
@@ -432,7 +423,6 @@ class SequenceAdapter(Generic[T], TypeAdapter[List[T]]):
         return [self.element.decode(decoder) for _ in range(length)]
 
     def _decode_packed(self, decoder: NoritoDecoder, length: int) -> List[T]:
-        varint_offsets = bool(decoder.flags & header.VARINT_OFFSETS)
         if length == 0:
             # Compat Rust encoders appended a single zero offset tail even when the
             # sequence contained no elements. Accept and skip those bytes so older
@@ -445,14 +435,8 @@ class SequenceAdapter(Generic[T], TypeAdapter[List[T]]):
                 return []
             raise DecodeError("packed sequence declared zero length but carried trailing data")
 
-        element_sizes: List[int] = []
-        if varint_offsets:
-            for _ in range(length):
-                size, decoder.offset = decode_varint(decoder.data, decoder.offset)
-                element_sizes.append(size)
-        else:
-            offsets = [decoder.read_uint(64) for _ in range(length + 1)]
-            element_sizes = [b - a for a, b in zip(offsets, offsets[1:])]
+        offsets = [decoder.read_uint(64) for _ in range(length + 1)]
+        element_sizes = [b - a for a, b in zip(offsets, offsets[1:])]
 
         outputs: List[T] = []
         for size in element_sizes:
@@ -504,8 +488,9 @@ class TupleAdapter(TypeAdapter[Tuple[Any, ...]]):
         return tuple(adapter.decode(decoder) for adapter in self.elements)
 
     def fixed_size(self) -> Optional[int]:
-        if all((size := adapter.fixed_size()) is not None for adapter in self.elements):
-            return sum(adapter.fixed_size() or 0 for adapter in self.elements)
+        sizes = [adapter.fixed_size() for adapter in self.elements]
+        if all(size is not None for size in sizes):
+            return sum(size or 0 for size in sizes)
         return None
 
     def is_self_delimiting(self) -> bool:

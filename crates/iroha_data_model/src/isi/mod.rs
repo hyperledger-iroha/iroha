@@ -534,6 +534,24 @@ impl From<crate::isi::transparent::RemoveAssetKeyValue> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+
+impl From<crate::isi::transparent::AddSignatory> for InstructionBox {
+    fn from(i: crate::isi::transparent::AddSignatory) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::transparent::RemoveSignatory> for InstructionBox {
+    fn from(i: crate::isi::transparent::RemoveSignatory) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::transparent::SetAccountQuorum> for InstructionBox {
+    fn from(i: crate::isi::transparent::SetAccountQuorum) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 #[cfg(feature = "governance")]
 impl From<crate::isi::governance::EnactReferendum> for InstructionBox {
     fn from(i: crate::isi::governance::EnactReferendum) -> Self {

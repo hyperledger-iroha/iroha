@@ -15,8 +15,16 @@ async fn sumeragi_rbc_endpoint_shape() {
         metrics.sumeragi_rbc_sessions_active.set(2);
         metrics.sumeragi_rbc_sessions_pruned_total.inc();
         metrics.sumeragi_rbc_ready_broadcasts_total.inc();
+        metrics
+            .sumeragi_rbc_rebroadcast_skipped_total
+            .with_label_values(&["ready"])
+            .inc();
         metrics.sumeragi_rbc_deliver_broadcasts_total.inc();
         metrics.sumeragi_rbc_payload_bytes_delivered_total.set(123);
+        metrics
+            .sumeragi_rbc_rebroadcast_skipped_total
+            .with_label_values(&["payload"])
+            .inc();
     }
 
     // Build a tiny router with the RBC endpoint handler
@@ -57,6 +65,8 @@ async fn sumeragi_rbc_endpoint_shape() {
     assert!(v.get("sessions_active").is_some());
     assert!(v.get("sessions_pruned_total").is_some());
     assert!(v.get("ready_broadcasts_total").is_some());
+    assert!(v.get("ready_rebroadcasts_skipped_total").is_some());
     assert!(v.get("deliver_broadcasts_total").is_some());
     assert!(v.get("payload_bytes_delivered_total").is_some());
+    assert!(v.get("payload_rebroadcasts_skipped_total").is_some());
 }

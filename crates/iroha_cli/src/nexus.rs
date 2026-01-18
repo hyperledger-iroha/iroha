@@ -105,7 +105,7 @@ fn lane_report<C: RunContext>(context: &mut C, args: &LaneReportArgs) -> Result<
         .get("lane_governance_sealed_total")
         .and_then(Value::as_u64)
         .and_then(|value| usize::try_from(value).ok())
-        .map_or_else(|| count_sealed(&lanes), |count| count);
+        .unwrap_or_else(|| count_sealed(&lanes));
     let sealed_aliases = status
         .get("lane_governance_sealed_aliases")
         .and_then(Value::as_array)

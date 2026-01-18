@@ -188,7 +188,8 @@ Operator access (Torii)
   `iroha_data_model` reflects the additional fields; older decoders should be
   updated to avoid silently dropping the new metadata.
 
-- After validating a proposal and assembling its `ExecVote`, Sumeragi emits a
+- After validating a proposal and capturing the execution witness (the source of
+  `parent_state_root`/`post_state_root` bound into commit QCs), Sumeragi emits a
   `PipelineEventBox::Witness` containing block metadata (`block_hash`, `height`,
   `view`, `epoch`) and the execution witness (`reads`/`writes`). Events surface
   immediately before the witness is forwarded to deterministic collectors (with
@@ -248,9 +249,9 @@ Iroha can group signatures by scheme during block validation and verify them in 
   - This forwards to `iroha_crypto/bls` and compiles the BLS path in `block.rs`.
   - Micro‑batching groups signatures deterministically: same‑message groups run fast‑aggregate verification, distinct messages use a multi‑message aggregate with deterministic bisection on failure, and per‑lane telemetry records both the latest block counters (`pipeline_sig_bls_agg_*`) and cumulative results (`pipeline_sig_bls_agg_{same,multi}_total`).
   - PoP requirement: batching expects a proof of possession in transaction metadata (`bls_pop` for BLS-normal, `bls_pop_small` for BLS-small). Missing or invalid PoPs fall back to individual verification while still enforcing the signature.
-  - Validators register with BLS-Normal keys only; `trusted_peers_bls` no longer exists and peer admission filters drop non-BLS entries unless they carry a valid PoP in `trusted_peers_pop` or the genesis topology entries (`pop_hex` bundled with each peer).
+- Validators register with BLS-Normal keys only; `trusted_peers_bls` no longer exists and peer admission filters drop non-BLS entries unless they carry a valid PoP in `trusted_peers_pop` or the genesis topology entries (`pop_hex` bundled with each peer). `trusted_peers_pop` must cover the full validator roster; config parsing rejects missing or invalid PoP entries.
   - Validator peers MUST set `signature_batch_max_bls > 0`; peer registration is rejected otherwise to ensure validators can batch BLS signatures (votes/commit certificates) by configuration.
-- Key scope reminder: `allowed_signing`/`allowed_curve_ids` apply to transaction admission (account/controller signatures). Consensus votes always use the validator BLS key + PoP from `trusted_peers` and do not depend on `allowed_signing`. Transport identity (P2P/Torii) continues to use `common.public_key`/`private_key`, typically Ed25519 or secp256k1.
+- Key scope reminder: `allowed_signing`/`allowed_curve_ids` gate transaction admission and non-consensus account controllers. Consensus votes always use the validator BLS key + PoP from `trusted_peers` and do not depend on `allowed_signing`. The node’s `public_key`/`private_key` must be BLS‑Normal for validator nodes.
 
 - Scheme specifics:
   - Ed25519 and ML‑DSA: use deterministic batch verification (not cryptographic aggregation). Security and outputs remain identical to per‑signature checks.

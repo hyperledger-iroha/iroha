@@ -74,8 +74,7 @@ fn resolve_vote_mode(
 
 fn hint_present(map: &json::Map, key: &str) -> bool {
     map.get(key)
-        .map(|value| !matches!(value, json::Value::Null))
-        .unwrap_or(false)
+        .is_some_and(|value| !matches!(value, json::Value::Null))
 }
 
 fn ensure_lock_hints_complete(map: &json::Map) -> Result<()> {

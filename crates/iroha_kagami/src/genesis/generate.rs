@@ -429,7 +429,7 @@ pub enum ConsensusPolicy {
     PublicDataspace,
 }
 
-pub(crate) fn validate_consensus_mode_for_line(
+pub fn validate_consensus_mode_for_line(
     build_line: BuildLine,
     consensus_mode: SumeragiConsensusMode,
     next_consensus_mode: Option<SumeragiConsensusMode>,
@@ -451,6 +451,7 @@ pub(crate) fn validate_consensus_mode_for_line(
 }
 
 impl<T: Write> RunArgs<T> for Args {
+    #[allow(clippy::too_many_lines)]
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         let Self {
             profile,

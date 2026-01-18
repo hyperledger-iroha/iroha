@@ -266,6 +266,14 @@ public final class HttpClientTransport implements IrohaClient {
   }
 
   /**
+   * Creates a {@link SubscriptionToriiClient} that reuses this transport's HTTP executor, base
+   * URI, headers, and observers.
+   */
+  public SubscriptionToriiClient subscriptionToriiClient() {
+    return config.toSubscriptionToriiClient(executor);
+  }
+
+  /**
    * Creates an {@link OfflineWallet} that shares this transport's HTTP executor and attaches a
    * file-backed audit logger.
    *

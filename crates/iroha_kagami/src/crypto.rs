@@ -46,7 +46,6 @@ impl ValueEnum for AlgorithmArg {
         const VARIANTS: &[AlgorithmArg] = &[
             AlgorithmArg(Algorithm::Ed25519),
             AlgorithmArg(Algorithm::Secp256k1),
-            #[cfg(feature = "ml-dsa")]
             AlgorithmArg(Algorithm::MlDsa),
             #[cfg(feature = "gost")]
             AlgorithmArg(Algorithm::Gost3410_2012_256ParamSetA),
@@ -223,6 +222,9 @@ mod tests {
         }
         if "bls_small".parse::<Algorithm>().is_ok() {
             expected.insert("bls_small");
+        }
+        if "ml-dsa".parse::<Algorithm>().is_ok() {
+            expected.insert("ml-dsa");
         }
         for gost in &[
             "gost3410-2012-256-paramset-a",

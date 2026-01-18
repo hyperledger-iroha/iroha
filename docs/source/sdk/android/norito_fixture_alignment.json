@@ -1,17 +1,17 @@
 {
   "canonical": {
     "path": "fixtures/norito_rpc/transaction_fixtures.manifest.json",
-    "fingerprint": "6c4a7cf3cf347de56b95c9cbdff0aeab",
+    "fingerprint": "43a83550a43f10c33516ddb75477751d",
     "fixtures": 27,
-    "age_hours": 305.38
+    "age_hours": 0.0
   },
   "targets": [
     {
       "label": "android",
       "path": "java/iroha_android/src/test/resources/transaction_fixtures.manifest.json",
-      "fingerprint": "f0daee8936bea41d6da7863d880bc977",
+      "fingerprint": "2cf2a5f41e9ed99a6dda7ab9475f8551",
       "fixtures": 27,
-      "age_hours": 0.01,
+      "age_hours": 0.0,
       "missing": [],
       "extra": [],
       "mismatched": [],
@@ -20,9 +20,9 @@
     {
       "label": "python",
       "path": "python/iroha_python/tests/fixtures/transaction_fixtures.manifest.json",
-      "fingerprint": "6c4a7cf3cf347de56b95c9cbdff0aeab",
+      "fingerprint": "ef39d896eda1eb0b53ebf8a5d4754777",
       "fixtures": 27,
-      "age_hours": 27.65,
+      "age_hours": 44.43,
       "missing": [],
       "extra": [],
       "mismatched": [],
@@ -31,14 +31,14 @@
     {
       "label": "swift",
       "path": "IrohaSwift/Fixtures/transaction_fixtures.manifest.json",
-      "fingerprint": "6c4a7cf3cf347de56b95c9cbdff0aeab",
+      "fingerprint": "ef39d896eda1eb0b53ebf8a5d4754777",
       "fixtures": 27,
-      "age_hours": 27.65,
+      "age_hours": 44.43,
       "missing": [],
       "extra": [],
       "mismatched": [],
       "status": "ok"
     }
   ],
-  "generated_at": "2025-11-21T19:39:24.790775+00:00"
+  "generated_at": "2026-01-17T07:19:55.472092+00:00"
 }

@@ -1438,7 +1438,7 @@ pub enum BlockValidationError {
 /// Error during signature verification
 #[derive(Debug, displaydoc::Display, Clone, Copy, PartialEq, Eq, Error)]
 pub enum SignatureVerificationError {
-    /// The block doesn't have enough valid signatures to be committed ({votes_count} out of {min_votes_for_commit})
+    /// The block doesn't have enough valid signatures to be committed (`{votes_count}` out of `{min_votes_for_commit}`)
     NotEnoughSignatures {
         /// Current number of signatures
         votes_count: usize,
@@ -1675,8 +1675,9 @@ mod pending {
             transactions: Vec<AcceptedTransaction<'static>>,
             time_source: TimeSource,
         ) -> Self {
-            // Empty blocks can be built, but validation rejects them unless they carry
-            // a heartbeat transaction or committed fragments.
+            // Empty blocks can be built for tests, but validation rejects them unless they carry
+            // entrypoints (external transactions or time triggers) or deterministic artifacts
+            // such as DA bundles; consensus should not emit them.
             let mut transactions: Vec<_> = transactions
                 .into_iter()
                 .enumerate()
@@ -1727,7 +1728,7 @@ mod pending {
                 .map(AsRef::as_ref)
                 .map(SignedTransaction::creation_time)
                 .max()
-                // Empty block is allowed
+                // No transactions present; validation still rejects empty payloads.
                 .unwrap_or(Duration::ZERO);
 
             let now = self.0.time_source.get_unix_time();
@@ -3057,6 +3058,22 @@ pub(crate) mod valid {
             Self::enforce_consensus_key_lifecycle(block, topology, state)
         }
 
+        /// Validate block signatures against the topology without consulting state.
+        ///
+        /// Use this before calling [`Self::enforce_consensus_key_lifecycle`] to keep state access
+        /// scoped to consensus key checks only.
+        pub(crate) fn validate_signatures_subset_without_state(
+            block: &SignedBlock,
+            topology: &Topology,
+        ) -> Result<(), SignatureVerificationError> {
+            if block.header().is_genesis() {
+                return Ok(());
+            }
+            Self::verify_unique_signers(block)?;
+            Self::verify_signatures_against_topology(block, topology)?;
+            Ok(())
+        }
+
         pub(crate) fn enforce_consensus_key_lifecycle(
             block: &SignedBlock,
             topology: &Topology,
@@ -3145,6 +3162,7 @@ pub(crate) mod valid {
             }
             Ok(())
         }
+
         /// Validate the given block, apply resulting state changes,
         /// and record any transaction errors back into the block.
         pub fn validate(
@@ -3173,8 +3191,7 @@ pub(crate) mod valid {
             }
             state_block.capture_exec_witness();
             drop(exec_witness_guard);
-            let has_external_txs = block.external_transactions().next().is_some();
-            if !state_block.has_committed_fragments() && !has_external_txs {
+            if block.is_empty() {
                 let error = BlockValidationError::EmptyBlock;
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
@@ -3225,8 +3242,7 @@ pub(crate) mod valid {
             }
             state_block.capture_exec_witness();
             drop(exec_witness_guard);
-            let has_external_txs = block.external_transactions().next().is_some();
-            if !state_block.has_committed_fragments() && !has_external_txs {
+            if block.is_empty() {
                 let error = BlockValidationError::EmptyBlock;
                 let ev = PipelineEventBox::from(BlockEvent {
                     header: block.header(),
@@ -3338,8 +3354,7 @@ pub(crate) mod valid {
             }
             state_block.capture_exec_witness();
             drop(exec_witness_guard);
-            let has_external_txs = block.external_transactions().next().is_some();
-            if !state_block.has_committed_fragments() && !has_external_txs {
+            if block.is_empty() {
                 let error = BlockValidationError::EmptyBlock;
                 drop(state_block);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
@@ -3447,8 +3462,7 @@ pub(crate) mod valid {
             }
             state_block.capture_exec_witness();
             drop(exec_witness_guard);
-            let has_external_txs = block.external_transactions().next().is_some();
-            if !state_block.has_committed_fragments() && !has_external_txs {
+            if block.is_empty() {
                 let error = BlockValidationError::EmptyBlock;
                 let ev = PipelineEventBox::from(BlockEvent {
                     header: block.header(),
@@ -4278,11 +4292,8 @@ pub(crate) mod valid {
                 );
             }
 
-            // PQC (e.g., ML‑DSA Dilithium) deterministic grouping (feature-gated).
-            // Activated when `iroha_core/ml-dsa` is enabled, which pulls `iroha_crypto/ml-dsa`.
-            #[cfg(feature = "ml-dsa")]
+            // PQC (e.g., ML‑DSA Dilithium) deterministic grouping.
             let mut pqc_preverified = false;
-            #[cfg(feature = "ml-dsa")]
             {
                 #[derive(Clone)]
                 struct PqcItem {
@@ -4463,16 +4474,7 @@ pub(crate) mod valid {
                                         false
                                     }
                                 })
-                                || ({
-                                    #[cfg(feature = "ml-dsa")]
-                                    {
-                                        algo == iroha_crypto::Algorithm::MlDsa && pqc_preverified
-                                    }
-                                    #[cfg(not(feature = "ml-dsa"))]
-                                    {
-                                        false
-                                    }
-                                })
+                                || (algo == iroha_crypto::Algorithm::MlDsa && pqc_preverified)
                         }
                         AccountController::Multisig(_) => false,
                     };
@@ -6744,8 +6746,26 @@ pub(crate) mod valid {
 
             let (time_trgs, mut time_trg_hashes, mut time_trg_results) =
                 state_block.execute_time_triggers(&block.header());
+            let mut fastpq_entry_dataspaces = std::collections::BTreeMap::new();
+            for (idx, entry_hash) in call_hashes.iter().enumerate() {
+                fastpq_entry_dataspaces.insert(
+                    iroha_crypto::Hash::from(*entry_hash),
+                    routing_decisions[idx].dataspace_id,
+                );
+            }
+            for entry_hash in &time_trg_hashes {
+                fastpq_entry_dataspaces
+                    .insert(iroha_crypto::Hash::from(*entry_hash), DataSpaceId::GLOBAL);
+            }
             hashes.append(&mut time_trg_hashes);
             ordered_results.append(&mut time_trg_results);
+
+            let mut tx_set_hashes = hashes.clone();
+            tx_set_hashes.sort_unstable();
+            let tx_set_hash =
+                crate::fastpq::tx_set_hash_from_ordered_hashes(tx_set_hashes.iter().copied());
+            state_block.set_fastpq_tx_set_hash(tx_set_hash);
+            state_block.set_fastpq_entry_dataspaces(fastpq_entry_dataspaces);
 
             let fastpq_transcripts = state_block.drain_transfer_transcripts();
             let axt_envelopes = state_block.drain_axt_envelopes();
@@ -8496,6 +8516,117 @@ pub(crate) mod valid {
         }
 
         #[test]
+        fn da_only_block_is_not_rejected_as_empty() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
+
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "validator",
+                leader.public_key().clone(),
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let mut params = Parameters::default();
+            params.sumeragi.da_enabled = true;
+            world.parameters = Cell::new(params);
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+
+            let _prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
+
+            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+            let record = DaCommitmentRecord::new(
+                LaneId::new(0),
+                1,
+                1,
+                BlobDigest::new([0xAA; 32]),
+                ManifestDigest::new([0xBB; 32]),
+                DaProofScheme::MerkleSha256,
+                Hash::prehashed([0xCC; 32]),
+                Some(KzgCommitment::new([0xDD; 48])),
+                None,
+                RetentionClass::default(),
+                StorageTicketId::new([0xEE; 32]),
+                Signature::from_bytes(&[0x11; 64]),
+            );
+            let bundle = DaCommitmentBundle::new(vec![record]);
+            let new_block = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
+                .chain(0, state.view().latest_block().as_deref())
+                .with_da_commitments(Some(bundle))
+                .sign(leader.private_key())
+                .unpack(|_| {});
+            let signed_block: SignedBlock = new_block.into();
+
+            let (_validation_handle, validation_time_source) =
+                TimeSource::new_mock(signed_block.header().creation_time());
+
+            let mut state_block = state.block(signed_block.header());
+            let validate_result = ValidBlock::validate(
+                signed_block.clone(),
+                &topology,
+                &state.chain_id.clone(),
+                &ALICE_ID,
+                &validation_time_source,
+                &mut state_block,
+            )
+            .unpack(|_| {});
+            assert!(validate_result.is_ok(), "DA-only block should be accepted");
+
+            let mut state_block = state.block(signed_block.header());
+            let events = std::cell::RefCell::new(Vec::new());
+            let validate_result = ValidBlock::validate_with_events(
+                signed_block.clone(),
+                &topology,
+                &state.chain_id.clone(),
+                &ALICE_ID,
+                &validation_time_source,
+                &mut state_block,
+                |event| {
+                    events.borrow_mut().push(event);
+                },
+            )
+            .unpack(|_| {});
+            assert!(validate_result.is_ok(), "DA-only block should be accepted");
+            assert!(events.borrow().is_empty(), "no rejection events expected");
+
+            let mut voting_block: Option<super::super::VotingBlock> = None;
+            let result = ValidBlock::validate_keep_voting_block(
+                signed_block.clone(),
+                &topology,
+                &state.chain_id.clone(),
+                &ALICE_ID,
+                &validation_time_source,
+                &state,
+                &mut voting_block,
+                false,
+            )
+            .unpack(|_| {});
+            assert!(result.is_ok(), "DA-only block should be accepted");
+
+            let mut voting_block: Option<super::super::VotingBlock> = None;
+            let mut events = Vec::new();
+            let result = ValidBlock::validate_keep_voting_block_with_events(
+                signed_block,
+                &topology,
+                &state.chain_id.clone(),
+                &ALICE_ID,
+                &validation_time_source,
+                &state,
+                &mut voting_block,
+                false,
+                |event| events.push(event),
+            )
+            .unpack(|_| {});
+            assert!(result.is_ok(), "DA-only block should be accepted");
+            assert!(events.is_empty(), "no rejection events expected");
+        }
+
+        #[test]
         fn heartbeat_block_is_accepted() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
@@ -8761,10 +8892,14 @@ pub(crate) mod valid {
     #[test]
     fn rejected_block_emits_rejection_event() {
         use iroha_data_model::peer::PeerId;
-        use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
+        use iroha_data_model::{isi::Log, transaction::TransactionBuilder};
+        use iroha_logger::Level;
+        use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in};
+        use std::{borrow::Cow, time::Duration};
 
         use crate::{
             kura::Kura, query::store::LiveQueryStore, sumeragi::network_topology::Topology,
+            tx::AcceptedTransaction,
         };
 
         // Build a fresh state (height = 0)
@@ -8779,9 +8914,17 @@ pub(crate) mod valid {
         let peer1 = PeerId::new(kp1.public_key().clone());
         let peer2 = PeerId::new(kp2.public_key().clone());
         let topology = Topology::new(vec![peer1, peer2]);
+        let chain_id: ChainId = "chain".parse().unwrap();
 
         // Create a signed block with only leader signature
-        let unverified_block = BlockBuilder::new(Vec::new())
+        let (account_id, keypair) = gen_account_in("dummy");
+        let mut builder = TransactionBuilder::new(chain_id.clone(), account_id);
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx = builder
+            .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
+            .sign(keypair.private_key());
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+        let unverified_block = BlockBuilder::new(vec![accepted])
             .chain(
                 topology.view_change_index(),
                 state.view().latest_block().as_deref(),
@@ -8790,7 +8933,6 @@ pub(crate) mod valid {
             .unpack(|_| {});
 
         // Attempt commit_keep_voting_block: should reject due to insufficient signatures
-        let chain_id: ChainId = "chain".parse().unwrap();
         let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
         let time_source = iroha_primitives::time::TimeSource::new_system();
         let mut voting_block = None;
@@ -10950,6 +11092,7 @@ mod scheduler_variant_tests {
 
 #[cfg(test)]
 mod tests {
+    use core::time::Duration;
     use std::borrow::Cow;
 
     use iroha_data_model::{errors::AmxStage, prelude::*};
@@ -10966,7 +11109,21 @@ mod tests {
         query::store::LiveQueryStore,
         state::{State, World},
         sumeragi::network_topology::test_topology,
+        tx::AcceptedTransaction,
     };
+
+    fn dummy_accepted_transaction() -> AcceptedTransaction<'static> {
+        let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
+            .parse()
+            .expect("valid chain id");
+        let (account_id, keypair) = gen_account_in("dummy");
+        let mut builder = TransactionBuilder::new(chain_id, account_id);
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx = builder
+            .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
+            .sign(keypair.private_key());
+        AcceptedTransaction::new_unchecked(Cow::Owned(tx))
+    }
 
     #[test]
     #[cfg(feature = "bls")]
@@ -11765,7 +11922,7 @@ mod tests {
         let topology = Topology::new(peers);
 
         // Build SignedBlock signed by all
-        let unverified_block = BlockBuilder::new(Vec::new())
+        let unverified_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .sign(kp0.private_key())
             .unpack(|_| {});

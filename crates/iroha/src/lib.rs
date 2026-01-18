@@ -11,6 +11,7 @@ pub mod offline;
 pub mod query;
 pub mod secrecy;
 pub mod sns;
+pub mod subscriptions;
 
 #[cfg(feature = "sm")]
 pub mod sm;

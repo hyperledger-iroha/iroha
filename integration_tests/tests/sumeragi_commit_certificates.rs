@@ -327,7 +327,7 @@ async fn wait_for_commit_certificate_quorum(
                     }
                     let signer_count = commit_certificate_signer_count(cert);
                     if signer_count < required {
-                        missing.push(format!("{torii} signatures {} < {required}", signer_count));
+                        missing.push(format!("{torii} signatures {signer_count} < {required}"));
                     }
                 }
                 Err(err) => {

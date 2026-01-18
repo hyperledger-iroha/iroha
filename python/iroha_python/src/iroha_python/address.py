@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
+import binascii
+import hashlib
 from dataclasses import dataclass
 from enum import Enum, IntEnum
 from typing import Iterable, List, Mapping, Optional, Sequence, Tuple
-
-import binascii
-import hashlib
 
 DEFAULT_DOMAIN_NAME = "default"
 
@@ -411,8 +410,8 @@ class AccountAddress:
         try:
             parsed = cls.from_ih58(token, expected_prefix=expected_prefix)
             return parsed, AccountAddressFormat.IH58
-        except AccountAddressError:
-            raise AccountAddressError("unsupported address format")
+        except AccountAddressError as err:
+            raise AccountAddressError("unsupported address format") from err
 
     def canonical_bytes(self) -> bytes:
         out = bytearray()
@@ -445,7 +444,7 @@ class AccountAddress:
 
 
 def compute_local_digest(label: str) -> bytes:
-    mac = hashlib.blake2s(data=label.encode("utf-8"), key=LOCAL_DOMAIN_KEY, digest_size=32)
+    mac = hashlib.blake2s(label.encode("utf-8"), key=LOCAL_DOMAIN_KEY, digest_size=32)
     return mac.digest()[:12]
 
 

@@ -15,7 +15,9 @@ public final class NoritoHeader {
   public static final int PACKED_SEQ = 0x01;
   public static final int COMPACT_LEN = 0x02;
   public static final int PACKED_STRUCT = 0x04;
+  // Reserved in v1; packed sequence offsets are fixed-width u64.
   public static final int VARINT_OFFSETS = 0x08;
+  // Reserved in v1; sequence length headers are fixed-width u64.
   public static final int COMPACT_SEQ_LEN = 0x10;
   public static final int FIELD_BITSET = 0x20;
 

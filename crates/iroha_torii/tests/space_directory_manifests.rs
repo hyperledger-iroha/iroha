@@ -592,7 +592,7 @@ async fn manifest_publish_endpoint_enqueues_transaction() {
         .await
         .expect("publish response body");
     assert_eq!(resp.status(), StatusCode::ACCEPTED);
-    assert_eq!(queue.tx_len(), 1, "publish transaction queued");
+    assert_eq!(queue.queued_len(), 1, "publish transaction queued");
 }
 
 #[tokio::test]
@@ -655,5 +655,5 @@ async fn manifest_revoke_endpoint_enqueues_transaction() {
         .await
         .expect("revoke response body");
     assert_eq!(resp.status(), StatusCode::ACCEPTED);
-    assert_eq!(queue.tx_len(), 1, "revocation transaction queued");
+    assert_eq!(queue.queued_len(), 1, "revocation transaction queued");
 }

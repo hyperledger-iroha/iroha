@@ -28,7 +28,6 @@ test-fixtures = []
 gost = ["iroha_crypto/gost"]
 bls = ["iroha_crypto/bls"]
 sm = ["iroha_crypto/sm"]
-ml-dsa = ["iroha_crypto/ml-dsa"]
 # Enable API for HTTP requests. Should be activated for HTTP clients
 http = []
 # Replace structures and methods with FFI equivalents to facilitate dynamic linkage (mainly used in smartcontracts)
@@ -89,7 +88,7 @@ time = { workspace = true }
 fastpq_isi = { path = "../fastpq_isi" }
 
 [dev-dependencies]
-iroha_crypto = { workspace = true, features = ["rand", "gost", "sm", "ml-dsa"] }
+iroha_crypto = { workspace = true, features = ["rand", "gost", "sm"] }
 hex-literal = { workspace = true }
 ivm = { path = "../ivm" }
 

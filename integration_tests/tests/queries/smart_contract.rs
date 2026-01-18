@@ -3,8 +3,20 @@
 use eyre::{Result, WrapErr};
 use integration_tests::sandbox;
 use iroha::{client::QueryError, data_model::prelude::*};
+use iroha_core::smartcontracts::ivm::gas_limit_for_meta;
 use iroha_test_network::*;
 use iroha_test_samples::load_sample_ivm;
+
+fn metadata_with_gas_limit(bytecode: &IvmBytecode) -> Result<Metadata> {
+    let parsed =
+        ivm::ProgramMetadata::parse(bytecode.as_ref()).wrap_err("parse IVM program metadata")?;
+    let mut metadata = Metadata::default();
+    metadata.insert(
+        "gas_limit".parse().expect("static gas_limit key"),
+        gas_limit_for_meta(&parsed.metadata),
+    );
+    Ok(metadata)
+}
 
 #[test]
 fn live_query_is_dropped_after_smart_contract_end() -> Result<()> {
@@ -18,10 +30,9 @@ fn live_query_is_dropped_after_smart_contract_end() -> Result<()> {
     let client = network.client();
 
     let result: Result<()> = (|| {
-        let transaction = client.build_transaction(
-            load_sample_ivm("query_assets_and_save_cursor"),
-            Metadata::default(),
-        );
+        let bytecode = load_sample_ivm("query_assets_and_save_cursor");
+        let metadata = metadata_with_gas_limit(&bytecode)?;
+        let transaction = client.build_transaction(bytecode, metadata);
         client.submit_transaction_blocking(&transaction)?;
 
         let cursor_key: Name = "cursor".parse().unwrap();
@@ -72,10 +83,9 @@ fn smart_contract_can_filter_queries() -> Result<()> {
     let env_dir = network.env_dir().to_path_buf();
 
     let result: Result<()> = (|| {
-        let transaction = client.build_transaction(
-            load_sample_ivm("smart_contract_can_filter_queries"),
-            Metadata::default(),
-        );
+        let bytecode = load_sample_ivm("smart_contract_can_filter_queries");
+        let metadata = metadata_with_gas_limit(&bytecode)?;
+        let transaction = client.build_transaction(bytecode, metadata);
         client
             .submit_transaction_blocking(&transaction)
             .wrap_err_with(|| {

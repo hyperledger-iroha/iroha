@@ -25,11 +25,12 @@ translator: manual
 - `observer`: מוצא מהטופולוגיה (התפקיד הופך `Undefined`), אינו מציע/מצביע/אוסף גם אם משבצת המקור הייתה אספן. מסתנכרן בקאנונית באמצעות Gossip ויכול לקמוט באמצעות commit certificates שהתקבלו.
 
 ### דרישות מפתח ולידטור
-- ולידטורים חייבים להשתמש במפתחות BLS-Normal ולהציג הוכחת החזקה (PoP). באתחול (גובה 0) נבנית רשימת הוולידטורים מ-`trusted_peers` לאחר סינון עמיתים ללא BLS-Normal או עם PoP חסר/שגוי.
+- ולידטורים חייבים להשתמש במפתחות BLS-Normal ולהציג הוכחת החזקה (PoP). ב‑NPoS מסננים את רשימת ההסכמה לפי הוולידטורים הפעילים במסלול הציבורי מהסטייקינג (כולל לאחר עדכוני commit topology); כאשר אין ולידטורים פעילים, נופלים חזרה ל‑`trusted_peers` לאחר סינון עמיתים ללא BLS-Normal (`trusted_peers_bls` הוסר). `trusted_peers_pop` חייבת לכסות את כל הרוסטר ונבדקת בזמן פריסת הקונפיג; PoP חסר/שגוי נדחה, וסינון PoP נופל לבסיס ה‑BLS רק כגיבוי בטיחותי אם חוסר התאמה חומק. עמיתים שאינם BLS תמיד מוחרגים; עמיתים עם PoP חסר/שגוי מוחרגים רק כאשר סינון PoP פעיל.
 - commit certificate נושאים חתימת BLS מצטברת על מסר אחיד, מערך חתימות מפורש ומפת חתימות קומפקטית. האימות נשען על החתימות המפורשות; הצבירה והביטמאפ הם ארטיפקטים לאודיט ואסור שישנו סמנטיקה.
 
 ### זרימת הודעות (מצב יציב)
-- **לידר**: בעת צפייה לבלוק (טרנזקציות בתור או בלוק קודם שאינו ריק) והדד-ליין מתקרב – משדר `BlockCreated`.
+- **לידר**: בעת צפייה לבלוק (טרנזקציות בתור) והדד-ליין מתקרב – משדר `BlockCreated`. כאשר התור ריק הפייסמייקר נשאר idle ואינו שולח הצעות heartbeat.
+- **דחיית הצעות**: הרכבת הצעות נדחית כאשר יש backpressure בריליי, כאשר קיימות סשנים של RBC שטרם הושלמו עבור ה-tip הפעיל, או כאשר יש בלוקים ממתינים שמאריכים את ה-tip ושעדיין לא עברו תזמון‑מחדש של קוורום; הפייסמייקר ממתין עד שהעומס מתפנה לפני שמציע שוב.
 - **ולידטורים**: מאמתים, מפיקים Availability votes ושולחים Prevote/Precommit לאספנים המיועדים. בטיימאאוט לוקאלי ב-View 0 ניתן לפנות עד `r` אספנים נוספים.
 - **אספנים**: מרכזים הצבעות ומפרסמים Availability/Prevote/Precommit commit certificate. ה-commit certificate התקף הראשון עבור `(height,hash)` מנצח; איחורים נדחים.
 - **עמיתים מתבוננים**: אינם מצביעים ב-View 0. ב-Views מאוחרים עשויים להצביע; כאשר גוף הבלוק ו-commit certificate תואם זמינים – מבצעים קומיט דטרמיניסטי.
@@ -50,7 +51,7 @@ translator: manual
 - פולבק: אם `k` לא מחזיר קולקטורים, ההצבעות נופלות לטופולוגיית ה-commit המלאה; `redundant_send_r` מטופל לפחות כ-1.
 
 ### עקרונות טופולוגיה
-- טופולוגיה נוצרת רק עבור ולידטורים בעלי PoP ב-BLS. הפונקציות `leader_index()` ו-`proxy_tail_index()` אינן משתמשות בשאריות ומחזירות `TopologySegment` דטרמיניסטי לביקורת.
+- טופולוגיה נוצרת עם ולידטורים בעלי PoP ב-BLS רק כאשר מפת ה‑PoP מכסה את כל הרוסטר; מפת PoP חלקית נדחית בזמן פריסת הקונפיג, והבסיס ה‑BLS משמש רק כגיבוי בטיחותי. הפונקציות `leader_index()` ו-`proxy_tail_index()` אינן משתמשות בשאריות ומחזירות `TopologySegment` דטרמיניסטי לביקורת.
 - `Topology::collectors_for(height)` מחזירה `CollectingPeerSet` נקי וקבוע לכל גובה. כאשר K=1 מתקבל Proxy Tail יחיד – תואם למסלול ההיסטורי.
 - `Topology::role_at(index)` מספק את תפקיד העמית, ו-`is_validator(idx)` מאשר חברות לגובה הנוכחי.
 
@@ -69,6 +70,8 @@ translator: manual
 ### RBC / DA (זמינות נתונים)
 - RBC משתמש בקבוצת האספנים כדי להפיץ את גוף הבלוק. כותרת הבלוק מכילה מזהה סשן ומטא-נתונים.
 - `sumeragi.da_enabled = true` עוקב אחרי עדות זמינות (`availability evidence`) אבל לא מעכב קומיט (ל־RBC `DELIVER` מקומי אין תנאי). כאשר עדות זמינות חסרה, `sumeragi_da_gate_block_total{reason="missing_local_data"}` גדל ו־`da_reschedule_total` הוא legacy ולכן בדרך כלל נשאר 0.
+- כאשר READY/DELIVER או צ׳אנקים מגיעים לפני INIT, הנוד שומר אותם ב־stash ומבקש מיד את `BlockCreated` החסר (בכפוף ל־backoff של missing‑block).
+- `sumeragi.rbc_rebroadcast_sessions_per_tick` מגביל את מספר סשני ה־RBC שנשלחים מחדש בכל tick כדי למנוע סופות שידור כשיש backlog. להאצת התאוששות מעלים את הערך, ובמקרה של עומס תורים מורידים.
 - תרחישים של ≥10 MiB נבחנים בסוויטת האינטגרציה ומודדים זמני RBC, קומיט, סף סינון תורים וזרימות P2P. הפרת SLO נכשלת במבחן ומפעילה התרעה.
 
 ### דוגמאות CLI לטופולוגיה ותפקידים
@@ -98,7 +101,7 @@ translator: manual
 
 ### מדדי טלמטריה
 - Counters: ‏`sumeragi_view_change_total`, ‏`sumeragi_backpressure_deferrals_total`, ‏`sumeragi_da_gate_block_total{reason="missing_local_data"}`, ‏`sumeragi_evidence_total`.
-- Histograms/Gauges: ‏`sumeragi_collect_witness_ms`, ‏`sumeragi_da_queue_depth`, ‏`sumeragi_pending_blocks`, ‏`sumeragi_locked_qc_height`.
+- Histograms/Gauges: ‏`sumeragi_phase_latency_ms{phase="commit"}`, ‏`sumeragi_da_queue_depth`, ‏`sumeragi_pending_blocks`, ‏`sumeragi_locked_qc_height`.
 - לוחות מחוונים: טבלאות אספנים לפי קצב הצבעות, מדדי RBC, פייסמייקר EMA, חלונות VRF.
 
 ### כיסוי בדיקות
@@ -125,13 +128,16 @@ translator: manual
 ### RBC
 - סשני RBC מזוהים באמצעות `RbcSessionId` ומכילים מטא-נתונים על גובה, hash, ומספר חלקים. הם מפיצים את גוף הבלוק ומספקים זמינות נתונים.
 - כאשר `sumeragi.da_enabled` פעיל, קומיט תלוי ב-`availability evidence` (ולא בהשלמה מקומית של RBC). RBC משמש כמנגנון הפצה/שחזור של ה-payload.
+- רוסטר ה‑INIT נשמר כסנאפשוט לא מאומת; הרוסטר הנגזר מטופולוגיית הקומיט הוא המקור הסמכותי ל‑READY/DELIVER ולאימות חתימה מקומית. INIT שסותר רוסטר נגזר נדחה.
+- READY/DELIVER שמגיעים לפני אימות הרוסטר נאגרים (stash), ובקשות ל‑`BlockCreated` חסר נופלות חזרה לטופולוגיית הקומיט. לאחר אימות, אי־התאמה של `roster_hash` גוררת דחייה.
+- שידורי READY חוזרים מוגבלים לתת־קבוצה דטרמיניסטית של f+1 (כולל תמיד את המנהיג) כדי לצמצם סערות הודעות.
 
 ### הגדרת `proof_policy`
 - `proof_policy = "off"` (ברירת מחדל): commit QC בלבד.
 - `proof_policy = "zk_parent"`: דרישה להוכחת ZK של ההורה (`zk_finality_k`).
 
 ### Telemetry & Backpressure
-- `pacemaker_backpressure_deferrals_total` מורה על עיכובים עקב לחץ תורים; `scripts/sumeragi_backpressure_log_scraper.py` קושר בין לוגים למדדים.
+- `pacemaker_backpressure_deferrals_total` מורה על עיכובים עקב לחץ תורים, backpressure בריליי, backlog של RBC או בלוק ממתין שחוסם הצעה; `scripts/sumeragi_backpressure_log_scraper.py` קושר בין לוגים למדדים.
 - `sumeragi_da_summary::*` מסכם את ריצות ה-RBC ו-SLO. CI בודק את הערכים הללו.
 - עקומות EMA מדווחות על טיימרים מומלצים במצב הריצה.
 
@@ -146,14 +152,14 @@ translator: manual
 - `iroha_cli sumeragi params` מחזיר Norito JSON מלא של הפרמטרים, כולל מצבים, טיימרים ופרמטרי DA.
 - שימוש ב-`--summary-only` מספק פלט תמציתי לחדרי בקרה.
 
-### מדריך טלמטריה לאספנים ולעדי־ביצוע
+### מדריך טלמטריה לאספנים
 
-כאשר אספן תקוע או עד ביצוע מאחר, הדבר יופיע כהעדר availability evidence, איסוף DA מתמשך או `collect_witness_ms` גבוה. להלן המדדים המרכזיים:
+כאשר אספן תקוע או הקומיט מתעכב, הדבר יופיע כהעדר availability evidence, איסוף DA מתמשך או `commit_ms`/`pipeline_total_ms` גבוהים. להלן המדדים המרכזיים:
 
 **לוחות מחוונים מרכזיים**
 - `sum(rate(sumeragi_da_votes_ingested_total[1m])) by (collector_idx)` — זיהוי אספנים שלא קולטים קולות.
 - `sumeragi_qc_last_latency_ms{kind="availability"}` וההיסטוגרמה `sumeragi_qc_assembly_latency_ms{kind="availability"}` — זמן ההרכבה העדכני והיסטוריית P95.
-- `sumeragi_phase_latency_ms{phase="collect_da"}` ו-`{phase="collect_witness"}` (P95 על פני 5 דק') — זמן לאיסוף קולות זמינות ו-ACK עדים.
+- `sumeragi_phase_latency_ms{phase="collect_da"}` ו-`{phase="collect_precommit"}` (P95 על פני 5 דק') — זמן לאיסוף קולות זמינות ו-precommit QCs.
 - `sumeragi_phase_latency_ms{phase="collect_aggregator"}` — פיזור אספנים; קשרו ל-`sumeragi_gossip_fallback_total`, `block_created_dropped_by_lock_total`, `block_created_hint_mismatch_total`, `block_created_proposal_mismatch_total`, `pacemaker_backpressure_deferrals_total`.
 - `sumeragi_phase_latency_ema_ms{phase=…}` — ממוצע נע (EMA) לכל פאזת צינור. סטייה בין EMA למדידות גולמיות תחייב בדיקה.
 - `/v1/sumeragi/telemetry` / `iroha_cli sumeragi status --summary` — צילום מצב עם קולות פר אספן, זמני commit certificate, backlog של RBC ו-H/L commit certificate.
@@ -164,7 +170,7 @@ translator: manual
 **ספי התרעה**
 - זמני availability evidence: אם `sumeragi_qc_last_latency_ms{kind="availability"}` חוצה `0.6 * commit_time_ms` פעמיים או שה-P95 עובר `0.7 * commit_time_ms` (permissioned: `CommitTimeMs`, ‏NPoS: `timeouts.timeout_commit_ms`).
 - קיפאון הצבעות: `sum(rate(sumeragi_da_votes_ingested_total[2m])) == 0` בזמן ש-`sumeragi_rbc_backlog_sessions_pending > 0`.
-- עדי ביצוע: `collect_witness_ms` או P95 של `sumeragi_phase_latency_ms{phase="collect_witness"}` עולים על `0.75 * commit_time_ms` (permissioned: `CommitTimeMs`, ‏NPoS: `timeouts.timeout_commit_ms`), או נותרים אפס ≥3 סבבים למרות בלוקים חדשים.
+- קומיט: `commit_ms` או P95 של `sumeragi_phase_latency_ms{phase="commit"}` עולים על `0.75 * commit_time_ms` (permissioned: `CommitTimeMs`, ‏NPoS: `timeouts.timeout_commit_ms`), או נותרים אפס ≥3 סבבים למרות בלוקים חדשים.
 - פיזור אספנים: `collect_aggregator_ms` > `0.5 * sumeragi.npos.timeouts.aggregator_ms` בשלושה סבבים, ‎`sumeragi_redundant_sends_total` > `redundant_send_r`, ‎`rate(sumeragi_gossip_fallback_total[5m]) > 0`, או ‎`increase(block_created_*[5m]) > 0`/`increase(pacemaker_backpressure_deferrals_total[5m]) > 0`.
 
 מדדי השליחה העודפת (`sumeragi_redundant_sends_total`) עולים כאשר DA משדר מחדש מטעני RBC. הבדיקה `npos_redundant_send_retries_update_metrics` מבטיחה שדשבורדים תואמים לציפיות.
@@ -173,7 +179,7 @@ translator: manual
 1. בדקו עם `iroha_cli sumeragi collectors --summary` שהאספן התקוע עדיין מוקצה.
 2. נתחו `/v1/sumeragi/telemetry` כדי לאתר אינדקס ללא `votes_ingested`. אם רק אספן יחיד נפגע, ניתן להגדיל זמנית את `collectors_redundant_send_r`.
 3. בדקו `sumeragi_bg_post_queue_depth` ו-`p2p_*_throttled_total` לזיהוי עומסי תורים או מגבלות רשת.
-4. עבור עדים – עיינו ב-`/v1/torii/zk/prover/reports` ובלוגים כדי לאתר בעיות בפרוברים.
+4. בעיות FASTPQ/prover: עיינו ב-`/v1/torii/zk/prover/reports` ובלוגים כדי לאתר כשלים בפרוברים.
 5. כאשר שני האספנים אינם מגיבים, יש לבדוק backlog של RBC, `sumeragi_rbc_store_evictions_total` ו-`rbc_store.recent_evictions` כדי לזהות עומס דיסק או TTL. בנוסף, `iroha_cli sumeragi status --summary` כולל את המונים `lane_governance_sealed_total` / `lane_governance_sealed_aliases`, כך שניתן לאתר מסילות שעדיין חסומות בלי לפענח את כל ה-JSON. בתהליכי שחרור ו-CI מומלץ להריץ גם `iroha_cli nexus lane-report --only-missing --fail-on-sealed` כדי לעצור אוטומטית כאשר יש מסילות שלא שוחררו.
 6. לאחר התאוששות, תעדו את האירוע והשיבו פרמטרים לערכי הבסיס.
 

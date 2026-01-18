@@ -1011,7 +1011,7 @@ pub fn merkle_paths_for_queries(
         }
         let mut path = Vec::with_capacity(levels.len().saturating_sub(1));
         for level in levels.iter().take(levels.len().saturating_sub(1)) {
-            let sibling_idx = if leaf_index % 2 == 0 {
+            let sibling_idx = if leaf_index.is_multiple_of(2) {
                 leaf_index + 1
             } else {
                 leaf_index.saturating_sub(1)
@@ -1322,7 +1322,7 @@ pub fn open_queries(evaluations: &[u64], indices: &[usize]) -> Result<Vec<(u32, 
         let value = evaluations
             .get(index)
             .copied()
-            .ok_or_else(|| Error::QueryIndexOutOfRange {
+            .ok_or(Error::QueryIndexOutOfRange {
                 index,
                 len: evaluations.len(),
             })?;

@@ -21,6 +21,7 @@ public final class HttpClientTransportStatusTests {
 
   public static void main(final String[] args) {
     waitForTransactionStatusResolvesOnCommit();
+    waitForTransactionStatusTreatsNotFoundAsPending();
     waitForTransactionStatusThrowsOnFailure();
     waitForTransactionStatusHonoursMaxAttempts();
     submitTransactionProvidesCanonicalHashForPolling();
@@ -56,6 +57,28 @@ public final class HttpClientTransportStatusTests {
     assert observed.toString().contains("Pending@1")
         && observed.toString().contains("Committed@2")
         : "Observer should capture pending and committed statuses";
+  }
+
+  private static void waitForTransactionStatusTreatsNotFoundAsPending() {
+    final SequencedExecutor executor = new SequencedExecutor(
+        newResponse(404, new byte[0]),
+        newResponse(200, statusPayload("Committed")));
+    final HttpClientTransport transport = HttpClientTransport.withExecutor(
+        executor,
+        ClientConfig.builder()
+            .setBaseUri(URI.create("http://localhost:8080"))
+            .setRequestTimeout(Duration.ofSeconds(5))
+            .build());
+
+    final Map<String, Object> result =
+        transport
+            .waitForTransactionStatus(
+                "deadbeef", PipelineStatusOptions.builder().intervalMillis(0L).build())
+            .join();
+
+    assert "Committed".equals(
+            PipelineStatusExtractor.extractStatusKind(result).orElse(null))
+        : "Expected committed status after 404 retry";
   }
 
   private static void waitForTransactionStatusThrowsOnFailure() {

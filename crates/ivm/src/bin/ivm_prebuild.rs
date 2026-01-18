@@ -55,7 +55,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Create realistic bytecode for known samples; fall back to a minimal HALT
         // program for others.
         let payload = match *name {
-            // Mint 1 unit of rose#wonderland to current authority using sentinel inputs
+            // Mint 1 unit of rose#wonderland to the current authority using pointer-ABI inputs.
             "mint_rose_trigger" => build_program_mint_rose_for_authority(),
             // Convenience: create one NFT per known account
             "create_nft_for_every_user_trigger" => build_program_create_nft_for_authority(),
@@ -76,6 +76,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn default_max_cycles() -> u64 {
     DEFAULT_MAX_CYCLES
+}
+
+const LITERAL_DATA_START: i16 = 16;
+
+fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
+    use iroha_crypto::Hash;
+
+    let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
+    out.extend_from_slice(&type_id.to_be_bytes());
+    out.push(1);
+    out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    out.extend_from_slice(payload);
+    let h: [u8; Hash::LENGTH] = Hash::new(payload).into();
+    out.extend_from_slice(&h);
+    out
+}
+
+fn assemble_program_with_literals(code: &[u8], literal_data: &[u8]) -> Vec<u8> {
+    let mut program = Vec::new();
+    program.extend_from_slice(b"IVM\0");
+    program.extend_from_slice(&[1, 0, 0, 4]);
+    program.extend_from_slice(&default_max_cycles().to_le_bytes());
+    program.push(1); // abi_version
+    if !literal_data.is_empty() {
+        program.extend_from_slice(b"LTLB");
+        program.extend_from_slice(&0u32.to_le_bytes()); // literal entries
+        program.extend_from_slice(&0u32.to_le_bytes()); // post-pad bytes
+        program.extend_from_slice(&(literal_data.len() as u32).to_le_bytes());
+        program.extend_from_slice(literal_data);
+    }
+    program.extend_from_slice(code);
+    program
 }
 
 fn build_minimal_valid_program(tag: u8) -> Vec<u8> {
@@ -118,39 +150,43 @@ fn build_minimal_valid_program(tag: u8) -> Vec<u8> {
 }
 
 fn build_program_mint_rose_for_authority() -> Vec<u8> {
-    use ivm::{encoding, instruction::wide, kotodama::compiler::encode_addi, syscalls as ivm_sys};
+    use iroha_data_model::prelude::AssetDefinitionId;
+    use ivm::{
+        PointerType, encoding, instruction::wide, kotodama::compiler::encode_addi,
+        syscalls as ivm_sys,
+    };
+    use norito::codec::Encode as _;
+
+    let asset_def: AssetDefinitionId = "rose#wonderland".parse().expect("asset definition");
+    let asset_payload = asset_def.encode();
+    let asset_tlv = make_tlv(PointerType::AssetDefinitionId as u16, &asset_payload);
+
     let mut code = Vec::new();
-    // a0 (x10) = 0 => authority sentinel
+    // r10 <- &AccountId(authority)
     code.extend_from_slice(
-        &encode_addi(10, 0, 0)
-            .expect("encode addi")
+        &encoding::wide::encode_sys(wide::system::SCALL, ivm_sys::SYSCALL_GET_AUTHORITY as u8)
             .to_le_bytes(),
     );
-    // a1 (x11) = 0 => asset_def sentinel (rose#wonderland)
+    code.extend_from_slice(&encode_addi(13, 10, 0).expect("encode addi").to_le_bytes()); // save account pointer
+    // r10 <- &AssetDefinitionId (literal TLV)
+    code.extend_from_slice(&encode_addi(10, 0, LITERAL_DATA_START).expect("encode addi").to_le_bytes());
     code.extend_from_slice(
-        &encode_addi(11, 0, 0)
-            .expect("encode addi")
-            .to_le_bytes(),
+        &encoding::wide::encode_sys(
+            wide::system::SCALL,
+            ivm_sys::SYSCALL_INPUT_PUBLISH_TLV as u8,
+        )
+        .to_le_bytes(),
     );
-    // a2 (x12) = 1 => amount
-    code.extend_from_slice(
-        &encode_addi(12, 0, 1)
-            .expect("encode addi")
-            .to_le_bytes(),
-    );
+    code.extend_from_slice(&encode_addi(11, 10, 0).expect("encode addi").to_le_bytes()); // r11 = asset ptr
+    code.extend_from_slice(&encode_addi(10, 13, 0).expect("encode addi").to_le_bytes()); // r10 = account ptr
+    code.extend_from_slice(&encode_addi(12, 0, 1).expect("encode addi").to_le_bytes()); // amount = 1
     code.extend_from_slice(
         &encoding::wide::encode_sys(wide::system::SCALL, ivm_sys::SYSCALL_MINT_ASSET as u8)
             .to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
 
-    let mut v = Vec::new();
-    v.extend_from_slice(b"IVM\0");
-    v.extend_from_slice(&[1, 0, 0, 4]);
-    v.extend_from_slice(&default_max_cycles().to_le_bytes());
-    v.push(1); // abi_version
-    v.extend_from_slice(&code);
-    v
+    assemble_program_with_literals(&code, &asset_tlv)
 }
 
 fn build_program_create_nft_for_authority() -> Vec<u8> {
@@ -201,26 +237,54 @@ fn build_program_set_sc_exec_depth(depth: u8) -> Vec<u8> {
 }
 
 fn build_program_set_account_detail_defaults() -> Vec<u8> {
-    use ivm::{encoding, instruction::wide, kotodama::compiler::encode_addi, syscalls as ivm_sys};
+    use iroha_data_model::{prelude::Name, query::parameters::ForwardCursor};
+    use ivm::{
+        PointerType, encoding, instruction::wide, kotodama::compiler::encode_addi,
+        syscalls as ivm_sys,
+    };
+    use nonzero_ext::nonzero;
+    use norito::{codec::Encode as _, json};
 
-    // Use host-provided sentinels for authority/key/value to enqueue a
-    // SetKeyValue instruction storing ForwardCursor{"sc_dummy",1}.
+    let key: Name = "cursor".parse().expect("key name");
+    let key_payload = key.encode();
+    let cursor = ForwardCursor {
+        query: "sc_dummy".to_owned(),
+        cursor: nonzero!(1_u64),
+        gas_budget: None,
+    };
+    let value_json = json::to_vec(&cursor).expect("encode ForwardCursor");
+    let key_tlv = make_tlv(PointerType::Name as u16, &key_payload);
+    let value_tlv = make_tlv(PointerType::Json as u16, &value_json);
+    let value_ptr = LITERAL_DATA_START + i16::try_from(key_tlv.len()).unwrap_or(0);
+
     let mut code = Vec::new();
+    // r10 <- &AccountId(authority)
     code.extend_from_slice(
-        &encode_addi(10, 0, 0)
-            .expect("encode addi")
+        &encoding::wide::encode_sys(wide::system::SCALL, ivm_sys::SYSCALL_GET_AUTHORITY as u8)
             .to_le_bytes(),
     );
+    code.extend_from_slice(&encode_addi(13, 10, 0).expect("encode addi").to_le_bytes()); // save account pointer
+    // r10 <- &Name("cursor")
+    code.extend_from_slice(&encode_addi(10, 0, LITERAL_DATA_START).expect("encode addi").to_le_bytes());
     code.extend_from_slice(
-        &encode_addi(11, 0, 0)
-            .expect("encode addi")
-            .to_le_bytes(),
+        &encoding::wide::encode_sys(
+            wide::system::SCALL,
+            ivm_sys::SYSCALL_INPUT_PUBLISH_TLV as u8,
+        )
+        .to_le_bytes(),
     );
+    code.extend_from_slice(&encode_addi(11, 10, 0).expect("encode addi").to_le_bytes()); // r11 = key ptr
+    // r10 <- &Json(cursor)
+    code.extend_from_slice(&encode_addi(10, 0, value_ptr).expect("encode addi").to_le_bytes());
     code.extend_from_slice(
-        &encode_addi(12, 0, 0)
-            .expect("encode addi")
-            .to_le_bytes(),
+        &encoding::wide::encode_sys(
+            wide::system::SCALL,
+            ivm_sys::SYSCALL_INPUT_PUBLISH_TLV as u8,
+        )
+        .to_le_bytes(),
     );
+    code.extend_from_slice(&encode_addi(12, 10, 0).expect("encode addi").to_le_bytes()); // r12 = value ptr
+    code.extend_from_slice(&encode_addi(10, 13, 0).expect("encode addi").to_le_bytes()); // r10 = account ptr
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             wide::system::SCALL,
@@ -230,13 +294,10 @@ fn build_program_set_account_detail_defaults() -> Vec<u8> {
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
 
-    let mut program = Vec::new();
-    program.extend_from_slice(b"IVM\0");
-    program.extend_from_slice(&[1, 0, 0, 4]);
-    program.extend_from_slice(&default_max_cycles().to_le_bytes());
-    program.push(1); // abi_version
-    program.extend_from_slice(&code);
-    program
+    let mut literal_data = Vec::with_capacity(key_tlv.len() + value_tlv.len());
+    literal_data.extend_from_slice(&key_tlv);
+    literal_data.extend_from_slice(&value_tlv);
+    assemble_program_with_literals(&code, &literal_data)
 }
 
 #[cfg(test)]

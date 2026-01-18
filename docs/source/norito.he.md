@@ -61,7 +61,7 @@ Norito הוא קודק הסריאליזציה הבינארי של Iroha. הוא 
 - 4 בייט Magic: `NRT0`.
 - גרסאות Major/M Minor.
 - דגלי Layout (בייט).
-- checksum CRC64-ECMA.
+- checksum CRC64-XZ.
 - אורכי Payload (לפני דחיסה).
 - hash סכמה (בייטים).
 
@@ -86,7 +86,7 @@ Norito הוא קודק הסריאליזציה הבינארי של Iroha. הוא 
 - **Strings/Bytes:** `[len][data]` עם Varint/Fix.
 - **Option/Result:** תג `u8` + Payload.
 - **Arrays/Tuples:** בהתאם לגודל קבוע/משתנה.
-- **`Vec<T>`:** Pack (Varint/Offsets) לפי דגלים.
+- **`Vec<T>`:** Pack עם offsets קבועים (u64).
 - **Maps/Sets:** נקראים כזוגות.
 - **Struct:** לפי derive-packing או Layout רגיל.
 - **Enums:** Tag + Variant Payload.
@@ -111,7 +111,7 @@ Norito הוא קודק הסריאליזציה הבינארי של Iroha. הוא 
 
 ## פנקס Decode/Flags
 
-- דגלים: `COMPACT_LEN`,‏ `COMPACT_SEQ_LEN`,‏ `VARINT_OFFSETS`,‏ `PACKED_STRUCT`,‏ `PACKED_SEQ`,‏ `HEADERLESS`.
+- דגלים: `COMPACT_LEN`,‏ `PACKED_STRUCT`,‏ `PACKED_SEQ`,‏ `FIELD_BITSET`,‏ `HEADERLESS`.
 - `DecodeFlagsGuard` + `PayloadCtxGuard`.
 - `reset_decode_state` לאיפוס.
 

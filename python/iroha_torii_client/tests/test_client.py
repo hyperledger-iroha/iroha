@@ -4,9 +4,11 @@ import base64
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import pytest
+import requests
+from requests.structures import CaseInsensitiveDict
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 if str(PACKAGE_ROOT) not in sys.path:
@@ -25,7 +27,7 @@ CANONICAL_OWNER = (
 )
 
 
-class StubResponse:
+class StubResponse(requests.Response):
     def __init__(
         self,
         status_code: int = 200,
@@ -34,29 +36,28 @@ class StubResponse:
         headers: Optional[Dict[str, str]] = None,
         text: Optional[str] = None,
     ) -> None:
+        super().__init__()
         self.status_code = status_code
         self._payload = payload
-        self.headers: Dict[str, str] = headers or {}
+        self.headers = CaseInsensitiveDict(headers or {})
         if payload is None:
-            if text is not None:
-                self.content = text.encode("utf-8")
-                self.text = text
-            else:
-                self.content = b""
-                self.text = ""
+            content = text.encode("utf-8") if text is not None else b""
         else:
-            encoded = json.dumps(payload)
-            self.content = encoded.encode("utf-8")
-            self.text = encoded
+            content = json.dumps(payload).encode("utf-8")
+            if "Content-Type" not in self.headers:
+                self.headers["Content-Type"] = "application/json"
+        self._content = content
+        self.encoding = "utf-8"
 
-    def json(self) -> Any:
+    def json(self, **kwargs: Any) -> Any:
         if self._payload is None:
             raise ValueError("no payload available")
         return json.loads(self.text)
 
 
-class RecordingSession:
+class RecordingSession(requests.Session):
     def __init__(self) -> None:
+        super().__init__()
         self.calls: List[Dict[str, Any]] = []
         self._responses: List[StubResponse] = []
 
@@ -65,18 +66,20 @@ class RecordingSession:
 
     def request(
         self,
-        method: str,
-        url: str,
-        params: Optional[Dict[str, Any]] = None,
-        headers: Optional[Dict[str, str]] = None,
-        data: Optional[bytes] = None,
-    ) -> StubResponse:
+        method: Union[str, bytes],
+        url: Union[str, bytes],
+        *args: Any,
+        **kwargs: Any,
+    ) -> requests.Response:
+        params = kwargs.get("params") or {}
+        headers = kwargs.get("headers") or {}
+        data = kwargs.get("data")
         self.calls.append(
             {
                 "method": method,
                 "url": url,
-                "params": params or {},
-                "headers": headers or {},
+                "params": params,
+                "headers": headers,
                 "data": data,
             }
         )
@@ -732,7 +735,7 @@ def test_publish_space_directory_manifest_posts_payload() -> None:
     session.queue(StubResponse(status_code=202, payload={"queued": True}))
     client = ToriiClient("http://node.test", session=session)
 
-    manifest = {
+    manifest: Dict[str, Any] = {
         "version": "V1",
         "uaid": "uaid:" + "11" * 32,
         "dataspace": 7,
@@ -1056,8 +1059,6 @@ def test_get_sumeragi_phases_parses_snapshot() -> None:
                 "collect_prevote_ms": 3,
                 "collect_precommit_ms": 4,
                 "collect_aggregator_ms": 5,
-                "collect_exec_ms": 6,
-                "collect_witness_ms": 7,
                 "commit_ms": 8,
                 "pipeline_total_ms": 9,
                 "collect_aggregator_gossip_total": 10,
@@ -1070,8 +1071,6 @@ def test_get_sumeragi_phases_parses_snapshot() -> None:
                     "collect_prevote_ms": 16,
                     "collect_precommit_ms": 17,
                     "collect_aggregator_ms": 18,
-                    "collect_exec_ms": 19,
-                    "collect_witness_ms": 20,
                     "commit_ms": 21,
                     "pipeline_total_ms": 22,
                 },
@@ -1082,7 +1081,7 @@ def test_get_sumeragi_phases_parses_snapshot() -> None:
 
     phases = client.get_sumeragi_phases()
 
-    assert phases.collect_exec_ms == 6
+    assert phases.collect_aggregator_ms == 5
     assert phases.ema_ms.commit_ms == 21
     assert session.calls[0]["url"].endswith("/v1/sumeragi/phases")
 
@@ -1306,7 +1305,7 @@ def test_set_confidential_gas_schedule_reuses_logger() -> None:
     assert body["confidential_gas"]["per_nullifier"] == 6
 
 
-def test_get_time_now_parses_snapshot() -> None:
+def test_get_time_now_parses_snapshot_alt_values() -> None:
     session = RecordingSession()
     session.queue(
         StubResponse(
@@ -1895,7 +1894,7 @@ def test_connect_admission_manifest_helpers() -> None:
 
 def test_trigger_listing_and_lookup_roundtrip() -> None:
     session = RecordingSession()
-    list_payload = {
+    list_payload: Dict[str, Any] = {
         "items": [
             {
                 "id": "daily-airdrop",
@@ -2424,3 +2423,226 @@ def test_submit_zk_ballot_v1_rejects_invalid_hex_hints() -> None:
             envelope_b64="AAAA",
             root_hint="not-hex",
         )
+
+
+def test_list_subscription_plans_encodes_params() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "items": [
+                    {
+                        "plan_id": "plan#subs",
+                        "plan": {"provider": "alice@wonderland", "pricing": {"kind": "fixed"}},
+                    }
+                ],
+                "total": 1,
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    page = client.list_subscription_plans(provider="alice@wonderland", limit=10, offset=5)
+
+    assert page.total == 1
+    assert page.items[0].plan_id == "plan#subs"
+    assert page.items[0].plan["provider"] == "alice@wonderland"
+    assert session.calls[0]["params"] == {
+        "provider": "alice@wonderland",
+        "limit": 10,
+        "offset": 5,
+    }
+
+
+def test_create_subscription_plan_posts_payload() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "ok": True,
+                "plan_id": "plan#subs",
+                "tx_hash_hex": "deadbeef",
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    result = client.create_subscription_plan(
+        authority="alice@wonderland",
+        private_key="ed25519:priv",
+        plan_id="plan#subs",
+        plan={"provider": "alice@wonderland"},
+    )
+
+    assert result.ok is True
+    assert result.plan_id == "plan#subs"
+    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
+    assert payload["authority"] == "alice@wonderland"
+    assert payload["private_key"] == "ed25519:priv"
+    assert payload["plan_id"] == "plan#subs"
+    assert payload["plan"]["provider"] == "alice@wonderland"
+
+
+def test_list_subscriptions_encodes_params() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "items": [
+                    {
+                        "subscription_id": "sub-1$subscriptions",
+                        "subscription": {"status": "active"},
+                        "invoice": {"amount": "120"},
+                        "plan": {"provider": "alice@wonderland"},
+                    }
+                ],
+                "total": 1,
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    page = client.list_subscriptions(
+        owned_by="bob@wonderland",
+        provider="alice@wonderland",
+        status="ACTIVE",
+        limit=25,
+        offset=0,
+    )
+
+    assert page.total == 1
+    assert page.items[0].subscription_id == "sub-1$subscriptions"
+    assert page.items[0].subscription["status"] == "active"
+    assert session.calls[0]["params"] == {
+        "owned_by": "bob@wonderland",
+        "provider": "alice@wonderland",
+        "status": "active",
+        "limit": 25,
+        "offset": 0,
+    }
+
+
+def test_list_subscriptions_rejects_invalid_status() -> None:
+    client = ToriiClient("http://node.test", session=RecordingSession())
+
+    with pytest.raises(ValueError, match="subscriptions.status"):
+        client.list_subscriptions(status="unknown")
+
+
+def test_create_subscription_posts_payload() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "ok": True,
+                "subscription_id": "sub-1$subscriptions",
+                "billing_trigger_id": "sub-bill",
+                "usage_trigger_id": "sub-usage",
+                "first_charge_ms": 1_704_067_200_000,
+                "tx_hash_hex": "deadbeef",
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    result = client.create_subscription(
+        authority="bob@wonderland",
+        private_key="ed25519:priv",
+        subscription_id="sub-1$subscriptions",
+        plan_id="plan#subs",
+        billing_trigger_id="sub-bill",
+        usage_trigger_id="sub-usage",
+        first_charge_ms=1_704_067_200_000,
+        grant_usage_to_provider=True,
+    )
+
+    assert result.subscription_id == "sub-1$subscriptions"
+    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
+    assert payload["authority"] == "bob@wonderland"
+    assert payload["private_key"] == "ed25519:priv"
+    assert payload["billing_trigger_id"] == "sub-bill"
+    assert payload["usage_trigger_id"] == "sub-usage"
+    assert payload["first_charge_ms"] == 1_704_067_200_000
+    assert payload["grant_usage_to_provider"] is True
+
+
+def test_get_subscription_encodes_path_and_parses_response() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "subscription_id": "sub-1$subscriptions",
+                "subscription": {"status": "active"},
+                "plan": {"provider": "alice@wonderland"},
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    record = client.get_subscription("sub-1$subscriptions")
+
+    assert record is not None
+    assert record.subscription_id == "sub-1$subscriptions"
+    assert session.calls[0]["url"].endswith("/v1/subscriptions/sub-1%24subscriptions")
+
+
+def test_get_subscription_returns_none_on_404() -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(status_code=404, payload=None))
+    client = ToriiClient("http://node.test", session=session)
+
+    assert client.get_subscription("sub-404$subscriptions") is None
+
+
+def test_subscription_actions_post_payloads() -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(payload={"ok": True, "subscription_id": "sub-1", "tx_hash_hex": "a"}))
+    session.queue(StubResponse(payload={"ok": True, "subscription_id": "sub-1", "tx_hash_hex": "b"}))
+    session.queue(StubResponse(payload={"ok": True, "subscription_id": "sub-1", "tx_hash_hex": "c"}))
+    session.queue(StubResponse(payload={"ok": True, "subscription_id": "sub-1", "tx_hash_hex": "d"}))
+    client = ToriiClient("http://node.test", session=session)
+
+    client.pause_subscription("sub-1", authority="bob@wonderland", private_key="ed25519:priv")
+    client.resume_subscription(
+        "sub-1",
+        authority="bob@wonderland",
+        private_key="ed25519:priv",
+        charge_at_ms=1_704_067_200_000,
+    )
+    client.cancel_subscription("sub-1", authority="bob@wonderland", private_key="ed25519:priv")
+    client.charge_subscription_now(
+        "sub-1",
+        authority="bob@wonderland",
+        private_key="ed25519:priv",
+        charge_at_ms=1_704_067_200_000,
+    )
+
+    pause_body = json.loads(session.calls[0]["data"].decode("utf-8"))
+    assert pause_body["authority"] == "bob@wonderland"
+    resume_body = json.loads(session.calls[1]["data"].decode("utf-8"))
+    assert resume_body["charge_at_ms"] == 1_704_067_200_000
+    cancel_body = json.loads(session.calls[2]["data"].decode("utf-8"))
+    assert cancel_body["private_key"] == "ed25519:priv"
+    charge_body = json.loads(session.calls[3]["data"].decode("utf-8"))
+    assert charge_body["charge_at_ms"] == 1_704_067_200_000
+
+
+def test_record_subscription_usage_posts_payload() -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(payload={"ok": True, "subscription_id": "sub-1", "tx_hash_hex": "e"}))
+    client = ToriiClient("http://node.test", session=session)
+
+    result = client.record_subscription_usage(
+        "sub-1",
+        authority="alice@wonderland",
+        private_key="ed25519:priv",
+        unit_key="compute_ms",
+        delta=3600,
+        usage_trigger_id="sub-usage",
+    )
+
+    assert result.ok is True
+    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
+    assert payload["unit_key"] == "compute_ms"
+    assert payload["delta"] == "3600"
+    assert payload["usage_trigger_id"] == "sub-usage"

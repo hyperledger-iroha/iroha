@@ -54,13 +54,14 @@ fn derive_ballot_nullifier(
 ) -> [u8; 32] {
     use blake2::{Blake2b512, Digest as _};
 
-    let mut input = Vec::with_capacity(
-        domain_tag.len() + chain_id.as_str().len() + election_id.len() + commit.len() + 24,
-    );
     fn push_len(buf: &mut Vec<u8>, len: usize) {
         let len_u64 = len as u64;
         buf.extend_from_slice(&len_u64.to_le_bytes());
     }
+
+    let mut input = Vec::with_capacity(
+        domain_tag.len() + chain_id.as_str().len() + election_id.len() + commit.len() + 24,
+    );
     push_len(&mut input, domain_tag.len());
     input.extend_from_slice(domain_tag.as_bytes());
     push_len(&mut input, chain_id.as_str().len());

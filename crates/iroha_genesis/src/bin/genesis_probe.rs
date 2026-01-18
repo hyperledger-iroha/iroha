@@ -171,10 +171,10 @@ fn describe_flags(flags: u8) -> String {
         parts.push("PACKED_STRUCT");
     }
     if flags & header_flags::VARINT_OFFSETS != 0 {
-        parts.push("VARINT_OFFSETS");
+        parts.push("VARINT_OFFSETS(reserved)");
     }
     if flags & header_flags::COMPACT_SEQ_LEN != 0 {
-        parts.push("COMPACT_SEQ_LEN");
+        parts.push("COMPACT_SEQ_LEN(reserved)");
     }
     if flags & header_flags::FIELD_BITSET != 0 {
         parts.push("FIELD_BITSET");
@@ -371,7 +371,7 @@ mod tests {
             header_flags::PACKED_SEQ | header_flags::VARINT_OFFSETS | header_flags::FIELD_BITSET,
         );
         assert!(desc.contains("PACKED_SEQ"));
-        assert!(desc.contains("VARINT_OFFSETS"));
+        assert!(desc.contains("VARINT_OFFSETS(reserved)"));
         assert!(desc.contains("FIELD_BITSET"));
     }
 }

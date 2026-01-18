@@ -4830,7 +4830,7 @@ pub struct Status {
     pub uptime: Uptime,
     /// Number of view changes in the current round
     pub view_changes: u32,
-    /// Number of the transactions in the queue
+    /// Number of transactions tracked by the queue (queued + in-flight)
     pub queue_size: u64,
     /// Total number of DA deadline reschedules observed by this peer.
     #[norito(default)]
@@ -5729,8 +5729,12 @@ pub struct Metrics {
     pub isi_times: HistogramVec,
     /// Number of view changes in the current round
     pub view_changes: ViewChangesGauge,
-    /// Number of transactions in the queue
+    /// Number of transactions tracked by the queue (queued + in-flight)
     pub queue_size: GenericGauge<AtomicU64>,
+    /// Number of transactions still queued for selection.
+    pub queue_queued: GenericGauge<AtomicU64>,
+    /// Number of transactions in-flight after selection.
+    pub queue_inflight: GenericGauge<AtomicU64>,
     /// Kura fsync policy state (0=off, 1=on, 2=batched).
     pub kura_fsync_enabled: GenericGauge<AtomicU64>,
     /// Kura fsync failures grouped by target (data/index/hashes).
@@ -5871,6 +5875,10 @@ pub struct Metrics {
     pub settlement_conversion_total: IntCounterVec,
     /// Cumulative settlement haircut totals grouped by lane/dataspace (XOR units).
     pub settlement_haircut_total: CounterVec,
+    /// Subscription billing attempts grouped by pricing kind.
+    pub subscription_billing_attempts_total: IntCounterVec,
+    /// Subscription billing outcomes grouped by pricing kind and result.
+    pub subscription_billing_outcomes_total: IntCounterVec,
     /// Offline-to-online transfer lifecycle events grouped by event kind.
     pub offline_transfer_events_total: IntCounterVec,
     /// Aggregate offline receipt counters grouped by event kind.
@@ -5951,6 +5959,10 @@ pub struct Metrics {
     pub storage_budget_bytes_limit: GenericGaugeVec<AtomicU64>,
     /// Storage budget: cap exceed events per component.
     pub storage_budget_exceeded_total: IntCounterVec,
+    /// DA storage: cache outcomes per component.
+    pub storage_da_cache_total: IntCounterVec,
+    /// DA storage: churn bytes per component and direction.
+    pub storage_da_churn_bytes_total: IntCounterVec,
     /// Governance: proposal counts grouped by status
     pub governance_proposals_status: GenericGaugeVec<AtomicU64>,
     /// Governance: latest council members count.
@@ -6140,6 +6152,10 @@ pub struct Metrics {
     pub sumeragi_block_sync_roster_source_total: IntCounterVec,
     /// Sumeragi: block-sync roster drops grouped by reason.
     pub sumeragi_block_sync_roster_drop_total: IntCounterVec,
+    /// Sumeragi: block-sync ShareBlocks dropped because no request was tracked.
+    pub sumeragi_block_sync_share_blocks_unsolicited_total: IntCounter,
+    /// Sumeragi: consensus message drops/deferrals grouped by kind, outcome, and reason.
+    pub sumeragi_consensus_message_handling_total: IntCounterVec,
     /// Sumeragi: view-change triggers grouped by cause.
     pub sumeragi_view_change_cause_total: IntCounterVec,
     /// Sumeragi: unix timestamp (ms) of the last view-change trigger grouped by cause.
@@ -6308,6 +6324,8 @@ pub struct Metrics {
     pub sumeragi_rbc_sessions_pruned_total: IntCounter,
     /// Sumeragi RBC: READY broadcasts sent (cumulative)
     pub sumeragi_rbc_ready_broadcasts_total: IntCounter,
+    /// Sumeragi RBC: rebroadcasts skipped (kind=payload|ready)
+    pub sumeragi_rbc_rebroadcast_skipped_total: IntCounterVec,
     /// Sumeragi RBC: DELIVER broadcasts sent (cumulative)
     pub sumeragi_rbc_deliver_broadcasts_total: IntCounter,
     /// Sumeragi RBC: total payload bytes delivered and cached (gauge)
@@ -6358,6 +6376,8 @@ pub struct Metrics {
     pub sumeragi_rbc_da_reschedule_by_mode_total: IntCounterVec,
     /// Sumeragi RBC: pending blocks aborted due to missing/mismatched/invalid RBC payload (labeled by consensus mode)
     pub sumeragi_rbc_abort_total: IntCounterVec,
+    /// Sumeragi RBC: payload mismatches attributed to peers (labels: peer, kind)
+    pub sumeragi_rbc_mismatch_total: IntCounterVec,
     /// Sumeragi: kura persistence failures grouped by outcome (retry|abort)
     pub sumeragi_kura_store_failures_total: IntCounterVec,
     /// Sumeragi: last recorded kura persistence retry attempt (gauge)
@@ -6436,6 +6456,14 @@ pub struct Metrics {
     pub p2p_dropped_posts: GenericGauge<AtomicU64>,
     /// Number of p2p dropped broadcast messages (bounded mode)
     pub p2p_dropped_broadcasts: GenericGauge<AtomicU64>,
+    /// Number of inbound messages dropped because subscriber queues were full.
+    pub p2p_subscriber_queue_full_total: GenericGauge<AtomicU64>,
+    /// Per-topic inbound drops caused by subscriber queues being full.
+    pub p2p_subscriber_queue_full_by_topic_total: GenericGaugeVec<AtomicU64>,
+    /// Number of inbound messages dropped because no subscriber matches the topic.
+    pub p2p_subscriber_unrouted_total: GenericGauge<AtomicU64>,
+    /// Per-topic inbound drops caused by no subscriber matches.
+    pub p2p_subscriber_unrouted_by_topic_total: GenericGaugeVec<AtomicU64>,
     /// Number of p2p handshake failures
     pub p2p_handshake_failures: GenericGauge<AtomicU64>,
     /// Number of low-priority post messages throttled
@@ -6446,6 +6474,8 @@ pub struct Metrics {
     pub p2p_post_overflow_total: GenericGauge<AtomicU64>,
     /// Per-topic breakdown for post channel overflows
     pub p2p_post_overflow_by_topic: GenericGaugeVec<AtomicU64>,
+    /// Consensus ingress drops grouped by topic and reason.
+    pub consensus_ingress_drop_total: IntCounterVec,
     /// Number of DNS interval-based refresh cycles performed.
     pub p2p_dns_refresh_total: GenericGauge<AtomicU64>,
     /// Number of DNS TTL-based refresh cycles performed.
@@ -6510,6 +6540,8 @@ pub struct Metrics {
     pub p2p_ws_inbound_total: GenericGauge<AtomicU64>,
     /// Successful outbound WebSocket P2P connections
     pub p2p_ws_outbound_total: GenericGauge<AtomicU64>,
+    /// Network message queue depth by priority (High/Low).
+    pub p2p_queue_depth: GenericGaugeVec<AtomicU64>,
     /// Bounded network message queue drops split by priority and kind
     pub p2p_queue_dropped_total: GenericGaugeVec<AtomicU64>,
     /// Handshake latency histogram emulation (buckets by `le` in ms)
@@ -7651,6 +7683,28 @@ impl Default for Metrics {
             &["lane_id", "dataspace_id"],
         )
         .expect("Infallible");
+        let subscription_billing_attempts_total = IntCounterVec::new(
+            Opts::new(
+                "iroha_subscription_billing_attempts_total",
+                "Subscription billing attempts grouped by pricing kind.",
+            ),
+            &["pricing"],
+        )
+        .expect("Infallible");
+        let subscription_billing_outcomes_total = IntCounterVec::new(
+            Opts::new(
+                "iroha_subscription_billing_outcomes_total",
+                "Subscription billing outcomes grouped by pricing kind and result.",
+            ),
+            &["pricing", "result"],
+        )
+        .expect("Infallible");
+        for pricing in ["fixed", "usage"] {
+            let _ = subscription_billing_attempts_total.with_label_values(&[pricing]);
+            for result in ["paid", "failed", "suspended", "skipped"] {
+                let _ = subscription_billing_outcomes_total.with_label_values(&[pricing, result]);
+            }
+        }
         let offline_transfer_events_total = IntCounterVec::new(
             Opts::new(
                 "iroha_offline_transfer_events_total",
@@ -7826,8 +7880,17 @@ impl Default for Metrics {
             "Number of view changes in the current round",
         )
         .expect("Infallible");
-        let queue_size = GenericGauge::new("queue_size", "Number of the transactions in the queue")
-            .expect("Infallible");
+        let queue_size = GenericGauge::new(
+            "queue_size",
+            "Transactions tracked by the queue (queued + in-flight)",
+        )
+        .expect("Infallible");
+        let queue_queued =
+            GenericGauge::new("queue_queued", "Transactions still queued for selection")
+                .expect("Infallible");
+        let queue_inflight =
+            GenericGauge::new("queue_inflight", "Transactions in-flight after selection")
+                .expect("Infallible");
         let kura_fsync_enabled = GenericGauge::new(
             "kura_fsync_enabled",
             "Kura fsync policy state (0=off, 1=on, 2=batched).",
@@ -8090,6 +8153,22 @@ impl Default for Metrics {
                 "Storage budget exceed events per component",
             ),
             &["component"],
+        )
+        .expect("Infallible");
+        let storage_da_cache_total = IntCounterVec::new(
+            Opts::new(
+                "storage_da_cache_total",
+                "DA storage cache outcomes per component",
+            ),
+            &["component", "result"],
+        )
+        .expect("Infallible");
+        let storage_da_churn_bytes_total = IntCounterVec::new(
+            Opts::new(
+                "storage_da_churn_bytes_total",
+                "DA storage churn bytes per component and direction",
+            ),
+            &["component", "direction"],
         )
         .expect("Infallible");
         let governance_proposals_status = GenericGaugeVec::new(
@@ -8818,6 +8897,32 @@ impl Default for Metrics {
             "Number of p2p broadcast messages dropped due to backpressure",
         )
         .expect("Infallible");
+        let p2p_subscriber_queue_full_total = GenericGauge::new(
+            "p2p_subscriber_queue_full_total",
+            "Number of inbound messages dropped because subscriber queues were full",
+        )
+        .expect("Infallible");
+        let p2p_subscriber_queue_full_by_topic_total = GenericGaugeVec::new(
+            Opts::new(
+                "p2p_subscriber_queue_full_by_topic_total",
+                "Per-topic inbound drops caused by full subscriber queues",
+            ),
+            &["topic"],
+        )
+        .expect("Infallible");
+        let p2p_subscriber_unrouted_total = GenericGauge::new(
+            "p2p_subscriber_unrouted_total",
+            "Number of inbound messages dropped because no subscriber matches the topic",
+        )
+        .expect("Infallible");
+        let p2p_subscriber_unrouted_by_topic_total = GenericGaugeVec::new(
+            Opts::new(
+                "p2p_subscriber_unrouted_by_topic_total",
+                "Per-topic inbound drops caused by no matching subscriber",
+            ),
+            &["topic"],
+        )
+        .expect("Infallible");
         let p2p_handshake_failures =
             GenericGauge::new("p2p_handshake_failures", "Number of p2p handshake failures")
                 .expect("Infallible");
@@ -8842,6 +8947,14 @@ impl Default for Metrics {
                 "Per-topic per-peer post channel overflows (bounded per-topic)",
             ),
             &["priority", "topic"],
+        )
+        .expect("Infallible");
+        let consensus_ingress_drop_total = IntCounterVec::new(
+            Opts::new(
+                "consensus_ingress_drop_total",
+                "Consensus ingress drops grouped by topic and reason",
+            ),
+            &["topic", "reason"],
         )
         .expect("Infallible");
         let p2p_dns_refresh_total = GenericGauge::new(
@@ -9214,6 +9327,14 @@ impl Default for Metrics {
             "Sumeragi RBC READY broadcasts sent",
         )
         .expect("Infallible");
+        let sumeragi_rbc_rebroadcast_skipped_total = IntCounterVec::new(
+            Opts::new(
+                "sumeragi_rbc_rebroadcast_skipped_total",
+                "Sumeragi RBC rebroadcasts skipped (kind=payload|ready)",
+            ),
+            &["kind"],
+        )
+        .expect("Infallible");
         let sumeragi_rbc_deliver_broadcasts_total = IntCounter::new(
             "sumeragi_rbc_deliver_broadcasts_total",
             "Sumeragi RBC DELIVER broadcasts sent",
@@ -9382,6 +9503,14 @@ impl Default for Metrics {
                 "Sumeragi pending blocks aborted due to missing/mismatched/invalid RBC payload (labeled by consensus mode)",
             ),
             &["mode"],
+        )
+        .expect("Infallible");
+        let sumeragi_rbc_mismatch_total = IntCounterVec::new(
+            Opts::new(
+                "sumeragi_rbc_mismatch_total",
+                "Sumeragi RBC payload mismatches attributed to peers (labeled by peer, kind)",
+            ),
+            &["peer", "kind"],
         )
         .expect("Infallible");
         let sumeragi_kura_store_failures_total = IntCounterVec::new(
@@ -9576,6 +9705,14 @@ impl Default for Metrics {
         let sumeragi_phase_total_ema_ms = GenericGauge::new(
             "sumeragi_phase_total_ema_ms",
             "Sumeragi aggregate pipeline EMA latency (ms) across pacemaker-controlled phases",
+        )
+        .expect("Infallible");
+        let p2p_queue_depth = GenericGaugeVec::new(
+            Opts::new(
+                "p2p_queue_depth",
+                "Network message queue depth by priority (High/Low)",
+            ),
+            &["priority"],
         )
         .expect("Infallible");
         let p2p_queue_dropped_total = GenericGaugeVec::new(
@@ -9784,6 +9921,19 @@ impl Default for Metrics {
         )
         .expect("Infallible");
         let _ = sumeragi_block_sync_roster_drop_total.with_label_values(&["missing"]);
+        let sumeragi_block_sync_share_blocks_unsolicited_total = IntCounter::new(
+            "sumeragi_block_sync_share_blocks_unsolicited_total",
+            "Block-sync ShareBlocks dropped because no matching request was tracked",
+        )
+        .expect("Infallible");
+        let sumeragi_consensus_message_handling_total = IntCounterVec::new(
+            Opts::new(
+                "sumeragi_consensus_message_handling_total",
+                "Consensus message drops/deferrals grouped by kind, outcome, and reason",
+            ),
+            &["kind", "outcome", "reason"],
+        )
+        .expect("Infallible");
         let sumeragi_view_change_cause_total = IntCounterVec::new(
             Opts::new(
                 "sumeragi_view_change_cause_total",
@@ -9803,6 +9953,7 @@ impl Default for Metrics {
         for label in [
             "commit_failure",
             "quorum_timeout",
+            "stake_quorum_timeout",
             "censorship_evidence",
             "da_gate",
             "missing_payload",
@@ -11895,6 +12046,8 @@ impl Default for Metrics {
         register_guarded(&registry, &da_shard_cursor_lag_blocks);
         register!(
             registry,
+            subscription_billing_attempts_total,
+            subscription_billing_outcomes_total,
             offline_transfer_events_total,
             offline_transfer_receipts_total,
             offline_transfer_settled_amount,
@@ -12376,6 +12529,8 @@ impl Default for Metrics {
             isi_times,
             view_changes,
             queue_size,
+            queue_queued,
+            queue_inflight,
             kura_fsync_enabled,
             kura_fsync_failures_total,
             kura_fsync_latency_ms,
@@ -12458,6 +12613,8 @@ impl Default for Metrics {
             storage_budget_bytes_used,
             storage_budget_bytes_limit,
             storage_budget_exceeded_total,
+            storage_da_cache_total,
+            storage_da_churn_bytes_total,
             alias_usage_total,
             iso_reference_status,
             iso_reference_age_seconds,
@@ -12485,10 +12642,15 @@ impl Default for Metrics {
             sumeragi_vrf_rejects_total_by_reason,
             p2p_dropped_posts,
             p2p_dropped_broadcasts,
+            p2p_subscriber_queue_full_total,
+            p2p_subscriber_queue_full_by_topic_total,
+            p2p_subscriber_unrouted_total,
+            p2p_subscriber_unrouted_by_topic_total,
             p2p_handshake_failures,
             p2p_low_post_throttled_total,
             p2p_low_broadcast_throttled_total,
             p2p_post_overflow_total,
+            consensus_ingress_drop_total,
             p2p_dns_refresh_total,
             p2p_dns_ttl_refresh_total,
             p2p_dns_resolution_fail_total,
@@ -12519,6 +12681,7 @@ impl Default for Metrics {
             tx_gossip_restricted_public_policy,
             p2p_ws_inbound_total,
             p2p_ws_outbound_total,
+            p2p_queue_depth,
             p2p_queue_dropped_total,
             p2p_handshake_ms_bucket,
             p2p_handshake_ms_sum,
@@ -12542,6 +12705,8 @@ impl Default for Metrics {
             sumeragi_validation_reject_last_timestamp_ms,
             sumeragi_block_sync_roster_source_total,
             sumeragi_block_sync_roster_drop_total,
+            sumeragi_block_sync_share_blocks_unsolicited_total,
+            sumeragi_consensus_message_handling_total,
             sumeragi_view_change_cause_total,
             sumeragi_view_change_cause_last_timestamp_ms,
             sumeragi_qc_signer_counts,
@@ -12698,6 +12863,7 @@ impl Default for Metrics {
             registry,
             sumeragi_rbc_sessions_pruned_total,
             sumeragi_rbc_ready_broadcasts_total,
+            sumeragi_rbc_rebroadcast_skipped_total,
             sumeragi_rbc_deliver_broadcasts_total,
             sumeragi_da_votes_ingested_total
         );
@@ -12738,6 +12904,7 @@ impl Default for Metrics {
             sumeragi_rbc_da_reschedule_total,
             sumeragi_rbc_da_reschedule_by_mode_total,
             sumeragi_rbc_abort_total,
+            sumeragi_rbc_mismatch_total,
             sumeragi_kura_store_failures_total,
             sumeragi_kura_store_last_retry_attempt,
             sumeragi_kura_store_last_retry_backoff_ms,
@@ -12834,6 +13001,8 @@ impl Default for Metrics {
             isi_times,
             view_changes,
             queue_size,
+            queue_queued,
+            queue_inflight,
             kura_fsync_enabled,
             kura_fsync_failures_total,
             kura_fsync_latency_ms,
@@ -12895,6 +13064,8 @@ impl Default for Metrics {
             settlement_swapline_utilisation,
             settlement_conversion_total,
             settlement_haircut_total,
+            subscription_billing_attempts_total,
+            subscription_billing_outcomes_total,
             offline_transfer_events_total,
             offline_transfer_receipts_total,
             offline_transfer_settled_amount,
@@ -12935,6 +13106,8 @@ impl Default for Metrics {
             storage_budget_bytes_used,
             storage_budget_bytes_limit,
             storage_budget_exceeded_total,
+            storage_da_cache_total,
+            storage_da_churn_bytes_total,
             governance_proposals_status,
             governance_council_members,
             governance_council_alternates,
@@ -13020,11 +13193,16 @@ impl Default for Metrics {
             sumeragi_dropped_control_messages_total,
             p2p_dropped_posts,
             p2p_dropped_broadcasts,
+            p2p_subscriber_queue_full_total,
+            p2p_subscriber_queue_full_by_topic_total,
+            p2p_subscriber_unrouted_total,
+            p2p_subscriber_unrouted_by_topic_total,
             p2p_handshake_failures,
             p2p_low_post_throttled_total,
             p2p_low_broadcast_throttled_total,
             p2p_post_overflow_total,
             p2p_post_overflow_by_topic,
+            consensus_ingress_drop_total,
             p2p_dns_refresh_total,
             p2p_dns_ttl_refresh_total,
             p2p_dns_resolution_fail_total,
@@ -13057,6 +13235,7 @@ impl Default for Metrics {
             tx_gossip_caps,
             p2p_ws_inbound_total,
             p2p_ws_outbound_total,
+            p2p_queue_depth,
             p2p_queue_dropped_total,
             p2p_handshake_ms_bucket,
             p2p_handshake_ms_sum,
@@ -13079,6 +13258,8 @@ impl Default for Metrics {
             sumeragi_validation_reject_last_timestamp_ms,
             sumeragi_block_sync_roster_source_total,
             sumeragi_block_sync_roster_drop_total,
+            sumeragi_block_sync_share_blocks_unsolicited_total,
+            sumeragi_consensus_message_handling_total,
             sumeragi_view_change_cause_total,
             sumeragi_view_change_cause_last_timestamp_ms,
             sumeragi_qc_signer_counts,
@@ -13153,6 +13334,7 @@ impl Default for Metrics {
             sumeragi_rbc_sessions_active,
             sumeragi_rbc_sessions_pruned_total,
             sumeragi_rbc_ready_broadcasts_total,
+            sumeragi_rbc_rebroadcast_skipped_total,
             sumeragi_rbc_deliver_broadcasts_total,
             sumeragi_rbc_payload_bytes_delivered_total,
             sumeragi_rbc_lane_tx_count,
@@ -13178,6 +13360,7 @@ impl Default for Metrics {
             sumeragi_rbc_da_reschedule_total,
             sumeragi_rbc_da_reschedule_by_mode_total,
             sumeragi_rbc_abort_total,
+            sumeragi_rbc_mismatch_total,
             sumeragi_kura_store_failures_total,
             sumeragi_kura_store_last_retry_attempt,
             sumeragi_kura_store_last_retry_backoff_ms,
@@ -15697,6 +15880,18 @@ mod test {
     }
 
     #[test]
+    fn p2p_queue_depth_metric_accepts_updates() {
+        let metrics = Metrics::default();
+        metrics.p2p_queue_depth.with_label_values(&["High"]).set(12);
+        metrics.p2p_queue_depth.with_label_values(&["Low"]).set(7);
+        assert_eq!(
+            metrics.p2p_queue_depth.with_label_values(&["High"]).get(),
+            12
+        );
+        assert_eq!(metrics.p2p_queue_depth.with_label_values(&["Low"]).get(), 7);
+    }
+
+    #[test]
     fn soranet_reward_metrics_record_without_exporter() {
         let metrics = Metrics::default();
         metrics.record_soranet_reward("relay_hex", 0, "rewarded");
@@ -15770,6 +15965,33 @@ mod test {
             metrics
                 .torii_operator_auth_lockout_total
                 .with_label_values(&["gate", "invalid_session"])
+                .get(),
+            1
+        );
+    }
+
+    #[test]
+    fn records_rbc_rebroadcast_skips_by_kind() {
+        let metrics = Metrics::default();
+        metrics
+            .sumeragi_rbc_rebroadcast_skipped_total
+            .with_label_values(&["payload"])
+            .inc();
+        metrics
+            .sumeragi_rbc_rebroadcast_skipped_total
+            .with_label_values(&["ready"])
+            .inc();
+        assert_eq!(
+            metrics
+                .sumeragi_rbc_rebroadcast_skipped_total
+                .with_label_values(&["payload"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .sumeragi_rbc_rebroadcast_skipped_total
+                .with_label_values(&["ready"])
                 .get(),
             1
         );

@@ -10,7 +10,10 @@ use std::{
 };
 
 use iroha_crypto::{Hash, HashOf, MerkleTree};
-use iroha_data_model::{block::BlockHeader, peer::PeerId};
+use iroha_data_model::{
+    block::{BlockHeader, BlockSignature},
+    peer::PeerId,
+};
 use iroha_logger::prelude::*;
 use norito::codec::{Decode, Encode};
 use norito::{decode_from_bytes, to_bytes};
@@ -139,7 +142,7 @@ pub(super) struct PersistOutcome {
     pub(super) pressure: StorePressure,
 }
 
-pub(super) const PERSIST_VERSION: u8 = 4;
+pub(super) const PERSIST_VERSION: u8 = 5;
 
 fn persist_version_supported(version: u8) -> bool {
     version == PERSIST_VERSION
@@ -285,8 +288,7 @@ impl ChunkStore {
     fn write_session(&self, persisted: &PersistedSession) -> io::Result<()> {
         let path = Self::make_session_path(&self.dir, &persisted.key());
         let tmp = temp_session_path(&path);
-        let encoded =
-            to_bytes(persisted).map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+        let encoded = to_bytes(persisted).map_err(io::Error::other)?;
         {
             let mut file = fs::OpenOptions::new()
                 .create(true)
@@ -769,6 +771,12 @@ pub(super) struct PersistedSession {
     pub(crate) height: u64,
     pub(crate) view: u64,
     pub(crate) epoch: u64,
+    /// Optional block header snapshot for payload recovery.
+    #[norito(default)]
+    pub(crate) block_header: Option<BlockHeader>,
+    /// Optional leader signature over the block header.
+    #[norito(default)]
+    pub(crate) leader_signature: Option<BlockSignature>,
     pub(crate) total_chunks: u32,
     /// SHA-256 digests for each chunk, indexed by chunk position.
     #[norito(default)]
@@ -992,6 +1000,8 @@ mod tests {
             height: key.1,
             view: key.2,
             epoch: 0,
+            block_header: None,
+            leader_signature: None,
             total_chunks: 0,
             chunk_digests: Vec::new(),
             payload_hash: None,
@@ -1085,6 +1095,8 @@ mod tests {
             height: key.1,
             view: key.2,
             epoch: 0,
+            block_header: None,
+            leader_signature: None,
             total_chunks: 0,
             chunk_digests: Vec::new(),
             payload_hash: None,

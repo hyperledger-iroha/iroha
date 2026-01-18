@@ -88,7 +88,7 @@ fn genesis_asset_minted_across_peers() -> Result<()> {
     let sync_timeout = network.sync_timeout();
     let block_result: Result<()> = rt.block_on(async {
         let genesis = Arc::new(genesis_block);
-        for peer in network.peers().iter() {
+        for peer in network.peers() {
             if let Err(err) = peer
                 .start_checked(network.config_layers(), Some(&genesis))
                 .await

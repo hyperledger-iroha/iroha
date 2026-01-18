@@ -84,6 +84,8 @@ transport.submitTransaction(tx).join();
   `waitForTransactionStatus` to poll `/v1/pipeline/transactions/status` for the
   resulting hash, or configure a `PendingTransactionQueue` so failed submissions
   replay deterministically.
+  A `404` response indicates Torii has no cached status yet (for example after a
+  restart), so the client keeps polling until a terminal state arrives.
 
 ## UAID portfolio & manifests
 

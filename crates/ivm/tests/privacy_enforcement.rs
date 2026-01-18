@@ -2,6 +2,14 @@
 
 use ivm::{IVM, Instruction, Memory, ProgramMetadata, VMError, encoding, instruction};
 
+fn meta_with_mode(mode: u8) -> ProgramMetadata {
+    ProgramMetadata {
+        mode,
+        max_cycles: 2,
+        ..ProgramMetadata::default()
+    }
+}
+
 #[test]
 fn branch_on_private_fails() {
     let mut vm = IVM::new(u64::MAX);
@@ -117,10 +125,7 @@ fn parallel_shift_mismatched_tags_fails() {
 
 #[test]
 fn sha256block_private_address_fails() {
-    let mut meta = ProgramMetadata::default();
-    meta.mode = ivm::ivm_mode::ZK | ivm::ivm_mode::VECTOR;
-    meta.max_cycles = 2;
-    let mut program = meta.encode();
+    let mut program = meta_with_mode(ivm::ivm_mode::ZK | ivm::ivm_mode::VECTOR).encode();
     let sha = encoding::wide::encode_rr(instruction::wide::crypto::SHA256BLOCK, 0, 1, 0);
     program.extend_from_slice(&sha.to_le_bytes());
     program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
@@ -135,10 +140,7 @@ fn sha256block_private_address_fails() {
 
 #[test]
 fn sha3block_private_address_fails() {
-    let mut meta = ProgramMetadata::default();
-    meta.mode = ivm::ivm_mode::ZK;
-    meta.max_cycles = 2;
-    let mut program = meta.encode();
+    let mut program = meta_with_mode(ivm::ivm_mode::ZK).encode();
     let sha3 = encoding::wide::encode_rr(instruction::wide::crypto::SHA3BLOCK, 4, 10, 11);
     program.extend_from_slice(&sha3.to_le_bytes());
     program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
@@ -155,10 +157,7 @@ fn sha3block_private_address_fails() {
 
 #[test]
 fn wide_add_mismatched_tags_fails() {
-    let mut meta = ProgramMetadata::default();
-    meta.mode = ivm::ivm_mode::ZK;
-    meta.max_cycles = 2;
-    let mut program = meta.encode();
+    let mut program = meta_with_mode(ivm::ivm_mode::ZK).encode();
     let add = encoding::wide::encode_rr(instruction::wide::arithmetic::ADD, 3, 1, 2);
     program.extend_from_slice(&add.to_le_bytes());
     program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
@@ -175,10 +174,7 @@ fn wide_add_mismatched_tags_fails() {
 
 #[test]
 fn wide_add_propagates_secret_tag() {
-    let mut meta = ProgramMetadata::default();
-    meta.mode = ivm::ivm_mode::ZK;
-    meta.max_cycles = 2;
-    let mut program = meta.encode();
+    let mut program = meta_with_mode(ivm::ivm_mode::ZK).encode();
     let add = encoding::wide::encode_rr(instruction::wide::arithmetic::ADD, 3, 1, 2);
     program.extend_from_slice(&add.to_le_bytes());
     program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
@@ -195,10 +191,7 @@ fn wide_add_propagates_secret_tag() {
 
 #[test]
 fn wide_addi_propagates_tag() {
-    let mut meta = ProgramMetadata::default();
-    meta.mode = ivm::ivm_mode::ZK;
-    meta.max_cycles = 2;
-    let mut program = meta.encode();
+    let mut program = meta_with_mode(ivm::ivm_mode::ZK).encode();
     let addi = encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 3, 1, 7);
     program.extend_from_slice(&addi.to_le_bytes());
     program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
@@ -213,10 +206,7 @@ fn wide_addi_propagates_tag() {
 
 #[test]
 fn wide_cmov_secret_condition_fails() {
-    let mut meta = ProgramMetadata::default();
-    meta.mode = ivm::ivm_mode::ZK;
-    meta.max_cycles = 2;
-    let mut program = meta.encode();
+    let mut program = meta_with_mode(ivm::ivm_mode::ZK).encode();
     let cmov = encoding::wide::encode_rr(instruction::wide::arithmetic::CMOV, 3, 1, 2);
     program.extend_from_slice(&cmov.to_le_bytes());
     program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
@@ -232,10 +222,7 @@ fn wide_cmov_secret_condition_fails() {
 
 #[test]
 fn wide_jal_clears_tag() {
-    let mut meta = ProgramMetadata::default();
-    meta.mode = ivm::ivm_mode::ZK;
-    meta.max_cycles = 2;
-    let mut program = meta.encode();
+    let mut program = meta_with_mode(ivm::ivm_mode::ZK).encode();
     let jal = encoding::wide::encode_jump(instruction::wide::control::JAL, 5, 1);
     program.extend_from_slice(&jal.to_le_bytes());
     program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
@@ -249,10 +236,7 @@ fn wide_jal_clears_tag() {
 
 #[test]
 fn wide_jalr_secret_target_fails() {
-    let mut meta = ProgramMetadata::default();
-    meta.mode = ivm::ivm_mode::ZK;
-    meta.max_cycles = 2;
-    let mut program = meta.encode();
+    let mut program = meta_with_mode(ivm::ivm_mode::ZK).encode();
     let jalr = encoding::wide::encode_ri(instruction::wide::control::JALR, 5, 1, 0);
     program.extend_from_slice(&jalr.to_le_bytes());
     program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
@@ -267,10 +251,7 @@ fn wide_jalr_secret_target_fails() {
 
 #[test]
 fn wide_aesenc_mismatched_tags_fails() {
-    let mut meta = ProgramMetadata::default();
-    meta.mode = ivm::ivm_mode::ZK | ivm::ivm_mode::VECTOR;
-    meta.max_cycles = 2;
-    let mut program = meta.encode();
+    let mut program = meta_with_mode(ivm::ivm_mode::ZK | ivm::ivm_mode::VECTOR).encode();
     let aes = encoding::wide::encode_rr(instruction::wide::crypto::AESENC, 20, 10, 12);
     program.extend_from_slice(&aes.to_le_bytes());
     program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
@@ -291,10 +272,7 @@ fn wide_aesenc_mismatched_tags_fails() {
 
 #[test]
 fn wide_aesdec_propagates_tag() {
-    let mut meta = ProgramMetadata::default();
-    meta.mode = ivm::ivm_mode::ZK | ivm::ivm_mode::VECTOR;
-    meta.max_cycles = 2;
-    let mut program = meta.encode();
+    let mut program = meta_with_mode(ivm::ivm_mode::ZK | ivm::ivm_mode::VECTOR).encode();
     let aes = encoding::wide::encode_rr(instruction::wide::crypto::AESDEC, 20, 10, 12);
     program.extend_from_slice(&aes.to_le_bytes());
     program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());

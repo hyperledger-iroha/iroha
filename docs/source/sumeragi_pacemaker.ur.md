@@ -21,11 +21,11 @@ Status: EMA سے اخذ کردہ base window، RTT floor، اور configurable j
 
 ## تصورات
 - Base window: observed consensus phases کی exponential moving average
-  (propose, collect_da, collect_prevote, collect_precommit, collect_aggregator,
-  commit). EMA کو `sumeragi.npos.timeouts.*` سے seed کیا جاتا ہے؛ جب تک کافی
-  samples نہ آئیں یہ عملی طور پر configured defaults سے match کرتی ہے۔
-  Execution اور witness EMAs observability کیلئے export ہوتی ہیں مگر ابھی
-  pacemaker window میں شامل نہیں۔ Smoothed values `sumeragi_phase_latency_ema_ms{phase=...}` کے ذریعے نظر آتی ہیں۔
+  (propose, collect_da, collect_prevote, collect_precommit, commit). EMA کو
+  `sumeragi.npos.timeouts.*` سے seed کیا جاتا ہے؛ جب تک کافی samples نہ آئیں یہ
+  عملی طور پر configured defaults سے match کرتی ہے۔ `collect_aggregator` EMA
+  observability کیلئے export ہوتی ہے مگر pacemaker window میں شامل نہیں۔
+  Smoothed values `sumeragi_phase_latency_ema_ms{phase=...}` کے ذریعے نظر آتی ہیں۔
 - Backoff multiplier: `sumeragi.pacemaker_backoff_multiplier` (default 1). ہر timeout موجودہ window میں `base * multiplier` کا اضافہ کرتا ہے۔
 - RTT floor: `avg_rtt_ms * sumeragi.pacemaker_rtt_floor_multiplier` (default 2). زیادہ latency والے links پر overly aggressive timeouts روکتا ہے۔
 - Cap: `sumeragi.pacemaker_max_backoff_ms` (default 60_000 ms). window کیلئے سخت ceiling.

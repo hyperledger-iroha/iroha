@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.governance;
 
 import java.math.BigInteger;
 import java.util.List;
+import java.util.Map;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.instructions.CastPlainBallotInstruction;
 import org.hyperledger.iroha.android.model.instructions.CastZkBallotInstruction;

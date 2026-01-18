@@ -118,6 +118,14 @@ const COMPOSER_MULTISIG_POLICY: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../fixtures/composer/multisig_policy.json"
 ));
+const SAMPLE_ALICE_PUBLIC_KEY: &str =
+    "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
+const SAMPLE_OTHER_PUBLIC_KEY: &str =
+    "ed0120E9F632D3034BAB6BB26D92AC8FD93EF878D9C5E69E01B61B4C47101884EE2F99";
+const SAMPLE_ALICE_ACCOUNT_ID: &str =
+    "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
+const SAMPLE_BOB_ACCOUNT_ID: &str =
+    "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016@wonderland";
 
 static CLI_OVERRIDES: LazyLock<Mutex<CliOverrides>> =
     LazyLock::new(|| Mutex::new(CliOverrides::default()));
@@ -800,7 +808,8 @@ fn set_cli_overrides(overrides: CliOverrides) {
 
 #[cfg(test)]
 fn reset_cli_overrides_for_tests() {
-    set_cli_overrides(CliOverrides::default());
+    let env_overrides = parse_env_overrides().expect("parse env overrides");
+    set_cli_overrides(env_overrides);
 }
 
 fn print_cli_usage() {
@@ -1229,7 +1238,8 @@ impl ComposerTemplate {
                 app.composer_asset_id = template_asset_id("rose#wonderland", signer.account_id())
                     .unwrap_or_else(|| format!("rose#wonderland#{}", signer.account_id()));
                 app.composer_quantity = "1".to_owned();
-                app.composer_destination_account = format!("newcomer@{domain}");
+                app.composer_destination_account =
+                    sample_account_id_for_domain(&domain, SAMPLE_OTHER_PUBLIC_KEY);
                 app.last_info = Some("Loaded implicit receive transfer template.".to_owned());
             }
             ComposerTemplate::RegisterDomainSideGarden => {
@@ -1242,7 +1252,8 @@ impl ComposerTemplate {
                 let domain = signer
                     .map(|authority| authority.account_id().domain().to_string())
                     .unwrap_or_else(|| "wonderland".to_owned());
-                app.composer_account_id = format!("carol@{domain}");
+                app.composer_account_id =
+                    sample_account_id_for_domain(&domain, SAMPLE_OTHER_PUBLIC_KEY);
                 app.last_info = Some("Loaded account registration template.".to_owned());
             }
             ComposerTemplate::RegisterAssetDefinitionLily => {
@@ -1356,27 +1367,35 @@ impl ComposerTemplate {
                     .unwrap_or_else(|| "wonderland".to_owned());
                 let owner = signer
                     .map(|authority| authority.account_id().to_string())
-                    .unwrap_or_else(|| format!("alice@{domain}"));
-                app.composer_multisig_account = format!("multisig@{domain}");
+                    .unwrap_or_else(|| {
+                        sample_account_id_for_domain(&domain, SAMPLE_ALICE_PUBLIC_KEY)
+                    });
+                app.composer_multisig_account = signers
+                    .iter()
+                    .find(|candidate| candidate.account_id().to_string() != owner)
+                    .map(|authority| authority.account_id().to_string())
+                    .unwrap_or_else(|| {
+                        sample_account_id_for_domain(&domain, SAMPLE_OTHER_PUBLIC_KEY)
+                    });
                 let mut instructions = COMPOSER_MULTISIG_INSTRUCTIONS.trim().to_owned();
-                instructions = instructions.replace("alice@wonderland", &owner);
+                instructions = instructions.replace(SAMPLE_ALICE_ACCOUNT_ID, &owner);
                 if let Some(other) = signers
                     .iter()
                     .find(|candidate| candidate.account_id().to_string() != owner)
                 {
-                    instructions =
-                        instructions.replace("bob@wonderland", &other.account_id().to_string());
+                    instructions = instructions
+                        .replace(SAMPLE_BOB_ACCOUNT_ID, &other.account_id().to_string());
                 }
                 app.composer_multisig_instructions = instructions;
                 app.composer_multisig_ttl_enabled = true;
                 let mut policy_json = COMPOSER_MULTISIG_POLICY.trim().to_owned();
-                policy_json = policy_json.replace("alice@wonderland", &owner);
+                policy_json = policy_json.replace(SAMPLE_ALICE_ACCOUNT_ID, &owner);
                 if let Some(other) = signers
                     .iter()
                     .find(|candidate| candidate.account_id().to_string() != owner)
                 {
                     policy_json =
-                        policy_json.replace("bob@wonderland", &other.account_id().to_string());
+                        policy_json.replace(SAMPLE_BOB_ACCOUNT_ID, &other.account_id().to_string());
                 }
                 app.composer_multisig_ttl_ms = json::from_str::<MultisigSpec>(&policy_json)
                     .map(|policy| policy.transaction_ttl_ms.get())
@@ -1398,6 +1417,10 @@ impl ComposerTemplate {
 fn template_asset_id(definition: &str, owner: &AccountId) -> Option<String> {
     let definition = definition.parse::<AssetDefinitionId>().ok()?;
     Some(AssetId::new(definition, owner.clone()).to_string())
+}
+
+fn sample_account_id_for_domain(domain: &str, public_key: &str) -> String {
+    format!("{public_key}@{domain}")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2470,9 +2493,13 @@ lane_count = 2
         let script = r#"#!/bin/sh
 set -e
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
-printf '%s\n' "$@" > "$SCRIPT_DIR/kagami_cli_override.log"
+printf '%s\n' "$@" >> "$SCRIPT_DIR/kagami_cli_override.log"
+if [ "$1" = "--version" ]; then
+  echo "kagami-stub iroha3"
+  exit 0
+fi
 cat <<'JSON'
-{"chain":"00000000-0000-0000-0000-000000000000","ivm_dir":".","transactions":[{"instructions":[]}]}
+{"chain":"00000000-0000-0000-0000-000000000000","ivm_dir":".","consensus_mode":"Permissioned","transactions":[{"instructions":[]}]}
 JSON
 "#;
         std::fs::write(&script_path, script).expect("write kagami CLI override stub");
@@ -8984,7 +9011,7 @@ impl MochiApp {
             ui.add(
                 egui::TextEdit::multiline(&mut self.composer_multisig_instructions)
                     .desired_rows(6)
-                    .hint_text("[ { \"kind\": \"mint_asset\", \"asset\": \"rose#wonderland#alice@wonderland\", \"quantity\": \"1\" } ]"),
+                    .hint_text("[ { \"kind\": \"mint_asset\", \"asset\": \"rose#wonderland#ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland\", \"quantity\": \"1\" } ]"),
             );
             ui.horizontal(|ui| {
                 ui.checkbox(
@@ -9003,7 +9030,7 @@ impl MochiApp {
             ui.add(
                 egui::TextEdit::multiline(&mut self.composer_multisig_policy_json)
                     .desired_rows(4)
-                    .hint_text("{ \"signatories\": { \"alice@wonderland\": 1 }, \"quorum\": 1, \"transaction_ttl_ms\": 3600000 }"),
+                    .hint_text("{ \"signatories\": { \"ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland\": 1 }, \"quorum\": 1, \"transaction_ttl_ms\": 3600000 }"),
             );
             if !self.composer_multisig_policy_json.trim().is_empty() {
                 match Self::parse_multisig_policy(&self.composer_multisig_policy_json) {
@@ -11281,6 +11308,9 @@ impl PeerStatusView {
         governance: Option<&&SumeragiLaneGovernance>,
     ) -> RelayIngestState {
         if let Some(relay) = relay {
+            if relay.qc.is_none() {
+                return RelayIngestState::MissingQc;
+            }
             if relay.da_commitment_hash.is_none() {
                 return RelayIngestState::MissingDa;
             }
@@ -11401,7 +11431,7 @@ mod tests {
             time::{TimeEvent, TimeInterval},
         },
         nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneStorageProfile, LaneVisibility},
-        prelude::{AccountId, Hash, HashOf, Numeric},
+        prelude::{Hash, HashOf, Numeric},
         role::RoleId,
     };
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
@@ -11458,8 +11488,10 @@ mod tests {
         let mut app = MochiApp::default();
         app.active_view = ActiveView::Logs;
         let ctx = Context::default();
-        CentralPanel::default().show(&ctx, |ui| {
-            app.render_view_tabs(ui);
+        let _ = ctx.run(Default::default(), |ctx| {
+            CentralPanel::default().show(ctx, |ui| {
+                app.render_view_tabs(ui);
+            });
         });
         assert_eq!(app.active_view, ActiveView::Logs);
     }
@@ -11486,8 +11518,10 @@ mod tests {
         let metrics = app.collect_dashboard_metrics(&peer_rows);
 
         let ctx = Context::default();
-        CentralPanel::default().show(&ctx, |ui| {
-            app.render_overview_bar(ui, &mut supervisor, &peer_rows, &metrics);
+        let _ = ctx.run(Default::default(), |ctx| {
+            CentralPanel::default().show(ctx, |ui| {
+                app.render_overview_bar(ui, &mut supervisor, &peer_rows, &metrics);
+            });
         });
 
         assert!(!app.settings_dialog);
@@ -11806,7 +11840,7 @@ mod tests {
             return;
         }
         let _lock = env_lock().lock().expect("env lock");
-        let (port, server_handle) = spawn_mock_torii_server();
+        let port = reserve_free_port();
         let port_str = port.to_string();
 
         let temp = tempfile::tempdir().expect("temp dir");
@@ -11821,6 +11855,7 @@ mod tests {
 
         let mut app = MochiApp::default();
         let mut supervisor = app.supervisor.take().expect("supervisor ready");
+        let server_handle = spawn_mock_torii_server(port);
         let handle = app.runtime.handle().clone();
         let result = MochiApp::reset_lane_with_lifecycle(&mut supervisor, 0, &handle);
         assert!(
@@ -11873,14 +11908,17 @@ mod tests {
 
     #[test]
     fn parse_multisig_policy_parses_json() {
-        let json = r#"{
-  "signatories": {
-    "alice@wonderland": 1
-  },
+        let account = ALICE_ID.to_string();
+        let json = format!(
+            r#"{{
+  "signatories": {{
+    "{account}": 1
+  }},
   "quorum": 1,
   "transaction_ttl_ms": 3600000
-}"#;
-        let spec = MochiApp::parse_multisig_policy(json).expect("policy should parse");
+}}"#
+        );
+        let spec = MochiApp::parse_multisig_policy(&json).expect("policy should parse");
         assert!(spec.signatories.contains_key(&*ALICE_ID));
         assert_eq!(spec.quorum.get(), 1);
         assert_eq!(spec.transaction_ttl_ms.get(), 3_600_000);
@@ -11909,7 +11947,7 @@ mod tests {
         app.composer_admission_fee_asset = "rose#wonderland".to_owned();
         app.composer_admission_fee_amount = "1".to_owned();
         app.composer_admission_fee_destination_burn = false;
-        app.composer_admission_fee_destination_account = "treasury@wonderland".to_owned();
+        app.composer_admission_fee_destination_account = ALICE_ID.to_string();
         app.composer_admission_min_initial_amounts = "rose#wonderland = 5".to_owned();
         app.composer_admission_default_role = "basic_user".to_owned();
 
@@ -11924,7 +11962,7 @@ mod tests {
         let asset: AssetDefinitionId = "rose#wonderland".parse().unwrap();
         assert_eq!(fee.asset_definition_id, asset);
         assert_eq!(fee.amount, "1".parse::<Numeric>().unwrap());
-        let treasury: AccountId = "treasury@wonderland".parse().unwrap();
+        let treasury = ALICE_ID.clone();
         match fee.destination {
             ImplicitAccountFeeDestination::Account(account) => assert_eq!(account, treasury),
             other => panic!("unexpected fee destination: {other:?}"),
@@ -14202,10 +14240,14 @@ mod tests {
         LOCK.get_or_init(|| Mutex::new(()))
     }
 
-    fn spawn_mock_torii_server() -> (u16, std::thread::JoinHandle<()>) {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock torii");
-        let port = listener.local_addr().expect("listener addr").port();
-        let handle = std::thread::spawn(move || {
+    fn reserve_free_port() -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind free port");
+        listener.local_addr().expect("listener addr").port()
+    }
+
+    fn spawn_mock_torii_server(port: u16) -> std::thread::JoinHandle<()> {
+        let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind mock torii");
+        std::thread::spawn(move || {
             for stream in listener.incoming().take(2) {
                 let mut stream = match stream {
                     Ok(stream) => stream,
@@ -14251,8 +14293,7 @@ mod tests {
                     }
                 }
             }
-        });
-        (port, handle)
+        })
     }
 
     fn genesis_invocation_count(path: &Path) -> usize {
@@ -14270,13 +14311,20 @@ mod tests {
             "kagami_stub.sh",
             r#"#!/bin/sh
 set -e
+if [ "$1" = "--version" ]; then
+  echo "kagami-stub iroha3"
+  exit 0
+fi
+if [ "$1" = "verify" ]; then
+  exit 0
+fi
 if [ "$1" = "genesis" ] && [ "$2" = "generate" ]; then
   LOG_FILE="${MOCHI_TEST_KAGAMI_LOG:-}"
   if [ -n "$LOG_FILE" ]; then
     printf '%s\n' "$@" >> "$LOG_FILE"
   fi
   cat <<'JSON'
-{"chain":"00000000-0000-0000-0000-000000000000","ivm_dir":".","transactions":[{"instructions":[]}]}
+{"chain":"00000000-0000-0000-0000-000000000000","ivm_dir":".","consensus_mode":"Permissioned","transactions":[{"instructions":[]}]}
 JSON
 else
   printf 'unexpected invocation: %s\n' "$0 $*" >&2

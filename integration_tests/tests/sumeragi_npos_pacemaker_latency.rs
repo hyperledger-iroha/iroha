@@ -5,10 +5,12 @@ use std::time::{Duration, Instant};
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::{metrics::MetricsReader, sandbox};
 use iroha::data_model::{
-    isi::SetParameter,
-    parameter::{Parameter, SumeragiParameter, system::SumeragiNposParameters},
+    Level,
+    isi::{InstructionBox, Log, SetParameter},
+    parameter::{BlockParameter, Parameter, SumeragiParameter, system::SumeragiNposParameters},
 };
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
+use nonzero_ext::nonzero;
 use tokio::time::sleep;
 
 const BLOCK_TIME_MS: u64 = 1_000;
@@ -73,6 +75,9 @@ async fn npos_pacemaker_targets_one_second_under_250ms_links() -> Result<()> {
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::RedundantSendR(REDUNDANT_SEND_R),
         )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Block(
+            BlockParameter::MaxTransactions(nonzero!(1_u64)),
+        )))
         .with_genesis_instruction(SetParameter::new(Parameter::Custom(
             npos_params.into_custom_parameter(),
         )));
@@ -90,6 +95,13 @@ async fn npos_pacemaker_targets_one_second_under_250ms_links() -> Result<()> {
     let start_status = client.get_status()?;
     let target_height = start_status.blocks + SAMPLE_BLOCKS;
     let start = Instant::now();
+    for idx in 0..SAMPLE_BLOCKS {
+        client
+            .submit::<InstructionBox>(
+                Log::new(Level::INFO, format!("pacemaker latency tick {idx}")).into(),
+            )
+            .wrap_err_with(|| format!("submit pacemaker latency tick {idx}"))?;
+    }
     network.ensure_blocks(target_height).await?;
     let elapsed_ms = start.elapsed().as_secs_f64() * 1_000.0;
     let produced = target_height - start_status.blocks;

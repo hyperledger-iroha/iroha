@@ -1,5 +1,4 @@
 //! Tests covering ML-DSA private key validation behaviour.
-#![cfg(feature = "ml-dsa")]
 
 use iroha_crypto::{Algorithm, PrivateKey};
 

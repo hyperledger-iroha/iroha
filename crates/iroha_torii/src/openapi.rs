@@ -215,6 +215,13 @@ fn tags_section() -> Value {
         Value::String("NFT listing and query helpers.".to_owned()),
     );
 
+    let mut subscriptions = Map::new();
+    subscriptions.insert("name".into(), Value::String("Subscriptions".to_owned()));
+    subscriptions.insert(
+        "description".into(),
+        Value::String("Subscription plan and billing helpers.".to_owned()),
+    );
+
     let mut parameters = Map::new();
     parameters.insert("name".into(), Value::String("Parameters".to_owned()));
     parameters.insert(
@@ -324,6 +331,7 @@ fn tags_section() -> Value {
         Value::Object(domains),
         Value::Object(assets),
         Value::Object(nfts),
+        Value::Object(subscriptions),
         Value::Object(parameters),
         Value::Object(explorer),
         Value::Object(connect),
@@ -1625,10 +1633,18 @@ fn offline_receipt_query_parameters() -> Vec<Value> {
 }
 
 fn string_query_param(name: &str, description: &str) -> Value {
+    string_query_param_with_required(name, description, false)
+}
+
+fn required_string_query_param(name: &str, description: &str) -> Value {
+    string_query_param_with_required(name, description, true)
+}
+
+fn string_query_param_with_required(name: &str, description: &str, required: bool) -> Value {
     let mut param = Map::new();
     param.insert("name".into(), Value::String(name.to_owned()));
     param.insert("in".into(), Value::String("query".to_owned()));
-    param.insert("required".into(), Value::Bool(false));
+    param.insert("required".into(), Value::Bool(required));
     param.insert("description".into(), Value::String(description.to_owned()));
     let mut schema = Map::new();
     schema.insert("type".into(), Value::String("string".to_owned()));
@@ -2369,6 +2385,31 @@ fn transaction_paths() -> Map {
             "Submit a SignedTransaction encoded as Norito bytes.",
             "#/components/schemas/JsonValue",
         )),
+    );
+    let mut pipeline_status = json_get_operation(
+        "Transactions",
+        "Fetch pipeline transaction status.",
+        "Return the latest pipeline status for a signed transaction hash.",
+        "#/components/schemas/JsonValue",
+        vec![required_string_query_param(
+            "hash",
+            "Transaction hash (hex).",
+        )],
+    );
+    if let Some(Value::Object(get_op)) = pipeline_status.get_mut("get") {
+        if let Some(Value::Object(responses)) = get_op.get_mut("responses") {
+            responses.insert(
+                "404".to_owned(),
+                json_response(
+                    "Pipeline status not found; Torii has no cached entry for the hash yet.",
+                    error_schema_reference(),
+                ),
+            );
+        }
+    }
+    paths.insert(
+        "/v1/pipeline/transactions/status".to_owned(),
+        Value::Object(pipeline_status),
     );
     paths.insert(
         "/v1/iso20022/pacs008".to_owned(),
@@ -3369,6 +3410,145 @@ fn nft_paths() -> Map {
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
+        )),
+    );
+    paths
+}
+
+fn subscription_paths() -> Map {
+    let mut paths = Map::new();
+    let plan_query_params = vec![
+        string_query_param("provider", "Filter plans by provider account id."),
+        integer_query_param("limit", "Optional page size limit.", Some("uint64")),
+        integer_query_param(
+            "offset",
+            "Optional starting offset (default 0).",
+            Some("uint64"),
+        ),
+    ];
+    let mut plans = json_get_operation(
+        "Subscriptions",
+        "List subscription plans.",
+        "List subscription plans by provider.",
+        "#/components/schemas/JsonValue",
+        plan_query_params,
+    );
+    plans.extend(json_post_operation(
+        "Subscriptions",
+        "Create a subscription plan.",
+        "Register a subscription plan on an asset definition.",
+        "#/components/schemas/JsonValue",
+        "#/components/schemas/JsonValue",
+        Vec::new(),
+    ));
+    paths.insert("/v1/subscriptions/plans".to_owned(), Value::Object(plans));
+
+    let subscription_query_params = vec![
+        string_query_param("owned_by", "Filter subscriptions by subscriber account id."),
+        string_query_param("provider", "Filter subscriptions by provider account id."),
+        string_query_param(
+            "status",
+            "Filter by status (`active`, `paused`, `past_due`, `canceled`, `suspended`).",
+        ),
+        integer_query_param("limit", "Optional page size limit.", Some("uint64")),
+        integer_query_param(
+            "offset",
+            "Optional starting offset (default 0).",
+            Some("uint64"),
+        ),
+    ];
+    let mut subs = json_get_operation(
+        "Subscriptions",
+        "List subscriptions.",
+        "List subscriptions with optional filters.",
+        "#/components/schemas/JsonValue",
+        subscription_query_params,
+    );
+    subs.extend(json_post_operation(
+        "Subscriptions",
+        "Create a subscription.",
+        "Create a subscription NFT and billing trigger.",
+        "#/components/schemas/JsonValue",
+        "#/components/schemas/JsonValue",
+        Vec::new(),
+    ));
+    paths.insert("/v1/subscriptions".to_owned(), Value::Object(subs));
+
+    let sub_param = string_path_param("subscription_id", "Subscription NFT identifier.");
+    paths.insert(
+        "/v1/subscriptions/{subscription_id}".to_owned(),
+        Value::Object(json_get_operation(
+            "Subscriptions",
+            "Fetch a subscription.",
+            "Fetch a subscription by NFT id.",
+            "#/components/schemas/JsonValue",
+            vec![sub_param.clone()],
+        )),
+    );
+    paths.insert(
+        "/v1/subscriptions/{subscription_id}/pause".to_owned(),
+        Value::Object(json_post_operation(
+            "Subscriptions",
+            "Pause a subscription.",
+            "Pause a subscription and unregister billing triggers.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            vec![sub_param.clone()],
+        )),
+    );
+    paths.insert(
+        "/v1/subscriptions/{subscription_id}/resume".to_owned(),
+        Value::Object(json_post_operation(
+            "Subscriptions",
+            "Resume a subscription.",
+            "Resume a subscription and re-schedule billing.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            vec![sub_param.clone()],
+        )),
+    );
+    paths.insert(
+        "/v1/subscriptions/{subscription_id}/cancel".to_owned(),
+        Value::Object(json_post_operation(
+            "Subscriptions",
+            "Cancel a subscription.",
+            "Cancel a subscription immediately or schedule cancellation at period end.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            vec![sub_param.clone()],
+        )),
+    );
+    paths.insert(
+        "/v1/subscriptions/{subscription_id}/keep".to_owned(),
+        Value::Object(json_post_operation(
+            "Subscriptions",
+            "Keep a subscription.",
+            "Undo a scheduled period-end cancellation and keep billing active.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            vec![sub_param.clone()],
+        )),
+    );
+    paths.insert(
+        "/v1/subscriptions/{subscription_id}/usage".to_owned(),
+        Value::Object(json_post_operation(
+            "Subscriptions",
+            "Record subscription usage.",
+            "Record usage for a subscription via a usage trigger.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            vec![sub_param.clone()],
+        )),
+    );
+    paths.insert(
+        "/v1/subscriptions/{subscription_id}/charge-now".to_owned(),
+        Value::Object(json_post_operation(
+            "Subscriptions",
+            "Charge a subscription now.",
+            "Trigger immediate billing for a subscription.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            vec![sub_param],
         )),
     );
     paths
@@ -5836,6 +6016,7 @@ fn paths_section() -> Map {
     paths.extend(domain_paths());
     paths.extend(asset_paths());
     paths.extend(nft_paths());
+    paths.extend(subscription_paths());
     paths.extend(parameter_paths());
     paths.extend(space_directory_paths());
     paths.extend(explorer_paths());
@@ -9499,6 +9680,31 @@ mod tests {
         assert!(paths.contains_key("/v1/soranet/privacy/event"));
         assert!(paths.contains_key("/v1/webhooks"));
         assert!(paths.contains_key("/v1/notify/devices"));
+    }
+
+    #[test]
+    fn pipeline_status_documents_not_found_response() {
+        let doc = generate_spec();
+        let paths = doc
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("paths section");
+        let status = paths
+            .get("/v1/pipeline/transactions/status")
+            .and_then(Value::as_object)
+            .expect("pipeline status path");
+        let get = status
+            .get("get")
+            .and_then(Value::as_object)
+            .expect("get op");
+        let responses = get
+            .get("responses")
+            .and_then(Value::as_object)
+            .expect("responses");
+        assert!(
+            responses.contains_key("404"),
+            "pipeline status should document 404 for missing cache entries"
+        );
     }
 
     #[test]

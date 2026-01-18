@@ -1,20 +1,25 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
+
+import requests
+from requests.structures import CaseInsensitiveDict
 
 
-class StubResponse:
+class StubResponse(requests.Response):
     """Minimal requests.Response stub that captures the provided payload."""
 
     def __init__(self, status_code: int = 200, payload: Optional[Dict[str, Any]] = None) -> None:
+        super().__init__()
         self.status_code = status_code
         self._payload = payload
-        self.headers: Dict[str, str] = {"Content-Type": "application/json"}
-        self.content = json.dumps(payload).encode("utf-8") if payload is not None else b""
-        self.text = self.content.decode("utf-8")
+        self.headers = CaseInsensitiveDict({"Content-Type": "application/json"})
+        content = json.dumps(payload).encode("utf-8") if payload is not None else b""
+        self._content = content
+        self.encoding = "utf-8"
 
-    def json(self) -> Dict[str, Any]:
+    def json(self, **kwargs: Any) -> Any:
         if self._payload is None:
             raise ValueError("no payload")
         return json.loads(self.content.decode("utf-8"))
@@ -25,34 +30,35 @@ class StubResponse:
     def __enter__(self) -> "StubResponse":
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> bool:
+    def __exit__(self, *args: object) -> None:
         self.close()
-        return False
+        return None
 
 
-class RecordingSession:
+class RecordingSession(requests.Session):
     """Capture outgoing requests and return a configured stub response."""
 
     def __init__(self, response: StubResponse) -> None:
+        super().__init__()
         self._response = response
         self.calls: list[Dict[str, Any]] = []
 
     def request(
         self,
-        method: str,
-        url: str,
-        params: Optional[Dict[str, Any]] = None,
-        headers: Optional[Dict[str, str]] = None,
-        data: Optional[bytes] = None,
-        stream: bool = False,
-        timeout: Optional[float] = None,
-    ) -> StubResponse:
+        method: Union[str, bytes],
+        url: Union[str, bytes],
+        *args: Any,
+        **kwargs: Any,
+    ) -> requests.Response:
+        params = kwargs.get("params") or {}
+        headers = kwargs.get("headers") or {}
+        data = kwargs.get("data")
         self.calls.append(
             {
                 "method": method,
                 "url": url,
-                "params": params or {},
-                "headers": headers or {},
+                "params": params,
+                "headers": headers,
                 "data": data,
             }
         )
@@ -60,18 +66,11 @@ class RecordingSession:
 
     def get(
         self,
-        url: str,
-        *,
-        params: Optional[Dict[str, Any]] = None,
-        stream: bool = False,
-        timeout: Optional[float] = None,
-        headers: Optional[Dict[str, str]] = None,
-    ) -> StubResponse:
+        url: Union[str, bytes],
+        **kwargs: Any,
+    ) -> requests.Response:
         return self.request(
             "GET",
             url,
-            params=params,
-            headers=headers,
-            stream=stream,
-            timeout=timeout,
+            **kwargs,
         )

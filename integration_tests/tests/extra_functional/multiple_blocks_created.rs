@@ -166,17 +166,14 @@ async fn multiple_blocks_created() -> Result<()> {
             let asset = assets.into_iter().find(|asset| {
                 *asset.id().account() == account_id && *asset.id().definition() == definition
             });
-            match asset {
-                Some(asset) => {
-                    if *asset.value() != expected_value {
-                        all_ok = false;
-                        break;
-                    }
-                }
-                None => {
+            if let Some(asset) = asset {
+                if *asset.value() != expected_value {
                     all_ok = false;
                     break;
                 }
+            } else {
+                all_ok = false;
+                break;
             }
         }
 

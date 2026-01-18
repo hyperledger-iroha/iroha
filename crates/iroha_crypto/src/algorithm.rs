@@ -16,7 +16,6 @@ use crate::error::NoSuchAlgorithm;
 pub const ED_25519: &str = "ed25519";
 /// String algorithm representation
 pub const SECP_256_K1: &str = "secp256k1";
-#[cfg(feature = "ml-dsa")]
 /// String algorithm representation
 pub const ML_DSA: &str = "ml-dsa";
 #[cfg(feature = "gost")]
@@ -76,7 +75,6 @@ crate::ffi::ffi_item! {
         #[cfg(feature = "bls")]
         /// BLS12-381 (small) scheme
         BlsSmall = 3,
-        #[cfg(feature = "ml-dsa")]
         /// ML‑DSA (Dilithium) post-quantum signature scheme
         MlDsa = 4,
         #[cfg(feature = "gost")]
@@ -106,7 +104,6 @@ impl Algorithm {
         match self {
             Self::Ed25519 => ED_25519,
             Self::Secp256k1 => SECP_256_K1,
-            #[cfg(feature = "ml-dsa")]
             Self::MlDsa => ML_DSA,
             #[cfg(feature = "gost")]
             Self::Gost3410_2012_256ParamSetA => GOST_34_10_2012_256_A,
@@ -141,7 +138,6 @@ impl FromStr for Algorithm {
         match algorithm {
             ED_25519 => Ok(Algorithm::Ed25519),
             SECP_256_K1 => Ok(Algorithm::Secp256k1),
-            #[cfg(feature = "ml-dsa")]
             ML_DSA => Ok(Algorithm::MlDsa),
             #[cfg(feature = "gost")]
             GOST_34_10_2012_256_A => Ok(Algorithm::Gost3410_2012_256ParamSetA),
@@ -171,7 +167,6 @@ impl TryFrom<u8> for Algorithm {
         match value {
             0 => Ok(Algorithm::Ed25519),
             1 => Ok(Algorithm::Secp256k1),
-            #[cfg(feature = "ml-dsa")]
             4 => Ok(Algorithm::MlDsa),
             #[cfg(feature = "gost")]
             5 => Ok(Algorithm::Gost3410_2012_256ParamSetA),
@@ -221,7 +216,6 @@ impl IntoSchema for Algorithm {
             push_variant("BlsNormal", Algorithm::BlsNormal as u8);
             push_variant("BlsSmall", Algorithm::BlsSmall as u8);
         }
-        #[cfg(feature = "ml-dsa")]
         push_variant("MlDsa", Algorithm::MlDsa as u8);
         #[cfg(feature = "gost")]
         {
@@ -291,7 +285,6 @@ mod tests {
         cases.push((Algorithm::Ed25519, ED_25519, 0u8));
         cases.push((Algorithm::Secp256k1, SECP_256_K1, 1u8));
 
-        #[cfg(feature = "ml-dsa")]
         cases.push((Algorithm::MlDsa, ML_DSA, 4u8));
 
         #[cfg(feature = "gost")]

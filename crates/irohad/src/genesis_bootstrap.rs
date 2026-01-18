@@ -3,6 +3,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fmt,
+    num::NonZeroUsize,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -25,7 +26,11 @@ use iroha_data_model::{
 };
 use iroha_genesis::GenesisBlock;
 use iroha_logger::prelude::*;
-use iroha_p2p::{Post, Priority, UpdatePeers, UpdateTopology, peer::message::PeerMessage};
+use iroha_p2p::{
+    Post, Priority, UpdatePeers, UpdateTopology,
+    network::{SubscriberFilter, message::Topic},
+    peer::message::PeerMessage,
+};
 use iroha_primitives::addr::SocketAddr;
 use tokio::{
     sync::mpsc,
@@ -43,6 +48,17 @@ pub trait GenesisNetwork: Clone + Send + Sync + 'static {
         &self,
         sender: mpsc::Sender<PeerMessage<NetworkMessage>>,
     ) -> Result<(), mpsc::Sender<PeerMessage<NetworkMessage>>>;
+    /// Subscribe to peer messages delivered by the P2P layer using a topic filter.
+    fn subscribe_with_filter(
+        &self,
+        sender: mpsc::Sender<PeerMessage<NetworkMessage>>,
+        filter: SubscriberFilter,
+    ) -> Result<(), mpsc::Sender<PeerMessage<NetworkMessage>>> {
+        let _ = filter;
+        self.subscribe(sender)
+    }
+    /// Configured queue capacity for P2P subscribers.
+    fn subscriber_queue_cap(&self) -> NonZeroUsize;
     /// Update the gossip topology (used to seed trusted peers for bootstrap).
     fn update_topology(&self, update: UpdateTopology);
     /// Update peer addresses (used to seed trusted peers for bootstrap).
@@ -59,6 +75,18 @@ impl GenesisNetwork for IrohaNetwork {
         sender: mpsc::Sender<PeerMessage<NetworkMessage>>,
     ) -> Result<(), mpsc::Sender<PeerMessage<NetworkMessage>>> {
         self.subscribe_to_peers_messages(sender)
+    }
+
+    fn subscribe_with_filter(
+        &self,
+        sender: mpsc::Sender<PeerMessage<NetworkMessage>>,
+        filter: SubscriberFilter,
+    ) -> Result<(), mpsc::Sender<PeerMessage<NetworkMessage>>> {
+        self.subscribe_to_peers_messages_with_filter(sender, filter)
+    }
+
+    fn subscriber_queue_cap(&self) -> NonZeroUsize {
+        self.subscriber_queue_cap()
     }
 
     fn update_topology(&self, update: UpdateTopology) {
@@ -284,9 +312,10 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
 
     /// Spawn a listener that handles inbound genesis requests/responses.
     pub async fn spawn_listener(&self) {
-        let (mut sender, mut rx) = mpsc::channel(8);
+        let (mut sender, mut rx) = mpsc::channel(self.network.subscriber_queue_cap().get());
+        let filter = SubscriberFilter::topics([Topic::Control]);
         let mut backoff_ms = 50;
-        while let Err(returned) = self.network.subscribe(sender) {
+        while let Err(returned) = self.network.subscribe_with_filter(sender, filter.clone()) {
             sender = returned;
             time::sleep(Duration::from_millis(backoff_ms)).await;
             backoff_ms = (backoff_ms * 2).min(500);
@@ -977,6 +1006,10 @@ mod tests {
             Ok(())
         }
 
+        fn subscriber_queue_cap(&self) -> NonZeroUsize {
+            NonZeroUsize::new(8).expect("nonzero")
+        }
+
         fn update_topology(&self, _update: UpdateTopology) {}
 
         fn update_peers_addresses(&self, _update: UpdatePeers) {}
@@ -1011,6 +1044,20 @@ mod tests {
             }
             time::sleep(Duration::from_millis(10)).await;
         }
+    }
+
+    #[test]
+    fn subscribe_with_filter_registers_sender() {
+        let network = MockNetwork::default();
+        let (tx, _rx) = mpsc::channel(1);
+        let filter = SubscriberFilter::topics([Topic::Control]);
+        network
+            .subscribe_with_filter(tx, filter)
+            .expect("subscribe");
+        assert!(
+            network.sender.lock().expect("sender mutex").is_some(),
+            "subscriber sender should be registered"
+        );
     }
 
     #[tokio::test]

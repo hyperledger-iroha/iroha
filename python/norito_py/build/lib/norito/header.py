@@ -28,13 +28,17 @@ MAJOR_VERSION = 0
 PACKED_SEQ = 0x01
 COMPACT_LEN = 0x02
 PACKED_STRUCT = 0x04
+# Reserved in v1; packed sequence offsets are fixed-width u64.
 VARINT_OFFSETS = 0x08
+# Reserved in v1; sequence length headers are fixed-width u64.
 COMPACT_SEQ_LEN = 0x10
 FIELD_BITSET = 0x20
 
-# Static default flags baked into minor version (mirrors Rust `default_encode_flags`).
-DEFAULT_MINOR_FLAGS = PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET
-MINOR_VERSION = DEFAULT_MINOR_FLAGS
+# V1 minor version is fixed; layout flags are declared in the header flags byte.
+MINOR_VERSION = 0
+
+# Maximum allowed alignment padding between the header and payload.
+MAX_HEADER_PADDING = 64
 
 COMPRESSION_NONE = 0
 COMPRESSION_ZSTD = 1
@@ -104,7 +108,7 @@ class NoritoHeader:
             raise InvalidMagicError("Invalid Norito magic")
         major = data[4]
         minor = data[5]
-        if (major, minor) != (MAJOR_VERSION, MINOR_VERSION):
+        if major != MAJOR_VERSION:
             raise UnsupportedVersionError(major, minor)
         schema_hash = data[6:22]
         compression = data[22]
@@ -113,6 +117,9 @@ class NoritoHeader:
         payload_length = int.from_bytes(data[23:31], "little")
         checksum = int.from_bytes(data[31:39], "little")
         flags = data[39]
+
+        if minor != MINOR_VERSION:
+            raise UnsupportedVersionError(major, minor)
 
         if expected_schema_hash is not None and expected_schema_hash != schema_hash:
             raise SchemaMismatchError(expected_schema_hash, schema_hash)
@@ -127,12 +134,21 @@ class NoritoHeader:
             raise UnsupportedFeatureError(unsupported)
 
         if compression == COMPRESSION_NONE:
-            end = cls._HEADER_LEN + payload_length
-            payload = data[cls._HEADER_LEN : end]
+            min_end = cls._HEADER_LEN + payload_length
+            if len(data) < min_end:
+                raise LengthMismatchError(min_end, len(data))
+            padding_len = len(data) - min_end
+            if padding_len > MAX_HEADER_PADDING:
+                raise LengthMismatchError(min_end + MAX_HEADER_PADDING, len(data))
+            if padding_len:
+                padding = data[cls._HEADER_LEN : cls._HEADER_LEN + padding_len]
+                if any(b != 0 for b in padding):
+                    raise LengthMismatchError(payload_length, payload_length + len(padding))
+            payload_start = cls._HEADER_LEN + padding_len
+            payload_end = payload_start + payload_length
+            payload = data[payload_start:payload_end]
             if len(payload) != payload_length:
                 raise LengthMismatchError(payload_length, len(payload))
-            if len(data) != end:
-                raise LengthMismatchError(payload_length, len(data) - cls._HEADER_LEN)
         else:
             payload = data[cls._HEADER_LEN :]
             if not payload:
@@ -162,6 +178,7 @@ __all__ = [
     "MAGIC",
     "MAJOR_VERSION",
     "MINOR_VERSION",
+    "MAX_HEADER_PADDING",
     "PACKED_SEQ",
     "COMPACT_LEN",
     "PACKED_STRUCT",

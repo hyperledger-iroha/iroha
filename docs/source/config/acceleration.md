@@ -161,8 +161,6 @@ config flag.
 | `zstd_level_small` / `zstd_level_large` | `1` / `3` | CPU compression levels for <32 KiB and ≥32 KiB payloads respectively. |
 | `zstd_level_gpu` | `1` | Conservative GPU level to keep latency consistent while filling command queues. |
 | `large_threshold` | `32_768` bytes | Size boundary between the “small” and “large” CPU zstd levels. |
-| `enable_compact_seq_len_up_to` | `0` | Varint-coded top-level sequence lengths are disabled by default (fixed 64-bit lengths keep hashes stable). |
-| `enable_varint_offsets_up_to` | `0` | Packed sequences always emit fixed offsets; varints remain off to preserve constant-time decoders. |
 | `aos_ncb_small_n` | `64` rows | Below this row count adaptive encoders probe both AoS and NCB layouts to pick the smallest payload. |
 | `combo_no_delta_small_n_if_empty` | `2` rows | Prevents enabling u32/id delta encodings when 1–2 rows contain empty cells. |
 | `combo_id_delta_min_rows` / `combo_u32_delta_min_rows` | `2` | Deltas kick in only once there are at least two rows. |

@@ -24,7 +24,8 @@ These guidelines apply to the `crates/norito` crate (Iroha serialization codec).
 - Python: if `python` is unavailable, use `python3` to run scripts.
 
 ## CRC64
-- Algorithm: CRC64-ECMA (`0x42F0E1EBA9EA3693`) via the `crc64fast` crate.
+- Algorithm: CRC64-XZ (ECMA polynomial `0x42F0E1EBA9EA3693`, reflected, init/xor all ones)
+  via the `crc64fast` crate.
 - Runtime selection: `hardware_crc64` is an alias of `crc64_fallback`; both use the same implementation.
 - Determinism: Parity tests ensure consistent outputs across platforms.
 

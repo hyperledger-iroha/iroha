@@ -309,26 +309,23 @@ fn ensure_in_memory_map_word_types(map_expr: &TypedExpr) -> Result<(), SemanticE
     if typed_map_expr_is_state(map_expr) {
         return Ok(());
     }
-    match resolve_struct_type(&map_expr.ty) {
-        Type::Map(k, v) => {
-            if !is_in_memory_map_word_type(&k) {
-                return Err(SemanticError {
-                    message: format!(
-                        "in-memory Map key type `{}` is not supported; use int, bool, string, Blob, bytes, Json, or pointer types",
-                        type_name(&k)
-                    ),
-                });
-            }
-            if !is_in_memory_map_word_type(&v) {
-                return Err(SemanticError {
-                    message: format!(
-                        "in-memory Map value type `{}` is not supported; use int, bool, string, Blob, bytes, Json, or pointer types",
-                        type_name(&v)
-                    ),
-                });
-            }
+    if let Type::Map(k, v) = resolve_struct_type(&map_expr.ty) {
+        if !is_in_memory_map_word_type(&k) {
+            return Err(SemanticError {
+                message: format!(
+                    "in-memory Map key type `{}` is not supported; use int, bool, string, Blob, bytes, Json, or pointer types",
+                    type_name(&k)
+                ),
+            });
         }
-        _ => {}
+        if !is_in_memory_map_word_type(&v) {
+            return Err(SemanticError {
+                message: format!(
+                    "in-memory Map value type `{}` is not supported; use int, bool, string, Blob, bytes, Json, or pointer types",
+                    type_name(&v)
+                ),
+            });
+        }
     }
     Ok(())
 }
@@ -822,16 +819,14 @@ fn analyze_statement(
                                 key: key_ident,
                                 value: value_expr,
                             });
-                            return Ok(out);
+                            Ok(out)
                         }
-                        other => {
-                            return Err(SemanticError {
-                                message: format!(
-                                    "map assignment expects Map<K,V> target, got {}",
-                                    type_name(&other)
-                                ),
-                            });
-                        }
+                        other => Err(SemanticError {
+                            message: format!(
+                                "map assignment expects Map<K,V> target, got {}",
+                                type_name(&other)
+                            ),
+                        }),
                     }
                 }
                 Expr::Ident(name) => {
@@ -894,11 +889,9 @@ fn analyze_statement(
                     bind_tuple_fields_rec(&mut out, vars, name, &value_expr, &value_expr.ty);
                     Ok(out)
                 }
-                _ => {
-                    return Err(SemanticError {
-                        message: "assignment target must be a variable or map index".into(),
-                    });
-                }
+                _ => Err(SemanticError {
+                    message: "assignment target must be a variable or map index".into(),
+                }),
             }
         }
         Statement::Expr(e) => Ok(vec![TypedStatement::Expr(analyze_expr(e, vars)?)]),
@@ -2212,6 +2205,37 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                             message: format!(
                                 "{name} expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT"
                             ),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Unit,
+                    })
+                }
+                // Vendor bridge helper: execute query via SMARTCONTRACT_EXECUTE_QUERY.
+                "execute_query" => {
+                    if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
+                        return Err(SemanticError {
+                            message: format!(
+                                "{name} expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT"
+                            ),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Bytes,
+                    })
+                }
+                "subscription_bill" | "subscription_record_usage" => {
+                    if !arg_typed.is_empty() {
+                        return Err(SemanticError {
+                            message: format!("{name} expects no arguments"),
                         });
                     }
                     Ok(TypedExpr {

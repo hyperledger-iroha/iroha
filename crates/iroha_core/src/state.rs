@@ -4,7 +4,7 @@ use std::{
     cell::OnceCell,
     collections::{BTreeMap, BTreeSet, VecDeque},
     fmt::Write,
-    mem,
+    io, mem,
     num::{NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
     sync::{
@@ -178,7 +178,7 @@ use crate::{
     role::RoleIdWithOwner,
     settlement::SettlementEngine,
     smartcontracts::{
-        isi::world::isi::apply_policy_if_due,
+        isi::{triggers::trigger_is_enabled, world::isi::apply_policy_if_due},
         triggers::{
             set::{
                 ExecutableRef, Set as TriggerSet, SetBlock as TriggerSetBlock,
@@ -4069,6 +4069,8 @@ pub struct State {
     pub pipeline: iroha_config::parameters::actual::Pipeline,
     /// Oracle aggregation configuration.
     pub oracle: iroha_config::parameters::actual::Oracle,
+    /// Streaming configuration snapshot (spool paths, codec defaults).
+    streaming: iroha_config::parameters::actual::Streaming,
     /// Cryptography configuration (enabled algorithms, defaults).
     pub crypto: parking_lot::RwLock<Arc<iroha_config::parameters::actual::Crypto>>,
     /// Nexus configuration snapshot (lanes, fusion, DA policies).
@@ -4153,6 +4155,10 @@ pub struct StateBlock<'state> {
     settlement_accumulator: crate::settlement::SettlementAccumulator,
     /// Transfer transcripts recorded for each transaction hash (for FASTPQ witness plumbing).
     fastpq_transcripts: BTreeMap<Hash, Vec<iroha_data_model::fastpq::TransferTranscript>>,
+    /// Cached transaction set hash for FASTPQ public inputs.
+    fastpq_tx_set_hash: Option<[u8; 32]>,
+    /// Dataspace assignments for FASTPQ entry hashes in this block.
+    fastpq_entry_dataspaces: BTreeMap<Hash, DataSpaceId>,
     /// AXT envelope records captured while executing this block.
     axt_envelopes: Vec<AxtEnvelopeRecord>,
     /// Captured execution witness for the block (SBV‑AM).
@@ -4928,9 +4934,61 @@ impl StakeSnapshot for StateView<'_> {
         let present_peers: std::collections::BTreeSet<PeerId> =
             self.world.peers().iter().cloned().collect();
         let block_height = u64::try_from(self.block_hashes.len()).unwrap_or(u64::MAX);
-        let topology_peers: std::collections::BTreeSet<PeerId> =
+        let mut topology_peers: std::collections::BTreeSet<PeerId> =
             self.commit_topology.iter().cloned().collect();
         let enforce_topology_membership = !topology_peers.is_empty();
+        if enforce_topology_membership {
+            let mut active_candidates: std::collections::BTreeSet<PeerId> =
+                std::collections::BTreeSet::new();
+            for ((_lane_id, _validator_id), record) in self.world.public_lane_validators().iter() {
+                if !matches!(record.status, PublicLaneValidatorStatus::Active) {
+                    continue;
+                }
+                if !matches!(
+                    self.lane_validator_mode(record.lane_id),
+                    iroha_config::parameters::actual::LaneValidatorMode::StakeElected
+                ) {
+                    continue;
+                }
+                let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
+                    &record.self_stake,
+                    self.nexus.staking.min_validator_stake,
+                ) else {
+                    continue;
+                };
+                if !meets_min {
+                    continue;
+                }
+                let Some(pk) = record.validator.try_signatory() else {
+                    continue;
+                };
+                let pid = PeerId::from(pk.clone());
+                if !present_peers.contains(&pid) {
+                    continue;
+                }
+                if !peer_has_live_consensus_key(self.world(), &pid, block_height) {
+                    continue;
+                }
+                active_candidates.insert(pid);
+            }
+
+            if !active_candidates.is_empty() {
+                let missing: Vec<_> = active_candidates
+                    .iter()
+                    .filter(|pid| !topology_peers.contains(*pid))
+                    .cloned()
+                    .collect();
+                if !missing.is_empty() {
+                    warn!(
+                        commit_topology_len = topology_peers.len(),
+                        active_candidates_len = active_candidates.len(),
+                        missing_len = missing.len(),
+                        "commit topology missing active validators; widening epoch roster filter"
+                    );
+                    topology_peers.extend(missing);
+                }
+            }
+        }
         // Preferred path: council-derived roster for the epoch
         if let Some(c) = self.world.council().get(&epoch).cloned() {
             // Build PeerIds from council members' signatories
@@ -5281,6 +5339,65 @@ mod stake_snapshot_tests {
             <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
         assert_eq!(roster.len(), 1);
         assert_eq!(roster[0], PeerId::from(present_kp.public_key().clone()));
+    }
+
+    #[test]
+    fn public_lane_snapshot_widens_missing_commit_topology_membership() {
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.staking.min_validator_stake = 100;
+        }
+
+        let domain: DomainId = "wonderland".parse().unwrap();
+        let keypairs: Vec<KeyPair> = (0..3).map(|_| KeyPair::random()).collect();
+
+        let mut wb = state.world.block();
+        {
+            let peers = wb.peers.get_mut();
+            for kp in &keypairs {
+                let _ = peers.push(PeerId::from(kp.public_key().clone()));
+            }
+        }
+        let peers: Vec<_> = wb.peers.clone().into_iter().collect();
+        for peer in &peers {
+            seed_consensus_key(&mut wb, peer, ConsensusKeyStatus::Active, 0);
+        }
+        for kp in &keypairs {
+            let validator = DMAccountId::of(domain.clone(), kp.public_key().clone());
+            wb.public_lane_validators.insert(
+                (LaneId::SINGLE, validator.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::SINGLE,
+                    validator: validator.clone(),
+                    stake_account: validator.clone(),
+                    total_stake: Numeric::new(1_000, 0),
+                    self_stake: Numeric::new(1_000, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+        }
+        wb.commit();
+
+        {
+            let mut topo_block = state.commit_topology.block();
+            topo_block.mutate_vec(|vec| *vec = vec![peers[0].clone(), peers[1].clone()]);
+            topo_block.commit();
+        }
+
+        let sv = state.view();
+        let roster =
+            <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
+        assert_eq!(roster.len(), peers.len());
+        for peer in peers {
+            assert!(roster.contains(&peer));
+        }
     }
 
     #[test]
@@ -9826,7 +9943,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     pub fn remove_account_roles(&mut self, account: &AccountId) {
         let roles_to_remove = self
             .account_roles_iter(account)
-            .cloned()
             .map(|role| RoleIdWithOwner::new(account.clone(), role.clone()))
             .collect::<Vec<_>>();
 
@@ -10346,8 +10462,9 @@ impl State {
 
     fn upsert_commit_qc_in_world(&self, commit_qc: &Qc) {
         let mut commit_qcs = self.world.commit_qcs.block();
-        let should_update = match commit_qcs.get(&commit_qc.subject_block_hash) {
-            Some(existing) => {
+        let should_update = commit_qcs
+            .get(&commit_qc.subject_block_hash)
+            .is_none_or(|existing| {
                 if existing.height != commit_qc.height {
                     warn!(
                         height = commit_qc.height,
@@ -10357,9 +10474,7 @@ impl State {
                     );
                 }
                 existing.view <= commit_qc.view
-            }
-            None => true,
-        };
+            });
         if !should_update {
             return;
         }
@@ -10383,13 +10498,12 @@ impl State {
             );
             return false;
         }
-        if checkpoint.height != commit_qc.height
-            || checkpoint.block_hash != commit_qc.subject_block_hash
-        {
+        let subject_block_hash = commit_qc.subject_block_hash;
+        if checkpoint.height != commit_qc.height || checkpoint.block_hash != subject_block_hash {
             warn!(
                 height = commit_qc.height,
                 view = commit_qc.view,
-                block = %commit_qc.subject_block_hash,
+                block = %subject_block_hash,
                 checkpoint_height = checkpoint.height,
                 checkpoint_block = %checkpoint.block_hash,
                 "skipping commit roster record: checkpoint metadata mismatch"
@@ -10745,7 +10859,9 @@ impl State {
                 }
             }
         };
-        let hashes = self.block_hashes.view();
+        // Clone the hash list up front so we do not hold the block-hash lock while
+        // loading blocks from Kura (avoids lock-order inversions with Kura writers).
+        let hashes: Vec<HashOf<BlockHeader>> = self.block_hashes.view().iter().copied().collect();
         let replay_len = target_height
             .map(|limit| usize::try_from(limit).unwrap_or(usize::MAX))
             .map_or(hashes.len(), |limit| hashes.len().min(limit));
@@ -11199,6 +11315,20 @@ impl State {
         let settlement_cfg = iroha_config::parameters::actual::Settlement::default();
         let settlement_engine = SettlementEngine::from_router_config(&settlement_cfg.router);
         let nexus = iroha_config::parameters::actual::Nexus::default();
+        let streaming = iroha_config::parameters::actual::Streaming {
+            key_material: iroha_crypto::streaming::StreamingKeyMaterial::new(
+                iroha_crypto::KeyPair::from_seed(vec![0u8; 32], Algorithm::Ed25519),
+            )
+            .expect("streaming key material"),
+            session_store_dir: PathBuf::from(
+                iroha_config::parameters::defaults::streaming::SESSION_STORE_DIR,
+            ),
+            feature_bits: iroha_config::parameters::defaults::streaming::FEATURE_BITS,
+            soranet: iroha_config::parameters::actual::StreamingSoranet::from_defaults(),
+            soravpn: iroha_config::parameters::actual::StreamingSoravpn::from_defaults(),
+            sync: iroha_config::parameters::actual::StreamingSync::from_defaults(),
+            codec: iroha_config::parameters::actual::StreamingCodec::from_defaults(),
+        };
         let da_shard_cursors = parking_lot::RwLock::new(DaShardCursorIndex::default());
         let store_root = kura.store_root();
         let roster_retention = kura.block_sync_roster_retention();
@@ -11295,6 +11425,8 @@ impl State {
                         iroha_config::parameters::defaults::pipeline::QUARANTINE_TX_MAX_MILLIS,
                     query_default_cursor_mode:
                         iroha_config::parameters::actual::QueryCursorMode::Ephemeral,
+                    query_max_fetch_size:
+                        iroha_config::parameters::defaults::pipeline::QUERY_MAX_FETCH_SIZE,
                     query_stored_min_gas_units:
                         iroha_config::parameters::defaults::pipeline::QUERY_STORED_MIN_GAS_UNITS,
                     amx_per_dataspace_budget_ms:
@@ -11309,6 +11441,7 @@ impl State {
                         iroha_config::parameters::defaults::pipeline::AMX_PER_SYSCALL_NS,
             },
             oracle: default_oracle(),
+            streaming,
             nexus: parking_lot::RwLock::new(nexus),
             tiered_backend: parking_lot::Mutex::new(TieredStateBackend::default()),
             fraud_monitoring: default_fraud_monitoring_cfg(),
@@ -11560,6 +11693,12 @@ impl State {
             crypto: parking_lot::RwLock::new(Arc::new(initial_crypto.clone())),
             view_lock: parking_lot::RwLock::new(()),
         };
+        #[cfg(feature = "telemetry")]
+        {
+            s.kura.attach_telemetry(telemetry_seed.clone());
+            let mut backend = s.tiered_backend.lock();
+            backend.attach_telemetry(telemetry_seed.clone());
+        }
         s.run_storage_migrations();
         #[cfg(feature = "telemetry")]
         {
@@ -11829,6 +11968,8 @@ impl State {
             pre_block_npos_seed,
             settlement_accumulator: crate::settlement::SettlementAccumulator::default(),
             fastpq_transcripts: BTreeMap::new(),
+            fastpq_tx_set_hash: None,
+            fastpq_entry_dataspaces: BTreeMap::new(),
             axt_envelopes: Vec::new(),
             touched_lanes: BTreeSet::new(),
             exec_witness: None,
@@ -12215,6 +12356,8 @@ impl State {
             pre_block_npos_seed,
             settlement_accumulator: crate::settlement::SettlementAccumulator::default(),
             fastpq_transcripts: BTreeMap::new(),
+            fastpq_tx_set_hash: None,
+            fastpq_entry_dataspaces: BTreeMap::new(),
             axt_envelopes: Vec::new(),
             touched_lanes: BTreeSet::new(),
             exec_witness: None,
@@ -12255,13 +12398,13 @@ impl State {
         let commit_topology = self.commit_topology.view();
         let prev_commit_topology = self.prev_commit_topology.view();
         let nexus = self.nexus_snapshot();
-        let _view_lock = match self.view_lock.try_read() {
-            Some(guard) => Some(guard),
-            None => {
+        let _view_lock = self.view_lock.try_read().map_or_else(
+            || {
                 warn!("state view lock contended; returning unlocked view");
                 None
-            }
-        };
+            },
+            Some,
+        );
         StateView {
             world,
             block_hashes,
@@ -13036,6 +13179,11 @@ impl State {
         self.oracle = oracle;
     }
 
+    /// Update streaming configuration snapshot.
+    pub fn set_streaming(&mut self, streaming: iroha_config::parameters::actual::Streaming) {
+        self.streaming = streaming;
+    }
+
     /// Update settlement configuration snapshot and rebuild the router engine.
     pub fn set_settlement(&mut self, settlement: iroha_config::parameters::actual::Settlement) {
         self.settlement = settlement;
@@ -13273,6 +13421,210 @@ impl State {
         self.merge_ledger.reconfigure_cache(sanitized);
     }
 
+    fn enforce_nexus_storage_budget(&self) {
+        let nexus = self.nexus.read();
+        if !nexus.enabled {
+            return;
+        }
+        let max_disk = nexus.storage.max_disk_usage_bytes.get();
+        if max_disk == 0 {
+            return;
+        }
+        drop(nexus);
+
+        let soranet_spool_dir = self.streaming.soranet.provision_spool_dir.clone();
+        let soravpn_spool_dir = self.streaming.soravpn.provision_spool_dir.clone();
+
+        let mut kura_used = match self.kura.disk_usage_bytes() {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                warn!(?err, "nexus storage eviction: failed to measure Kura usage");
+                return;
+            }
+        };
+
+        let mut soranet_used = match dir_size(&soranet_spool_dir) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    path = %soranet_spool_dir.display(),
+                    "nexus storage eviction: failed to measure SoraNet spool usage"
+                );
+                0
+            }
+        };
+        let mut soravpn_used = match dir_size(&soravpn_spool_dir) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    path = %soravpn_spool_dir.display(),
+                    "nexus storage eviction: failed to measure SoraVPN spool usage"
+                );
+                0
+            }
+        };
+
+        let mut cold_used = {
+            let backend = self.tiered_backend.lock();
+            match backend.cold_store_bytes() {
+                Ok(bytes) => bytes.unwrap_or(0),
+                Err(err) => {
+                    warn!(?err, "tiered-state: failed to measure cold store bytes");
+                    0
+                }
+            }
+        };
+
+        let mut total = kura_used
+            .saturating_add(cold_used)
+            .saturating_add(soranet_used)
+            .saturating_add(soravpn_used);
+        if total <= max_disk {
+            return;
+        }
+        let mut excess = total.saturating_sub(max_disk);
+
+        if excess > 0 && !soranet_spool_dir.as_os_str().is_empty() {
+            match prune_spool_dir(&soranet_spool_dir, excess) {
+                Ok((remaining, freed)) => {
+                    excess = remaining;
+                    soranet_used = soranet_used.saturating_sub(freed);
+                    #[cfg(feature = "telemetry")]
+                    if freed > 0 {
+                        self.telemetry.inc_storage_budget_exceeded("soranet_spool");
+                    }
+                }
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        path = %soranet_spool_dir.display(),
+                        "nexus storage eviction: failed to prune SoraNet spool"
+                    );
+                }
+            }
+        }
+
+        if excess > 0 && !soravpn_spool_dir.as_os_str().is_empty() {
+            match prune_spool_dir(&soravpn_spool_dir, excess) {
+                Ok((remaining, freed)) => {
+                    excess = remaining;
+                    soravpn_used = soravpn_used.saturating_sub(freed);
+                    #[cfg(feature = "telemetry")]
+                    if freed > 0 {
+                        self.telemetry.inc_storage_budget_exceeded("soravpn_spool");
+                    }
+                }
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        path = %soravpn_spool_dir.display(),
+                        "nexus storage eviction: failed to prune SoraVPN spool"
+                    );
+                }
+            }
+        }
+
+        if excess > 0 && cold_used > 0 {
+            let target = cold_used.saturating_sub(excess);
+            let backend = self.tiered_backend.lock();
+            if let Err(err) = backend.prune_cold_snapshots_to_bytes(target) {
+                warn!(
+                    ?err,
+                    "tiered-state: failed to prune cold snapshots for budget"
+                );
+            }
+            match backend.cold_store_bytes() {
+                Ok(bytes) => {
+                    let updated = bytes.unwrap_or(0);
+                    if updated < cold_used {
+                        #[cfg(feature = "telemetry")]
+                        self.telemetry.inc_storage_budget_exceeded("wsv_cold");
+                    }
+                    cold_used = updated;
+                }
+                Err(err) => {
+                    warn!(?err, "tiered-state: failed to remeasure cold store bytes");
+                }
+            }
+            total = kura_used
+                .saturating_add(cold_used)
+                .saturating_add(soranet_used)
+                .saturating_add(soravpn_used);
+            excess = total.saturating_sub(max_disk);
+        }
+
+        if excess > 0 {
+            let before = kura_used;
+            if self.kura.purge_retired_segments() {
+                match self.kura.disk_usage_bytes() {
+                    Ok(bytes) => kura_used = bytes,
+                    Err(err) => {
+                        warn!(
+                            ?err,
+                            "nexus storage eviction: failed to remeasure Kura usage"
+                        );
+                    }
+                }
+                if kura_used < before {
+                    #[cfg(feature = "telemetry")]
+                    self.telemetry.inc_storage_budget_exceeded("kura");
+                }
+            }
+            total = kura_used
+                .saturating_add(cold_used)
+                .saturating_add(soranet_used)
+                .saturating_add(soravpn_used);
+            excess = total.saturating_sub(max_disk);
+        }
+
+        if excess > 0 {
+            let before = kura_used;
+            match self.kura.evict_block_bodies(excess) {
+                Ok(freed) if freed > 0 => {
+                    match self.kura.disk_usage_bytes() {
+                        Ok(bytes) => kura_used = bytes,
+                        Err(err) => {
+                            warn!(
+                                ?err,
+                                "nexus storage eviction: failed to remeasure Kura usage after eviction"
+                            );
+                        }
+                    }
+                    if kura_used < before {
+                        #[cfg(feature = "telemetry")]
+                        self.telemetry.inc_storage_budget_exceeded("kura");
+                    }
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        "nexus storage eviction: failed to evict active Kura block bodies"
+                    );
+                }
+            }
+            total = kura_used
+                .saturating_add(cold_used)
+                .saturating_add(soranet_used)
+                .saturating_add(soravpn_used);
+            excess = total.saturating_sub(max_disk);
+        }
+
+        if excess > 0 {
+            warn!(
+                excess,
+                max_disk,
+                kura_used,
+                cold_used,
+                soranet_used,
+                soravpn_used,
+                "nexus storage eviction could not reclaim enough space"
+            );
+        }
+    }
+
     /// Update governance settings (default VKs and policy tunables) using loaded configuration.
     pub fn set_gov(&mut self, gov: iroha_config::parameters::actual::Governance) {
         for (provider, owner) in &gov.sorafs_provider_owners {
@@ -13294,6 +13646,95 @@ impl State {
         }
         self.gov = gov;
     }
+}
+
+struct SpoolEntry {
+    key: String,
+    path: PathBuf,
+    size: u64,
+}
+
+fn spool_entries_sorted(spool_dir: &Path) -> io::Result<Vec<SpoolEntry>> {
+    if spool_dir.as_os_str().is_empty() || !spool_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut files = Vec::new();
+    let mut stack = vec![spool_dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            let path = entry.path();
+            if file_type.is_dir() {
+                stack.push(path);
+            } else if file_type.is_file() {
+                if path.extension().and_then(|ext| ext.to_str()) == Some("tmp") {
+                    continue;
+                }
+                let size = entry.metadata()?.len();
+                let rel = path.strip_prefix(spool_dir).unwrap_or(&path);
+                let mut key = String::new();
+                for (idx, component) in rel.components().enumerate() {
+                    if idx > 0 {
+                        key.push('/');
+                    }
+                    key.push_str(&component.as_os_str().to_string_lossy());
+                }
+                files.push(SpoolEntry { key, path, size });
+            }
+        }
+    }
+    files.sort_by(|a, b| a.key.cmp(&b.key));
+    Ok(files)
+}
+
+fn prune_spool_dir(spool_dir: &Path, mut bytes_to_free: u64) -> io::Result<(u64, u64)> {
+    if bytes_to_free == 0 {
+        return Ok((0, 0));
+    }
+    let entries = spool_entries_sorted(spool_dir)?;
+    let mut freed = 0u64;
+    for entry in entries {
+        if bytes_to_free == 0 {
+            break;
+        }
+        match std::fs::remove_file(&entry.path) {
+            Ok(()) => {
+                freed = freed.saturating_add(entry.size);
+                bytes_to_free = bytes_to_free.saturating_sub(entry.size);
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => {
+                warn!(
+                    ?err,
+                    path = %entry.path.display(),
+                    "failed to remove spool file during eviction"
+                );
+            }
+        }
+    }
+    Ok((bytes_to_free, freed))
+}
+
+fn dir_size(path: &Path) -> io::Result<u64> {
+    if path.as_os_str().is_empty() || !path.exists() {
+        return Ok(0);
+    }
+    let mut total = 0u64;
+    let mut stack = vec![path.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            let entry_path = entry.path();
+            if file_type.is_dir() {
+                stack.push(entry_path);
+            } else if file_type.is_file() {
+                total = total.saturating_add(entry.metadata()?.len());
+            }
+        }
+    }
+    Ok(total)
 }
 
 struct LaneTopologyDiff<'a> {
@@ -13531,16 +13972,16 @@ pub trait StateReadOnly: WorldStateSnapshot {
     ) -> impl DoubleEndedIterator<Item = Arc<SignedBlock>> + '_ {
         (start.get()..=self.height()).filter_map(|height| {
             let height = NonZeroUsize::new(height)?;
-            match self.kura().get_block(height) {
-                Some(block) => Some(block),
-                None => {
+            self.kura().get_block(height).map_or_else(
+                || {
                     warn!(
                         height = height.get(),
                         "missing block in Kura; skipping entry"
                     );
                     None
-                }
-            }
+                },
+                Some,
+            )
         })
     }
 
@@ -14120,7 +14561,7 @@ impl StateReadOnlyWithTransactions for StateBlock<'_> {
 }
 
 impl<'state> StateBlock<'state> {
-    /// Number of committed fragments (transactions, triggers, deterministic updates) recorded in this block.
+    /// Number of committed fragments (transactions and triggers) recorded in this block.
     #[must_use]
     pub fn committed_fragment_count(&self) -> usize {
         self.committed_fragments
@@ -14312,16 +14753,63 @@ impl<'state> StateBlock<'state> {
         mem::take(&mut self.fastpq_transcripts)
     }
 
+    /// Cache the transaction set hash for FASTPQ public inputs.
+    pub(crate) fn set_fastpq_tx_set_hash(&mut self, tx_set_hash: [u8; 32]) {
+        self.fastpq_tx_set_hash = Some(tx_set_hash);
+    }
+
+    /// Cache per-entry dataspace ids for FASTPQ public inputs.
+    pub(crate) fn set_fastpq_entry_dataspaces(&mut self, entries: BTreeMap<Hash, DataSpaceId>) {
+        self.fastpq_entry_dataspaces = entries;
+    }
+
     /// Capture the execution witness accumulated during this block's execution.
     pub fn capture_exec_witness(&mut self) {
         if self.exec_witness.is_none() {
             let mut witness = crate::sumeragi::witness::drain_exec_witness();
+            let entry_dsid_bytes: BTreeMap<Hash, [u8; 16]> = self
+                .fastpq_entry_dataspaces
+                .iter()
+                .map(|(hash, dsid)| (*hash, crate::fastpq::dataspace_id_bytes(*dsid)))
+                .collect();
+            let tx_set_hash = if witness.fastpq_transcripts.is_empty()
+                && witness.fastpq_batches.is_empty()
+            {
+                None
+            } else {
+                Some(self.fastpq_tx_set_hash.unwrap_or_else(|| {
+                    if witness.fastpq_transcripts.is_empty() {
+                        [0u8; 32]
+                    } else {
+                        let mut entry_hashes: Vec<Hash> = witness
+                            .fastpq_transcripts
+                            .iter()
+                            .map(|bundle| bundle.entry_hash)
+                            .collect();
+                        entry_hashes.sort_unstable();
+                        crate::fastpq::tx_set_hash_from_ordered_hashes(entry_hashes.iter().copied())
+                    }
+                }))
+            };
+            let perm_root =
+                if witness.fastpq_transcripts.is_empty() && witness.fastpq_batches.is_empty() {
+                    None
+                } else {
+                    Some(crate::fastpq::permission_table_root(
+                        self.world.roles.iter(),
+                    ))
+                };
             if witness.fastpq_batches.is_empty() && !witness.fastpq_transcripts.is_empty() {
-                let template =
-                    crate::fastpq::public_inputs_template_from_block(&self._curr_block, &witness);
+                let template = crate::fastpq::public_inputs_template_from_block(
+                    &self._curr_block,
+                    &witness,
+                    perm_root.unwrap_or([0u8; 32]),
+                );
+                let tx_set_hash = tx_set_hash.unwrap_or([0u8; 32]);
                 match crate::fastpq::batches_from_bundles(
                     crate::fastpq::FASTPQ_CANONICAL_PARAMETER_SET,
                     template,
+                    tx_set_hash,
                     witness.fastpq_transcripts.iter(),
                 ) {
                     Ok(batches) => {
@@ -14336,6 +14824,30 @@ impl<'state> StateBlock<'state> {
                             "failed to build FASTPQ batches for exec witness"
                         );
                     }
+                }
+            }
+            if !entry_dsid_bytes.is_empty()
+                && !witness.fastpq_batches.is_empty()
+                && !witness.fastpq_transcripts.is_empty()
+            {
+                for (bundle, batch) in witness
+                    .fastpq_transcripts
+                    .iter()
+                    .zip(witness.fastpq_batches.iter_mut())
+                {
+                    if let Some(dsid) = entry_dsid_bytes.get(&bundle.entry_hash) {
+                        batch.public_inputs.dsid = *dsid;
+                    }
+                }
+            }
+            if let Some(tx_set_hash) = tx_set_hash {
+                for batch in &mut witness.fastpq_batches {
+                    batch.public_inputs.tx_set_hash = tx_set_hash;
+                }
+            }
+            if let Some(perm_root) = perm_root {
+                for batch in &mut witness.fastpq_batches {
+                    batch.public_inputs.perm_root = perm_root;
                 }
             }
             self.exec_witness = Some(witness);
@@ -14558,12 +15070,14 @@ impl<'state> StateBlock<'state> {
                 }
             }
         }
+        state_ref.enforce_nexus_storage_budget();
         Ok(())
     }
 
     /// Assuming all transactions in the block have been processed,
     /// apply the remaining block effects outside the world state.
     #[allow(clippy::too_many_lines)]
+    #[allow(clippy::needless_pass_by_value)]
     #[iroha_logger::log(
         skip_all,
         fields(block_height = block.as_ref().header().height())
@@ -14643,12 +15157,47 @@ impl<'state> StateBlock<'state> {
         self.prev_commit_topology
             .mutate_vec(|vec| *vec = prev_topology);
         let checkpoint_topology = topology.clone();
-        let next_topology = if topology.is_empty() {
+        let mut world_peers: Vec<PeerId> = self.world.peers().iter().cloned().collect();
+        let roster_source = if checkpoint_topology.is_empty() {
+            if world_peers.is_empty() {
+                Vec::new()
+            } else {
+                warn!(
+                    height = block_height,
+                    block = %block_hash,
+                    "commit topology missing during block apply; deriving from world peers"
+                );
+                world_peers.sort();
+                world_peers
+            }
+        } else if world_peers.is_empty() {
+            checkpoint_topology.clone()
+        } else {
+            let checkpoint_set: BTreeSet<_> = checkpoint_topology.iter().cloned().collect();
+            let mut missing: Vec<_> = world_peers
+                .into_iter()
+                .filter(|peer| !checkpoint_set.contains(peer))
+                .collect();
+            if !missing.is_empty() {
+                missing.sort();
+                warn!(
+                    height = block_height,
+                    block = %block_hash,
+                    missing = missing.len(),
+                    "commit topology missing peers observed in world state; appending"
+                );
+            }
+            let mut combined = checkpoint_topology.clone();
+            combined.extend(missing);
+            combined
+        };
+        let next_topology = if roster_source.is_empty() {
             Vec::new()
         } else {
-            let mut topo = crate::sumeragi::network_topology::Topology::new(topology);
-            let world_peers = self.world.peers().iter().cloned();
-            topo.block_committed(world_peers, block_hash);
+            // Always derive commit topology from a deterministic roster source to avoid
+            // clearing the roster when commit QC metadata is unavailable.
+            let mut topo = crate::sumeragi::network_topology::Topology::new(roster_source.clone());
+            topo.block_committed(roster_source, block_hash);
             topo.as_ref().to_vec()
         };
         self.commit_topology.mutate_vec(|vec| *vec = next_topology);
@@ -14666,15 +15215,7 @@ impl<'state> StateBlock<'state> {
                         && matches!(cert.phase, crate::sumeragi::consensus::Phase::Commit)
                 })
             {
-                if commit_cert.validator_set != checkpoint_topology {
-                    warn!(
-                        height = block_height,
-                        block = %block_hash,
-                        expected = checkpoint_topology.len(),
-                        actual = commit_cert.validator_set.len(),
-                        "skipping commit roster record: validator set mismatch"
-                    );
-                } else {
+                if commit_cert.validator_set == checkpoint_topology {
                     let checkpoint = ValidatorSetCheckpoint::new(
                         block_height,
                         commit_cert.view,
@@ -14704,6 +15245,14 @@ impl<'state> StateBlock<'state> {
                                 .insert(commit_cert.subject_block_hash, commit_cert.clone());
                         }
                     }
+                } else {
+                    warn!(
+                        height = block_height,
+                        block = %block_hash,
+                        expected = checkpoint_topology.len(),
+                        actual = commit_cert.validator_set.len(),
+                        "skipping commit roster record: validator set mismatch"
+                    );
                 }
             } else {
                 warn!(
@@ -14806,10 +15355,7 @@ impl<'state> StateBlock<'state> {
                     .metadata()
                     .get(&key_h)
                     .and_then(|json| json.try_into_any_norito::<u64>().ok());
-                match registered_height {
-                    Some(height) => height != current_block_height,
-                    None => false,
-                }
+                registered_height.is_some_and(|height| height != current_block_height)
             })
             .collect();
         let matched_count = matched.len();
@@ -15237,6 +15783,225 @@ mod transfer_transcript_tests {
             crate::fastpq::authority_digest(&ALICE_ID)
         );
         assert!(transcript.poseidon_preimage_digest.is_none());
+    }
+}
+
+#[cfg(test)]
+mod fastpq_tx_set_hash_tests {
+    use std::{borrow::Cow, collections::BTreeSet, time::Duration};
+
+    use iroha_crypto::Hash;
+    use iroha_data_model::{
+        ChainId,
+        account::Account,
+        block::BlockHeader,
+        domain::Domain,
+        fastpq::{TransferDeltaTranscript, TransferTranscript},
+        isi::Log,
+        nexus::DataSpaceId,
+        permission::Permission,
+        role::{Role, RoleId},
+        transaction::TransactionBuilder,
+    };
+    use iroha_logger::Level;
+    use iroha_primitives::{json::Json, numeric::Numeric};
+    use iroha_test_samples::{ALICE_ID, BOB_ID, gen_account_in};
+    use nonzero_ext::nonzero;
+
+    use super::*;
+    use crate::{
+        block::BlockBuilder, kura::Kura, query::store::LiveQueryStore, tx::AcceptedTransaction,
+    };
+
+    #[test]
+    fn validate_and_record_transactions_sets_tx_set_hash() {
+        let (authority, keypair) = gen_account_in("wonderland");
+        let domain_id = "wonderland".parse().expect("valid domain");
+        let domain = Domain::new(domain_id).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let world = World::with([domain], [account], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new(world, kura, query);
+
+        let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
+            .parse()
+            .expect("valid chain id");
+        let mut builder = TransactionBuilder::new(chain_id.clone(), authority.clone());
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx1 = builder
+            .with_instructions([Log::new(Level::INFO, "alpha".to_owned())])
+            .sign(keypair.private_key());
+        let mut builder = TransactionBuilder::new(chain_id, authority);
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx2 = builder
+            .with_instructions([Log::new(Level::INFO, "beta".to_owned())])
+            .sign(keypair.private_key());
+
+        let accepted = vec![
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx1.clone())),
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx2.clone())),
+        ];
+        let new_block = BlockBuilder::new(accepted)
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let header = new_block.header();
+        let mut state_block = state.block(header);
+        let _ = new_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+
+        let mut entry_hashes = vec![tx1.hash_as_entrypoint(), tx2.hash_as_entrypoint()];
+        entry_hashes.sort_unstable();
+        let expected = crate::fastpq::tx_set_hash_from_ordered_hashes(entry_hashes.iter().copied());
+        assert_eq!(state_block.fastpq_tx_set_hash, Some(expected));
+    }
+
+    #[test]
+    fn capture_exec_witness_uses_cached_tx_set_hash() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let _guard = crate::sumeragi::witness::exec_witness_guard();
+        crate::sumeragi::witness::start_block();
+
+        let tx_set_hash = [0xEE; 32];
+        state_block.set_fastpq_tx_set_hash(tx_set_hash);
+
+        let delta = TransferDeltaTranscript {
+            from_account: (*ALICE_ID).clone(),
+            to_account: (*BOB_ID).clone(),
+            asset_definition: "rose#wonderland".parse().expect("valid asset id"),
+            amount: Numeric::from(10u32),
+            from_balance_before: Numeric::from(100u32),
+            from_balance_after: Numeric::from(90u32),
+            to_balance_before: Numeric::from(0u32),
+            to_balance_after: Numeric::from(10u32),
+            from_merkle_proof: None,
+            to_merkle_proof: None,
+        };
+        let batch_hash = Hash::prehashed([0x11; 32]);
+        let transcript = TransferTranscript {
+            batch_hash,
+            deltas: vec![delta.clone()],
+            authority_digest: crate::fastpq::authority_digest(&ALICE_ID),
+            poseidon_preimage_digest: Some(crate::fastpq::poseidon_preimage_digest(
+                &delta,
+                &batch_hash,
+            )),
+        };
+        crate::sumeragi::witness::record_fastpq_transcript(&transcript);
+
+        state_block.capture_exec_witness();
+        let witness = state_block.take_exec_witness().expect("exec witness");
+        assert_eq!(witness.fastpq_batches.len(), 1);
+        assert_eq!(
+            witness.fastpq_batches[0].public_inputs.tx_set_hash,
+            tx_set_hash
+        );
+    }
+
+    #[test]
+    fn capture_exec_witness_threads_entry_dataspace_dsid() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let _guard = crate::sumeragi::witness::exec_witness_guard();
+        crate::sumeragi::witness::start_block();
+
+        let delta = TransferDeltaTranscript {
+            from_account: (*ALICE_ID).clone(),
+            to_account: (*BOB_ID).clone(),
+            asset_definition: "rose#wonderland".parse().expect("valid asset id"),
+            amount: Numeric::from(10u32),
+            from_balance_before: Numeric::from(100u32),
+            from_balance_after: Numeric::from(90u32),
+            to_balance_before: Numeric::from(0u32),
+            to_balance_after: Numeric::from(10u32),
+            from_merkle_proof: None,
+            to_merkle_proof: None,
+        };
+        let batch_hash = Hash::prehashed([0x22; 32]);
+        let transcript = TransferTranscript {
+            batch_hash,
+            deltas: vec![delta.clone()],
+            authority_digest: crate::fastpq::authority_digest(&ALICE_ID),
+            poseidon_preimage_digest: Some(crate::fastpq::poseidon_preimage_digest(
+                &delta,
+                &batch_hash,
+            )),
+        };
+        crate::sumeragi::witness::record_fastpq_transcript(&transcript);
+
+        let dsid = DataSpaceId::new(7);
+        let mut entries = BTreeMap::new();
+        entries.insert(batch_hash, dsid);
+        state_block.set_fastpq_entry_dataspaces(entries);
+
+        state_block.capture_exec_witness();
+        let witness = state_block.take_exec_witness().expect("exec witness");
+        assert_eq!(witness.fastpq_batches.len(), 1);
+        assert_eq!(
+            witness.fastpq_batches[0].public_inputs.dsid,
+            crate::fastpq::dataspace_id_bytes(dsid)
+        );
+    }
+
+    #[test]
+    fn capture_exec_witness_sets_perm_root() {
+        let perm = Permission::new("perm_a".to_string(), Json::new(()));
+        let role_id: RoleId = "role_a".parse().expect("role id");
+        let role = Role {
+            id: role_id.clone(),
+            permissions: BTreeSet::from([perm]),
+        };
+        let entries = vec![(role_id.clone(), role.clone())];
+        let expected =
+            crate::fastpq::permission_table_root(entries.iter().map(|(id, role)| (id, role)));
+
+        let mut world = World::with([], [], []);
+        world.roles.insert(role.id.clone(), role);
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new(world, kura, query);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let _guard = crate::sumeragi::witness::exec_witness_guard();
+        crate::sumeragi::witness::start_block();
+
+        let delta = TransferDeltaTranscript {
+            from_account: (*ALICE_ID).clone(),
+            to_account: (*BOB_ID).clone(),
+            asset_definition: "rose#wonderland".parse().expect("valid asset id"),
+            amount: Numeric::from(10u32),
+            from_balance_before: Numeric::from(100u32),
+            from_balance_after: Numeric::from(90u32),
+            to_balance_before: Numeric::from(0u32),
+            to_balance_after: Numeric::from(10u32),
+            from_merkle_proof: None,
+            to_merkle_proof: None,
+        };
+        let batch_hash = Hash::prehashed([0x33; 32]);
+        let transcript = TransferTranscript {
+            batch_hash,
+            deltas: vec![delta.clone()],
+            authority_digest: crate::fastpq::authority_digest(&ALICE_ID),
+            poseidon_preimage_digest: Some(crate::fastpq::poseidon_preimage_digest(
+                &delta,
+                &batch_hash,
+            )),
+        };
+        crate::sumeragi::witness::record_fastpq_transcript(&transcript);
+
+        state_block.capture_exec_witness();
+        let witness = state_block.take_exec_witness().expect("exec witness");
+        assert_eq!(witness.fastpq_batches.len(), 1);
+        assert_eq!(witness.fastpq_batches[0].public_inputs.perm_root, expected);
     }
 }
 
@@ -17496,6 +18261,7 @@ impl StateTransaction<'_, '_> {
     }
 
     /// Apply transaction making it's changes visible
+    #[allow(clippy::too_many_lines)]
     pub fn apply(self) {
         // NOTE: intentionally destruct self not to forget apply some fields
         let Self {
@@ -17718,11 +18484,21 @@ impl StateTransaction<'_, '_> {
                 .ok_or_else(|| FindError::Trigger(id.clone()))
                 .map_err(Error::from)
                 .map_err(ValidationFail::from)?;
-
-            assert!(
-                !action.repeats.is_depleted(),
-                "orphaned trigger was not removed"
-            );
+            if !trigger_is_enabled(action.metadata()) {
+                return Err(
+                    ValidationFail::from(Error::from(FindError::Trigger(id.clone()))).into(),
+                );
+            }
+            if action.repeats.is_depleted() {
+                warn!(
+                    trigger_id = %id,
+                    "by-call trigger is depleted; removing"
+                );
+                let _ = self.world.triggers.remove(id);
+                return Err(
+                    ValidationFail::from(Error::from(FindError::Trigger(id.clone()))).into(),
+                );
+            }
 
             (action.executable().clone(), action.authority().clone())
         };
@@ -17767,17 +18543,26 @@ impl StateTransaction<'_, '_> {
                 return Err(TriggerExecutionFail::MaxDepthExceeded.into());
             }
             let executable = {
-                let action = self
-                    .world
-                    .triggers
-                    .data_triggers()
-                    .get(&trg_id)
-                    .expect("stack should reference existing data trigger IDs");
+                let Some(action) = self.world.triggers.data_triggers().get(&trg_id) else {
+                    warn!(
+                        trigger_id = %trg_id,
+                        "data trigger missing while executing trigger events"
+                    );
+                    let _ = self.world.triggers.remove(&trg_id);
+                    continue;
+                };
 
-                assert!(
-                    !action.repeats.is_depleted(),
-                    "orphaned trigger was not removed"
-                );
+                if action.repeats.is_depleted() {
+                    warn!(
+                        trigger_id = %trg_id,
+                        "data trigger is depleted while executing trigger events; removing"
+                    );
+                    let _ = self.world.triggers.remove(&trg_id);
+                    continue;
+                }
+                if !trigger_is_enabled(action.metadata()) {
+                    continue;
+                }
 
                 action.executable().clone()
             };
@@ -17814,6 +18599,9 @@ impl StateTransaction<'_, '_> {
 
         for event in &drained {
             for (trg_id, action) in self.world.triggers.data_triggers().iter() {
+                if !trigger_is_enabled(action.metadata()) {
+                    continue;
+                }
                 if action.filter.matches(event) {
                     // Preserve emission order so every matching event in a batch
                     // produces its own trigger execution.
@@ -17842,6 +18630,7 @@ impl StateTransaction<'_, '_> {
     ///
     /// Returns the execution step on success, or the rejection reason on failure.
     #[allow(clippy::needless_pass_by_value)]
+    #[allow(clippy::too_many_lines)]
     fn execute_trigger(
         &mut self,
         id: &TriggerId,
@@ -17849,95 +18638,106 @@ impl StateTransaction<'_, '_> {
         executable: &ExecutableRef,
         event: EventBox,
     ) -> Result<ExecutionStep, TransactionRejectionReason> {
-        let res = match executable {
-            ExecutableRef::Instructions(instructions) => {
+        let (res, outcome_override) = match executable {
+            ExecutableRef::Instructions(instructions) => (
                 // Route trigger instructions through the executor so custom
                 // validation/fuel policies apply consistently.
-                self.execute_instructions(instructions.clone(), authority)
-            }
+                self.execute_instructions(instructions.clone(), authority),
+                None,
+            ),
             ExecutableRef::Ivm(blob_hash) => {
-                // Extract args if this was an ExecuteTrigger event
-                let trigger_args = match &event {
-                    EventBox::ExecuteTrigger(ev) => ev.args().clone(),
-                    _ => iroha_primitives::json::Json::default(),
-                };
-                let bytecode = self
-                    .world
-                    .triggers
-                    .get_original_contract(blob_hash)
-                    .expect("INTERNAL BUG: contract is not present")
-                    .clone();
-                let parsed = ivm::ProgramMetadata::parse(bytecode.as_ref())
-                    .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
-                let meta = parsed.metadata;
-                let pipeline_cap = self.pipeline.ivm_max_cycles_upper_bound;
-                let mut eff_cycles = meta.max_cycles;
-                if eff_cycles == 0 {
-                    eff_cycles = u64::MAX;
-                }
-                if pipeline_cap > 0 {
-                    eff_cycles = eff_cycles.min(pipeline_cap);
-                }
-                if eff_cycles == u64::MAX {
-                    eff_cycles = 0;
-                }
-                let gas_cap_cycles = if eff_cycles == 0 {
-                    meta.max_cycles
-                } else {
-                    eff_cycles
-                };
-                let gas_cap = crate::smartcontracts::ivm::gas_limit_for_cycles(gas_cap_cycles);
-                let remaining_block_budget = if self.gas_limit_per_block == 0 {
-                    u64::MAX
-                } else {
-                    self.gas_limit_per_block
-                        .saturating_sub(self.gas_used_in_block_so_far)
-                };
-                let mut gas_limit = gas_cap.min(remaining_block_budget);
-                if gas_limit == u64::MAX {
-                    gas_limit = DEFAULT_TRIGGER_GAS_LIMIT;
-                }
-                let mut vm = ivm::IVM::new(gas_limit);
-                // Attach core IVM host adapter. Stateful syscalls enqueue ISIs
-                // which we collect after `vm.run()` and return as the trigger step.
-                let accounts = self.trigger_accounts_snapshot();
-                let mut host = crate::smartcontracts::ivm::host::CoreHost::with_accounts_and_args(
-                    authority.clone(),
-                    accounts,
-                    trigger_args,
-                );
-                // Seed sample NFT helper sequence with the current block height so repeated
-                // executions across blocks generate unique ids.
-                host.set_nft_seq_base(self._curr_block.height().get().saturating_mul(256));
-                #[cfg(feature = "telemetry")]
-                host.set_telemetry(self.telemetry.clone());
-                host.set_crypto_config(self.crypto());
-                host.set_durable_state_snapshot_from_world(&self.world);
-                vm.set_host(host);
-                if let Err(e) = vm.load_program(bytecode.as_ref()) {
-                    return Err(ValidationFail::InternalError(e.to_string()).into());
-                }
-                if eff_cycles > 0 {
-                    vm.set_max_cycles(eff_cycles);
-                }
-                vm.set_gas_limit(gas_limit);
-                if let Err(e) = vm.run() {
-                    return Err(crate::smartcontracts::ivm::map_vm_error_to_validation(e).into());
-                }
-                // Collect queued ISIs from the host, execute them via the executor,
-                // and return them as the step.
-                if let Some(host_any) = vm.host_mut_any() {
-                    if let Some(host) =
-                        host_any.downcast_mut::<crate::smartcontracts::ivm::host::CoreHost>()
-                    {
-                        let queued = host.apply_queued(self, authority)?;
-                        let cvs: ConstVec<InstructionBox> = ConstVec::from(queued);
-                        Ok(cvs.into())
-                    } else {
-                        Ok(ConstVec::new_empty().into())
+                if let Some(bytecode) = self.world.triggers.get_original_contract(blob_hash) {
+                    // Extract args if this was an ExecuteTrigger event
+                    let trigger_args = match &event {
+                        EventBox::ExecuteTrigger(ev) => ev.args().clone(),
+                        _ => iroha_primitives::json::Json::default(),
+                    };
+                    let bytecode = bytecode.clone();
+                    let parsed = ivm::ProgramMetadata::parse(bytecode.as_ref())
+                        .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+                    let meta = parsed.metadata;
+                    let pipeline_cap = self.pipeline.ivm_max_cycles_upper_bound;
+                    let mut eff_cycles = meta.max_cycles;
+                    if eff_cycles == 0 {
+                        eff_cycles = u64::MAX;
                     }
+                    if pipeline_cap > 0 {
+                        eff_cycles = eff_cycles.min(pipeline_cap);
+                    }
+                    if eff_cycles == u64::MAX {
+                        eff_cycles = 0;
+                    }
+                    let gas_cap_cycles = if eff_cycles == 0 {
+                        meta.max_cycles
+                    } else {
+                        eff_cycles
+                    };
+                    let gas_cap = crate::smartcontracts::ivm::gas_limit_for_cycles(gas_cap_cycles);
+                    let remaining_block_budget = if self.gas_limit_per_block == 0 {
+                        u64::MAX
+                    } else {
+                        self.gas_limit_per_block
+                            .saturating_sub(self.gas_used_in_block_so_far)
+                    };
+                    let mut gas_limit = gas_cap.min(remaining_block_budget);
+                    if gas_limit == u64::MAX {
+                        gas_limit = DEFAULT_TRIGGER_GAS_LIMIT;
+                    }
+                    let mut vm = ivm::IVM::new(gas_limit);
+                    // Attach core IVM host adapter. Stateful syscalls enqueue ISIs
+                    // which we collect after `vm.run()` and return as the trigger step.
+                    let accounts = self.trigger_accounts_snapshot();
+                    let mut host =
+                        crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
+                            authority.clone(),
+                            accounts,
+                            trigger_args,
+                        );
+                    let current_block_time_ms =
+                        u64::try_from(self._curr_block.creation_time().as_millis())
+                            .expect("block creation timestamp must fit into u64");
+                    host.set_trigger_id(id.clone());
+                    host.set_block_time_ms(current_block_time_ms);
+                    // Seed sample NFT helper sequence with the current block height so repeated
+                    // executions across blocks generate unique ids.
+                    host.set_nft_seq_base(self._curr_block.height().get().saturating_mul(256));
+                    #[cfg(feature = "telemetry")]
+                    host.set_telemetry(self.telemetry.clone());
+                    host.set_crypto_config(self.crypto());
+                    host.set_durable_state_snapshot_from_world(&self.world);
+                    host.set_public_inputs_from_parameters(self.world.parameters.get());
+                    host.set_query_state(self);
+                    if let Err(e) = vm.load_program(bytecode.as_ref()) {
+                        return Err(ValidationFail::InternalError(e.to_string()).into());
+                    }
+                    if eff_cycles > 0 {
+                        vm.set_max_cycles(eff_cycles);
+                    }
+                    vm.set_gas_limit(gas_limit);
+                    if let Err(e) = vm.run_with_host(&mut host) {
+                        return Err(
+                            crate::smartcontracts::ivm::map_vm_error_to_validation(&e).into()
+                        );
+                    }
+                    // Collect queued ISIs from the host, execute them via the executor,
+                    // and return them as the step.
+                    let artifacts = host.into_execution_artifacts()?;
+                    let queued = artifacts.apply_to_transaction(self, authority)?;
+                    let cvs: ConstVec<InstructionBox> = ConstVec::from(queued);
+                    (Ok(cvs.into()), None)
                 } else {
-                    Ok(ConstVec::new_empty().into())
+                    warn!(
+                        trigger_id = %id,
+                        ?blob_hash,
+                        "missing trigger bytecode; dropping trigger"
+                    );
+                    self.world.triggers.remove(id);
+                    (
+                        Ok(Self::execution_step_from_executable(executable)),
+                        Some(TriggerCompletedOutcome::Failure(
+                            "missing trigger bytecode".to_owned(),
+                        )),
+                    )
                 }
             }
         };
@@ -17952,10 +18752,12 @@ impl StateTransaction<'_, '_> {
         }
         .hash_as_entrypoint();
 
-        let outcome = res.as_ref().map_or_else(
-            |error| TriggerCompletedOutcome::Failure(error.to_string()),
-            |_| TriggerCompletedOutcome::Success,
-        );
+        let outcome = outcome_override.unwrap_or_else(|| {
+            res.as_ref().map_or_else(
+                |error| TriggerCompletedOutcome::Failure(error.to_string()),
+                |_| TriggerCompletedOutcome::Success,
+            )
+        });
         let event = TriggerCompletedEvent::new(id.clone(), entrypoint_hash, 0, outcome);
         self.world
             .external_event_buf
@@ -18805,6 +19607,20 @@ pub(crate) mod deserialize {
         let telemetry_seed = telemetry.clone();
         let initial_crypto = iroha_config::parameters::actual::Crypto::default();
         let nexus = iroha_config::parameters::actual::Nexus::default();
+        let streaming = iroha_config::parameters::actual::Streaming {
+            key_material: iroha_crypto::streaming::StreamingKeyMaterial::new(
+                iroha_crypto::KeyPair::from_seed(vec![0u8; 32], Algorithm::Ed25519),
+            )
+            .expect("streaming key material"),
+            session_store_dir: PathBuf::from(
+                iroha_config::parameters::defaults::streaming::SESSION_STORE_DIR,
+            ),
+            feature_bits: iroha_config::parameters::defaults::streaming::FEATURE_BITS,
+            soranet: iroha_config::parameters::actual::StreamingSoranet::from_defaults(),
+            soravpn: iroha_config::parameters::actual::StreamingSoravpn::from_defaults(),
+            sync: iroha_config::parameters::actual::StreamingSync::from_defaults(),
+            codec: iroha_config::parameters::actual::StreamingCodec::from_defaults(),
+        };
         let da_receipt_cursors = parking_lot::RwLock::new(DaReceiptCursorIndex::default());
         let da_shard_cursors = parking_lot::RwLock::new(DaShardCursorIndex::default());
         let store_root = kura.store_root();
@@ -18843,6 +19659,7 @@ pub(crate) mod deserialize {
             query_handle,
             oracle: default_oracle(),
             pipeline: default_pipeline(),
+            streaming,
             crypto: parking_lot::RwLock::new(Arc::new(initial_crypto.clone())),
             nexus: parking_lot::RwLock::new(nexus),
             tiered_backend: parking_lot::Mutex::new(TieredStateBackend::default()),
@@ -18922,6 +19739,8 @@ pub(crate) mod deserialize {
             quarantine_tx_max_millis:
                 iroha_config::parameters::defaults::pipeline::QUARANTINE_TX_MAX_MILLIS,
             query_default_cursor_mode: iroha_config::parameters::actual::QueryCursorMode::Ephemeral,
+            query_max_fetch_size:
+                iroha_config::parameters::defaults::pipeline::QUERY_MAX_FETCH_SIZE,
             query_stored_min_gas_units:
                 iroha_config::parameters::defaults::pipeline::QUERY_STORED_MIN_GAS_UNITS,
             amx_per_dataspace_budget_ms:
@@ -19267,8 +20086,9 @@ fn default_fraud_monitoring_cfg() -> iroha_config::parameters::actual::FraudMoni
 
 #[cfg(test)]
 mod tests {
-    use core::{mem, num::NonZeroU64};
+    use core::{mem, num::NonZeroU64, time::Duration};
     use std::{
+        borrow::Cow,
         collections::{BTreeMap, BTreeSet},
         sync::Arc,
     };
@@ -19342,6 +20162,7 @@ mod tests {
         role::RoleIdWithOwner,
         smartcontracts::{Execute, ivm::host::CoreHost},
         sumeragi::{network_topology::Topology, status},
+        tx::AcceptedTransaction,
     };
 
     fn make_tlv(ty: PointerType, payload: &[u8]) -> Vec<u8> {
@@ -19354,6 +20175,19 @@ mod tests {
         let hash: [u8; 32] = Hash::new(payload).into();
         tlv.extend_from_slice(&hash);
         tlv
+    }
+
+    fn dummy_accepted_transaction() -> AcceptedTransaction<'static> {
+        let chain_id = (*super::DEFAULT_TEST_CHAIN_ID).clone();
+        let domain_id: DomainId = "dummy".parse().expect("valid domain id");
+        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(domain_id, keypair.public_key().clone());
+        let mut builder = TransactionBuilder::new(chain_id, authority);
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx = builder
+            .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
+            .sign(keypair.private_key());
+        AcceptedTransaction::new_unchecked(Cow::Owned(tx))
     }
 
     fn dataspace_catalog_for_lane_catalog(catalog: &LaneCatalog) -> DataSpaceCatalog {
@@ -19564,6 +20398,92 @@ mod tests {
             iroha_data_model::account::address::default_domain_name().as_ref(),
             "ledger"
         );
+    }
+
+    #[test]
+    fn set_streaming_updates_config() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let mut streaming = state.streaming.clone();
+        let soranet_spool = PathBuf::from("soranet-spool");
+        streaming.soranet.provision_spool_dir = soranet_spool.clone();
+        state.set_streaming(streaming);
+
+        assert_eq!(state.streaming.soranet.provision_spool_dir, soranet_spool);
+    }
+
+    #[test]
+    fn enforce_nexus_storage_budget_prunes_spools_before_cold() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let store_root = temp_dir.path().join("kura");
+        let soranet_spool = temp_dir.path().join("soranet");
+        let soravpn_spool = temp_dir.path().join("soravpn");
+        let cold_root = temp_dir.path().join("cold");
+
+        std::fs::create_dir_all(&soranet_spool).expect("create soranet spool");
+        std::fs::write(soranet_spool.join("b-file.norito"), vec![0u8; 60])
+            .expect("write spool file");
+        std::fs::write(soranet_spool.join("a-file.norito"), vec![0u8; 60])
+            .expect("write spool file");
+
+        let snapshot_dir = cold_root.join("00000000000000000001");
+        std::fs::create_dir_all(&snapshot_dir).expect("create snapshot dir");
+        std::fs::write(snapshot_dir.join("payload.norito"), vec![0u8; 50])
+            .expect("write cold payload");
+
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+            block_sync_roster_retention:
+                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention:
+                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let mut streaming = state.streaming.clone();
+        streaming.soranet.provision_spool_dir = soranet_spool.clone();
+        streaming.soravpn.provision_spool_dir = soravpn_spool.clone();
+        state.set_streaming(streaming);
+
+        state.set_tiered_backend(&iroha_config::parameters::actual::TieredState {
+            enabled: true,
+            hot_retained_keys: 0,
+            hot_retained_bytes: iroha_config::base::util::Bytes(0),
+            hot_retained_grace_snapshots: 0,
+            cold_store_root: Some(cold_root.clone()),
+            da_store_root: None,
+            max_snapshots: 0,
+            max_cold_bytes: iroha_config::base::util::Bytes(0),
+        });
+
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.enabled = true;
+        nexus.storage.max_disk_usage_bytes = iroha_config::base::util::Bytes(120);
+        state.set_nexus(nexus).expect("apply nexus config");
+
+        state.enforce_nexus_storage_budget();
+
+        assert!(
+            !soranet_spool.join("a-file.norito").exists(),
+            "oldest spool entry should be evicted"
+        );
+        assert!(
+            soranet_spool.join("b-file.norito").exists(),
+            "newer spool entry should remain"
+        );
+        assert!(snapshot_dir.exists(), "cold snapshot should remain");
     }
 
     #[test]
@@ -21299,7 +22219,7 @@ mod tests {
 
         let bundle = DaPinIntentBundle::new(vec![intent.clone()]);
         let keypair = KeyPair::random();
-        let new_block = BlockBuilder::new(Vec::new())
+        let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_pin_intents(Some(bundle))
             .sign(keypair.private_key())
@@ -21454,7 +22374,7 @@ mod tests {
         state.set_sumeragi_parameters(&sumeragi);
 
         let keypair = KeyPair::random();
-        let new_block = BlockBuilder::new(Vec::new())
+        let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .sign(keypair.private_key())
             .unpack(|_| {});
@@ -21478,7 +22398,7 @@ mod tests {
         state.set_sumeragi_parameters(&sumeragi);
 
         let keypair = KeyPair::random();
-        let new_block = BlockBuilder::new(Vec::new())
+        let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(DaCommitmentBundle::new(Vec::new())))
             .sign(keypair.private_key())
@@ -21545,7 +22465,7 @@ mod tests {
             StorageTicketId::new([0xEE; 32]),
             Signature::from_bytes(&[0x11; 64]),
         )]);
-        let new_block = BlockBuilder::new(Vec::new())
+        let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(bundle))
             .sign(keypair.private_key())
@@ -21595,7 +22515,7 @@ mod tests {
         };
 
         let first_bundle = DaCommitmentBundle::new(vec![make_record(1)]);
-        let first_block = BlockBuilder::new(Vec::new())
+        let first_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(first_bundle))
             .sign(keypair.private_key())
@@ -21610,7 +22530,7 @@ mod tests {
         }
 
         let second_bundle = DaCommitmentBundle::new(vec![make_record(0)]);
-        let second_block = BlockBuilder::new(Vec::new())
+        let second_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, Some(&signed_first))
             .with_da_commitments(Some(second_bundle))
             .sign(keypair.private_key())
@@ -21670,7 +22590,7 @@ mod tests {
             StorageTicketId::new([0x05; 32]),
             Signature::from_bytes(&[0x06; 64]),
         )]);
-        let block = BlockBuilder::new(Vec::new())
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(bundle))
             .sign(keypair.private_key())
@@ -21782,7 +22702,7 @@ mod tests {
                 Signature::from_bytes(&[0x12; 64]),
             ),
         ]);
-        let first_block = BlockBuilder::new(Vec::new())
+        let first_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(first_bundle))
             .sign(keypair.private_key())
@@ -21810,7 +22730,7 @@ mod tests {
             StorageTicketId::new([0xF0; 32]),
             Signature::from_bytes(&[0x13; 64]),
         )]);
-        let second_block = BlockBuilder::new(Vec::new())
+        let second_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, Some(&signed_first))
             .with_da_commitments(Some(second_bundle))
             .sign(keypair.private_key())
@@ -21961,7 +22881,7 @@ mod tests {
         };
 
         let first_bundle = DaCommitmentBundle::new(vec![make_record(1)]);
-        let first_block = BlockBuilder::new(Vec::new())
+        let first_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(first_bundle))
             .sign(keypair.private_key())
@@ -21976,7 +22896,7 @@ mod tests {
         }
 
         let second_bundle = DaCommitmentBundle::new(vec![make_record(2)]);
-        let second_block = BlockBuilder::new(Vec::new())
+        let second_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, Some(&signed_first))
             .with_da_commitments(Some(second_bundle))
             .sign(keypair.private_key())
@@ -22097,7 +23017,7 @@ mod tests {
         let bundle =
             DaCommitmentBundle::new(vec![lane_zero_record.clone(), lane_one_record.clone()]);
         let keypair = KeyPair::random();
-        let block = BlockBuilder::new(Vec::new())
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(bundle))
             .sign(keypair.private_key())
@@ -22177,7 +23097,7 @@ mod tests {
         );
         let bundle = DaCommitmentBundle::new(vec![committed_record.clone()]);
         let keypair = KeyPair::random();
-        let block = BlockBuilder::new(Vec::new())
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(bundle))
             .sign(keypair.private_key())
@@ -22276,7 +23196,7 @@ mod tests {
         };
 
         let first_bundle = DaCommitmentBundle::new(vec![make_record(LaneId::new(0), 1)]);
-        let first_block = BlockBuilder::new(Vec::new())
+        let first_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(first_bundle))
             .sign(keypair.private_key())
@@ -22291,7 +23211,7 @@ mod tests {
         }
 
         let second_bundle = DaCommitmentBundle::new(vec![make_record(LaneId::new(1), 1)]);
-        let second_block = BlockBuilder::new(Vec::new())
+        let second_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, Some(&signed_first))
             .with_da_commitments(Some(second_bundle))
             .sign(keypair.private_key())
@@ -22310,7 +23230,7 @@ mod tests {
             .expect("hydration should succeed");
 
         let replacement_bundle = DaCommitmentBundle::new(vec![make_record(LaneId::new(1), 2)]);
-        let replacement_block = BlockBuilder::new(Vec::new())
+        let replacement_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, Some(&signed_first))
             .with_da_commitments(Some(replacement_bundle))
             .sign(keypair.private_key())
@@ -22559,7 +23479,7 @@ mod tests {
 
         // Store a single block to set the latest height below the journal cursor.
         let keypair = KeyPair::random();
-        let block = BlockBuilder::new(Vec::new())
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .sign(keypair.private_key())
             .unpack(|_| {});
@@ -22998,7 +23918,7 @@ mod tests {
         };
 
         let first_bundle = DaCommitmentBundle::new(vec![make_record(1)]);
-        let first_block = BlockBuilder::new(Vec::new())
+        let first_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(first_bundle.clone()))
             .sign(keypair.private_key())
@@ -23024,7 +23944,7 @@ mod tests {
         let pin_bundle =
             iroha_data_model::da::pin_intent::DaPinIntentBundle::new(vec![pin_intent.clone()]);
         let second_bundle = DaCommitmentBundle::new(vec![make_record(2)]);
-        let second_block = BlockBuilder::new(Vec::new())
+        let second_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, Some(&signed_first))
             .with_da_commitments(Some(second_bundle.clone()))
             .with_da_pin_intents(Some(pin_bundle))
@@ -23102,7 +24022,7 @@ mod tests {
             .expect("apply Nexus catalog for telemetry validation");
 
         let keypair = KeyPair::random();
-        let block: SignedBlock = BlockBuilder::new(Vec::new())
+        let block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .sign(keypair.private_key())
             .unpack(|_| {})
@@ -23181,7 +24101,7 @@ mod tests {
         );
         let bundle = DaCommitmentBundle::new(vec![record]);
         let keypair = KeyPair::random();
-        let block: SignedBlock = BlockBuilder::new(Vec::new())
+        let block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(bundle))
             .sign(keypair.private_key())
@@ -23264,12 +24184,12 @@ mod tests {
             .advance_da_shard_cursors_from_bundle(1, &[record])
             .expect("advance cursor");
 
-        let first_block: SignedBlock = BlockBuilder::new(Vec::new())
+        let first_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .sign(keypair.private_key())
             .unpack(|_| {})
             .into();
-        let second_block: SignedBlock = BlockBuilder::new(Vec::new())
+        let second_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, Some(&first_block))
             .sign(keypair.private_key())
             .unpack(|_| {})
@@ -23405,7 +24325,7 @@ mod tests {
         );
         let bundle = DaCommitmentBundle::new(vec![record.clone()]);
         let keypair = KeyPair::random();
-        let signed_block: SignedBlock = BlockBuilder::new(Vec::new())
+        let signed_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(bundle))
             .sign(keypair.private_key())
@@ -23507,7 +24427,7 @@ mod tests {
             plain.clone(),
         ]);
         let keypair = KeyPair::random();
-        let new_block = BlockBuilder::new(Vec::new())
+        let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_pin_intents(Some(bundle))
             .sign(keypair.private_key())
@@ -23581,7 +24501,7 @@ mod tests {
 
         let bundle = DaPinIntentBundle::new(vec![missing_owner.clone(), valid.clone()]);
         let keypair = KeyPair::random();
-        let new_block = BlockBuilder::new(Vec::new())
+        let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_pin_intents(Some(bundle))
             .sign(keypair.private_key())
@@ -23641,7 +24561,7 @@ mod tests {
 
         let bundle = DaPinIntentBundle::new(vec![intent.clone()]);
         let keypair = KeyPair::random();
-        let new_block = BlockBuilder::new(Vec::new())
+        let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_pin_intents(Some(bundle))
             .sign(keypair.private_key())
@@ -27059,7 +27979,7 @@ mod tests {
                 .clone(),
         );
 
-        let block = BlockBuilder::new(Vec::new())
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .sign(keypairs[0].private_key())
             .unpack(|_| {});
@@ -27084,6 +28004,101 @@ mod tests {
         let mut world_peers = base_topology.clone();
         world_peers.push(new_peer);
         expected_topology.block_committed(world_peers, prev_hash);
+        let expected = expected_topology.as_ref().to_vec();
+
+        let view = state.view();
+        let actual: Vec<_> = view.commit_topology().iter().cloned().collect();
+        assert_eq!(actual, expected);
+        let prev: Vec<_> = view.prev_commit_topology().iter().cloned().collect();
+        assert_eq!(prev, base_topology);
+    }
+
+    #[test]
+    fn apply_without_execution_derives_commit_topology_when_roster_missing() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+
+        let keypairs = configure_commit_topology(&state, 4);
+        let base_topology: Vec<_> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+        let new_peer = PeerId::new(
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .sign(keypairs[0].private_key())
+            .unpack(|_| {});
+        let signed_block: SignedBlock = block.into();
+        let mut state_block = state.block(signed_block.header());
+
+        {
+            let mut peers = state_block.world.peers_mut_for_testing().transaction();
+            peers.clear();
+            peers.extend(base_topology.clone());
+            peers.push(new_peer.clone());
+            peers.apply();
+        }
+
+        let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        let block_hash = committed.as_ref().hash();
+        let _ = state_block.apply_without_execution(&committed, Vec::new());
+        state_block.commit().expect("commit state block");
+
+        let mut expected_topology = Topology::new(base_topology.clone());
+        let mut world_peers = base_topology.clone();
+        world_peers.push(new_peer);
+        world_peers.sort();
+        expected_topology.block_committed(world_peers, block_hash);
+        let expected = expected_topology.as_ref().to_vec();
+
+        let view = state.view();
+        let actual: Vec<_> = view.commit_topology().iter().cloned().collect();
+        assert_eq!(actual, expected);
+        let prev: Vec<_> = view.prev_commit_topology().iter().cloned().collect();
+        assert_eq!(prev, base_topology);
+    }
+
+    #[test]
+    fn apply_without_execution_prefers_checkpoint_topology_when_world_peers_incomplete() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+
+        let keypairs = configure_commit_topology(&state, 4);
+        let base_topology: Vec<_> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .sign(keypairs[0].private_key())
+            .unpack(|_| {});
+        let signed_block: SignedBlock = block.into();
+        let mut state_block = state.block(signed_block.header());
+
+        {
+            let mut peers = state_block.world.peers_mut_for_testing().transaction();
+            peers.clear();
+            peers.push(base_topology[0].clone());
+            peers.apply();
+        }
+
+        let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        let block_hash = committed.as_ref().hash();
+        let _ = state_block.apply_without_execution(&committed, base_topology.clone());
+        state_block.commit().expect("commit state block");
+
+        let mut expected_topology = Topology::new(base_topology.clone());
+        expected_topology.block_committed(base_topology.clone(), block_hash);
         let expected = expected_topology.as_ref().to_vec();
 
         let view = state.view();
@@ -27918,6 +28933,395 @@ mod tests {
             }
             other => panic!("unexpected rejection: {other:?}"),
         }
+    }
+
+    #[test]
+    fn execute_called_trigger_skips_missing_bytecode_and_removes_trigger() {
+        use iroha_data_model::{
+            events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter},
+            transaction::{Executable, IvmBytecode},
+            trigger::{
+                Trigger,
+                action::{Action, Repeats},
+            },
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new(World::default(), kura, query_handle);
+
+        let trigger_id: TriggerId = "missing_bytecode_by_call".parse().unwrap();
+        let mut raw = Vec::new();
+        raw.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+        let bytecode = IvmBytecode::from_compiled(assemble_ivm_header(&raw));
+        let blob_hash = HashOf::new(&bytecode);
+
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        {
+            let mut stx = state_block.transaction();
+            Register::domain(Domain::new("wonderland".parse().unwrap()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(Account::new(ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let action = Action::new(
+                Executable::Ivm(bytecode),
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                ExecuteTriggerEventFilter::new()
+                    .for_trigger(trigger_id.clone())
+                    .under_authority(ALICE_ID.clone()),
+            );
+            Register::trigger(Trigger::new(trigger_id.clone(), action))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            stx.apply();
+        }
+        state_block.commit().unwrap();
+
+        assert!(
+            state.world.triggers.remove_contract_for_test(blob_hash),
+            "contract entry should be removed for test setup"
+        );
+
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let mut stx = state_block.transaction();
+        let event = ExecuteTriggerEvent {
+            trigger_id: trigger_id.clone(),
+            authority: ALICE_ID.clone(),
+            args: Json::default(),
+        };
+        let step = stx
+            .execute_called_trigger(&trigger_id, &event)
+            .expect("missing bytecode should be skipped");
+        assert!(
+            step.0.is_empty(),
+            "missing bytecode should not execute any instructions"
+        );
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let view = state.view();
+        assert!(
+            view.world.triggers().ids().get(&trigger_id).is_none(),
+            "trigger should be removed after missing bytecode"
+        );
+    }
+
+    #[test]
+    fn execute_called_trigger_rejects_depleted_entry_and_prunes_trigger() {
+        use iroha_data_model::{
+            events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter},
+            trigger::{
+                Trigger,
+                action::{Action, Repeats},
+            },
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let trigger_id: TriggerId = "depleted_by_call".parse().unwrap();
+
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        {
+            let mut stx = state_block.transaction();
+            Register::domain(Domain::new("wonderland".parse().unwrap()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(Account::new(ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let action = Action::new(
+                Vec::<InstructionBox>::new(),
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                ExecuteTriggerEventFilter::new()
+                    .for_trigger(trigger_id.clone())
+                    .under_authority(ALICE_ID.clone()),
+            );
+            Register::trigger(Trigger::new(trigger_id.clone(), action))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            stx.apply();
+        }
+        state_block.commit().unwrap();
+
+        {
+            let mut trigger_block = state.world.triggers.block();
+            let mut trigger_tx = trigger_block.transaction();
+            let updated = trigger_tx.inspect_by_id_mut(&trigger_id, |action| {
+                action.set_repeats(Repeats::Exactly(0));
+            });
+            assert!(
+                updated.is_some(),
+                "trigger should be present for corruption"
+            );
+            trigger_tx.apply();
+            trigger_block.commit();
+        }
+
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let mut stx = state_block.transaction();
+        let event = ExecuteTriggerEvent {
+            trigger_id: trigger_id.clone(),
+            authority: ALICE_ID.clone(),
+            args: Json::default(),
+        };
+        let err = stx
+            .execute_called_trigger(&trigger_id, &event)
+            .expect_err("depleted trigger should be rejected");
+        match err {
+            TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+                InstructionExecutionError::Find(FindError::Trigger(id)),
+            )) => assert_eq!(id, trigger_id),
+            other => panic!("unexpected rejection: {other:?}"),
+        }
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let view = state.view();
+        assert!(
+            view.world.triggers().ids().get(&trigger_id).is_none(),
+            "depleted trigger should be removed"
+        );
+    }
+
+    #[test]
+    fn execute_called_trigger_rejects_disabled_trigger() {
+        use iroha_data_model::events::execute_trigger::{
+            ExecuteTriggerEvent, ExecuteTriggerEventFilter,
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let trigger_id: TriggerId = "disabled_by_call".parse().unwrap();
+
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        {
+            let mut stx = state_block.transaction();
+            Register::domain(Domain::new("wonderland".parse().unwrap()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(Account::new(ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                crate::smartcontracts::isi::triggers::TRIGGER_ENABLED_METADATA_KEY
+                    .parse::<Name>()
+                    .expect("valid metadata key"),
+                Json::from(false),
+            );
+            let action = Action::new(
+                Vec::<InstructionBox>::new(),
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                ExecuteTriggerEventFilter::new()
+                    .for_trigger(trigger_id.clone())
+                    .under_authority(ALICE_ID.clone()),
+            )
+            .with_metadata(metadata);
+            Register::trigger(Trigger::new(trigger_id.clone(), action))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            stx.apply();
+        }
+        state_block.commit().unwrap();
+
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let mut stx = state_block.transaction();
+        let event = ExecuteTriggerEvent {
+            trigger_id: trigger_id.clone(),
+            authority: ALICE_ID.clone(),
+            args: Json::default(),
+        };
+        let err = stx
+            .execute_called_trigger(&trigger_id, &event)
+            .expect_err("disabled trigger should be rejected");
+        match err {
+            TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+                InstructionExecutionError::Find(FindError::Trigger(id)),
+            )) => assert_eq!(id, trigger_id),
+            other => panic!("unexpected rejection: {other:?}"),
+        }
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let view = state.view();
+        assert!(
+            view.world.triggers().ids().get(&trigger_id).is_some(),
+            "disabled trigger should remain registered"
+        );
+    }
+
+    #[test]
+    fn execute_data_triggers_dfs_skips_disabled_trigger() {
+        use iroha_data_model::prelude::DataEvent;
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let trigger_id: TriggerId = "disabled_data_trigger".parse().unwrap();
+        let flag_key: Name = "flag".parse().expect("valid name");
+
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        {
+            let mut stx = state_block.transaction();
+            Register::domain(Domain::new("wonderland".parse().unwrap()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(Account::new(ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                crate::smartcontracts::isi::triggers::TRIGGER_ENABLED_METADATA_KEY
+                    .parse::<Name>()
+                    .expect("valid metadata key"),
+                Json::from(false),
+            );
+            let action = Action::new(
+                vec![InstructionBox::from(SetKeyValue::account(
+                    ALICE_ID.clone(),
+                    flag_key.clone(),
+                    Json::from(true),
+                ))],
+                Repeats::Indefinitely,
+                ALICE_ID.clone(),
+                data_pre::DataEventFilter::Any,
+            )
+            .with_metadata(metadata);
+            Register::trigger(Trigger::new(trigger_id.clone(), action))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            stx.apply();
+        }
+        state_block.commit().unwrap();
+
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let mut stx = state_block.transaction();
+        let event =
+            data_pre::DomainEvent::Created(Domain::new("alpha".parse().unwrap()).build(&ALICE_ID));
+        stx.world
+            .internal_event_buf
+            .push(Arc::new(DataEvent::Domain(event)));
+
+        let steps = stx
+            .execute_data_triggers_dfs(&ALICE_ID)
+            .expect("disabled trigger should be skipped");
+        assert!(steps.is_empty(), "disabled trigger should not execute");
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let view = state.view();
+        assert!(
+            view.world.triggers().ids().get(&trigger_id).is_some(),
+            "disabled trigger should remain registered"
+        );
+        let flag_val = view
+            .world
+            .map_account(&ALICE_ID, |account| {
+                account.value().metadata().get(&flag_key).cloned()
+            })
+            .unwrap();
+        assert!(flag_val.is_none(), "disabled trigger must not mutate state");
+    }
+
+    #[test]
+    fn execute_data_triggers_dfs_skips_missing_trigger_after_bytecode_drop() {
+        use iroha_data_model::{
+            prelude::DataEvent,
+            transaction::{Executable, IvmBytecode},
+            trigger::{
+                Trigger,
+                action::{Action, Repeats},
+            },
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new(World::default(), kura, query_handle);
+
+        let trigger_id: TriggerId = "missing_bytecode_data".parse().unwrap();
+        let mut raw = Vec::new();
+        raw.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+        let bytecode = IvmBytecode::from_compiled(assemble_ivm_header(&raw));
+        let blob_hash = HashOf::new(&bytecode);
+
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        {
+            let mut stx = state_block.transaction();
+            Register::domain(Domain::new("wonderland".parse().unwrap()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(Account::new(ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let action = Action::new(
+                Executable::Ivm(bytecode),
+                Repeats::Indefinitely,
+                ALICE_ID.clone(),
+                data_pre::DataEventFilter::Any,
+            );
+            Register::trigger(Trigger::new(trigger_id.clone(), action))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            stx.apply();
+        }
+        state_block.commit().unwrap();
+
+        assert!(
+            state.world.triggers.remove_contract_for_test(blob_hash),
+            "contract entry should be removed for test setup"
+        );
+
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let mut stx = state_block.transaction();
+
+        let alpha_domain: DomainId = "alpha".parse().unwrap();
+        let beta_domain: DomainId = "beta".parse().unwrap();
+        let event_a = data_pre::DomainEvent::Created(Domain::new(alpha_domain).build(&ALICE_ID));
+        let event_b = data_pre::DomainEvent::Created(Domain::new(beta_domain).build(&ALICE_ID));
+        stx.world
+            .internal_event_buf
+            .push(Arc::new(DataEvent::Domain(event_a)));
+        stx.world
+            .internal_event_buf
+            .push(Arc::new(DataEvent::Domain(event_b)));
+
+        let steps = stx
+            .execute_data_triggers_dfs(&ALICE_ID)
+            .expect("missing bytecode should be skipped without panicking");
+        assert_eq!(steps.len(), 1);
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let view = state.view();
+        assert!(
+            view.world.triggers().ids().get(&trigger_id).is_none(),
+            "trigger should be removed after missing bytecode"
+        );
     }
 
     #[test]

@@ -8,7 +8,7 @@ use norito::{
 };
 
 fn packed_seq_supported() -> bool {
-    (norito::core::default_encode_flags() & norito::core::header_flags::PACKED_SEQ) != 0
+    cfg!(feature = "packed-seq")
 }
 
 fn encode_fixed_vec_u32(values: &[u32]) -> Vec<u8> {
@@ -142,20 +142,14 @@ fn decode_flags_guard_resets_hint_state() {
 
     core::reset_decode_state();
     {
-        let _guard = core::DecodeFlagsGuard::enter(
-            header_flags::PACKED_SEQ | header_flags::COMPACT_LEN | header_flags::COMPACT_SEQ_LEN,
-        );
-        assert!(
-            !core::use_packed_seq(),
-            "packed seq remains disabled with fixed layout"
-        );
-        assert!(
-            !core::use_compact_len(),
-            "compact len remains disabled with fixed layout"
-        );
-        assert!(
-            !core::use_compact_seq_len(),
-            "compact seq len remains disabled with fixed layout"
+        let _guard =
+            core::DecodeFlagsGuard::enter(header_flags::PACKED_SEQ | header_flags::COMPACT_LEN);
+        assert!(core::use_packed_seq(), "packed seq should be active");
+        assert!(core::use_compact_len(), "compact len should be active");
+        assert_eq!(
+            core::get_decode_flags(),
+            header_flags::PACKED_SEQ | header_flags::COMPACT_LEN,
+            "decode flags should ignore reserved bits"
         );
     }
 
@@ -174,10 +168,6 @@ fn decode_flags_guard_resets_hint_state() {
         !core::use_compact_len(),
         "compact len must remain disabled when header flags are zero"
     );
-    assert!(
-        !core::use_compact_seq_len(),
-        "compact seq len must remain disabled when header flags are zero"
-    );
 }
 
 #[test]
@@ -189,9 +179,8 @@ fn header_flags_guard_mismatch_fails_fast() {
     let values = vec![1u32, 2, 3, 4];
     let bytes = norito::to_bytes(&values).expect("encode vec");
 
-    let _guard = core::DecodeFlagsGuard::enter(
-        header_flags::PACKED_SEQ | header_flags::COMPACT_LEN | header_flags::COMPACT_SEQ_LEN,
-    );
+    let _guard =
+        core::DecodeFlagsGuard::enter(header_flags::PACKED_SEQ | header_flags::COMPACT_LEN);
 
     let err = match norito::core::from_bytes::<Vec<u32>>(&bytes) {
         Ok(_) => panic!("from_bytes accepted mismatched decode flags"),
@@ -205,9 +194,7 @@ fn header_flags_guard_mismatch_fails_fast() {
             active_flags,
             active_hint
         } if active_flags
-            == (header_flags::PACKED_SEQ
-                | header_flags::COMPACT_LEN
-                | header_flags::COMPACT_SEQ_LEN)
+            == (header_flags::PACKED_SEQ | header_flags::COMPACT_LEN)
             && active_hint == active_flags
     ));
 }
@@ -242,12 +229,12 @@ fn decode_flags_guard_restores_previous_defaults() {
     core::set_decode_flags(header_flags::PACKED_SEQ | header_flags::COMPACT_LEN);
 
     assert!(
-        !core::use_packed_seq(),
-        "packed seq remains disabled with baseline flags"
+        core::use_packed_seq(),
+        "packed seq should be enabled by decode flags"
     );
     assert!(
-        !core::use_compact_len(),
-        "compact len remains disabled with baseline flags"
+        core::use_compact_len(),
+        "compact len should be enabled by decode flags"
     );
     assert!(
         !core::use_packed_struct(),
@@ -257,22 +244,30 @@ fn decode_flags_guard_restores_previous_defaults() {
     {
         let _guard = core::DecodeFlagsGuard::enter(header_flags::PACKED_STRUCT);
         assert!(
-            !core::use_packed_struct(),
-            "packed struct remains disabled with fixed layout"
+            core::use_packed_struct(),
+            "packed struct should be enabled inside guard"
+        );
+        assert!(
+            !core::use_packed_seq(),
+            "packed seq should be disabled inside guard"
+        );
+        assert!(
+            !core::use_compact_len(),
+            "compact len should be disabled inside guard"
         );
     }
 
     assert!(
-        !core::use_packed_seq(),
-        "packed seq stays disabled after guard drop"
+        core::use_packed_seq(),
+        "packed seq should be restored after guard drop"
     );
     assert!(
-        !core::use_compact_len(),
-        "compact len stays disabled after guard drop"
+        core::use_compact_len(),
+        "compact len should be restored after guard drop"
     );
     assert!(
         !core::use_packed_struct(),
-        "packed struct stays disabled after guard drop"
+        "packed struct should be disabled after guard drop"
     );
 
     core::reset_decode_state();
@@ -465,12 +460,13 @@ fn stream_vec_collect_handles_fixed_layout() {
 }
 
 #[test]
-fn stream_vec_collect_handles_packed_offsets() {
+fn stream_vec_collect_handles_packed_seq() {
     if !packed_seq_supported() {
         return;
     }
 
     let payload: Vec<u64> = (0..2048u64).collect();
+    let _guard = core::DecodeFlagsGuard::enter(norito::core::header_flags::PACKED_SEQ);
     let bytes = norito::to_bytes(&payload).expect("encode large vec");
 
     let flags = bytes[Header::SIZE - 1];
@@ -479,10 +475,10 @@ fn stream_vec_collect_handles_packed_offsets() {
         norito::core::header_flags::PACKED_SEQ,
         "packed sequence flag should be set",
     );
-    assert!(
-        flags & norito::core::header_flags::VARINT_OFFSETS
-            == norito::core::header_flags::VARINT_OFFSETS,
-        "packed layout should use varint offsets for all payload sizes"
+    assert_eq!(
+        flags & norito::core::header_flags::VARINT_OFFSETS,
+        0,
+        "packed layout should not advertise varint offsets in v1"
     );
 
     let streamed: Vec<u64> = norito::stream_vec_collect_from_reader(Cursor::new(bytes.as_slice()))

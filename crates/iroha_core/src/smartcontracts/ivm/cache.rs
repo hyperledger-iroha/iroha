@@ -38,7 +38,7 @@ impl RuntimeKey {
         }
     }
 
-    fn summary_key(self) -> SummaryKey {
+    fn summary_key(&self) -> SummaryKey {
         SummaryKey::new(self.code_hash, self.meta_hash)
     }
 }
@@ -233,15 +233,15 @@ impl IvmCache {
         }
         let mut vm = ivm::IVM::new(stack_gas_limit);
         vm.set_host(ivm::host::DefaultHost::default());
+        let key = RuntimeKey::new(
+            runtime.summary.code_hash,
+            runtime.summary.meta_hash,
+            stack_limit,
+        );
         if vm.load_program(&runtime.bytecode).is_ok() {
             if stack_gas_limit > 0 {
                 vm.set_gas_limit(stack_gas_limit);
             }
-            let key = RuntimeKey::new(
-                runtime.summary.code_hash,
-                runtime.summary.meta_hash,
-                stack_limit,
-            );
             self.insert_runtime(key, vm);
         }
     }
@@ -425,5 +425,57 @@ mod tests {
             "expected stack limit to exceed 64KiB; got {expected}"
         );
         assert_eq!(vm.memory.stack_limit(), expected);
+    }
+
+    #[test]
+    fn cached_runtime_tracks_stack_gas_limit() {
+        let mut cache = IvmCache::with_capacity(2);
+        let mut program = minimal_program();
+        program[8..16].copy_from_slice(&9u64.to_le_bytes());
+        let gas_limit = 50_000;
+
+        let runtime = cache
+            .take_or_create_cached_runtime(&program, gas_limit)
+            .expect("runtime");
+        assert_eq!(runtime.stack_gas_limit, gas_limit);
+    }
+
+    #[test]
+    fn eviction_prunes_runtimes_for_evicted_summary() {
+        let mut cache = IvmCache::with_capacity(1);
+        let gas_limit = 50_000;
+
+        let mut program1 = minimal_program();
+        program1[8..16].copy_from_slice(&1u64.to_le_bytes());
+        let summary1 = cache.summarize_program(&program1).expect("summary1");
+        let _ = cache
+            .clone_runtime(&summary1, &program1, gas_limit)
+            .expect("runtime1");
+
+        let mut program2 = minimal_program();
+        program2[8..16].copy_from_slice(&2u64.to_le_bytes());
+        let summary2 = cache.summarize_program(&program2).expect("summary2");
+
+        let summary1_key = SummaryKey::new(summary1.code_hash, summary1.meta_hash);
+        let summary2_key = SummaryKey::new(summary2.code_hash, summary2.meta_hash);
+        assert!(!cache.summaries.contains_key(&summary1_key));
+        assert!(cache.summaries.contains_key(&summary2_key));
+
+        let runtime1_key = RuntimeKey::new(
+            summary1.code_hash,
+            summary1.meta_hash,
+            stack_limit_for_gas(gas_limit),
+        );
+        assert!(!cache.runtime_templates.contains_key(&runtime1_key));
+
+        let _ = cache
+            .clone_runtime(&summary2, &program2, gas_limit)
+            .expect("runtime2");
+        let runtime2_key = RuntimeKey::new(
+            summary2.code_hash,
+            summary2.meta_hash,
+            stack_limit_for_gas(gas_limit),
+        );
+        assert!(cache.runtime_templates.contains_key(&runtime2_key));
     }
 }

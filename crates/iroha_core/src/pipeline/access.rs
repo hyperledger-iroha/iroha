@@ -38,6 +38,7 @@ use parking_lot::RwLock;
 
 use crate::{
     executor::parse_gas_limit,
+    smartcontracts::ivm::host::QueryStateSource,
     state::{StateReadOnly, WorldReadOnly},
 };
 
@@ -163,20 +164,26 @@ pub enum IvmStrategy {
 /// - ISI batches are analyzed statically by inspecting instruction targets.
 /// - IVM contracts: when `ivm_strategy` is `DynamicThenConservative` and `state_view` is provided,
 ///   a read-only prepass is performed to derive keys from queued ISIs; otherwise conservative.
-pub fn derive_for_transaction<R: StateReadOnly>(
+pub fn derive_for_transaction<R>(
     tx: &SignedTransaction,
     state_ro: Option<&R>,
     ivm_strategy: IvmStrategy,
-) -> AccessSet {
+) -> AccessSet
+where
+    R: StateReadOnly + QueryStateSource,
+{
     derive_for_transaction_with_source(tx, state_ro, ivm_strategy).0
 }
 
 /// Derive access set for a signed transaction and report the IVM source, if any.
-pub(crate) fn derive_for_transaction_with_source<R: StateReadOnly>(
+pub(crate) fn derive_for_transaction_with_source<R>(
     tx: &SignedTransaction,
     state_ro: Option<&R>,
     ivm_strategy: IvmStrategy,
-) -> (AccessSet, Option<AccessSetSource>) {
+) -> (AccessSet, Option<AccessSetSource>)
+where
+    R: StateReadOnly + QueryStateSource,
+{
     match tx.instructions() {
         Executable::Instructions(batch) => (derive_from_isi_batch(batch.as_ref()), None),
         Executable::Ivm(bytecode) => {
@@ -999,18 +1006,21 @@ fn tx_gas_limit(tx: &SignedTransaction) -> Result<u64, String> {
     gas_limit.ok_or_else(|| "missing gas_limit in transaction metadata".to_owned())
 }
 
-fn derive_from_ivm_dynamic<R: StateReadOnly>(
+fn derive_from_ivm_dynamic<R>(
     bytecode: &[u8],
     authority: &AccountId,
     state_ro: &R,
     gas_limit: u64,
-) -> Result<AccessSet, String> {
+) -> Result<AccessSet, String>
+where
+    R: StateReadOnly + QueryStateSource,
+{
     // Execute VM with CoreHost to collect queued ISIs; do not apply.
     ivm::ProgramMetadata::parse(bytecode).map_err(|e| format!("ivm.metadata: {e}"))?;
     let mut vm = ivm::IVM::new(gas_limit);
     // Supply accounts snapshot for vendor helpers to become deterministic.
     let accounts = state_ro.accounts_snapshot();
-    let mut host = crate::smartcontracts::ivm::host::CoreHost::with_accounts(
+    let mut host = crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
         authority.clone(),
         Arc::clone(&accounts),
     )
@@ -1020,27 +1030,25 @@ fn derive_from_ivm_dynamic<R: StateReadOnly>(
     host.set_crypto_config(state_ro.crypto());
     host.set_halo2_config(&state_ro.zk().halo2);
     host.set_durable_state_snapshot_from_world(state_ro.world());
+    host.set_public_inputs_from_parameters(state_ro.world().parameters());
+    host.set_query_state(state_ro);
     host.begin_tx(&ivm::parallel::StateAccessSet::default())
         .map_err(|e| format!("ivm.begin_tx: {e}"))?;
-    vm.set_host(host);
     vm.load_program(bytecode)
         .map_err(|e| format!("ivm.load_program: {e}"))?;
     vm.set_gas_limit(gas_limit);
-    vm.run().map_err(|e| format!("ivm.run: {e}"))?;
+    vm.run_with_host(&mut host)
+        .map_err(|e| format!("ivm.run: {e}"))?;
     let mut set = AccessSet::new();
     let mut access_log: Option<ivm::host::AccessLog> = None;
-    if let Some(host_any) = vm.host_mut_any()
-        && let Some(host) = host_any.downcast_mut::<crate::smartcontracts::ivm::host::CoreHost>()
-    {
-        for isi in host.drain_instructions() {
-            set.union_with(derive_from_instruction(&isi));
-        }
-        if host.access_logging_supported() {
-            access_log = Some(
-                host.finish_tx()
-                    .map_err(|e| format!("ivm.finish_tx: {e}"))?,
-            );
-        }
+    for isi in host.drain_instructions() {
+        set.union_with(derive_from_instruction(&isi));
+    }
+    if host.access_logging_supported() {
+        access_log = Some(
+            host.finish_tx()
+                .map_err(|e| format!("ivm.finish_tx: {e}"))?,
+        );
     }
     if let Some(log) = access_log {
         merge_access_log(&mut set, &log);

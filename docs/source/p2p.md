@@ -11,20 +11,23 @@ This section describes the peer-to-peer (P2P) queue capacities and the metrics e
   - Capacity of the low-priority network message queue (gossip/sync messages).
 - `p2p_post_queue_cap` (usize, default: 2048)
   - Capacity of the per-peer post channel (outbound messages to a specific peer).
+- `p2p_subscriber_queue_cap` (usize, default: 8192)
+  - Capacity of each inbound subscriber queue feeding the node relay.
 
 These defaults are tuned for blockchain workloads around 20,000 TPS: consensus/control traffic stays responsive, while gossip and synchronization get more headroom. Adjust these values based on your block size, block time, and network conditions.
 
 Notes
 - High-priority queues carry consensus/control traffic; low-priority queues handle gossip and sync paths.
+- The relay registers separate high/low subscribers, so total relay buffering is `2 * p2p_subscriber_queue_cap` plus any additional subscribers (e.g., genesis bootstrap, Torii Connect).
 
 ### Low-Priority Rate Limiting ([network] settings)
 
 - `low_priority_rate_per_sec` (optional; msgs/sec)
-  - Enables per-peer token-bucket for Low-priority traffic (gossip/sync). When unset, disabled.
+  - Enables per-peer token-bucket for Low-priority traffic (gossip/sync) on both ingress and egress. When unset, disabled.
 - `low_priority_burst` (optional; msgs)
   - Bucket burst capacity; defaults to `low_priority_rate_per_sec` when unset.
 
-When enabled, excess Low-priority posts/broadcast deliveries are throttled per peer. High-priority traffic is unaffected.
+When enabled, inbound Low-priority frames are dropped before relay dispatch (tx gossip, peer/trust gossip, health/time), and outbound Low-priority posts/broadcast deliveries are throttled per peer. Streaming control frames are also gated by the ingress limiter to prevent control-plane floods. High-priority consensus/control traffic is otherwise unaffected.
 
 ### DNS Hostname Refresh ([network] setting)
 
@@ -40,6 +43,11 @@ The following gauges are exposed via Prometheus when telemetry is enabled:
 
 - `p2p_dropped_posts`: number of post messages dropped due to a full bounded queue (monotonic).
 - `p2p_dropped_broadcasts`: number of broadcast messages dropped due to a full bounded queue (monotonic).
+- `p2p_subscriber_queue_full_total`: number of inbound messages dropped because subscriber queues were full.
+- `p2p_subscriber_queue_full_by_topic_total{topic="Consensus|Control|BlockSync|TxGossip|PeerGossip|Health|Other"}`: per-topic subscriber-queue drops.
+- `p2p_subscriber_unrouted_total`: number of inbound messages dropped because no subscriber matches the topic.
+- `p2p_subscriber_unrouted_by_topic_total{topic="Consensus|Control|BlockSync|TxGossip|PeerGossip|Health|Other"}`: per-topic unrouted inbound drops.
+- `p2p_queue_depth{priority="High|Low"}`: bounded network actor queue depth by priority.
 - `p2p_queue_dropped_total{priority="High|Low",kind="Post|Broadcast"}`: bounded network actor queue drops by priority/kind.
 - `p2p_handshake_failures`: number of P2P handshake failures (timeouts, signature/verification errors).
 - `soranet_pow_revocation_store_total{reason}`: count of SoraNet PoW revocation store fallbacks
@@ -75,6 +83,22 @@ p2p_dropped_posts 0
 # HELP p2p_dropped_broadcasts Number of p2p broadcast messages dropped due to backpressure
 # TYPE p2p_dropped_broadcasts gauge
 p2p_dropped_broadcasts 12
+
+# HELP p2p_subscriber_queue_full_total Number of inbound messages dropped because subscriber queues were full
+# TYPE p2p_subscriber_queue_full_total gauge
+p2p_subscriber_queue_full_total 3
+
+# HELP p2p_subscriber_queue_full_by_topic_total Per-topic inbound drops caused by full subscriber queues
+# TYPE p2p_subscriber_queue_full_by_topic_total gauge
+p2p_subscriber_queue_full_by_topic_total{topic="Consensus"} 2
+
+# HELP p2p_subscriber_unrouted_total Number of inbound messages dropped because no subscriber matches the topic
+# TYPE p2p_subscriber_unrouted_total gauge
+p2p_subscriber_unrouted_total 7
+
+# HELP p2p_subscriber_unrouted_by_topic_total Per-topic inbound drops caused by no matching subscriber
+# TYPE p2p_subscriber_unrouted_by_topic_total gauge
+p2p_subscriber_unrouted_by_topic_total{topic="Consensus"} 1
 
 # HELP p2p_handshake_failures Number of p2p handshake failures
 # TYPE p2p_handshake_failures gauge
@@ -172,12 +196,17 @@ P2P_PUBLIC_ADDRESS = "peer1.example.com:1337"
 p2p_queue_cap_high = 8192     # consensus/control
 p2p_queue_cap_low  = 32768    # gossip/sync
 p2p_post_queue_cap = 2048     # per-peer post channel
+p2p_subscriber_queue_cap = 8192  # inbound relay subscriber queue
 
 # Other networking parameters (for reference)
-block_gossip_size = 4        # fanout cap for block-sync gossip (peer samples, block sync updates, availability votes, NEW_VIEW)
+block_gossip_size = 4        # fanout cap for block-sync gossip (peer samples, block sync updates, availability votes)
 block_gossip_period_ms = 10000
+block_gossip_max_period_ms = 30000
+peer_gossip_period_ms = 1000
+peer_gossip_max_period_ms = 30000
 transaction_gossip_size = 500
 transaction_gossip_period_ms = 1000
+transaction_gossip_resend_ticks = 3
 idle_timeout_ms = 60000
 # Trust decay/penalties for gossip senders (decays toward 0)
 trust_decay_half_life_ms = 300000  # halve negative scores every 5 minutes
@@ -187,10 +216,15 @@ trust_min_score = -20              # drop trust gossip at or below this score
 ```
 
 - Gossip/idle intervals are clamped to >=100ms to prevent zero-duration spin loops.
-- NEW_VIEW gossip uses the same `block_gossip_size` fanout; peers rotate a deterministic,
-  per-node sample window on each rebroadcast so all peers are eventually covered. Rebroadcasts
-  are paced by the block-time-based cooldown (clamped >=200ms) and run on pacemaker ticks even
-  when the transaction queue is empty to prevent view-change starvation without flooding the network.
+- Peer-address gossip is change-driven with exponential backoff up to `peer_gossip_max_period_ms`
+  (and is throttled when the relay drops inbound frames); block-sync sampling similarly backs off
+  up to `block_gossip_max_period_ms` when no progress is observed.
+- Transaction gossip pauses when relay backpressure is active (recent subscriber-queue drops) and
+  resumes after `transaction_gossip_period_ms * transaction_gossip_resend_ticks` to avoid
+  flooding under load.
+- NEW_VIEW votes are sent to the deterministic collector set for the current view and always
+  include the leader; if the collector set is below commit quorum, the sender falls back to the
+  full commit topology. This provides redundancy without relying on full broadcast in the steady state.
 - Trust scoring is deterministic: scores start at 0, penalties subtract `trust_penalty_bad_gossip`,
   and the debt halves every `trust_decay_half_life_ms` until it reaches 0. In permissioned mode,
   trust gossip that advertises peers outside the current topology applies `trust_penalty_unknown_peer`;
@@ -342,6 +376,8 @@ Observers that intentionally skip verification (`assume_valid=true`) must avoid 
 Per-topic metrics (when telemetry enabled):
 
 - `p2p_post_overflow_total{priority="High|Low",topic="Consensus|Control|BlockSync|TxGossip|PeerGossip|Health|Other"}`
+- `p2p_subscriber_queue_full_by_topic_total{topic="Consensus|Control|BlockSync|TxGossip|PeerGossip|Health|Other"}`
+- `p2p_subscriber_unrouted_by_topic_total{topic="Consensus|Control|BlockSync|TxGossip|PeerGossip|Health|Other"}`
 
 Behavior matrix (bounded queues enabled):
 
@@ -354,16 +390,16 @@ Because queues are always bounded, overflow counters rise whenever a channel dro
 
 ### Frame Size Caps
 
-- Global cap: `[network].max_frame_bytes` (default 1 MiB) rejects oversized frames early.
+- Global cap: `[network].max_frame_bytes` (default 16 MiB) rejects oversized frames early.
   The limit now applies uniformly to TCP, TLS, QUIC, and Torii `/p2p` WebSocket
   accepts as well as outbound dialers, with `p2p_post_overflow_by_topic`
   counters incremented whenever an inbound frame is dropped by the topic caps.
   This cap is enforced on encrypted frames, so AEAD overhead (nonce + tag) counts
   toward the limit (currently 28 bytes for ChaCha20-Poly1305).
 - Topic caps (post-decode enforcement, tightened defaults) apply to decrypted payload sizes:
-  - `[network].max_frame_bytes_consensus` (default 1 MiB)
+  - `[network].max_frame_bytes_consensus` (default 16 MiB)
   - `[network].max_frame_bytes_control` (default 128 KiB)
-  - `[network].max_frame_bytes_block_sync` (default = global cap)
+  - `[network].max_frame_bytes_block_sync` (default = global cap; also caps consensus payloads such as `BlockCreated`, `BlockSyncUpdate`, `RbcReady`/`RbcDeliver`, and RBC chunks)
   - `[network].max_frame_bytes_tx_gossip` (default 128 KiB)
   - `[network].max_frame_bytes_peer_gossip` (default 64 KiB)
   - `[network].max_frame_bytes_health` (default 32 KiB)

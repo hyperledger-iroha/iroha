@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-from iroha_python.client import ToriiClient
 from iroha_python.address import AccountAddress
+from iroha_python.client import ToriiClient
 
 from .helpers import RecordingSession, StubResponse
 

@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 @testable import IrohaSwift
 
@@ -42,6 +43,10 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
             fixture.entry.signedLen,
             "signed length mismatch for \(name)"
         )
+        let payloadHash = IrohaHash.hash(payloadBytes).hexLowercased()
+        XCTAssertEqual(payloadHash, fixture.entry.payloadHash, "payload hash mismatch for \(name)")
+        let signedHash = IrohaHash.hash(signedBytes).hexLowercased()
+        XCTAssertEqual(signedHash, fixture.entry.signedHash, "signed hash mismatch for \(name)")
 
         guard NoritoNativeBridge.shared.isAvailable else {
             throw XCTSkip("NoritoBridge native decoder not linked")
@@ -53,8 +58,34 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
         guard let json else {
             return XCTFail("native decoder returned nil for \(name)")
         }
-        XCTAssertTrue(json.contains(expectedAuthority), "authority missing in decode for \(name)")
-        XCTAssertTrue(json.contains(fixture.entry.chain), "chain missing in decode for \(name)")
+        guard let payload = decodeSignedPayload(from: json) else {
+            return XCTFail("failed to decode signed transaction JSON for \(name)")
+        }
+        let decodedAuthority = payload["authority"] as? String
+        XCTAssertEqual(decodedAuthority, expectedAuthority, "authority mismatch in decode for \(name)")
+        let decodedChain = payload["chain"] as? String
+        XCTAssertEqual(decodedChain, fixture.entry.chain, "chain mismatch in decode for \(name)")
+        if let creation = payload["creation_time_ms"] as? NSNumber {
+            XCTAssertEqual(
+                creation.int64Value,
+                fixture.entry.creationTimeMs,
+                "creation_time_ms mismatch in decode for \(name)"
+            )
+        } else {
+            XCTFail("creation_time_ms missing in decode for \(name)")
+        }
+        assertOptionalNumberEquals(
+            payload["time_to_live_ms"],
+            expected: fixture.entry.timeToLiveMs,
+            name: name,
+            field: "time_to_live_ms"
+        )
+        assertOptionalNumberEquals(
+            payload["nonce"],
+            expected: fixture.entry.nonce,
+            name: name,
+            field: "nonce"
+        )
     }
 }
 
@@ -69,21 +100,31 @@ private struct NoritoRpcFixtureLoader {
         let name: String
         let authority: String
         let chain: String
+        let creationTimeMs: Int64
+        let timeToLiveMs: Int64?
+        let nonce: Int64?
         let encodedFile: String
         let encodedLen: Int
         let signedLen: Int
         let payloadBase64: String
         let signedBase64: String
+        let payloadHash: String
+        let signedHash: String
 
         enum CodingKeys: String, CodingKey {
             case name
             case authority
             case chain
+            case creationTimeMs = "creation_time_ms"
+            case timeToLiveMs = "time_to_live_ms"
+            case nonce
             case encodedFile = "encoded_file"
             case encodedLen = "encoded_len"
             case signedLen = "signed_len"
             case payloadBase64 = "payload_base64"
             case signedBase64 = "signed_base64"
+            case payloadHash = "payload_hash"
+            case signedHash = "signed_hash"
         }
     }
 
@@ -152,6 +193,35 @@ private func deriveFixtureSeed(signatory: String, domain: String) -> Data {
         seed[index % seed.count] ^= byte
     }
     return Data(seed)
+}
+
+private func decodeSignedPayload(from json: String) -> [String: Any]? {
+    guard let data = json.data(using: .utf8) else {
+        return nil
+    }
+    guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        return nil
+    }
+    return object["payload"] as? [String: Any]
+}
+
+private func assertOptionalNumberEquals(
+    _ value: Any?,
+    expected: Int64?,
+    name: String,
+    field: String
+) {
+    if let expected {
+        guard let number = value as? NSNumber else {
+            return XCTFail("\(field) missing in decode for \(name)")
+        }
+        XCTAssertEqual(number.int64Value, expected, "\(field) mismatch in decode for \(name)")
+        return
+    }
+    if value == nil || value is NSNull {
+        return
+    }
+    XCTFail("\(field) should be null in decode for \(name)")
 }
 
 private enum FixtureError: Error {

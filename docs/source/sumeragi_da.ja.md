@@ -54,14 +54,14 @@ cargo test -p integration_tests \
 
 ## 想定ベースライン
 
-既定の `sumeragi.rbc_chunk_max_bytes = 64 KiB` と命令サイズ 10.5 MiB（11 010 048 バイト）に加え、`force_deliver_quorum_one` を有効化した前提で次の不変条件が成り立ちます。
+既定の `sumeragi.rbc_chunk_max_bytes = 256 KiB` と命令サイズ 10.5 MiB（11 010 048 バイト）に加え、`force_deliver_quorum_one` を有効化した前提で次の不変条件が成り立ちます。
 
-注記: `sumeragi.rbc_chunk_max_bytes` は起動時にクランプされ、`network.max_frame_bytes_consensus` から暗号化オーバーヘッドを差し引いた平文上限に収まるよう調整されます。
+注記: `sumeragi.rbc_chunk_max_bytes` は起動時にクランプされ、`network.max_frame_bytes_block_sync` から暗号化オーバーヘッドを差し引いた平文上限に収まるよう調整されます。
 
 | シナリオ | チャンク数 | READY 閾値 | ピアごとのカウンタ | タイミング予算 |
 | --- | --- | --- | --- | --- |
-| 4 ピア | 168 チャンク（全て必要） | READY 投票 ≥1（デバッグ強制；通常は `f=1` の 2f+1 で ≥3） | `payload_bytes_delivered_total ≥ 11 010 048`、`deliver_broadcasts_total = 1`、`ready_broadcasts_total = 1` | `commit_ms` と `rbc_deliver_ms` が `commit_time_ms`（既定 `4000`）の範囲に収まること |
-| 6 ピア | 168 チャンク | READY 投票 ≥1（デバッグ強制；通常は `f=2` の 2f+1 で ≥4） | 上と同じ | 上と同じ |
+| 4 ピア | 42 チャンク（全て必要） | READY 投票 ≥1（デバッグ強制；通常は `f=1` の 2f+1 で ≥3） | `payload_bytes_delivered_total ≥ 11 010 048`、`deliver_broadcasts_total = 1`、`ready_broadcasts_total = 1` | `commit_ms` と `rbc_deliver_ms` が `commit_time_ms`（既定 `4000`）の範囲に収まること |
+| 6 ピア | 42 チャンク | READY 投票 ≥1（デバッグ強制；通常は `f=2` の 2f+1 で ≥4） | 上と同じ | 上と同じ |
 
 コミット猶予 4 秒以内に収まるには、平均スループットが最低でも約 2.7 MiB/s 必要です。`commit_time_ms` 付近まで DELIVER 遅延が伸びた場合、スループットが閾値を下回った場合、またはピア間でカウンタが乖離した場合（コレクタのスロットリングやチャンク欠落の兆候）はアラートを推奨します。
 

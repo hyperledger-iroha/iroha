@@ -309,7 +309,7 @@ private struct IntegrityKeyProvider {
     private let baseDirectory: URL
     private let accessGroup: String?
     private static let cacheLock = NSLock()
-    private static var cachedKeys: [String: SymmetricKey] = [:]
+    private static nonisolated(unsafe) var cachedKeys: [String: SymmetricKey] = [:]
 
     init(baseDirectory: URL, accessGroup: String?) {
         self.baseDirectory = baseDirectory

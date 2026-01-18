@@ -150,7 +150,6 @@ pub enum SyscallPolicy {
 }
 pub use iroha_crypto::{MerkleProof, MerkleTree};
 
-#[cfg(feature = "ed25519")]
 pub use crate::signature::{Ed25519BatchItem, verify_ed25519_batch_items};
 #[cfg(target_os = "macos")]
 pub use crate::vector::{

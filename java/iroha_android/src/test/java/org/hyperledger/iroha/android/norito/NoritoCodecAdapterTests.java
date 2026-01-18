@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.norito;
 
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.hyperledger.iroha.android.IrohaKeyManager;
@@ -55,22 +56,38 @@ import org.hyperledger.iroha.android.model.instructions.UpdateVerifyingKeyInstru
 import org.hyperledger.iroha.android.model.zk.VerifyingKeyBackendTag;
 import org.hyperledger.iroha.android.model.zk.VerifyingKeyRecordDescription;
 import org.hyperledger.iroha.android.model.zk.VerifyingKeyStatus;
-import org.hyperledger.iroha.norito.NoritoHeader;
-import org.hyperledger.iroha.norito.SchemaHash;
 import org.hyperledger.iroha.android.crypto.Blake2b;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 import org.hyperledger.iroha.android.tx.SignedTransactionHasher;
 import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
 import org.hyperledger.iroha.android.tx.TransactionBuilder;
 import org.hyperledger.iroha.android.SigningException;
+import org.hyperledger.iroha.norito.NoritoAdapters;
+import org.hyperledger.iroha.norito.NoritoCodec;
+import org.hyperledger.iroha.norito.NoritoDecoder;
+import org.hyperledger.iroha.norito.NoritoHeader;
+import org.hyperledger.iroha.norito.TypeAdapter;
+import org.junit.Test;
 
 public final class NoritoCodecAdapterTests {
 
   private NoritoCodecAdapterTests() {}
 
+  @Test
+  public void runCodecScenarios() throws NoritoException {
+    runAll();
+  }
+
   public static void main(final String[] args) throws NoritoException {
+    runAll();
+  }
+
+  private static void runAll() throws NoritoException {
     javaCodecRoundTripsPayload();
     javaCodecSupportsInstructionsVariant();
+    javaCodecSupportsWireInstructionPayloads();
+    javaCodecEncodesIvmBytecodeLayout();
+    javaCodecEncodesInstructionLayout();
     javaCodecHydratesTypedRegisterInstructions();
     javaCodecHydratesTransferAssetInstruction();
     javaCodecHydratesTransferNftInstruction();
@@ -119,13 +136,7 @@ public final class NoritoCodecAdapterTests {
     assert decoded.timeToLiveMs().orElseThrow() == 5_000L : "TTL must round-trip";
     assert decoded.nonce().orElseThrow() == 42 : "Nonce must round-trip";
     assert "unit-test".equals(decoded.metadata().get("purpose")) : "Metadata must round-trip";
-
-    final NoritoHeader.DecodeResult result = NoritoHeader.decode(encoded, null);
-    assert Arrays.equals(
-            SchemaHash.hash16(adapter.schemaName()), result.header().schemaHash())
-        : "Encoded payload must advertise the configured schema hash";
-    assert result.header().payloadLength() == result.payload().length
-        : "Header payload length must match decoded bytes";
+    assertBarePayload(encoded);
   }
 
   private static void javaCodecSupportsInstructionsVariant() throws NoritoException {
@@ -136,9 +147,9 @@ public final class NoritoCodecAdapterTests {
             .setCreationTimeMs(1_735_111_111_000L)
             .setExecutable(
                 Executable.instructions(
-                    List.of(
-                        InstructionBuilders.custom(InstructionKind.REGISTER, Map.of("action", "InstrA", "arg", "1")),
-                        InstructionBuilders.custom(InstructionKind.CUSTOM, Map.of("action", "InstrB")))))
+                    listOf(
+                        InstructionBuilders.custom(InstructionKind.REGISTER, mapOf("action", "InstrA", "arg", "1")),
+                        InstructionBuilders.custom(InstructionKind.CUSTOM, mapOf("action", "InstrB")))))
             .build();
 
     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
@@ -154,6 +165,127 @@ public final class NoritoCodecAdapterTests {
       assert expected.kind() == actual.kind() : "Instruction kind mismatch";
       assert expected.arguments().equals(actual.arguments()) : "Instruction arguments mismatch";
     }
+  }
+
+  private static void javaCodecSupportsWireInstructionPayloads() throws NoritoException {
+    final byte[] wirePayload =
+        NoritoCodec.encode("wire-payload", "iroha.test.WirePayload", NoritoAdapters.stringAdapter());
+    final InstructionBox wireInstruction =
+        InstructionBox.fromWirePayload("iroha.custom", wirePayload);
+
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setChainId("00000011")
+            .setAuthority("wire@wonderland")
+            .setCreationTimeMs(1_735_111_111_123L)
+            .setExecutable(Executable.instructions(listOf(wireInstruction)))
+            .build();
+
+    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+    final byte[] encoded = adapter.encodeTransaction(payload);
+    final TransactionPayload decoded = adapter.decodeTransaction(encoded);
+
+    final InstructionBox decodedBox = decoded.executable().instructions().get(0);
+    assert decodedBox.payload() instanceof InstructionBox.WirePayload
+        : "Wire payload instructions must decode to wire payloads";
+    final InstructionBox.WirePayload decodedWire = (InstructionBox.WirePayload) decodedBox.payload();
+    assert "iroha.custom".equals(decodedWire.wireName()) : "Wire name must round-trip";
+    assert Arrays.equals(wirePayload, decodedWire.payloadBytes())
+        : "Wire payload bytes must round-trip";
+  }
+
+  private static void javaCodecEncodesIvmBytecodeLayout() throws NoritoException {
+    final byte[] ivmBytes = new byte[] {0x01, 0x02, 0x03, 0x04};
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setChainId("00000012")
+            .setAuthority("ivm@wonderland")
+            .setCreationTimeMs(1_735_222_222_123L)
+            .setExecutable(Executable.ivm(ivmBytes))
+            .build();
+
+    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+    final byte[] encoded = adapter.encodeTransaction(payload);
+
+    final NoritoDecoder decoder = new NoritoDecoder(encoded, NoritoHeader.MINOR_VERSION);
+    readField(decoder, "payload.chain_id");
+    readField(decoder, "payload.authority");
+    readField(decoder, "payload.creation_time_ms");
+    final byte[] executableField = readField(decoder, "payload.executable");
+    readField(decoder, "payload.time_to_live_ms");
+    readField(decoder, "payload.nonce");
+    readField(decoder, "payload.metadata");
+    assert decoder.remaining() == 0 : "Payload has trailing bytes";
+
+    final NoritoDecoder execDecoder = new NoritoDecoder(executableField, NoritoHeader.MINOR_VERSION);
+    final TypeAdapter<Long> uint32 = NoritoAdapters.uint(32);
+    final long tag = uint32.decode(execDecoder);
+    assert tag == 1L : "Executable should be Ivm";
+    final byte[] ivmField = readField(execDecoder, "payload.executable.ivm");
+    assert execDecoder.remaining() == 0 : "Executable has trailing bytes";
+
+    final NoritoDecoder ivmDecoder = new NoritoDecoder(ivmField, NoritoHeader.MINOR_VERSION);
+    final byte[] inner = readField(ivmDecoder, "payload.executable.ivm.bytes");
+    final byte[] decodedIvm =
+        decodeFieldPayload(inner, NoritoAdapters.byteVecAdapter(), "payload.executable.ivm.bytes");
+    assert Arrays.equals(ivmBytes, decodedIvm) : "IVM bytecode bytes should match";
+    assert ivmDecoder.remaining() == 0 : "IVM bytecode has trailing bytes";
+  }
+
+  private static void javaCodecEncodesInstructionLayout() throws NoritoException {
+    final byte[] wirePayload =
+        NoritoCodec.encode("layout", "iroha.test.Layout", NoritoAdapters.stringAdapter());
+    final InstructionBox wireInstruction =
+        InstructionBox.fromWirePayload("iroha.custom.layout", wirePayload);
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setChainId("00000013")
+            .setAuthority("layout@wonderland")
+            .setCreationTimeMs(1_735_222_333_123L)
+            .setExecutable(Executable.instructions(listOf(wireInstruction)))
+            .build();
+
+    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+    final byte[] encoded = adapter.encodeTransaction(payload);
+
+    final NoritoDecoder decoder = new NoritoDecoder(encoded, NoritoHeader.MINOR_VERSION);
+    readField(decoder, "payload.chain_id");
+    readField(decoder, "payload.authority");
+    readField(decoder, "payload.creation_time_ms");
+    final byte[] executableField = readField(decoder, "payload.executable");
+    readField(decoder, "payload.time_to_live_ms");
+    readField(decoder, "payload.nonce");
+    readField(decoder, "payload.metadata");
+    assert decoder.remaining() == 0 : "Payload has trailing bytes";
+
+    final NoritoDecoder execDecoder = new NoritoDecoder(executableField, NoritoHeader.MINOR_VERSION);
+    final TypeAdapter<Long> uint32 = NoritoAdapters.uint(32);
+    final long tag = uint32.decode(execDecoder);
+    assert tag == 0L : "Executable should be Instructions";
+    final byte[] instructionsField = readField(execDecoder, "payload.executable.instructions");
+    assert execDecoder.remaining() == 0 : "Executable has trailing bytes";
+
+    final NoritoDecoder listDecoder = new NoritoDecoder(instructionsField, NoritoHeader.MINOR_VERSION);
+    final long count = listDecoder.readLength(false);
+    assert count == 1L : "Instruction list should contain one element";
+    final long elementLength = listDecoder.readLength(listDecoder.compactLenActive());
+    assert elementLength > 0 : "Instruction element must not be empty";
+    if (elementLength > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException("Instruction element too large");
+    }
+    final byte[] elementPayload = listDecoder.readBytes((int) elementLength);
+    assert listDecoder.remaining() == 0 : "Instruction list has trailing bytes";
+
+    final NoritoDecoder elementDecoder = new NoritoDecoder(elementPayload, NoritoHeader.MINOR_VERSION);
+    final byte[] nameField = readField(elementDecoder, "instruction.name");
+    final byte[] payloadField = readField(elementDecoder, "instruction.payload");
+    assert elementDecoder.remaining() == 0 : "Instruction element has trailing bytes";
+    final String decodedName =
+        decodeFieldPayload(nameField, NoritoAdapters.stringAdapter(), "instruction.name");
+    final byte[] decodedPayload =
+        decodeFieldPayload(payloadField, NoritoAdapters.byteVecAdapter(), "instruction.payload");
+    assert "iroha.custom.layout".equals(decodedName) : "Instruction name must match wire payload";
+    assert Arrays.equals(wirePayload, decodedPayload) : "Instruction payload must match wire bytes";
   }
 
   private static void javaCodecHydratesTypedRegisterInstructions() throws NoritoException {
@@ -185,7 +317,7 @@ public final class NoritoCodecAdapterTests {
             .setChainId("00000010")
             .setAuthority("registrar@wonderland")
             .setExecutable(
-                Executable.instructions(List.of(registerDomain, registerAccount, registerAsset)))
+                Executable.instructions(listOf(registerDomain, registerAccount, registerAsset)))
             .build();
 
     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
@@ -247,7 +379,7 @@ public final class NoritoCodecAdapterTests {
         TransactionPayload.builder()
             .setChainId("00000011")
             .setAuthority("alice@wonderland")
-            .setExecutable(Executable.instructions(List.of(transferAsset, transferDomain, transferDefinition)))
+            .setExecutable(Executable.instructions(listOf(transferAsset, transferDomain, transferDefinition)))
             .build();
 
     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
@@ -285,7 +417,7 @@ public final class NoritoCodecAdapterTests {
             .setChainId("00000020")
             .setAuthority("alice@wonderland")
             .setCreationTimeMs(1_735_003_300_000L)
-            .setExecutable(Executable.instructions(List.of(transfer)))
+            .setExecutable(Executable.instructions(listOf(transfer)))
             .build();
 
     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
@@ -328,7 +460,7 @@ public final class NoritoCodecAdapterTests {
         TransactionPayload.builder()
             .setChainId("00000012")
             .setAuthority("alice@wonderland")
-            .setExecutable(Executable.instructions(List.of(mint, burn)))
+            .setExecutable(Executable.instructions(listOf(mint, burn)))
             .build();
 
     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
@@ -357,7 +489,7 @@ public final class NoritoCodecAdapterTests {
             .setChainId("0000001C")
             .setAuthority("alice@wonderland")
             .setCreationTimeMs(1_735_002_900_000L)
-            .setExecutable(Executable.instructions(List.of(mint, burn)))
+            .setExecutable(Executable.instructions(listOf(mint, burn)))
             .build();
 
     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
@@ -398,7 +530,7 @@ public final class NoritoCodecAdapterTests {
         TransactionPayload.builder()
             .setChainId("00000013")
             .setAuthority("alice@wonderland")
-            .setExecutable(Executable.instructions(List.of(grant, revoke)))
+            .setExecutable(Executable.instructions(listOf(grant, revoke)))
             .build();
 
     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
@@ -452,7 +584,7 @@ public final class NoritoCodecAdapterTests {
             .setAuthority("alice@wonderland")
             .setExecutable(
                 Executable.instructions(
-                    List.of(grantRole, revokeRole, grantRolePermission, revokeRolePermission)))
+                    listOf(grantRole, revokeRole, grantRolePermission, revokeRolePermission)))
             .build();
 
     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
@@ -509,7 +641,7 @@ public final class NoritoCodecAdapterTests {
             .setAuthority("alice@enterprise")
             .setExecutable(
                 Executable.instructions(
-                    List.of(
+                    listOf(
                         setDomain,
                         setAccount,
                         setDefinition,
@@ -584,7 +716,7 @@ public final class NoritoCodecAdapterTests {
         TransactionPayload.builder()
             .setChainId("00000011")
             .setAuthority("alice@wonderland")
-            .setExecutable(Executable.instructions(List.of(setParameter)))
+            .setExecutable(Executable.instructions(listOf(setParameter)))
             .build();
 
     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
@@ -612,7 +744,7 @@ public final class NoritoCodecAdapterTests {
             .setAuthority("admin@wonderland")
             .setExecutable(
                 Executable.instructions(
-                    List.of(unregisterDomain, unregisterAccount, unregisterTrigger)))
+                    listOf(unregisterDomain, unregisterAccount, unregisterTrigger)))
             .build();
 
     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
@@ -647,7 +779,7 @@ public final class NoritoCodecAdapterTests {
         TransactionPayload.builder()
             .setChainId("00000017")
             .setAuthority("ops@wonderland")
-            .setExecutable(Executable.instructions(List.of(executeTrigger, logInstruction)))
+            .setExecutable(Executable.instructions(listOf(executeTrigger, logInstruction)))
             .build();
 
     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
@@ -675,7 +807,7 @@ public final class NoritoCodecAdapterTests {
         TransactionPayload.builder()
             .setChainId("00000018")
             .setAuthority("governance@wonderland")
-            .setExecutable(Executable.instructions(List.of(upgrade)))
+            .setExecutable(Executable.instructions(listOf(upgrade)))
             .build();
 
     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
@@ -703,7 +835,7 @@ public final class NoritoCodecAdapterTests {
         TransactionPayload.builder()
             .setChainId("00000019")
             .setAuthority("genesis@wonderland")
-            .setExecutable(Executable.instructions(List.of(registerPeer)))
+            .setExecutable(Executable.instructions(listOf(registerPeer)))
             .build();
 
     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
@@ -722,7 +854,7 @@ public final class NoritoCodecAdapterTests {
   }
 
   private static void javaCodecHydratesRegisterRoleInstruction() throws NoritoException {
-    final List<String> permissions = List.of("CanRegisterDomain", "CanUnregisterDomain");
+    final List<String> permissions = listOf("CanRegisterDomain", "CanUnregisterDomain");
     final InstructionBox registerRole =
         InstructionBuilders.registerRole("AUDITOR", "ops@wonderland", permissions);
 
@@ -730,7 +862,7 @@ public final class NoritoCodecAdapterTests {
         TransactionPayload.builder()
             .setChainId("0000001A")
             .setAuthority("ops@wonderland")
-            .setExecutable(Executable.instructions(List.of(registerRole)))
+            .setExecutable(Executable.instructions(listOf(registerRole)))
             .build();
 
     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
@@ -749,7 +881,7 @@ public final class NoritoCodecAdapterTests {
   }
 
   private static void javaCodecHydratesRegisterNftInstruction() throws NoritoException {
-    final Map<String, String> metadata = Map.of("category", "collectible", "edition", "1");
+    final Map<String, String> metadata = mapOf("category", "collectible", "edition", "1");
     final InstructionBox registerNft =
         InstructionBuilders.registerNft("rare_card$wonderland", metadata);
 
@@ -758,7 +890,7 @@ public final class NoritoCodecAdapterTests {
             .setChainId("0000001B")
             .setAuthority("alice@wonderland")
             .setCreationTimeMs(1_735_002_800_000L)
-            .setExecutable(Executable.instructions(List.of(registerNft)))
+            .setExecutable(Executable.instructions(listOf(registerNft)))
             .build();
 
     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
@@ -783,12 +915,12 @@ public final class NoritoCodecAdapterTests {
   private static void javaCodecHydratesRegisterTimeTriggerInstruction() throws NoritoException {
     final InstructionBox nested =
         InstructionBuilders.mintAsset("rose#wonderland#treasury@wonderland", "5");
-    final Map<String, String> metadata = Map.of("label", "periodic");
+    final Map<String, String> metadata = mapOf("label", "periodic");
     final InstructionBox register =
         InstructionBuilders.registerTimeTrigger(
             "daily_report",
             "alice@wonderland",
-            List.of(nested),
+            listOf(nested),
             1_735_000_000_000L,
             60_000L,
             3,
@@ -799,7 +931,7 @@ public final class NoritoCodecAdapterTests {
             .setChainId("0000001C")
             .setAuthority("alice@wonderland")
             .setCreationTimeMs(1_735_003_000_000L)
-            .setExecutable(Executable.instructions(List.of(register)))
+            .setExecutable(Executable.instructions(listOf(register)))
             .build();
 
     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
@@ -842,12 +974,12 @@ public final class NoritoCodecAdapterTests {
             .setTransactionHash(sampleHash)
             .setTransactionBlockHeight(42L)
             .setTransactionStatus("Approved");
-    final Map<String, String> metadata = Map.of("label", "pipeline");
+    final Map<String, String> metadata = mapOf("label", "pipeline");
     final InstructionBox register =
         InstructionBuilders.registerPipelineTrigger(
             "tx_monitor",
             "monitor@wonderland",
-            List.of(nested),
+            listOf(nested),
             filter,
             5,
             metadata);
@@ -857,7 +989,7 @@ public final class NoritoCodecAdapterTests {
             .setChainId("0000001E")
             .setAuthority("monitor@wonderland")
             .setCreationTimeMs(1_735_003_200_000L)
-            .setExecutable(Executable.instructions(List.of(register)))
+            .setExecutable(Executable.instructions(listOf(register)))
             .build();
 
     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
@@ -902,12 +1034,12 @@ public final class NoritoCodecAdapterTests {
   private static void javaCodecHydratesRegisterPrecommitTriggerInstruction() throws NoritoException {
     final InstructionBox nested =
         InstructionBuilders.grantPermission("bob@wonderland", "CanSubmitTransactions");
-    final Map<String, String> metadata = Map.of("purpose", "guard");
+    final Map<String, String> metadata = mapOf("purpose", "guard");
     final InstructionBox register =
         InstructionBuilders.registerPrecommitTrigger(
             "pc_guard",
             "carol@wonderland",
-            List.of(nested),
+            listOf(nested),
             null,
             metadata);
 
@@ -916,7 +1048,7 @@ public final class NoritoCodecAdapterTests {
             .setChainId("0000001D")
             .setAuthority("carol@wonderland")
             .setCreationTimeMs(1_735_003_100_000L)
-            .setExecutable(Executable.instructions(List.of(register)))
+            .setExecutable(Executable.instructions(listOf(register)))
             .build();
 
     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
@@ -1033,7 +1165,7 @@ public final class NoritoCodecAdapterTests {
             .setAuthority("ed0120HOST@wonderland")
             .setExecutable(
                 Executable.instructions(
-                    List.of(
+                    listOf(
                         InstructionBox.of(createInstruction),
                         InstructionBox.of(joinInstruction),
                         InstructionBox.of(leaveInstruction),
@@ -1150,7 +1282,7 @@ public final class NoritoCodecAdapterTests {
             .setAuthority("ed0120VK@wonderland")
             .setExecutable(
                 Executable.instructions(
-                    List.of(
+                    listOf(
                         InstructionBox.of(registerInstruction),
                         InstructionBox.of(updateInstruction))))
             .build();
@@ -1178,6 +1310,24 @@ public final class NoritoCodecAdapterTests {
     assert updateInstruction.equals(decodedUpdate)
         : "UpdateVerifyingKey fields must round-trip";
 
+  }
+
+  private static byte[] readField(final NoritoDecoder decoder, final String field) {
+    final long length = decoder.readLength(decoder.compactLenActive());
+    if (length > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException(field + " length too large: " + length);
+    }
+    return decoder.readBytes((int) length);
+  }
+
+  private static <T> T decodeFieldPayload(
+      final byte[] payload, final TypeAdapter<T> adapter, final String field) {
+    final NoritoDecoder decoder = new NoritoDecoder(payload, NoritoHeader.MINOR_VERSION);
+    final T value = adapter.decode(decoder);
+    if (decoder.remaining() != 0) {
+      throw new IllegalArgumentException(field + ": trailing bytes after field payload");
+    }
+    return value;
   }
 
   private static byte[] emitFixtureMetadata(
@@ -1217,5 +1367,29 @@ public final class NoritoCodecAdapterTests {
       builder.append(String.format("%02x", b));
     }
     return builder.toString();
+  }
+
+  private static void assertBarePayload(final byte[] encoded) {
+    if (encoded.length < 4) {
+      return;
+    }
+    final boolean hasMagic =
+        encoded[0] == 'N' && encoded[1] == 'R' && encoded[2] == 'T' && encoded[3] == '0';
+    assert !hasMagic : "Encoded payload should be bare (no Norito header)";
+  }
+
+  private static <T> List<T> listOf(final T... items) {
+    return Arrays.asList(items);
+  }
+
+  private static Map<String, String> mapOf(final String... entries) {
+    if (entries.length % 2 != 0) {
+      throw new IllegalArgumentException("mapOf requires an even number of arguments");
+    }
+    final Map<String, String> map = new LinkedHashMap<>();
+    for (int i = 0; i < entries.length; i += 2) {
+      map.put(entries[i], entries[i + 1]);
+    }
+    return map;
   }
 }

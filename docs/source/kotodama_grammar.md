@@ -204,6 +204,10 @@ Host/syscall builtins (map to SCALL; exact numbers in ivm.md)
 - `burn_asset(AccountId*, AssetDefinitionId*, int)`
 - `transfer_asset(AccountId*, AccountId*, AssetDefinitionId*, int)`
 - `set_account_detail(AccountId*, Name*, Json*)`
+- `execute_instruction(Blob[NoritoBytes])`
+- `execute_query(Blob[NoritoBytes]) -> Blob`
+- `subscription_bill()`
+- `subscription_record_usage()`
 - `nft_mint_asset(NftId*, AccountId*)`
 - `nft_transfer_asset(AccountId*, NftId*, AccountId*)`
 - `nft_set_metadata(NftId*, Json*)`
@@ -226,6 +230,8 @@ Utility builtins
 - `hash(blob) -> Blob*`: returns a Norito-encoded hash as Blob.
 - `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` and `build_unshield_inline(asset, to, amount, inputs32, backend, proof, vk) -> Blob*`: inline ISI builders; all arguments must be compile-time literals (string literals or pointer constructors from literals). `nullifier32` and `inputs32` must be exactly 32 bytes (raw string or `0x` hex), and `amount` must be non-negative.
 - `schema_info(Name*) -> Json* { "id": "<hex>", "version": N }`
+- `encode_schema(Name*, Json*) -> Blob`: encodes JSON using the host schema registry (DefaultRegistry supports `QueryRequest` and `QueryResponse` in addition to Order/Trade samples).
+- `decode_schema(Name*, Blob|bytes) -> Json*`: decodes Norito bytes using the host schema registry.
 - `pointer_to_norito(ptr) -> NoritoBytes*`: wraps an existing pointer-ABI TLV as NoritoBytes for storage or transport.
 - `isqrt(int) -> int`: integer square root (`floor(sqrt(x))`) implemented as an IVM opcode.
 - `min(int, int) -> int`, `max(int, int) -> int`, `abs(int) -> int`, `div_ceil(int, int) -> int`, `gcd(int, int) -> int`, `mean(int, int) -> int` — fused arithmetic helpers backed by native IVM opcodes (ceil division traps on divide-by-zero).

@@ -7,24 +7,28 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree};
+use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree, SignatureOf};
 use iroha_data_model::{
     block::{
-        Header as BlockHeader,
+        BlockSignature, Header as BlockHeader,
         consensus::{
             CertPhase, ConsensusBlockHeader, ConsensusGenesisParams, Evidence, EvidenceKind,
             EvidencePayload, EvidenceRecord, ExecKv, ExecWitness, ExecWitnessMsg,
             LaneBlockCommitment, LaneSettlementReceipt, NposGenesisParams, PERMISSIONED_TAG,
             Proposal, Qc, QcAggregate, QcRef, QcVote, RbcChunk, RbcDeliver, RbcInit, RbcReady,
-            Reconfig, SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus,
-            SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus, SumeragiDaGateReason,
-            SumeragiDaGateSatisfaction, SumeragiDaGateStatus, SumeragiDataspaceCommitment,
-            SumeragiKuraStoreStatus, SumeragiLaneCommitment, SumeragiLaneGovernance,
-            SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
+            RbcReadySignature, Reconfig, SumeragiBlockSyncRosterStatus,
+            SumeragiCommitInflightStatus, SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus,
+            SumeragiConsensusMessageHandlingEntry, SumeragiConsensusMessageHandlingStatus,
+            SumeragiDaGateReason, SumeragiDaGateSatisfaction, SumeragiDaGateStatus,
+            SumeragiDataspaceCommitment, SumeragiKuraStoreStatus, SumeragiLaneCommitment,
+            SumeragiLaneGovernance, SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
             SumeragiMissingBlockFetchStatus, SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcEntry,
             SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcSnapshot, SumeragiQcStatus,
-            SumeragiRbcEvictedSession, SumeragiRbcStoreStatus, SumeragiRuntimeUpgradeHook,
-            SumeragiStatusWire, SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
+            SumeragiRbcEvictedSession, SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus,
+            SumeragiRbcStoreStatus, SumeragiRuntimeUpgradeHook, SumeragiStatusWire,
+            SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
+            SumeragiVoteValidationDropEntry, SumeragiVoteValidationDropPeerEntry,
+            SumeragiVoteValidationDropReasonCount, SumeragiVoteValidationDropStatus,
             SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths, SumeragiWorkerQueueDiagnostics,
             SumeragiWorkerQueueTotals, VrfCommit, VrfReveal,
         },
@@ -259,10 +263,10 @@ fn rng_proposal(rng: &mut DeterministicRng) -> Proposal {
 fn rng_commit_vote(rng: &mut DeterministicRng) -> QcVote {
     let phase = rng_cert_phase_any(rng);
     let highest_qc = matches!(phase, CertPhase::NewView).then(|| rng_commit_qc_ref(rng));
-    let (block_hash, height, epoch) = highest_qc
-        .as_ref()
-        .map(|cert| (cert.subject_block_hash, cert.height, cert.epoch))
-        .unwrap_or_else(|| (rng_block_hash(rng), rng.next_u64(), rng.next_u64()));
+    let (block_hash, height, epoch) = highest_qc.as_ref().map_or_else(
+        || (rng_block_hash(rng), rng.next_u64(), rng.next_u64()),
+        |cert| (cert.subject_block_hash, cert.height, cert.epoch),
+    );
     let (parent_state_root, post_state_root) = if matches!(phase, CertPhase::Commit) {
         (rng_hash(rng), rng_hash(rng))
     } else {
@@ -288,10 +292,10 @@ fn rng_commit_vote(rng: &mut DeterministicRng) -> QcVote {
 fn rng_commit_qc(rng: &mut DeterministicRng) -> Qc {
     let phase = rng_cert_phase_any(rng);
     let highest_qc = matches!(phase, CertPhase::NewView).then(|| rng_commit_qc_ref(rng));
-    let (subject_block_hash, height, epoch) = highest_qc
-        .as_ref()
-        .map(|cert| (cert.subject_block_hash, cert.height, cert.epoch))
-        .unwrap_or_else(|| (rng_block_hash(rng), rng.next_u64(), rng.next_u64()));
+    let (subject_block_hash, height, epoch) = highest_qc.as_ref().map_or_else(
+        || (rng_block_hash(rng), rng.next_u64(), rng.next_u64()),
+        |cert| (cert.subject_block_hash, cert.height, cert.epoch),
+    );
     let (parent_state_root, post_state_root) = if matches!(phase, CertPhase::Commit) {
         (rng_hash(rng), rng_hash(rng))
     } else {
@@ -401,7 +405,9 @@ fn rng_roster(rng: &mut DeterministicRng) -> Vec<PeerId> {
 
 fn rng_rbc_init(rng: &mut DeterministicRng) -> RbcInit {
     let roster = rng_roster(rng);
-    let roster_hash = Hash::new(&roster.encode());
+    let roster_hash = Hash::new(roster.encode());
+    let height = rng.next_u64().max(1);
+    let view = rng.next_u64();
     let total_chunks = u32::try_from(rng.range_inclusive(1, 8)).expect("range bound fits u32");
     let mut chunk_digests = Vec::with_capacity(total_chunks as usize);
     for _ in 0..total_chunks {
@@ -413,10 +419,24 @@ fn rng_rbc_init(rng: &mut DeterministicRng) -> RbcInit {
         .root()
         .map(Hash::from)
         .expect("chunk root");
+    let block_header = BlockHeader::new(
+        NonZeroU64::new(height).expect("block height must be non-zero"),
+        None,
+        None,
+        None,
+        0,
+        view,
+    );
+    let leader_key = KeyPair::random();
+    let (_, leader_private) = leader_key.into_parts();
+    let leader_signature = BlockSignature::new(
+        0,
+        SignatureOf::from_hash(&leader_private, block_header.hash()),
+    );
     RbcInit {
-        block_hash: rng_block_hash(rng),
-        height: rng.next_u64(),
-        view: rng.next_u64(),
+        block_hash: block_header.hash(),
+        height,
+        view,
         epoch: rng.next_u64(),
         roster,
         roster_hash,
@@ -424,6 +444,8 @@ fn rng_rbc_init(rng: &mut DeterministicRng) -> RbcInit {
         chunk_digests,
         payload_hash: rng_hash(rng),
         chunk_root,
+        block_header,
+        leader_signature,
     }
 }
 
@@ -454,6 +476,13 @@ fn rng_rbc_ready_from(rng: &mut DeterministicRng, init: &RbcInit) -> RbcReady {
     }
 }
 
+fn rng_rbc_ready_signature_from(rng: &mut DeterministicRng) -> RbcReadySignature {
+    RbcReadySignature {
+        sender: rng.next_u32(),
+        signature: rng.bytes(64),
+    }
+}
+
 fn rng_rbc_deliver_from(rng: &mut DeterministicRng, init: &RbcInit) -> RbcDeliver {
     RbcDeliver {
         block_hash: init.block_hash,
@@ -464,6 +493,9 @@ fn rng_rbc_deliver_from(rng: &mut DeterministicRng, init: &RbcInit) -> RbcDelive
         chunk_root: init.chunk_root,
         sender: rng.next_u32(),
         signature: rng.bytes(64),
+        ready_signatures: (0..rng.up_to(2))
+            .map(|_| rng_rbc_ready_signature_from(rng))
+            .collect(),
     }
 }
 
@@ -478,9 +510,8 @@ fn rng_evidence(rng: &mut DeterministicRng) -> Evidence {
             let mut v2 = v1.clone();
             v2.block_hash = rng_block_hash(rng);
             let kind = match v1.phase {
-                CertPhase::Prepare => EvidenceKind::DoublePrepare,
                 CertPhase::Commit => EvidenceKind::DoubleCommit,
-                CertPhase::NewView => EvidenceKind::DoublePrepare,
+                CertPhase::Prepare | CertPhase::NewView => EvidenceKind::DoublePrepare,
             };
             Evidence {
                 kind,
@@ -556,6 +587,7 @@ fn rng_sumeragi_status(rng: &mut DeterministicRng) -> SumeragiStatusWire {
         view_change_causes: SumeragiViewChangeCauseStatus {
             commit_failure_total: rng.next_u64(),
             quorum_timeout_total: rng.next_u64(),
+            stake_quorum_timeout_total: rng.next_u64(),
             da_gate_total: rng.next_u64(),
             censorship_evidence_total: rng.next_u64(),
             missing_payload_total: rng.next_u64(),
@@ -569,6 +601,7 @@ fn rng_sumeragi_status(rng: &mut DeterministicRng) -> SumeragiStatusWire {
             last_cause_timestamp_ms: rng.next_u64(),
             last_commit_failure_timestamp_ms: rng.next_u64(),
             last_quorum_timeout_timestamp_ms: rng.next_u64(),
+            last_stake_quorum_timeout_timestamp_ms: rng.next_u64(),
             last_da_gate_timestamp_ms: rng.next_u64(),
             last_censorship_evidence_timestamp_ms: rng.next_u64(),
             last_missing_payload_timestamp_ms: rng.next_u64(),
@@ -579,6 +612,8 @@ fn rng_sumeragi_status(rng: &mut DeterministicRng) -> SumeragiStatusWire {
         block_created_dropped_by_lock_total: rng.next_u64(),
         block_created_hint_mismatch_total: rng.next_u64(),
         block_created_proposal_mismatch_total: rng.next_u64(),
+        consensus_message_handling: rng_consensus_message_handling_status(rng),
+        vote_validation_drops: rng_vote_validation_drop_status(rng),
         validation_reject_total: rng.next_u64(),
         validation_reject_reason: if rng.next_bool() {
             Some("stateless".to_string())
@@ -638,6 +673,7 @@ fn rng_sumeragi_status(rng: &mut DeterministicRng) -> SumeragiStatusWire {
             roster_sidecar_total: rng.next_u64(),
             commit_roster_journal_total: rng.next_u64(),
             drop_missing_total: rng.next_u64(),
+            drop_unsolicited_share_blocks_total: rng.next_u64(),
         },
         pacemaker_backpressure_deferrals_total: rng.next_u64(),
         commit_pipeline_tick_total: rng.next_u64(),
@@ -646,6 +682,7 @@ fn rng_sumeragi_status(rng: &mut DeterministicRng) -> SumeragiStatusWire {
         da_gate: rng_da_gate(rng),
         kura_store: rng_kura_store(rng),
         rbc_store: rng_rbc_store(rng),
+        rbc_mismatch: rng_rbc_mismatch_status(rng),
         pending_rbc: SumeragiPendingRbcStatus::default(),
         tx_queue_depth: rng.next_u64(),
         tx_queue_capacity: rng.next_u64(),
@@ -969,6 +1006,105 @@ fn rng_rbc_store(rng: &mut DeterministicRng) -> SumeragiRbcStoreStatus {
     }
 }
 
+fn rng_rbc_mismatch_entry(rng: &mut DeterministicRng) -> SumeragiRbcMismatchEntry {
+    SumeragiRbcMismatchEntry {
+        peer_id: PeerId::from(KeyPair::random().public_key().clone()),
+        chunk_digest_mismatch_total: rng.next_u64(),
+        payload_hash_mismatch_total: rng.next_u64(),
+        chunk_root_mismatch_total: rng.next_u64(),
+        last_timestamp_ms: rng.next_u64(),
+    }
+}
+
+fn rng_rbc_mismatch_status(rng: &mut DeterministicRng) -> SumeragiRbcMismatchStatus {
+    let entry_len = rng.up_to(3);
+    let entries = (0..entry_len)
+        .map(|_| rng_rbc_mismatch_entry(rng))
+        .collect();
+    SumeragiRbcMismatchStatus { entries }
+}
+
+fn rng_consensus_message_handling_status(
+    rng: &mut DeterministicRng,
+) -> SumeragiConsensusMessageHandlingStatus {
+    let entry_len = rng.up_to(3);
+    let entries = (0..entry_len)
+        .map(|_| SumeragiConsensusMessageHandlingEntry {
+            kind: rng_ascii_string(rng, 16),
+            outcome: rng_ascii_string(rng, 12),
+            reason: rng_ascii_string(rng, 24),
+            total: rng.next_u64(),
+        })
+        .collect();
+    SumeragiConsensusMessageHandlingStatus { entries }
+}
+
+fn rng_vote_validation_drop_entry(rng: &mut DeterministicRng) -> SumeragiVoteValidationDropEntry {
+    SumeragiVoteValidationDropEntry {
+        reason: rng_ascii_string(rng, 24),
+        height: rng.next_u64(),
+        view: rng.next_u64(),
+        epoch: rng.next_u64(),
+        signer_index: rng.next_u32(),
+        peer_id: rng
+            .next_bool()
+            .then(|| PeerId::from(KeyPair::random().public_key().clone())),
+        roster_hash: rng
+            .next_bool()
+            .then(|| HashOf::<Vec<PeerId>>::from_untyped_unchecked(rng_hash(rng))),
+        roster_len: rng.next_u32(),
+        block_hash: rng_block_hash(rng),
+        timestamp_ms: rng.next_u64(),
+    }
+}
+
+fn rng_vote_validation_drop_reason_count(
+    rng: &mut DeterministicRng,
+) -> SumeragiVoteValidationDropReasonCount {
+    SumeragiVoteValidationDropReasonCount {
+        reason: rng_ascii_string(rng, 12),
+        total: rng.next_u64(),
+    }
+}
+
+fn rng_vote_validation_drop_peer_entry(
+    rng: &mut DeterministicRng,
+) -> SumeragiVoteValidationDropPeerEntry {
+    let reason_len = rng.up_to(3);
+    let reasons = (0..reason_len)
+        .map(|_| rng_vote_validation_drop_reason_count(rng))
+        .collect();
+    SumeragiVoteValidationDropPeerEntry {
+        peer_id: PeerId::from(KeyPair::random().public_key().clone()),
+        roster_hash: rng
+            .next_bool()
+            .then(|| HashOf::<Vec<PeerId>>::from_untyped_unchecked(rng_hash(rng))),
+        roster_len: rng.next_u32(),
+        total: rng.next_u64(),
+        reasons,
+        last_height: rng.next_u64(),
+        last_view: rng.next_u64(),
+        last_epoch: rng.next_u64(),
+        last_timestamp_ms: rng.next_u64(),
+    }
+}
+
+fn rng_vote_validation_drop_status(rng: &mut DeterministicRng) -> SumeragiVoteValidationDropStatus {
+    let entry_len = rng.up_to(3);
+    let entries = (0..entry_len)
+        .map(|_| rng_vote_validation_drop_entry(rng))
+        .collect();
+    let peer_entry_len = rng.up_to(3);
+    let peer_entries = (0..peer_entry_len)
+        .map(|_| rng_vote_validation_drop_peer_entry(rng))
+        .collect();
+    SumeragiVoteValidationDropStatus {
+        total: rng.next_u64(),
+        entries,
+        peer_entries,
+    }
+}
+
 fn rng_worker_queue_depths(rng: &mut DeterministicRng) -> SumeragiWorkerQueueDepths {
     SumeragiWorkerQueueDepths {
         vote_rx: rng.next_u64(),
@@ -1138,6 +1274,7 @@ fn sumeragi_wire_status_roundtrip() {
         view_change_causes: SumeragiViewChangeCauseStatus {
             commit_failure_total: 1,
             quorum_timeout_total: 2,
+            stake_quorum_timeout_total: 0,
             da_gate_total: 3,
             censorship_evidence_total: 7,
             missing_payload_total: 4,
@@ -1147,6 +1284,7 @@ fn sumeragi_wire_status_roundtrip() {
             last_cause_timestamp_ms: 42,
             last_commit_failure_timestamp_ms: 10,
             last_quorum_timeout_timestamp_ms: 11,
+            last_stake_quorum_timeout_timestamp_ms: 0,
             last_da_gate_timestamp_ms: 12,
             last_censorship_evidence_timestamp_ms: 16,
             last_missing_payload_timestamp_ms: 13,
@@ -1157,6 +1295,47 @@ fn sumeragi_wire_status_roundtrip() {
         block_created_dropped_by_lock_total: 2,
         block_created_hint_mismatch_total: 1,
         block_created_proposal_mismatch_total: 4,
+        consensus_message_handling: SumeragiConsensusMessageHandlingStatus {
+            entries: vec![SumeragiConsensusMessageHandlingEntry {
+                kind: "block_created".to_string(),
+                outcome: "dropped".to_string(),
+                reason: "hint_mismatch".to_string(),
+                total: 3,
+            }],
+        },
+        vote_validation_drops: SumeragiVoteValidationDropStatus {
+            total: 2,
+            entries: vec![SumeragiVoteValidationDropEntry {
+                reason: "invalid_signature".to_string(),
+                height: 9,
+                view: 2,
+                epoch: 0,
+                signer_index: 1,
+                peer_id: Some(PeerId::from(KeyPair::random().public_key().clone())),
+                roster_hash: Some(HashOf::<Vec<PeerId>>::from_untyped_unchecked(
+                    Hash::prehashed([0xAE; Hash::LENGTH]),
+                )),
+                roster_len: 4,
+                block_hash: sample_block_hash(0x94),
+                timestamp_ms: 456,
+            }],
+            peer_entries: vec![SumeragiVoteValidationDropPeerEntry {
+                peer_id: PeerId::from(KeyPair::random().public_key().clone()),
+                roster_hash: Some(HashOf::<Vec<PeerId>>::from_untyped_unchecked(
+                    Hash::prehashed([0xAF; Hash::LENGTH]),
+                )),
+                roster_len: 4,
+                total: 2,
+                reasons: vec![SumeragiVoteValidationDropReasonCount {
+                    reason: "invalid_signature".to_string(),
+                    total: 2,
+                }],
+                last_height: 9,
+                last_view: 2,
+                last_epoch: 0,
+                last_timestamp_ms: 789,
+            }],
+        },
         validation_reject_total: 1,
         validation_reject_reason: Some("stateless".to_string()),
         validation_rejects: SumeragiValidationRejectStatus {
@@ -1192,6 +1371,7 @@ fn sumeragi_wire_status_roundtrip() {
             roster_sidecar_total: 6,
             commit_roster_journal_total: 7,
             drop_missing_total: 10,
+            drop_unsolicited_share_blocks_total: 11,
         },
         pacemaker_backpressure_deferrals_total: 8,
         commit_pipeline_tick_total: 0,
@@ -1229,6 +1409,15 @@ fn sumeragi_wire_status_roundtrip() {
                 view: 2,
             }],
         },
+        rbc_mismatch: SumeragiRbcMismatchStatus {
+            entries: vec![SumeragiRbcMismatchEntry {
+                peer_id: PeerId::from(KeyPair::random().public_key().clone()),
+                chunk_digest_mismatch_total: 2,
+                payload_hash_mismatch_total: 1,
+                chunk_root_mismatch_total: 3,
+                last_timestamp_ms: 42,
+            }],
+        },
         pending_rbc: SumeragiPendingRbcStatus {
             sessions: 2,
             session_cap: 256,
@@ -1244,6 +1433,17 @@ fn sumeragi_wire_status_roundtrip() {
             drops_ttl_bytes_total: 4,
             drops_bytes_total: 16,
             evicted_total: 2,
+            stash_ready_total: 3,
+            stash_ready_init_missing_total: 1,
+            stash_ready_roster_missing_total: 1,
+            stash_ready_roster_hash_mismatch_total: 0,
+            stash_ready_roster_unverified_total: 1,
+            stash_deliver_total: 2,
+            stash_deliver_init_missing_total: 1,
+            stash_deliver_roster_missing_total: 0,
+            stash_deliver_roster_hash_mismatch_total: 1,
+            stash_deliver_roster_unverified_total: 0,
+            stash_chunk_total: 5,
             entries: vec![SumeragiPendingRbcEntry {
                 block_hash: sample_block_hash(0x80),
                 height: 5,
@@ -1609,7 +1809,7 @@ fn consensus_messages_norito_roundtrip() {
     let invalid_proposal = Evidence {
         kind: EvidenceKind::InvalidProposal,
         payload: EvidencePayload::InvalidProposal {
-            proposal: proposal.clone(),
+            proposal,
             reason: "payload commitment mismatch".to_owned(),
         },
     };
@@ -1662,14 +1862,28 @@ fn consensus_messages_norito_roundtrip() {
         PeerId::from(KeyPair::random().public_key().clone()),
         PeerId::from(KeyPair::random().public_key().clone()),
     ];
-    let roster_hash = Hash::new(&roster.encode());
+    let roster_hash = Hash::new(roster.encode());
     let chunk_digests = vec![[0x31; 32], [0x32; 32], [0x33; 32]];
     let chunk_root = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(chunk_digests.clone())
         .root()
         .map(Hash::from)
         .expect("chunk root");
+    let block_header = BlockHeader::new(
+        NonZeroU64::new(44).expect("block height must be non-zero"),
+        None,
+        None,
+        None,
+        0,
+        7,
+    );
+    let leader_key = KeyPair::random();
+    let (_, leader_private) = leader_key.into_parts();
+    let leader_signature = BlockSignature::new(
+        0,
+        SignatureOf::from_hash(&leader_private, block_header.hash()),
+    );
     let rbc_init = RbcInit {
-        block_hash: sample_block_hash(0x30),
+        block_hash: block_header.hash(),
         height: 44,
         view: 7,
         epoch: 2,
@@ -1679,6 +1893,8 @@ fn consensus_messages_norito_roundtrip() {
         chunk_digests,
         payload_hash: sample_hash(0x31),
         chunk_root,
+        block_header,
+        leader_signature,
     };
     let rbc_chunk = RbcChunk {
         block_hash: rbc_init.block_hash,
@@ -1707,6 +1923,10 @@ fn consensus_messages_norito_roundtrip() {
         chunk_root: rbc_init.chunk_root,
         sender: 16,
         signature: sample_bytes(0x60, 64),
+        ready_signatures: vec![RbcReadySignature {
+            sender: 3,
+            signature: sample_bytes(0x61, 64),
+        }],
     };
     assert_roundtrip(&cert_header);
     assert_roundtrip(&block_header);

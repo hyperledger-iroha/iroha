@@ -1157,7 +1157,7 @@ impl Executor {
             (Self::Initial | Self::UserProvided(_), Executable::Ivm(bytes)) => {
                 // IVM path: run the bytecode through the VM with CoreHost, enqueueing ISIs,
                 // then apply them via the standard executor logic.
-                use crate::smartcontracts::ivm::host::CoreHost as CoreCoreHost;
+                use crate::smartcontracts::ivm::host::CoreHostImpl as CoreCoreHost;
                 // Set gas limit per transaction (payer-provided), clamped to remaining block budget.
                 // Read gas_limit metadata (payer's cap) captured before moving transaction
                 let gas_limit_md = gas_limit_md.ok_or_else(|| {
@@ -1190,6 +1190,8 @@ impl Executor {
                 host.set_crypto_config(Arc::clone(&state_transaction.crypto));
                 host.set_halo2_config(&state_transaction.zk.halo2);
                 host.set_durable_state_snapshot_from_world(&state_transaction.world);
+                host.set_public_inputs_from_parameters(state_transaction.world.parameters.get());
+                host.set_query_state(state_transaction);
                 // Thread chain_id from StateTransaction into the IVM host for VRF binding
                 host.set_chain_id(&state_transaction.chain_id);
                 #[cfg(feature = "telemetry")]
@@ -1209,20 +1211,16 @@ impl Executor {
                     }
                     host.set_zk_roots_snapshot(snap);
                 }
-                runtime.vm.set_host(host);
                 runtime.vm.set_gas_limit(effective_limit);
-                if let Err(err) = runtime.vm.run() {
-                    return Err(crate::smartcontracts::ivm::map_vm_error_to_validation(err));
+                if let Err(err) = runtime.vm.run_with_host(&mut host) {
+                    return Err(crate::smartcontracts::ivm::map_vm_error_to_validation(&err));
                 }
                 let gas_used = effective_limit.saturating_sub(runtime.vm.remaining_gas());
-                state_transaction.last_tx_gas_used = gas_used;
 
                 // Drain and apply queued ISIs deterministically via executor.
-                if let Some(host_any) = runtime.vm.host_mut_any()
-                    && let Some(host) = host_any.downcast_mut::<CoreCoreHost>()
-                {
-                    let _executed = host.apply_queued(state_transaction, authority)?;
-                }
+                let artifacts = host.into_execution_artifacts()?;
+                let _executed = artifacts.apply_to_transaction(state_transaction, authority)?;
+                state_transaction.last_tx_gas_used = gas_used;
 
                 // Charge gas fees: if a gas asset was provided and accepted by policy.
                 if let Some(gas_asset_id_str) = gas_asset_opt {

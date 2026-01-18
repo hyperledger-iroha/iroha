@@ -3,12 +3,15 @@
 //! This replaces the previous fixed-width, non-negative decimal. Mantissas are
 //! stored in [`crate::bigint::BigInt`] and allow negative values; scale counts
 //! fractional digits (e.g., `1.88` => mantissa `188`, scale `2`).
+//!
+//! Encoding note: `Numeric` serializes as a helper carrying `(mantissa, scale)`.
+//! The mantissa is a raw [`crate::bigint::BigInt`] integer (no decimal scale
+//! is embedded in the integer), and the scale is stored separately as a `u32`.
 
 use core::{cmp::Ordering, str::FromStr};
 use std::{
     io::Write,
     string::{String, ToString},
-    vec,
     vec::Vec,
 };
 
@@ -25,6 +28,8 @@ use crate::bigint::{BigInt, MAX_BITS as BIGINT_MAX_BITS};
 ///
 /// The finite set of values of type [`Numeric`] are of the form $m / 10^e$,
 /// where `m` is a signed integer with up to 512 bits and `e` is in `[0, 28]`.
+/// The mantissa `m` is stored as a [`crate::bigint::BigInt`], while the scale
+/// `e` is carried separately.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Numeric {
     mantissa: BigInt,
@@ -444,6 +449,10 @@ impl NoritoSerialize for Numeric {
         };
         helper.serialize(writer)
     }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        None
+    }
 }
 
 impl<'a> NoritoDeserialize<'a> for Numeric {
@@ -459,9 +468,10 @@ impl<'a> NoritoDeserialize<'a> for Numeric {
 
         if aligned {
             let helper_arch: &Archived<scale_::NumericScaleHelper> = archived.cast();
-            let helper = scale_::NumericScaleHelper::deserialize(helper_arch);
-            Numeric::try_new(helper.mantissa, helper.scale)
-                .map_err(|err| Error::Message(format!("invalid numeric: {err}")))
+            let helper = scale_::NumericScaleHelper::try_deserialize(helper_arch)?;
+            let value = Numeric::try_new(helper.mantissa, helper.scale)
+                .map_err(|err| Error::Message(format!("invalid numeric: {err}")))?;
+            Ok(value)
         } else {
             let slice = norito::core::payload_slice_from_ptr(ptr)?;
             let (value, _) = <Numeric as norito::core::DecodeFromSlice>::decode_from_slice(slice)?;
@@ -688,7 +698,7 @@ mod scale_ {
     #[allow(unexpected_cfgs)]
     #[derive(norito::Encode, norito::Decode)]
     #[norito(decode_from_slice)]
-    /// Internal helper used to validate SCALE-based decoding for numeric values.
+    /// Internal helper used to encode/decode Numeric as `(mantissa, scale)`.
     pub(super) struct NumericScaleHelper {
         /// Mantissa carried by the numeric helper.
         #[codec(compact)]
@@ -844,5 +854,15 @@ mod tests {
         let num2 = Numeric::decode(&mut s.as_slice()).expect("failed to decode numeric");
 
         assert_eq!(num1, num2);
+    }
+
+    #[test]
+    fn numeric_canonical_roundtrip() {
+        let value = Numeric::new(12345, 3);
+        let payload = norito::codec::Encode::encode(&value);
+        let (decoded, used) = norito::core::decode_field_canonical::<Numeric>(&payload)
+            .expect("decode canonical numeric");
+        assert_eq!(decoded, value);
+        assert_eq!(used, payload.len());
     }
 }

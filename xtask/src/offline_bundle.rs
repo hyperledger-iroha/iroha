@@ -477,13 +477,13 @@ impl PlatformProofSpec {
                             .wrap_err_with(|| format!("invalid marker signature hex `{hex}`"))
                     })
                     .transpose()?;
-                if let Some(signature) = &marker_signature {
-                    if signature.len() != 64 {
-                        return Err(eyre!(
-                            "invalid marker signature length: expected 64 bytes (got {})",
-                            signature.len()
-                        ));
-                    }
+                if let Some(signature) = &marker_signature
+                    && signature.len() != 64
+                {
+                    return Err(eyre!(
+                        "invalid marker signature length: expected 64 bytes (got {})",
+                        signature.len()
+                    ));
                 }
                 let attestation = BASE64
                     .decode(attestation_b64)

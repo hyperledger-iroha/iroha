@@ -10,7 +10,7 @@ use std::{
         Mutex, OnceLock,
         atomic::{AtomicUsize, Ordering as StdOrdering},
     },
-    time::{Duration, SystemTime},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use iroha_config::parameters::actual::ConsensusMode;
@@ -175,6 +175,50 @@ pub struct RbcAbortSnapshot {
     pub last_view: u64,
 }
 
+/// Classifies per-peer RBC payload mismatches for telemetry and status reporting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RbcMismatchKind {
+    /// Chunk digest does not match the declared digest list.
+    ChunkDigest,
+    /// Payload hash does not match the expected value.
+    PayloadHash,
+    /// Merkle root for chunk digests does not match the expected root.
+    ChunkRoot,
+}
+
+impl RbcMismatchKind {
+    /// Telemetry label for the mismatch kind.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::ChunkDigest => "chunk_digest",
+            Self::PayloadHash => "payload_hash",
+            Self::ChunkRoot => "chunk_root",
+        }
+    }
+}
+
+/// Snapshot of per-peer RBC payload mismatch counters.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RbcMismatchSnapshot {
+    /// Per-peer mismatch counters and last-observed timestamps.
+    pub entries: Vec<RbcMismatchEntry>,
+}
+
+/// Per-peer mismatch counters tracked for RBC payload validation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RbcMismatchEntry {
+    /// Peer associated with the mismatch counts.
+    pub peer_id: PeerId,
+    /// Count of RBC chunk digest mismatches attributed to the peer.
+    pub chunk_digest_mismatch_total: u64,
+    /// Count of payload-hash mismatches attributed to the peer.
+    pub payload_hash_mismatch_total: u64,
+    /// Count of chunk-root mismatches attributed to the peer.
+    pub chunk_root_mismatch_total: u64,
+    /// Timestamp (ms since UNIX epoch) when the last mismatch was recorded.
+    pub last_timestamp_ms: u64,
+}
+
 /// Snapshot of membership mismatch tracking.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MembershipMismatchSnapshot {
@@ -220,6 +264,14 @@ struct MembershipMismatchRegistry {
     last: Option<MembershipMismatchContext>,
 }
 
+#[derive(Clone, Debug, Default)]
+struct RbcMismatchCounts {
+    chunk_digest_mismatch_total: u64,
+    payload_hash_mismatch_total: u64,
+    chunk_root_mismatch_total: u64,
+    last_timestamp_ms: u64,
+}
+
 static LEADER_INDEX: AtomicU64 = AtomicU64::new(0);
 static HIGHEST_QC_HEIGHT: AtomicU64 = AtomicU64::new(0);
 static HIGHEST_QC_VIEW: AtomicU64 = AtomicU64::new(0);
@@ -244,6 +296,8 @@ static MEMBERSHIP_VIEW: AtomicU64 = AtomicU64::new(0);
 static MEMBERSHIP_EPOCH: AtomicU64 = AtomicU64::new(0);
 static MEMBERSHIP_VIEW_HASH: OnceLock<Mutex<[u8; 32]>> = OnceLock::new();
 static MEMBERSHIP_MISMATCH_REGISTRY: OnceLock<Mutex<MembershipMismatchRegistry>> = OnceLock::new();
+static RBC_MISMATCH_REGISTRY: OnceLock<Mutex<BTreeMap<PeerId, RbcMismatchCounts>>> =
+    OnceLock::new();
 static MODE_TAG: OnceLock<Mutex<String>> = OnceLock::new();
 static STAGED_MODE_TAG: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 static STAGED_MODE_ACTIVATION_HEIGHT: OnceLock<Mutex<Option<u64>>> = OnceLock::new();
@@ -272,16 +326,12 @@ static LAST_COLLECT_DA_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_COLLECT_PREVOTE_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_COLLECT_PRECOMMIT_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_COLLECT_AGG_MS: AtomicU64 = AtomicU64::new(0);
-static LAST_COLLECT_EXEC_MS: AtomicU64 = AtomicU64::new(0);
-static LAST_COLLECT_WITNESS_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_COMMIT_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_PROPOSE_EMA_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_COLLECT_DA_EMA_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_COLLECT_PREVOTE_EMA_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_COLLECT_PRECOMMIT_EMA_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_COLLECT_AGG_EMA_MS: AtomicU64 = AtomicU64::new(0);
-static LAST_COLLECT_EXEC_EMA_MS: AtomicU64 = AtomicU64::new(0);
-static LAST_COLLECT_WITNESS_EMA_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_COMMIT_EMA_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_PIPELINE_TOTAL_EMA_MS: AtomicU64 = AtomicU64::new(0);
 static GOSSIP_FALLBACK_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -300,6 +350,8 @@ static BG_POST_DROP_BROADCAST_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCK_CREATED_DROPPED_BY_LOCK_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCK_CREATED_HINT_MISMATCH_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCK_CREATED_PROPOSAL_MISMATCH_TOTAL: AtomicU64 = AtomicU64::new(0);
+static MESSAGE_HANDLING_TOTALS: OnceLock<Mutex<BTreeMap<ConsensusMessageHandlingKey, u64>>> =
+    OnceLock::new();
 static MISSING_BLOCK_FETCH_TOTAL: AtomicU64 = AtomicU64::new(0);
 static MISSING_BLOCK_FETCH_LAST_TARGETS: AtomicU64 = AtomicU64::new(0);
 static MISSING_BLOCK_FETCH_LAST_DWELL_MS: AtomicU64 = AtomicU64::new(0);
@@ -334,8 +386,10 @@ static BLOCK_SYNC_ROSTER_CHECKPOINT_HISTORY_TOTAL: AtomicU64 = AtomicU64::new(0)
 static BLOCK_SYNC_ROSTER_ROSTER_SIDECAR_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCK_SYNC_ROSTER_COMMIT_ROSTER_JOURNAL_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCK_SYNC_ROSTER_DROP_MISSING_TOTAL: AtomicU64 = AtomicU64::new(0);
+static BLOCK_SYNC_ROSTER_DROP_UNSOLICITED_SHARE_BLOCKS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_COMMIT_FAILURE_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_QUORUM_TIMEOUT_TOTAL: AtomicU64 = AtomicU64::new(0);
+static VIEW_CHANGE_CAUSE_STAKE_QUORUM_TIMEOUT_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_DA_GATE_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_CENSORSHIP_EVIDENCE_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_MISSING_PAYLOAD_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -345,6 +399,7 @@ static VIEW_CHANGE_CAUSE_LAST_TS_MS: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_LAST_LABEL: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 static VIEW_CHANGE_CAUSE_LAST_COMMIT_FAILURE_TS_MS: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_LAST_QUORUM_TIMEOUT_TS_MS: AtomicU64 = AtomicU64::new(0);
+static VIEW_CHANGE_CAUSE_LAST_STAKE_QUORUM_TIMEOUT_TS_MS: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_LAST_DA_GATE_TS_MS: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_LAST_CENSORSHIP_EVIDENCE_TS_MS: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_LAST_MISSING_PAYLOAD_TS_MS: AtomicU64 = AtomicU64::new(0);
@@ -412,7 +467,13 @@ static VIEW_CHANGE_CAUSE_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
 static LANE_RELAY_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 #[cfg(test)]
+static MESSAGE_HANDLING_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
+#[cfg(test)]
+static VOTE_VALIDATION_DROPS_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
+#[cfg(test)]
 static MISSING_BLOCK_FETCH_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
+#[cfg(test)]
+static BLOCK_SYNC_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
 static PREVOTE_TIMEOUT_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 #[cfg(test)]
@@ -439,9 +500,23 @@ static PENDING_RBC_DROPS_CAP_BYTES_TOTAL: AtomicU64 = AtomicU64::new(0);
 static PENDING_RBC_DROPS_TTL_BYTES_TOTAL: AtomicU64 = AtomicU64::new(0);
 static PENDING_RBC_DROPPED_BYTES_TOTAL: AtomicU64 = AtomicU64::new(0);
 static PENDING_RBC_EVICTED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static PENDING_RBC_STASH_READY_TOTAL: AtomicU64 = AtomicU64::new(0);
+static PENDING_RBC_STASH_READY_INIT_MISSING_TOTAL: AtomicU64 = AtomicU64::new(0);
+static PENDING_RBC_STASH_READY_ROSTER_MISSING_TOTAL: AtomicU64 = AtomicU64::new(0);
+static PENDING_RBC_STASH_READY_ROSTER_HASH_MISMATCH_TOTAL: AtomicU64 = AtomicU64::new(0);
+static PENDING_RBC_STASH_READY_ROSTER_UNVERIFIED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static PENDING_RBC_STASH_DELIVER_TOTAL: AtomicU64 = AtomicU64::new(0);
+static PENDING_RBC_STASH_DELIVER_INIT_MISSING_TOTAL: AtomicU64 = AtomicU64::new(0);
+static PENDING_RBC_STASH_DELIVER_ROSTER_MISSING_TOTAL: AtomicU64 = AtomicU64::new(0);
+static PENDING_RBC_STASH_DELIVER_ROSTER_HASH_MISMATCH_TOTAL: AtomicU64 = AtomicU64::new(0);
+static PENDING_RBC_STASH_DELIVER_ROSTER_UNVERIFIED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static PENDING_RBC_STASH_CHUNK_TOTAL: AtomicU64 = AtomicU64::new(0);
 static RBC_STORE_SESSIONS: AtomicU64 = AtomicU64::new(0);
 static RBC_STORE_BYTES: AtomicU64 = AtomicU64::new(0);
 static RBC_STORE_PRESSURE_LEVEL: AtomicU8 = AtomicU8::new(0);
+static RBC_STORE_PRESSURE_LOG_LEVEL: AtomicU8 = AtomicU8::new(0);
+static RBC_STORE_PRESSURE_LOG_LAST_SECS: AtomicU64 = AtomicU64::new(0);
+const RBC_STORE_PRESSURE_LOG_INTERVAL_SECS: u64 = 60;
 static RBC_STORE_BACKPRESSURE_DEFERRALS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static RBC_STORE_EVICTIONS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static RBC_DELIVER_DEFER_READY_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -452,7 +527,13 @@ static DA_GATE_LAST_REASON: AtomicU8 = AtomicU8::new(DaGateReasonSnapshot::None.
 static DA_GATE_LAST_SATISFIED: AtomicU8 = AtomicU8::new(DaGateSatisfactionSnapshot::None.as_code());
 static DA_GATE_MANIFEST_GUARD_TOTAL: AtomicU64 = AtomicU64::new(0);
 const RBC_STORE_RECENT_EVICTIONS_CAP: usize = 32;
+const VOTE_VALIDATION_DROPS_CAP: usize = 256;
 static RBC_STORE_RECENT_EVICTIONS: OnceLock<Mutex<VecDeque<RbcEvictedSession>>> = OnceLock::new();
+static VOTE_VALIDATION_DROPS: OnceLock<Mutex<VecDeque<VoteValidationDropEntry>>> = OnceLock::new();
+static VOTE_VALIDATION_DROPS_BY_PEER: OnceLock<
+    Mutex<BTreeMap<VoteValidationDropPeerKey, VoteValidationDropPeerState>>,
+> = OnceLock::new();
+static VOTE_VALIDATION_DROPS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static SETTLEMENT_STATUS: OnceLock<Mutex<SettlementStatusState>> = OnceLock::new();
 static LANE_ACTIVITY: OnceLock<Mutex<Vec<LaneActivitySnapshot>>> = OnceLock::new();
 static ACCESS_SET_SOURCES: OnceLock<Mutex<AccessSetSourceSummary>> = OnceLock::new();
@@ -1115,8 +1196,54 @@ pub struct PendingRbcSnapshot {
     pub drops_bytes_total: u64,
     /// Total pending sessions evicted (TTL expiry or stash-cap eviction).
     pub evicted_total: u64,
+    /// Total READY frames stashed before processing.
+    pub stash_ready_total: u64,
+    /// READY frames stashed because INIT has not arrived yet.
+    pub stash_ready_init_missing_total: u64,
+    /// READY frames stashed because the commit roster is missing.
+    pub stash_ready_roster_missing_total: u64,
+    /// READY frames stashed because the commit roster hash mismatched.
+    pub stash_ready_roster_hash_mismatch_total: u64,
+    /// READY frames stashed while the commit roster is unverified.
+    pub stash_ready_roster_unverified_total: u64,
+    /// Total DELIVER frames stashed before processing.
+    pub stash_deliver_total: u64,
+    /// DELIVER frames stashed because INIT has not arrived yet.
+    pub stash_deliver_init_missing_total: u64,
+    /// DELIVER frames stashed because the commit roster is missing.
+    pub stash_deliver_roster_missing_total: u64,
+    /// DELIVER frames stashed because the commit roster hash mismatched.
+    pub stash_deliver_roster_hash_mismatch_total: u64,
+    /// DELIVER frames stashed while the commit roster is unverified.
+    pub stash_deliver_roster_unverified_total: u64,
+    /// Chunk frames stashed before INIT arrives.
+    pub stash_chunk_total: u64,
     /// Pending sessions with per-session drop counters.
     pub entries: Vec<PendingRbcEntrySnapshot>,
+}
+
+/// Kind of pending RBC message stashed before processing.
+#[derive(Clone, Copy, Debug)]
+pub enum PendingRbcStashKind {
+    /// READY messages stashed before processing.
+    Ready,
+    /// DELIVER messages stashed before processing.
+    Deliver,
+    /// Chunk messages stashed before INIT arrives.
+    Chunk,
+}
+
+/// Reason a pending RBC message was stashed.
+#[derive(Clone, Copy, Debug)]
+pub enum PendingRbcStashReason {
+    /// INIT has not arrived yet for this session.
+    InitMissing,
+    /// Commit roster is missing for the target height/view.
+    RosterMissing,
+    /// Commit roster hash mismatched the message metadata.
+    RosterHashMismatch,
+    /// Commit roster is present but not yet verified.
+    RosterUnverified,
 }
 
 /// Per-lane execution summary for operator dashboards.
@@ -1485,6 +1612,76 @@ pub fn membership_mismatch_snapshot() -> MembershipMismatchSnapshot {
     }
 }
 
+fn rbc_mismatch_registry()
+-> Option<std::sync::MutexGuard<'static, BTreeMap<PeerId, RbcMismatchCounts>>> {
+    RBC_MISMATCH_REGISTRY
+        .get_or_init(|| Mutex::new(BTreeMap::new()))
+        .lock()
+        .ok()
+}
+
+/// Record an RBC payload mismatch attributed to the given peer.
+pub fn record_rbc_mismatch(peer: &PeerId, kind: RbcMismatchKind) {
+    let now_ms = now_timestamp_ms();
+    let Some(mut registry) = rbc_mismatch_registry() else {
+        return;
+    };
+    let entry = registry.entry(peer.clone()).or_default();
+    entry.last_timestamp_ms = now_ms;
+    match kind {
+        RbcMismatchKind::ChunkDigest => {
+            entry.chunk_digest_mismatch_total = entry.chunk_digest_mismatch_total.saturating_add(1);
+        }
+        RbcMismatchKind::PayloadHash => {
+            entry.payload_hash_mismatch_total = entry.payload_hash_mismatch_total.saturating_add(1);
+        }
+        RbcMismatchKind::ChunkRoot => {
+            entry.chunk_root_mismatch_total = entry.chunk_root_mismatch_total.saturating_add(1);
+        }
+    }
+}
+
+/// Snapshot the per-peer RBC mismatch registry.
+pub fn rbc_mismatch_snapshot() -> RbcMismatchSnapshot {
+    let Some(registry) = rbc_mismatch_registry() else {
+        return RbcMismatchSnapshot::default();
+    };
+    let entries = registry
+        .iter()
+        .map(|(peer, entry)| RbcMismatchEntry {
+            peer_id: peer.clone(),
+            chunk_digest_mismatch_total: entry.chunk_digest_mismatch_total,
+            payload_hash_mismatch_total: entry.payload_hash_mismatch_total,
+            chunk_root_mismatch_total: entry.chunk_root_mismatch_total,
+            last_timestamp_ms: entry.last_timestamp_ms,
+        })
+        .collect();
+    RbcMismatchSnapshot { entries }
+}
+
+#[cfg(test)]
+/// Reset the RBC mismatch registry for unit tests.
+pub fn reset_rbc_mismatch_for_tests() {
+    if let Some(mut registry) = rbc_mismatch_registry() {
+        registry.clear();
+    }
+}
+
+#[cfg(test)]
+/// Reset vote validation drop history for unit tests.
+pub fn reset_vote_validation_drops_for_tests() {
+    if let Some(slot) = VOTE_VALIDATION_DROPS.get() {
+        let mut guard = slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.clear();
+    }
+    if let Some(mut registry) = vote_validation_drop_peer_registry() {
+        registry.clear();
+    }
+    VOTE_VALIDATION_DROPS_TOTAL.store(0, Ordering::Relaxed);
+}
+
 #[cfg(test)]
 /// Reset the membership mismatch registry for unit tests.
 pub fn reset_membership_mismatch_for_tests() {
@@ -1730,8 +1927,10 @@ pub fn set_locked_qc(height: u64, view: u64, subject: Option<HashOf<BlockHeader>
         return;
     }
     if (height, view) == (cur_h, cur_v) {
-        if subject.is_some() && locked_qc_hash().is_none() {
-            set_locked_qc_hash(subject);
+        if let Some(subject) = subject {
+            if locked_qc_hash() != Some(subject) {
+                set_locked_qc_hash(Some(subject));
+            }
         }
     }
 }
@@ -2031,6 +2230,397 @@ pub struct BlockSyncRosterSnapshot {
     pub commit_roster_journal_total: u64,
     /// Total block-sync drops due to missing/invalid roster proofs.
     pub drop_missing_total: u64,
+    /// Total block-sync `ShareBlocks` drops without a matching request.
+    pub drop_unsolicited_share_blocks_total: u64,
+}
+
+/// Consensus message kinds tracked for drop/deferral telemetry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ConsensusMessageKind {
+    /// Block payload creation (`BlockCreated`).
+    BlockCreated,
+    /// Block-sync update batches (`BlockSyncUpdate`).
+    BlockSyncUpdate,
+    /// Consensus-parameter advertisements (`ConsensusParams`).
+    ConsensusParams,
+    /// Proposal hints (`ProposalHint`).
+    ProposalHint,
+    /// Proposals (`Proposal`).
+    Proposal,
+    /// Commit votes (`QcVote`).
+    QcVote,
+    /// Commit certificates (`Qc`).
+    Qc,
+    /// VRF commit broadcasts (`VrfCommit`).
+    VrfCommit,
+    /// VRF reveal broadcasts (`VrfReveal`).
+    VrfReveal,
+    /// Execution witness payloads (`ExecWitness`).
+    ExecWitness,
+    /// RBC init payloads (`RbcInit`).
+    RbcInit,
+    /// RBC chunk payloads (`RbcChunk`).
+    RbcChunk,
+    /// RBC ready messages (`RbcReady`).
+    RbcReady,
+    /// RBC delivery notifications (`RbcDeliver`).
+    RbcDeliver,
+    /// Fetch-pending-block requests (`FetchPendingBlock`).
+    FetchPendingBlock,
+    /// Consensus control-flow evidence.
+    Evidence,
+}
+
+impl ConsensusMessageKind {
+    /// Stable label for telemetry and status.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ConsensusMessageKind::BlockCreated => "block_created",
+            ConsensusMessageKind::BlockSyncUpdate => "block_sync_update",
+            ConsensusMessageKind::ConsensusParams => "consensus_params",
+            ConsensusMessageKind::ProposalHint => "proposal_hint",
+            ConsensusMessageKind::Proposal => "proposal",
+            ConsensusMessageKind::QcVote => "qc_vote",
+            ConsensusMessageKind::Qc => "qc",
+            ConsensusMessageKind::VrfCommit => "vrf_commit",
+            ConsensusMessageKind::VrfReveal => "vrf_reveal",
+            ConsensusMessageKind::ExecWitness => "exec_witness",
+            ConsensusMessageKind::RbcInit => "rbc_init",
+            ConsensusMessageKind::RbcChunk => "rbc_chunk",
+            ConsensusMessageKind::RbcReady => "rbc_ready",
+            ConsensusMessageKind::RbcDeliver => "rbc_deliver",
+            ConsensusMessageKind::FetchPendingBlock => "fetch_pending_block",
+            ConsensusMessageKind::Evidence => "evidence",
+        }
+    }
+}
+
+/// Outcome recorded for consensus-message handling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ConsensusMessageOutcome {
+    /// The message was dropped.
+    Dropped,
+    /// The message was deferred/stashed for later processing.
+    Deferred,
+}
+
+impl ConsensusMessageOutcome {
+    /// Stable label for telemetry and status.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ConsensusMessageOutcome::Dropped => "dropped",
+            ConsensusMessageOutcome::Deferred => "deferred",
+        }
+    }
+}
+
+/// Reason a consensus message was dropped or deferred.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ConsensusMessageReason {
+    /// Beyond the configured future height/view window.
+    FutureWindow,
+    /// Height is at or below the committed tip.
+    StaleHeight,
+    /// View is older than the local view.
+    StaleView,
+    /// Duplicate payload already seen.
+    Duplicate,
+    /// Conflicting vote already recorded for the signer.
+    ConflictingVote,
+    /// Locked QC gate rejected the payload.
+    LockedQc,
+    /// Missing highest QC reference.
+    MissingHighestQc,
+    /// Highest QC header mismatch.
+    HighestQcMismatch,
+    /// BlockCreated hint validation failed.
+    HintMismatch,
+    /// Payload hash mismatched the expected value.
+    PayloadMismatch,
+    /// Payload failed basic validation.
+    InvalidPayload,
+    /// Payload exceeds size limits.
+    PayloadTooLarge,
+    /// Incoming block conflicts with a committed block hash.
+    CommitConflict,
+    /// No verifiable roster available for the payload.
+    RosterMissing,
+    /// Signature validation failed for the payload.
+    InvalidSignature,
+    /// Missing quorum evidence for block sync.
+    QuorumMissing,
+    /// Payload could not be applied locally.
+    PayloadUnapplied,
+    /// Signature mismatch deferred while the node catches up.
+    SignatureMismatchDeferred,
+    /// Delivery channel is unavailable.
+    EnqueueFailed,
+    /// Sender is currently penalized.
+    PenalizedSender,
+    /// Epoch mismatch on the payload.
+    EpochMismatch,
+    /// Payload already committed locally.
+    Committed,
+    /// Roster hash mismatched authoritative roster.
+    RosterHashMismatch,
+    /// RBC chunk digest mismatched expected hash.
+    ChunkDigestMismatch,
+    /// Chunk root mismatch detected.
+    ChunkRootMismatch,
+    /// Pending stash session cap reached.
+    StashSessionLimit,
+    /// Pending stash payload cap reached.
+    StashCap,
+    /// RBC DELIVER deferred awaiting READY quorum.
+    ReadyQuorumMissing,
+    /// RBC DELIVER deferred awaiting missing chunks.
+    ChunksMissing,
+    /// RBC DELIVER deferred while INIT is missing.
+    InitMissing,
+    /// RBC DELIVER deferred while roster is missing.
+    RosterMissingDeferred,
+    /// RBC DELIVER deferred while roster hash mismatches.
+    RosterHashMismatchDeferred,
+    /// RBC DELIVER deferred while roster is unverified.
+    RosterUnverifiedDeferred,
+    /// Consensus message ignored due to mismatched mode/context.
+    ModeMismatch,
+    /// Requested data not found locally.
+    NotFound,
+}
+
+impl ConsensusMessageReason {
+    /// Stable label for telemetry and status.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ConsensusMessageReason::FutureWindow => "future_window",
+            ConsensusMessageReason::StaleHeight => "stale_height",
+            ConsensusMessageReason::StaleView => "stale_view",
+            ConsensusMessageReason::Duplicate => "duplicate",
+            ConsensusMessageReason::ConflictingVote => "conflicting_vote",
+            ConsensusMessageReason::LockedQc => "locked_qc",
+            ConsensusMessageReason::MissingHighestQc => "missing_highest_qc",
+            ConsensusMessageReason::HighestQcMismatch => "highest_qc_mismatch",
+            ConsensusMessageReason::HintMismatch => "hint_mismatch",
+            ConsensusMessageReason::PayloadMismatch => "payload_mismatch",
+            ConsensusMessageReason::InvalidPayload => "invalid_payload",
+            ConsensusMessageReason::PayloadTooLarge => "payload_too_large",
+            ConsensusMessageReason::CommitConflict => "commit_conflict",
+            ConsensusMessageReason::RosterMissing => "roster_missing",
+            ConsensusMessageReason::InvalidSignature => "invalid_signature",
+            ConsensusMessageReason::QuorumMissing => "quorum_missing",
+            ConsensusMessageReason::PayloadUnapplied => "payload_unapplied",
+            ConsensusMessageReason::SignatureMismatchDeferred => "signature_mismatch_deferred",
+            ConsensusMessageReason::EnqueueFailed => "enqueue_failed",
+            ConsensusMessageReason::PenalizedSender => "penalized_sender",
+            ConsensusMessageReason::EpochMismatch => "epoch_mismatch",
+            ConsensusMessageReason::Committed => "committed",
+            ConsensusMessageReason::RosterHashMismatch => "roster_hash_mismatch",
+            ConsensusMessageReason::ChunkDigestMismatch => "chunk_digest_mismatch",
+            ConsensusMessageReason::ChunkRootMismatch => "chunk_root_mismatch",
+            ConsensusMessageReason::StashSessionLimit => "stash_session_limit",
+            ConsensusMessageReason::StashCap => "stash_cap",
+            ConsensusMessageReason::ReadyQuorumMissing => "ready_quorum_missing",
+            ConsensusMessageReason::ChunksMissing => "chunks_missing",
+            ConsensusMessageReason::InitMissing => "init_missing",
+            ConsensusMessageReason::RosterMissingDeferred => "roster_missing_deferred",
+            ConsensusMessageReason::RosterHashMismatchDeferred => "roster_hash_mismatch_deferred",
+            ConsensusMessageReason::RosterUnverifiedDeferred => "roster_unverified_deferred",
+            ConsensusMessageReason::ModeMismatch => "mode_mismatch",
+            ConsensusMessageReason::NotFound => "not_found",
+        }
+    }
+}
+
+/// Single consensus-message handling counter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConsensusMessageHandlingEntry {
+    /// Message kind.
+    pub kind: ConsensusMessageKind,
+    /// Handling outcome (dropped or deferred).
+    pub outcome: ConsensusMessageOutcome,
+    /// Reason label for the drop/deferral.
+    pub reason: ConsensusMessageReason,
+    /// Total count observed.
+    pub total: u64,
+}
+
+/// Snapshot of consensus-message handling counters.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConsensusMessageHandlingSnapshot {
+    /// Per-kind drop/deferral counters with reason labels.
+    pub entries: Vec<ConsensusMessageHandlingEntry>,
+}
+
+/// Reasons a consensus vote can be dropped during validation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum VoteValidationDropReason {
+    /// Height is at or below the committed tip.
+    StaleHeight,
+    /// View is older than the local view.
+    StaleView,
+    /// Epoch mismatch on the vote payload.
+    EpochMismatch,
+    /// Sender is currently penalized.
+    PenalizedSender,
+    /// Commit roster could not be resolved for the vote.
+    RosterMissing,
+    /// Locked QC gate rejected the vote.
+    LockedQc,
+    /// Duplicate vote already recorded.
+    Duplicate,
+    /// Signer index cannot be represented as usize.
+    SignerIndexOverflow,
+    /// Signer index exceeds the active roster length.
+    SignerOutOfRange,
+    /// Signature payload fails cryptographic validation.
+    SignatureInvalid,
+    /// NEW_VIEW vote missing the highest QC reference.
+    MissingHighestQc,
+    /// NEW_VIEW highest QC mismatch.
+    HighestQcMismatch,
+    /// Conflicting vote already recorded for the signer.
+    ConflictingVote,
+}
+
+impl VoteValidationDropReason {
+    /// Stable label for telemetry and status.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            VoteValidationDropReason::StaleHeight => "stale_height",
+            VoteValidationDropReason::StaleView => "stale_view",
+            VoteValidationDropReason::EpochMismatch => "epoch_mismatch",
+            VoteValidationDropReason::PenalizedSender => "penalized_sender",
+            VoteValidationDropReason::RosterMissing => "roster_missing",
+            VoteValidationDropReason::LockedQc => "locked_qc",
+            VoteValidationDropReason::Duplicate => "duplicate",
+            VoteValidationDropReason::SignerIndexOverflow => "signer_index_overflow",
+            VoteValidationDropReason::SignerOutOfRange => "signer_out_of_range",
+            VoteValidationDropReason::SignatureInvalid => "invalid_signature",
+            VoteValidationDropReason::MissingHighestQc => "missing_highest_qc",
+            VoteValidationDropReason::HighestQcMismatch => "highest_qc_mismatch",
+            VoteValidationDropReason::ConflictingVote => "conflicting_vote",
+        }
+    }
+}
+
+/// Input record for a vote validation drop event.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VoteValidationDropRecord {
+    /// Drop reason label.
+    pub reason: VoteValidationDropReason,
+    /// Vote height.
+    pub height: u64,
+    /// Vote view.
+    pub view: u64,
+    /// Vote epoch.
+    pub epoch: u64,
+    /// Signer index from the vote payload.
+    pub signer_index: u32,
+    /// Peer ID resolved from the validation roster (if any).
+    pub peer_id: Option<PeerId>,
+    /// Validator roster hash used for validation (if any).
+    pub roster_hash: Option<HashOf<Vec<PeerId>>>,
+    /// Validator roster length used for validation (if known).
+    pub roster_len: u32,
+    /// Block hash referenced by the vote.
+    pub block_hash: HashOf<BlockHeader>,
+}
+
+/// Recorded vote validation drop entry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VoteValidationDropEntry {
+    /// Drop reason label.
+    pub reason: VoteValidationDropReason,
+    /// Vote height.
+    pub height: u64,
+    /// Vote view.
+    pub view: u64,
+    /// Vote epoch.
+    pub epoch: u64,
+    /// Signer index from the vote payload.
+    pub signer_index: u32,
+    /// Peer ID resolved from the validation roster (if any).
+    pub peer_id: Option<PeerId>,
+    /// Validator roster hash used for validation (if any).
+    pub roster_hash: Option<HashOf<Vec<PeerId>>>,
+    /// Validator roster length used for validation (if known).
+    pub roster_len: u32,
+    /// Block hash referenced by the vote.
+    pub block_hash: HashOf<BlockHeader>,
+    /// Milliseconds since UNIX epoch when the drop was recorded.
+    pub timestamp_ms: u64,
+}
+
+/// Aggregated count for a vote-validation drop reason.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VoteValidationDropReasonCount {
+    /// Drop reason label.
+    pub reason: VoteValidationDropReason,
+    /// Total drops recorded for the reason.
+    pub total: u64,
+}
+
+/// Aggregated vote validation drops for a peer/roster hash pairing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VoteValidationDropPeerEntry {
+    /// Peer associated with the drop counts.
+    pub peer_id: PeerId,
+    /// Validator roster hash used for validation (if any).
+    pub roster_hash: Option<HashOf<Vec<PeerId>>>,
+    /// Validator roster length used for validation (if known).
+    pub roster_len: u32,
+    /// Total drops recorded for this peer/roster pairing.
+    pub total: u64,
+    /// Per-reason drop counters.
+    pub reasons: Vec<VoteValidationDropReasonCount>,
+    /// Height associated with the last drop.
+    pub last_height: u64,
+    /// View associated with the last drop.
+    pub last_view: u64,
+    /// Epoch associated with the last drop.
+    pub last_epoch: u64,
+    /// Milliseconds since UNIX epoch when the last drop was recorded.
+    pub last_timestamp_ms: u64,
+}
+
+/// Snapshot of recent vote validation drops.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct VoteValidationDropSnapshot {
+    /// Total vote validation drops recorded.
+    pub total: u64,
+    /// Recent drop entries (newest-first, bounded).
+    pub entries: Vec<VoteValidationDropEntry>,
+    /// Aggregated drop counters per peer/roster pairing.
+    pub peer_entries: Vec<VoteValidationDropPeerEntry>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct ConsensusMessageHandlingKey {
+    kind: ConsensusMessageKind,
+    outcome: ConsensusMessageOutcome,
+    reason: ConsensusMessageReason,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct VoteValidationDropPeerKey {
+    peer_id: PeerId,
+    roster_hash: Option<HashOf<Vec<PeerId>>>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct VoteValidationDropPeerState {
+    roster_len: u32,
+    total: u64,
+    reasons: BTreeMap<VoteValidationDropReason, u64>,
+    last_height: u64,
+    last_view: u64,
+    last_epoch: u64,
+    last_timestamp_ms: u64,
 }
 
 /// Snapshot of view-change causes and timing.
@@ -2040,6 +2630,8 @@ pub struct ViewChangeCauseSnapshot {
     pub commit_failure_total: u64,
     /// Total view changes triggered after quorum timeouts/missing commits.
     pub quorum_timeout_total: u64,
+    /// Total view changes triggered after stake-quorum timeouts (NPoS only).
+    pub stake_quorum_timeout_total: u64,
     /// Total view changes triggered after DA availability aborts (unused when DA is advisory).
     pub da_gate_total: u64,
     /// Total view changes triggered after censorship evidence reaches quorum.
@@ -2058,6 +2650,8 @@ pub struct ViewChangeCauseSnapshot {
     pub last_commit_failure_timestamp_ms: u64,
     /// Milliseconds since UNIX epoch when a quorum-timeout cause was last recorded.
     pub last_quorum_timeout_timestamp_ms: u64,
+    /// Milliseconds since UNIX epoch when a stake-quorum-timeout cause was last recorded.
+    pub last_stake_quorum_timeout_timestamp_ms: u64,
     /// Milliseconds since UNIX epoch when a DA-gate cause was last recorded.
     pub last_da_gate_timestamp_ms: u64,
     /// Milliseconds since UNIX epoch when a censorship-evidence cause was last recorded.
@@ -2485,6 +3079,10 @@ pub struct StatusSnapshot {
     pub gossip_fallback_total: u64,
     /// Dedup eviction counters for inbound consensus traffic.
     pub dedup_evictions: DedupEvictionSnapshot,
+    /// Consensus message drop/deferral counters with reason labels.
+    pub consensus_message_handling: ConsensusMessageHandlingSnapshot,
+    /// Recent vote validation drops with roster context.
+    pub vote_validation_drops: VoteValidationDropSnapshot,
     /// Total background Post drops when the worker is unavailable.
     pub bg_post_drop_post_total: u64,
     /// Total background Broadcast drops when the worker is unavailable.
@@ -2521,7 +3119,8 @@ pub struct StatusSnapshot {
     pub missing_block_fetch_last_dwell_ms: u64,
     /// Data-availability gate snapshot and counters.
     pub da_gate: DaGateSnapshot,
-    /// Total times pacemaker deferred proposal assembly due to transaction-queue backpressure.
+    /// Total times pacemaker deferred proposal assembly due to proposal backpressure
+    /// (queue saturation, relay/RBC backpressure, or blocking pending blocks).
     pub pacemaker_backpressure_deferrals_total: u64,
     /// Total times the commit pipeline executed from the pacemaker tick loop.
     pub commit_pipeline_tick_total: u64,
@@ -2545,6 +3144,8 @@ pub struct StatusSnapshot {
     pub rbc_store_evictions_total: u64,
     /// RBC abort counters and last occurrence.
     pub rbc_abort: RbcAbortSnapshot,
+    /// Per-peer RBC payload mismatch counters.
+    pub rbc_mismatch: RbcMismatchSnapshot,
     /// Most recent RBC sessions evicted due to TTL or capacity enforcement (bounded list).
     pub rbc_store_recent_evictions: Vec<RbcEvictedSession>,
     /// Snapshot of pending (pre-INIT) RBC stashes.
@@ -2706,7 +3307,7 @@ pub struct PrecommitSignerRecord {
     pub mode_tag: String,
     /// Ordered validator set used when forming the QC.
     pub validator_set: Vec<PeerId>,
-    /// Stake snapshot aligned to the validator set (NPoS only).
+    /// Stake snapshot aligned to the validator set (`NPoS` only).
     pub stake_snapshot: Option<CommitStakeSnapshot>,
 }
 
@@ -2971,6 +3572,8 @@ fn block_sync_roster_snapshot() -> BlockSyncRosterSnapshot {
         commit_roster_journal_total: BLOCK_SYNC_ROSTER_COMMIT_ROSTER_JOURNAL_TOTAL
             .load(Ordering::Relaxed),
         drop_missing_total: BLOCK_SYNC_ROSTER_DROP_MISSING_TOTAL.load(Ordering::Relaxed),
+        drop_unsolicited_share_blocks_total: BLOCK_SYNC_ROSTER_DROP_UNSOLICITED_SHARE_BLOCKS_TOTAL
+            .load(Ordering::Relaxed),
     }
 }
 
@@ -2984,6 +3587,8 @@ fn view_change_cause_snapshot() -> ViewChangeCauseSnapshot {
     ViewChangeCauseSnapshot {
         commit_failure_total: VIEW_CHANGE_CAUSE_COMMIT_FAILURE_TOTAL.load(Ordering::Relaxed),
         quorum_timeout_total: VIEW_CHANGE_CAUSE_QUORUM_TIMEOUT_TOTAL.load(Ordering::Relaxed),
+        stake_quorum_timeout_total: VIEW_CHANGE_CAUSE_STAKE_QUORUM_TIMEOUT_TOTAL
+            .load(Ordering::Relaxed),
         da_gate_total: VIEW_CHANGE_CAUSE_DA_GATE_TOTAL.load(Ordering::Relaxed),
         censorship_evidence_total: VIEW_CHANGE_CAUSE_CENSORSHIP_EVIDENCE_TOTAL
             .load(Ordering::Relaxed),
@@ -2995,6 +3600,8 @@ fn view_change_cause_snapshot() -> ViewChangeCauseSnapshot {
         last_commit_failure_timestamp_ms: VIEW_CHANGE_CAUSE_LAST_COMMIT_FAILURE_TS_MS
             .load(Ordering::Relaxed),
         last_quorum_timeout_timestamp_ms: VIEW_CHANGE_CAUSE_LAST_QUORUM_TIMEOUT_TS_MS
+            .load(Ordering::Relaxed),
+        last_stake_quorum_timeout_timestamp_ms: VIEW_CHANGE_CAUSE_LAST_STAKE_QUORUM_TIMEOUT_TS_MS
             .load(Ordering::Relaxed),
         last_da_gate_timestamp_ms: VIEW_CHANGE_CAUSE_LAST_DA_GATE_TS_MS.load(Ordering::Relaxed),
         last_censorship_evidence_timestamp_ms: VIEW_CHANGE_CAUSE_LAST_CENSORSHIP_EVIDENCE_TS_MS
@@ -3077,6 +3684,81 @@ fn dedup_evictions_snapshot() -> DedupEvictionSnapshot {
         rbc_ready_expired_total: DEDUP_RBC_READY_EVICT_EXPIRED_TOTAL.load(Ordering::Relaxed),
         rbc_deliver_capacity_total: DEDUP_RBC_DELIVER_EVICT_CAPACITY_TOTAL.load(Ordering::Relaxed),
         rbc_deliver_expired_total: DEDUP_RBC_DELIVER_EVICT_EXPIRED_TOTAL.load(Ordering::Relaxed),
+    }
+}
+
+fn consensus_message_handling_snapshot() -> ConsensusMessageHandlingSnapshot {
+    let Some(slot) = MESSAGE_HANDLING_TOTALS.get() else {
+        return ConsensusMessageHandlingSnapshot::default();
+    };
+    let guard = slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let entries = guard
+        .iter()
+        .map(|(key, total)| ConsensusMessageHandlingEntry {
+            kind: key.kind,
+            outcome: key.outcome,
+            reason: key.reason,
+            total: *total,
+        })
+        .collect();
+    ConsensusMessageHandlingSnapshot { entries }
+}
+
+fn vote_validation_drop_peer_registry() -> Option<
+    std::sync::MutexGuard<
+        'static,
+        BTreeMap<VoteValidationDropPeerKey, VoteValidationDropPeerState>,
+    >,
+> {
+    VOTE_VALIDATION_DROPS_BY_PEER
+        .get_or_init(|| Mutex::new(BTreeMap::new()))
+        .lock()
+        .ok()
+}
+
+fn vote_validation_drop_peer_entries() -> Vec<VoteValidationDropPeerEntry> {
+    let Some(registry) = vote_validation_drop_peer_registry() else {
+        return Vec::new();
+    };
+    registry
+        .iter()
+        .map(|(key, entry)| VoteValidationDropPeerEntry {
+            peer_id: key.peer_id.clone(),
+            roster_hash: key.roster_hash,
+            roster_len: entry.roster_len,
+            total: entry.total,
+            reasons: entry
+                .reasons
+                .iter()
+                .map(|(reason, total)| VoteValidationDropReasonCount {
+                    reason: *reason,
+                    total: *total,
+                })
+                .collect(),
+            last_height: entry.last_height,
+            last_view: entry.last_view,
+            last_epoch: entry.last_epoch,
+            last_timestamp_ms: entry.last_timestamp_ms,
+        })
+        .collect()
+}
+
+fn vote_validation_drop_snapshot() -> VoteValidationDropSnapshot {
+    let entries = VOTE_VALIDATION_DROPS
+        .get()
+        .map(|slot| {
+            let guard = slot
+                .lock()
+                .expect("vote validation drop history mutex poisoned");
+            guard.iter().rev().cloned().collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    VoteValidationDropSnapshot {
+        total: VOTE_VALIDATION_DROPS_TOTAL.load(Ordering::Relaxed),
+        entries,
+        peer_entries: vote_validation_drop_peer_entries(),
     }
 }
 
@@ -3177,6 +3859,8 @@ pub fn snapshot() -> StatusSnapshot {
         settlement: settlement_snapshot(),
         gossip_fallback_total: GOSSIP_FALLBACK_TOTAL.load(Ordering::Relaxed),
         dedup_evictions: dedup_evictions_snapshot(),
+        consensus_message_handling: consensus_message_handling_snapshot(),
+        vote_validation_drops: vote_validation_drop_snapshot(),
         bg_post_drop_post_total: BG_POST_DROP_POST_TOTAL.load(Ordering::Relaxed),
         bg_post_drop_broadcast_total: BG_POST_DROP_BROADCAST_TOTAL.load(Ordering::Relaxed),
         block_created_dropped_by_lock_total: BLOCK_CREATED_DROPPED_BY_LOCK_TOTAL
@@ -3237,6 +3921,7 @@ pub fn snapshot() -> StatusSnapshot {
             .load(Ordering::Relaxed),
         rbc_store_evictions_total: RBC_STORE_EVICTIONS_TOTAL.load(Ordering::Relaxed),
         rbc_abort: rbc_abort_snapshot(),
+        rbc_mismatch: rbc_mismatch_snapshot(),
         rbc_store_recent_evictions: recent_evictions,
         pending_rbc,
         collectors_targeted_current: COLLECTORS_TARGETED_CURRENT.load(Ordering::Relaxed),
@@ -3310,14 +3995,6 @@ pub fn set_phase_collect_precommit_ms(ms: u64) {
 pub fn set_phase_collect_aggregator_ms(ms: u64) {
     LAST_COLLECT_AGG_MS.store(ms, Ordering::Relaxed);
 }
-/// Set last observed latency for the execution QC collection phase (ms).
-pub fn set_phase_collect_exec_ms(ms: u64) {
-    LAST_COLLECT_EXEC_MS.store(ms, Ordering::Relaxed);
-}
-/// Set last observed latency for the witness availability QC collection phase (ms).
-pub fn set_phase_collect_witness_ms(ms: u64) {
-    LAST_COLLECT_WITNESS_MS.store(ms, Ordering::Relaxed);
-}
 /// Set last observed latency for the commit phase (ms).
 pub fn set_phase_commit_ms(ms: u64) {
     LAST_COMMIT_MS.store(ms, Ordering::Relaxed);
@@ -3342,14 +4019,6 @@ pub fn set_phase_collect_precommit_ema_ms(ms: u64) {
 /// Set EMA latency for redundant collector fan-out (ms).
 pub fn set_phase_collect_aggregator_ema_ms(ms: u64) {
     LAST_COLLECT_AGG_EMA_MS.store(ms, Ordering::Relaxed);
-}
-/// Set EMA latency for the execution QC collection phase (ms).
-pub fn set_phase_collect_exec_ema_ms(ms: u64) {
-    LAST_COLLECT_EXEC_EMA_MS.store(ms, Ordering::Relaxed);
-}
-/// Set EMA latency for the witness availability QC collection phase (ms).
-pub fn set_phase_collect_witness_ema_ms(ms: u64) {
-    LAST_COLLECT_WITNESS_EMA_MS.store(ms, Ordering::Relaxed);
 }
 /// Set EMA latency for the commit phase (ms).
 pub fn set_phase_commit_ema_ms(ms: u64) {
@@ -3449,6 +4118,104 @@ pub fn record_bg_post_drop(kind: &'static str) {
     }
 }
 
+/// Record a consensus message drop or deferral with a reason label.
+pub fn record_consensus_message_handling(
+    kind: ConsensusMessageKind,
+    outcome: ConsensusMessageOutcome,
+    reason: ConsensusMessageReason,
+) {
+    #[cfg(test)]
+    let _guard = message_handling_test_guard();
+    let slot = MESSAGE_HANDLING_TOTALS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut guard = slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let key = ConsensusMessageHandlingKey {
+        kind,
+        outcome,
+        reason,
+    };
+    let entry = guard.entry(key).or_insert(0);
+    *entry = entry.saturating_add(1);
+}
+
+fn should_log_vote_drop_count(count: u64) -> bool {
+    if count == 1 {
+        return true;
+    }
+    if count < 10 || count % 10 != 0 {
+        return false;
+    }
+    let mut value = count;
+    while value % 10 == 0 {
+        value /= 10;
+    }
+    value == 1
+}
+
+/// Record a vote-validation drop with roster context.
+pub fn record_vote_validation_drop(record: VoteValidationDropRecord) {
+    #[cfg(test)]
+    let _guard = vote_validation_drops_test_guard();
+    let now_ms = now_timestamp_ms();
+    let peer_id = record.peer_id.clone();
+    let entry = VoteValidationDropEntry {
+        reason: record.reason,
+        height: record.height,
+        view: record.view,
+        epoch: record.epoch,
+        signer_index: record.signer_index,
+        peer_id: record.peer_id,
+        roster_hash: record.roster_hash,
+        roster_len: record.roster_len,
+        block_hash: record.block_hash,
+        timestamp_ms: now_ms,
+    };
+    let slot = VOTE_VALIDATION_DROPS.get_or_init(|| Mutex::new(VecDeque::new()));
+    let mut guard = slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    guard.push_back(entry);
+    while guard.len() > VOTE_VALIDATION_DROPS_CAP {
+        guard.pop_front();
+    }
+    VOTE_VALIDATION_DROPS_TOTAL.fetch_add(1, Ordering::Relaxed);
+    let Some(peer_id) = peer_id else {
+        return;
+    };
+    let roster_hash = record.roster_hash.clone();
+    let Some(mut registry) = vote_validation_drop_peer_registry() else {
+        return;
+    };
+    let key = VoteValidationDropPeerKey {
+        peer_id: peer_id.clone(),
+        roster_hash: roster_hash.clone(),
+    };
+    let entry = registry.entry(key).or_default();
+    entry.total = entry.total.saturating_add(1);
+    entry.roster_len = record.roster_len;
+    let reason_total = entry.reasons.entry(record.reason).or_insert(0);
+    *reason_total = reason_total.saturating_add(1);
+    entry.last_height = record.height;
+    entry.last_view = record.view;
+    entry.last_epoch = record.epoch;
+    entry.last_timestamp_ms = now_ms;
+    if should_log_vote_drop_count(entry.total) || should_log_vote_drop_count(*reason_total) {
+        iroha_logger::info!(
+            peer = ?peer_id,
+            roster_hash = ?roster_hash,
+            roster_len = entry.roster_len,
+            reason = record.reason.as_str(),
+            total = entry.total,
+            reason_total = *reason_total,
+            height = record.height,
+            view = record.view,
+            epoch = record.epoch,
+            "vote validation drop telemetry"
+        );
+    }
+}
+
 /// Increment `BlockCreated` drop counter when locked QC gate rejects a proposal.
 pub fn inc_block_created_dropped_by_lock() {
     BLOCK_CREATED_DROPPED_BY_LOCK_TOTAL.fetch_add(1, Ordering::Relaxed);
@@ -3466,16 +4233,22 @@ pub fn inc_block_created_proposal_mismatch() {
 
 /// Increment counter when block sync drops a batch due to invalid signatures.
 pub fn inc_block_sync_drop_invalid_signatures() {
+    #[cfg(test)]
+    let _guard = block_sync_test_guard();
     BLOCK_SYNC_DROP_INVALID_SIGNATURES_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Increment counter when block sync replaces an incoming QC with a locally derived one.
 pub fn inc_block_sync_qc_replaced() {
+    #[cfg(test)]
+    let _guard = block_sync_test_guard();
     BLOCK_SYNC_QC_REPLACED_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Increment counter when block sync cannot derive a QC for an incoming batch.
 pub fn inc_block_sync_qc_derive_failed() {
+    #[cfg(test)]
+    let _guard = block_sync_test_guard();
     BLOCK_SYNC_QC_DERIVE_FAILED_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -3600,6 +4373,8 @@ pub fn record_peer_key_policy_reject(reason: PeerKeyPolicyRejectReason) {
 
 /// Record which roster source was used during block sync.
 pub fn inc_block_sync_roster_source(source: &str) {
+    #[cfg(test)]
+    let _guard = block_sync_test_guard();
     match source {
         "commit_checkpoint_pair_hint" => {
             BLOCK_SYNC_ROSTER_COMMIT_CERT_HINT_TOTAL.fetch_add(1, Ordering::Relaxed);
@@ -3629,7 +4404,16 @@ pub fn inc_block_sync_roster_source(source: &str) {
 
 /// Increment counter when block sync drops an update with no verifiable roster.
 pub fn inc_block_sync_roster_drop_missing() {
+    #[cfg(test)]
+    let _guard = block_sync_test_guard();
     BLOCK_SYNC_ROSTER_DROP_MISSING_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment counter when block sync drops `ShareBlocks` without a matching request.
+pub fn inc_block_sync_roster_drop_unsolicited_share_blocks() {
+    #[cfg(test)]
+    let _guard = block_sync_test_guard();
+    BLOCK_SYNC_ROSTER_DROP_UNSOLICITED_SHARE_BLOCKS_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Record the cause of a view change and timestamp it.
@@ -3648,6 +4432,10 @@ pub fn record_view_change_cause(cause: &str) {
         "quorum_timeout" => {
             VIEW_CHANGE_CAUSE_QUORUM_TIMEOUT_TOTAL.fetch_add(1, Ordering::Relaxed);
             VIEW_CHANGE_CAUSE_LAST_QUORUM_TIMEOUT_TS_MS.store(now_ms, Ordering::Relaxed);
+        }
+        "stake_quorum_timeout" => {
+            VIEW_CHANGE_CAUSE_STAKE_QUORUM_TIMEOUT_TOTAL.fetch_add(1, Ordering::Relaxed);
+            VIEW_CHANGE_CAUSE_LAST_STAKE_QUORUM_TIMEOUT_TS_MS.store(now_ms, Ordering::Relaxed);
         }
         "da_gate" => {
             VIEW_CHANGE_CAUSE_DA_GATE_TOTAL.fetch_add(1, Ordering::Relaxed);
@@ -3786,7 +4574,18 @@ pub(crate) fn reset_missing_block_fetch_counters_for_tests() {
 }
 
 #[cfg(test)]
+pub(crate) fn reset_message_handling_for_tests() {
+    let _guard = message_handling_test_guard();
+    if let Some(slot) = MESSAGE_HANDLING_TOTALS.get() {
+        slot.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn reset_block_sync_counters_for_tests() {
+    let _guard = block_sync_test_guard();
     BLOCK_SYNC_DROP_INVALID_SIGNATURES_TOTAL.store(0, Ordering::Relaxed);
     BLOCK_SYNC_QC_REPLACED_TOTAL.store(0, Ordering::Relaxed);
     BLOCK_SYNC_QC_DERIVE_FAILED_TOTAL.store(0, Ordering::Relaxed);
@@ -3797,6 +4596,7 @@ pub(crate) fn reset_block_sync_counters_for_tests() {
     BLOCK_SYNC_ROSTER_ROSTER_SIDECAR_TOTAL.store(0, Ordering::Relaxed);
     BLOCK_SYNC_ROSTER_COMMIT_ROSTER_JOURNAL_TOTAL.store(0, Ordering::Relaxed);
     BLOCK_SYNC_ROSTER_DROP_MISSING_TOTAL.store(0, Ordering::Relaxed);
+    BLOCK_SYNC_ROSTER_DROP_UNSOLICITED_SHARE_BLOCKS_TOTAL.store(0, Ordering::Relaxed);
 }
 
 /// Reset the cached precommit signer history for unit tests.
@@ -3813,6 +4613,7 @@ pub(crate) fn reset_view_change_cause_counters_for_tests() {
     let _guard = view_change_cause_test_guard();
     VIEW_CHANGE_CAUSE_COMMIT_FAILURE_TOTAL.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_QUORUM_TIMEOUT_TOTAL.store(0, Ordering::Relaxed);
+    VIEW_CHANGE_CAUSE_STAKE_QUORUM_TIMEOUT_TOTAL.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_DA_GATE_TOTAL.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_CENSORSHIP_EVIDENCE_TOTAL.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_MISSING_PAYLOAD_TOTAL.store(0, Ordering::Relaxed);
@@ -3821,6 +4622,7 @@ pub(crate) fn reset_view_change_cause_counters_for_tests() {
     VIEW_CHANGE_CAUSE_LAST_TS_MS.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_LAST_COMMIT_FAILURE_TS_MS.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_LAST_QUORUM_TIMEOUT_TS_MS.store(0, Ordering::Relaxed);
+    VIEW_CHANGE_CAUSE_LAST_STAKE_QUORUM_TIMEOUT_TS_MS.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_LAST_DA_GATE_TS_MS.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_LAST_CENSORSHIP_EVIDENCE_TS_MS.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_LAST_MISSING_PAYLOAD_TS_MS.store(0, Ordering::Relaxed);
@@ -3980,7 +4782,8 @@ pub(crate) fn reset_da_gate_counters_for_tests() {
     );
 }
 
-/// Increment counter when the pacemaker skips proposal assembly due to queue backpressure.
+/// Increment counter when the pacemaker skips proposal assembly due to proposal backpressure
+/// (queue saturation, relay/RBC backpressure, or blocking pending blocks).
 pub fn inc_pacemaker_backpressure_deferrals() {
     PACEMAKER_BACKPRESSURE_DEFERRALS_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
@@ -3996,16 +4799,12 @@ pub fn phase_latencies_snapshot() -> PhaseLatenciesSnapshot {
     let collect_prevote_ms = LAST_COLLECT_PREVOTE_MS.load(Ordering::Relaxed);
     let collect_precommit_ms = LAST_COLLECT_PRECOMMIT_MS.load(Ordering::Relaxed);
     let collect_aggregator_ms = LAST_COLLECT_AGG_MS.load(Ordering::Relaxed);
-    let collect_exec_ms = LAST_COLLECT_EXEC_MS.load(Ordering::Relaxed);
-    let collect_witness_ms = LAST_COLLECT_WITNESS_MS.load(Ordering::Relaxed);
     let commit_ms = LAST_COMMIT_MS.load(Ordering::Relaxed);
     let propose_ema_ms = LAST_PROPOSE_EMA_MS.load(Ordering::Relaxed);
     let collect_da_ema_ms = LAST_COLLECT_DA_EMA_MS.load(Ordering::Relaxed);
     let collect_prevote_ema_ms = LAST_COLLECT_PREVOTE_EMA_MS.load(Ordering::Relaxed);
     let collect_precommit_ema_ms = LAST_COLLECT_PRECOMMIT_EMA_MS.load(Ordering::Relaxed);
     let collect_aggregator_ema_ms = LAST_COLLECT_AGG_EMA_MS.load(Ordering::Relaxed);
-    let collect_exec_ema_ms = LAST_COLLECT_EXEC_EMA_MS.load(Ordering::Relaxed);
-    let collect_witness_ema_ms = LAST_COLLECT_WITNESS_EMA_MS.load(Ordering::Relaxed);
     let commit_ema_ms = LAST_COMMIT_EMA_MS.load(Ordering::Relaxed);
 
     let pipeline_total_acc = (u128::from(propose_ms)
@@ -4021,16 +4820,12 @@ pub fn phase_latencies_snapshot() -> PhaseLatenciesSnapshot {
         collect_prevote_ms,
         collect_precommit_ms,
         collect_aggregator_ms,
-        collect_exec_ms,
-        collect_witness_ms,
         commit_ms,
         propose_ema_ms,
         collect_da_ema_ms,
         collect_prevote_ema_ms,
         collect_precommit_ema_ms,
         collect_aggregator_ema_ms,
-        collect_exec_ema_ms,
-        collect_witness_ema_ms,
         commit_ema_ms,
         pipeline_total_ms,
         pipeline_total_ema_ms: LAST_PIPELINE_TOTAL_EMA_MS.load(Ordering::Relaxed),
@@ -4122,7 +4917,80 @@ pub fn pending_rbc_snapshot() -> PendingRbcSnapshot {
     snapshot.drops_ttl_bytes_total = PENDING_RBC_DROPS_TTL_BYTES_TOTAL.load(Ordering::Relaxed);
     snapshot.drops_bytes_total = PENDING_RBC_DROPPED_BYTES_TOTAL.load(Ordering::Relaxed);
     snapshot.evicted_total = PENDING_RBC_EVICTED_TOTAL.load(Ordering::Relaxed);
+    snapshot.stash_ready_total = PENDING_RBC_STASH_READY_TOTAL.load(Ordering::Relaxed);
+    snapshot.stash_ready_init_missing_total =
+        PENDING_RBC_STASH_READY_INIT_MISSING_TOTAL.load(Ordering::Relaxed);
+    snapshot.stash_ready_roster_missing_total =
+        PENDING_RBC_STASH_READY_ROSTER_MISSING_TOTAL.load(Ordering::Relaxed);
+    snapshot.stash_ready_roster_hash_mismatch_total =
+        PENDING_RBC_STASH_READY_ROSTER_HASH_MISMATCH_TOTAL.load(Ordering::Relaxed);
+    snapshot.stash_ready_roster_unverified_total =
+        PENDING_RBC_STASH_READY_ROSTER_UNVERIFIED_TOTAL.load(Ordering::Relaxed);
+    snapshot.stash_deliver_total = PENDING_RBC_STASH_DELIVER_TOTAL.load(Ordering::Relaxed);
+    snapshot.stash_deliver_init_missing_total =
+        PENDING_RBC_STASH_DELIVER_INIT_MISSING_TOTAL.load(Ordering::Relaxed);
+    snapshot.stash_deliver_roster_missing_total =
+        PENDING_RBC_STASH_DELIVER_ROSTER_MISSING_TOTAL.load(Ordering::Relaxed);
+    snapshot.stash_deliver_roster_hash_mismatch_total =
+        PENDING_RBC_STASH_DELIVER_ROSTER_HASH_MISMATCH_TOTAL.load(Ordering::Relaxed);
+    snapshot.stash_deliver_roster_unverified_total =
+        PENDING_RBC_STASH_DELIVER_ROSTER_UNVERIFIED_TOTAL.load(Ordering::Relaxed);
+    snapshot.stash_chunk_total = PENDING_RBC_STASH_CHUNK_TOTAL.load(Ordering::Relaxed);
     snapshot
+}
+
+/// Record pending-RBC stash counts by message kind and reason.
+pub fn inc_pending_rbc_stash(kind: PendingRbcStashKind, reason: Option<PendingRbcStashReason>) {
+    match kind {
+        PendingRbcStashKind::Chunk => {
+            PENDING_RBC_STASH_CHUNK_TOTAL.fetch_add(1, Ordering::Relaxed);
+        }
+        PendingRbcStashKind::Ready => {
+            PENDING_RBC_STASH_READY_TOTAL.fetch_add(1, Ordering::Relaxed);
+            if let Some(reason) = reason {
+                match reason {
+                    PendingRbcStashReason::InitMissing => {
+                        PENDING_RBC_STASH_READY_INIT_MISSING_TOTAL.fetch_add(1, Ordering::Relaxed);
+                    }
+                    PendingRbcStashReason::RosterMissing => {
+                        PENDING_RBC_STASH_READY_ROSTER_MISSING_TOTAL
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    PendingRbcStashReason::RosterHashMismatch => {
+                        PENDING_RBC_STASH_READY_ROSTER_HASH_MISMATCH_TOTAL
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    PendingRbcStashReason::RosterUnverified => {
+                        PENDING_RBC_STASH_READY_ROSTER_UNVERIFIED_TOTAL
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+        PendingRbcStashKind::Deliver => {
+            PENDING_RBC_STASH_DELIVER_TOTAL.fetch_add(1, Ordering::Relaxed);
+            if let Some(reason) = reason {
+                match reason {
+                    PendingRbcStashReason::InitMissing => {
+                        PENDING_RBC_STASH_DELIVER_INIT_MISSING_TOTAL
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    PendingRbcStashReason::RosterMissing => {
+                        PENDING_RBC_STASH_DELIVER_ROSTER_MISSING_TOTAL
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    PendingRbcStashReason::RosterHashMismatch => {
+                        PENDING_RBC_STASH_DELIVER_ROSTER_HASH_MISMATCH_TOTAL
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    PendingRbcStashReason::RosterUnverified => {
+                        PENDING_RBC_STASH_DELIVER_ROSTER_UNVERIFIED_TOTAL
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Record dropped pending RBC frames (cap or TTL enforcement).
@@ -4472,11 +5340,70 @@ pub fn update_lane_governance_from_statuses(statuses: &[LaneManifestStatus]) {
     set_lane_governance_snapshot(snapshots);
 }
 
+fn rbc_store_pressure_label(level: u8) -> &'static str {
+    match level {
+        0 => "normal",
+        1 => "soft",
+        2 => "hard",
+        _ => "unknown",
+    }
+}
+
+fn should_log_rbc_store_pressure(
+    level: u8,
+    prev_level: u8,
+    last_log_secs: u64,
+    now_secs: u64,
+) -> bool {
+    if level != prev_level {
+        return true;
+    }
+    if level == 0 {
+        return false;
+    }
+    now_secs.saturating_sub(last_log_secs) >= RBC_STORE_PRESSURE_LOG_INTERVAL_SECS
+}
+
+fn maybe_log_rbc_store_pressure(sessions: u64, bytes: u64, level: u8) {
+    // TODO: Temporary logging for soak diagnostics; remove or formalize once stable.
+    let prev_level = RBC_STORE_PRESSURE_LOG_LEVEL.load(Ordering::Relaxed);
+    let last_log_secs = RBC_STORE_PRESSURE_LOG_LAST_SECS.load(Ordering::Relaxed);
+    let now_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0);
+    if !should_log_rbc_store_pressure(level, prev_level, last_log_secs, now_secs) {
+        return;
+    }
+    RBC_STORE_PRESSURE_LOG_LEVEL.store(level, Ordering::Relaxed);
+    RBC_STORE_PRESSURE_LOG_LAST_SECS.store(now_secs, Ordering::Relaxed);
+
+    let level_label = rbc_store_pressure_label(level);
+    let prev_label = rbc_store_pressure_label(prev_level);
+    if level == 0 {
+        iroha_logger::info!(
+            sessions,
+            bytes,
+            previous = prev_label,
+            "RBC store pressure back to normal"
+        );
+    } else {
+        iroha_logger::warn!(
+            sessions,
+            bytes,
+            level = level_label,
+            previous = prev_label,
+            "RBC store pressure elevated"
+        );
+    }
+}
+
 /// Update the persisted RBC store pressure snapshot (sessions, bytes, pressure level).
 pub fn set_rbc_store_pressure(sessions: u64, bytes: u64, level: u8) {
     RBC_STORE_SESSIONS.store(sessions, Ordering::Relaxed);
     RBC_STORE_BYTES.store(bytes, Ordering::Relaxed);
     RBC_STORE_PRESSURE_LEVEL.store(level, Ordering::Relaxed);
+    maybe_log_rbc_store_pressure(sessions, bytes, level);
 }
 
 /// Record detailed information about RBC sessions evicted due to TTL or capacity enforcement.
@@ -5104,6 +6031,17 @@ pub(crate) fn reset_pending_rbc_for_tests() {
     PENDING_RBC_DROPS_TTL_BYTES_TOTAL.store(0, Ordering::Relaxed);
     PENDING_RBC_DROPPED_BYTES_TOTAL.store(0, Ordering::Relaxed);
     PENDING_RBC_EVICTED_TOTAL.store(0, Ordering::Relaxed);
+    PENDING_RBC_STASH_READY_TOTAL.store(0, Ordering::Relaxed);
+    PENDING_RBC_STASH_READY_INIT_MISSING_TOTAL.store(0, Ordering::Relaxed);
+    PENDING_RBC_STASH_READY_ROSTER_MISSING_TOTAL.store(0, Ordering::Relaxed);
+    PENDING_RBC_STASH_READY_ROSTER_HASH_MISMATCH_TOTAL.store(0, Ordering::Relaxed);
+    PENDING_RBC_STASH_READY_ROSTER_UNVERIFIED_TOTAL.store(0, Ordering::Relaxed);
+    PENDING_RBC_STASH_DELIVER_TOTAL.store(0, Ordering::Relaxed);
+    PENDING_RBC_STASH_DELIVER_INIT_MISSING_TOTAL.store(0, Ordering::Relaxed);
+    PENDING_RBC_STASH_DELIVER_ROSTER_MISSING_TOTAL.store(0, Ordering::Relaxed);
+    PENDING_RBC_STASH_DELIVER_ROSTER_HASH_MISMATCH_TOTAL.store(0, Ordering::Relaxed);
+    PENDING_RBC_STASH_DELIVER_ROSTER_UNVERIFIED_TOTAL.store(0, Ordering::Relaxed);
+    PENDING_RBC_STASH_CHUNK_TOTAL.store(0, Ordering::Relaxed);
     *pending_rbc_slot().lock().unwrap() = PendingRbcSnapshot::default();
 }
 
@@ -5143,9 +6081,7 @@ enum TestLockOwner {
 impl TestLockOwner {
     fn current() -> Self {
         // Use task IDs so the guard remains reentrant even when async tests hop threads.
-        tokio::task::try_id()
-            .map(Self::Task)
-            .unwrap_or_else(|| Self::Thread(std::thread::current().id()))
+        tokio::task::try_id().map_or_else(|| Self::Thread(std::thread::current().id()), Self::Task)
     }
 }
 
@@ -5251,8 +6187,26 @@ pub(crate) fn lane_relay_test_guard() -> std::sync::MutexGuard<'static, ()> {
 
 #[cfg(test)]
 #[allow(private_interfaces)]
+pub(crate) fn message_handling_test_guard() -> TestLockGuard {
+    reentrant_test_guard(&MESSAGE_HANDLING_TEST_LOCK)
+}
+
+#[cfg(test)]
+#[allow(private_interfaces)]
+pub(crate) fn vote_validation_drops_test_guard() -> TestLockGuard {
+    reentrant_test_guard(&VOTE_VALIDATION_DROPS_TEST_LOCK)
+}
+
+#[cfg(test)]
+#[allow(private_interfaces)]
 pub(crate) fn missing_block_fetch_test_guard() -> TestLockGuard {
     reentrant_test_guard(&MISSING_BLOCK_FETCH_TEST_LOCK)
+}
+
+#[cfg(test)]
+#[allow(private_interfaces)]
+pub(crate) fn block_sync_test_guard() -> TestLockGuard {
+    reentrant_test_guard(&BLOCK_SYNC_TEST_LOCK)
 }
 
 #[cfg(test)]
@@ -5320,6 +6274,22 @@ pub(crate) fn reset_rbc_store_evictions_for_tests() {
 }
 
 #[cfg(test)]
+/// Reset the logged RBC pressure state for unit tests.
+pub(crate) fn reset_rbc_store_pressure_log_state_for_tests() {
+    RBC_STORE_PRESSURE_LOG_LEVEL.store(0, Ordering::Relaxed);
+    RBC_STORE_PRESSURE_LOG_LAST_SECS.store(0, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+/// Snapshot the logged RBC pressure state for unit tests.
+pub(crate) fn rbc_store_pressure_log_state_for_tests() -> (u8, u64) {
+    (
+        RBC_STORE_PRESSURE_LOG_LEVEL.load(Ordering::Relaxed),
+        RBC_STORE_PRESSURE_LOG_LAST_SECS.load(Ordering::Relaxed),
+    )
+}
+
+#[cfg(test)]
 pub(crate) fn reset_gossip_fallback_for_tests() {
     GOSSIP_FALLBACK_TOTAL.store(0, Ordering::Relaxed);
     BG_POST_DROP_POST_TOTAL.store(0, Ordering::Relaxed);
@@ -5357,10 +6327,6 @@ pub struct PhaseLatenciesSnapshot {
     pub collect_precommit_ms: u64,
     /// Last observed latency for redundant collector fan-out (ms).
     pub collect_aggregator_ms: u64,
-    /// Last observed latency for execution QC collection (ms).
-    pub collect_exec_ms: u64,
-    /// Last observed latency for witness-availability QC collection (ms).
-    pub collect_witness_ms: u64,
     /// Last observed latency for commit phase (ms).
     pub commit_ms: u64,
     /// EMA latency for the propose phase (ms).
@@ -5373,10 +6339,6 @@ pub struct PhaseLatenciesSnapshot {
     pub collect_precommit_ema_ms: u64,
     /// EMA latency for redundant collector fan-out (ms).
     pub collect_aggregator_ema_ms: u64,
-    /// EMA latency for execution QC collection (ms).
-    pub collect_exec_ema_ms: u64,
-    /// EMA latency for witness-availability QC collection (ms).
-    pub collect_witness_ema_ms: u64,
     /// EMA latency for commit (ms).
     pub commit_ema_ms: u64,
     /// Aggregate pipeline latency across propose/DA/prevote/precommit/commit (ms).
@@ -5444,6 +6406,8 @@ mod tests {
 
     #[test]
     fn locked_qc_updates_monotonically() {
+        let _guard = super::qc_status_test_guard();
+        super::set_locked_qc(0, 0, None);
         let hash_1 = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
             [1; UntypedHash::LENGTH],
         ));
@@ -5462,16 +6426,21 @@ mod tests {
 
     #[test]
     fn locked_qc_subject_updates_for_same_height_view() {
+        let _guard = super::qc_status_test_guard();
         let hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
             [3; UntypedHash::LENGTH],
+        ));
+        let hash_2 = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
+            [4; UntypedHash::LENGTH],
         ));
         super::set_locked_qc(0, 0, None);
         super::set_locked_qc(10, 2, None);
         super::set_locked_qc(10, 2, Some(hash));
+        super::set_locked_qc(10, 2, Some(hash_2));
         let snap = super::snapshot();
         assert_eq!(snap.locked_qc_height, 10);
         assert_eq!(snap.locked_qc_view, 2);
-        assert_eq!(snap.locked_qc_subject, Some(hash));
+        assert_eq!(snap.locked_qc_subject, Some(hash_2));
     }
 
     #[test]
@@ -5563,6 +6532,150 @@ mod tests {
 
         super::clear_membership_mismatch(&peer_b);
         super::reset_membership_mismatch_for_tests();
+    }
+
+    #[test]
+    fn rbc_mismatch_snapshot_tracks_counts_per_peer() {
+        super::reset_rbc_mismatch_for_tests();
+        let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+
+        super::record_rbc_mismatch(&peer_a, super::RbcMismatchKind::PayloadHash);
+        super::record_rbc_mismatch(&peer_a, super::RbcMismatchKind::ChunkDigest);
+        super::record_rbc_mismatch(&peer_a, super::RbcMismatchKind::ChunkDigest);
+        super::record_rbc_mismatch(&peer_b, super::RbcMismatchKind::ChunkRoot);
+
+        let snap = super::rbc_mismatch_snapshot();
+        assert_eq!(snap.entries.len(), 2);
+        let entry_a = snap
+            .entries
+            .iter()
+            .find(|entry| entry.peer_id == peer_a)
+            .expect("peer_a entry");
+        assert_eq!(entry_a.payload_hash_mismatch_total, 1);
+        assert_eq!(entry_a.chunk_digest_mismatch_total, 2);
+        assert_eq!(entry_a.chunk_root_mismatch_total, 0);
+        assert!(entry_a.last_timestamp_ms > 0);
+
+        let entry_b = snap
+            .entries
+            .iter()
+            .find(|entry| entry.peer_id == peer_b)
+            .expect("peer_b entry");
+        assert_eq!(entry_b.payload_hash_mismatch_total, 0);
+        assert_eq!(entry_b.chunk_digest_mismatch_total, 0);
+        assert_eq!(entry_b.chunk_root_mismatch_total, 1);
+        assert!(entry_b.last_timestamp_ms > 0);
+
+        super::reset_rbc_mismatch_for_tests();
+    }
+
+    #[test]
+    fn vote_validation_drop_snapshot_tracks_entries() {
+        super::reset_vote_validation_drops_for_tests();
+        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
+            [0xAB; UntypedHash::LENGTH],
+        ));
+        let roster_hash = HashOf::new(&vec![peer.clone()]);
+
+        super::record_vote_validation_drop(super::VoteValidationDropRecord {
+            reason: super::VoteValidationDropReason::SignatureInvalid,
+            height: 3,
+            view: 1,
+            epoch: 0,
+            signer_index: 0,
+            peer_id: Some(peer.clone()),
+            roster_hash: Some(roster_hash),
+            roster_len: 1,
+            block_hash,
+        });
+
+        let snap = super::snapshot().vote_validation_drops;
+        assert_eq!(snap.total, 1);
+        assert_eq!(snap.entries.len(), 1);
+        let entry = &snap.entries[0];
+        assert_eq!(
+            entry.reason,
+            super::VoteValidationDropReason::SignatureInvalid
+        );
+        assert_eq!(entry.peer_id, Some(peer));
+        assert_eq!(entry.roster_hash, Some(roster_hash));
+        assert_eq!(entry.block_hash, block_hash);
+        assert_eq!(entry.roster_len, 1);
+        assert!(entry.timestamp_ms > 0);
+    }
+
+    #[test]
+    fn vote_validation_drop_snapshot_tracks_peer_entries() {
+        super::reset_vote_validation_drops_for_tests();
+        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
+            [0xBC; UntypedHash::LENGTH],
+        ));
+        let roster_hash = HashOf::new(&vec![peer.clone()]);
+
+        super::record_vote_validation_drop(super::VoteValidationDropRecord {
+            reason: super::VoteValidationDropReason::SignatureInvalid,
+            height: 3,
+            view: 1,
+            epoch: 0,
+            signer_index: 0,
+            peer_id: Some(peer.clone()),
+            roster_hash: Some(roster_hash),
+            roster_len: 1,
+            block_hash,
+        });
+        super::record_vote_validation_drop(super::VoteValidationDropRecord {
+            reason: super::VoteValidationDropReason::Duplicate,
+            height: 4,
+            view: 2,
+            epoch: 1,
+            signer_index: 0,
+            peer_id: Some(peer.clone()),
+            roster_hash: Some(roster_hash),
+            roster_len: 1,
+            block_hash,
+        });
+
+        let snap = super::snapshot().vote_validation_drops;
+        let entry = snap
+            .peer_entries
+            .iter()
+            .find(|entry| entry.peer_id == peer)
+            .expect("peer entry");
+        let reason_counts: BTreeMap<_, _> = entry
+            .reasons
+            .iter()
+            .map(|entry| (entry.reason, entry.total))
+            .collect();
+        assert_eq!(entry.total, 2);
+        assert_eq!(entry.roster_hash, Some(roster_hash));
+        assert_eq!(entry.roster_len, 1);
+        assert_eq!(
+            reason_counts.get(&super::VoteValidationDropReason::SignatureInvalid),
+            Some(&1)
+        );
+        assert_eq!(
+            reason_counts.get(&super::VoteValidationDropReason::Duplicate),
+            Some(&1)
+        );
+        assert_eq!(entry.last_height, 4);
+        assert_eq!(entry.last_view, 2);
+        assert_eq!(entry.last_epoch, 1);
+        assert!(entry.last_timestamp_ms > 0);
+    }
+
+    #[test]
+    fn vote_validation_drop_log_thresholds_are_decadic() {
+        assert!(super::should_log_vote_drop_count(1));
+        assert!(super::should_log_vote_drop_count(10));
+        assert!(super::should_log_vote_drop_count(100));
+        assert!(super::should_log_vote_drop_count(1_000));
+        assert!(!super::should_log_vote_drop_count(0));
+        assert!(!super::should_log_vote_drop_count(2));
+        assert!(!super::should_log_vote_drop_count(11));
+        assert!(!super::should_log_vote_drop_count(20));
     }
 
     #[test]
@@ -5780,7 +6893,7 @@ mod tests {
     }
 
     #[test]
-    fn phase_snapshot_exposes_exec_and_witness_ema() {
+    fn phase_snapshot_exposes_phase_ema() {
         super::reset_gossip_fallback_for_tests();
         super::set_phase_propose_ms(5);
         super::set_phase_collect_da_ms(6);
@@ -5793,19 +6906,11 @@ mod tests {
         super::set_phase_collect_precommit_ema_ms(7);
         super::set_phase_commit_ema_ms(8);
         super::set_phase_pipeline_total_ema_ms(30);
-        super::set_phase_collect_exec_ms(42);
-        super::set_phase_collect_witness_ms(84);
-        super::set_phase_collect_exec_ema_ms(21);
-        super::set_phase_collect_witness_ema_ms(63);
         super::set_phase_collect_aggregator_ms(11);
         super::set_phase_collect_aggregator_ema_ms(31);
         super::inc_gossip_fallback();
         super::inc_gossip_fallback();
         let snapshot = super::phase_latencies_snapshot();
-        assert_eq!(snapshot.collect_exec_ms, 42);
-        assert_eq!(snapshot.collect_witness_ms, 84);
-        assert_eq!(snapshot.collect_exec_ema_ms, 21);
-        assert_eq!(snapshot.collect_witness_ema_ms, 63);
         assert_eq!(snapshot.collect_aggregator_ms, 11);
         assert_eq!(snapshot.collect_aggregator_ema_ms, 31);
         assert_eq!(snapshot.pipeline_total_ms, 35);
@@ -5891,6 +6996,59 @@ mod tests {
     }
 
     #[test]
+    fn pending_rbc_stash_counters_track_reasons() {
+        super::reset_pending_rbc_for_tests();
+        super::inc_pending_rbc_stash(super::PendingRbcStashKind::Chunk, None);
+        super::inc_pending_rbc_stash(
+            super::PendingRbcStashKind::Ready,
+            Some(super::PendingRbcStashReason::InitMissing),
+        );
+        super::inc_pending_rbc_stash(
+            super::PendingRbcStashKind::Ready,
+            Some(super::PendingRbcStashReason::RosterMissing),
+        );
+        super::inc_pending_rbc_stash(
+            super::PendingRbcStashKind::Ready,
+            Some(super::PendingRbcStashReason::RosterHashMismatch),
+        );
+        super::inc_pending_rbc_stash(
+            super::PendingRbcStashKind::Ready,
+            Some(super::PendingRbcStashReason::RosterUnverified),
+        );
+        super::inc_pending_rbc_stash(
+            super::PendingRbcStashKind::Deliver,
+            Some(super::PendingRbcStashReason::InitMissing),
+        );
+        super::inc_pending_rbc_stash(
+            super::PendingRbcStashKind::Deliver,
+            Some(super::PendingRbcStashReason::RosterMissing),
+        );
+        super::inc_pending_rbc_stash(
+            super::PendingRbcStashKind::Deliver,
+            Some(super::PendingRbcStashReason::RosterHashMismatch),
+        );
+        super::inc_pending_rbc_stash(
+            super::PendingRbcStashKind::Deliver,
+            Some(super::PendingRbcStashReason::RosterUnverified),
+        );
+
+        let snapshot = super::pending_rbc_snapshot();
+        assert_eq!(snapshot.stash_chunk_total, 1);
+        assert_eq!(snapshot.stash_ready_total, 4);
+        assert_eq!(snapshot.stash_ready_init_missing_total, 1);
+        assert_eq!(snapshot.stash_ready_roster_missing_total, 1);
+        assert_eq!(snapshot.stash_ready_roster_hash_mismatch_total, 1);
+        assert_eq!(snapshot.stash_ready_roster_unverified_total, 1);
+        assert_eq!(snapshot.stash_deliver_total, 4);
+        assert_eq!(snapshot.stash_deliver_init_missing_total, 1);
+        assert_eq!(snapshot.stash_deliver_roster_missing_total, 1);
+        assert_eq!(snapshot.stash_deliver_roster_hash_mismatch_total, 1);
+        assert_eq!(snapshot.stash_deliver_roster_unverified_total, 1);
+
+        super::reset_pending_rbc_for_tests();
+    }
+
+    #[test]
     fn qc_rebuild_counters_surface_in_snapshot() {
         super::reset_qc_rebuild_counters_for_tests();
         super::inc_qc_rebuild_attempts();
@@ -5923,7 +7081,104 @@ mod tests {
     }
 
     #[test]
+    fn consensus_message_handling_counters_surface_in_snapshot() {
+        super::reset_message_handling_for_tests();
+        super::record_consensus_message_handling(
+            super::ConsensusMessageKind::BlockCreated,
+            super::ConsensusMessageOutcome::Dropped,
+            super::ConsensusMessageReason::FutureWindow,
+        );
+        super::record_consensus_message_handling(
+            super::ConsensusMessageKind::BlockCreated,
+            super::ConsensusMessageOutcome::Dropped,
+            super::ConsensusMessageReason::FutureWindow,
+        );
+        super::record_consensus_message_handling(
+            super::ConsensusMessageKind::BlockSyncUpdate,
+            super::ConsensusMessageOutcome::Deferred,
+            super::ConsensusMessageReason::SignatureMismatchDeferred,
+        );
+
+        let snapshot = super::snapshot();
+        let entries = snapshot.consensus_message_handling.entries;
+        let block_created = entries
+            .iter()
+            .find(|entry| {
+                entry.kind == super::ConsensusMessageKind::BlockCreated
+                    && entry.outcome == super::ConsensusMessageOutcome::Dropped
+                    && entry.reason == super::ConsensusMessageReason::FutureWindow
+            })
+            .expect("block created drop entry");
+        assert_eq!(block_created.total, 2);
+        let deferred = entries
+            .iter()
+            .find(|entry| {
+                entry.kind == super::ConsensusMessageKind::BlockSyncUpdate
+                    && entry.outcome == super::ConsensusMessageOutcome::Deferred
+                    && entry.reason == super::ConsensusMessageReason::SignatureMismatchDeferred
+            })
+            .expect("block sync deferred entry");
+        assert_eq!(deferred.total, 1);
+        super::reset_message_handling_for_tests();
+    }
+
+    #[test]
+    fn consensus_message_handling_labels_include_new_variants() {
+        assert_eq!(
+            super::ConsensusMessageKind::ProposalHint.as_str(),
+            "proposal_hint"
+        );
+        assert_eq!(super::ConsensusMessageKind::Proposal.as_str(), "proposal");
+        assert_eq!(super::ConsensusMessageKind::QcVote.as_str(), "qc_vote");
+        assert_eq!(super::ConsensusMessageKind::Qc.as_str(), "qc");
+        assert_eq!(
+            super::ConsensusMessageKind::VrfCommit.as_str(),
+            "vrf_commit"
+        );
+        assert_eq!(super::ConsensusMessageKind::RbcInit.as_str(), "rbc_init");
+        assert_eq!(
+            super::ConsensusMessageKind::FetchPendingBlock.as_str(),
+            "fetch_pending_block"
+        );
+        assert_eq!(super::ConsensusMessageKind::Evidence.as_str(), "evidence");
+
+        assert_eq!(
+            super::ConsensusMessageReason::MissingHighestQc.as_str(),
+            "missing_highest_qc"
+        );
+        assert_eq!(
+            super::ConsensusMessageReason::HighestQcMismatch.as_str(),
+            "highest_qc_mismatch"
+        );
+        assert_eq!(
+            super::ConsensusMessageReason::ConflictingVote.as_str(),
+            "conflicting_vote"
+        );
+        assert_eq!(
+            super::ConsensusMessageReason::PayloadTooLarge.as_str(),
+            "payload_too_large"
+        );
+        assert_eq!(
+            super::ConsensusMessageReason::ChunkDigestMismatch.as_str(),
+            "chunk_digest_mismatch"
+        );
+        assert_eq!(
+            super::ConsensusMessageReason::InvalidPayload.as_str(),
+            "invalid_payload"
+        );
+        assert_eq!(
+            super::ConsensusMessageReason::ModeMismatch.as_str(),
+            "mode_mismatch"
+        );
+        assert_eq!(
+            super::ConsensusMessageReason::NotFound.as_str(),
+            "not_found"
+        );
+    }
+
+    #[test]
     fn block_sync_counters_surface_in_snapshot() {
+        let _guard = super::block_sync_test_guard();
         super::reset_block_sync_counters_for_tests();
         super::inc_block_sync_drop_invalid_signatures();
         super::inc_block_sync_qc_replaced();
@@ -5931,6 +7186,7 @@ mod tests {
         super::inc_block_sync_roster_source("commit_checkpoint_pair_hint");
         super::inc_block_sync_roster_source("commit_roster_journal");
         super::inc_block_sync_roster_drop_missing();
+        super::inc_block_sync_roster_drop_unsolicited_share_blocks();
 
         let snapshot = super::snapshot();
         assert_eq!(snapshot.block_sync_drop_invalid_signatures_total, 1);
@@ -5940,6 +7196,12 @@ mod tests {
         assert_eq!(snapshot.block_sync_roster.checkpoint_hint_total, 1);
         assert_eq!(snapshot.block_sync_roster.commit_roster_journal_total, 1);
         assert_eq!(snapshot.block_sync_roster.drop_missing_total, 1);
+        assert_eq!(
+            snapshot
+                .block_sync_roster
+                .drop_unsolicited_share_blocks_total,
+            1
+        );
         super::reset_block_sync_counters_for_tests();
     }
 
@@ -5979,6 +7241,7 @@ mod tests {
         super::reset_view_change_cause_counters_for_tests();
         super::record_view_change_cause("commit_failure");
         super::record_view_change_cause("quorum_timeout");
+        super::record_view_change_cause("stake_quorum_timeout");
         super::record_view_change_cause("da_gate");
         super::record_view_change_cause("censorship_evidence");
         super::record_view_change_cause("missing_payload");
@@ -5988,6 +7251,7 @@ mod tests {
         let snapshot = super::snapshot();
         assert_eq!(snapshot.view_change_causes.commit_failure_total, 1);
         assert_eq!(snapshot.view_change_causes.quorum_timeout_total, 1);
+        assert_eq!(snapshot.view_change_causes.stake_quorum_timeout_total, 1);
         assert_eq!(snapshot.view_change_causes.da_gate_total, 1);
         assert_eq!(snapshot.view_change_causes.censorship_evidence_total, 1);
         assert_eq!(snapshot.view_change_causes.missing_payload_total, 1);
@@ -6264,6 +7528,34 @@ mod tests {
         assert_eq!(oldest.block_hash, expected_oldest);
         assert_eq!(oldest.height, key_a.1);
         assert_eq!(oldest.view, key_a.2);
+    }
+
+    #[test]
+    fn rbc_store_pressure_log_state_updates_on_transition() {
+        let _guard = super::rbc_status_test_guard();
+        super::reset_rbc_store_pressure_log_state_for_tests();
+        super::set_rbc_store_pressure(2, 8_192, 2);
+        let (level, _stamp) = super::rbc_store_pressure_log_state_for_tests();
+        assert_eq!(level, 2);
+
+        super::set_rbc_store_pressure(0, 0, 0);
+        let (level, _stamp) = super::rbc_store_pressure_log_state_for_tests();
+        assert_eq!(level, 0);
+    }
+
+    #[test]
+    fn rbc_store_pressure_log_interval_respects_state() {
+        let interval = super::RBC_STORE_PRESSURE_LOG_INTERVAL_SECS;
+        assert!(super::should_log_rbc_store_pressure(1, 0, 0, 0));
+        assert!(super::should_log_rbc_store_pressure(0, 1, 10, 10));
+        assert!(!super::should_log_rbc_store_pressure(0, 0, 0, interval));
+        assert!(!super::should_log_rbc_store_pressure(
+            1,
+            1,
+            0,
+            interval.saturating_sub(1)
+        ));
+        assert!(super::should_log_rbc_store_pressure(1, 1, 0, interval));
     }
 
     #[test]

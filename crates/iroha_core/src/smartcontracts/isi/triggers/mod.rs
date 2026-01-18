@@ -1,6 +1,8 @@
 //! This module contains implementations of smart-contract traits and
 //! instructions for triggers in Iroha.
 
+use std::sync::OnceLock;
+
 use iroha_data_model::{
     ValidationFail,
     isi::error::MathError,
@@ -13,6 +15,32 @@ use iroha_telemetry::metrics;
 
 pub mod set;
 pub mod specialized;
+
+/// Trigger metadata key toggled by `set_trigger_enabled` syscalls/ISIs.
+pub(crate) const TRIGGER_ENABLED_METADATA_KEY: &str = "__enabled";
+
+fn trigger_enabled_metadata_key() -> &'static Name {
+    static KEY: OnceLock<Name> = OnceLock::new();
+    KEY.get_or_init(|| {
+        TRIGGER_ENABLED_METADATA_KEY
+            .parse()
+            .expect("trigger enabled metadata key must be valid")
+    })
+}
+
+/// Read the trigger enabled flag from metadata, defaulting to `true` when absent or malformed.
+pub(crate) fn trigger_is_enabled(metadata: &Metadata) -> bool {
+    let Some(value) = metadata.get(trigger_enabled_metadata_key()) else {
+        return true;
+    };
+    if let Ok(flag) = value.clone().try_into_any_norito::<bool>() {
+        return flag;
+    }
+    if let Ok(raw) = value.clone().try_into_any_norito::<u64>() {
+        return raw != 0;
+    }
+    true
+}
 
 /// All instructions related to triggers.
 /// - registering a trigger and validating the declared authority against
@@ -230,7 +258,7 @@ pub mod isi {
             let trigger_id = self.object().clone();
 
             let triggers = &mut state_transaction.world.triggers;
-            if triggers.remove(trigger_id.clone()) {
+            if triggers.remove(&trigger_id) {
                 state_transaction
                     .world
                     .emit_events(Some(TriggerEvent::Deleted(trigger_id)));
@@ -301,7 +329,7 @@ pub mod isi {
                 .inspect_by_id(&trigger, |action| action.repeats().is_depleted())
                 .unwrap_or(false);
             if should_remove {
-                let _ = triggers.remove(trigger.clone());
+                let _ = triggers.remove(&trigger);
             }
             state_transaction
                 .world
@@ -640,17 +668,13 @@ pub mod query {
             let triggers = state_ro.world().triggers();
 
             Ok(triggers
-                   .ids_iter()
-                   .map(|id| {
-                       let action = triggers.inspect_by_id(id, |action| action.clone_and_box())
-                           .expect("INTERNAL BUG: Trigger Id is in the list of ids but not in the triggers map");
-
-                       let action = triggers.get_original_action(action)
-                           .into();
-
-                       Trigger::new(id.clone(), action)
-                   })
-                   .filter(move |trigger| filter.applies(trigger)))
+                .ids_iter()
+                .filter_map(|id| {
+                    let action = triggers.inspect_by_id(id, |action| action.clone_and_box())?;
+                    let action = triggers.get_original_action(action)?;
+                    Some(Trigger::new(id.clone(), action.into()))
+                })
+                .filter(move |trigger| filter.applies(trigger)))
         }
     }
 }
@@ -707,6 +731,27 @@ mod tests {
 
     // No unit test for the cache helpers here; those are exercised indirectly
     // via existing trigger authorization tests.
+
+    #[test]
+    fn trigger_is_enabled_reads_metadata_flag() {
+        let mut metadata = Metadata::default();
+        assert!(
+            trigger_is_enabled(&metadata),
+            "missing flag defaults to enabled"
+        );
+
+        let key = TRIGGER_ENABLED_METADATA_KEY
+            .parse::<Name>()
+            .expect("valid metadata key");
+        metadata.insert(key.clone(), Json::from(false));
+        assert!(!trigger_is_enabled(&metadata), "false disables trigger");
+
+        metadata.insert(key.clone(), Json::from(0_u64));
+        assert!(!trigger_is_enabled(&metadata), "zero disables trigger");
+
+        metadata.insert(key, Json::from(true));
+        assert!(trigger_is_enabled(&metadata), "true enables trigger");
+    }
 
     #[test]
     fn execute_trigger_requires_owner_or_permission() {

@@ -157,7 +157,7 @@ public final class TransactionPayload {
     }
 
     private static String normalize(final String value, final String field) {
-      if (value == null || value.isBlank()) {
+      if (value == null || value.trim().isEmpty()) {
         throw new IllegalArgumentException(field + " must not be blank");
       }
       return value;

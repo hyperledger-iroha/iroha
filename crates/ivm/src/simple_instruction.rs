@@ -98,7 +98,6 @@ pub enum Instruction {
     },
     /// Verify a Dilithium signature over a message in memory using the
     /// specified security level (2, 3 or 5). Result is placed in `result_reg`.
-    #[cfg(feature = "ml-dsa")]
     DilithiumVerify {
         level: u8,
         pubkey_addr: u64,

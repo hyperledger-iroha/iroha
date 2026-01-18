@@ -357,7 +357,7 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
         .push(tx_lane1, state.view())
         .expect("lane1 transaction accepted");
 
-    assert_eq!(queue.tx_len(), 2, "both transactions should be queued");
+    assert_eq!(queue.queued_len(), 2, "both transactions should be queued");
 
     let lane0_label = LaneId::new(0).as_u32().to_string();
     let lane1_label = LaneId::new(1).as_u32().to_string();
@@ -405,7 +405,11 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
 
     drop(guards);
 
-    assert_eq!(queue.tx_len(), 0, "queue should drain after guards drop");
+    assert_eq!(
+        queue.queued_len(),
+        0,
+        "queue should drain after guards drop"
+    );
 
     let backlog_lane0_after = metrics
         .nexus_scheduler_dataspace_teu_backlog
@@ -580,7 +584,7 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
     queue
         .push(tx_fallback, state.view())
         .expect("fallback transaction accepted");
-    assert_eq!(queue.tx_len(), 2, "both transactions should be queued");
+    assert_eq!(queue.queued_len(), 2, "both transactions should be queued");
 
     let lane0_label = LaneId::new(0).as_u32().to_string();
     let lane1_label = LaneId::new(1).as_u32().to_string();
@@ -627,7 +631,7 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
     );
 
     drop(guards);
-    assert_eq!(queue.tx_len(), 0, "queue should drain after processing");
+    assert_eq!(queue.queued_len(), 0, "queue should drain after processing");
 
     let backlog_lane0_after = metrics
         .nexus_scheduler_dataspace_teu_backlog

@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import importlib.util
 import json
+import sys
 import os
 import shutil
 import subprocess
@@ -16,6 +17,7 @@ MODULE_PATH = REPO_ROOT / "scripts/check_android_fixtures.py"
 SPEC = importlib.util.spec_from_file_location("check_android_fixtures", MODULE_PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader  # pragma: no cover - defensive
+sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 
@@ -28,12 +30,22 @@ def _write_fixture_set(base: Path) -> tuple[Path, Path, Path]:
     (resources / "alpha.norito").write_bytes(payload_bytes)
 
     payloads_path = base / "transaction_payloads.json"
+    creation_time_ms = 1_735_000_000_111
+    chain = "00000002"
+    authority = "alice@wonderland"
+    time_to_live_ms = 5000
+    nonce = 42
     payloads_path.write_text(
         json.dumps(
             [
                 {
                     "name": "alpha",
                     "encoded": base64.b64encode(payload_bytes).decode(),
+                    "creation_time_ms": creation_time_ms,
+                    "chain": chain,
+                    "authority": authority,
+                    "time_to_live_ms": time_to_live_ms,
+                    "nonce": nonce,
                 }
             ],
             indent=2,
@@ -55,6 +67,11 @@ def _write_fixture_set(base: Path) -> tuple[Path, Path, Path]:
                         "signed_base64": base64.b64encode(signed_bytes).decode(),
                         "signed_hash": MODULE.iroha_hash(signed_bytes),  # type: ignore[attr-defined]
                         "signed_len": len(signed_bytes),
+                        "creation_time_ms": creation_time_ms,
+                        "chain": chain,
+                        "authority": authority,
+                        "time_to_live_ms": time_to_live_ms,
+                        "nonce": nonce,
                     }
                 ]
             },

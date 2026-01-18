@@ -102,13 +102,13 @@ fn transfer_pair(index: usize) -> (TransferTranscript, StateTransition, StateTra
         poseidon_preimage_digest: Some(digest),
     };
     let sender = StateTransition::new(
-        format!("asset/{}/{}", asset_definition, from_account).into_bytes(),
+        format!("asset/{asset_definition}/{from_account}").into_bytes(),
         from_pre.to_le_bytes().to_vec(),
         from_post.to_le_bytes().to_vec(),
         OperationKind::Transfer,
     );
     let receiver = StateTransition::new(
-        format!("asset/{}/{}", asset_definition, to_account).into_bytes(),
+        format!("asset/{asset_definition}/{to_account}").into_bytes(),
         to_pre.to_le_bytes().to_vec(),
         to_post.to_le_bytes().to_vec(),
         OperationKind::Transfer,

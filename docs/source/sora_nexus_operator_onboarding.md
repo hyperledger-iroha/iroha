@@ -33,7 +33,7 @@ This guide captures the end-to-end flow Sora Nexus data-space operators must fol
 1. Extract the bundle and copy `config/` to the location where the node will read its configuration.
 2. Treat the files under `config/` as templates:
    - Replace `public_key`/`private_key` with your production Ed25519 keys. Remove private keys from disk if the node will source them from an HSM; update the config to point at the HSM connector instead.
-   - Adjust `trusted_peers`, `network.address`, and `torii.address` so they reflect your reachable interfaces and the bootstrap peers you were assigned. Validators must be BLS-Normal with PoPs provided in `trusted_peers_pop`; configs carrying the removed `trusted_peers_bls` mapping are rejected.
+   - Adjust `trusted_peers`, `network.address`, and `torii.address` so they reflect your reachable interfaces and the bootstrap peers you were assigned. Validators must be BLS-Normal with PoPs provided in `trusted_peers_pop` for every validator; configs carrying the removed `trusted_peers_bls` mapping or incomplete/invalid PoP maps are rejected.
    - Update `client.toml` with the operator-facing Torii endpoint (including TLS configuration if applicable) and the credentials you provision for operational tooling.
 3. Keep the chain ID provided in the bundle unless Governance explicitly instructs otherwise—the global lane expects a single canonical chain identifier.
 4. Plan to start the node with the Sora profile flag: `irohad --sora --config <path>`. The configuration loader will reject SoraFS or multi-lane settings when the flag is absent.

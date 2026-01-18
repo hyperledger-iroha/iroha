@@ -329,9 +329,8 @@ pub enum Instr {
         args: Vec<Temp>,
         dests: Vec<Temp>,
     },
-    /// Host helper: set account detail (pointer-ABI or sentinel defaults).
-    /// Accepts either pointer temps produced by `account_id/name/json` builtins
-    /// or integer sentinels (0s) to use host defaults.
+    /// Host helper: set account detail (pointer-ABI).
+    /// Accepts pointer temps produced by `account_id/name/json` builtins.
     SetAccountDetail {
         account: Temp,
         key: Temp,
@@ -456,6 +455,15 @@ pub enum Instr {
     VendorExecuteInstruction {
         payload: Temp,
     },
+    /// Vendor bridge: SMARTCONTRACT_EXECUTE_QUERY with NoritoBytes `QueryRequest` in r10.
+    VendorExecuteQuery {
+        dest: Temp,
+        payload: Temp,
+    },
+    /// Subscription billing helper using trigger context.
+    SubscriptionBill,
+    /// Subscription usage recorder using trigger args.
+    SubscriptionRecordUsage,
     /// Durable state get: r10 = &Name path; returns r10 = &NoritoBytes into dest.
     StateGet {
         dest: Temp,
@@ -2077,8 +2085,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                         map: m,
                         offset: 0,
                     });
-                    let out = lower_map_key_eq(ctx, &kexpr.ty, sk, key_tmp);
-                    out
+                    lower_map_key_eq(ctx, &kexpr.ty, sk, key_tmp)
                 }
                 "has" => {
                     // Alias to contains(map, key) -> bool
@@ -2120,8 +2127,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                         map: m,
                         offset: 0,
                     });
-                    let out = lower_map_key_eq(ctx, &kexpr.ty, sk, key_tmp);
-                    out
+                    lower_map_key_eq(ctx, &kexpr.ty, sk, key_tmp)
                 }
                 "get_or_default" => {
                     let mexpr = &args[0];
@@ -2545,6 +2551,27 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 "sc_execute_submit_ballot" | "sc_execute_unshield" | "execute_instruction" => {
                     let p = lower_expr(ctx, &args[0], vars);
                     ctx.current_instr(Instr::VendorExecuteInstruction { payload: p });
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
+                    t
+                }
+                "execute_query" => {
+                    let p = lower_expr(ctx, &args[0], vars);
+                    let d = ctx.new_temp();
+                    ctx.current_instr(Instr::VendorExecuteQuery {
+                        dest: d,
+                        payload: p,
+                    });
+                    d
+                }
+                "subscription_bill" => {
+                    ctx.current_instr(Instr::SubscriptionBill);
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
+                    t
+                }
+                "subscription_record_usage" => {
+                    ctx.current_instr(Instr::SubscriptionRecordUsage);
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::Const { dest: t, value: 0 });
                     t

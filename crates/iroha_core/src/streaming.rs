@@ -346,6 +346,7 @@ impl FilesystemSoranetProvisioner {
 
     /// Attach a telemetry sink for budget reporting.
     #[cfg(feature = "telemetry")]
+    #[must_use]
     pub fn with_telemetry(mut self, telemetry: StreamingTelemetry) -> Self {
         self.telemetry = Some(telemetry);
         self

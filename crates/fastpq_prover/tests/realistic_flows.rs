@@ -71,13 +71,13 @@ fn remittance_batch() -> TransitionBatch {
     let to_account = deterministic_account("bob", &domain);
 
     batch.push(StateTransition::new(
-        format!("asset/{}/{}", asset_definition, from_account).into_bytes(),
+        format!("asset/{asset_definition}/{from_account}").into_bytes(),
         encode_u64(ALICE_START),
         encode_u64(ALICE_START - REMIT_AMOUNT),
         OperationKind::Transfer,
     ));
     batch.push(StateTransition::new(
-        format!("asset/{}/{}", asset_definition, to_account).into_bytes(),
+        format!("asset/{asset_definition}/{to_account}").into_bytes(),
         encode_u64(BOB_START),
         encode_u64(BOB_START + REMIT_AMOUNT),
         OperationKind::Transfer,

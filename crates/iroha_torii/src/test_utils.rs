@@ -350,6 +350,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             require_sm_openssl_preview_match: true,
             idle_timeout: core::time::Duration::from_secs(5),
             peer_gossip_period: defaults::network::PEER_GOSSIP_PERIOD,
+            peer_gossip_max_period: defaults::network::PEER_GOSSIP_PERIOD,
             trust_gossip: defaults::network::TRUST_GOSSIP,
             trust_decay_half_life: defaults::network::TRUST_DECAY_HALF_LIFE,
             trust_penalty_bad_gossip: defaults::network::TRUST_PENALTY_BAD_GOSSIP,
@@ -364,6 +365,28 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             p2p_queue_cap_high: nonzero!(128usize),
             p2p_queue_cap_low: nonzero!(512usize),
             p2p_post_queue_cap: nonzero!(128usize),
+            p2p_subscriber_queue_cap: nonzero!(128usize),
+            consensus_ingress_rate_per_sec: defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
+            consensus_ingress_burst: defaults::network::CONSENSUS_INGRESS_BURST,
+            consensus_ingress_bytes_per_sec: defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
+            consensus_ingress_bytes_burst: defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+            consensus_ingress_critical_rate_per_sec:
+                defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
+            consensus_ingress_critical_burst: defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
+            consensus_ingress_critical_bytes_per_sec:
+                defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
+            consensus_ingress_critical_bytes_burst:
+                defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
+            consensus_ingress_rbc_session_limit:
+                defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
+            consensus_ingress_penalty_threshold:
+                defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
+            consensus_ingress_penalty_window: Duration::from_millis(
+                defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
+            ),
+            consensus_ingress_penalty_cooldown: Duration::from_millis(
+                defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
+            ),
             happy_eyeballs_stagger: core::time::Duration::from_millis(100),
             addr_ipv6_first: false,
             max_incoming: None,
@@ -424,6 +447,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             ws_message_timeout: Duration::from_millis(defaults::torii::WS_MESSAGE_TIMEOUT_MS),
             query_rate_per_authority_per_sec: None,
             query_burst_per_authority: None,
+            tx_rate_per_authority_per_sec: None,
+            tx_burst_per_authority: None,
             deploy_rate_per_origin_per_sec: None,
             deploy_burst_per_origin: None,
             proof_api: iroha_config::parameters::actual::ProofApi {
@@ -611,6 +636,15 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             membership_mismatch_alert_threshold:
                 defaults::sumeragi::MEMBERSHIP_MISMATCH_ALERT_THRESHOLD,
             membership_mismatch_fail_closed: defaults::sumeragi::MEMBERSHIP_MISMATCH_FAIL_CLOSED,
+            consensus_future_height_window: defaults::sumeragi::CONSENSUS_FUTURE_HEIGHT_WINDOW,
+            consensus_future_view_window: defaults::sumeragi::CONSENSUS_FUTURE_VIEW_WINDOW,
+            invalid_sig_penalty_threshold: defaults::sumeragi::INVALID_SIG_PENALTY_THRESHOLD,
+            invalid_sig_penalty_window: Duration::from_millis(
+                defaults::sumeragi::INVALID_SIG_PENALTY_WINDOW_MS,
+            ),
+            invalid_sig_penalty_cooldown: Duration::from_millis(
+                defaults::sumeragi::INVALID_SIG_PENALTY_COOLDOWN_MS,
+            ),
             role: A::NodeRole::Validator,
             allow_view0_slack: false,
             collectors_k: 1,
@@ -620,6 +654,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             rbc_pending_ttl: Duration::from_millis(defaults::sumeragi::RBC_PENDING_TTL_MS),
             block_max_transactions: defaults::sumeragi::BLOCK_MAX_TRANSACTIONS,
             block_max_payload_bytes: defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES,
+            proposal_queue_scan_multiplier: defaults::sumeragi::PROPOSAL_QUEUE_SCAN_MULTIPLIER,
             msg_channel_cap_votes: defaults::sumeragi::MSG_CHANNEL_CAP_VOTES,
             msg_channel_cap_block_payload: defaults::sumeragi::MSG_CHANNEL_CAP_BLOCK_PAYLOAD,
             msg_channel_cap_rbc_chunks: defaults::sumeragi::MSG_CHANNEL_CAP_RBC_CHUNKS,
@@ -641,6 +676,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             zk_finality_k: 0,
             require_precommit_qc: false,
             rbc_chunk_max_bytes: 32 * 1024,
+            rbc_chunk_fanout: defaults::sumeragi::RBC_CHUNK_FANOUT,
             rbc_session_ttl: core::time::Duration::from_secs(10),
             rbc_store_max_sessions: defaults::sumeragi::RBC_STORE_MAX_SESSIONS,
             rbc_store_soft_sessions: defaults::sumeragi::RBC_STORE_SOFT_SESSIONS,
@@ -650,6 +686,9 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 defaults::sumeragi::RBC_DISK_STORE_TTL_SECS,
             ),
             rbc_disk_store_max_bytes: defaults::sumeragi::RBC_DISK_STORE_MAX_BYTES,
+            rbc_rebroadcast_sessions_per_tick:
+                defaults::sumeragi::RBC_REBROADCAST_SESSIONS_PER_TICK,
+            rbc_payload_chunks_per_tick: defaults::sumeragi::RBC_PAYLOAD_CHUNKS_PER_TICK,
             key_activation_lead_blocks: defaults::sumeragi::KEY_ACTIVATION_LEAD_BLOCKS,
             key_overlap_grace_blocks: defaults::sumeragi::KEY_OVERLAP_GRACE_BLOCKS,
             key_expiry_grace_blocks: defaults::sumeragi::KEY_EXPIRY_GRACE_BLOCKS,
@@ -674,11 +713,13 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
         },
         block_sync: A::BlockSync {
             gossip_period: core::time::Duration::from_millis(200),
+            gossip_max_period: core::time::Duration::from_millis(200),
             gossip_size: nonzero!(32u32),
         },
         transaction_gossiper: A::TransactionGossiper {
             gossip_period: core::time::Duration::from_millis(200),
             gossip_size: nonzero!(32u32),
+            gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
             dataspace: Default::default(),
         },
         live_query_store: A::LiveQueryStore::default(),
@@ -743,6 +784,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             quarantine_tx_max_cycles: defaults::pipeline::QUARANTINE_TX_MAX_CYCLES,
             quarantine_tx_max_millis: defaults::pipeline::QUARANTINE_TX_MAX_MILLIS,
             query_default_cursor_mode: A::QueryCursorMode::Ephemeral,
+            query_max_fetch_size: defaults::pipeline::QUERY_MAX_FETCH_SIZE,
             query_stored_min_gas_units: 0,
             amx_per_dataspace_budget_ms: defaults::pipeline::AMX_PER_DATASPACE_BUDGET_MS,
             amx_group_budget_ms: defaults::pipeline::AMX_GROUP_BUDGET_MS,
@@ -1041,8 +1083,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             zstd_level_large: defaults::norito::ZSTD_LEVEL_LARGE,
             zstd_level_gpu: defaults::norito::ZSTD_LEVEL_GPU,
             large_threshold: defaults::norito::LARGE_THRESHOLD,
-            enable_compact_seq_len_up_to: defaults::norito::ENABLE_COMPACT_SEQ_LEN_UP_TO,
-            enable_varint_offsets_up_to: defaults::norito::ENABLE_VARINT_OFFSETS_UP_TO,
             allow_gpu_compression: defaults::norito::ALLOW_GPU_COMPRESSION,
             max_archive_len: defaults::norito::MAX_ARCHIVE_LEN,
             aos_ncb_small_n: defaults::norito::AOS_NCB_SMALL_N,

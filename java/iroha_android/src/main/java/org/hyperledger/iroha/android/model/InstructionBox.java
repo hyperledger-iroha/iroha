@@ -1,7 +1,9 @@
 package org.hyperledger.iroha.android.model;
 
+import java.util.Base64;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import org.hyperledger.iroha.android.model.instructions.ApprovePinManifestInstruction;
@@ -78,8 +80,8 @@ import org.hyperledger.iroha.android.model.instructions.UpsertProviderCreditInst
  *
  * <p>The container wraps strongly typed instruction payloads where available (for example, register
  * domain/account/asset definition builders) and falls back to an opaque key/value payload when the
- * instruction has no dedicated Java binding yet. This keeps Norito round-trips fully structural
- * while preparing the surface for instruction code generation.
+ * instruction has no dedicated Java binding yet. Wire-framed instruction payloads can also be
+ * attached directly to preserve Norito parity when raw instruction bytes are available.
  */
 public final class InstructionBox {
 
@@ -91,6 +93,9 @@ public final class InstructionBox {
 
   /** Instruction display name (matches `InstructionType` tag). */
   public String name() {
+    if (payload instanceof WirePayload wire) {
+      return wire.wireName();
+    }
     return kind().displayName();
   }
 
@@ -132,6 +137,15 @@ public final class InstructionBox {
 
   public static InstructionBox of(final InstructionPayload payload) {
     return new InstructionBox(payload);
+  }
+
+  /**
+   * Builds an {@link InstructionBox} from a canonical wire identifier and its Norito-framed payload.
+   *
+   * <p>The payload must include the Norito header with a valid checksum.
+   */
+  public static InstructionBox fromWirePayload(final String wireName, final byte[] payloadBytes) {
+    return new InstructionBox(new WireInstructionPayload(wireName, payloadBytes));
   }
 
   /**
@@ -393,6 +407,53 @@ public final class InstructionBox {
     return new CustomInstructionPayload(kind, arguments);
   }
 
+  private static InstructionKind wireKindForName(final String wireName) {
+    if (wireName == null) {
+      return InstructionKind.CUSTOM;
+    }
+    final String normalized = wireName.toLowerCase(Locale.ROOT);
+    if (normalized.startsWith("iroha.register")) {
+      return InstructionKind.REGISTER;
+    }
+    if (normalized.startsWith("iroha.unregister")) {
+      return InstructionKind.UNREGISTER;
+    }
+    if (normalized.startsWith("iroha.transfer")) {
+      return InstructionKind.TRANSFER;
+    }
+    if (normalized.startsWith("iroha.mint")) {
+      return InstructionKind.MINT;
+    }
+    if (normalized.startsWith("iroha.burn")) {
+      return InstructionKind.BURN;
+    }
+    if (normalized.startsWith("iroha.grant")) {
+      return InstructionKind.GRANT;
+    }
+    if (normalized.startsWith("iroha.revoke")) {
+      return InstructionKind.REVOKE;
+    }
+    if (normalized.startsWith("iroha.set_key_value")) {
+      return InstructionKind.SET_KEY_VALUE;
+    }
+    if (normalized.startsWith("iroha.remove_key_value")) {
+      return InstructionKind.REMOVE_KEY_VALUE;
+    }
+    if (normalized.startsWith("iroha.set_parameter")) {
+      return InstructionKind.SET_PARAMETER;
+    }
+    if (normalized.startsWith("iroha.execute_trigger")) {
+      return InstructionKind.EXECUTE_TRIGGER;
+    }
+    if (normalized.startsWith("iroha.log")) {
+      return InstructionKind.LOG;
+    }
+    if (normalized.startsWith("iroha.runtime_upgrade") || normalized.startsWith("iroha.upgrade")) {
+      return InstructionKind.UPGRADE;
+    }
+    return InstructionKind.CUSTOM;
+  }
+
   private static final class CustomInstructionPayload implements InstructionPayload {
 
     private final InstructionKind kind;
@@ -420,6 +481,58 @@ public final class InstructionBox {
     InstructionKind kind();
 
     Map<String, String> toArguments();
+  }
+
+  public interface WirePayload extends InstructionPayload {
+    String wireName();
+
+    byte[] payloadBytes();
+  }
+
+  private static final class WireInstructionPayload implements WirePayload {
+    private static final String ARG_WIRE_NAME = "wire_name";
+    private static final String ARG_PAYLOAD_BASE64 = "payload_base64";
+
+    private final InstructionKind kind;
+    private final String wireName;
+    private final byte[] payloadBytes;
+    private final Map<String, String> arguments;
+
+    private WireInstructionPayload(final String wireName, final byte[] payloadBytes) {
+      if (wireName == null || wireName.isBlank()) {
+        throw new IllegalArgumentException("wireName must not be blank");
+      }
+      if (payloadBytes == null || payloadBytes.length == 0) {
+        throw new IllegalArgumentException("payloadBytes must not be empty");
+      }
+      this.wireName = wireName;
+      this.payloadBytes = payloadBytes.clone();
+      this.kind = wireKindForName(wireName);
+      final LinkedHashMap<String, String> args = new LinkedHashMap<>();
+      args.put(ARG_WIRE_NAME, wireName);
+      args.put(ARG_PAYLOAD_BASE64, Base64.getEncoder().encodeToString(this.payloadBytes));
+      this.arguments = Collections.unmodifiableMap(args);
+    }
+
+    @Override
+    public InstructionKind kind() {
+      return kind;
+    }
+
+    @Override
+    public Map<String, String> toArguments() {
+      return arguments;
+    }
+
+    @Override
+    public String wireName() {
+      return wireName;
+    }
+
+    @Override
+    public byte[] payloadBytes() {
+      return payloadBytes.clone();
+    }
   }
 
   public static final class Builder {

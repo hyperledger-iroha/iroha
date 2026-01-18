@@ -28,7 +28,7 @@ const EXPLAIN_ENTRIES: &[(&str, &str)] = &[
     ),
     (
         "E0004",
-        "Asset operations expect pointer literals. Use helpers such as `account_id(...)` and `asset_definition(...)`, or pass 0 to request sentinel defaults.",
+        "Asset operations expect pointer literals. Use helpers such as `account_id(...)` and `asset_definition(...)`.",
     ),
     (
         "E0005",
@@ -207,11 +207,10 @@ fn main() {
                 std::process::exit(2);
             }
             path => {
-                if input.is_some() {
+                if let Some(existing) = input.as_deref() {
                     eprintln!(
                         "Multiple input files specified: '{}' and '{}'",
-                        input.unwrap(),
-                        path
+                        existing, path
                     );
                     std::process::exit(2);
                 }

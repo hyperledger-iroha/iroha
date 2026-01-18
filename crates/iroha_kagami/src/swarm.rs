@@ -144,6 +144,7 @@ impl Args {
 }
 
 impl<T: Write> RunArgs<T> for Args {
+    #[allow(clippy::too_many_lines)]
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         // let args: Args = <Args as clap::Parser>::parse();
         let args = self;

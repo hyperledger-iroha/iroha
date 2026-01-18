@@ -65,6 +65,7 @@ const DATA_FILE_NAME: &str = "blocks.data";
 const HASHES_FILE_NAME: &str = "blocks.hashes";
 const COUNT_FILE_NAME: &str = "blocks.count.norito";
 const PIPELINE_DIR_NAME: &str = "pipeline";
+const DA_BLOCKS_DIR_NAME: &str = "da_blocks";
 const PIPELINE_SIDECARS_DATA_FILE: &str = "sidecars.norito";
 const PIPELINE_SIDECARS_INDEX_FILE: &str = "sidecars.index";
 const ROSTER_SIDECARS_DATA_FILE: &str = "roster_sidecars.norito";
@@ -74,6 +75,7 @@ const PIPELINE_INDEX_ENTRY_SIZE_U64: u64 = PIPELINE_INDEX_ENTRY_SIZE as u64;
 
 const SIZE_OF_BLOCK_HASH: u64 = Hash::LENGTH as u64;
 pub(crate) const STRICT_INIT_MAX_BLOCK_BYTES: u64 = 256 * 1024 * 1024;
+const EVICTED_BLOCK_START: u64 = u64::MAX;
 /// Upper bound for merge-ledger entry payloads to avoid unbounded allocations on recovery.
 const MERGE_LEDGER_MAX_ENTRY_BYTES: usize = 16 * 1024 * 1024;
 
@@ -307,9 +309,9 @@ impl MergeLedgerLog {
     fn append(&mut self, entry: &MergeLedgerEntry) -> Result<()> {
         let encoded = Encode::encode(entry);
         if encoded.len() > MERGE_LEDGER_MAX_ENTRY_BYTES {
-            return Err(Error::NoritoFrame(norito::core::Error::Message(
-                format!("merge ledger entry exceeds {MERGE_LEDGER_MAX_ENTRY_BYTES} bytes").into(),
-            )));
+            return Err(Error::NoritoFrame(norito::core::Error::Message(format!(
+                "merge ledger entry exceeds {MERGE_LEDGER_MAX_ENTRY_BYTES} bytes"
+            ))));
         }
         let len: u32 = encoded.len().try_into().map_err(|_| {
             Error::NoritoFrame(norito::core::Error::Message(
@@ -590,6 +592,161 @@ impl Kura {
     #[must_use]
     pub fn store_root(&self) -> PathBuf {
         self.store_root.clone()
+    }
+
+    /// Return total on-disk bytes used by Kura (active + retired segments).
+    ///
+    /// This mirrors the accounting used for storage budget enforcement.
+    pub(crate) fn disk_usage_bytes(&self) -> Result<u64> {
+        self.kura_disk_usage_bytes()
+    }
+
+    /// Attempt to purge retired Kura segments to reclaim disk budget.
+    pub(crate) fn purge_retired_segments(&self) -> bool {
+        self.purge_retired_storage()
+    }
+
+    /// Evict persisted block bodies into DA-backed storage to reclaim disk budget.
+    pub(crate) fn evict_block_bodies(&self, bytes_needed: u64) -> Result<u64> {
+        if bytes_needed == 0 || self.store_root.as_os_str().is_empty() {
+            return Ok(0);
+        }
+
+        let mut block_store = self.block_store.lock();
+        if let Err(err) = block_store.flush_pending_fsync(false) {
+            warn!(?err, "failed to flush pending Kura writes before eviction");
+        }
+
+        let persisted = usize::try_from(block_store.read_durable_index_count()?)?;
+        if persisted <= 1 {
+            return Ok(0);
+        }
+        let retain_tail = self.blocks_in_memory.get().max(1);
+        let evict_limit = persisted.saturating_sub(retain_tail);
+        if evict_limit <= 1 {
+            return Ok(0);
+        }
+
+        let mut indices = vec![BlockIndex::default(); persisted];
+        block_store.read_block_indices(0, &mut indices)?;
+
+        let mut evict_mask = vec![false; persisted];
+        let mut freed = 0u64;
+        for idx in 1..evict_limit {
+            let entry = indices[idx];
+            if entry.is_evicted() {
+                continue;
+            }
+            freed = freed.saturating_add(entry.length);
+            evict_mask[idx] = true;
+            if freed >= bytes_needed {
+                break;
+            }
+        }
+
+        if freed == 0 {
+            return Ok(0);
+        }
+
+        block_store.ensure_da_blocks_dir()?;
+        let mut buffer = Vec::new();
+        for idx in 1..evict_limit {
+            if !evict_mask[idx] {
+                continue;
+            }
+            let entry = indices[idx];
+            if entry.is_evicted() {
+                continue;
+            }
+            let height = idx.saturating_add(1) as u64;
+            let path = block_store.da_block_path(height);
+            if path.exists() {
+                continue;
+            }
+            let length: usize = entry.length.try_into()?;
+            buffer.resize(length, 0);
+            block_store.read_block_data(entry.start, &mut buffer)?;
+            let tmp_path = path.with_extension("norito.tmp");
+            let mut tmp_file = FileWrap::open_with(tmp_path.clone(), |opts| {
+                opts.write(true).create(true).truncate(true);
+            })?;
+            tmp_file.try_io(|file| {
+                file.write_all(&buffer)?;
+                file.flush()?;
+                file.sync_data()
+            })?;
+            std::fs::rename(&tmp_path, &path).map_err(|err| Error::IO(err, path.clone()))?;
+            if let Some(parent) = path.parent() {
+                sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+            }
+        }
+
+        let data_path = block_store.path_to_blockchain.join(DATA_FILE_NAME);
+        let data_tmp = block_store
+            .path_to_blockchain
+            .join(format!("{DATA_FILE_NAME}.tmp"));
+        let index_path = block_store.path_to_blockchain.join(INDEX_FILE_NAME);
+        let index_tmp = block_store
+            .path_to_blockchain
+            .join(format!("{INDEX_FILE_NAME}.tmp"));
+
+        let mut new_indices = indices.clone();
+        let mut cursor = 0u64;
+        let mut data_tmp_file = FileWrap::open_with(data_tmp.clone(), |opts| {
+            opts.write(true).create(true).truncate(true);
+        })?;
+        for (idx, entry) in indices.iter().enumerate() {
+            if entry.is_evicted() || evict_mask[idx] {
+                new_indices[idx].start = EVICTED_BLOCK_START;
+                continue;
+            }
+            let length: usize = entry.length.try_into()?;
+            buffer.resize(length, 0);
+            block_store.read_block_data(entry.start, &mut buffer)?;
+            data_tmp_file.try_io(|file| {
+                file.seek(SeekFrom::Start(cursor))?;
+                file.write_all(&buffer)
+            })?;
+            new_indices[idx].start = cursor;
+            cursor = cursor.saturating_add(entry.length);
+        }
+        data_tmp_file.try_io(|file| {
+            file.flush()?;
+            file.set_len(cursor)?;
+            file.sync_data()
+        })?;
+
+        let mut index_tmp_file = FileWrap::open_with(index_tmp.clone(), |opts| {
+            opts.write(true).create(true).truncate(true);
+        })?;
+        let index_len = u64::try_from(persisted)?.saturating_mul(BlockIndex::SIZE);
+        index_tmp_file.try_io(|file| {
+            for entry in &new_indices {
+                file.write_all(&entry.start.to_le_bytes())?;
+                file.write_all(&entry.length.to_le_bytes())?;
+            }
+            file.flush()?;
+            file.set_len(index_len)?;
+            file.sync_data()
+        })?;
+
+        std::fs::rename(&data_tmp, &data_path).map_err(|err| Error::IO(err, data_path.clone()))?;
+        std::fs::rename(&index_tmp, &index_path)
+            .map_err(|err| Error::IO(err, index_path.clone()))?;
+        if let Some(parent) = data_path.parent() {
+            sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+        }
+
+        block_store.fsync.clear();
+        block_store.drop_cached_handles();
+
+        if freed > 0 {
+            if let Some(telemetry) = self.telemetry.get() {
+                telemetry.add_storage_da_churn_bytes("kura", "evicted", freed);
+            }
+        }
+
+        Ok(freed)
     }
 
     /// Retention window for commit-roster snapshots.
@@ -1086,6 +1243,7 @@ impl Kura {
         let mut hash_mismatch = false;
 
         for (idx, block) in block_indices.iter().enumerate() {
+            let height = idx.saturating_add(1) as u64;
             if block.length == 0 {
                 truncated = Some(true);
                 error!(
@@ -1104,53 +1262,81 @@ impl Kura {
                 );
                 break;
             }
-            let end = block
-                .start
-                .checked_add(block.length)
-                .ok_or(Error::CorruptedBlockRange {
-                    start: block.start,
-                    length: block.length,
-                    data_len: data_file_len,
-                })?;
-            if end > data_file_len {
-                truncated = Some(true);
-                error!(
-                    start = block.start,
-                    length = block.length,
-                    data_len = data_file_len,
-                    "Block index points past data file; pruning to last valid block"
-                );
-                break;
-            }
-            let length: usize = block.length.try_into()?;
-            let additional = length.saturating_sub(block_data_buffer.len());
-            if additional > 0 {
-                block_data_buffer.try_reserve(additional)?;
-            }
-            block_data_buffer.resize(length, 0);
-
             let decoded_block =
-                match block_store.read_block_data(block.start, &mut block_data_buffer) {
-                    Ok(()) => match decode_framed_signed_block(&block_data_buffer) {
+                if block.is_evicted() {
+                    let payload = match block_store.read_da_block_bytes(height, block.length) {
+                        Ok(payload) => payload,
+                        Err(error) => {
+                            truncated = Some(true);
+                            error!(
+                                ?error,
+                                block_index = idx,
+                                height,
+                                "Failed to read evicted block payload; pruning to last valid block"
+                            );
+                            break;
+                        }
+                    };
+                    match decode_framed_signed_block(&payload) {
                         Ok(decoded_block) => decoded_block,
                         Err(error) => {
                             truncated = Some(true);
                             error!(
                                 ?error,
                                 block_index = idx,
-                                "Malformed block payload; pruning to last valid block"
+                                height,
+                                "Malformed evicted block payload; pruning to last valid block"
                             );
                             break;
                         }
-                    },
-                    Err(error) => {
+                    }
+                } else {
+                    let end = block.start.checked_add(block.length).ok_or(
+                        Error::CorruptedBlockRange {
+                            start: block.start,
+                            length: block.length,
+                            data_len: data_file_len,
+                        },
+                    )?;
+                    if end > data_file_len {
                         truncated = Some(true);
                         error!(
-                            ?error,
-                            block_index = idx,
-                            "Failed to read block payload; pruning to last valid block"
+                            start = block.start,
+                            length = block.length,
+                            data_len = data_file_len,
+                            "Block index points past data file; pruning to last valid block"
                         );
                         break;
+                    }
+                    let length: usize = block.length.try_into()?;
+                    let additional = length.saturating_sub(block_data_buffer.len());
+                    if additional > 0 {
+                        block_data_buffer.try_reserve(additional)?;
+                    }
+                    block_data_buffer.resize(length, 0);
+
+                    match block_store.read_block_data(block.start, &mut block_data_buffer) {
+                        Ok(()) => match decode_framed_signed_block(&block_data_buffer) {
+                            Ok(decoded_block) => decoded_block,
+                            Err(error) => {
+                                truncated = Some(true);
+                                error!(
+                                    ?error,
+                                    block_index = idx,
+                                    "Malformed block payload; pruning to last valid block"
+                                );
+                                break;
+                            }
+                        },
+                        Err(error) => {
+                            truncated = Some(true);
+                            error!(
+                                ?error,
+                                block_index = idx,
+                                "Failed to read block payload; pruning to last valid block"
+                            );
+                            break;
+                        }
                     }
                 };
 
@@ -1333,8 +1519,11 @@ impl Kura {
             );
             let end_height = start_height + blocks_to_be_written.len();
             let start_height_u64 = u64::try_from(start_height).expect("start height fits in u64");
-            if let Err(error) =
-                block_store_guard.append_block_batch_at(start_height_u64, &blocks_to_be_written)
+            if let Err(error) = block_store_guard.append_block_batch_at(
+                start_height_u64,
+                &blocks_to_be_written,
+                kura.max_disk_usage_bytes,
+            )
             {
                 error!(?error, "Failed to store block batch");
                 panic!("Kura has encountered a fatal IO error.");
@@ -1411,33 +1600,67 @@ impl Kura {
 
         let block = {
             let mut block_store = self.block_store.lock();
-            let BlockIndex { start, length } =
-                match block_store.read_block_index(block_index as u64) {
-                    Ok(index) => index,
-                    Err(error) => {
-                        error!(?error, block_index, "Failed to read block index from disk");
-                        return None;
-                    }
-                };
+            let index = match block_store.read_block_index(block_index as u64) {
+                Ok(index) => index,
+                Err(error) => {
+                    error!(?error, block_index, "Failed to read block index from disk");
+                    return None;
+                }
+            };
+            let BlockIndex { start, length } = index;
+            let is_evicted = index.is_evicted();
 
             if length == 0 {
                 error!(block_index, "Encountered zero-length block entry");
                 return None;
             }
 
-            let bytes = match block_store.block_bytes(start, length) {
-                Ok(slice) => slice,
-                Err(error) => {
-                    error!(?error, block_index, "Failed to borrow block data slice");
-                    return None;
-                }
-            };
+            if let Some(telemetry) = self.telemetry.get() {
+                let outcome = if is_evicted { "miss" } else { "hit" };
+                telemetry.inc_storage_da_cache("kura", outcome);
+            }
 
-            match decode_framed_signed_block(bytes) {
-                Ok(decoded) => decoded,
-                Err(error) => {
-                    error!(?error, block_index, "Failed to decode block from disk");
-                    return None;
+            if is_evicted {
+                let height = block_index.saturating_add(1) as u64;
+                let bytes = match block_store.read_da_block_bytes(height, length) {
+                    Ok(bytes) => bytes,
+                    Err(error) => {
+                        error!(
+                            ?error,
+                            block_index, height, "Failed to read evicted block payload"
+                        );
+                        return None;
+                    }
+                };
+                if let Some(telemetry) = self.telemetry.get() {
+                    let actual_len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+                    telemetry.add_storage_da_churn_bytes("kura", "rehydrated", actual_len);
+                }
+                match decode_framed_signed_block(&bytes) {
+                    Ok(decoded) => decoded,
+                    Err(error) => {
+                        error!(
+                            ?error,
+                            block_index, height, "Failed to decode evicted block payload"
+                        );
+                        return None;
+                    }
+                }
+            } else {
+                let bytes = match block_store.block_bytes(start, length) {
+                    Ok(slice) => slice,
+                    Err(error) => {
+                        error!(?error, block_index, "Failed to borrow block data slice");
+                        return None;
+                    }
+                };
+
+                match decode_framed_signed_block(bytes) {
+                    Ok(decoded) => decoded,
+                    Err(error) => {
+                        error!(?error, block_index, "Failed to decode block from disk");
+                        return None;
+                    }
                 }
             }
         };
@@ -1544,6 +1767,20 @@ impl Kura {
         Ok(frame_len
             .saturating_add(BlockIndex::SIZE)
             .saturating_add(SIZE_OF_BLOCK_HASH))
+    }
+
+    fn evicted_block_required_bytes() -> u64 {
+        BlockIndex::SIZE.saturating_add(SIZE_OF_BLOCK_HASH)
+    }
+
+    // Budget accounting treats oversized blocks as evicted-on-write.
+    fn block_required_bytes_for_budget(block: &SignedBlock, limit: u64) -> Result<u64> {
+        let required = Self::block_required_bytes(block)?;
+        if limit > 0 && required > limit {
+            Ok(Self::evicted_block_required_bytes())
+        } else {
+            Ok(required)
+        }
     }
 
     fn sidecar_bytes(store_dir: &Path) -> Result<u64> {
@@ -1714,7 +1951,10 @@ impl Kura {
 
         let mut pending_bytes = 0u64;
         for block in pending_blocks {
-            pending_bytes = pending_bytes.saturating_add(Self::block_required_bytes(&block)?);
+            pending_bytes = pending_bytes.saturating_add(Self::block_required_bytes_for_budget(
+                &block,
+                self.max_disk_usage_bytes,
+            )?);
         }
         Ok(pending_bytes)
     }
@@ -1755,7 +1995,6 @@ impl Kura {
             return Ok(());
         }
 
-        let block_required = Self::block_required_bytes(block)?;
         let merge_entry_bytes = match merge_entry {
             Some(entry) => {
                 let encoded = Encode::encode(entry);
@@ -1768,6 +2007,7 @@ impl Kura {
         let (persisted_count, unindexed_bytes) = self.persisted_count_and_unindexed_bytes()?;
 
         let limit = self.max_disk_usage_bytes;
+        let block_required = Self::block_required_bytes_for_budget(block, limit)?;
         let mut used = self.kura_disk_usage_bytes()?;
         let pending_bytes = self.pending_block_bytes(persisted_count, unindexed_bytes)?;
         let mut budget_used = used.saturating_add(pending_bytes);
@@ -1788,6 +2028,29 @@ impl Kura {
                         telemetry.record_storage_budget_usage("kura", required, limit);
                     }
                     return Ok(());
+                }
+            }
+            let evict_needed = required.saturating_sub(limit);
+            if evict_needed > 0 {
+                match self.evict_block_bodies(evict_needed) {
+                    Ok(freed) if freed > 0 => {
+                        used = self.kura_disk_usage_bytes()?;
+                        budget_used = used.saturating_add(pending_bytes);
+                        required = used
+                            .saturating_add(pending_bytes)
+                            .saturating_add(block_required)
+                            .saturating_add(merge_entry_bytes);
+                        if required <= limit {
+                            if let Some(telemetry) = self.telemetry.get() {
+                                telemetry.record_storage_budget_usage("kura", required, limit);
+                            }
+                            return Ok(());
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(err) => {
+                        warn!(?err, "failed to evict Kura block bodies for budget");
+                    }
                 }
             }
             if let Some(telemetry) = self.telemetry.get() {
@@ -1836,8 +2099,9 @@ impl Kura {
             return self.check_storage_budget(block, None);
         };
 
-        let new_bytes = Self::block_required_bytes(block)?;
-        let old_bytes = Self::block_required_bytes(&old_block)?;
+        let limit = self.max_disk_usage_bytes;
+        let new_bytes = Self::block_required_bytes_for_budget(block, limit)?;
+        let old_bytes = Self::block_required_bytes_for_budget(&old_block, limit)?;
         let (persisted_count, unindexed_bytes) = self.persisted_count_and_unindexed_bytes()?;
         let pending_raw = self.pending_block_bytes_raw(persisted_count)?;
         let top_is_pending = block_count > persisted_count;
@@ -1848,7 +2112,6 @@ impl Kura {
         }
         pending_raw_after = pending_raw_after.saturating_add(new_bytes);
 
-        let limit = self.max_disk_usage_bytes;
         let pending_current = pending_raw.saturating_sub(unindexed_bytes);
         let mut used = self.kura_disk_usage_bytes()?;
         let mut budget_used = used.saturating_add(pending_current);
@@ -1880,6 +2143,34 @@ impl Kura {
                         telemetry.record_storage_budget_usage("kura", required, limit);
                     }
                     return Ok(());
+                }
+            }
+            let evict_needed = required.saturating_sub(limit);
+            if evict_needed > 0 {
+                match self.evict_block_bodies(evict_needed) {
+                    Ok(freed) if freed > 0 => {
+                        used = self.kura_disk_usage_bytes()?;
+                        budget_used = used.saturating_add(pending_current);
+                        required = {
+                            let used_after = if top_is_pending {
+                                used
+                            } else {
+                                used.saturating_sub(old_bytes)
+                            };
+                            let pending_after = pending_raw_after.saturating_sub(unindexed_bytes);
+                            used_after.saturating_add(pending_after)
+                        };
+                        if required <= limit {
+                            if let Some(telemetry) = self.telemetry.get() {
+                                telemetry.record_storage_budget_usage("kura", required, limit);
+                            }
+                            return Ok(());
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(err) => {
+                        warn!(?err, "failed to evict Kura block bodies for budget");
+                    }
                 }
             }
             if let Some(telemetry) = self.telemetry.get() {
@@ -1981,8 +2272,8 @@ impl Kura {
             return;
         }
         // (Genesis block is used in metrics to get genesis timestamp.)
-        for idx in 1..limit {
-            block_data[idx].1 = None;
+        for entry in block_data.iter_mut().take(limit).skip(1) {
+            entry.1 = None;
         }
     }
 
@@ -2015,6 +2306,7 @@ pub struct BlockCount(pub usize);
 /// that uses `std::fs`, the default IO file in Rust.
 pub struct BlockStore {
     path_to_blockchain: PathBuf,
+    da_blocks_dir: PathBuf,
     data_file: Option<FileWrap>,
     index_file: Option<FileWrap>,
     hashes_file: Option<FileWrap>,
@@ -2032,6 +2324,7 @@ impl Debug for BlockStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BlockStore")
             .field("path_to_blockchain", &self.path_to_blockchain)
+            .field("da_blocks_dir", &self.da_blocks_dir)
             .field("data_file_open", &self.data_file.is_some())
             .field("index_file_open", &self.index_file.is_some())
             .field("hashes_file_open", &self.hashes_file.is_some())
@@ -2134,6 +2427,12 @@ pub struct BlockIndex {
     pub start: u64,
     /// Length of block section in bytes
     pub length: u64,
+}
+
+impl BlockIndex {
+    fn is_evicted(&self) -> bool {
+        self.start == EVICTED_BLOCK_START
+    }
 }
 
 impl BlockIndex {
@@ -2616,8 +2915,9 @@ impl Kura {
                     sidecar_height = sidecar.height,
                     "roster sidecar height mismatch"
                 );
-                None
-            } else if let Ok(height_usize) = usize::try_from(height)
+                return None;
+            }
+            if let Ok(height_usize) = usize::try_from(height)
                 && let Some(expected) =
                     NonZeroUsize::new(height_usize).and_then(|height| self.get_block_hash(height))
                 && expected != sidecar.block_hash
@@ -2628,35 +2928,38 @@ impl Kura {
                     actual = %sidecar.block_hash,
                     "roster sidecar block hash mismatch"
                 );
-                None
-            } else if let Some(cert) = sidecar.commit_qc.as_ref()
-                && (cert.height != sidecar.height || cert.subject_block_hash != sidecar.block_hash)
-            {
-                iroha_logger::warn!(
-                    height,
-                    sidecar_height = sidecar.height,
-                    sidecar_hash = %sidecar.block_hash,
-                    cert_height = cert.height,
-                    cert_hash = %cert.subject_block_hash,
-                    "roster sidecar commit certificate metadata mismatch"
-                );
-                None
-            } else if let Some(checkpoint) = sidecar.validator_checkpoint.as_ref()
-                && (checkpoint.height != sidecar.height
-                    || checkpoint.block_hash != sidecar.block_hash)
-            {
-                iroha_logger::warn!(
-                    height,
-                    sidecar_height = sidecar.height,
-                    sidecar_hash = %sidecar.block_hash,
-                    checkpoint_height = checkpoint.height,
-                    checkpoint_hash = %checkpoint.block_hash,
-                    "roster sidecar checkpoint metadata mismatch"
-                );
-                None
-            } else {
-                Some(sidecar)
+                return None;
             }
+            if let Some(cert) = sidecar.commit_qc.as_ref() {
+                let cert_block_hash = cert.subject_block_hash;
+                if cert.height != sidecar.height || cert_block_hash != sidecar.block_hash {
+                    iroha_logger::warn!(
+                        height,
+                        sidecar_height = sidecar.height,
+                        sidecar_hash = %sidecar.block_hash,
+                        cert_height = cert.height,
+                        cert_hash = %cert_block_hash,
+                        "roster sidecar commit certificate metadata mismatch"
+                    );
+                    return None;
+                }
+            }
+            if let Some(checkpoint) = sidecar.validator_checkpoint.as_ref() {
+                if checkpoint.height != sidecar.height
+                    || checkpoint.block_hash != sidecar.block_hash
+                {
+                    iroha_logger::warn!(
+                        height,
+                        sidecar_height = sidecar.height,
+                        sidecar_hash = %sidecar.block_hash,
+                        checkpoint_height = checkpoint.height,
+                        checkpoint_hash = %checkpoint.block_hash,
+                        "roster sidecar checkpoint metadata mismatch"
+                    );
+                    return None;
+                }
+            }
+            Some(sidecar)
         })
     }
 
@@ -2692,38 +2995,34 @@ impl Kura {
                     (None, false)
                 }
             };
-            if let Some(data_len) = data_len {
+            data_len.is_some_and(|data_len| {
                 if !temp_index_sane {
                     warn!(
                         ?temp_index_path,
                         kind, "refusing to promote invalid sidecar temp index"
                     );
+                    return false;
+                }
+                if temp_data_exists {
+                    return Self::promote_sidecar_temp(&temp_index_path, index_path, kind, "index");
+                }
+                let main_index_sane = if index_path.exists() {
+                    Self::sidecar_index_sane_with_label(index_path, data_len, kind, "main")
+                } else {
+                    false
+                };
+                if main_index_sane {
+                    iroha_logger::debug!(
+                        ?temp_index_path,
+                        ?index_path,
+                        kind,
+                        "skipping temp sidecar index promotion because main index is valid"
+                    );
                     false
                 } else {
-                    if !temp_data_exists {
-                        let main_index_sane = if index_path.exists() {
-                            Self::sidecar_index_sane_with_label(index_path, data_len, kind, "main")
-                        } else {
-                            false
-                        };
-                        if main_index_sane {
-                            iroha_logger::debug!(
-                                ?temp_index_path,
-                                ?index_path,
-                                kind,
-                                "skipping temp sidecar index promotion because main index is valid"
-                            );
-                            false
-                        } else {
-                            Self::promote_sidecar_temp(&temp_index_path, index_path, kind, "index")
-                        }
-                    } else {
-                        Self::promote_sidecar_temp(&temp_index_path, index_path, kind, "index")
-                    }
+                    Self::promote_sidecar_temp(&temp_index_path, index_path, kind, "index")
                 }
-            } else {
-                false
-            }
+            })
         } else {
             false
         };
@@ -2874,19 +3173,18 @@ impl Kura {
                 );
                 return false;
             }
-            let entry_end = match entry.offset.checked_add(entry.len) {
-                Some(end) => end,
-                None => {
-                    warn!(
-                        offset = entry.offset,
-                        len = entry.len,
-                        ?index_path,
-                        kind,
-                        label,
-                        "sidecar index entry overflows offset"
-                    );
-                    return false;
-                }
+            let entry_end = if let Some(end) = entry.offset.checked_add(entry.len) {
+                end
+            } else {
+                warn!(
+                    offset = entry.offset,
+                    len = entry.len,
+                    ?index_path,
+                    kind,
+                    label,
+                    "sidecar index entry overflows offset"
+                );
+                return false;
             };
             if entry_end > data_len {
                 warn!(
@@ -3253,6 +3551,7 @@ impl Kura {
         true
     }
 
+    #[allow(clippy::too_many_lines)]
     fn read_indexed_sidecar<T, F>(
         &self,
         height: u64,
@@ -3554,26 +3853,25 @@ impl Kura {
                 }
                 continue;
             };
-            let entry_end = match entry.offset.checked_add(entry.len) {
-                Some(end) => end,
-                None => {
+            let entry_end = if let Some(end) = entry.offset.checked_add(entry.len) {
+                end
+            } else {
+                iroha_logger::warn!(
+                    offset = entry.offset,
+                    len = entry.len,
+                    kind,
+                    "sidecar payload range overflow during prune; dropping entry"
+                );
+                if let Err(err) = new_index.write_all(&empty_entry) {
                     iroha_logger::warn!(
-                        offset = entry.offset,
-                        len = entry.len,
+                        ?err,
+                        ?temp_index_path,
                         kind,
-                        "sidecar payload range overflow during prune; dropping entry"
+                        "failed to write pruned sidecar index entry"
                     );
-                    if let Err(err) = new_index.write_all(&empty_entry) {
-                        iroha_logger::warn!(
-                            ?err,
-                            ?temp_index_path,
-                            kind,
-                            "failed to write pruned sidecar index entry"
-                        );
-                        return false;
-                    }
-                    continue;
+                    return false;
                 }
+                continue;
             };
             if entry_end > data_len {
                 iroha_logger::warn!(
@@ -3801,6 +4099,7 @@ impl BlockStore {
     fn retarget_path(&mut self, path: PathBuf) -> Result<()> {
         self.drop_cached_handles();
         self.path_to_blockchain = path;
+        self.da_blocks_dir = self.path_to_blockchain.join(DA_BLOCKS_DIR_NAME);
         self.fsync.clear();
         self.create_files_if_they_do_not_exist()
     }
@@ -3816,8 +4115,10 @@ impl BlockStore {
         fsync_mode: FsyncMode,
         fsync_interval: Duration,
     ) -> Self {
+        let path_to_blockchain = store_path.as_ref().to_path_buf();
         Self {
-            path_to_blockchain: store_path.as_ref().to_path_buf(),
+            da_blocks_dir: path_to_blockchain.join(DA_BLOCKS_DIR_NAME),
+            path_to_blockchain,
             data_file: None,
             index_file: None,
             hashes_file: None,
@@ -3830,6 +4131,34 @@ impl BlockStore {
             commit_marker_count: 0,
             commit_marker_pending: None,
         }
+    }
+
+    fn da_block_path(&self, height: u64) -> PathBuf {
+        self.da_blocks_dir.join(format!("{height:020}.norito"))
+    }
+
+    fn ensure_da_blocks_dir(&self) -> Result<()> {
+        if self.da_blocks_dir.as_os_str().is_empty() {
+            return Ok(());
+        }
+        std::fs::create_dir_all(&self.da_blocks_dir)
+            .map_err(|err| Error::MkDir(err, self.da_blocks_dir.clone()))
+    }
+
+    fn read_da_block_bytes(&self, height: u64, expected_len: u64) -> Result<Vec<u8>> {
+        self.ensure_da_blocks_dir()?;
+        let path = self.da_block_path(height);
+        let bytes = std::fs::read(&path).map_err(|err| Error::IO(err, path.clone()))?;
+        if expected_len > 0 && u64::try_from(bytes.len())? != expected_len {
+            warn!(
+                height,
+                expected_len,
+                actual_len = bytes.len(),
+                path = %path.display(),
+                "DA-backed block payload length mismatched index entry"
+            );
+        }
+        Ok(bytes)
     }
 
     fn ensure_data_file(&mut self) -> Result<&mut FileWrap> {
@@ -3952,8 +4281,8 @@ impl BlockStore {
                 .open(&tmp_path)
                 .map_err(|err| Error::IO(err, tmp_path.clone()))?;
             file.write_all(&bytes)
-                .and_then(|_| file.flush())
-                .and_then(|_| file.sync_data())
+                .and_then(|()| file.flush())
+                .and_then(|()| file.sync_data())
                 .map_err(|err| Error::IO(err, tmp_path.clone()))?;
         }
         if let Err(err) = std::fs::rename(&tmp_path, &path) {
@@ -3999,12 +4328,11 @@ impl BlockStore {
         while candidate > 0 {
             match self.read_block_index(candidate - 1) {
                 Ok(index) => {
-                    let end = match index.start.checked_add(index.length) {
-                        Some(end) => end,
-                        None => {
-                            candidate = candidate.saturating_sub(1);
-                            continue;
-                        }
+                    let end = if let Some(end) = index.start.checked_add(index.length) {
+                        end
+                    } else {
+                        candidate = candidate.saturating_sub(1);
+                        continue;
                     };
                     if index.length == 0
                         || index.length > STRICT_INIT_MAX_BLOCK_BYTES
@@ -4066,12 +4394,11 @@ impl BlockStore {
             return Ok(());
         }
 
-        let mut durable_count = match self.read_commit_marker()? {
-            Some(marker) => marker.count,
-            None => {
-                self.write_commit_marker(data_backed_count)?;
-                data_backed_count
-            }
+        let mut durable_count = if let Some(marker) = self.read_commit_marker()? {
+            marker.count
+        } else {
+            self.write_commit_marker(data_backed_count)?;
+            data_backed_count
         };
 
         if durable_count > data_backed_count {
@@ -4349,12 +4676,18 @@ impl BlockStore {
     }
 
     /// Return the logical index count based on the index file length.
+    ///
+    /// # Errors
+    /// Returns any underlying IO errors when reading the index file metadata.
     #[allow(clippy::integer_division)]
     pub fn read_index_count(&mut self) -> Result<u64> {
         self.read_index_count_from_len()
     }
 
     /// Return the durable index count as recorded by the commit marker.
+    ///
+    /// # Errors
+    /// Returns any underlying IO errors when reading the index file metadata.
     pub fn read_durable_index_count(&mut self) -> Result<u64> {
         if self.path_to_blockchain.as_os_str().is_empty() {
             return Ok(0);
@@ -4662,7 +4995,7 @@ impl BlockStore {
     /// Propagates I/O and encoding errors.
     pub fn append_block_batch(&mut self, blocks: &[Arc<SignedBlock>]) -> Result<()> {
         let start_height = self.read_index_count()?;
-        self.append_block_batch_at(start_height, blocks)
+        self.append_block_batch_at(start_height, blocks, 0)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -4670,6 +5003,7 @@ impl BlockStore {
         &mut self,
         start_height: u64,
         blocks: &[Arc<SignedBlock>],
+        max_disk_usage_bytes: u64,
     ) -> Result<()> {
         if blocks.is_empty() {
             return Ok(());
@@ -4684,8 +5018,24 @@ impl BlockStore {
         let start_location_in_data_file = if start_height == 0 {
             0
         } else {
-            let ultimate_block = self.read_block_index(start_height - 1)?;
-            ultimate_block.start + ultimate_block.length
+            let mut idx = start_height.saturating_sub(1);
+            loop {
+                let entry = self.read_block_index(idx)?;
+                if !entry.is_evicted() {
+                    break entry
+                        .start
+                        .checked_add(entry.length)
+                        .ok_or(Error::CorruptedBlockRange {
+                            start: entry.start,
+                            length: entry.length,
+                            data_len: entry.start,
+                        })?;
+                }
+                if idx == 0 {
+                    break 0;
+                }
+                idx = idx.saturating_sub(1);
+            }
         };
         debug!(
             start_height,
@@ -4696,6 +5046,7 @@ impl BlockStore {
         let mut lengths = Vec::with_capacity(blocks.len());
         let mut offsets = Vec::with_capacity(blocks.len());
         let mut hashes = Vec::with_capacity(blocks.len());
+        let mut evicted = Vec::with_capacity(blocks.len());
 
         for (idx, block) in blocks.iter().enumerate() {
             debug!(
@@ -4706,14 +5057,20 @@ impl BlockStore {
             let wire = block.canonical_wire()?;
             let (frame, versioned) = wire.into_parts();
             let frame_len = u64::try_from(frame.len())?;
+            let required = frame_len
+                .saturating_add(BlockIndex::SIZE)
+                .saturating_add(SIZE_OF_BLOCK_HASH);
+            let evict = max_disk_usage_bytes > 0 && required > max_disk_usage_bytes;
             frames.push(frame);
             lengths.push(frame_len);
             hashes.push(block.hash());
+            evicted.push(evict);
             self.encode_scratch = versioned;
             debug!(
                 start_height,
                 block_idx = idx,
                 frame_len,
+                evict,
                 "append_block_batch encoded block"
             );
         }
@@ -4724,7 +5081,11 @@ impl BlockStore {
             "append_block_batch prepared frames"
         );
         let mut cursor = start_location_in_data_file;
-        for len in &lengths {
+        for (len, evict) in lengths.iter().zip(evicted.iter()) {
+            if *evict {
+                offsets.push(EVICTED_BLOCK_START);
+                continue;
+            }
             offsets.push(cursor);
             cursor = cursor.checked_add(*len).ok_or(Error::CorruptedBlockRange {
                 start: cursor,
@@ -4741,6 +5102,33 @@ impl BlockStore {
             "append_block_batch preparing to write data"
         );
 
+        if evicted.iter().any(|evict| *evict) {
+            self.ensure_da_blocks_dir()?;
+            for (idx, (frame, evict)) in frames.iter().zip(evicted.iter()).enumerate() {
+                if !*evict {
+                    continue;
+                }
+                let height = start_height.saturating_add(idx as u64).saturating_add(1);
+                let path = self.da_block_path(height);
+                let tmp_path = path.with_extension("norito.tmp");
+                if path.exists() {
+                    std::fs::remove_file(&path).map_err(|err| Error::IO(err, path.clone()))?;
+                }
+                let mut tmp_file = FileWrap::open_with(tmp_path.clone(), |opts| {
+                    opts.write(true).create(true).truncate(true);
+                })?;
+                tmp_file.try_io(|file| {
+                    file.write_all(frame)?;
+                    file.flush()?;
+                    file.sync_data()
+                })?;
+                std::fs::rename(&tmp_path, &path).map_err(|err| Error::IO(err, path.clone()))?;
+                if let Some(parent) = path.parent() {
+                    sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+                }
+            }
+        }
+
         let data_file = self.ensure_data_file()?;
         data_file.try_io(|file| {
             debug!(
@@ -4748,7 +5136,10 @@ impl BlockStore {
                 "append_block_batch writing frames to data file"
             );
             file.seek(SeekFrom::Start(start_location_in_data_file))?;
-            for frame in &frames {
+            for (frame, evict) in frames.iter().zip(evicted.iter()) {
+                if *evict {
+                    continue;
+                }
                 file.write_all(frame)?;
             }
             debug!(start_height, "append_block_batch flushing data file");
@@ -4968,7 +5359,7 @@ pub enum Error {
     NoritoFrame(#[from] norito::core::Error),
     /// Failed to allocate buffer
     Alloc(#[from] std::collections::TryReserveError),
-    /// Tried reading block data out of bounds: start {start_block_height}, count {block_count}
+    /// Tried reading block data out of bounds: start `{start_block_height}`, count `{block_count}`
     OutOfBoundsBlockRead {
         /// The block height from which the read was supposed to start
         start_block_height: u64,
@@ -5838,7 +6229,81 @@ mod tests {
     }
 
     #[test]
-    fn replace_top_block_rejects_when_budget_exceeded() {
+    fn store_block_evicts_when_block_exceeds_budget() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: NonZeroUsize::new(1).expect("non-zero"),
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: FSYNC_INTERVAL,
+            block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+        };
+        let (mut kura, _) =
+            Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+        let used = kura.kura_disk_usage_bytes().expect("baseline usage");
+        let overhead = BlockIndex::SIZE.saturating_add(SIZE_OF_BLOCK_HASH);
+        let budget_limit = used.saturating_add(overhead.saturating_mul(2)).saturating_add(1);
+        Arc::get_mut(&mut kura)
+            .expect("exclusive kura handle")
+            .max_disk_usage_bytes = budget_limit;
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let _handle = {
+            let _rt_guard = rt.enter();
+            Kura::start(kura.clone(), ShutdownSignal::new())
+        };
+
+        let make_block =
+            |message: &str, prev: Option<&SignedBlock>| -> Arc<SignedBlock> {
+            let tx = TransactionBuilder::new(
+                ChainId::from("test"),
+                SAMPLE_GENESIS_ACCOUNT_ID.to_owned(),
+            )
+            .with_instructions([Log::new(Level::INFO, message.to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+            let acc = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+            Arc::new(
+                BlockBuilder::new(vec![acc])
+                    .chain(0, prev)
+                    .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
+                    .unpack(|_| {})
+                    .into(),
+            )
+        };
+
+        let payload = "x".repeat(4096);
+        let block1 = make_block(&payload, None);
+        let block2 = make_block(&payload, Some(block1.as_ref()));
+        let block1_required = Kura::block_required_bytes(&block1).expect("block1 bytes");
+        assert!(
+            block1_required > budget_limit,
+            "expected block to exceed budget"
+        );
+
+        kura.store_block(Arc::clone(&block1))
+            .expect("store oversized block1");
+        kura.store_block(Arc::clone(&block2))
+            .expect("store oversized block2");
+        wait_for_block_hash(&kura, 2, block2.hash());
+
+        let (index, da_path) = {
+            let mut store = kura.block_store.lock();
+            (store.read_block_index(0).expect("block index"), store.da_block_path(1))
+        };
+        assert!(index.is_evicted());
+        assert!(da_path.exists(), "expected DA payload for block1");
+
+        let height = NonZeroUsize::new(1).expect("non-zero");
+        let block = kura.get_block(height).expect("rehydrate block1");
+        assert_eq!(block.hash(), block1.hash());
+    }
+
+    #[test]
+    fn replace_top_block_evicts_when_budget_exceeded() {
         let temp_dir = TempDir::new().expect("create temp dir");
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
@@ -5854,9 +6319,6 @@ mod tests {
         };
         let (mut kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = StateTelemetry::new(metrics.clone(), true);
-        kura.attach_telemetry(telemetry);
 
         let make_block = |message: &str| -> SignedBlock {
             let tx = TransactionBuilder::new(
@@ -5887,42 +6349,27 @@ mod tests {
         Arc::get_mut(&mut kura)
             .expect("exclusive kura handle")
             .max_disk_usage_bytes = limit;
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let _handle = {
+            let _rt_guard = rt.enter();
+            Kura::start(kura.clone(), ShutdownSignal::new())
+        };
 
         kura.store_block(small_block).expect("store small block");
-        let (persisted_count, unindexed_bytes) = kura
-            .persisted_count_and_unindexed_bytes()
-            .expect("persisted count");
-        let pending_bytes = kura
-            .pending_block_bytes(persisted_count, unindexed_bytes)
-            .expect("pending bytes");
-        let used = kura.kura_disk_usage_bytes().expect("kura bytes");
-        let expected_used = used.saturating_add(pending_bytes);
 
-        let err = kura
-            .replace_top_block(large_block)
-            .expect_err("replacement should exceed budget");
-        assert!(matches!(err, Error::StorageBudgetExceeded { .. }));
-        assert_eq!(
-            metrics
-                .storage_budget_bytes_used
-                .with_label_values(&["kura"])
-                .get(),
-            expected_used
+        assert!(
+            large_bytes > limit,
+            "expected replacement block to exceed budget"
         );
-        assert_eq!(
-            metrics
-                .storage_budget_bytes_limit
-                .with_label_values(&["kura"])
-                .get(),
-            limit
-        );
-        assert_eq!(
-            metrics
-                .storage_budget_exceeded_total
-                .with_label_values(&["kura"])
-                .get(),
-            1
-        );
+        kura.replace_top_block(large_block.clone())
+            .expect("replacement should evict oversized block");
+        wait_for_block_hash(&kura, 1, large_block.hash());
+        let (index, da_path) = {
+            let mut store = kura.block_store.lock();
+            (store.read_block_index(0).expect("block index"), store.da_block_path(1))
+        };
+        assert!(index.is_evicted());
+        assert!(da_path.exists(), "expected DA payload for evicted block");
     }
 
     #[test]
@@ -5977,7 +6424,7 @@ mod tests {
         let (kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
 
-        let base = kura.kura_disk_usage_bytes().expect("base usage");
+        let base = kura.disk_usage_bytes().expect("base usage");
         let blocks_dir = RuntimeLaneConfig::default()
             .primary()
             .blocks_dir(temp_dir.path());
@@ -6001,9 +6448,41 @@ mod tests {
             .with_extension("norito.tmp");
         std::fs::write(&temp_sidecar, [0u8; 3]).expect("write temp sidecar");
 
-        let updated = kura.kura_disk_usage_bytes().expect("usage with extras");
+        let updated = kura.disk_usage_bytes().expect("usage with extras");
         let extra = 7u64 + 5 + 3;
         assert_eq!(updated, base.saturating_add(extra));
+    }
+
+    #[test]
+    fn purge_retired_segments_removes_retired_dir() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: FSYNC_INTERVAL,
+            block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+        };
+        let (kura, _) =
+            Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+
+        let retired_dir = temp_dir.path().join("retired").join("blocks");
+        std::fs::create_dir_all(&retired_dir).expect("create retired dir");
+        std::fs::write(retired_dir.join("dummy.norito"), [0u8; 4]).expect("write retired file");
+
+        assert!(
+            kura.purge_retired_segments(),
+            "purge should remove retired data"
+        );
+        assert!(
+            !temp_dir.path().join("retired").exists(),
+            "retired dir should be removed"
+        );
     }
 
     #[test]
@@ -6521,7 +7000,7 @@ mod tests {
         assert_ne!(replacement.hash(), block2.hash(), "replacement must differ");
 
         block_store
-            .append_block_batch_at(1, &[replacement.clone()])
+            .append_block_batch_at(1, std::slice::from_ref(&replacement), 0)
             .unwrap();
 
         assert_eq!(block_store.read_index_count().unwrap(), 2);
@@ -6760,6 +7239,93 @@ mod tests {
             kura.get_block(nonzero!(1_usize)).is_none(),
             "expected missing block to yield None"
         );
+    }
+
+    #[test]
+    fn evicted_block_rehydrates_from_da_store() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 4);
+
+        let (kura, _) = Kura::new(
+            &KuraConfig {
+                init_mode: InitMode::Strict,
+                store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+                blocks_in_memory: NonZeroUsize::new(1).expect("non-zero"),
+                debug_output_new_blocks: false,
+                merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
+                fsync_mode: FsyncMode::Batched,
+                fsync_interval: FSYNC_INTERVAL,
+                block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
+                roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+            },
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("kura init");
+
+        let evict_len = {
+            let mut store = kura.block_store.lock();
+            store.read_block_index(1).expect("block index").length
+        };
+        let freed = kura
+            .evict_block_bodies(evict_len)
+            .expect("evict block bodies");
+        assert!(
+            freed >= evict_len,
+            "expected eviction to free at least one block"
+        );
+
+        let (evicted_index, da_path) = {
+            let mut store = kura.block_store.lock();
+            (
+                store.read_block_index(1).expect("block index"),
+                store.da_block_path(2),
+            )
+        };
+        assert!(evicted_index.is_evicted());
+        assert!(da_path.exists(), "expected DA block payload to exist");
+
+        let height = NonZeroUsize::new(2).expect("non-zero");
+        let expected_hash = kura.get_block_hash(height).expect("hash available");
+        let block = kura.get_block(height).expect("rehydrated block");
+        assert_eq!(block.hash(), expected_hash);
+    }
+
+    #[test]
+    fn evicted_blocks_survive_restart() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 4);
+
+        let config = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: NonZeroUsize::new(1).expect("non-zero"),
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: FsyncMode::Batched,
+            fsync_interval: FSYNC_INTERVAL,
+            block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+        };
+
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let evict_len = {
+            let mut store = kura.block_store.lock();
+            store.read_block_index(1).expect("block index").length
+        };
+        kura.evict_block_bodies(evict_len)
+            .expect("evict block bodies");
+        drop(kura);
+
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura reopen");
+        let height = NonZeroUsize::new(2).expect("non-zero");
+        let expected_hash = kura.get_block_hash(height).expect("hash available");
+        let block = kura
+            .get_block(height)
+            .expect("rehydrated block after restart");
+        assert_eq!(block.hash(), expected_hash);
     }
 
     #[test]
@@ -7928,7 +8494,7 @@ mod tests {
         let data_path = dir.join(PIPELINE_SIDECARS_DATA_FILE);
         let index_path = dir.join(PIPELINE_SIDECARS_INDEX_FILE);
 
-        std::fs::write(&data_path, &[]).expect("create sidecar data file");
+        std::fs::write(&data_path, []).expect("create sidecar data file");
         let entry = SidecarIndexEntry {
             offset: 0,
             len: STRICT_INIT_MAX_BLOCK_BYTES + 1,

@@ -204,7 +204,10 @@ use iroha_core::{
     prelude::*,
     query::store::LiveQueryStoreHandle,
     queue::{self, Queue},
-    state::{BlockProofError, State as CoreState, StateReadOnly, StateReadOnlyWithTransactions},
+    state::{
+        BlockProofError, State as CoreState, StateReadOnly, StateReadOnlyWithTransactions,
+        TransactionsReadOnly,
+    },
     sumeragi::rbc_store::SoftwareManifest,
 };
 use iroha_crypto::{
@@ -232,7 +235,7 @@ use iroha_data_model::{
     domain::DomainId,
     events::{
         EventBox,
-        pipeline::{PipelineEventBox, TransactionStatus},
+        pipeline::{BlockStatus, PipelineEventBox, TransactionStatus},
     },
     name::Name,
     nft::NftId,
@@ -615,6 +618,7 @@ struct AppState {
     kiso: KisoHandle,
     query_service: LiveQueryStoreHandle,
     rate_limiter: limits::RateLimiter,
+    tx_rate_limiter: limits::RateLimiter,
     deploy_rate_limiter: limits::RateLimiter,
     proof_rate_limiter: limits::RateLimiter,
     proof_egress_limiter: limits::RateLimiter,
@@ -634,6 +638,7 @@ struct AppState {
     allow_nets: Arc<Vec<limits::IpNet>>,
     preauth_gate: Arc<limits::PreAuthGate>,
     queue: Arc<Queue>,
+    pipeline_status_cache: Arc<PipelineStatusCache>,
     high_load_tx_threshold: usize,
     high_load_stream_tx_threshold: usize,
     high_load_subscription_tx_threshold: usize,
@@ -727,6 +732,361 @@ fn json_string_or_null(opt: Option<String>) -> norito::json::native::Value {
         .unwrap_or(norito::json::native::Value::Null)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PipelineStatusKind {
+    Queued,
+    Approved,
+    Committed,
+    Applied,
+    Rejected,
+    Expired,
+}
+
+const PIPELINE_STATUS_CACHE_CAP: usize = 100_000;
+const PIPELINE_STATUS_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
+const PIPELINE_STATUS_CACHE_PRUNE_INTERVAL_SECS: u64 = 30;
+
+impl PipelineStatusKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "Queued",
+            Self::Approved => "Approved",
+            Self::Committed => "Committed",
+            Self::Applied => "Applied",
+            Self::Rejected => "Rejected",
+            Self::Expired => "Expired",
+        }
+    }
+
+    fn rank(self) -> u8 {
+        match self {
+            Self::Queued => 0,
+            Self::Approved => 1,
+            Self::Expired => 2,
+            Self::Committed => 3,
+            Self::Applied => 4,
+            Self::Rejected => 5,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct PipelineStatusEntry {
+    kind: PipelineStatusKind,
+    block_height: Option<NonZeroU64>,
+    rejection: Option<iroha_data_model::transaction::error::TransactionRejectionReason>,
+    observed_at: Instant,
+}
+
+impl PipelineStatusEntry {
+    fn fresh(
+        kind: PipelineStatusKind,
+        block_height: Option<NonZeroU64>,
+        rejection: Option<iroha_data_model::transaction::error::TransactionRejectionReason>,
+    ) -> Self {
+        Self::at_time(kind, block_height, rejection, Instant::now())
+    }
+
+    fn at_time(
+        kind: PipelineStatusKind,
+        block_height: Option<NonZeroU64>,
+        rejection: Option<iroha_data_model::transaction::error::TransactionRejectionReason>,
+        observed_at: Instant,
+    ) -> Self {
+        Self {
+            kind,
+            block_height,
+            rejection,
+            observed_at,
+        }
+    }
+
+    fn merge_from_event(&mut self, incoming: PipelineStatusEntry) {
+        let incoming_observed_at = incoming.observed_at;
+        match incoming.kind.rank().cmp(&self.kind.rank()) {
+            std::cmp::Ordering::Greater => {
+                *self = incoming;
+                return;
+            }
+            std::cmp::Ordering::Equal => {
+                if self.block_height.is_none() {
+                    self.block_height = incoming.block_height;
+                }
+                if self.rejection.is_none() && incoming.rejection.is_some() {
+                    self.rejection = incoming.rejection;
+                }
+            }
+            std::cmp::Ordering::Less => {}
+        }
+        if incoming_observed_at > self.observed_at {
+            self.observed_at = incoming_observed_at;
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct PendingBlockStatus {
+    kind: PipelineStatusKind,
+    block_hash: HashOf<BlockHeader>,
+    observed_at: Instant,
+}
+
+#[derive(Debug)]
+struct PipelineStatusCache {
+    entries: DashMap<HashOf<SignedTransaction>, PipelineStatusEntry>,
+    pending_blocks: DashMap<NonZeroU64, PendingBlockStatus>,
+    capacity: usize,
+    ttl: Duration,
+    start: Instant,
+    last_prune_secs: std::sync::atomic::AtomicU64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BlockRecordOutcome {
+    Recorded,
+    MissingBlock,
+    HashMismatch,
+}
+
+impl PipelineStatusCache {
+    fn new() -> Self {
+        Self::with_limits(PIPELINE_STATUS_CACHE_CAP, PIPELINE_STATUS_CACHE_TTL)
+    }
+
+    fn with_limits(capacity: usize, ttl: Duration) -> Self {
+        let cap = capacity.max(1);
+        Self {
+            entries: DashMap::new(),
+            pending_blocks: DashMap::new(),
+            capacity: cap,
+            ttl,
+            start: Instant::now(),
+            last_prune_secs: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    fn record_transaction_event(
+        &self,
+        event: &iroha_data_model::events::pipeline::TransactionEvent,
+    ) {
+        let (kind, rejection) = match event.status() {
+            TransactionStatus::Queued => (PipelineStatusKind::Queued, None),
+            TransactionStatus::Expired => (PipelineStatusKind::Expired, None),
+            TransactionStatus::Approved => (PipelineStatusKind::Approved, None),
+            TransactionStatus::Rejected(reason) => {
+                (PipelineStatusKind::Rejected, Some((**reason).clone()))
+            }
+        };
+        let incoming = PipelineStatusEntry::fresh(kind, event.block_height(), rejection);
+        self.entries
+            .entry(*event.hash())
+            .and_modify(|entry| entry.merge_from_event(incoming.clone()))
+            .or_insert(incoming);
+        self.prune_if_needed(Instant::now());
+    }
+
+    fn record_block_event(
+        &self,
+        event: &iroha_data_model::events::pipeline::BlockEvent,
+        kura: &Kura,
+    ) {
+        let kind = match event.status {
+            BlockStatus::Committed => PipelineStatusKind::Committed,
+            BlockStatus::Applied => PipelineStatusKind::Applied,
+            _ => return,
+        };
+        let height = event.header.height();
+        let block_hash = event.header.hash();
+        let now = Instant::now();
+        match self.record_block_results(height, block_hash, kind, kura, now) {
+            BlockRecordOutcome::Recorded => {
+                self.pending_blocks.remove(&height);
+                self.prune_if_needed(now);
+            }
+            BlockRecordOutcome::MissingBlock => {
+                self.pending_blocks.insert(
+                    height,
+                    PendingBlockStatus {
+                        kind,
+                        block_hash,
+                        observed_at: now,
+                    },
+                );
+                self.prune_if_needed(now);
+            }
+            BlockRecordOutcome::HashMismatch => {}
+        }
+    }
+
+    fn lookup(&self, hash: &HashOf<SignedTransaction>) -> Option<PipelineStatusEntry> {
+        self.entries.get(hash).map(|entry| entry.clone())
+    }
+
+    fn record_entry(&self, hash: HashOf<SignedTransaction>, entry: PipelineStatusEntry) {
+        self.entries
+            .entry(hash)
+            .and_modify(|current| current.merge_from_event(entry.clone()))
+            .or_insert(entry);
+        self.prune_if_needed(Instant::now());
+    }
+
+    fn refresh_pending_blocks(&self, kura: &Kura) {
+        if self.pending_blocks.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        let pending: Vec<_> = self
+            .pending_blocks
+            .iter()
+            .map(|entry| (*entry.key(), entry.value().clone()))
+            .collect();
+        for (height, pending) in pending {
+            match self.record_block_results(height, pending.block_hash, pending.kind, kura, now) {
+                BlockRecordOutcome::Recorded | BlockRecordOutcome::HashMismatch => {
+                    self.pending_blocks.remove(&height);
+                }
+                BlockRecordOutcome::MissingBlock => {}
+            }
+        }
+        self.prune_if_needed(now);
+    }
+
+    fn prune_if_needed(&self, now: Instant) {
+        let entries_len = self.entries.len();
+        let pending_len = self.pending_blocks.len();
+        let elapsed_secs = now.saturating_duration_since(self.start).as_secs().max(1);
+        let last_prune = self
+            .last_prune_secs
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let prune_due =
+            elapsed_secs.saturating_sub(last_prune) >= PIPELINE_STATUS_CACHE_PRUNE_INTERVAL_SECS;
+        let over_cap = entries_len > self.capacity || pending_len > self.capacity;
+        if !over_cap && !prune_due {
+            return;
+        }
+        self.last_prune_secs
+            .store(elapsed_secs, std::sync::atomic::Ordering::Relaxed);
+        self.prune(now);
+    }
+
+    fn prune(&self, now: Instant) {
+        if !self.ttl.is_zero() {
+            let ttl = self.ttl;
+            let stale_keys: Vec<_> = self
+                .entries
+                .iter()
+                .filter_map(|entry| {
+                    let age = now.saturating_duration_since(entry.observed_at);
+                    (age > ttl).then_some(*entry.key())
+                })
+                .collect();
+            for key in stale_keys {
+                self.entries.remove(&key);
+            }
+
+            let stale_pending: Vec<_> = self
+                .pending_blocks
+                .iter()
+                .filter_map(|entry| {
+                    let age = now.saturating_duration_since(entry.observed_at);
+                    (age > ttl).then_some(*entry.key())
+                })
+                .collect();
+            for key in stale_pending {
+                self.pending_blocks.remove(&key);
+            }
+        }
+
+        self.evict_over_capacity();
+    }
+
+    fn evict_over_capacity(&self) {
+        let len = self.entries.len();
+        if len <= self.capacity {
+            return;
+        }
+        let mut ordered: Vec<_> = self
+            .entries
+            .iter()
+            .map(|entry| (*entry.key(), entry.observed_at))
+            .collect();
+        ordered.sort_by_key(|(_, observed_at)| *observed_at);
+        let excess = len - self.capacity;
+        for (hash, _) in ordered.into_iter().take(excess) {
+            self.entries.remove(&hash);
+        }
+
+        let pending_len = self.pending_blocks.len();
+        if pending_len <= self.capacity {
+            return;
+        }
+        let mut pending_ordered: Vec<_> = self
+            .pending_blocks
+            .iter()
+            .map(|entry| (*entry.key(), entry.observed_at))
+            .collect();
+        pending_ordered.sort_by_key(|(_, observed_at)| *observed_at);
+        let excess = pending_len - self.capacity;
+        for (height, _) in pending_ordered.into_iter().take(excess) {
+            self.pending_blocks.remove(&height);
+        }
+    }
+
+    fn record_block_results(
+        &self,
+        height: NonZeroU64,
+        expected_hash: HashOf<BlockHeader>,
+        kind: PipelineStatusKind,
+        kura: &Kura,
+        now: Instant,
+    ) -> BlockRecordOutcome {
+        let height_usize = match usize::try_from(height.get()) {
+            Ok(value) => value,
+            Err(_) => {
+                iroha_logger::debug!(
+                    height = height.get(),
+                    "pipeline status cache skipped block: height exceeds usize"
+                );
+                return BlockRecordOutcome::MissingBlock;
+            }
+        };
+        let Some(height_nz) = NonZeroUsize::new(height_usize) else {
+            return BlockRecordOutcome::MissingBlock;
+        };
+        let Some(block) = kura.get_block(height_nz) else {
+            iroha_logger::debug!(
+                height = height.get(),
+                "pipeline status cache skipped block: block not in kura"
+            );
+            return BlockRecordOutcome::MissingBlock;
+        };
+        let block_ref = block.as_ref();
+        if block_ref.hash() != expected_hash {
+            iroha_logger::debug!(
+                height = height.get(),
+                "pipeline status cache skipped block: hash mismatch"
+            );
+            return BlockRecordOutcome::HashMismatch;
+        }
+        let external_total = block_ref.external_transactions().len();
+        for (tx, result) in block_ref
+            .external_transactions()
+            .zip(block_ref.results().take(external_total))
+        {
+            let (entry_kind, rejection) = match &result.0 {
+                Ok(_) => (kind, None),
+                Err(reason) => (PipelineStatusKind::Rejected, Some(reason.clone())),
+            };
+            let incoming = PipelineStatusEntry::at_time(entry_kind, Some(height), rejection, now);
+            self.entries
+                .entry(tx.hash())
+                .and_modify(|entry| entry.merge_from_event(incoming.clone()))
+                .or_insert(incoming);
+        }
+        BlockRecordOutcome::Recorded
+    }
+}
+
 fn telemetry_unavailable_response(
     endpoint: &'static str,
     telemetry: &routing::MaybeTelemetry,
@@ -746,56 +1106,16 @@ fn telemetry_unavailable_response(
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 fn collect_peer_urls(
-    online_peers: &OnlinePeersProvider,
+    _online_peers: &OnlinePeersProvider,
     configured: &[telemetry::peers::ToriiUrl],
 ) -> Vec<telemetry::peers::ToriiUrl> {
-    use std::net::ToSocketAddrs;
-
-    if !configured.is_empty() {
-        let mut urls = configured.to_vec();
-        urls.sort();
-        urls.dedup();
-        return urls;
+    if configured.is_empty() {
+        // Avoid probing P2P ports; peer telemetry requires explicit Torii URLs.
+        iroha_logger::debug!("peer telemetry disabled: no peer_telemetry_urls configured");
+        return Vec::new();
     }
 
-    let snapshot = online_peers.get();
-    let mut urls = Vec::with_capacity(snapshot.len());
-    for peer in snapshot {
-        let native_addr = match peer.address().to_socket_addrs() {
-            Ok(mut addrs) => {
-                if let Some(addr) = addrs.next() {
-                    addr
-                } else {
-                    iroha_logger::warn!(
-                        peer = %peer,
-                        address = %peer.address(),
-                        "peer address resolved to an empty set; skipping telemetry bootstrap entry"
-                    );
-                    continue;
-                }
-            }
-            Err(error) => {
-                iroha_logger::warn!(
-                    peer = %peer,
-                    address = %peer.address(),
-                    ?error,
-                    "failed to resolve peer address into socket addresses for telemetry bootstrap"
-                );
-                continue;
-            }
-        };
-        match telemetry::peers::ToriiUrl::try_from(native_addr) {
-            Ok(url) => urls.push(url),
-            Err(error) => {
-                iroha_logger::warn!(
-                    peer = %peer,
-                    address = %peer.address(),
-                    ?error,
-                    "failed to convert peer address into Torii URL for telemetry bootstrap"
-                );
-            }
-        }
-    }
+    let mut urls = configured.to_vec();
     urls.sort();
     urls.dedup();
     urls
@@ -1982,7 +2302,8 @@ async fn handler_account_transactions_query(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     let cost = limits.rate_limit_cost(page_limit);
     check_access_enforced_with_cost(&app, &headers, None, &key_hint, enforce, cost).await?;
 
@@ -2020,7 +2341,8 @@ async fn handler_account_assets(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     let cost = limits.rate_limit_cost(page_limit);
     check_access_enforced_with_cost(&app, &headers, None, &key_hint, enforce, cost).await?;
 
@@ -2054,7 +2376,8 @@ async fn handler_account_permissions(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, &key_hint, enforce).await?;
 
     routing::handle_v1_account_permissions_with_policy(
@@ -2095,7 +2418,8 @@ async fn handler_account_assets_query(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     let cost = limits.rate_limit_cost(page_limit);
     check_access_enforced_with_cost(&app, &headers, None, &key_hint, enforce, cost).await?;
 
@@ -2139,7 +2463,8 @@ async fn handler_account_transactions_get(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     let cost = limits.rate_limit_cost(page_limit);
     check_access_enforced_with_cost(&app, &headers, None, &key_hint, enforce, cost).await?;
 
@@ -2181,7 +2506,8 @@ async fn handler_proofs_query(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/proofs/query", enforce).await?;
 
     let signed = crate::routing::signed_find_proof_by_id(&dto)?;
@@ -2293,7 +2619,8 @@ async fn handler_accounts_list(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/accounts", enforce).await?;
 
     routing::handle_v1_accounts(
@@ -2324,7 +2651,8 @@ async fn handler_accounts_query(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/accounts/query", enforce).await?;
 
     routing::handle_v1_accounts_query(
@@ -2348,7 +2676,8 @@ async fn handler_accounts_onboard(
             .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -2377,7 +2706,8 @@ async fn handler_accounts_portfolio(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -2462,7 +2792,8 @@ async fn handler_nexus_public_lane_validators(
         )
         .await;
     }
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -2501,7 +2832,8 @@ async fn handler_nexus_public_lane_stake(
         )
         .await;
     }
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -2541,7 +2873,8 @@ async fn handler_nexus_public_lane_rewards(
         )
         .await;
     }
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -2578,7 +2911,8 @@ async fn handler_space_directory_bindings(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -2615,7 +2949,8 @@ async fn handler_space_directory_manifests(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -2653,7 +2988,8 @@ async fn handler_space_directory_manifest_publish(
         .map(axum::response::IntoResponse::into_response);
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -2693,7 +3029,8 @@ async fn handler_space_directory_manifest_revoke(
         .map(axum::response::IntoResponse::into_response);
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -2731,7 +3068,8 @@ async fn handler_repo_agreements(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/repo/agreements", enforce).await?;
 
     routing::handle_v1_repo_agreements(
@@ -2762,7 +3100,8 @@ async fn handler_repo_agreements_query(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/repo/agreements/query", enforce).await?;
 
     routing::handle_v1_repo_agreements_query(
@@ -2791,7 +3130,8 @@ async fn handler_offline_allowances_list(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/allowances", enforce).await?;
 
     routing::handle_v1_offline_allowances(
@@ -2822,7 +3162,8 @@ async fn handler_offline_allowances_query(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/allowances/query", enforce).await?;
 
     routing::handle_v1_offline_allowances_query(
@@ -2853,7 +3194,8 @@ async fn handler_offline_certificates_query(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -2892,7 +3234,8 @@ async fn handler_offline_allowances_issue(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/allowances", enforce).await?;
 
     routing::handle_post_v1_offline_allowances_issue(
@@ -2923,7 +3266,8 @@ async fn handler_offline_certificates_issue(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -2957,7 +3301,8 @@ async fn handler_offline_allowance_get(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -2995,7 +3340,8 @@ async fn handler_offline_certificates_renew_issue(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -3036,7 +3382,8 @@ async fn handler_offline_allowances_renew(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -3077,7 +3424,8 @@ async fn handler_offline_certificates_revoke(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -3117,7 +3465,8 @@ async fn handler_offline_settlements_submit(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/settlements", enforce).await?;
 
     routing::handle_post_v1_offline_settlements_submit(
@@ -3148,7 +3497,8 @@ async fn handler_offline_spend_receipts_submit(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/spend-receipts", enforce).await?;
 
     routing::handle_post_v1_offline_spend_receipts(
@@ -3169,7 +3519,8 @@ async fn handler_offline_state(
         return routing::handle_v1_offline_state(app.state.clone(), app.telemetry.clone()).await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/state", enforce).await?;
 
     routing::handle_v1_offline_state(app.state.clone(), app.telemetry.clone()).await
@@ -3192,7 +3543,8 @@ async fn handler_offline_revocations_list(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/revocations", enforce).await?;
 
     routing::handle_v1_offline_revocations(
@@ -3223,7 +3575,8 @@ async fn handler_offline_revocations_query(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -3259,7 +3612,8 @@ async fn handler_offline_summaries_list(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/summaries", enforce).await?;
 
     routing::handle_v1_offline_summaries(
@@ -3290,7 +3644,8 @@ async fn handler_offline_summaries_query(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/summaries/query", enforce).await?;
 
     routing::handle_v1_offline_summaries_query(
@@ -3319,7 +3674,8 @@ async fn handler_offline_receipts_list(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/receipts", enforce).await?;
 
     routing::handle_v1_offline_receipts(
@@ -3350,7 +3706,8 @@ async fn handler_offline_receipts_query(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/receipts/query", enforce).await?;
 
     routing::handle_v1_offline_receipts_query(
@@ -3379,7 +3736,8 @@ async fn handler_offline_transfers_list(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/transfers", enforce).await?;
 
     routing::handle_v1_offline_transfers(
@@ -3410,7 +3768,8 @@ async fn handler_offline_transfer_get(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -3449,7 +3808,8 @@ async fn handler_offline_transfers_query(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/transfers/query", enforce).await?;
 
     routing::handle_v1_offline_transfers_query(
@@ -3481,7 +3841,8 @@ async fn handler_offline_transfer_proof(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_proof_access(
         &app,
         negotiated,
@@ -3518,7 +3879,8 @@ async fn handler_offline_bundle_proof_status(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
         &app,
         &headers,
@@ -3548,7 +3910,8 @@ async fn handler_offline_rejections(
             .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/rejections", enforce).await?;
 
     routing::handle_v1_offline_rejections(app.state.clone(), app.telemetry.clone()).await
@@ -4177,7 +4540,8 @@ async fn handler_assets_definitions_list(
         return routing::handle_v1_assets_definitions(app.state.clone(), AxQuery(p)).await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/assets/definitions", enforce).await?;
 
     routing::handle_v1_assets_definitions(app.state.clone(), AxQuery(p)).await
@@ -4199,7 +4563,8 @@ async fn handler_assets_definitions_query(
         .await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/assets/definitions/query", enforce).await?;
 
     routing::handle_v1_assets_definitions_query(
@@ -4231,7 +4596,8 @@ async fn handler_asset_holders(
         )
         .await;
     }
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     let cost = limits.rate_limit_cost(page_limit);
     check_access_enforced_with_cost(&app, &headers, None, &def_id, enforce, cost).await?;
     routing::handle_v1_asset_holders(
@@ -4268,7 +4634,8 @@ async fn handler_asset_holders_query(
         )
         .await;
     }
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     let cost = limits.rate_limit_cost(page_limit);
     check_access_enforced_with_cost(&app, &headers, None, &def_id, enforce, cost).await?;
     routing::handle_v1_asset_holders_query(
@@ -4308,7 +4675,8 @@ async fn handler_domains_list(
         return routing::handle_v1_domains(app.state.clone(), AxQuery(p)).await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/domains", enforce).await?;
 
     routing::handle_v1_domains(app.state.clone(), AxQuery(p)).await
@@ -4327,7 +4695,8 @@ async fn handler_domains_query(
         return routing::handle_v1_domains_query(app.state.clone(), payload).await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/domains/query", enforce).await?;
 
     routing::handle_v1_domains_query(app.state.clone(), payload).await
@@ -4343,7 +4712,8 @@ async fn handler_nfts_list(
         return routing::handle_v1_nfts(app.state.clone(), AxQuery(p)).await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/nfts", enforce).await?;
 
     routing::handle_v1_nfts(app.state.clone(), AxQuery(p)).await
@@ -4363,12 +4733,401 @@ async fn handler_nfts_query(
         routing::handle_v1_nfts_query(app.state.clone(), payload).await?
     } else {
         let enforce =
-            app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(&app, &headers, None, "v1/nfts/query", enforce).await?;
         routing::handle_v1_nfts_query(app.state.clone(), payload).await?
     };
 
     Ok(response.into_response())
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_subscription_plans_list(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    AxQuery(p): AxQuery<crate::routing::SubscriptionPlanListParams>,
+) -> Result<impl IntoResponse, Error> {
+    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        return routing::handle_v1_subscription_plans(app.state.clone(), AxQuery(p)).await;
+    }
+
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    check_access_enforced(&app, &headers, None, "v1/subscriptions/plans", enforce).await?;
+
+    routing::handle_v1_subscription_plans(app.state.clone(), AxQuery(p)).await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_subscription_plans_create(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
+        crate::routing::SubscriptionPlanCreateDto,
+    >,
+) -> Result<impl IntoResponse, Error> {
+    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        return routing::handle_post_v1_subscription_plan(
+            app.chain_id.clone(),
+            app.queue.clone(),
+            app.state.clone(),
+            app.telemetry.clone(),
+            crate::utils::extractors::NoritoJson(req),
+        )
+        .await;
+    }
+
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    check_access_enforced(&app, &headers, None, "v1/subscriptions/plans", enforce).await?;
+
+    routing::handle_post_v1_subscription_plan(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        app.telemetry.clone(),
+        crate::utils::extractors::NoritoJson(req),
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_subscriptions_list(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    AxQuery(p): AxQuery<crate::routing::SubscriptionListParams>,
+) -> Result<impl IntoResponse, Error> {
+    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        return routing::handle_v1_subscriptions(app.state.clone(), AxQuery(p)).await;
+    }
+
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    check_access_enforced(&app, &headers, None, "v1/subscriptions", enforce).await?;
+
+    routing::handle_v1_subscriptions(app.state.clone(), AxQuery(p)).await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_subscriptions_create(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
+        crate::routing::SubscriptionCreateDto,
+    >,
+) -> Result<impl IntoResponse, Error> {
+    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        return routing::handle_post_v1_subscription_create(
+            app.chain_id.clone(),
+            app.queue.clone(),
+            app.state.clone(),
+            app.telemetry.clone(),
+            crate::utils::extractors::NoritoJson(req),
+        )
+        .await;
+    }
+
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    check_access_enforced(&app, &headers, None, "v1/subscriptions", enforce).await?;
+
+    routing::handle_post_v1_subscription_create(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        app.telemetry.clone(),
+        crate::utils::extractors::NoritoJson(req),
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_subscription_get(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    AxPath(subscription_raw): AxPath<String>,
+) -> Result<impl IntoResponse, Error> {
+    let subscription_id = parse_nft_id(&subscription_raw)?;
+    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        return routing::handle_v1_subscription_get(app.state.clone(), subscription_id).await;
+    }
+
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    check_access_enforced(
+        &app,
+        &headers,
+        None,
+        "v1/subscriptions/{subscription_id}",
+        enforce,
+    )
+    .await?;
+
+    routing::handle_v1_subscription_get(app.state.clone(), subscription_id).await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_subscription_pause(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    AxPath(subscription_raw): AxPath<String>,
+    crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
+        crate::routing::SubscriptionActionDto,
+    >,
+) -> Result<impl IntoResponse, Error> {
+    let subscription_id = parse_nft_id(&subscription_raw)?;
+    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        return routing::handle_post_v1_subscription_pause(
+            app.chain_id.clone(),
+            app.queue.clone(),
+            app.state.clone(),
+            app.telemetry.clone(),
+            subscription_id,
+            crate::utils::extractors::NoritoJson(req),
+        )
+        .await;
+    }
+
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    check_access_enforced(
+        &app,
+        &headers,
+        None,
+        "v1/subscriptions/{subscription_id}/pause",
+        enforce,
+    )
+    .await?;
+
+    routing::handle_post_v1_subscription_pause(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        app.telemetry.clone(),
+        subscription_id,
+        crate::utils::extractors::NoritoJson(req),
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_subscription_resume(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    AxPath(subscription_raw): AxPath<String>,
+    crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
+        crate::routing::SubscriptionActionDto,
+    >,
+) -> Result<impl IntoResponse, Error> {
+    let subscription_id = parse_nft_id(&subscription_raw)?;
+    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        return routing::handle_post_v1_subscription_resume(
+            app.chain_id.clone(),
+            app.queue.clone(),
+            app.state.clone(),
+            app.telemetry.clone(),
+            subscription_id,
+            crate::utils::extractors::NoritoJson(req),
+        )
+        .await;
+    }
+
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    check_access_enforced(
+        &app,
+        &headers,
+        None,
+        "v1/subscriptions/{subscription_id}/resume",
+        enforce,
+    )
+    .await?;
+
+    routing::handle_post_v1_subscription_resume(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        app.telemetry.clone(),
+        subscription_id,
+        crate::utils::extractors::NoritoJson(req),
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_subscription_cancel(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    AxPath(subscription_raw): AxPath<String>,
+    crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
+        crate::routing::SubscriptionActionDto,
+    >,
+) -> Result<impl IntoResponse, Error> {
+    let subscription_id = parse_nft_id(&subscription_raw)?;
+    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        return routing::handle_post_v1_subscription_cancel(
+            app.chain_id.clone(),
+            app.queue.clone(),
+            app.state.clone(),
+            app.telemetry.clone(),
+            subscription_id,
+            crate::utils::extractors::NoritoJson(req),
+        )
+        .await;
+    }
+
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    check_access_enforced(
+        &app,
+        &headers,
+        None,
+        "v1/subscriptions/{subscription_id}/cancel",
+        enforce,
+    )
+    .await?;
+
+    routing::handle_post_v1_subscription_cancel(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        app.telemetry.clone(),
+        subscription_id,
+        crate::utils::extractors::NoritoJson(req),
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_subscription_keep(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    AxPath(subscription_raw): AxPath<String>,
+    crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
+        crate::routing::SubscriptionActionDto,
+    >,
+) -> Result<impl IntoResponse, Error> {
+    let subscription_id = parse_nft_id(&subscription_raw)?;
+    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        return routing::handle_post_v1_subscription_keep(
+            app.chain_id.clone(),
+            app.queue.clone(),
+            app.state.clone(),
+            app.telemetry.clone(),
+            subscription_id,
+            crate::utils::extractors::NoritoJson(req),
+        )
+        .await;
+    }
+
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    check_access_enforced(
+        &app,
+        &headers,
+        None,
+        "v1/subscriptions/{subscription_id}/keep",
+        enforce,
+    )
+    .await?;
+
+    routing::handle_post_v1_subscription_keep(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        app.telemetry.clone(),
+        subscription_id,
+        crate::utils::extractors::NoritoJson(req),
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_subscription_usage(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    AxPath(subscription_raw): AxPath<String>,
+    crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
+        crate::routing::SubscriptionUsageRequestDto,
+    >,
+) -> Result<impl IntoResponse, Error> {
+    let subscription_id = parse_nft_id(&subscription_raw)?;
+    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        return routing::handle_post_v1_subscription_usage(
+            app.chain_id.clone(),
+            app.queue.clone(),
+            app.state.clone(),
+            app.telemetry.clone(),
+            subscription_id,
+            crate::utils::extractors::NoritoJson(req),
+        )
+        .await;
+    }
+
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    check_access_enforced(
+        &app,
+        &headers,
+        None,
+        "v1/subscriptions/{subscription_id}/usage",
+        enforce,
+    )
+    .await?;
+
+    routing::handle_post_v1_subscription_usage(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        app.telemetry.clone(),
+        subscription_id,
+        crate::utils::extractors::NoritoJson(req),
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_subscription_charge_now(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    AxPath(subscription_raw): AxPath<String>,
+    crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
+        crate::routing::SubscriptionActionDto,
+    >,
+) -> Result<impl IntoResponse, Error> {
+    let subscription_id = parse_nft_id(&subscription_raw)?;
+    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        return routing::handle_post_v1_subscription_charge_now(
+            app.chain_id.clone(),
+            app.queue.clone(),
+            app.state.clone(),
+            app.telemetry.clone(),
+            subscription_id,
+            crate::utils::extractors::NoritoJson(req),
+        )
+        .await;
+    }
+
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    check_access_enforced(
+        &app,
+        &headers,
+        None,
+        "v1/subscriptions/{subscription_id}/charge-now",
+        enforce,
+    )
+    .await?;
+
+    routing::handle_post_v1_subscription_charge_now(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        app.telemetry.clone(),
+        subscription_id,
+        crate::utils::extractors::NoritoJson(req),
+    )
+    .await
 }
 
 #[cfg(feature = "app_api")]
@@ -4382,7 +5141,8 @@ async fn handler_parameters(
         return routing::handle_v1_parameters(app.state.clone()).await;
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, Some(remote_ip), "v1/parameters", enforce).await?;
 
     routing::handle_v1_parameters(app.state.clone()).await
@@ -4398,7 +5158,8 @@ async fn handler_webhooks_create(
         return Ok(webhook::handle_create_webhook(body).await);
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/webhooks", enforce).await?;
 
     Ok(webhook::handle_create_webhook(body).await)
@@ -4413,7 +5174,8 @@ async fn handler_webhooks_list(
         return Ok(webhook::handle_list_webhooks().await);
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/webhooks", enforce).await?;
 
     Ok(webhook::handle_list_webhooks().await)
@@ -4429,7 +5191,8 @@ async fn handler_webhooks_delete(
         return Ok(webhook::handle_delete_webhook(axum::extract::Path(id)).await);
     }
 
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/webhooks", enforce).await?;
 
     Ok(webhook::handle_delete_webhook(axum::extract::Path(id)).await)
@@ -5119,7 +5882,8 @@ async fn handler_status_tail(
         "status",
         app.api_token_enforced(),
     );
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     if enforce && !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -5166,7 +5930,8 @@ async fn handler_status_root(
         "status",
         app.api_token_enforced(),
     );
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     if enforce && !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -5205,7 +5970,8 @@ async fn handler_metrics(
         "metrics",
         app.api_token_enforced(),
     );
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     if !limits::allow_conditionally(&app.rate_limiter, &key, enforce).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -5734,7 +6500,8 @@ async fn handler_subscription_ws(
         "subscription/stream",
         app.api_token_enforced(),
     );
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     if !limits::allow_conditionally(&app.rate_limiter, &key, enforce).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -5788,7 +6555,8 @@ async fn handler_blocks_stream_ws(
         }
     }
     let key = rate_limit_key(&headers, None, "blocks/stream", app.api_token_enforced());
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     if !limits::allow_conditionally(&app.rate_limiter, &key, enforce).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -5958,7 +6726,8 @@ async fn handler_get_contract_code(
         "v1/contracts/code:get",
         app.api_token_enforced(),
     );
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     if !limits::allow_conditionally(&app.rate_limiter, &key, enforce).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -7252,7 +8021,8 @@ async fn handler_post_contract_code(
         "v1/contracts/code",
         app.api_token_enforced(),
     );
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     if !limits::allow_conditionally(&app.deploy_rate_limiter, &key, enforce).await {
         app.telemetry
             .with_metrics(|tel| tel.inc_torii_contract_throttle("code"));
@@ -8911,7 +9681,8 @@ async fn handler_post_vk_register(
         "v1/zk/vk/register",
         app.api_token_enforced(),
     );
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     if !limits::allow_conditionally(&app.rate_limiter, &key, enforce).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -8960,7 +9731,8 @@ async fn handler_post_vk_update(
         }
     }
     let key = rate_limit_key(&headers, None, "v1/zk/vk/update", app.api_token_enforced());
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     if !limits::allow_conditionally(&app.rate_limiter, &key, enforce).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -8998,8 +9770,9 @@ async fn handler_post_transaction(
     }
     let auth_id = format!("{}", transaction.authority());
     let key = token_hdr.unwrap_or(auth_id);
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
-    if !limits::allow_conditionally(&app.rate_limiter, &key, enforce).await {
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    if !limits::allow_conditionally(&app.tx_rate_limiter, &key, enforce).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
@@ -9204,6 +9977,138 @@ async fn handler_pipeline_recovery(
     )
 }
 
+#[derive(JsonDeserialize)]
+struct PipelineStatusQuery {
+    #[norito(default)]
+    hash: Option<String>,
+}
+
+fn parse_signed_transaction_hash(raw: &str) -> Result<HashOf<SignedTransaction>, Error> {
+    raw.trim()
+        .parse::<HashOf<SignedTransaction>>()
+        .map_err(|_| conversion_error("invalid signed transaction hash".to_owned()))
+}
+
+fn pipeline_status_payload(
+    hash: &HashOf<SignedTransaction>,
+    entry: &PipelineStatusEntry,
+) -> norito::json::Value {
+    let mut status = norito::json::Map::new();
+    status.insert(
+        "kind".into(),
+        norito::json::Value::from(entry.kind.as_str()),
+    );
+    if let Some(height) = entry.block_height {
+        status.insert(
+            "block_height".into(),
+            norito::json::Value::from(height.get()),
+        );
+    }
+    let rejection = match entry.kind {
+        PipelineStatusKind::Rejected => entry.rejection.as_ref().and_then(|reason| {
+            norito::to_bytes(reason)
+                .ok()
+                .map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes))
+        }),
+        _ => None,
+    };
+    status.insert(
+        "content".into(),
+        rejection
+            .map(norito::json::Value::from)
+            .unwrap_or(norito::json::Value::Null),
+    );
+
+    let mut content = norito::json::Map::new();
+    content.insert("hash".into(), norito::json::Value::from(hash.to_string()));
+    content.insert("status".into(), norito::json::Value::Object(status));
+
+    let mut envelope = norito::json::Map::new();
+    envelope.insert("kind".into(), norito::json::Value::from("Transaction"));
+    envelope.insert("content".into(), norito::json::Value::Object(content));
+    norito::json::Value::Object(envelope)
+}
+
+fn pipeline_status_from_state(
+    app: &AppState,
+    hash: &HashOf<SignedTransaction>,
+) -> Option<PipelineStatusEntry> {
+    let height = app.state.view().transactions().get(hash)?;
+    let height_u64 = u64::try_from(height.get()).ok()?;
+    let height_nz = NonZeroU64::new(height_u64)?;
+    let block = app.kura.get_block(height)?;
+    let block_ref = block.as_ref();
+    let external_total = block_ref.external_transactions().len();
+    for (tx, result) in block_ref
+        .external_transactions()
+        .zip(block_ref.results().take(external_total))
+    {
+        if tx.hash() != *hash {
+            continue;
+        }
+        let (kind, rejection) = match &result.0 {
+            Ok(_) => (PipelineStatusKind::Applied, None),
+            Err(reason) => (PipelineStatusKind::Rejected, Some(reason.clone())),
+        };
+        return Some(PipelineStatusEntry::fresh(kind, Some(height_nz), rejection));
+    }
+    None
+}
+
+async fn handler_pipeline_transaction_status(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+    AxQuery(query): AxQuery<PipelineStatusQuery>,
+) -> Result<Response, Error> {
+    check_access(&app, &headers, None, "v1/pipeline/transactions/status").await?;
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
+        Ok(format) => format,
+        Err(resp) => return Ok(resp),
+    };
+    let hash_raw = query
+        .hash
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| conversion_error("missing hash query parameter".to_owned()))?;
+    let hash = parse_signed_transaction_hash(hash_raw)?;
+    app.pipeline_status_cache.refresh_pending_blocks(&app.kura);
+
+    if let Some(entry) = app.pipeline_status_cache.lookup(&hash) {
+        return Ok(crate::utils::respond_value_with_format(
+            pipeline_status_payload(&hash, &entry),
+            format,
+        ));
+    }
+
+    let view = app.state.view();
+    if app
+        .queue
+        .all_transactions(&view)
+        .any(|tx| tx.as_ref().hash() == hash)
+    {
+        let entry = PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None);
+        app.pipeline_status_cache.record_entry(hash, entry.clone());
+        return Ok(crate::utils::respond_value_with_format(
+            pipeline_status_payload(&hash, &entry),
+            format,
+        ));
+    }
+
+    if let Some(entry) = pipeline_status_from_state(&app, &hash) {
+        app.pipeline_status_cache.record_entry(hash, entry.clone());
+        return Ok(crate::utils::respond_value_with_format(
+            pipeline_status_payload(&hash, &entry),
+            format,
+        ));
+    }
+
+    Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::NotFound,
+    )))
+}
+
 async fn handler_policy(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -9290,7 +10195,7 @@ async fn handler_policy(
         resp
     }
 
-    let queue_len = app.queue.tx_len() as u64;
+    let queue_len = app.queue.active_len() as u64;
     let token_required = app.require_api_token && !app.api_tokens_set.is_empty();
 
     if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.allow_nets) {
@@ -9377,7 +10282,8 @@ async fn handler_signed_query(
         }
     }
     let key = token_hdr.unwrap_or_else(|| "query".to_string());
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     if !limits::allow_conditionally(&app.rate_limiter, &key, enforce).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -10527,7 +11433,8 @@ async fn handler_status_root_v2(
         }
     }
     let key = rate_limit_key(&headers, None, "status", app.api_token_enforced());
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     if enforce && !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -10549,7 +11456,8 @@ async fn handler_status_tail_v2(
 ) -> Result<impl IntoResponse, Error> {
     validate_api_token(&app, &headers)?;
     let key = rate_limit_key(&headers, None, "status", app.api_token_enforced());
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     if enforce && !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -10650,6 +11558,7 @@ pub struct Torii {
     chain_id: Arc<ChainId>,
     kiso: KisoHandle,
     queue: Arc<Queue>,
+    pipeline_status_cache: Arc<PipelineStatusCache>,
     events: EventsSender,
     query_service: LiveQueryStoreHandle,
     kura: Arc<Kura>,
@@ -10668,16 +11577,21 @@ pub struct Torii {
     sumeragi: Option<iroha_core::sumeragi::SumeragiHandle>,
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     p2p: Option<iroha_core::IrohaNetwork>,
-    // Query rate limits and optional fee policy (operator-local)
+    // Query and transaction rate limits (operator-local)
     #[allow(dead_code)]
     query_rate_per_authority_per_sec: Option<std::num::NonZeroU32>,
     #[allow(dead_code)]
     query_burst_per_authority: Option<std::num::NonZeroU32>,
     #[allow(dead_code)]
+    tx_rate_per_authority_per_sec: Option<std::num::NonZeroU32>,
+    #[allow(dead_code)]
+    tx_burst_per_authority: Option<std::num::NonZeroU32>,
+    #[allow(dead_code)]
     deploy_rate_per_origin_per_sec: Option<std::num::NonZeroU32>,
     #[allow(dead_code)]
     deploy_burst_per_origin: Option<std::num::NonZeroU32>,
     rate_limiter: limits::RateLimiter,
+    tx_rate_limiter: limits::RateLimiter,
     deploy_rate_limiter: limits::RateLimiter,
     proof_rate_limiter: limits::RateLimiter,
     proof_egress_limiter: limits::RateLimiter,
@@ -11394,6 +12308,10 @@ impl Torii {
         builder.apply(|router| {
             router
                 .route(
+                    "/v1/pipeline/transactions/status",
+                    get(handler_pipeline_transaction_status),
+                )
+                .route(
                     "/v1/pipeline/recovery/{height}",
                     get(handler_pipeline_recovery),
                 )
@@ -11679,6 +12597,43 @@ impl Torii {
                 // NFTs listing
                 .route("/v1/nfts", get(handler_nfts_list))
                 .route("/v1/nfts/query", post(handler_nfts_query))
+                // Subscriptions
+                .route(
+                    "/v1/subscriptions/plans",
+                    get(handler_subscription_plans_list).post(handler_subscription_plans_create),
+                )
+                .route(
+                    "/v1/subscriptions",
+                    get(handler_subscriptions_list).post(handler_subscriptions_create),
+                )
+                .route(
+                    "/v1/subscriptions/{subscription_id}",
+                    get(handler_subscription_get),
+                )
+                .route(
+                    "/v1/subscriptions/{subscription_id}/pause",
+                    post(handler_subscription_pause),
+                )
+                .route(
+                    "/v1/subscriptions/{subscription_id}/resume",
+                    post(handler_subscription_resume),
+                )
+                .route(
+                    "/v1/subscriptions/{subscription_id}/cancel",
+                    post(handler_subscription_cancel),
+                )
+                .route(
+                    "/v1/subscriptions/{subscription_id}/keep",
+                    post(handler_subscription_keep),
+                )
+                .route(
+                    "/v1/subscriptions/{subscription_id}/usage",
+                    post(handler_subscription_usage),
+                )
+                .route(
+                    "/v1/subscriptions/{subscription_id}/charge-now",
+                    post(handler_subscription_charge_now),
+                )
                 .route("/v1/parameters", get(handler_parameters))
                 // Explorer endpoints
                 .route("/v1/explorer/accounts", get(handler_explorer_accounts_list))
@@ -12260,6 +13215,12 @@ impl Torii {
                 .query_burst_per_authority
                 .map(std::num::NonZeroU32::get),
         );
+        let tx_rl = limits::RateLimiter::new(
+            config
+                .tx_rate_per_authority_per_sec
+                .map(std::num::NonZeroU32::get),
+            config.tx_burst_per_authority.map(std::num::NonZeroU32::get),
+        );
         let deploy_rl = limits::RateLimiter::new(
             config
                 .deploy_rate_per_origin_per_sec
@@ -12321,13 +13282,37 @@ impl Torii {
                 .burst
                 .map(std::num::NonZeroU32::get),
         );
+        let nofile_soft = limits::nofile_soft_limit();
+        let configured_max_total = config
+            .preauth_max_connections
+            .map(std::num::NonZeroUsize::get);
+        let max_total = limits::clamp_preauth_max_total(configured_max_total, nofile_soft);
+        if let (Some(configured), Some(clamped)) = (configured_max_total, max_total) {
+            if clamped < configured {
+                iroha_logger::warn!(
+                    configured,
+                    clamped,
+                    ?nofile_soft,
+                    "clamping torii pre-auth global connection cap to fit RLIMIT_NOFILE"
+                );
+            }
+        }
+        let configured_max_per_ip = config
+            .preauth_max_connections_per_ip
+            .map(std::num::NonZeroUsize::get);
+        let max_per_ip = limits::clamp_preauth_max_per_ip(configured_max_per_ip, max_total);
+        if let (Some(configured), Some(clamped)) = (configured_max_per_ip, max_per_ip) {
+            if clamped < configured {
+                iroha_logger::warn!(
+                    configured,
+                    clamped,
+                    "clamping torii pre-auth per-ip connection cap to global limit"
+                );
+            }
+        }
         let preauth_gate = Arc::new(limits::PreAuthGate::new(limits::PreAuthConfig {
-            max_total: config
-                .preauth_max_connections
-                .map(std::num::NonZeroUsize::get),
-            max_per_ip: config
-                .preauth_max_connections_per_ip
-                .map(std::num::NonZeroUsize::get),
+            max_total,
+            max_per_ip,
             rate_per_ip: config
                 .preauth_rate_per_ip_per_sec
                 .map(std::num::NonZeroU32::get),
@@ -12360,7 +13345,11 @@ impl Torii {
             _ => FeePolicy::Disabled,
         };
         // Default threshold if not provided
-        let high_load_tx_threshold = config.api_high_load_tx_threshold.unwrap_or(4_096);
+        let default_high_load_tx_threshold =
+            std::cmp::max(1, queue.current_backpressure().capacity().get() / 2);
+        let high_load_tx_threshold = config
+            .api_high_load_tx_threshold
+            .unwrap_or(default_high_load_tx_threshold);
         // Default higher threshold for streaming endpoints if not provided
         let high_load_stream_tx_threshold = config.api_high_load_stream_threshold.unwrap_or(16_384);
         // Subscription WS may use its own threshold; default to stream threshold
@@ -12470,11 +13459,13 @@ impl Torii {
                 allowed_controllers: cfg.allowed_controllers.clone(),
             }
         });
+        let pipeline_status_cache = Arc::new(PipelineStatusCache::new());
 
         Self {
             chain_id: Arc::new(chain_id),
             kiso,
             queue,
+            pipeline_status_cache,
             events,
             query_service,
             kura,
@@ -12496,9 +13487,12 @@ impl Torii {
             p2p: None,
             query_rate_per_authority_per_sec: config.query_rate_per_authority_per_sec,
             query_burst_per_authority: config.query_burst_per_authority,
+            tx_rate_per_authority_per_sec: config.tx_rate_per_authority_per_sec,
+            tx_burst_per_authority: config.tx_burst_per_authority,
             deploy_rate_per_origin_per_sec: config.deploy_rate_per_origin_per_sec,
             deploy_burst_per_origin: config.deploy_burst_per_origin,
             rate_limiter: rl,
+            tx_rate_limiter: tx_rl,
             deploy_rate_limiter: deploy_rl,
             proof_rate_limiter,
             proof_egress_limiter,
@@ -12706,6 +13700,7 @@ impl Torii {
             kiso: self.kiso.clone(),
             query_service: self.query_service.clone(),
             rate_limiter: self.rate_limiter.clone(),
+            tx_rate_limiter: self.tx_rate_limiter.clone(),
             deploy_rate_limiter: self.deploy_rate_limiter.clone(),
             proof_rate_limiter: self.proof_rate_limiter.clone(),
             proof_egress_limiter: self.proof_egress_limiter.clone(),
@@ -12725,6 +13720,7 @@ impl Torii {
             allow_nets: self.allow_nets.clone(),
             preauth_gate: self.preauth_gate.clone(),
             queue: self.queue.clone(),
+            pipeline_status_cache: self.pipeline_status_cache.clone(),
             fee_policy: self.fee_policy.clone(),
             norito_rpc: self.norito_rpc.clone(),
             high_load_tx_threshold: self.high_load_tx_threshold,
@@ -13019,6 +14015,29 @@ impl Torii {
                                 }
                                 TransactionStatus::Queued => {}
                             }
+                        }
+                        Ok(_) => {}
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            // Skip on lag to catch up with the latest events
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
+        }
+
+        {
+            let mut rx = self.events.subscribe();
+            let cache = self.pipeline_status_cache.clone();
+            let kura = self.kura.clone();
+            tokio::spawn(async move {
+                loop {
+                    match rx.recv().await {
+                        Ok(EventBox::Pipeline(PipelineEventBox::Transaction(event))) => {
+                            cache.record_transaction_event(&event);
+                        }
+                        Ok(EventBox::Pipeline(PipelineEventBox::Block(event))) => {
+                            cache.record_block_event(&event, &kura);
                         }
                         Ok(_) => {}
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
@@ -14196,11 +15215,18 @@ fn _assert_torii_types_are_send_sync() {
 
 #[cfg(test)]
 pub(crate) mod tests_runtime_handlers {
-    use std::{collections::HashSet, net::SocketAddr, sync::Arc};
+    use std::{
+        collections::HashSet,
+        net::SocketAddr,
+        num::{NonZeroU32, NonZeroU64, NonZeroUsize},
+        sync::Arc,
+        time::{Duration, Instant},
+    };
 
     use axum::{
         extract::{Extension, State},
         http::{HeaderMap, HeaderValue, StatusCode},
+        response::IntoResponse,
     };
     use base64::Engine as _;
     use futures::executor;
@@ -14213,23 +15239,35 @@ pub(crate) mod tests_runtime_handlers {
     };
     use iroha_core::{
         kiso::KisoHandle,
+        kura::Kura,
         query::store::LiveQueryStore,
+        queue::Queue,
+        state::{State as IrohaState, World},
         sumeragi::{
             consensus::{PERMISSIONED_TAG, Phase, Vote, vote_preimage},
             status::record_commit_qc,
         },
+        tx::AcceptedTransaction,
     };
     use iroha_crypto::{Algorithm, KeyPair, Signature, SignatureOf};
     use iroha_data_model::{
+        ChainId, ValidationFail,
+        account::AccountId,
         block::{BlockSignature, SignedBlock},
         consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
+        events::pipeline::{BlockEvent, BlockStatus, TransactionEvent, TransactionStatus},
+        isi::Log,
+        level::Level,
         nexus::{AxtPolicySnapshot, AxtRejectReason, DataSpaceId, LaneId},
         peer::{Peer, PeerId},
         soranet::privacy_metrics::{
             SoranetPrivacyEventHandshakeSuccessV1, SoranetPrivacyEventKindV1,
             SoranetPrivacyEventV1, SoranetPrivacyModeV1, SoranetPrivacyPrioShareV1,
         },
-        transaction::signed::{TransactionBuilder, TransactionResultInner},
+        transaction::{
+            error::TransactionRejectionReason,
+            signed::{TransactionBuilder, TransactionResultInner},
+        },
         trigger::DataTriggerSequence,
     };
 
@@ -14288,6 +15326,7 @@ pub(crate) mod tests_runtime_handlers {
         let events: EventsSender = tokio::sync::broadcast::channel(1).0;
         let queue_cfg = iroha_config::parameters::actual::Queue::default();
         let queue = Arc::new(Queue::from_config(queue_cfg, events.clone()));
+        let pipeline_status_cache = Arc::new(PipelineStatusCache::new());
         let chain_id: ChainId = "chain".parse().unwrap();
         // Minimal Kiso and peers provider (mocked to avoid spawning the full actor in tests)
         let cfg = crate::test_utils::mk_minimal_root_cfg();
@@ -14417,6 +15456,7 @@ pub(crate) mod tests_runtime_handlers {
             kiso,
             query_service: query_handle,
             rate_limiter: limits::RateLimiter::new(None, None),
+            tx_rate_limiter: limits::RateLimiter::new(None, None),
             deploy_rate_limiter,
             proof_rate_limiter: limits::RateLimiter::new(None, None),
             proof_egress_limiter: limits::RateLimiter::new_u64(None, None),
@@ -14436,6 +15476,7 @@ pub(crate) mod tests_runtime_handlers {
             allow_nets: Arc::new(vec![]),
             preauth_gate: Arc::new(limits::PreAuthGate::disabled()),
             queue,
+            pipeline_status_cache,
             fee_policy: FeePolicy::Disabled,
             norito_rpc: norito_rpc_cfg,
             high_load_tx_threshold: usize::MAX,
@@ -14564,6 +15605,90 @@ pub(crate) mod tests_runtime_handlers {
             norito::json::from_slice(&bytes).expect("decode json");
         assert_eq!(hash.policy, "V1");
         assert_eq!(hash.abi_hash_hex.len(), 64);
+    }
+
+    #[tokio::test]
+    async fn torii_tx_rate_uses_config_and_queue_default() {
+        let mut cfg = crate::test_utils::mk_minimal_root_cfg();
+        cfg.torii.tx_rate_per_authority_per_sec =
+            Some(NonZeroU32::new(123).expect("nonzero tx rate"));
+        cfg.torii.tx_burst_per_authority = Some(NonZeroU32::new(456).expect("nonzero tx burst"));
+        cfg.torii.api_high_load_tx_threshold = None;
+
+        let (kiso, _child) = KisoHandle::start(cfg.clone());
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = Arc::new(IrohaState::new_for_testing(
+            World::default(),
+            kura.clone(),
+            query,
+        ));
+        let queue_cfg = iroha_config::parameters::actual::Queue {
+            capacity: NonZeroUsize::new(100).expect("queue capacity non-zero"),
+            capacity_per_user: NonZeroUsize::new(100).expect("queue per-user capacity non-zero"),
+            transaction_time_to_live: Duration::from_secs(60),
+            ..Default::default()
+        };
+        let queue_events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
+        let queue = Arc::new(Queue::from_config(queue_cfg, queue_events));
+        let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
+        let _ = peers_tx;
+        let torii = Torii::new_with_handle(
+            ChainId::from("tx-rate-test"),
+            kiso,
+            cfg.torii.clone(),
+            queue,
+            tokio::sync::broadcast::channel(1).0,
+            LiveQueryStore::start_test(),
+            kura,
+            state,
+            cfg.common.key_pair.clone(),
+            OnlinePeersProvider::new(peers_rx),
+            None,
+            routing::MaybeTelemetry::disabled(),
+        );
+
+        assert_eq!(torii.tx_rate_per_authority_per_sec.unwrap().get(), 123);
+        assert_eq!(torii.tx_burst_per_authority.unwrap().get(), 456);
+        assert_eq!(torii.high_load_tx_threshold, 50);
+    }
+
+    #[tokio::test]
+    async fn handler_post_transaction_uses_tx_rate_limiter() {
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            app_mut.high_load_tx_threshold = 0;
+            app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
+        }
+
+        let keypair = KeyPair::random();
+        let authority = AccountId::new(
+            "wonderland".parse().expect("domain"),
+            keypair.public_key().clone(),
+        );
+        let chain = (*app.chain_id).clone();
+        let tx1 =
+            TransactionBuilder::new(chain.clone(), authority.clone()).sign(keypair.private_key());
+        let tx2 = TransactionBuilder::new(chain, authority).sign(keypair.private_key());
+        let headers = HeaderMap::new();
+
+        let ok = super::handler_post_transaction(
+            State(app.clone()),
+            headers.clone(),
+            NoritoVersioned(tx1),
+        )
+        .await
+        .expect("accepted");
+        assert_eq!(ok.into_response().status(), StatusCode::ACCEPTED);
+
+        let err = match super::handler_post_transaction(State(app), headers, NoritoVersioned(tx2))
+            .await
+        {
+            Ok(_) => panic!("expected rate limit"),
+            Err(err) => err,
+        };
+        assert_eq!(err.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
     #[cfg(feature = "telemetry")]
@@ -15159,6 +16284,317 @@ pub(crate) mod tests_runtime_handlers {
         let hash = block.hash();
         app.kura.store_block(Arc::new(block)).expect("store block");
         hash
+    }
+
+    #[test]
+    fn pipeline_status_merge_prefers_higher_rank() {
+        let now = Instant::now();
+        let mut entry = PipelineStatusEntry::at_time(PipelineStatusKind::Applied, None, None, now);
+        entry.merge_from_event(PipelineStatusEntry::at_time(
+            PipelineStatusKind::Expired,
+            None,
+            None,
+            now + Duration::from_secs(1),
+        ));
+        assert_eq!(entry.kind, PipelineStatusKind::Applied);
+
+        let height = NonZeroU64::new(7).expect("height");
+        let rejection = TransactionRejectionReason::Validation(ValidationFail::TooComplex);
+        entry.merge_from_event(PipelineStatusEntry::at_time(
+            PipelineStatusKind::Rejected,
+            Some(height),
+            Some(rejection.clone()),
+            now + Duration::from_secs(2),
+        ));
+        assert_eq!(entry.kind, PipelineStatusKind::Rejected);
+        assert_eq!(entry.block_height, Some(height));
+        assert_eq!(entry.rejection, Some(rejection));
+    }
+
+    #[test]
+    fn pipeline_status_cache_records_transaction_event() {
+        let cache = PipelineStatusCache::new();
+        let (block, _) = make_signed_block(1, None);
+        let tx_hash = block.external_transactions().next().expect("tx").hash();
+        let height = NonZeroU64::new(2).expect("height");
+        let event = TransactionEvent {
+            hash: tx_hash,
+            block_height: Some(height),
+            lane_id: LaneId::new(1),
+            dataspace_id: DataSpaceId::new(1),
+            status: TransactionStatus::Approved,
+        };
+        cache.record_transaction_event(&event);
+        let stored = cache.lookup(&tx_hash).expect("entry");
+        assert_eq!(stored.kind, PipelineStatusKind::Approved);
+        assert_eq!(stored.block_height, Some(height));
+        assert!(stored.rejection.is_none());
+    }
+
+    #[test]
+    fn pipeline_status_cache_records_block_event() {
+        let app = mk_app_state_for_tests();
+        let (block, _) = make_signed_block(1, None);
+        let header = block.header();
+        let tx = block.external_transactions().next().expect("tx");
+        let tx_hash = tx.hash();
+        store_block(&app, block);
+        let event = BlockEvent {
+            header,
+            status: BlockStatus::Applied,
+        };
+        app.pipeline_status_cache
+            .record_block_event(&event, &app.kura);
+        let stored = app.pipeline_status_cache.lookup(&tx_hash).expect("entry");
+        assert_eq!(stored.kind, PipelineStatusKind::Applied);
+        let height = NonZeroU64::new(1).expect("height");
+        assert_eq!(stored.block_height, Some(height));
+    }
+
+    #[test]
+    fn pipeline_status_cache_refreshes_pending_block() {
+        let app = mk_app_state_for_tests();
+        let (block, _) = make_signed_block(1, None);
+        let header = block.header();
+        let tx_hash = block.external_transactions().next().expect("tx").hash();
+        let event = BlockEvent {
+            header,
+            status: BlockStatus::Committed,
+        };
+        app.pipeline_status_cache
+            .record_block_event(&event, &app.kura);
+        assert!(app.pipeline_status_cache.lookup(&tx_hash).is_none());
+        store_block(&app, block);
+        app.pipeline_status_cache.refresh_pending_blocks(&app.kura);
+        let stored = app.pipeline_status_cache.lookup(&tx_hash).expect("entry");
+        assert_eq!(stored.kind, PipelineStatusKind::Committed);
+    }
+
+    #[test]
+    fn pipeline_status_cache_prunes_stale_entries() {
+        let cache = PipelineStatusCache::with_limits(10, Duration::from_secs(1));
+        let (block, _) = make_signed_block(1, None);
+        let tx_hash = block.external_transactions().next().expect("tx").hash();
+        let now = Instant::now();
+        cache.record_entry(
+            tx_hash,
+            PipelineStatusEntry::at_time(
+                PipelineStatusKind::Queued,
+                None,
+                None,
+                now - Duration::from_secs(5),
+            ),
+        );
+        cache.prune(now);
+        assert!(cache.lookup(&tx_hash).is_none());
+    }
+
+    #[test]
+    fn pipeline_status_cache_eviction_respects_capacity() {
+        let cache = PipelineStatusCache::with_limits(1, Duration::from_secs(60));
+        let (block_a, _) = make_signed_block(1, None);
+        let (block_b, _) = make_signed_block(2, None);
+        let hash_a = block_a.external_transactions().next().expect("tx").hash();
+        let hash_b = block_b.external_transactions().next().expect("tx").hash();
+        let now = Instant::now();
+        cache.record_entry(
+            hash_a,
+            PipelineStatusEntry::at_time(
+                PipelineStatusKind::Queued,
+                None,
+                None,
+                now - Duration::from_secs(5),
+            ),
+        );
+        cache.record_entry(
+            hash_b,
+            PipelineStatusEntry::at_time(PipelineStatusKind::Queued, None, None, now),
+        );
+        cache.prune(now);
+        assert!(cache.lookup(&hash_a).is_none());
+        assert!(cache.lookup(&hash_b).is_some());
+    }
+
+    #[test]
+    fn parse_signed_transaction_hash_rejects_invalid() {
+        assert!(parse_signed_transaction_hash("not-a-hash").is_err());
+    }
+
+    #[tokio::test]
+    async fn pipeline_status_handler_returns_queued() {
+        let app = mk_app_state_for_tests();
+        let keypair = KeyPair::random();
+        let authority = AccountId::new(
+            "wonderland".parse().expect("domain"),
+            keypair.public_key().clone(),
+        );
+        let tx = TransactionBuilder::new((*app.chain_id).clone(), authority)
+            .with_instructions([Log {
+                level: Level::INFO,
+                msg: "queued".to_string(),
+            }])
+            .sign(keypair.private_key());
+        let params = app.state.world.view().parameters().clone();
+        let max_clock_drift = params.sumeragi().max_clock_drift();
+        let tx_limits = params.transaction();
+        let crypto_cfg = app.state.crypto();
+        let accepted = AcceptedTransaction::accept(
+            tx.clone(),
+            app.chain_id.as_ref(),
+            max_clock_drift,
+            tx_limits,
+            crypto_cfg.as_ref(),
+        )
+        .expect("accepted");
+        app.queue
+            .push(accepted, app.state.view())
+            .expect("queue push");
+
+        let resp = super::handler_pipeline_transaction_status(
+            State(app.clone()),
+            HeaderMap::new(),
+            None,
+            crate::NoritoQuery(PipelineStatusQuery {
+                hash: Some(tx.hash().to_string()),
+            }),
+        )
+        .await
+        .expect("ok");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
+        let status_kind = payload
+            .get("content")
+            .and_then(|content| content.get("status"))
+            .and_then(|status| status.get("kind"))
+            .and_then(norito::json::Value::as_str);
+        assert_eq!(status_kind, Some("Queued"));
+
+        let resp_entry = super::handler_pipeline_transaction_status(
+            State(app.clone()),
+            HeaderMap::new(),
+            None,
+            crate::NoritoQuery(PipelineStatusQuery {
+                hash: Some(tx.hash_as_entrypoint().to_string()),
+            }),
+        )
+        .await
+        .expect("ok");
+        assert_eq!(resp_entry.status(), StatusCode::OK);
+        let bytes_entry = axum::body::to_bytes(resp_entry.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload_entry: norito::json::Value =
+            norito::json::from_slice(&bytes_entry).expect("json");
+        let status_kind_entry = payload_entry
+            .get("content")
+            .and_then(|content| content.get("status"))
+            .and_then(|status| status.get("kind"))
+            .and_then(norito::json::Value::as_str);
+        assert_eq!(status_kind_entry, Some("Queued"));
+    }
+
+    #[tokio::test]
+    async fn pipeline_status_handler_returns_applied_from_state() {
+        let app = mk_app_state_for_tests();
+        let (block, _) = make_signed_block(1, None);
+        let header = block.header();
+        let tx = block.external_transactions().next().expect("tx");
+        let tx_hash = tx.hash();
+        let tx_entry_hash = tx.hash_as_entrypoint();
+        store_block(&app, block);
+
+        let height = header.height();
+        let height_usize = usize::try_from(height.get()).expect("height usize");
+        let height_nz = NonZeroUsize::new(height_usize).expect("height");
+        let mut state_block = app.state.block(header);
+        let tx_hashes: HashSet<_> = [tx_hash].into_iter().collect();
+        state_block.transactions.insert_block(tx_hashes, height_nz);
+        state_block.commit().expect("commit");
+
+        let resp = super::handler_pipeline_transaction_status(
+            State(app.clone()),
+            HeaderMap::new(),
+            None,
+            crate::NoritoQuery(PipelineStatusQuery {
+                hash: Some(tx_hash.to_string()),
+            }),
+        )
+        .await
+        .expect("ok");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
+        let status_kind = payload
+            .get("content")
+            .and_then(|content| content.get("status"))
+            .and_then(|status| status.get("kind"))
+            .and_then(norito::json::Value::as_str);
+        assert_eq!(status_kind, Some("Applied"));
+
+        let resp_entry = super::handler_pipeline_transaction_status(
+            State(app.clone()),
+            HeaderMap::new(),
+            None,
+            crate::NoritoQuery(PipelineStatusQuery {
+                hash: Some(tx_entry_hash.to_string()),
+            }),
+        )
+        .await
+        .expect("ok");
+        assert_eq!(resp_entry.status(), StatusCode::OK);
+        let bytes_entry = axum::body::to_bytes(resp_entry.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload_entry: norito::json::Value =
+            norito::json::from_slice(&bytes_entry).expect("json");
+        let status_kind_entry = payload_entry
+            .get("content")
+            .and_then(|content| content.get("status"))
+            .and_then(|status| status.get("kind"))
+            .and_then(norito::json::Value::as_str);
+        assert_eq!(status_kind_entry, Some("Applied"));
+    }
+
+    #[tokio::test]
+    async fn pipeline_status_handler_encodes_rejection_as_base64() {
+        let app = mk_app_state_for_tests();
+        let (block, _) = make_signed_block(1, None);
+        let tx_hash = block.external_transactions().next().expect("tx").hash();
+        let reason = TransactionRejectionReason::Validation(ValidationFail::TooComplex);
+        app.pipeline_status_cache.record_entry(
+            tx_hash,
+            PipelineStatusEntry::fresh(PipelineStatusKind::Rejected, None, Some(reason.clone())),
+        );
+
+        let resp = super::handler_pipeline_transaction_status(
+            State(app.clone()),
+            HeaderMap::new(),
+            None,
+            crate::NoritoQuery(PipelineStatusQuery {
+                hash: Some(tx_hash.to_string()),
+            }),
+        )
+        .await
+        .expect("ok");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
+        let rejection_payload = payload
+            .get("content")
+            .and_then(|content| content.get("status"))
+            .and_then(|status| status.get("content"))
+            .and_then(norito::json::Value::as_str)
+            .expect("rejection content");
+        let expected =
+            base64::engine::general_purpose::STANDARD.encode(norito::to_bytes(&reason).unwrap());
+        assert_eq!(rejection_payload, expected);
     }
 
     fn sample_commit_qc(
@@ -16756,6 +18192,7 @@ impl Error {
                 Expired => StatusCode::GONE,
                 AuthorityQuotaExceeded => StatusCode::TOO_MANY_REQUESTS,
                 CapacityLimit => StatusCode::TOO_MANY_REQUESTS,
+                GasBudgetExceeded => StatusCode::TOO_MANY_REQUESTS,
             },
             TooComplex => StatusCode::UNPROCESSABLE_ENTITY,
             InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -17958,7 +19395,7 @@ fn conn_scheme_flags_websocket_upgrade() {
 
 #[cfg(all(test, feature = "app_api", feature = "telemetry"))]
 mod peer_telemetry_tests {
-    use std::{collections::HashSet, net::ToSocketAddrs, str::FromStr};
+    use std::{collections::HashSet, str::FromStr};
 
     use iroha_crypto::KeyPair;
     use iroha_data_model::peer::Peer;
@@ -17968,7 +19405,7 @@ mod peer_telemetry_tests {
     use crate::telemetry::peers::ToriiUrl;
 
     #[test]
-    fn collect_peer_urls_reflects_online_peers_snapshot() {
+    fn collect_peer_urls_requires_configured_urls() {
         let (tx, rx) = watch::channel(HashSet::new());
         let provider = OnlinePeersProvider::new(rx);
 
@@ -17986,22 +19423,9 @@ mod peer_telemetry_tests {
 
         let urls = collect_peer_urls(&provider, &[]);
 
-        let to_url = |peer: &Peer| {
-            peer.address()
-                .to_socket_addrs()
-                .expect("peer address resolves")
-                .next()
-                .expect("peer socket resolution yields endpoint")
-                .try_into()
-                .expect("peer address must convert to Torii URL")
-        };
-        let mut expected = vec![to_url(&peer_a), to_url(&peer_b)];
-        expected.sort();
-        expected.dedup();
-
-        assert_eq!(
-            urls, expected,
-            "telemetry seed should reflect current peers"
+        assert!(
+            urls.is_empty(),
+            "no configured URLs means no peer telemetry"
         );
     }
 

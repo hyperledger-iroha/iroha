@@ -24,6 +24,46 @@ fn default_max_cycles() -> u64 {
     DEFAULT_MAX_CYCLES
 }
 
+const LITERAL_DATA_START: i16 = 16;
+
+fn len_u32(len: usize) -> u32 {
+    u32::try_from(len).expect("length fits in u32")
+}
+
+fn syscall_u8(id: u32) -> u8 {
+    u8::try_from(id).expect("syscall id fits in u8")
+}
+
+fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
+    use iroha_data_model::prelude::Hash;
+
+    let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
+    out.extend_from_slice(&type_id.to_be_bytes());
+    out.push(1);
+    out.extend_from_slice(&len_u32(payload.len()).to_be_bytes());
+    out.extend_from_slice(payload);
+    let h: [u8; Hash::LENGTH] = Hash::new(payload).into();
+    out.extend_from_slice(&h);
+    out
+}
+
+fn assemble_program_with_literals(code: &[u8], literal_data: &[u8]) -> Vec<u8> {
+    let mut program = Vec::new();
+    program.extend_from_slice(b"IVM\0");
+    program.extend_from_slice(&[1, 0, 0, 4]);
+    program.extend_from_slice(&default_max_cycles().to_le_bytes());
+    program.push(1); // abi_version
+    if !literal_data.is_empty() {
+        program.extend_from_slice(b"LTLB");
+        program.extend_from_slice(&0u32.to_le_bytes()); // literal entries
+        program.extend_from_slice(&0u32.to_le_bytes()); // post-pad bytes
+        program.extend_from_slice(&len_u32(literal_data.len()).to_le_bytes());
+        program.extend_from_slice(literal_data);
+    }
+    program.extend_from_slice(code);
+    program
+}
+
 fn build_minimal_program(tag: u8) -> Vec<u8> {
     // Program metadata header: MAGIC("IVM\0"), version(1,0), mode(0),
     // vector_length(tag+1), max_cycles(default_max_cycles LE), abi_version(1)
@@ -53,30 +93,47 @@ fn build_minimal_program(tag: u8) -> Vec<u8> {
 }
 
 fn build_program_mint_rose_for_authority() -> Vec<u8> {
-    use ivm::{encoding, instruction::wide, kotodama::compiler::encode_addi, syscalls as ivm_sys};
+    use iroha_data_model::prelude::AssetDefinitionId;
+    use ivm::{
+        PointerType, encoding, instruction::wide, kotodama::compiler::encode_addi,
+        syscalls as ivm_sys,
+    };
+    use norito::codec::Encode as _;
 
-    // Assemble: set a0=0 (authority sentinel), a1=0 (rose#wonderland sentinel), a2=1; SCALL MINT_ASSET; HALT
+    // Assemble: mint 1 unit of rose#wonderland to the authority with pointer-ABI inputs.
+    let asset_def: AssetDefinitionId = "rose#wonderland".parse().expect("asset definition");
+    let asset_payload = asset_def.encode();
+    let asset_tlv = make_tlv(PointerType::AssetDefinitionId as u16, &asset_payload);
+
     let mut code = Vec::new();
-    code.extend_from_slice(&encode_addi(10, 0, 0).expect("encode addi").to_le_bytes()); // a0 = 0 => authority
-    code.extend_from_slice(&encode_addi(11, 0, 0).expect("encode addi").to_le_bytes()); // a1 = 0 => rose#wonderland
-    code.extend_from_slice(&encode_addi(12, 0, 1).expect("encode addi").to_le_bytes()); // a2 = 1 (amount)
+    // r10 <- &AccountId(authority)
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             wide::system::SCALL,
-            u8::try_from(ivm_sys::SYSCALL_MINT_ASSET).expect("syscall fits in u8"),
+            syscall_u8(ivm_sys::SYSCALL_GET_AUTHORITY),
         )
         .to_le_bytes(),
     );
+    code.extend_from_slice(&encode_addi(13, 10, 0).expect("encode addi").to_le_bytes()); // save account pointer
+    // r10 <- &AssetDefinitionId (literal TLV)
+    code.extend_from_slice(&encode_addi(10, 0, LITERAL_DATA_START).expect("encode addi").to_le_bytes());
+    code.extend_from_slice(
+        &encoding::wide::encode_sys(
+            wide::system::SCALL,
+            syscall_u8(ivm_sys::SYSCALL_INPUT_PUBLISH_TLV),
+        )
+        .to_le_bytes(),
+    );
+    code.extend_from_slice(&encode_addi(11, 10, 0).expect("encode addi").to_le_bytes()); // r11 = asset ptr
+    code.extend_from_slice(&encode_addi(10, 13, 0).expect("encode addi").to_le_bytes()); // r10 = account ptr
+    code.extend_from_slice(&encode_addi(12, 0, 1).expect("encode addi").to_le_bytes()); // amount = 1
+    code.extend_from_slice(
+        &encoding::wide::encode_sys(wide::system::SCALL, syscall_u8(ivm_sys::SYSCALL_MINT_ASSET))
+            .to_le_bytes(),
+    );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
 
-    // Program metadata header: MAGIC("IVM\0"), version(1,0), mode(0), vector_length(4), max_cycles(default_max_cycles), abi_version(1)
-    let mut program = Vec::new();
-    program.extend_from_slice(b"IVM\0");
-    program.extend_from_slice(&[1, 0, 0, 4]);
-    program.extend_from_slice(&default_max_cycles().to_le_bytes());
-    program.push(1); // abi_version
-    program.extend_from_slice(&code);
-    program
+    assemble_program_with_literals(&code, &asset_tlv)
 }
 
 fn build_program_create_nft_for_authority() -> Vec<u8> {
@@ -105,30 +162,70 @@ fn build_program_create_nft_for_authority() -> Vec<u8> {
 }
 
 fn build_program_set_account_detail_defaults() -> Vec<u8> {
-    use ivm::{encoding, instruction::wide, kotodama::compiler::encode_addi, syscalls as ivm_sys};
+    use iroha_data_model::{prelude::Name, query::parameters::ForwardCursor};
+    use ivm::{
+        PointerType, encoding, instruction::wide, kotodama::compiler::encode_addi,
+        syscalls as ivm_sys,
+    };
+    use norito::{codec::Encode as _, json};
+    use std::num::NonZeroU64;
 
-    // Leverage host sentinels: zeroed pointers target the authority account,
-    // "cursor" key, and a ForwardCursor {"sc_dummy", 1}.
+    let key: Name = "cursor".parse().expect("key name");
+    let key_payload = key.encode();
+    let cursor = ForwardCursor {
+        query: "sc_dummy".to_owned(),
+        cursor: NonZeroU64::new(1).expect("cursor non-zero"),
+        gas_budget: None,
+    };
+    let value_json = json::to_vec(&cursor).expect("encode ForwardCursor");
+    let key_tlv = make_tlv(PointerType::Name as u16, &key_payload);
+    let value_tlv = make_tlv(PointerType::Json as u16, &value_json);
+    let value_ptr = LITERAL_DATA_START + i16::try_from(key_tlv.len()).unwrap_or(0);
+
     let mut code = Vec::new();
-    code.extend_from_slice(&encode_addi(10, 0, 0).expect("encode addi").to_le_bytes()); // account ptr = 0 (authority)
-    code.extend_from_slice(&encode_addi(11, 0, 0).expect("encode addi").to_le_bytes()); // key ptr = 0 ("cursor")
-    code.extend_from_slice(&encode_addi(12, 0, 0).expect("encode addi").to_le_bytes()); // value ptr = 0 (ForwardCursor)
+    // r10 <- &AccountId(authority)
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             wide::system::SCALL,
-            u8::try_from(ivm_sys::SYSCALL_SET_ACCOUNT_DETAIL).expect("syscall fits in u8"),
+            syscall_u8(ivm_sys::SYSCALL_GET_AUTHORITY),
+        )
+        .to_le_bytes(),
+    );
+    code.extend_from_slice(&encode_addi(13, 10, 0).expect("encode addi").to_le_bytes()); // save account pointer
+    // r10 <- &Name("cursor")
+    code.extend_from_slice(&encode_addi(10, 0, LITERAL_DATA_START).expect("encode addi").to_le_bytes());
+    code.extend_from_slice(
+        &encoding::wide::encode_sys(
+            wide::system::SCALL,
+            syscall_u8(ivm_sys::SYSCALL_INPUT_PUBLISH_TLV),
+        )
+        .to_le_bytes(),
+    );
+    code.extend_from_slice(&encode_addi(11, 10, 0).expect("encode addi").to_le_bytes()); // r11 = key ptr
+    // r10 <- &Json(cursor)
+    code.extend_from_slice(&encode_addi(10, 0, value_ptr).expect("encode addi").to_le_bytes());
+    code.extend_from_slice(
+        &encoding::wide::encode_sys(
+            wide::system::SCALL,
+            syscall_u8(ivm_sys::SYSCALL_INPUT_PUBLISH_TLV),
+        )
+        .to_le_bytes(),
+    );
+    code.extend_from_slice(&encode_addi(12, 10, 0).expect("encode addi").to_le_bytes()); // r12 = value ptr
+    code.extend_from_slice(&encode_addi(10, 13, 0).expect("encode addi").to_le_bytes()); // r10 = account ptr
+    code.extend_from_slice(
+        &encoding::wide::encode_sys(
+            wide::system::SCALL,
+            syscall_u8(ivm_sys::SYSCALL_SET_ACCOUNT_DETAIL),
         )
         .to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
 
-    let mut program = Vec::new();
-    program.extend_from_slice(b"IVM\0");
-    program.extend_from_slice(&[1, 0, 0, 4]);
-    program.extend_from_slice(&default_max_cycles().to_le_bytes());
-    program.push(1); // abi_version
-    program.extend_from_slice(&code);
-    program
+    let mut literal_data = Vec::with_capacity(key_tlv.len() + value_tlv.len());
+    literal_data.extend_from_slice(&key_tlv);
+    literal_data.extend_from_slice(&value_tlv);
+    assemble_program_with_literals(&code, &literal_data)
 }
 
 fn compile_kotodama_sample(root: &Path, name: &str) -> Option<Vec<u8>> {

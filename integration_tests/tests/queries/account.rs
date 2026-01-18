@@ -5,19 +5,18 @@ use std::collections::HashSet;
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
-use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 
 #[test]
 fn find_accounts_with_asset() -> Result<()> {
     let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
-        NetworkBuilder::new(),
+        super::query_network_builder(),
         stringify!(find_accounts_with_asset),
     )
     .unwrap() else {
         return Ok(());
     };
-    let test_client = network.client();
+    let test_client = super::query_client(&network);
 
     let result: Result<()> = (|| {
         // Registering new asset definition

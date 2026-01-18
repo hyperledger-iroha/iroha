@@ -14,7 +14,7 @@ norito_derive = { workspace = true }
 thiserror = "2.0.17"
 sorafs_chunker = { path = "../sorafs_chunker" }
 ed25519-dalek = "2.2.0"
-iroha_crypto = { workspace = true, features = ["ml-dsa"] }
+iroha_crypto = { workspace = true }
 iroha_schema = { workspace = true }
 sha3 = "0.10.8"
 http = { workspace = true }

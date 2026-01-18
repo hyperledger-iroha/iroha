@@ -162,7 +162,6 @@ mod digest_function_public {
 
     const ED_25519: DigestFunction = 0xed;
     const SECP_256_K1: DigestFunction = 0xe7;
-    #[cfg(feature = "ml-dsa")]
     // Provisional multicodec for ML‑DSA (Dilithium3) public keys; align with upstream when assigned.
     const ML_DSA_DILITHIUM3_PK: DigestFunction = 0xee;
     #[cfg(feature = "gost")]
@@ -192,7 +191,6 @@ mod digest_function_public {
             BLS12_381_G1 => Algorithm::BlsNormal,
             #[cfg(feature = "bls")]
             BLS12_381_G2 => Algorithm::BlsSmall,
-            #[cfg(feature = "ml-dsa")]
             ML_DSA_DILITHIUM3_PK => Algorithm::MlDsa,
             #[cfg(feature = "gost")]
             GOST_3410_2012_256_A => Algorithm::Gost3410_2012_256ParamSetA,
@@ -215,7 +213,6 @@ mod digest_function_public {
         match algorithm {
             Algorithm::Ed25519 => ED_25519,
             Algorithm::Secp256k1 => SECP_256_K1,
-            #[cfg(feature = "ml-dsa")]
             Algorithm::MlDsa => ML_DSA_DILITHIUM3_PK,
             #[cfg(feature = "gost")]
             Algorithm::Gost3410_2012_256ParamSetA => GOST_3410_2012_256_A,
@@ -244,7 +241,6 @@ mod digest_function_private {
 
     const ED_25519: DigestFunction = 0x1300;
     const SECP_256_K1: DigestFunction = 0x1301;
-    #[cfg(feature = "ml-dsa")]
     // Provisional multicodec for ML‑DSA (Dilithium3) private keys; align with upstream when assigned.
     const ML_DSA_DILITHIUM3_SK: DigestFunction = 0x130b;
     #[cfg(feature = "gost")]
@@ -274,7 +270,6 @@ mod digest_function_private {
             BLS12_381_G1 => Algorithm::BlsNormal,
             #[cfg(feature = "bls")]
             BLS12_381_G2 => Algorithm::BlsSmall,
-            #[cfg(feature = "ml-dsa")]
             ML_DSA_DILITHIUM3_SK => Algorithm::MlDsa,
             #[cfg(feature = "gost")]
             GOST_3410_2012_256_A => Algorithm::Gost3410_2012_256ParamSetA,
@@ -297,7 +292,6 @@ mod digest_function_private {
         match algorithm {
             Algorithm::Ed25519 => ED_25519,
             Algorithm::Secp256k1 => SECP_256_K1,
-            #[cfg(feature = "ml-dsa")]
             Algorithm::MlDsa => ML_DSA_DILITHIUM3_SK,
             #[cfg(feature = "gost")]
             Algorithm::Gost3410_2012_256ParamSetA => GOST_3410_2012_256_A,

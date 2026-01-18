@@ -25,10 +25,6 @@ fn overflow_varint() -> Vec<u8> {
     bytes
 }
 
-fn non_canonical_varint_zero() -> Vec<u8> {
-    vec![0x80, 0x00]
-}
-
 #[test]
 fn stream_seq_iter_half_then_finish() {
     // Build a reasonably large Vec<u32>
@@ -87,7 +83,7 @@ fn stream_map_iter_partial_then_finish() {
 #[test]
 fn stream_seq_iter_compact_len_roundtrip() {
     let values: Vec<u32> = (0..256u32).map(|i| i.wrapping_mul(3) + 1).collect();
-    let flags = header_flags::COMPACT_LEN | header_flags::COMPACT_SEQ_LEN;
+    let flags = header_flags::COMPACT_LEN;
     let payload = {
         let _guard = DecodeFlagsGuard::enter(flags);
         let mut payload = Vec::new();
@@ -112,7 +108,7 @@ fn stream_seq_iter_packed_struct_roundtrip() {
         PackedRow { id: 2, tag: 7 },
         PackedRow { id: 3, tag: 5 },
     ];
-    let flags = header_flags::PACKED_STRUCT | header_flags::COMPACT_SEQ_LEN;
+    let flags = header_flags::PACKED_STRUCT;
     let payload = {
         let _guard = DecodeFlagsGuard::enter(flags);
         let mut payload = Vec::new();
@@ -131,7 +127,7 @@ fn stream_seq_iter_packed_struct_roundtrip() {
 
 #[test]
 fn stream_map_compact_len_roundtrip() {
-    let flags = header_flags::COMPACT_LEN | header_flags::COMPACT_SEQ_LEN;
+    let flags = header_flags::COMPACT_LEN;
     let mut hm: HashMap<String, u32> = HashMap::new();
     for i in 0..256u32 {
         hm.insert(format!("k-{}", i * 7), i.wrapping_mul(5) + 1);
@@ -172,9 +168,8 @@ fn stream_map_compact_len_roundtrip() {
 }
 
 #[test]
-fn stream_map_packed_varint_offsets_roundtrip() {
-    let flags =
-        header_flags::PACKED_SEQ | header_flags::VARINT_OFFSETS | header_flags::COMPACT_SEQ_LEN;
+fn stream_map_packed_fixed_offsets_roundtrip() {
+    let flags = header_flags::PACKED_SEQ;
     let entries: Vec<(u8, u32)> = vec![(1, 10), (2, 20), (3, 30)];
     let mut key_payloads = Vec::new();
     let mut val_payloads = Vec::new();
@@ -187,13 +182,19 @@ fn stream_map_packed_varint_offsets_roundtrip() {
         val_payloads.push(val_buf);
     }
     let mut payload = Vec::new();
-    norito_core::write_varint_len_to_vec(&mut payload, entries.len() as u64);
+    payload.extend_from_slice(&(entries.len() as u64).to_le_bytes());
+    let mut key_total = 0u64;
     for key_buf in &key_payloads {
-        norito_core::write_varint_len_to_vec(&mut payload, key_buf.len() as u64);
+        payload.extend_from_slice(&key_total.to_le_bytes());
+        key_total = key_total.saturating_add(key_buf.len() as u64);
     }
+    payload.extend_from_slice(&key_total.to_le_bytes());
+    let mut val_total = 0u64;
     for val_buf in &val_payloads {
-        norito_core::write_varint_len_to_vec(&mut payload, val_buf.len() as u64);
+        payload.extend_from_slice(&val_total.to_le_bytes());
+        val_total = val_total.saturating_add(val_buf.len() as u64);
     }
+    payload.extend_from_slice(&val_total.to_le_bytes());
     for key_buf in &key_payloads {
         payload.extend_from_slice(key_buf);
     }
@@ -215,9 +216,9 @@ fn stream_map_packed_varint_offsets_roundtrip() {
 }
 
 #[test]
-fn stream_seq_iter_rejects_overflowing_varint_len() {
-    let flags = header_flags::COMPACT_SEQ_LEN;
-    let payload = overflow_varint();
+fn stream_seq_iter_rejects_short_seq_header() {
+    let flags = 0;
+    let payload = vec![0xAA; 4];
     let bytes =
         norito_core::frame_bare_with_header_flags::<Vec<u32>>(&payload, flags).expect("frame");
     let err = stream_seq_iter::<_, u32>(Cursor::new(bytes))
@@ -228,22 +229,22 @@ fn stream_seq_iter_rejects_overflowing_varint_len() {
 }
 
 #[test]
-fn stream_seq_iter_rejects_non_canonical_varint_len() {
+fn stream_seq_iter_rejects_reserved_flags() {
     let flags = header_flags::COMPACT_SEQ_LEN;
-    let payload = non_canonical_varint_zero();
+    let payload = vec![0u8; 8];
     let bytes =
         norito_core::frame_bare_with_header_flags::<Vec<u32>>(&payload, flags).expect("frame");
     let err = stream_seq_iter::<_, u32>(Cursor::new(bytes))
         .err()
         .expect("iter");
-    assert!(matches!(err, Error::LengthMismatch));
+    assert!(matches!(err, Error::UnsupportedFeature(_)));
     norito_core::reset_decode_state();
 }
 
 #[test]
-fn stream_map_iter_rejects_overflowing_entry_count_varint() {
-    let flags = header_flags::COMPACT_SEQ_LEN;
-    let payload = overflow_varint();
+fn stream_map_iter_rejects_short_entry_count_header() {
+    let flags = 0;
+    let payload = vec![0xBB; 4];
     let bytes = norito_core::frame_bare_with_header_flags::<HashMap<u8, u8>>(&payload, flags)
         .expect("frame");
     let err = StreamMapIter::<u8, u8>::new_hash(Cursor::new(bytes))
@@ -254,27 +255,27 @@ fn stream_map_iter_rejects_overflowing_entry_count_varint() {
 }
 
 #[test]
-fn stream_map_iter_rejects_non_canonical_entry_count_varint() {
+fn stream_map_iter_rejects_reserved_flags() {
     let flags = header_flags::COMPACT_SEQ_LEN;
-    let payload = non_canonical_varint_zero();
+    let payload = vec![0u8; 8];
     let bytes = norito_core::frame_bare_with_header_flags::<HashMap<u8, u8>>(&payload, flags)
         .expect("frame");
     let err = StreamMapIter::<u8, u8>::new_hash(Cursor::new(bytes))
         .err()
         .expect("iter");
-    assert!(matches!(err, Error::LengthMismatch));
+    assert!(matches!(err, Error::UnsupportedFeature(_)));
     norito_core::reset_decode_state();
 }
 
 #[test]
-fn stream_map_collect_rejects_non_canonical_entry_count_varint() {
+fn stream_map_collect_rejects_reserved_flags() {
     let flags = header_flags::COMPACT_SEQ_LEN;
-    let payload = non_canonical_varint_zero();
+    let payload = vec![0u8; 8];
     let bytes = norito_core::frame_bare_with_header_flags::<HashMap<u8, u8>>(&payload, flags)
         .expect("frame");
     let err =
         stream_hashmap_collect_from_reader::<_, u8, u8>(Cursor::new(bytes)).expect_err("collect");
-    assert!(matches!(err, Error::LengthMismatch));
+    assert!(matches!(err, Error::UnsupportedFeature(_)));
     norito_core::reset_decode_state();
 }
 

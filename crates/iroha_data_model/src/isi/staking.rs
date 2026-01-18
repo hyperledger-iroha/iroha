@@ -13,11 +13,23 @@ use crate::{
 
 isi! {
     /// Activate a pending validator for a public Nexus lane.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
     pub struct ActivatePublicLaneValidator {
         /// Lane that the validator targets.
         pub lane_id: LaneId,
         /// Account that signs consensus messages for the lane.
         pub validator: AccountId,
+    }
+}
+
+impl ActivatePublicLaneValidator {
+    /// Build a public-lane validator activation instruction.
+    #[must_use]
+    pub fn new(lane_id: LaneId, validator: AccountId) -> Self {
+        Self { lane_id, validator }
     }
 }
 
@@ -35,6 +47,10 @@ isi! {
 
 isi! {
     /// Register a validator for a public Nexus lane and bond initial stake.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
     pub struct RegisterPublicLaneValidator {
         /// Lane that the validator targets.
         pub lane_id: LaneId,
@@ -46,6 +62,26 @@ isi! {
         pub initial_stake: Numeric,
         /// Metadata documenting commission, jurisdiction flags, telemetry ids, etc.
         pub metadata: Metadata,
+    }
+}
+
+impl RegisterPublicLaneValidator {
+    /// Build a public-lane validator registration instruction.
+    #[must_use]
+    pub fn new(
+        lane_id: LaneId,
+        validator: AccountId,
+        stake_account: AccountId,
+        initial_stake: Numeric,
+        metadata: Metadata,
+    ) -> Self {
+        Self {
+            lane_id,
+            validator,
+            stake_account,
+            initial_stake,
+            metadata,
+        }
     }
 }
 
@@ -62,6 +98,46 @@ isi! {
         pub amount: Numeric,
         /// Optional metadata captured for dashboards/audit trails.
         pub metadata: Metadata,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::prelude::{AccountId, Algorithm, DomainId, KeyPair};
+
+    fn sample_account() -> AccountId {
+        let domain: DomainId = "wonderland".parse().expect("domain id");
+        let key_pair = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
+        AccountId::new(domain, key_pair.public_key().clone())
+    }
+
+    #[test]
+    fn activate_public_lane_validator_new_sets_fields() {
+        let validator = sample_account();
+        let instruction = ActivatePublicLaneValidator::new(LaneId::SINGLE, validator.clone());
+
+        assert_eq!(*instruction.lane_id(), LaneId::SINGLE);
+        assert_eq!(instruction.validator(), &validator);
+    }
+
+    #[test]
+    fn register_public_lane_validator_new_sets_fields() {
+        let validator = sample_account();
+        let metadata = Metadata::default();
+        let instruction = RegisterPublicLaneValidator::new(
+            LaneId::SINGLE,
+            validator.clone(),
+            validator.clone(),
+            Numeric::from(10_u64),
+            metadata.clone(),
+        );
+
+        assert_eq!(*instruction.lane_id(), LaneId::SINGLE);
+        assert_eq!(instruction.validator(), &validator);
+        assert_eq!(instruction.stake_account(), &validator);
+        assert_eq!(instruction.initial_stake(), &Numeric::from(10_u64));
+        assert_eq!(instruction.metadata(), &metadata);
     }
 }
 
@@ -154,3 +230,45 @@ impl crate::seal::Instruction for FinalizePublicLaneUnbond {}
 impl crate::seal::Instruction for SlashPublicLaneValidator {}
 impl crate::seal::Instruction for RecordPublicLaneRewards {}
 impl crate::seal::Instruction for ClaimPublicLaneRewards {}
+
+#[cfg(test)]
+mod json_tests {
+    use super::{ActivatePublicLaneValidator, RegisterPublicLaneValidator};
+    use crate::{account::AccountId, metadata::Metadata, nexus::LaneId};
+    use iroha_primitives::numeric::Numeric;
+    use norito::json::value::{from_value, to_value};
+
+    #[test]
+    fn register_public_lane_validator_json_roundtrip() {
+        let validator: AccountId = "validator@wonderland"
+            .parse()
+            .expect("validator account id");
+        let isi = RegisterPublicLaneValidator::new(
+            LaneId::new(1),
+            validator.clone(),
+            "stake@wonderland".parse().expect("stake account id"),
+            Numeric::from(42u32),
+            Metadata::default(),
+        );
+
+        let encoded = to_value(&isi).expect("encode RegisterPublicLaneValidator");
+        let decoded: RegisterPublicLaneValidator =
+            from_value(encoded).expect("decode RegisterPublicLaneValidator");
+
+        assert_eq!(decoded, isi);
+    }
+
+    #[test]
+    fn activate_public_lane_validator_json_roundtrip() {
+        let validator: AccountId = "validator@wonderland"
+            .parse()
+            .expect("validator account id");
+        let isi = ActivatePublicLaneValidator::new(LaneId::new(2), validator);
+
+        let encoded = to_value(&isi).expect("encode ActivatePublicLaneValidator");
+        let decoded: ActivatePublicLaneValidator =
+            from_value(encoded).expect("decode ActivatePublicLaneValidator");
+
+        assert_eq!(decoded, isi);
+    }
+}

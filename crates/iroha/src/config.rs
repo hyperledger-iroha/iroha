@@ -14,7 +14,8 @@ use iroha_config::parameters::{actual::SorafsRolloutPhase, defaults};
 use iroha_config_base::{env::ReadEnv, read::ConfigReader, toml::TomlSource};
 use iroha_primitives::small::SmallStr;
 use norito::json::{self, JsonDeserialize, JsonSerialize};
-use sorafs_orchestrator::AnonymityPolicy;
+/// Re-exported `SoraNet` anonymity policy for client configuration.
+pub use sorafs_orchestrator::AnonymityPolicy;
 use url::Url;
 
 use crate::{

@@ -1,8 +1,6 @@
 //! Tests for adaptive layout flags in `to_bytes_auto`.
 //!
-//! We validate that adaptive flags advertise compact sequence lengths and that
-//! packed layouts always use `VARINT_OFFSETS` so decoders can rely on the
-//! canonical representation.
+//! We validate that adaptive helpers still emit the fixed v1 layout flags.
 
 use norito::to_bytes_auto;
 
@@ -13,7 +11,7 @@ fn header_flags(bytes: &[u8]) -> u8 {
 }
 
 #[test]
-fn adaptive_small_prefers_varints() {
+fn adaptive_small_keeps_flags_zero() {
     // Small-ish packed sequence payload
     let v: Vec<u32> = (0..256u32).collect();
     let bytes = to_bytes_auto(&v).expect("encode");
@@ -22,7 +20,7 @@ fn adaptive_small_prefers_varints() {
 }
 
 #[test]
-fn adaptive_large_still_uses_varints() {
+fn adaptive_large_keeps_flags_zero() {
     // Large payload: vector of 1M u32 (4 MiB data)
     let v: Vec<u32> = (0..1_000_000u32).collect();
     let bytes = to_bytes_auto(&v).expect("encode");

@@ -13,7 +13,7 @@ use std::{
     collections::{BTreeMap, VecDeque},
     io::Cursor,
     mem,
-    num::{NonZeroU64, NonZeroUsize},
+    num::{NonZeroU16, NonZeroU64, NonZeroUsize},
     str::FromStr,
     sync::Arc,
 };
@@ -22,10 +22,12 @@ use iroha_crypto::{Hash, streaming::TransportCapabilityResolutionSnapshot};
 use iroha_data_model::{
     DataSpaceId, ValidationFail,
     errors::{AmxStage, AmxTimeout, CanonicalErrorKind},
+    events::time::Schedule,
     isi::{
-        Burn, BurnBox, InstructionBox, Mint, MintBox, Register, RegisterBox, SetKeyValue,
-        SetKeyValueBox, SetParameter, Transfer, TransferAssetBatch, TransferAssetBatchEntry,
-        TransferBox, Unregister, UnregisterBox, smart_contract_code as scode, zk as DMZk,
+        AddSignatory, Burn, BurnBox, InstructionBox, Mint, MintBox, Register, RegisterBox,
+        RemoveSignatory, SetAccountQuorum, SetKeyValue, SetKeyValueBox, SetParameter, Transfer,
+        TransferAssetBatch, TransferAssetBatchEntry, TransferBox, Unregister, UnregisterBox,
+        register::RegisterPeerWithPop, smart_contract_code as scode, zk as DMZk,
     },
     nexus::{
         AxtBinding, AxtDescriptor as ModelAxtDescriptor, AxtEnvelopeRecord, AxtHandleFragment,
@@ -34,11 +36,21 @@ use iroha_data_model::{
         AxtTouchSpec as ModelAxtTouchSpec, ProofBlob as ModelProofBlob,
         TouchManifest as ModelTouchManifest, proof_matches_manifest,
     },
+    parameter::{Parameters, system::ivm_metadata},
+    permission::Permissions,
     prelude::{AccountId, *},
     proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
-    query::parameters::ForwardCursor,
+    query::{
+        QueryRequest, QueryResponse, SingularQueryBox, SingularQueryOutputBox,
+        asset::prelude::FindAssetById, error::QueryExecutionFail,
+    },
+    subscription::{
+        SUBSCRIPTION_INVOICE_METADATA_KEY, SUBSCRIPTION_METADATA_KEY,
+        SUBSCRIPTION_PLAN_METADATA_KEY, SUBSCRIPTION_TRIGGER_REF_METADATA_KEY,
+    },
     zk::BackendTag,
 };
+use iroha_primitives::calendar;
 #[cfg(test)]
 use ivm::VMError;
 use ivm::{
@@ -46,15 +58,31 @@ use ivm::{
     analysis::{self, AmxLimits, ProgramAnalysis},
     axt::{self, AssetHandle, ProofBlob, RemoteSpendIntent, TouchManifest},
     host::IVMHost,
-    is_type_allowed_for_policy,
+    is_type_allowed_for_policy, pointer_abi,
 };
 use mv::storage::StorageReadOnly;
-use norito::{codec::Decode as NoritoDecode, decode_from_bytes, streaming::CapabilityFlags};
+use norito::{
+    codec::Decode as NoritoDecode,
+    core::{Archived, Header, NoritoSerialize},
+    decode_from_bytes, json,
+    streaming::CapabilityFlags,
+};
 use sha2::{Digest, Sha256};
 
-use crate::state::{StateReadOnly, StateTransaction, WorldReadOnly, current_axt_slot_from_block};
 #[cfg(feature = "telemetry")]
 use crate::telemetry::StateTelemetry;
+use crate::{
+    smartcontracts::isi::{
+        query::{IvmQueryValidator, QueryLimits, ValidQueryRequest},
+        triggers::{
+            TRIGGER_ENABLED_METADATA_KEY, set::SetReadOnly, specialized::SpecializedAction,
+        },
+    },
+    state::{
+        StateBlock, StateReadOnly, StateTransaction, StateView, WorldReadOnly,
+        current_axt_slot_from_block,
+    },
+};
 
 const AXT_PROOF_CACHE_HIT: &str = "hit";
 const AXT_PROOF_CACHE_MISS: &str = "miss";
@@ -91,6 +119,73 @@ struct CachedProofEntry {
     manifest_root: Option<[u8; 32]>,
     valid: bool,
     status: &'static str,
+}
+
+const PUBLIC_INPUT_GAS_BASE_DEFAULT: u64 = 16;
+const PUBLIC_INPUT_GAS_PER_BYTE_DEFAULT: u64 = 1;
+
+#[derive(Debug, Clone, crate::json_macros::JsonDeserialize)]
+struct PublicInputDescriptor {
+    name: Name,
+    type_id: u16,
+    tlv_hex: String,
+    #[norito(default)]
+    gas_base: Option<u64>,
+    #[norito(default)]
+    gas_per_byte: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+struct PublicInputRecord {
+    type_id: PointerType,
+    tlv: Vec<u8>,
+    gas_base: u64,
+    gas_per_byte: u64,
+}
+
+impl PublicInputRecord {
+    fn from_tlv_bytes(bytes: Vec<u8>) -> Result<Self, ivm::VMError> {
+        let tlv = pointer_abi::validate_tlv_bytes(&bytes)?;
+        Ok(Self {
+            type_id: tlv.type_id,
+            tlv: bytes,
+            gas_base: PUBLIC_INPUT_GAS_BASE_DEFAULT,
+            gas_per_byte: PUBLIC_INPUT_GAS_PER_BYTE_DEFAULT,
+        })
+    }
+
+    fn from_descriptor(desc: PublicInputDescriptor) -> Result<(Name, Self), ivm::VMError> {
+        let expected_type =
+            PointerType::from_u16(desc.type_id).ok_or(ivm::VMError::NoritoInvalid)?;
+        let hex_str = desc
+            .tlv_hex
+            .trim_start_matches("0x")
+            .trim_start_matches("0X");
+        let bytes = hex::decode(hex_str).map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let tlv = pointer_abi::validate_tlv_bytes(&bytes)?;
+        if tlv.type_id != expected_type {
+            return Err(ivm::VMError::NoritoInvalid);
+        }
+        let gas_base = desc.gas_base.unwrap_or(PUBLIC_INPUT_GAS_BASE_DEFAULT);
+        let gas_per_byte = desc
+            .gas_per_byte
+            .unwrap_or(PUBLIC_INPUT_GAS_PER_BYTE_DEFAULT);
+        Ok((
+            desc.name,
+            Self {
+                type_id: expected_type,
+                tlv: bytes,
+                gas_base,
+                gas_per_byte,
+            },
+        ))
+    }
+
+    fn gas_cost(&self) -> u64 {
+        let len = u64::try_from(self.tlv.len()).unwrap_or(u64::MAX);
+        self.gas_base
+            .saturating_add(self.gas_per_byte.saturating_mul(len))
+    }
 }
 
 /// Lightweight view of a cached AXT proof entry for diagnostics/tests.
@@ -170,7 +265,7 @@ fn apply_sm_openssl_preview(_: bool) {}
 /// Stateful operations must be translated into ISIs and executed via the
 /// executor. Durable-state syscalls are only forwarded to an in-memory
 /// overlay when access logging is enabled for prepass execution.
-pub struct CoreHost {
+pub struct CoreHostImpl<QS> {
     authority: AccountId,
     default: ivm::host::DefaultHost,
     codec_host: IvmCodecHost,
@@ -181,10 +276,16 @@ pub struct CoreHost {
     fastpq_batch_entries: Option<Vec<TransferAssetBatchEntry>>,
     // Snapshot of accounts available for simple iteration helpers used by samples.
     accounts_snapshot: Arc<Vec<AccountId>>,
-    // Simple counter for sentinel-generated NFT ids to guarantee uniqueness across calls.
+    // Live read-only state view used to execute queries during IVM runs.
+    query_state: QS,
+    // Simple counter for sample-generated NFT ids to guarantee uniqueness across calls.
     nft_seq: u64,
     // Optional trigger arguments for by-call entrypoints.
     args: Option<iroha_primitives::json::Json>,
+    // Trigger identifier for the current execution (time/by-call triggers).
+    current_trigger_id: Option<TriggerId>,
+    // Block creation timestamp (UTC ms) for the current execution.
+    current_block_time_ms: Option<u64>,
     // Snapshot of durable smart-contract state persisted in WSV.
     durable_state_base: BTreeMap<Name, Vec<u8>>,
     // Overlay of durable state updates staged by the current VM execution.
@@ -208,6 +309,8 @@ pub struct CoreHost {
     zk_elections: BTreeMap<String, (bool, Vec<u64>)>,
     // Registry snapshot of verifying keys.
     verifying_keys: BTreeMap<VerifyingKeyId, VerifyingKeyRecord>,
+    // Registry snapshot of public inputs exposed via SYSCALL_GET_PUBLIC_INPUT.
+    public_inputs: BTreeMap<Name, PublicInputRecord>,
     // Chain id bytes for domain-tag binding.
     chain_id_bytes: Vec<u8>,
     // Policy hook for AXT validation (deny-wins).
@@ -247,6 +350,306 @@ pub struct CoreHost {
     telemetry: Option<StateTelemetry>,
 }
 
+/// Core host variant without query support (default for VM-attached hosts).
+pub type CoreHost = CoreHostImpl<NoQueryState>;
+
+/// Marker query slot for hosts that do not run queries.
+#[derive(Default, Copy, Clone)]
+pub struct NoQueryState;
+
+/// Slot storing a live queryable state reference for a host run.
+pub(crate) struct QueryStateSlot<QRef> {
+    state: Option<QRef>,
+}
+
+impl<QRef> Default for QueryStateSlot<QRef> {
+    fn default() -> Self {
+        Self { state: None }
+    }
+}
+
+/// Borrowed query-state reference used during IVM query syscalls.
+#[derive(Copy, Clone)]
+pub enum QueryStateRef<'block, 'tx, 'state> {
+    /// Query against a state view snapshot.
+    View(&'block StateView<'state>),
+    /// Query against a state block snapshot.
+    Block(&'block StateBlock<'state>),
+    /// Query against a state transaction snapshot.
+    Transaction(&'block StateTransaction<'tx, 'state>),
+}
+
+/// Adapter for state containers that can serve IVM queries.
+pub trait QueryStateSource {
+    /// Query-state reference type for a given borrow lifetime.
+    type Ref<'a>: Copy + QueryStateExecute + QueryStateRefOps + 'a
+    where
+        Self: 'a;
+    /// Borrow the state as a query-state reference.
+    fn as_query_state_ref(&self) -> Self::Ref<'_>;
+}
+
+impl<'state> QueryStateSource for StateView<'state> {
+    type Ref<'a>
+        = QueryStateRef<'a, 'state, 'state>
+    where
+        Self: 'a;
+
+    fn as_query_state_ref(&self) -> Self::Ref<'_> {
+        QueryStateRef::View(self)
+    }
+}
+
+impl<'state> QueryStateSource for StateBlock<'state> {
+    type Ref<'a>
+        = QueryStateRef<'a, 'state, 'state>
+    where
+        Self: 'a;
+
+    fn as_query_state_ref(&self) -> Self::Ref<'_> {
+        QueryStateRef::Block(self)
+    }
+}
+
+impl<'block, 'state> QueryStateSource for StateTransaction<'block, 'state>
+where
+    'state: 'block,
+{
+    type Ref<'a>
+        = QueryStateRef<'a, 'block, 'state>
+    where
+        Self: 'a;
+
+    fn as_query_state_ref(&self) -> Self::Ref<'_> {
+        QueryStateRef::Transaction(self)
+    }
+}
+
+/// Execute a query against a concrete state reference.
+pub trait QueryStateExecute {
+    /// Execute a query request for the provided authority.
+    ///
+    /// Returns the query response and processed item count or a VM error.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ivm::VMError`] if the query cannot be executed or fails validation.
+    fn execute_query(
+        self,
+        authority: &AccountId,
+        request: QueryRequest,
+    ) -> Result<QueryExecutionResult, ivm::VMError>
+    where
+        Self: Sized;
+
+    /// Execute a query request with a budget for post-offset items.
+    ///
+    /// Implementations may ignore the budget if they do not support early aborts.
+    /// Returns the query response and processed item count or a VM error.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ivm::VMError`] if the query cannot be executed or fails validation.
+    fn execute_query_with_budget(
+        self,
+        authority: &AccountId,
+        request: QueryRequest,
+        budget_items: Option<u64>,
+    ) -> Result<QueryExecutionResult, ivm::VMError>
+    where
+        Self: Sized,
+    {
+        let _ = budget_items;
+        self.execute_query(authority, request)
+    }
+}
+
+impl QueryStateExecute for QueryStateRef<'_, '_, '_> {
+    fn execute_query(
+        self,
+        authority: &AccountId,
+        request: QueryRequest,
+    ) -> Result<QueryExecutionResult, ivm::VMError> {
+        QueryStateRef::execute_query(self, authority, request)
+    }
+
+    fn execute_query_with_budget(
+        self,
+        authority: &AccountId,
+        request: QueryRequest,
+        budget_items: Option<u64>,
+    ) -> Result<QueryExecutionResult, ivm::VMError> {
+        QueryStateRef::execute_query_with_budget(self, authority, request, budget_items)
+    }
+}
+
+/// Query-state access shim for host types that may or may not carry a state reference.
+pub trait QueryStateAccess {
+    /// Query-state reference type for a given borrow lifetime.
+    type Ref<'a>: QueryStateExecute + QueryStateRefOps
+    where
+        Self: 'a;
+
+    /// Fetch the configured query-state reference, if any.
+    fn get(&self) -> Option<Self::Ref<'_>>;
+}
+
+impl QueryStateAccess for NoQueryState {
+    type Ref<'a>
+        = QueryStateRef<'a, 'a, 'a>
+    where
+        Self: 'a;
+
+    fn get(&self) -> Option<Self::Ref<'_>> {
+        None
+    }
+}
+
+impl<QRef> QueryStateAccess for QueryStateSlot<QRef>
+where
+    QRef: Copy + QueryStateExecute + QueryStateRefOps,
+{
+    type Ref<'a>
+        = QRef
+    where
+        Self: 'a;
+
+    fn get(&self) -> Option<Self::Ref<'_>> {
+        self.state
+    }
+}
+
+fn map_query_validation_error(error: &ValidationFail) -> ivm::VMError {
+    match error {
+        ValidationFail::NotPermitted(_) => ivm::VMError::PermissionDenied,
+        _ => ivm::VMError::DecodeError,
+    }
+}
+
+fn map_query_execution_error(error: &QueryExecutionFail) -> ivm::VMError {
+    match error {
+        QueryExecutionFail::GasBudgetExceeded => ivm::VMError::OutOfGas,
+        _ => ivm::VMError::DecodeError,
+    }
+}
+
+/// Query response plus processed item count for gas accounting.
+#[derive(Debug)]
+pub struct QueryExecutionResult {
+    /// Query response payload.
+    pub response: QueryResponse,
+    /// Number of items processed during query execution.
+    pub processed_items: u64,
+}
+
+fn execute_query_on_state_with_budget<R: StateReadOnly>(
+    state: &R,
+    authority: &AccountId,
+    request: QueryRequest,
+    budget_items: Option<u64>,
+) -> Result<QueryExecutionResult, ivm::VMError> {
+    struct Validator<'a, R: StateReadOnly> {
+        authority: &'a AccountId,
+        state: &'a R,
+    }
+
+    impl<R: StateReadOnly> IvmQueryValidator for Validator<'_, R> {
+        fn authority(&self) -> &AccountId {
+            self.authority
+        }
+
+        fn validate_query(
+            &mut self,
+            authority: &AccountId,
+            query: &QueryRequest,
+        ) -> Result<(), ValidationFail> {
+            self.state
+                .world()
+                .executor()
+                .validate_query(self.state, authority, query)
+        }
+    }
+
+    let mut validator = Validator { authority, state };
+    let limits = QueryLimits::from_pipeline(state.pipeline());
+    let validated = ValidQueryRequest::validate_for_ivm(request, &mut validator, limits)
+        .map_err(|err| map_query_validation_error(&err))?;
+    let (response, processed_items) = validated
+        .execute_ephemeral_with_stats(state.query_handle(), state, authority, budget_items)
+        .map_err(|err| map_query_execution_error(&err))?;
+    Ok(QueryExecutionResult {
+        response,
+        processed_items,
+    })
+}
+
+#[derive(Copy, Clone)]
+struct QueryGasContext {
+    base: u64,
+    per_item: u64,
+    offset_items: u64,
+}
+
+impl QueryGasContext {
+    fn from_request(request: &QueryRequest) -> Self {
+        let sort_requested = CoreHostImpl::<NoQueryState>::query_sort_requested(request);
+        let base = match request {
+            QueryRequest::Singular(_) => CoreHostImpl::<NoQueryState>::QUERY_GAS_BASE_SINGULAR,
+            QueryRequest::Start(_) | QueryRequest::Continue(_) => {
+                CoreHostImpl::<NoQueryState>::QUERY_GAS_BASE_ITERABLE
+            }
+        };
+        let per_item = if sort_requested {
+            CoreHostImpl::<NoQueryState>::QUERY_GAS_PER_ITEM
+                .saturating_mul(CoreHostImpl::<NoQueryState>::QUERY_GAS_SORT_MULTIPLIER)
+        } else {
+            CoreHostImpl::<NoQueryState>::QUERY_GAS_PER_ITEM
+        };
+        let offset_items = if sort_requested {
+            0
+        } else {
+            CoreHostImpl::<NoQueryState>::query_offset_items(request)
+        };
+        Self {
+            base,
+            per_item,
+            offset_items,
+        }
+    }
+}
+
+impl<'tx, 'state> QueryStateRef<'_, 'tx, 'state>
+where
+    'state: 'tx,
+{
+    fn execute_query(
+        self,
+        authority: &AccountId,
+        request: QueryRequest,
+    ) -> Result<QueryExecutionResult, ivm::VMError> {
+        self.execute_query_with_budget(authority, request, None)
+    }
+
+    fn execute_query_with_budget(
+        self,
+        authority: &AccountId,
+        request: QueryRequest,
+        budget_items: Option<u64>,
+    ) -> Result<QueryExecutionResult, ivm::VMError> {
+        match self {
+            QueryStateRef::View(view) => {
+                execute_query_on_state_with_budget(view, authority, request, budget_items)
+            }
+            QueryStateRef::Block(block) => {
+                execute_query_on_state_with_budget(block, authority, request, budget_items)
+            }
+            QueryStateRef::Transaction(tx) => {
+                execute_query_on_state_with_budget(tx, authority, request, budget_items)
+            }
+        }
+    }
+}
+
 struct DomainHashInputs<'a> {
     backend: &'a str,
     curve: &'a str,
@@ -255,6 +658,101 @@ struct DomainHashInputs<'a> {
     syscall_label: &'a str,
     manifest: &'a str,
     namespace: &'a str,
+}
+
+/// Snapshot of subscription-related data resolved from the current state.
+pub struct SubscriptionContext {
+    executable: Executable,
+    authority: AccountId,
+    trigger_metadata: Metadata,
+    subscription_nft_id: NftId,
+    subscription_state: SubscriptionState,
+    plan: SubscriptionPlan,
+    charge_asset_def: AssetDefinition,
+    subscriber_balance: Numeric,
+    nft_owner: AccountId,
+}
+
+/// Helpers for accessing subscription data through a query-state reference.
+pub trait QueryStateRefOps {
+    /// Resolve subscription context for a trigger identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ivm::VMError`] if the trigger or subscription metadata cannot be resolved.
+    fn subscription_context_for_trigger(
+        &self,
+        trigger_id: &TriggerId,
+    ) -> Result<SubscriptionContext, ivm::VMError>;
+    /// Load subscription state from a subscription NFT.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ivm::VMError`] if the subscription state is missing or invalid.
+    fn subscription_state_for_nft(&self, nft_id: &NftId)
+    -> Result<SubscriptionState, ivm::VMError>;
+    /// Load a subscription plan from its asset definition metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ivm::VMError`] if the plan metadata cannot be decoded.
+    fn subscription_plan(
+        &self,
+        plan_id: &AssetDefinitionId,
+    ) -> Result<SubscriptionPlan, ivm::VMError>;
+}
+
+impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
+    fn subscription_context_for_trigger(
+        &self,
+        trigger_id: &TriggerId,
+    ) -> Result<SubscriptionContext, ivm::VMError> {
+        match *self {
+            QueryStateRef::View(view) => {
+                CoreHostImpl::<NoQueryState>::subscription_context_for_trigger(view, trigger_id)
+            }
+            QueryStateRef::Block(block) => {
+                CoreHostImpl::<NoQueryState>::subscription_context_for_trigger(block, trigger_id)
+            }
+            QueryStateRef::Transaction(tx) => {
+                CoreHostImpl::<NoQueryState>::subscription_context_for_trigger(tx, trigger_id)
+            }
+        }
+    }
+
+    fn subscription_state_for_nft(
+        &self,
+        nft_id: &NftId,
+    ) -> Result<SubscriptionState, ivm::VMError> {
+        match *self {
+            QueryStateRef::View(view) => {
+                CoreHostImpl::<NoQueryState>::subscription_state_for_nft(view, nft_id)
+            }
+            QueryStateRef::Block(block) => {
+                CoreHostImpl::<NoQueryState>::subscription_state_for_nft(block, nft_id)
+            }
+            QueryStateRef::Transaction(tx) => {
+                CoreHostImpl::<NoQueryState>::subscription_state_for_nft(tx, nft_id)
+            }
+        }
+    }
+
+    fn subscription_plan(
+        &self,
+        plan_id: &AssetDefinitionId,
+    ) -> Result<SubscriptionPlan, ivm::VMError> {
+        match *self {
+            QueryStateRef::View(view) => {
+                CoreHostImpl::<NoQueryState>::subscription_plan(view, plan_id)
+            }
+            QueryStateRef::Block(block) => {
+                CoreHostImpl::<NoQueryState>::subscription_plan(block, plan_id)
+            }
+            QueryStateRef::Transaction(tx) => {
+                CoreHostImpl::<NoQueryState>::subscription_plan(tx, plan_id)
+            }
+        }
+    }
 }
 
 /// Structured details about an AMX budget violation captured by the host.
@@ -283,6 +781,58 @@ impl AmxBudgetViolation {
     }
 }
 
+/// Execution artifacts extracted from a host run that can be applied to state later.
+pub(crate) struct HostExecutionArtifacts {
+    queued: Vec<InstructionBox>,
+    confidential_gas_delta: u64,
+    completed_axt: Vec<axt::HostAxtState>,
+    durable_state_overlay: BTreeMap<Name, Option<Vec<u8>>>,
+}
+
+impl HostExecutionArtifacts {
+    pub(crate) fn apply_to_transaction(
+        self,
+        tx: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+    ) -> Result<Vec<InstructionBox>, ValidationFail> {
+        let executor = tx.world.executor.clone();
+        for instr in &self.queued {
+            executor.execute_instruction(tx, authority, instr.clone())?;
+        }
+        if self.confidential_gas_delta > 0 {
+            tx.record_confidential_gas_delta(self.confidential_gas_delta);
+        }
+        if !self.completed_axt.is_empty() {
+            let lane = tx.current_lane_id.unwrap_or_else(|| LaneId::new(0));
+            let commit_height = tx.block_height();
+            let envelopes: Vec<_> = self
+                .completed_axt
+                .into_iter()
+                .map(|state| {
+                    CoreHostImpl::<NoQueryState>::materialize_axt_record(
+                        &state,
+                        lane,
+                        commit_height,
+                    )
+                })
+                .collect();
+            for envelope in envelopes {
+                tx.record_axt_envelope(envelope);
+            }
+        }
+        if !self.durable_state_overlay.is_empty() {
+            for (path, value) in self.durable_state_overlay {
+                if let Some(stored) = value {
+                    tx.world.smart_contract_state.insert(path.clone(), stored);
+                } else {
+                    tx.world.smart_contract_state.remove(path.clone());
+                }
+            }
+        }
+        Ok(self.queued)
+    }
+}
+
 #[allow(clippy::cast_possible_truncation)]
 const fn nanoseconds_to_millis(ns: u64) -> u32 {
     let millis = ns.saturating_add(999_999) / 1_000_000;
@@ -294,7 +844,7 @@ const fn nanoseconds_to_millis(ns: u64) -> u32 {
 }
 
 #[allow(clippy::used_underscore_binding)]
-impl CoreHost {
+impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// Create a new host for the given authority.
     pub fn new(authority: AccountId) -> Self {
         let default_crypto = iroha_config::parameters::actual::Crypto::default();
@@ -312,8 +862,11 @@ impl CoreHost {
             queued: Vec::new(),
             fastpq_batch_entries: None,
             accounts_snapshot: Arc::new(Vec::new()),
+            query_state: QS::default(),
             nft_seq: 0,
             args: None,
+            current_trigger_id: None,
+            current_block_time_ms: None,
             durable_state_base: BTreeMap::new(),
             durable_state_overlay: BTreeMap::new(),
             state_access_log: ivm::host::AccessLog::default(),
@@ -328,6 +881,7 @@ impl CoreHost {
             zk_roots: BTreeMap::new(),
             zk_elections: BTreeMap::new(),
             verifying_keys: BTreeMap::new(),
+            public_inputs: BTreeMap::new(),
             chain_id_bytes: Vec::new(),
             axt_policy: Arc::new(ivm::axt::AllowAllAxtPolicy),
             axt_timing: iroha_config::parameters::actual::NexusAxt::default(),
@@ -360,6 +914,7 @@ impl CoreHost {
         host.set_axt_timing(view.nexus.axt);
         host.hydrate_axt_replay_ledger(&view);
         host.set_durable_state_snapshot_from_world(view.world());
+        host.set_public_inputs_from_parameters(view.world().parameters());
         host = host.with_axt_policy_snapshot(&snapshot);
         host.set_amx_limits(Self::amx_limits_from_config(&view.pipeline));
         host
@@ -382,8 +937,11 @@ impl CoreHost {
             queued: Vec::new(),
             fastpq_batch_entries: None,
             accounts_snapshot: accounts,
+            query_state: QS::default(),
             nft_seq: 0,
             args: None,
+            current_trigger_id: None,
+            current_block_time_ms: None,
             durable_state_base: BTreeMap::new(),
             durable_state_overlay: BTreeMap::new(),
             state_access_log: ivm::host::AccessLog::default(),
@@ -398,6 +956,7 @@ impl CoreHost {
             zk_roots: BTreeMap::new(),
             zk_elections: BTreeMap::new(),
             verifying_keys: BTreeMap::new(),
+            public_inputs: BTreeMap::new(),
             chain_id_bytes: Vec::new(),
             axt_policy: Arc::new(ivm::axt::AllowAllAxtPolicy),
             axt_timing: iroha_config::parameters::actual::NexusAxt::default(),
@@ -443,8 +1002,11 @@ impl CoreHost {
             queued: Vec::new(),
             fastpq_batch_entries: None,
             accounts_snapshot: accounts,
+            query_state: QS::default(),
             nft_seq: 0,
             args: Some(args),
+            current_trigger_id: None,
+            current_block_time_ms: None,
             durable_state_base: BTreeMap::new(),
             durable_state_overlay: BTreeMap::new(),
             state_access_log: ivm::host::AccessLog::default(),
@@ -459,6 +1021,7 @@ impl CoreHost {
             zk_roots: BTreeMap::new(),
             zk_elections: BTreeMap::new(),
             verifying_keys: BTreeMap::new(),
+            public_inputs: BTreeMap::new(),
             chain_id_bytes: Vec::new(),
             axt_policy: Arc::new(ivm::axt::AllowAllAxtPolicy),
             axt_timing: iroha_config::parameters::actual::NexusAxt::default(),
@@ -1076,6 +1639,88 @@ impl CoreHost {
         self.chain_id_bytes = chain.to_string().into_bytes();
     }
 
+    /// Provide public inputs retrievable via `SYSCALL_GET_PUBLIC_INPUT`.
+    #[must_use]
+    pub fn with_public_inputs(mut self, inputs: BTreeMap<Name, Vec<u8>>) -> Self {
+        self.set_public_inputs(inputs);
+        self
+    }
+
+    /// Replace the public input map used by `SYSCALL_GET_PUBLIC_INPUT`.
+    pub fn set_public_inputs(&mut self, inputs: BTreeMap<Name, Vec<u8>>) {
+        self.public_inputs = Self::public_inputs_from_tlvs(inputs);
+    }
+
+    /// Refresh the public input registry from on-chain parameters when present.
+    pub fn set_public_inputs_from_parameters(&mut self, params: &Parameters) {
+        if let Some(map) = Self::public_inputs_from_parameters(params) {
+            self.public_inputs = map;
+        }
+    }
+
+    fn public_inputs_from_tlvs(
+        inputs: BTreeMap<Name, Vec<u8>>,
+    ) -> BTreeMap<Name, PublicInputRecord> {
+        let mut map = BTreeMap::new();
+        for (name, bytes) in inputs {
+            match PublicInputRecord::from_tlv_bytes(bytes) {
+                Ok(record) => {
+                    map.insert(name, record);
+                }
+                Err(err) => {
+                    iroha_logger::warn!(
+                        %name,
+                        ?err,
+                        "Skipping invalid public input TLV"
+                    );
+                }
+            }
+        }
+        map
+    }
+
+    fn public_inputs_from_parameters(
+        params: &Parameters,
+    ) -> Option<BTreeMap<Name, PublicInputRecord>> {
+        let id = ivm_metadata::public_inputs_id();
+        let custom = params.custom().get(&id)?;
+        let entries = match custom
+            .payload()
+            .try_into_any_norito::<Vec<PublicInputDescriptor>>()
+        {
+            Ok(entries) => entries,
+            Err(error) => {
+                iroha_logger::warn!(
+                    ?error,
+                    "Failed to decode ivm_public_inputs custom parameter payload"
+                );
+                return Some(BTreeMap::new());
+            }
+        };
+        let mut map = BTreeMap::new();
+        for entry in entries {
+            let name = entry.name.clone();
+            match PublicInputRecord::from_descriptor(entry) {
+                Ok((name, record)) => {
+                    if map.insert(name.clone(), record).is_some() {
+                        iroha_logger::warn!(
+                            %name,
+                            "Duplicate public input name in ivm_public_inputs registry"
+                        );
+                    }
+                }
+                Err(err) => {
+                    iroha_logger::warn!(
+                        %name,
+                        ?err,
+                        "Skipping invalid public input registry entry"
+                    );
+                }
+            }
+        }
+        Some(map)
+    }
+
     /// Install a read-only snapshot of ZK roots per asset for state-read syscalls.
     pub fn set_zk_roots_snapshot(&mut self, map: BTreeMap<AssetDefinitionId, Vec<[u8; 32]>>) {
         self.zk_roots = map;
@@ -1230,12 +1875,11 @@ impl CoreHost {
         Ok(())
     }
 
-    fn load_vk_record(
+    fn load_vk_record_any_namespace(
         &self,
         env: &iroha_zkp_halo2::OpenVerifyEnvelope,
         vk_commitment: [u8; 32],
         schema_hash: [u8; 32],
-        namespace: &str,
     ) -> Result<(VerifyingKeyRecord, String), u64> {
         let vk_rec = self
             .verifying_keys
@@ -1262,10 +1906,22 @@ impl CoreHost {
         if vk_rec.public_inputs_schema_hash != schema_hash || vk_rec.commitment != vk_commitment {
             return Err(ivm::host::ERR_VK_MISMATCH);
         }
+        let backend_label = Self::backend_label_for_record(&vk_rec);
+        Ok((vk_rec, backend_label))
+    }
+
+    fn load_vk_record(
+        &self,
+        env: &iroha_zkp_halo2::OpenVerifyEnvelope,
+        vk_commitment: [u8; 32],
+        schema_hash: [u8; 32],
+        namespace: &str,
+    ) -> Result<(VerifyingKeyRecord, String), u64> {
+        let (vk_rec, backend_label) =
+            self.load_vk_record_any_namespace(env, vk_commitment, schema_hash)?;
         if vk_rec.namespace != namespace {
             return Err(ivm::host::ERR_NAMESPACE);
         }
-        let backend_label = Self::backend_label_for_record(&vk_rec);
         Ok((vk_rec, backend_label))
     }
 
@@ -1411,21 +2067,9 @@ impl CoreHost {
         self.zk_last_env_hash_tally.push_back(h);
     }
 
-    /// Apply queued ISIs via the executor, returning the executed instructions.
-    ///
-    /// # Errors
-    /// Returns a `ValidationFail` if an instruction fails permission checks or execution.
-    pub fn apply_queued(
-        &mut self,
-        tx: &mut StateTransaction<'_, '_>,
-        authority: &AccountId,
-    ) -> Result<Vec<InstructionBox>, ValidationFail> {
-        let queued = self.drain_instructions();
-        let executor = tx.world.executor.clone();
-        for instr in &queued {
-            let instr = instr.clone();
-            // Gate ZK ISIs on prior successful ZK_VERIFY
-            let any: &dyn iroha_data_model::isi::Instruction = &*instr;
+    fn validate_queued_for_zk(&mut self, queued: &[InstructionBox]) -> Result<(), ValidationFail> {
+        for instr in queued {
+            let any: &dyn iroha_data_model::isi::Instruction = &**instr;
             let any_ref = any.as_any();
             if let Some(z) = any_ref.downcast_ref::<DMZk::ZkTransfer>() {
                 let Some(expected_hash) = self.zk_verified_transfer.pop_front() else {
@@ -1497,6 +2141,43 @@ impl CoreHost {
                     ));
                 }
             }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn into_execution_artifacts(
+        mut self,
+    ) -> Result<HostExecutionArtifacts, ValidationFail> {
+        let queued = self.drain_instructions();
+        self.validate_queued_for_zk(&queued)?;
+        let confidential_gas_delta = queued
+            .iter()
+            .map(crate::gas::confidential_gas_cost)
+            .sum::<u64>();
+        let completed_axt = mem::take(&mut self.completed_axt);
+        let durable_state_overlay = mem::take(&mut self.durable_state_overlay);
+        Ok(HostExecutionArtifacts {
+            queued,
+            confidential_gas_delta,
+            completed_axt,
+            durable_state_overlay,
+        })
+    }
+
+    /// Apply queued ISIs via the executor, returning the executed instructions.
+    ///
+    /// # Errors
+    /// Returns a `ValidationFail` if an instruction fails permission checks or execution.
+    pub fn apply_queued(
+        &mut self,
+        tx: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+    ) -> Result<Vec<InstructionBox>, ValidationFail> {
+        let queued = self.drain_instructions();
+        self.validate_queued_for_zk(&queued)?;
+        let executor = tx.world.executor.clone();
+        for instr in &queued {
+            let instr = instr.clone();
             executor.execute_instruction(tx, authority, instr)?;
         }
         if !queued.is_empty() {
@@ -1564,7 +2245,7 @@ impl CoreHost {
         Ok(())
     }
 
-    #[allow(clippy::unused_self)]
+    #[allow(clippy::unused_self, dead_code)]
     fn read_norito_payload<'a>(&self, vm: &'a IVM, ptr: u64) -> Result<&'a [u8], ivm::VMError> {
         // Try TLV envelope first: [type_id:u16][version:u8][len:be u32][payload][hash:32]
         // If TLV appears present but is invalid, do NOT silently fall back.
@@ -1589,6 +2270,7 @@ impl CoreHost {
         vm.memory.load_region(ptr + 4, len)
     }
 
+    #[allow(dead_code)]
     fn decode_at<T: NoritoDecode>(&self, vm: &IVM, ptr: u64) -> Result<T, ivm::VMError> {
         let bytes = self.read_norito_payload(vm, ptr)?;
         T::decode(&mut &*bytes).map_err(|_| ivm::VMError::DecodeError)
@@ -1648,6 +2330,130 @@ impl CoreHost {
         }
         let s = core::str::from_utf8(tlv.payload).map_err(|_| ivm::VMError::DecodeError)?;
         s.parse::<Json>().map_err(|_| ivm::VMError::DecodeError)
+    }
+
+    fn permission_from_name(name: &Name) -> Permission {
+        Permission::new(name.as_ref().to_string(), Json::new(()))
+    }
+
+    fn permission_from_value(value: &json::Value) -> Result<Permission, ivm::VMError> {
+        if let Some(name) = value.as_str() {
+            return Ok(Permission::new(name.to_string(), Json::new(())));
+        }
+        if let Some(map) = value.as_object() {
+            if let Ok(permission) = json::from_value::<Permission>(value.clone()) {
+                return Ok(permission);
+            }
+            let name = map
+                .get("name")
+                .and_then(json::Value::as_str)
+                .ok_or(ivm::VMError::DecodeError)?;
+            let payload = map.get("payload").cloned().unwrap_or(json::Value::Null);
+            return Ok(Permission::new(name.to_string(), Json::from(payload)));
+        }
+        Err(ivm::VMError::DecodeError)
+    }
+
+    fn permission_from_json(value: &Json) -> Result<Permission, ivm::VMError> {
+        let value: json::Value = value
+            .try_into_any_norito::<json::Value>()
+            .map_err(|_| ivm::VMError::DecodeError)?;
+        Self::permission_from_value(&value)
+    }
+
+    fn permissions_from_value(value: &json::Value) -> Result<Permissions, ivm::VMError> {
+        if let Ok(perms) = json::from_value::<Permissions>(value.clone()) {
+            return Ok(perms);
+        }
+        let array = value.as_array().map_or_else(
+            || {
+                value.as_object().and_then(|map| {
+                    map.get("permissions")
+                        .or_else(|| map.get("perms"))
+                        .or_else(|| map.get("permission"))
+                        .and_then(json::Value::as_array)
+                })
+            },
+            Some,
+        );
+        if let Some(items) = array {
+            let mut perms = Permissions::new();
+            for item in items {
+                let perm = Self::permission_from_value(item)?;
+                perms.insert(perm);
+            }
+            return Ok(perms);
+        }
+        let perm = Self::permission_from_value(value)?;
+        let mut perms = Permissions::new();
+        perms.insert(perm);
+        Ok(perms)
+    }
+
+    fn permissions_from_json(value: &Json) -> Result<Permissions, ivm::VMError> {
+        let value: json::Value = value
+            .try_into_any_norito::<json::Value>()
+            .map_err(|_| ivm::VMError::DecodeError)?;
+        Self::permissions_from_value(&value)
+    }
+
+    fn peer_id_from_value(value: &json::Value) -> Result<PeerId, ivm::VMError> {
+        if let Some(peer_str) = value.as_str() {
+            if let Ok(peer_id) = PeerId::from_str(peer_str) {
+                return Ok(peer_id);
+            }
+            if let Ok(peer) = Peer::from_str(peer_str) {
+                return Ok(peer.id().clone());
+            }
+            return Err(ivm::VMError::DecodeError);
+        }
+        if let Some(map) = value.as_object()
+            && let Some(peer_value) = map.get("peer")
+        {
+            return Self::peer_id_from_value(peer_value);
+        }
+        Err(ivm::VMError::DecodeError)
+    }
+
+    fn register_peer_from_value(value: &json::Value) -> Result<RegisterPeerWithPop, ivm::VMError> {
+        if let Ok(request) = json::from_value::<RegisterPeerWithPop>(value.clone()) {
+            return Ok(request);
+        }
+        let map = value.as_object().ok_or(ivm::VMError::DecodeError)?;
+        let peer_value = map.get("peer").ok_or(ivm::VMError::DecodeError)?;
+        let peer_id = Self::peer_id_from_value(peer_value)?;
+        let pop_value = map.get("pop").ok_or(ivm::VMError::DecodeError)?;
+        let pop: Vec<u8> =
+            json::from_value(pop_value.clone()).map_err(|_| ivm::VMError::DecodeError)?;
+        let mut request = RegisterPeerWithPop::new(peer_id, pop);
+        if let Some(value) = map.get("activation_at") {
+            request.activation_at =
+                Some(json::from_value(value.clone()).map_err(|_| ivm::VMError::DecodeError)?);
+        }
+        if let Some(value) = map.get("expiry_at") {
+            request.expiry_at =
+                Some(json::from_value(value.clone()).map_err(|_| ivm::VMError::DecodeError)?);
+        }
+        if let Some(value) = map.get("hsm") {
+            request.hsm =
+                Some(json::from_value(value.clone()).map_err(|_| ivm::VMError::DecodeError)?);
+        }
+        Ok(request)
+    }
+
+    fn decode_permission(vm: &IVM, ptr: u64) -> Result<Permission, ivm::VMError> {
+        let tlv = vm.memory.validate_tlv(ptr)?;
+        match tlv.type_id {
+            PointerType::Name => {
+                let name: Name = Self::decode_tlv_typed(vm, ptr, PointerType::Name)?;
+                Ok(Self::permission_from_name(&name))
+            }
+            PointerType::Json => {
+                let payload = Self::decode_tlv_json(vm, ptr)?;
+                Self::permission_from_json(&payload)
+            }
+            _ => Err(ivm::VMError::NoritoInvalid),
+        }
     }
 
     fn decode_header_or_bare<T: NoritoDecode>(payload: &[u8]) -> Result<T, ivm::VMError> {
@@ -2027,6 +2833,590 @@ impl CoreHost {
         u32::try_from(len).map_err(|_| ivm::VMError::NoritoInvalid)
     }
 
+    const QUERY_GAS_BASE_SINGULAR: u64 = 1_000;
+    const QUERY_GAS_BASE_ITERABLE: u64 = 2_500;
+    const QUERY_GAS_PER_ITEM: u64 = 250;
+    const QUERY_GAS_SORT_MULTIPLIER: u64 = 4;
+    const QUERY_GAS_PER_BYTE: u64 = 2;
+
+    #[cfg(test)]
+    fn query_total_items(response: &QueryResponse) -> u64 {
+        match response {
+            QueryResponse::Singular(_) => 1,
+            QueryResponse::Iterable(output) => {
+                let returned = output
+                    .batch
+                    .iter()
+                    .map(|batch| u64::try_from(batch.len()).unwrap_or(u64::MAX))
+                    .fold(0_u64, u64::saturating_add);
+                returned.saturating_add(output.remaining_items)
+            }
+        }
+    }
+
+    fn query_sort_requested(request: &QueryRequest) -> bool {
+        match request {
+            QueryRequest::Start(start) => start.params.sorting.sort_by_metadata_key.is_some(),
+            QueryRequest::Singular(_) | QueryRequest::Continue(_) => false,
+        }
+    }
+
+    fn query_offset_items(request: &QueryRequest) -> u64 {
+        match request {
+            QueryRequest::Start(start) => start.params.pagination.offset_value(),
+            QueryRequest::Singular(_) | QueryRequest::Continue(_) => 0,
+        }
+    }
+
+    fn query_gas_cost(ctx: &QueryGasContext, processed_items: u64, response_bytes: u64) -> u64 {
+        ctx.base
+            .saturating_add(ctx.per_item.saturating_mul(processed_items))
+            .saturating_add(ctx.per_item.saturating_mul(ctx.offset_items))
+            .saturating_add(Self::QUERY_GAS_PER_BYTE.saturating_mul(response_bytes))
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn subscription_bill(&mut self) -> Result<u64, ivm::VMError> {
+        struct BillingWindow {
+            start_ms: u64,
+            end_ms: u64,
+        }
+
+        let trigger_id = self
+            .current_trigger_id
+            .clone()
+            .ok_or(ivm::VMError::NotImplemented {
+                syscall: ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL,
+            })?;
+        let context = {
+            let Some(state_ref) = self.query_state.get() else {
+                return Err(ivm::VMError::NotImplemented {
+                    syscall: ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL,
+                });
+            };
+            state_ref.subscription_context_for_trigger(&trigger_id)?
+        };
+
+        let mut subscription_state = context.subscription_state;
+        if subscription_state.subscriber != context.nft_owner {
+            return Err(ivm::VMError::NoritoInvalid);
+        }
+        if subscription_state.provider != context.plan.provider {
+            return Err(ivm::VMError::NoritoInvalid);
+        }
+        subscription_state.billing_trigger_id = trigger_id.clone();
+
+        #[cfg(feature = "telemetry")]
+        let pricing_label = match context.plan.pricing {
+            SubscriptionPricing::Fixed(_) => "fixed",
+            SubscriptionPricing::Usage(_) => "usage",
+        };
+        #[cfg(feature = "telemetry")]
+        if let Some(telemetry) = self.telemetry.as_ref() {
+            telemetry.record_subscription_billing_attempt(pricing_label);
+        }
+
+        if matches!(
+            subscription_state.status,
+            SubscriptionStatus::Paused
+                | SubscriptionStatus::Canceled
+                | SubscriptionStatus::Suspended
+        ) {
+            #[cfg(feature = "telemetry")]
+            if let Some(telemetry) = self.telemetry.as_ref() {
+                telemetry.record_subscription_billing_outcome(pricing_label, "skipped");
+            }
+            let instr =
+                InstructionBox::from(UnregisterBox::from(Unregister::trigger(trigger_id.clone())));
+            return Ok(self.queue_instruction(instr));
+        }
+
+        let billing = context.plan.billing;
+        let scheduled_at_ms = subscription_state.next_charge_ms;
+        let now_ms = self.current_block_time_ms.unwrap_or(scheduled_at_ms);
+        let attempted_at_ms = now_ms.max(scheduled_at_ms);
+        let bill_for = match billing.bill_for {
+            SubscriptionBillFor::PreviousPeriod => calendar::BillingPeriod::Previous,
+            SubscriptionBillFor::NextPeriod => calendar::BillingPeriod::Next,
+        };
+
+        let (charge_period, next_period, next_charge_ms) = match billing.cadence {
+            SubscriptionCadence::MonthlyCalendar(cadence) => {
+                let charge = calendar::monthly_billing_period(
+                    scheduled_at_ms,
+                    cadence.anchor_day,
+                    cadence.anchor_time_ms,
+                    bill_for,
+                )
+                .map_err(|_| ivm::VMError::NoritoInvalid)?;
+                let next_charge = calendar::monthly_anchor_after(
+                    scheduled_at_ms,
+                    cadence.anchor_day,
+                    cadence.anchor_time_ms,
+                )
+                .map_err(|_| ivm::VMError::NoritoInvalid)?;
+                let next = calendar::monthly_billing_period(
+                    scheduled_at_ms,
+                    cadence.anchor_day,
+                    cadence.anchor_time_ms,
+                    calendar::BillingPeriod::Next,
+                )
+                .map_err(|_| ivm::VMError::NoritoInvalid)?;
+                (
+                    BillingWindow {
+                        start_ms: charge.start_ms,
+                        end_ms: charge.end_ms,
+                    },
+                    BillingWindow {
+                        start_ms: next.start_ms,
+                        end_ms: next.end_ms,
+                    },
+                    next_charge,
+                )
+            }
+            SubscriptionCadence::FixedPeriod(cadence) => {
+                if cadence.period_ms == 0 {
+                    return Err(ivm::VMError::NoritoInvalid);
+                }
+                let (start, end) = match billing.bill_for {
+                    SubscriptionBillFor::PreviousPeriod => (
+                        scheduled_at_ms
+                            .checked_sub(cadence.period_ms)
+                            .ok_or(ivm::VMError::NoritoInvalid)?,
+                        scheduled_at_ms,
+                    ),
+                    SubscriptionBillFor::NextPeriod => (
+                        scheduled_at_ms,
+                        scheduled_at_ms
+                            .checked_add(cadence.period_ms)
+                            .ok_or(ivm::VMError::NoritoInvalid)?,
+                    ),
+                };
+                let next_charge = scheduled_at_ms
+                    .checked_add(cadence.period_ms)
+                    .ok_or(ivm::VMError::NoritoInvalid)?;
+                (
+                    BillingWindow {
+                        start_ms: start,
+                        end_ms: end,
+                    },
+                    BillingWindow {
+                        start_ms: scheduled_at_ms,
+                        end_ms: next_charge,
+                    },
+                    next_charge,
+                )
+            }
+        };
+
+        let mut gas = 0_u64;
+        if subscription_state.cancel_at_period_end {
+            let cancel_at_ms = subscription_state
+                .cancel_at_ms
+                .unwrap_or(subscription_state.current_period_end_ms);
+            if charge_period.start_ms >= cancel_at_ms {
+                subscription_state.status = SubscriptionStatus::Canceled;
+                subscription_state.cancel_at_period_end = false;
+                subscription_state.cancel_at_ms = None;
+                #[cfg(feature = "telemetry")]
+                if let Some(telemetry) = self.telemetry.as_ref() {
+                    telemetry.record_subscription_billing_outcome(pricing_label, "skipped");
+                }
+                let subscription_key: Name = SUBSCRIPTION_METADATA_KEY
+                    .parse()
+                    .map_err(|_| ivm::VMError::NoritoInvalid)?;
+                let subscription_json =
+                    iroha_primitives::json::Json::new(subscription_state.clone());
+                let isi = SetKeyValue::nft(
+                    context.subscription_nft_id.clone(),
+                    subscription_key,
+                    subscription_json,
+                );
+                let instr = InstructionBox::from(SetKeyValueBox::from(isi));
+                gas = gas.saturating_add(self.queue_instruction(instr));
+                let unregister = InstructionBox::from(UnregisterBox::from(Unregister::trigger(
+                    trigger_id.clone(),
+                )));
+                gas = gas.saturating_add(self.queue_instruction(unregister));
+                return Ok(gas);
+            }
+        }
+
+        let charge_spec = context.charge_asset_def.spec();
+        let (amount, usage_key) = match &context.plan.pricing {
+            SubscriptionPricing::Fixed(pricing) => {
+                let fixed_amount = pricing.amount.clone();
+                if fixed_amount < Numeric::zero() {
+                    return Err(ivm::VMError::NoritoInvalid);
+                }
+                if charge_spec.check(&fixed_amount).is_err() {
+                    return Err(ivm::VMError::NoritoInvalid);
+                }
+                (fixed_amount, None)
+            }
+            SubscriptionPricing::Usage(pricing) => {
+                let usage = subscription_state
+                    .usage_accumulated
+                    .get(&pricing.unit_key)
+                    .cloned()
+                    .unwrap_or_else(Numeric::zero);
+                let unit_price = pricing.unit_price.clone();
+                if usage < Numeric::zero() || unit_price < Numeric::zero() {
+                    return Err(ivm::VMError::NoritoInvalid);
+                }
+                let amount = usage
+                    .checked_mul(unit_price, charge_spec)
+                    .ok_or(ivm::VMError::NoritoInvalid)?;
+                if charge_spec.check(&amount).is_err() {
+                    return Err(ivm::VMError::NoritoInvalid);
+                }
+                (amount, Some(pricing.unit_key.clone()))
+            }
+        };
+
+        let can_pay = amount <= context.subscriber_balance;
+        let invoice_status = if can_pay {
+            SubscriptionInvoiceStatus::Paid
+        } else {
+            SubscriptionInvoiceStatus::Failed
+        };
+        let invoice = SubscriptionInvoice {
+            subscription_nft_id: context.subscription_nft_id.clone(),
+            period_start_ms: charge_period.start_ms,
+            period_end_ms: charge_period.end_ms,
+            attempted_at_ms,
+            amount: amount.clone(),
+            asset_definition: context.charge_asset_def.id.clone(),
+            status: invoice_status,
+            tx_hash: None,
+        };
+        if can_pay {
+            if !amount.is_zero() {
+                let asset_id = AssetId::of(
+                    context.charge_asset_def.id.clone(),
+                    subscription_state.subscriber.clone(),
+                );
+                let isi = Transfer::asset_numeric(
+                    asset_id,
+                    amount.clone(),
+                    context.plan.provider.clone(),
+                );
+                let instr = InstructionBox::from(TransferBox::from(isi));
+                gas = gas.saturating_add(self.queue_instruction(instr));
+            }
+            subscription_state.failure_count = 0;
+            subscription_state.status = SubscriptionStatus::Active;
+            subscription_state.next_charge_ms = next_charge_ms;
+            let (period_start, period_end) = match billing.bill_for {
+                SubscriptionBillFor::PreviousPeriod => (next_period.start_ms, next_period.end_ms),
+                SubscriptionBillFor::NextPeriod => (charge_period.start_ms, charge_period.end_ms),
+            };
+            subscription_state.current_period_start_ms = period_start;
+            subscription_state.current_period_end_ms = period_end;
+            if let Some(key) = usage_key {
+                subscription_state.usage_accumulated.remove(&key);
+            }
+        } else {
+            subscription_state.failure_count = subscription_state.failure_count.saturating_add(1);
+            let grace_deadline = scheduled_at_ms.saturating_add(billing.grace_ms);
+            let mut status = subscription_state.status;
+            if subscription_state.failure_count >= billing.max_failures {
+                status = SubscriptionStatus::Suspended;
+            } else if attempted_at_ms >= grace_deadline {
+                status = SubscriptionStatus::PastDue;
+            }
+            subscription_state.status = status;
+            if status != SubscriptionStatus::Suspended {
+                subscription_state.next_charge_ms =
+                    attempted_at_ms.saturating_add(billing.retry_backoff_ms);
+            }
+        }
+
+        if subscription_state.cancel_at_period_end {
+            let cancel_at_ms = subscription_state
+                .cancel_at_ms
+                .unwrap_or(subscription_state.current_period_end_ms);
+            if charge_period.end_ms >= cancel_at_ms {
+                subscription_state.status = SubscriptionStatus::Canceled;
+                subscription_state.cancel_at_period_end = false;
+                subscription_state.cancel_at_ms = None;
+            }
+        }
+        #[cfg(feature = "telemetry")]
+        let outcome = if can_pay {
+            "paid"
+        } else if subscription_state.status == SubscriptionStatus::Suspended {
+            "suspended"
+        } else {
+            "failed"
+        };
+        #[cfg(feature = "telemetry")]
+        if let Some(telemetry) = self.telemetry.as_ref() {
+            telemetry.record_subscription_billing_outcome(pricing_label, outcome);
+        }
+
+        let subscription_key: Name = SUBSCRIPTION_METADATA_KEY
+            .parse()
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let subscription_json = iroha_primitives::json::Json::new(subscription_state.clone());
+        let isi = SetKeyValue::nft(
+            context.subscription_nft_id.clone(),
+            subscription_key,
+            subscription_json,
+        );
+        let instr = InstructionBox::from(SetKeyValueBox::from(isi));
+        gas = gas.saturating_add(self.queue_instruction(instr));
+
+        let invoice_key: Name = SUBSCRIPTION_INVOICE_METADATA_KEY
+            .parse()
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let invoice_json = iroha_primitives::json::Json::new(invoice);
+        let invoice_isi = SetKeyValue::nft(
+            context.subscription_nft_id.clone(),
+            invoice_key,
+            invoice_json,
+        );
+        let invoice_instr = InstructionBox::from(SetKeyValueBox::from(invoice_isi));
+        gas = gas.saturating_add(self.queue_instruction(invoice_instr));
+
+        if matches!(
+            subscription_state.status,
+            SubscriptionStatus::Suspended | SubscriptionStatus::Canceled
+        ) {
+            let instr =
+                InstructionBox::from(UnregisterBox::from(Unregister::trigger(trigger_id.clone())));
+            gas = gas.saturating_add(self.queue_instruction(instr));
+            return Ok(gas);
+        }
+
+        let schedule = Schedule {
+            start_ms: subscription_state.next_charge_ms,
+            period_ms: None,
+        };
+        let action = iroha_data_model::trigger::action::Action::new(
+            context.executable.clone(),
+            Repeats::Exactly(1),
+            context.authority.clone(),
+            TimeEventFilter(ExecutionTime::Schedule(schedule)),
+        )
+        .with_metadata(context.trigger_metadata.clone());
+        let trigger = Trigger::new(trigger_id.clone(), action);
+        let unregister =
+            InstructionBox::from(UnregisterBox::from(Unregister::trigger(trigger_id.clone())));
+        gas = gas.saturating_add(self.queue_instruction(unregister));
+        let register = InstructionBox::from(RegisterBox::from(Register::trigger(trigger)));
+        gas = gas.saturating_add(self.queue_instruction(register));
+
+        Ok(gas)
+    }
+
+    fn subscription_record_usage(&mut self) -> Result<u64, ivm::VMError> {
+        let args = self.args.as_ref().ok_or(ivm::VMError::NoritoInvalid)?;
+        let delta: SubscriptionUsageDelta = args
+            .try_into_any_norito()
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        if delta.delta < Numeric::zero() {
+            return Err(ivm::VMError::NoritoInvalid);
+        }
+
+        let (mut subscription_state, plan) = {
+            let Some(state_ref) = self.query_state.get() else {
+                return Err(ivm::VMError::NotImplemented {
+                    syscall: ivm::syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE,
+                });
+            };
+            let subscription_state =
+                state_ref.subscription_state_for_nft(&delta.subscription_nft_id)?;
+            let plan = state_ref.subscription_plan(&subscription_state.plan_id)?;
+            (subscription_state, plan)
+        };
+
+        if !matches!(
+            subscription_state.status,
+            SubscriptionStatus::Active | SubscriptionStatus::PastDue
+        ) {
+            return Err(ivm::VMError::PermissionDenied);
+        }
+
+        match &plan.pricing {
+            SubscriptionPricing::Usage(pricing) => {
+                if pricing.unit_key != delta.unit_key {
+                    return Err(ivm::VMError::PermissionDenied);
+                }
+            }
+            SubscriptionPricing::Fixed(_) => {
+                return Err(ivm::VMError::PermissionDenied);
+            }
+        }
+
+        let entry = subscription_state
+            .usage_accumulated
+            .entry(delta.unit_key.clone())
+            .or_insert_with(Numeric::zero);
+        let updated = entry
+            .clone()
+            .checked_add(delta.delta.clone())
+            .ok_or(ivm::VMError::NoritoInvalid)?;
+        *entry = updated;
+
+        let subscription_key: Name = SUBSCRIPTION_METADATA_KEY
+            .parse()
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let subscription_json = iroha_primitives::json::Json::new(subscription_state);
+        let isi = SetKeyValue::nft(
+            delta.subscription_nft_id,
+            subscription_key,
+            subscription_json,
+        );
+        let instr = InstructionBox::from(SetKeyValueBox::from(isi));
+        Ok(self.queue_instruction(instr))
+    }
+
+    fn subscription_context_for_trigger<S: StateReadOnly>(
+        state: &S,
+        trigger_id: &TriggerId,
+    ) -> Result<SubscriptionContext, ivm::VMError> {
+        let triggers = state.world().triggers();
+        let action = triggers
+            .time_triggers()
+            .get(trigger_id)
+            .cloned()
+            .ok_or(ivm::VMError::NoritoInvalid)?;
+        let action = triggers
+            .get_original_action(action)
+            .ok_or(ivm::VMError::NoritoInvalid)?;
+        let trigger_metadata = action.metadata.clone();
+        let trigger_ref_key: Name = SUBSCRIPTION_TRIGGER_REF_METADATA_KEY
+            .parse()
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let trigger_ref_json = trigger_metadata
+            .get(&trigger_ref_key)
+            .ok_or(ivm::VMError::NoritoInvalid)?;
+        let trigger_ref: SubscriptionTriggerRef = trigger_ref_json
+            .try_into_any_norito()
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+
+        let subscription_nft_id = trigger_ref.subscription_nft_id;
+        let (subscription_state, nft_owner) =
+            Self::subscription_state_and_owner(state, &subscription_nft_id)?;
+
+        let plan = Self::subscription_plan(state, &subscription_state.plan_id)?;
+        let charge_asset_def = {
+            let charge_asset_id = match &plan.pricing {
+                SubscriptionPricing::Fixed(pricing) => &pricing.asset_definition,
+                SubscriptionPricing::Usage(pricing) => &pricing.asset_definition,
+            };
+            state
+                .world()
+                .asset_definition(charge_asset_id)
+                .map_err(|_| ivm::VMError::NoritoInvalid)?
+        };
+
+        let balance = {
+            let asset_id = AssetId::of(
+                charge_asset_def.id.clone(),
+                subscription_state.subscriber.clone(),
+            );
+            state.world().asset(&asset_id).map_or_else(
+                |_| Numeric::zero(),
+                |entry| entry.value().clone().into_inner(),
+            )
+        };
+
+        Ok(SubscriptionContext {
+            executable: action.executable.clone(),
+            authority: action.authority.clone(),
+            trigger_metadata,
+            subscription_nft_id,
+            subscription_state,
+            plan,
+            charge_asset_def,
+            subscriber_balance: balance,
+            nft_owner,
+        })
+    }
+
+    fn subscription_state_for_nft<S: StateReadOnly>(
+        state: &S,
+        nft_id: &NftId,
+    ) -> Result<SubscriptionState, ivm::VMError> {
+        let (state, _) = Self::subscription_state_and_owner(state, nft_id)?;
+        Ok(state)
+    }
+
+    fn subscription_state_and_owner<S: StateReadOnly>(
+        state: &S,
+        nft_id: &NftId,
+    ) -> Result<(SubscriptionState, AccountId), ivm::VMError> {
+        let entry = state
+            .world()
+            .nft(nft_id)
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let subscription_key: Name = SUBSCRIPTION_METADATA_KEY
+            .parse()
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let value = entry
+            .value()
+            .content
+            .get(&subscription_key)
+            .ok_or(ivm::VMError::NoritoInvalid)?;
+        let subscription_state = value
+            .try_into_any_norito::<SubscriptionState>()
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let owner = entry.value().owned_by.clone();
+        Ok((subscription_state, owner))
+    }
+
+    fn subscription_plan<S: StateReadOnly>(
+        state: &S,
+        plan_id: &AssetDefinitionId,
+    ) -> Result<SubscriptionPlan, ivm::VMError> {
+        let asset_def = state
+            .world()
+            .asset_definition(plan_id)
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let plan_key: Name = SUBSCRIPTION_PLAN_METADATA_KEY
+            .parse()
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let value = asset_def
+            .metadata()
+            .get(&plan_key)
+            .ok_or(ivm::VMError::NoritoInvalid)?;
+        value
+            .try_into_any_norito::<SubscriptionPlan>()
+            .map_err(|_| ivm::VMError::NoritoInvalid)
+    }
+
+    fn norito_encoded_len_exact<T: NoritoSerialize>(value: &T) -> Option<u64> {
+        let payload_len = NoritoSerialize::encoded_len_exact(value)?;
+        let header_len = Header::SIZE;
+        let align = mem::align_of::<Archived<T>>();
+        let padding = if align <= 1 {
+            0
+        } else {
+            let rem = header_len % align;
+            if rem == 0 { 0 } else { align - rem }
+        };
+        let total_len = header_len
+            .saturating_add(padding)
+            .saturating_add(payload_len);
+        u64::try_from(total_len).ok()
+    }
+
+    fn query_items_budget(ctx: &QueryGasContext, gas_remaining: u64) -> Result<u64, ivm::VMError> {
+        let base_cost = ctx
+            .base
+            .saturating_add(ctx.per_item.saturating_mul(ctx.offset_items));
+        if gas_remaining < base_cost {
+            return Err(ivm::VMError::OutOfGas);
+        }
+        let remaining = gas_remaining.saturating_sub(base_cost);
+        if ctx.per_item == 0 {
+            return Ok(u64::MAX);
+        }
+        Ok(remaining / ctx.per_item)
+    }
+
     fn gas_for_zk_verify_payload(payload: &[u8]) -> u64 {
         // Reuse the confidential gas schedule by wrapping the envelope payload
         // in a VerifyProof instruction; this keeps ZK verify costs aligned with ISI gas.
@@ -2227,7 +3617,7 @@ impl CoreHost {
                 None,
             );
             return Err(ivm::VMError::PermissionDenied);
-        };
+        }
         let ds_ptr = vm.register(10);
         let dsid: DataSpaceId = Self::decode_tlv_typed(vm, ds_ptr, PointerType::DataSpaceId)
             .map_err(|err| {
@@ -2670,14 +4060,13 @@ impl CoreHost {
         } else {
             let proof_tlv = Self::expect_tlv(vm, proof_ptr, PointerType::ProofBlob)?;
             let blob: ProofBlob =
-                Self::decode_header_or_bare(proof_tlv.payload).map_err(|err| {
+                Self::decode_header_or_bare(proof_tlv.payload).inspect_err(|_| {
                     self.record_axt_reject(
                         AxtRejectReason::Proof,
                         Some(intent.asset_dsid),
                         Some(handle.target_lane),
                         "proof payload failed to decode",
                     );
-                    err
                 })?;
             Some(blob)
         };
@@ -2918,7 +4307,45 @@ impl CoreHost {
     }
 }
 
-impl IVMHost for CoreHost {
+impl<QRef> CoreHostImpl<QueryStateSlot<QRef>>
+where
+    QRef: Copy + QueryStateExecute,
+{
+    /// Attach a read-only state view for query execution during this VM run.
+    pub(crate) fn set_query_state<'block, S>(&mut self, state: &'block S)
+    where
+        S: QueryStateSource<Ref<'block> = QRef>,
+    {
+        self.query_state.state = Some(state.as_query_state_ref());
+    }
+}
+
+impl<QS> CoreHostImpl<QS> {
+    /// Set the trigger identifier for the current execution.
+    pub(crate) fn set_trigger_id(&mut self, id: TriggerId) {
+        self.current_trigger_id = Some(id);
+    }
+
+    /// Set the current block creation timestamp (UTC ms).
+    pub(crate) fn set_block_time_ms(&mut self, time_ms: u64) {
+        self.current_block_time_ms = Some(time_ms);
+    }
+
+    fn amount_from_trigger_args(&self) -> Option<u64> {
+        let args = self.args.as_ref()?;
+        let value: json::Value = args.try_into_any_norito().ok()?;
+        match value {
+            json::Value::Number(number) => number.as_u64(),
+            json::Value::Object(map) => map.get("val").and_then(|val| match val {
+                json::Value::Number(number) => number.as_u64(),
+                _ => None,
+            }),
+            _ => None,
+        }
+    }
+}
+
+impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
     #[allow(clippy::too_many_lines)]
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, ivm::VMError> {
         // Enforce central syscall policy (ABI-versioned) uniformly across hosts.
@@ -2952,45 +4379,113 @@ impl IVMHost for CoreHost {
                 let instr = InstructionBox::from(TransferBox::from(isi));
                 Ok(self.queue_instruction(instr))
             }
+            // ----------------- Peer ISIs via pointer-ABI -----------------
+            ivm::syscalls::SYSCALL_REGISTER_PEER => {
+                let ptr = vm.register(10);
+                let payload: Json = Self::decode_tlv_json(vm, ptr)?;
+                let value: json::Value = payload
+                    .try_into_any_norito::<json::Value>()
+                    .map_err(|_| ivm::VMError::DecodeError)?;
+                let request = Self::register_peer_from_value(&value)?;
+                let instr = InstructionBox::from(request);
+                Ok(self.queue_instruction(instr))
+            }
+            ivm::syscalls::SYSCALL_UNREGISTER_PEER => {
+                let ptr = vm.register(10);
+                let payload: Json = Self::decode_tlv_json(vm, ptr)?;
+                let value: json::Value = payload
+                    .try_into_any_norito::<json::Value>()
+                    .map_err(|_| ivm::VMError::DecodeError)?;
+                let peer_id = Self::peer_id_from_value(&value)?;
+                let isi = Unregister::peer(peer_id);
+                let instr = InstructionBox::from(UnregisterBox::from(isi));
+                Ok(self.queue_instruction(instr))
+            }
+            // ----------------- Account ISIs via pointer-ABI -----------------
+            ivm::syscalls::SYSCALL_REGISTER_ACCOUNT => {
+                let ptr = vm.register(10);
+                let id: AccountId = Self::decode_tlv_typed(vm, ptr, PointerType::AccountId)?;
+                let isi = Register::account(Account::new(id));
+                let instr = InstructionBox::from(RegisterBox::from(isi));
+                Ok(self.queue_instruction(instr))
+            }
+            ivm::syscalls::SYSCALL_UNREGISTER_ACCOUNT => {
+                let ptr = vm.register(10);
+                let id: AccountId = Self::decode_tlv_typed(vm, ptr, PointerType::AccountId)?;
+                let isi = Unregister::account(id);
+                let instr = InstructionBox::from(UnregisterBox::from(isi));
+                Ok(self.queue_instruction(instr))
+            }
+            ivm::syscalls::SYSCALL_ADD_SIGNATORY => {
+                let account_ptr = vm.register(10);
+                let signatory_ptr = vm.register(11);
+                let account: AccountId =
+                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
+                let payload: Json = Self::decode_tlv_json(vm, signatory_ptr)?;
+                let signatory: PublicKey = payload
+                    .try_into_any_norito::<PublicKey>()
+                    .map_err(|_| ivm::VMError::DecodeError)?;
+                let isi = AddSignatory::new(account, signatory);
+                let instr = InstructionBox::from(isi);
+                Ok(self.queue_instruction(instr))
+            }
+            ivm::syscalls::SYSCALL_REMOVE_SIGNATORY => {
+                let account_ptr = vm.register(10);
+                let signatory_ptr = vm.register(11);
+                let account: AccountId =
+                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
+                let payload: Json = Self::decode_tlv_json(vm, signatory_ptr)?;
+                let signatory: PublicKey = payload
+                    .try_into_any_norito::<PublicKey>()
+                    .map_err(|_| ivm::VMError::DecodeError)?;
+                let isi = RemoveSignatory::new(account, signatory);
+                let instr = InstructionBox::from(isi);
+                Ok(self.queue_instruction(instr))
+            }
+            ivm::syscalls::SYSCALL_SET_ACCOUNT_QUORUM => {
+                let account_ptr = vm.register(10);
+                let quorum_raw = vm.register(11);
+                let account: AccountId =
+                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
+                let quorum_u16 =
+                    u16::try_from(quorum_raw).map_err(|_| ivm::VMError::DecodeError)?;
+                let quorum = NonZeroU16::new(quorum_u16).ok_or(ivm::VMError::DecodeError)?;
+                let isi = SetAccountQuorum::new(account, quorum);
+                let instr = InstructionBox::from(isi);
+                Ok(self.queue_instruction(instr))
+            }
             // ----------------- Asset (Numeric) ISIs via pointer-ABI -----------------
+            ivm::syscalls::SYSCALL_REGISTER_ASSET => {
+                let ptr = vm.register(10);
+                let id: AssetDefinitionId =
+                    Self::decode_tlv_typed(vm, ptr, PointerType::AssetDefinitionId)?;
+                let isi = Register::asset_definition(AssetDefinition::numeric(id));
+                let instr = InstructionBox::from(RegisterBox::from(isi));
+                Ok(self.queue_instruction(instr))
+            }
+            ivm::syscalls::SYSCALL_UNREGISTER_ASSET => {
+                let ptr = vm.register(10);
+                let id: AssetDefinitionId =
+                    Self::decode_tlv_typed(vm, ptr, PointerType::AssetDefinitionId)?;
+                let isi = Unregister::asset_definition(id);
+                let instr = InstructionBox::from(UnregisterBox::from(isi));
+                Ok(self.queue_instruction(instr))
+            }
             ivm::syscalls::SYSCALL_MINT_ASSET => {
                 let account_ptr = vm.register(10);
                 let asset_def_ptr = vm.register(11);
                 let mut amount = vm.register(12);
 
-                // Pointer-ABI: if the pointer lies in the INPUT region use it,
-                // otherwise interpret sentinel values for minimal test samples.
-                let account: AccountId = if account_ptr >= ivm::Memory::INPUT_START {
-                    // Strict typed TLV (AccountId)
-                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?
-                } else {
-                    // Sentinel 0 => current authority
-                    if account_ptr == 0 {
-                        self.authority.clone()
-                    } else {
-                        return Err(ivm::VMError::DecodeError);
+                let account: AccountId =
+                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
+                let asset_def: AssetDefinitionId =
+                    Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
+                if amount == 0 {
+                    if let Some(from_args) = self.amount_from_trigger_args() {
+                        amount = from_args;
                     }
-                };
-                let asset_def: AssetDefinitionId = if asset_def_ptr >= ivm::Memory::INPUT_START {
-                    Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?
-                } else {
-                    // Sentinel 0 => predefined sample: "rose#wonderland"
-                    if asset_def_ptr == 0 {
-                        "rose#wonderland"
-                            .parse()
-                            .map_err(|_| ivm::VMError::DecodeError)?
-                    } else {
-                        return Err(ivm::VMError::DecodeError);
-                    }
-                };
-                let asset_id = AssetId::of(asset_def, account);
-                // If amount is a sentinel (0), try to take it from trigger args.
-                if let Some(args) = &self.args
-                    && let Ok(value) = args.try_into_any_norito::<norito::json::Value>()
-                    && let Some(v) = value.get("val").and_then(norito::json::Value::as_u64)
-                {
-                    amount = v;
                 }
+                let asset_id = AssetId::of(asset_def, account);
                 let isi = Mint::asset_numeric(amount, asset_id);
                 let instr = InstructionBox::from(MintBox::from(isi));
                 Ok(self.queue_instruction(instr))
@@ -3034,37 +4529,137 @@ impl IVMHost for CoreHost {
                 let key_ptr = vm.register(11);
                 let value_ptr = vm.register(12);
 
-                let account: AccountId = if account_ptr >= ivm::Memory::INPUT_START {
-                    self.decode_at(vm, account_ptr)?
-                } else if account_ptr == 0 {
-                    self.authority.clone()
-                } else {
-                    return Err(ivm::VMError::DecodeError);
-                };
-
-                let key: Name = if key_ptr >= ivm::Memory::INPUT_START {
-                    Self::decode_tlv_typed(vm, key_ptr, PointerType::Name)?
-                } else if key_ptr == 0 {
-                    "cursor".parse().map_err(|_| ivm::VMError::DecodeError)?
-                } else {
-                    return Err(ivm::VMError::DecodeError);
-                };
-
-                let value: Json = if value_ptr >= ivm::Memory::INPUT_START {
-                    Self::decode_tlv_json(vm, value_ptr)?
-                } else if value_ptr == 0 {
-                    // Minimal ForwardCursor value so client-side deserialization succeeds.
-                    let fc = ForwardCursor {
-                        query: "sc_dummy".to_string(),
-                        cursor: nonzero_ext::nonzero!(1_u64),
-                        gas_budget: None,
-                    };
-                    Json::new(fc)
-                } else {
-                    return Err(ivm::VMError::DecodeError);
-                };
+                let account: AccountId =
+                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
+                let key: Name = Self::decode_tlv_typed(vm, key_ptr, PointerType::Name)?;
+                let value: Json = Self::decode_tlv_json(vm, value_ptr)?;
 
                 let isi = SetKeyValue::account(account, key, value);
+                let instr = InstructionBox::from(SetKeyValueBox::from(isi));
+                Ok(self.queue_instruction(instr))
+            }
+            // ----------------- Role and permission ISIs via pointer-ABI -----------------
+            ivm::syscalls::SYSCALL_CREATE_ROLE => {
+                let name_ptr = vm.register(10);
+                let perms_ptr = vm.register(11);
+                let name: Name = Self::decode_tlv_typed(vm, name_ptr, PointerType::Name)?;
+                let perms_json: Json = Self::decode_tlv_json(vm, perms_ptr)?;
+                let permissions = Self::permissions_from_json(&perms_json)?;
+                let role_id = RoleId::new(name);
+                let mut role = Role::new(role_id, self.authority.clone());
+                for perm in permissions {
+                    role = role.add_permission(perm);
+                }
+                let isi = Register::role(role);
+                let instr = InstructionBox::from(RegisterBox::from(isi));
+                Ok(self.queue_instruction(instr))
+            }
+            ivm::syscalls::SYSCALL_DELETE_ROLE => {
+                let name_ptr = vm.register(10);
+                let name: Name = Self::decode_tlv_typed(vm, name_ptr, PointerType::Name)?;
+                let isi = Unregister::role(RoleId::new(name));
+                let instr = InstructionBox::from(UnregisterBox::from(isi));
+                Ok(self.queue_instruction(instr))
+            }
+            ivm::syscalls::SYSCALL_GRANT_ROLE => {
+                let account_ptr = vm.register(10);
+                let name_ptr = vm.register(11);
+                let account: AccountId =
+                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
+                let name: Name = Self::decode_tlv_typed(vm, name_ptr, PointerType::Name)?;
+                let isi = Grant::account_role(RoleId::new(name), account);
+                let instr = InstructionBox::from(isi);
+                Ok(self.queue_instruction(instr))
+            }
+            ivm::syscalls::SYSCALL_REVOKE_ROLE => {
+                let account_ptr = vm.register(10);
+                let name_ptr = vm.register(11);
+                let account: AccountId =
+                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
+                let name: Name = Self::decode_tlv_typed(vm, name_ptr, PointerType::Name)?;
+                let isi = Revoke::account_role(RoleId::new(name), account);
+                let instr = InstructionBox::from(isi);
+                Ok(self.queue_instruction(instr))
+            }
+            ivm::syscalls::SYSCALL_GRANT_PERMISSION => {
+                let account_ptr = vm.register(10);
+                let perm_ptr = vm.register(11);
+                let account: AccountId =
+                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
+                let permission = Self::decode_permission(vm, perm_ptr)?;
+                let isi = Grant::account_permission(permission, account);
+                let instr = InstructionBox::from(isi);
+                Ok(self.queue_instruction(instr))
+            }
+            ivm::syscalls::SYSCALL_REVOKE_PERMISSION => {
+                let account_ptr = vm.register(10);
+                let perm_ptr = vm.register(11);
+                let account: AccountId =
+                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
+                let permission = Self::decode_permission(vm, perm_ptr)?;
+                let isi = Revoke::account_permission(permission, account);
+                let instr = InstructionBox::from(isi);
+                Ok(self.queue_instruction(instr))
+            }
+            ivm::syscalls::SYSCALL_CREATE_TRIGGER => {
+                let ptr = vm.register(10);
+                let spec: Json = Self::decode_tlv_json(vm, ptr)?;
+                let trigger = if let Ok(trigger) = spec.try_into_any_norito::<Trigger>() {
+                    trigger
+                } else {
+                    let value: json::Value = spec
+                        .try_into_any_norito::<json::Value>()
+                        .map_err(|_| ivm::VMError::DecodeError)?;
+                    let mut map = match value {
+                        json::Value::Object(map) => map,
+                        _ => return Err(ivm::VMError::DecodeError),
+                    };
+                    let id_value = map.remove("id").ok_or(ivm::VMError::DecodeError)?;
+                    let id_str = id_value.as_str().ok_or(ivm::VMError::DecodeError)?;
+                    let id: TriggerId = id_str.parse().map_err(|_| ivm::VMError::DecodeError)?;
+                    let action_value = map.remove("action").ok_or(ivm::VMError::DecodeError)?;
+                    let action = if let Ok(action) =
+                        json::from_value::<Action>(action_value.clone())
+                    {
+                        action
+                    } else {
+                        let spec_action: SpecializedAction<EventFilterBox> =
+                            json::from_value(action_value)
+                                .map_err(|_| ivm::VMError::DecodeError)?;
+                        let SpecializedAction {
+                            executable,
+                            repeats,
+                            authority,
+                            filter,
+                            metadata,
+                        } = spec_action;
+                        if matches!(filter, EventFilterBox::TriggerCompleted(_)) {
+                            return Err(ivm::VMError::DecodeError);
+                        }
+                        Action::new(executable, repeats, authority, filter).with_metadata(metadata)
+                    };
+                    Trigger::new(id, action)
+                };
+                let instr = InstructionBox::from(Register::trigger(trigger));
+                Ok(self.queue_instruction(instr))
+            }
+            ivm::syscalls::SYSCALL_REMOVE_TRIGGER => {
+                let ptr = vm.register(10);
+                let name: Name = Self::decode_tlv_typed(vm, ptr, PointerType::Name)?;
+                let id = TriggerId::new(name);
+                let isi = Unregister::trigger(id);
+                let instr = InstructionBox::from(UnregisterBox::from(isi));
+                Ok(self.queue_instruction(instr))
+            }
+            ivm::syscalls::SYSCALL_SET_TRIGGER_ENABLED => {
+                let ptr = vm.register(10);
+                let enabled = vm.register(11) != 0;
+                let name: Name = Self::decode_tlv_typed(vm, ptr, PointerType::Name)?;
+                let id = TriggerId::new(name);
+                let key: Name = TRIGGER_ENABLED_METADATA_KEY
+                    .parse()
+                    .map_err(|_| ivm::VMError::DecodeError)?;
+                let isi = SetKeyValue::trigger(id, key, Json::from(enabled));
                 let instr = InstructionBox::from(SetKeyValueBox::from(isi));
                 Ok(self.queue_instruction(instr))
             }
@@ -3113,50 +4708,29 @@ impl IVMHost for CoreHost {
             ivm::syscalls::SYSCALL_NFT_MINT_ASSET => {
                 let nft_id_ptr = vm.register(10);
                 let owner_ptr = vm.register(11);
-                let owner: AccountId = if owner_ptr >= ivm::Memory::INPUT_START {
-                    Self::decode_tlv_typed(vm, owner_ptr, PointerType::AccountId)?
-                } else if owner_ptr == 0 {
-                    self.authority.clone()
-                } else {
-                    return Err(ivm::VMError::DecodeError);
-                };
-                let nft_id: NftId = if nft_id_ptr >= ivm::Memory::INPUT_START {
-                    Self::decode_tlv_typed(vm, nft_id_ptr, PointerType::NftId)?
-                } else if nft_id_ptr == 0 {
-                    // Auto-generate a unique NFT id for the current authority with a monotonic suffix
-                    let name = format!("nft_number_{}_for_{}", self.nft_seq, owner.signatory())
-                        .parse()
-                        .map_err(|_| ivm::VMError::DecodeError)?;
-                    self.nft_seq = self.nft_seq.saturating_add(1);
-                    NftId::of(owner.domain().clone(), name)
-                } else {
-                    return Err(ivm::VMError::DecodeError);
-                };
-                let nft = Nft::new(nft_id, Metadata::default());
-                let instr = InstructionBox::from(RegisterBox::from(Register::nft(nft)));
-                Ok(self.queue_instruction(instr))
+                let owner: AccountId =
+                    Self::decode_tlv_typed(vm, owner_ptr, PointerType::AccountId)?;
+                let nft_id: NftId = Self::decode_tlv_typed(vm, nft_id_ptr, PointerType::NftId)?;
+                let nft = Nft::new(nft_id.clone(), Metadata::default());
+                let mut gas = self
+                    .queue_instruction(InstructionBox::from(RegisterBox::from(Register::nft(nft))));
+                if owner != self.authority {
+                    let transfer = InstructionBox::from(TransferBox::from(Transfer::nft(
+                        self.authority.clone(),
+                        nft_id,
+                        owner,
+                    )));
+                    gas = gas.saturating_add(self.queue_instruction(transfer));
+                }
+                Ok(gas)
             }
             ivm::syscalls::SYSCALL_NFT_TRANSFER_ASSET => {
                 let from_ptr = vm.register(10);
                 let nft_id_ptr = vm.register(11);
                 let to_ptr = vm.register(12);
-                let from: AccountId = if from_ptr >= ivm::Memory::INPUT_START {
-                    Self::decode_tlv_typed(vm, from_ptr, PointerType::AccountId)?
-                } else if from_ptr == 0 {
-                    self.authority.clone()
-                } else {
-                    return Err(ivm::VMError::DecodeError);
-                };
-                let nft_id: NftId = if nft_id_ptr >= ivm::Memory::INPUT_START {
-                    Self::decode_tlv_typed(vm, nft_id_ptr, PointerType::NftId)?
-                } else {
-                    return Err(ivm::VMError::DecodeError);
-                };
-                let to: AccountId = if to_ptr >= ivm::Memory::INPUT_START {
-                    Self::decode_tlv_typed(vm, to_ptr, PointerType::AccountId)?
-                } else {
-                    return Err(ivm::VMError::DecodeError);
-                };
+                let from: AccountId = Self::decode_tlv_typed(vm, from_ptr, PointerType::AccountId)?;
+                let nft_id: NftId = Self::decode_tlv_typed(vm, nft_id_ptr, PointerType::NftId)?;
+                let to: AccountId = Self::decode_tlv_typed(vm, to_ptr, PointerType::AccountId)?;
                 let isi = Transfer::nft(from, nft_id, to);
                 let instr = InstructionBox::from(TransferBox::from(isi));
                 Ok(self.queue_instruction(instr))
@@ -3309,6 +4883,95 @@ impl IVMHost for CoreHost {
                     Err(ivm::VMError::PermissionDenied)
                 }
             }
+            ivm::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY => {
+                let ptr = vm.register(10);
+                let request: QueryRequest =
+                    Self::decode_tlv_typed(vm, ptr, PointerType::NoritoBytes)?;
+                let gas_remaining = vm.remaining_gas();
+                let gas_ctx = QueryGasContext::from_request(&request);
+                let Some(state_ref) = self.query_state.get() else {
+                    return Err(ivm::VMError::NotImplemented { syscall: number });
+                };
+                let budget_items = Self::query_items_budget(&gas_ctx, gas_remaining)?;
+                if matches!(request, QueryRequest::Singular(_)) && budget_items == 0 {
+                    return Err(ivm::VMError::OutOfGas);
+                }
+                let query_result = state_ref.execute_query_with_budget(
+                    &self.authority,
+                    request,
+                    Some(budget_items),
+                )?;
+                let response = query_result.response;
+                let processed_items = query_result.processed_items;
+                if let Some(encoded_len) = Self::norito_encoded_len_exact(&response) {
+                    let gas = Self::query_gas_cost(&gas_ctx, processed_items, encoded_len);
+                    if gas > gas_remaining {
+                        return Err(ivm::VMError::OutOfGas);
+                    }
+                }
+                let response_bytes =
+                    norito::to_bytes(&response).map_err(|_| ivm::VMError::DecodeError)?;
+                let response_len_u64 = u64::try_from(response_bytes.len()).unwrap_or(u64::MAX);
+                let gas = Self::query_gas_cost(&gas_ctx, processed_items, response_len_u64);
+                if gas > gas_remaining {
+                    return Err(ivm::VMError::OutOfGas);
+                }
+                let payload_len = Self::len_to_u32(response_bytes.len())?;
+                let mut out = Vec::with_capacity(7 + response_bytes.len() + Hash::LENGTH);
+                out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
+                out.push(1);
+                out.extend_from_slice(&payload_len.to_be_bytes());
+                out.extend_from_slice(&response_bytes);
+                let h: [u8; Hash::LENGTH] = Hash::new(&response_bytes).into();
+                out.extend_from_slice(&h);
+                let p = vm.alloc_input_tlv(&out)?;
+                vm.set_register(10, p);
+                Ok(gas)
+            }
+            ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL => self.subscription_bill(),
+            ivm::syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE => self.subscription_record_usage(),
+            ivm::syscalls::SYSCALL_GET_ACCOUNT_BALANCE => {
+                let account_ptr = vm.register(10);
+                let asset_def_ptr = vm.register(11);
+                let account: AccountId =
+                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
+                let asset_def: AssetDefinitionId =
+                    Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
+                let asset_id = AssetId::of(asset_def, account);
+                let Some(state_ref) = self.query_state.get() else {
+                    return Err(ivm::VMError::NotImplemented { syscall: number });
+                };
+                let request =
+                    QueryRequest::Singular(SingularQueryBox::FindAssetById(FindAssetById {
+                        id: asset_id,
+                    }));
+                let result = state_ref.execute_query(&self.authority, request)?;
+                let asset = match result.response {
+                    QueryResponse::Singular(SingularQueryOutputBox::Asset(asset)) => asset,
+                    _ => return Err(ivm::VMError::DecodeError),
+                };
+                let amount =
+                    u64::try_from(asset.value().clone()).map_err(|_| ivm::VMError::DecodeError)?;
+                vm.set_register(10, amount);
+                Ok(0)
+            }
+            ivm::syscalls::SYSCALL_GET_PUBLIC_INPUT => {
+                let name_ptr = vm.register(10);
+                let tlv = Self::expect_tlv(vm, name_ptr, PointerType::Name)?;
+                let name = Self::decode_name_payload(tlv.payload)?;
+                let Some(record) = self.public_inputs.get(&name) else {
+                    return Err(ivm::VMError::PermissionDenied);
+                };
+                if !is_type_allowed_for_policy(vm.syscall_policy(), record.type_id) {
+                    return Err(ivm::VMError::AbiTypeNotAllowed {
+                        abi: vm.abi_version(),
+                        type_id: record.type_id as u16,
+                    });
+                }
+                let ptr = vm.alloc_input_tlv(&record.tlv)?;
+                vm.set_register(10, ptr);
+                Ok(record.gas_cost())
+            }
             // Helper syscalls forwarded to the default host implementation.
             // Intercept ZK_VERIFY syscalls to record success and gate ZK ISIs.
             ivm::syscalls::SYSCALL_ZK_VERIFY_TRANSFER => {
@@ -3398,6 +5061,164 @@ impl IVMHost for CoreHost {
                 if vm.register(10) != 0 {
                     self.zk_verified_tally.push_back(env_hash);
                     self.zk_last_env_hash_tally.push_back(env_hash);
+                }
+                Ok(gas)
+            }
+            ivm::syscalls::SYSCALL_ZK_VERIFY_BATCH => {
+                let ptr = vm.register(10);
+                let tlv = vm.memory.validate_tlv(ptr)?;
+                if tlv.type_id != PointerType::NoritoBytes {
+                    return Err(ivm::VMError::NoritoInvalid);
+                }
+                let gas = Self::gas_for_zk_verify_payload(tlv.payload);
+                let envs: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+                    if let Ok(v) = norito::decode_from_bytes(tlv.payload) {
+                        v
+                    } else {
+                        vm.set_register(10, 0);
+                        vm.set_register(11, ivm::host::ERR_DECODE);
+                        return Ok(gas);
+                    };
+                if u32::try_from(envs.len()).unwrap_or(u32::MAX)
+                    > self.halo2_config.verifier_max_batch
+                {
+                    vm.set_register(10, 0);
+                    vm.set_register(11, ivm::host::ERR_BATCH);
+                    return Ok(gas);
+                }
+                if !self.halo2_config.enabled {
+                    vm.set_register(10, 0);
+                    vm.set_register(11, ivm::host::ERR_DISABLED);
+                    return Ok(gas);
+                }
+                if self.halo2_config.backend != ivm::host::ZkHalo2Backend::Ipa {
+                    vm.set_register(10, 0);
+                    vm.set_register(11, ivm::host::ERR_BACKEND);
+                    return Ok(gas);
+                }
+
+                let mut statuses: Vec<u8> = Vec::with_capacity(envs.len());
+                let mut first_error: Option<u64> = None;
+                for env in &envs {
+                    let mut status = 0u8;
+                    let payload = if let Ok(bytes) = norito::to_bytes(env) {
+                        bytes
+                    } else {
+                        first_error.get_or_insert(ivm::host::ERR_DECODE);
+                        statuses.push(status);
+                        continue;
+                    };
+                    if let Err(code) =
+                        self.validate_envelope_header(env, payload.len(), ivm::host::LABEL_BATCH)
+                    {
+                        first_error.get_or_insert(code);
+                        statuses.push(status);
+                        continue;
+                    }
+                    let Some(vk_commitment) = env.vk_commitment else {
+                        first_error.get_or_insert(ivm::host::ERR_VK_MISSING);
+                        statuses.push(status);
+                        continue;
+                    };
+                    let Some(schema_hash) = env.public_inputs_schema_hash else {
+                        first_error.get_or_insert(ivm::host::ERR_VK_MISSING);
+                        statuses.push(status);
+                        continue;
+                    };
+                    let (vk_rec, backend_label) =
+                        match self.load_vk_record_any_namespace(env, vk_commitment, schema_hash) {
+                            Ok(v) => v,
+                            Err(code) => {
+                                first_error.get_or_insert(code);
+                                statuses.push(status);
+                                continue;
+                            }
+                        };
+                    let Some(vk_box) = vk_rec.key.as_ref() else {
+                        first_error.get_or_insert(ivm::host::ERR_VK_MISSING);
+                        statuses.push(status);
+                        continue;
+                    };
+                    let inline_commit = Self::hash_vk_bytes(&backend_label, &vk_box.bytes);
+                    if inline_commit != vk_rec.commitment {
+                        first_error.get_or_insert(ivm::host::ERR_VK_MISMATCH);
+                        statuses.push(status);
+                        continue;
+                    }
+                    let current_manifest = self.current_manifest_id.as_deref().unwrap_or("core");
+                    if vk_rec.owner_manifest_id.as_deref().unwrap_or("core") != current_manifest {
+                        first_error.get_or_insert(ivm::host::ERR_NAMESPACE);
+                        statuses.push(status);
+                        continue;
+                    }
+                    let proof_len = if let Ok(bytes) = norito::to_bytes(&env.proof) {
+                        bytes.len()
+                    } else {
+                        first_error.get_or_insert(ivm::host::ERR_DECODE);
+                        statuses.push(status);
+                        continue;
+                    };
+                    if let Err(code) = self.validate_proof_len(&vk_rec, proof_len) {
+                        first_error.get_or_insert(code);
+                        statuses.push(status);
+                        continue;
+                    }
+                    let domain_inputs = DomainHashInputs {
+                        backend: &backend_label,
+                        curve: &vk_rec.curve,
+                        vk_commitment,
+                        schema_hash,
+                        syscall_label: ivm::host::LABEL_BATCH,
+                        manifest: current_manifest,
+                        namespace: &vk_rec.namespace,
+                    };
+                    let domain = self.compute_domain_hash(&domain_inputs);
+                    if env.domain_tag != Some(domain) {
+                        first_error.get_or_insert(ivm::host::ERR_DOMAIN_TAG);
+                        statuses.push(status);
+                        continue;
+                    }
+                    self.default
+                        .set_external_vk_bytes(vk_box.backend.clone(), vk_box.bytes.clone());
+                    match ivm::zk_verify::verify_open_envelope(&payload) {
+                        Ok(ok) => {
+                            status = u8::from(ok);
+                            if !ok {
+                                first_error.get_or_insert(ivm::host::ERR_VERIFY);
+                            }
+                        }
+                        Err(_) => {
+                            first_error.get_or_insert(ivm::host::ERR_DECODE);
+                        }
+                    }
+                    statuses.push(status);
+                }
+
+                if statuses.is_empty() {
+                    vm.set_register(10, 0);
+                    vm.set_register(11, ivm::host::ERR_DECODE);
+                    return Ok(gas);
+                }
+
+                let body = norito::to_bytes(&statuses).map_err(|_| ivm::VMError::NoritoInvalid)?;
+                let mut out = Vec::with_capacity(7 + body.len() + 32);
+                out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
+                out.push(1);
+                out.extend_from_slice(&u32::try_from(body.len()).unwrap_or(u32::MAX).to_be_bytes());
+                out.extend_from_slice(&body);
+                let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
+                out.extend_from_slice(&h);
+                let p = vm.alloc_input_tlv(&out)?;
+                vm.set_register(10, p);
+                if let Some((idx, _)) = statuses.iter().enumerate().find(|(_, s)| **s == 0) {
+                    vm.set_register(12, idx as u64);
+                } else {
+                    vm.set_register(12, u64::MAX);
+                }
+                if let Some(code) = first_error {
+                    vm.set_register(11, code);
+                } else {
+                    vm.set_register(11, 0);
                 }
                 Ok(gas)
             }
@@ -3551,15 +5372,25 @@ impl IVMHost for CoreHost {
             | ivm::syscalls::SYSCALL_TLV_EQ
             | ivm::syscalls::SYSCALL_SCHEMA_INFO
             | ivm::syscalls::SYSCALL_NAME_DECODE => self.codec_host.syscall(number, vm),
-            // Remaining Norito helpers are safe to forward to DefaultHost.
-            ivm::syscalls::SYSCALL_ALLOC
+            // Stateless helpers are safe to forward to DefaultHost.
+            ivm::syscalls::SYSCALL_DEBUG_PRINT
+            | ivm::syscalls::SYSCALL_EXIT
+            | ivm::syscalls::SYSCALL_ABORT
+            | ivm::syscalls::SYSCALL_DEBUG_LOG
+            | ivm::syscalls::SYSCALL_ALLOC
             | ivm::syscalls::SYSCALL_GROW_HEAP
             | ivm::syscalls::SYSCALL_GET_PRIVATE_INPUT
             | ivm::syscalls::SYSCALL_INPUT_PUBLISH_TLV
             | ivm::syscalls::SYSCALL_COMMIT_OUTPUT
             | ivm::syscalls::SYSCALL_PROVE_EXECUTION
             | ivm::syscalls::SYSCALL_VERIFY_PROOF
-            | ivm::syscalls::SYSCALL_GET_MERKLE_PATH => self.default.syscall(number, vm),
+            | ivm::syscalls::SYSCALL_VERIFY_SIGNATURE
+            | ivm::syscalls::SYSCALL_GET_MERKLE_PATH
+            | ivm::syscalls::SYSCALL_GET_MERKLE_COMPACT
+            | ivm::syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT
+            | ivm::syscalls::SYSCALL_USE_NULLIFIER
+            | ivm::syscalls::SYSCALL_VRF_VERIFY
+            | ivm::syscalls::SYSCALL_VRF_VERIFY_BATCH => self.default.syscall(number, vm),
 
             // Provide current authority AccountId pointer via INPUT region.
             // New format: TLV (type_id:u16, version:u8, len:be u32, payload, hash:32).
@@ -3598,7 +5429,10 @@ impl IVMHost for CoreHost {
     }
 
     /// Downcast support for hosts with extra methods/state.
-    fn as_any(&mut self) -> &mut dyn Any {
+    fn as_any(&mut self) -> &mut dyn Any
+    where
+        Self: 'static,
+    {
         self
     }
 
@@ -3622,11 +5456,12 @@ impl IVMHost for CoreHost {
 
 #[cfg(test)]
 mod pointer_abi_tests {
-    use core::str::FromStr;
+    use core::{num::NonZeroU16, str::FromStr};
 
     use iroha_crypto::{Hash as IrohaHash, KeyPair};
     use iroha_data_model::smart_contract::manifest::ContractManifest;
     use iroha_primitives::json::Json;
+    use iroha_test_samples::ALICE_ID;
     use ivm::{
         axt::{GroupBinding, HandleBudget, HandleSubject, SpendOp},
         syscalls as ivm_sys,
@@ -3735,7 +5570,7 @@ mod pointer_abi_tests {
     fn pointer_from_norito_wrong_type_is_rejected() {
         crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(10_000);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority = ALICE_ID.clone();
         let mut host = CoreHost::new(authority);
 
         let name_payload = Name::from_str("rose").unwrap().encode();
@@ -3764,7 +5599,7 @@ mod pointer_abi_tests {
             touches: Vec::new(),
         };
         let snapshot = make_policy_snapshot(dsid, manifest_root, 5);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority = ALICE_ID.clone();
         let mut host = CoreHost::new(authority).with_axt_policy_snapshot(&snapshot);
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
@@ -3871,8 +5706,10 @@ mod pointer_abi_tests {
             touches: Vec::new(),
         };
         let snapshot = make_policy_snapshot(dsid, manifest_root, 12);
-        let mut timing = iroha_config::parameters::actual::NexusAxt::default();
-        timing.max_clock_skew_ms = 1;
+        let timing = iroha_config::parameters::actual::NexusAxt {
+            max_clock_skew_ms: 1,
+            ..Default::default()
+        };
         let authority: AccountId = "alice@wonderland".parse().unwrap();
         let mut host = CoreHost::new(authority)
             .with_axt_policy_snapshot(&snapshot)
@@ -5239,6 +7076,428 @@ mod pointer_abi_tests {
     }
 
     #[test]
+    fn register_account_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let account: AccountId = "bob@wonderland".parse().unwrap();
+        let ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
+        vm.set_register(10, ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_REGISTER_ACCOUNT, &mut vm);
+        let expected = InstructionBox::from(Register::account(Account::new(account)));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn unregister_account_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let account: AccountId = "bob@wonderland".parse().unwrap();
+        let ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
+        vm.set_register(10, ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_UNREGISTER_ACCOUNT, &mut vm);
+        let expected = InstructionBox::from(Unregister::account(account));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn register_asset_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let ptr = store_tlv(
+            &mut vm,
+            PointerType::AssetDefinitionId,
+            &norito_blob(&asset_def),
+        );
+        vm.set_register(10, ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_REGISTER_ASSET, &mut vm);
+        let expected = InstructionBox::from(Register::asset_definition(AssetDefinition::numeric(
+            asset_def,
+        )));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn unregister_asset_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let ptr = store_tlv(
+            &mut vm,
+            PointerType::AssetDefinitionId,
+            &norito_blob(&asset_def),
+        );
+        vm.set_register(10, ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_UNREGISTER_ASSET, &mut vm);
+        let expected = InstructionBox::from(Unregister::asset_definition(asset_def));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn register_peer_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+        let request = RegisterPeerWithPop::new(peer_id, vec![0xAB, 0xCD]);
+        let json = Json::new(request.clone());
+        let ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&json));
+        vm.set_register(10, ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_REGISTER_PEER, &mut vm);
+        let expected = InstructionBox::from(request);
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn unregister_peer_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+        let json = Json::new(peer_id.clone());
+        let ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&json));
+        vm.set_register(10, ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_UNREGISTER_PEER, &mut vm);
+        let expected = InstructionBox::from(Unregister::peer(peer_id));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn create_role_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority.clone());
+
+        let role_name: Name = "auditor".parse().unwrap();
+        let mut perms_map = BTreeMap::new();
+        perms_map.insert(
+            "permissions".to_string(),
+            norito::json::Value::Array(vec![norito::json::Value::String(
+                "read_assets".to_string(),
+            )]),
+        );
+        let perms_json = Json::from(&norito::json::Value::Object(perms_map));
+
+        let name_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&role_name));
+        let perms_ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&perms_json));
+        vm.set_register(10, name_ptr);
+        vm.set_register(11, perms_ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_CREATE_ROLE, &mut vm);
+        let mut role = Role::new(RoleId::new(role_name), authority);
+        role = role.add_permission(Permission::new("read_assets".to_string(), Json::new(())));
+        let expected = InstructionBox::from(Register::role(role));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn delete_role_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let role_name: Name = "auditor".parse().unwrap();
+        let name_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&role_name));
+        vm.set_register(10, name_ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_DELETE_ROLE, &mut vm);
+        let expected = InstructionBox::from(Unregister::role(RoleId::new(role_name)));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn grant_role_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let account: AccountId = "bob@wonderland".parse().unwrap();
+        let role_name: Name = "auditor".parse().unwrap();
+        let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
+        let role_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&role_name));
+        vm.set_register(10, account_ptr);
+        vm.set_register(11, role_ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_GRANT_ROLE, &mut vm);
+        let expected = InstructionBox::from(Grant::account_role(RoleId::new(role_name), account));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn revoke_role_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let account: AccountId = "bob@wonderland".parse().unwrap();
+        let role_name: Name = "auditor".parse().unwrap();
+        let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
+        let role_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&role_name));
+        vm.set_register(10, account_ptr);
+        vm.set_register(11, role_ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_REVOKE_ROLE, &mut vm);
+        let expected = InstructionBox::from(Revoke::account_role(RoleId::new(role_name), account));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn grant_permission_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let account: AccountId = "bob@wonderland".parse().unwrap();
+        let perm_name: Name = "read_assets".parse().unwrap();
+        let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
+        let perm_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&perm_name));
+        vm.set_register(10, account_ptr);
+        vm.set_register(11, perm_ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_GRANT_PERMISSION, &mut vm);
+        let expected = InstructionBox::from(Grant::account_permission(
+            Permission::new(perm_name.as_ref().to_string(), Json::new(())),
+            account,
+        ));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn revoke_permission_syscall_queues_instruction_from_json() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let account: AccountId = "bob@wonderland".parse().unwrap();
+        let permission = Permission::new("transfer_asset".to_string(), Json::new(()));
+        let perm_json = Json::new(permission.clone());
+        let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
+        let perm_ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&perm_json));
+        vm.set_register(10, account_ptr);
+        vm.set_register(11, perm_ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_REVOKE_PERMISSION, &mut vm);
+        let expected = InstructionBox::from(Revoke::account_permission(permission, account));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn add_signatory_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let account: AccountId = "bob@wonderland".parse().unwrap();
+        let public_key = KeyPair::random().public_key().clone();
+        let pk_json = Json::new(public_key.clone());
+        let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
+        let pk_ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&pk_json));
+        vm.set_register(10, account_ptr);
+        vm.set_register(11, pk_ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_ADD_SIGNATORY, &mut vm);
+        let expected = InstructionBox::from(AddSignatory::new(account, public_key));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn remove_signatory_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let account: AccountId = "bob@wonderland".parse().unwrap();
+        let public_key = KeyPair::random().public_key().clone();
+        let pk_json = Json::new(public_key.clone());
+        let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
+        let pk_ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&pk_json));
+        vm.set_register(10, account_ptr);
+        vm.set_register(11, pk_ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_REMOVE_SIGNATORY, &mut vm);
+        let expected = InstructionBox::from(RemoveSignatory::new(account, public_key));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn set_account_quorum_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let account: AccountId = "bob@wonderland".parse().unwrap();
+        let quorum = NonZeroU16::new(2).expect("non-zero quorum");
+        let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
+        vm.set_register(10, account_ptr);
+        vm.set_register(11, quorum.get().into());
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_SET_ACCOUNT_QUORUM, &mut vm);
+        let expected = InstructionBox::from(SetAccountQuorum::new(account, quorum));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn create_trigger_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority.clone());
+
+        let trigger_id: TriggerId = "trigger_base64".parse().unwrap();
+        let trigger = Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                vec![InstructionBox::from(Log::new(
+                    Level::INFO,
+                    "noop".to_owned(),
+                ))],
+                Repeats::Exactly(1),
+                authority.clone(),
+                DataEventFilter::Any,
+            ),
+        );
+        let json = Json::new(trigger.clone());
+        let ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&json));
+        vm.set_register(10, ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_CREATE_TRIGGER, &mut vm);
+        let expected = InstructionBox::from(Register::trigger(trigger));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn create_trigger_syscall_object_spec_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority.clone());
+
+        let trigger_id: TriggerId = "trigger_object".parse().unwrap();
+        let action = SpecializedAction::new(
+            vec![InstructionBox::from(Log::new(
+                Level::INFO,
+                "object".to_owned(),
+            ))],
+            Repeats::Exactly(1),
+            authority.clone(),
+            EventFilterBox::Data(DataEventFilter::Any),
+        );
+        let action_value = norito::json::to_value(&action).expect("serialize specialized action");
+        let mut map = BTreeMap::new();
+        map.insert(
+            "id".to_string(),
+            norito::json::Value::String(trigger_id.to_string()),
+        );
+        map.insert("action".to_string(), action_value);
+        let spec = Json::from(&norito::json::Value::Object(map));
+
+        let ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&spec));
+        vm.set_register(10, ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_CREATE_TRIGGER, &mut vm);
+        let expected_action = Action::new(
+            action.executable.clone(),
+            action.repeats,
+            action.authority.clone(),
+            action.filter.clone(),
+        )
+        .with_metadata(action.metadata.clone());
+        let expected =
+            InstructionBox::from(Register::trigger(Trigger::new(trigger_id, expected_action)));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn remove_trigger_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let name: Name = "drop_me".parse().unwrap();
+        let ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&name));
+        vm.set_register(10, ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_REMOVE_TRIGGER, &mut vm);
+        let expected = InstructionBox::from(Unregister::trigger(TriggerId::new(name)));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn set_trigger_enabled_syscall_queues_instruction() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let name: Name = "toggle_me".parse().unwrap();
+        let ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&name));
+        vm.set_register(10, ptr);
+        vm.set_register(11, 1);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_SET_TRIGGER_ENABLED, &mut vm);
+        let key: Name = TRIGGER_ENABLED_METADATA_KEY
+            .parse()
+            .expect("valid metadata key");
+        let expected = InstructionBox::from(SetKeyValue::trigger(
+            TriggerId::new(name),
+            key,
+            Json::from(true),
+        ));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
     fn mint_asset_syscall_returns_metered_gas() {
         let mut vm = ivm::IVM::new(1_000);
         let authority: AccountId = "alice@wonderland".parse().unwrap();
@@ -5267,6 +7526,43 @@ mod pointer_abi_tests {
         let isi = Mint::asset_numeric(5u64, asset_id);
         let expected = crate::gas::meter_instruction(&InstructionBox::from(MintBox::from(isi)));
         assert_eq!(gas, expected);
+    }
+
+    #[test]
+    fn mint_asset_syscall_uses_trigger_args_for_zero_amount() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority = ALICE_ID.clone();
+        let args = Json::new(norito::json!({"val": 42}));
+        let mut host: CoreHost =
+            CoreHostImpl::with_accounts_and_args(authority.clone(), Arc::new(vec![authority.clone()]), args);
+        vm.load_program(&ivm::ProgramMetadata::default().encode())
+            .expect("load header");
+
+        let account_tlv = make_tlv(PointerType::AccountId as u16, &authority.encode());
+        let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_tlv = make_tlv(PointerType::AssetDefinitionId as u16, &asset_def.encode());
+
+        vm.memory
+            .preload_input(0, &account_tlv)
+            .expect("preload account");
+        vm.memory
+            .preload_input(256, &asset_tlv)
+            .expect("preload asset def");
+        vm.set_register(10, ivm::Memory::INPUT_START);
+        vm.set_register(11, ivm::Memory::INPUT_START + 256);
+        vm.set_register(12, 0);
+
+        let gas = host
+            .syscall(ivm::syscalls::SYSCALL_MINT_ASSET, &mut vm)
+            .expect("mint syscall");
+        let asset_id = AssetId::of(asset_def, authority);
+        let isi = Mint::asset_numeric(42u64, asset_id);
+        let expected = crate::gas::meter_instruction(&InstructionBox::from(MintBox::from(isi.clone())));
+        assert_eq!(gas, expected);
+        assert_eq!(
+            host.queued,
+            vec![InstructionBox::from(MintBox::from(isi))]
+        );
     }
 
     #[test]
@@ -5405,20 +7701,38 @@ fn build_program(code: &[u8], vector_length: u8) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, sync::Arc};
 
     use iroha_data_model::{
+        parameter::{CustomParameter, Parameter},
         proof::{VerifyingKeyBox, VerifyingKeyId},
+        query::{QueryRequest, QueryResponse, SingularQueryBox, prelude::FindParameters},
         zk::BackendTag,
     };
     use ivm::{IVM, encoding, instruction, syscalls as ivm_sys};
     use norito::codec::Encode as NoritoEncode;
 
+    #[cfg(not(feature = "fast_dsl"))]
+    use iroha_data_model::query::account::prelude::FindAccounts;
+    use iroha_data_model::{
+        prelude::*,
+        query::{
+            QueryBox, QueryWithFilter, QueryWithParams,
+            dsl::prelude::{CompoundPredicate, SelectorTuple},
+            parameters::{FetchSize, ForwardCursor, Pagination, QueryParams, Sorting},
+        },
+    };
+    use iroha_test_samples::ALICE_ID;
+    use nonzero_ext::nonzero;
+
     use super::*;
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
-        smartcontracts::ivm::host::pointer_abi_tests::make_tlv,
+        smartcontracts::{
+            isi::triggers::specialized::{SpecializedAction, SpecializedTrigger},
+            ivm::host::pointer_abi_tests::make_tlv,
+        },
         state::{State, World},
     };
 
@@ -5465,8 +7779,965 @@ mod tests {
     }
 
     #[test]
-    fn queue_instructions_accumulates_gas_and_enqueues() {
+    fn execute_query_syscall_returns_norito_response_and_gas() {
+        crate::test_alias::ensure();
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
         let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority);
+        host.set_query_state(&view);
+        let mut vm = IVM::new(1_000_000);
+
+        let request = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters));
+        let request_bytes = norito::to_bytes(&request).expect("encode query request");
+        let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &request_bytes);
+        vm.set_register(10, ptr);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY, &mut vm)
+            .expect("query syscall");
+        let out_ptr = vm.register(10);
+        let tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
+        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+        let response: QueryResponse =
+            norito::decode_from_bytes(tlv.payload).expect("decode response");
+        assert!(matches!(response, QueryResponse::Singular(_)));
+
+        let response_len = u64::try_from(tlv.payload.len()).unwrap_or(u64::MAX);
+        let gas_ctx = QueryGasContext::from_request(&request);
+        let processed_items = CoreHost::query_total_items(&response);
+        let expected = CoreHost::query_gas_cost(&gas_ctx, processed_items, response_len);
+        assert_eq!(gas, expected);
+    }
+
+    #[test]
+    fn get_account_balance_syscall_reads_numeric_asset() {
+        crate::test_alias::ensure();
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
+        let asset = Asset::new(asset_id, Numeric::new(42_u32, 0));
+        let world = World::with_assets([domain], [account], [asset_def], [asset], []);
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority.clone());
+        host.set_query_state(&view);
+        let mut vm = IVM::new(10_000);
+
+        let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&authority));
+        let asset_def_ptr = store_tlv(
+            &mut vm,
+            PointerType::AssetDefinitionId,
+            &norito_blob(&asset_def_id),
+        );
+        vm.set_register(10, account_ptr);
+        vm.set_register(11, asset_def_ptr);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_GET_ACCOUNT_BALANCE, &mut vm)
+            .expect("get balance");
+        assert_eq!(gas, 0);
+        assert_eq!(vm.register(10), 42);
+    }
+
+    #[test]
+    fn execute_query_syscall_charges_sorted_queries_by_scanned_items() {
+        crate::test_alias::ensure();
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
+        let accounts = vec![
+            Account::new(authority.clone()).build(&authority),
+            Account::new("bob@wonderland".parse().unwrap()).build(&authority),
+            Account::new("carol@wonderland".parse().unwrap()).build(&authority),
+        ];
+        let world = World::with([domain], accounts, []);
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority.clone());
+        host.set_query_state(&view);
+        let mut vm = IVM::new(1_000_000);
+
+        let sort_key: Name = "rank".parse().unwrap();
+        let params = QueryParams {
+            pagination: Pagination::new(Some(nonzero!(1_u64)), 0),
+            sorting: Sorting::by_metadata_key(sort_key),
+            fetch_size: FetchSize::new(Some(nonzero!(1_u64))),
+        };
+        let query_box = {
+            #[cfg(not(feature = "fast_dsl"))]
+            {
+                let query = QueryWithFilter::<Account>::new_with_query(
+                    Box::new(FindAccounts),
+                    CompoundPredicate::PASS,
+                    SelectorTuple::default(),
+                );
+                QueryBox::from(query)
+            }
+            #[cfg(feature = "fast_dsl")]
+            {
+                let query = QueryWithFilter::<Account>::new_with_query(
+                    (),
+                    CompoundPredicate::PASS,
+                    SelectorTuple::default(),
+                );
+                QueryBox::from(query)
+            }
+        };
+        let request = QueryRequest::Start({
+            #[cfg(feature = "fast_dsl")]
+            {
+                QueryWithParams::new(&query_box, params)
+            }
+            #[cfg(not(feature = "fast_dsl"))]
+            {
+                QueryWithParams::new(query_box, params)
+            }
+        });
+        let request_bytes = norito::to_bytes(&request).expect("encode query request");
+        let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &request_bytes);
+        vm.set_register(10, ptr);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY, &mut vm)
+            .expect("query syscall");
+        let out_ptr = vm.register(10);
+        let tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
+        let response: QueryResponse =
+            norito::decode_from_bytes(tlv.payload).expect("decode response");
+        let QueryResponse::Iterable(output) = response else {
+            panic!("expected iterable query response");
+        };
+        assert_eq!(output.batch.len(), 1);
+        assert_eq!(output.remaining_items, 0);
+
+        let response_len = u64::try_from(tlv.payload.len()).unwrap_or(u64::MAX);
+        let gas_ctx = QueryGasContext::from_request(&request);
+        let expected = CoreHost::query_gas_cost(&gas_ctx, 3, response_len);
+        assert_eq!(gas, expected);
+    }
+
+    #[test]
+    fn execute_query_syscall_sorted_offset_ignores_offset_penalty() {
+        crate::test_alias::ensure();
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
+        let accounts = vec![
+            Account::new(authority.clone()).build(&authority),
+            Account::new("bob@wonderland".parse().unwrap()).build(&authority),
+            Account::new("carol@wonderland".parse().unwrap()).build(&authority),
+        ];
+        let world = World::with([domain], accounts, []);
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority.clone());
+        host.set_query_state(&view);
+        let mut vm = IVM::new(1_000_000);
+
+        let sort_key: Name = "rank".parse().unwrap();
+        let params = QueryParams {
+            pagination: Pagination::new(Some(nonzero!(1_u64)), 2),
+            sorting: Sorting::by_metadata_key(sort_key),
+            fetch_size: FetchSize::new(Some(nonzero!(1_u64))),
+        };
+        let query_box = {
+            #[cfg(not(feature = "fast_dsl"))]
+            {
+                let query = QueryWithFilter::<Account>::new_with_query(
+                    Box::new(FindAccounts),
+                    CompoundPredicate::PASS,
+                    SelectorTuple::default(),
+                );
+                QueryBox::from(query)
+            }
+            #[cfg(feature = "fast_dsl")]
+            {
+                let query = QueryWithFilter::<Account>::new_with_query(
+                    (),
+                    CompoundPredicate::PASS,
+                    SelectorTuple::default(),
+                );
+                QueryBox::from(query)
+            }
+        };
+        let request = QueryRequest::Start({
+            #[cfg(feature = "fast_dsl")]
+            {
+                QueryWithParams::new(&query_box, params)
+            }
+            #[cfg(not(feature = "fast_dsl"))]
+            {
+                QueryWithParams::new(query_box, params)
+            }
+        });
+        let request_bytes = norito::to_bytes(&request).expect("encode query request");
+        let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &request_bytes);
+        vm.set_register(10, ptr);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY, &mut vm)
+            .expect("query syscall");
+        let out_ptr = vm.register(10);
+        let tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
+
+        let response_len = u64::try_from(tlv.payload.len()).unwrap_or(u64::MAX);
+        let gas_ctx = QueryGasContext::from_request(&request);
+        let expected = gas_ctx
+            .base
+            .saturating_add(gas_ctx.per_item.saturating_mul(3))
+            .saturating_add(CoreHost::QUERY_GAS_PER_BYTE.saturating_mul(response_len));
+        assert_eq!(gas, expected);
+    }
+
+    #[test]
+    fn execute_query_syscall_out_of_gas_when_budget_exhausted() {
+        crate::test_alias::ensure();
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority);
+        host.set_query_state(&view);
+        let mut vm = IVM::new(CoreHost::QUERY_GAS_BASE_SINGULAR - 1);
+
+        let request = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters));
+        let request_bytes = norito::to_bytes(&request).expect("encode query request");
+        let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &request_bytes);
+        vm.set_register(10, ptr);
+
+        let err = host
+            .syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY, &mut vm)
+            .expect_err("query should run out of gas");
+        assert!(matches!(err, ivm::VMError::OutOfGas));
+    }
+
+    #[test]
+    fn execute_query_syscall_out_of_gas_when_response_bytes_exceed_budget() {
+        crate::test_alias::ensure();
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority);
+        host.set_query_state(&view);
+        let mut vm = IVM::new(CoreHost::QUERY_GAS_BASE_SINGULAR + CoreHost::QUERY_GAS_PER_ITEM);
+
+        let request = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters));
+        let request_bytes = norito::to_bytes(&request).expect("encode query request");
+        let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &request_bytes);
+        vm.set_register(10, ptr);
+
+        let err = host
+            .syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY, &mut vm)
+            .expect_err("query should run out of gas on response bytes");
+        assert!(matches!(err, ivm::VMError::OutOfGas));
+    }
+
+    #[test]
+    fn execute_query_syscall_rejects_continue_request() {
+        crate::test_alias::ensure();
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority);
+        host.set_query_state(&view);
+        let mut vm = IVM::new(1_000_000);
+
+        let cursor = ForwardCursor {
+            query: "ivm-cursor".to_string(),
+            cursor: nonzero!(1_u64),
+            gas_budget: None,
+        };
+        let request = QueryRequest::Continue(cursor);
+        let request_bytes = norito::to_bytes(&request).expect("encode query request");
+        let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &request_bytes);
+        vm.set_register(10, ptr);
+
+        let err = host
+            .syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY, &mut vm)
+            .expect_err("continue should be rejected");
+        assert!(matches!(err, ivm::VMError::PermissionDenied));
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn subscription_bill_fixed_plan_transfers_and_reschedules() {
+        crate::test_alias::ensure();
+        let provider: AccountId = "acme@commerce".parse().unwrap();
+        let subscriber: AccountId = "alice@users".parse().unwrap();
+        let plan_id: AssetDefinitionId = "fixed_plan#commerce".parse().unwrap();
+        let charge_asset_id: AssetDefinitionId = "usd#pay".parse().unwrap();
+        let period_ms = 1_000_u64;
+        let scheduled_at_ms = 10_000_u64;
+        let trigger_id: TriggerId = "sub-bill".parse().unwrap();
+        let amount = Numeric::new(120_u32, 0);
+
+        let plan = SubscriptionPlan {
+            provider: provider.clone(),
+            billing: SubscriptionBilling {
+                cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
+                    period_ms,
+                }),
+                bill_for: SubscriptionBillFor::PreviousPeriod,
+                retry_backoff_ms: 500,
+                max_failures: 3,
+                grace_ms: 5_000,
+            },
+            pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
+                amount: amount.clone(),
+                asset_definition: charge_asset_id.clone(),
+            }),
+        };
+
+        let mut plan_def =
+            AssetDefinition::new(plan_id.clone(), NumericSpec::integer()).build(&provider);
+        let plan_key: Name = SUBSCRIPTION_PLAN_METADATA_KEY.parse().unwrap();
+        plan_def.metadata.insert(plan_key, Json::new(plan.clone()));
+        let charge_def =
+            AssetDefinition::new(charge_asset_id.clone(), NumericSpec::integer()).build(&provider);
+        let asset_id = AssetId::of(charge_asset_id.clone(), subscriber.clone());
+        let asset = Asset::new(asset_id.clone(), Numeric::new(500_u32, 0));
+
+        let subscription_state = SubscriptionState {
+            plan_id: plan_id.clone(),
+            provider: provider.clone(),
+            subscriber: subscriber.clone(),
+            status: SubscriptionStatus::Active,
+            current_period_start_ms: scheduled_at_ms - period_ms,
+            current_period_end_ms: scheduled_at_ms,
+            next_charge_ms: scheduled_at_ms,
+            cancel_at_period_end: false,
+            cancel_at_ms: None,
+            failure_count: 0,
+            usage_accumulated: BTreeMap::new(),
+            billing_trigger_id: trigger_id.clone(),
+        };
+        let mut nft_meta = Metadata::default();
+        let subscription_key: Name = SUBSCRIPTION_METADATA_KEY.parse().unwrap();
+        nft_meta.insert(
+            subscription_key.clone(),
+            Json::new(subscription_state.clone()),
+        );
+        let nft_id: NftId = "sub-0$subscriptions".parse().unwrap();
+        let nft = Nft::new(nft_id.clone(), nft_meta).build(&subscriber);
+
+        let domains = vec![
+            Domain::new("commerce".parse().unwrap()).build(&provider),
+            Domain::new("users".parse().unwrap()).build(&provider),
+            Domain::new("pay".parse().unwrap()).build(&provider),
+            Domain::new("subscriptions".parse().unwrap()).build(&provider),
+        ];
+        let accounts = vec![
+            Account::new(provider.clone()).build(&provider),
+            Account::new(subscriber.clone()).build(&provider),
+        ];
+        let world = World::with_assets(domains, accounts, [plan_def, charge_def], [asset], [nft]);
+
+        let bytecode = IvmBytecode::from_compiled(ivm::ProgramMetadata::default().encode());
+        let mut trigger_metadata = Metadata::default();
+        let trigger_ref_key: Name = SUBSCRIPTION_TRIGGER_REF_METADATA_KEY.parse().unwrap();
+        trigger_metadata.insert(
+            trigger_ref_key,
+            Json::new(SubscriptionTriggerRef {
+                subscription_nft_id: nft_id.clone(),
+            }),
+        );
+        let schedule = Schedule {
+            start_ms: scheduled_at_ms,
+            period_ms: None,
+        };
+        let mut action = SpecializedAction::new(
+            Executable::Ivm(bytecode.clone()),
+            Repeats::Exactly(1),
+            subscriber.clone(),
+            TimeEventFilter(ExecutionTime::Schedule(schedule)),
+        );
+        action.metadata = trigger_metadata.clone();
+        let trigger = SpecializedTrigger::new(trigger_id.clone(), action);
+        {
+            let mut block = world.triggers.block();
+            let mut tx = block.transaction();
+            tx.add_time_trigger(trigger).expect("add trigger");
+            tx.apply();
+            block.commit();
+        }
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let view = state.view();
+        let mut host = CoreHostImpl::new(subscriber.clone());
+        #[cfg(feature = "telemetry")]
+        let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
+        #[cfg(feature = "telemetry")]
+        host.set_telemetry(StateTelemetry::new(Arc::clone(&metrics), true));
+        host.set_query_state(&view);
+        host.set_trigger_id(trigger_id.clone());
+        host.set_block_time_ms(scheduled_at_ms);
+        let mut vm = IVM::new(1_000_000);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_SUBSCRIPTION_BILL, &mut vm)
+            .expect("billing");
+
+        let mut expected_state = subscription_state.clone();
+        expected_state.current_period_start_ms = scheduled_at_ms;
+        expected_state.current_period_end_ms = scheduled_at_ms + period_ms;
+        expected_state.next_charge_ms = scheduled_at_ms + period_ms;
+        expected_state.failure_count = 0;
+        expected_state.status = SubscriptionStatus::Active;
+
+        let expected_transfer = InstructionBox::from(Transfer::asset_numeric(
+            asset_id,
+            amount.clone(),
+            provider.clone(),
+        ));
+        let expected_set = InstructionBox::from(SetKeyValue::nft(
+            nft_id.clone(),
+            subscription_key,
+            Json::new(expected_state),
+        ));
+        let expected_invoice = SubscriptionInvoice {
+            subscription_nft_id: nft_id.clone(),
+            period_start_ms: scheduled_at_ms - period_ms,
+            period_end_ms: scheduled_at_ms,
+            attempted_at_ms: scheduled_at_ms,
+            amount: amount.clone(),
+            asset_definition: charge_asset_id.clone(),
+            status: SubscriptionInvoiceStatus::Paid,
+            tx_hash: None,
+        };
+        let invoice_key: Name = SUBSCRIPTION_INVOICE_METADATA_KEY.parse().unwrap();
+        let expected_invoice_set = InstructionBox::from(SetKeyValue::nft(
+            nft_id.clone(),
+            invoice_key,
+            Json::new(expected_invoice),
+        ));
+        let expected_unregister = InstructionBox::from(Unregister::trigger(trigger_id.clone()));
+        let expected_schedule = Schedule {
+            start_ms: scheduled_at_ms + period_ms,
+            period_ms: None,
+        };
+        let expected_action = iroha_data_model::trigger::action::Action::new(
+            Executable::Ivm(bytecode),
+            Repeats::Exactly(1),
+            subscriber.clone(),
+            TimeEventFilter(ExecutionTime::Schedule(expected_schedule)),
+        )
+        .with_metadata(trigger_metadata);
+        let expected_trigger = Trigger::new(trigger_id.clone(), expected_action);
+        let expected_register = InstructionBox::from(Register::trigger(expected_trigger));
+
+        assert_eq!(
+            host.queued,
+            vec![
+                expected_transfer.clone(),
+                expected_set.clone(),
+                expected_invoice_set.clone(),
+                expected_unregister.clone(),
+                expected_register.clone()
+            ]
+        );
+        let expected_gas = crate::gas::meter_instruction(&expected_transfer)
+            .saturating_add(crate::gas::meter_instruction(&expected_set))
+            .saturating_add(crate::gas::meter_instruction(&expected_invoice_set))
+            .saturating_add(crate::gas::meter_instruction(&expected_unregister))
+            .saturating_add(crate::gas::meter_instruction(&expected_register));
+        assert_eq!(gas, expected_gas);
+
+        #[cfg(feature = "telemetry")]
+        {
+            assert_eq!(
+                metrics
+                    .subscription_billing_attempts_total
+                    .with_label_values(&["fixed"])
+                    .get(),
+                1
+            );
+            assert_eq!(
+                metrics
+                    .subscription_billing_outcomes_total
+                    .with_label_values(&["fixed", "paid"])
+                    .get(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn subscription_record_usage_updates_metadata() {
+        crate::test_alias::ensure();
+        let provider: AccountId = "acme@commerce".parse().unwrap();
+        let subscriber: AccountId = "alice@users".parse().unwrap();
+        let plan_id: AssetDefinitionId = "usage_plan#commerce".parse().unwrap();
+        let charge_asset_id: AssetDefinitionId = "usd#pay".parse().unwrap();
+        let unit_key: Name = "compute_ms".parse().unwrap();
+        let trigger_id: TriggerId = "sub-usage".parse().unwrap();
+
+        let plan = SubscriptionPlan {
+            provider: provider.clone(),
+            billing: SubscriptionBilling {
+                cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
+                    period_ms: 1_000,
+                }),
+                bill_for: SubscriptionBillFor::PreviousPeriod,
+                retry_backoff_ms: 100,
+                max_failures: 3,
+                grace_ms: 500,
+            },
+            pricing: SubscriptionPricing::Usage(SubscriptionUsagePricing {
+                unit_price: Numeric::new(2_u32, 0),
+                unit_key: unit_key.clone(),
+                asset_definition: charge_asset_id.clone(),
+            }),
+        };
+
+        let mut plan_def =
+            AssetDefinition::new(plan_id.clone(), NumericSpec::integer()).build(&provider);
+        let plan_key: Name = SUBSCRIPTION_PLAN_METADATA_KEY.parse().unwrap();
+        plan_def.metadata.insert(plan_key, Json::new(plan));
+        let charge_def =
+            AssetDefinition::new(charge_asset_id, NumericSpec::integer()).build(&provider);
+
+        let mut usage_accumulated = BTreeMap::new();
+        usage_accumulated.insert(unit_key.clone(), Numeric::new(10_u32, 0));
+        let subscription_state = SubscriptionState {
+            plan_id,
+            provider: provider.clone(),
+            subscriber: subscriber.clone(),
+            status: SubscriptionStatus::Active,
+            current_period_start_ms: 0,
+            current_period_end_ms: 1,
+            next_charge_ms: 1,
+            cancel_at_period_end: false,
+            cancel_at_ms: None,
+            failure_count: 0,
+            usage_accumulated,
+            billing_trigger_id: trigger_id,
+        };
+        let mut nft_meta = Metadata::default();
+        let subscription_key: Name = SUBSCRIPTION_METADATA_KEY.parse().unwrap();
+        nft_meta.insert(
+            subscription_key.clone(),
+            Json::new(subscription_state.clone()),
+        );
+        let nft_id: NftId = "sub-usage$subscriptions".parse().unwrap();
+        let nft = Nft::new(nft_id.clone(), nft_meta).build(&subscriber);
+
+        let domains = vec![
+            Domain::new("commerce".parse().unwrap()).build(&provider),
+            Domain::new("users".parse().unwrap()).build(&provider),
+            Domain::new("pay".parse().unwrap()).build(&provider),
+            Domain::new("subscriptions".parse().unwrap()).build(&provider),
+        ];
+        let accounts = vec![
+            Account::new(provider.clone()).build(&provider),
+            Account::new(subscriber.clone()).build(&provider),
+        ];
+        let world = World::with_assets(
+            domains,
+            accounts,
+            [plan_def, charge_def],
+            Vec::<Asset>::new(),
+            [nft],
+        );
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let view = state.view();
+
+        let delta = SubscriptionUsageDelta {
+            subscription_nft_id: nft_id.clone(),
+            unit_key: unit_key.clone(),
+            delta: Numeric::new(5_u32, 0),
+        };
+        let args = Json::new(delta);
+        let mut host = CoreHostImpl::with_accounts_and_args(
+            subscriber.clone(),
+            Arc::new(vec![provider, subscriber]),
+            args,
+        );
+        host.set_query_state(&view);
+        let mut vm = IVM::new(1_000_000);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_SUBSCRIPTION_RECORD_USAGE, &mut vm)
+            .expect("usage record");
+
+        let mut expected_state = subscription_state;
+        expected_state
+            .usage_accumulated
+            .insert(unit_key, Numeric::new(15_u32, 0));
+        let expected_set = InstructionBox::from(SetKeyValue::nft(
+            nft_id,
+            subscription_key,
+            Json::new(expected_state),
+        ));
+        assert_eq!(host.queued, vec![expected_set.clone()]);
+        assert_eq!(gas, crate::gas::meter_instruction(&expected_set));
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn subscription_bill_failed_reschedules_and_records_invoice() {
+        crate::test_alias::ensure();
+        let provider: AccountId = "acme@commerce".parse().unwrap();
+        let subscriber: AccountId = "alice@users".parse().unwrap();
+        let plan_id: AssetDefinitionId = "fixed_plan#commerce".parse().unwrap();
+        let charge_asset_id: AssetDefinitionId = "usd#pay".parse().unwrap();
+        let period_ms = 1_000_u64;
+        let scheduled_at_ms = 10_000_u64;
+        let trigger_id: TriggerId = "sub-bill-fail".parse().unwrap();
+        let amount = Numeric::new(120_u32, 0);
+        let retry_backoff_ms = 500_u64;
+
+        let plan = SubscriptionPlan {
+            provider: provider.clone(),
+            billing: SubscriptionBilling {
+                cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
+                    period_ms,
+                }),
+                bill_for: SubscriptionBillFor::PreviousPeriod,
+                retry_backoff_ms,
+                max_failures: 3,
+                grace_ms: 0,
+            },
+            pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
+                amount: amount.clone(),
+                asset_definition: charge_asset_id.clone(),
+            }),
+        };
+
+        let mut plan_def =
+            AssetDefinition::new(plan_id.clone(), NumericSpec::integer()).build(&provider);
+        let plan_key: Name = SUBSCRIPTION_PLAN_METADATA_KEY.parse().unwrap();
+        plan_def.metadata.insert(plan_key, Json::new(plan));
+        let charge_def =
+            AssetDefinition::new(charge_asset_id.clone(), NumericSpec::integer()).build(&provider);
+        let asset_id = AssetId::of(charge_asset_id.clone(), subscriber.clone());
+        let asset = Asset::new(asset_id.clone(), Numeric::new(50_u32, 0));
+
+        let subscription_state = SubscriptionState {
+            plan_id: plan_id.clone(),
+            provider: provider.clone(),
+            subscriber: subscriber.clone(),
+            status: SubscriptionStatus::Active,
+            current_period_start_ms: scheduled_at_ms - period_ms,
+            current_period_end_ms: scheduled_at_ms,
+            next_charge_ms: scheduled_at_ms,
+            cancel_at_period_end: false,
+            cancel_at_ms: None,
+            failure_count: 0,
+            usage_accumulated: BTreeMap::new(),
+            billing_trigger_id: trigger_id.clone(),
+        };
+        let mut nft_meta = Metadata::default();
+        let subscription_key: Name = SUBSCRIPTION_METADATA_KEY.parse().unwrap();
+        nft_meta.insert(
+            subscription_key.clone(),
+            Json::new(subscription_state.clone()),
+        );
+        let nft_id: NftId = "sub-fail$subscriptions".parse().unwrap();
+        let nft = Nft::new(nft_id.clone(), nft_meta).build(&subscriber);
+
+        let domains = vec![
+            Domain::new("commerce".parse().unwrap()).build(&provider),
+            Domain::new("users".parse().unwrap()).build(&provider),
+            Domain::new("pay".parse().unwrap()).build(&provider),
+            Domain::new("subscriptions".parse().unwrap()).build(&provider),
+        ];
+        let accounts = vec![
+            Account::new(provider.clone()).build(&provider),
+            Account::new(subscriber.clone()).build(&provider),
+        ];
+        let world = World::with_assets(domains, accounts, [plan_def, charge_def], [asset], [nft]);
+
+        let bytecode = IvmBytecode::from_compiled(ivm::ProgramMetadata::default().encode());
+        let mut trigger_metadata = Metadata::default();
+        let trigger_ref_key: Name = SUBSCRIPTION_TRIGGER_REF_METADATA_KEY.parse().unwrap();
+        trigger_metadata.insert(
+            trigger_ref_key,
+            Json::new(SubscriptionTriggerRef {
+                subscription_nft_id: nft_id.clone(),
+            }),
+        );
+        let schedule = Schedule {
+            start_ms: scheduled_at_ms,
+            period_ms: None,
+        };
+        let mut action = SpecializedAction::new(
+            Executable::Ivm(bytecode.clone()),
+            Repeats::Exactly(1),
+            subscriber.clone(),
+            TimeEventFilter(ExecutionTime::Schedule(schedule)),
+        );
+        action.metadata = trigger_metadata.clone();
+        let trigger = SpecializedTrigger::new(trigger_id.clone(), action);
+        {
+            let mut block = world.triggers.block();
+            let mut tx = block.transaction();
+            tx.add_time_trigger(trigger).expect("add trigger");
+            tx.apply();
+            block.commit();
+        }
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let view = state.view();
+        let mut host = CoreHostImpl::new(subscriber.clone());
+        host.set_query_state(&view);
+        host.set_trigger_id(trigger_id.clone());
+        host.set_block_time_ms(scheduled_at_ms);
+        let mut vm = IVM::new(1_000_000);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_SUBSCRIPTION_BILL, &mut vm)
+            .expect("billing");
+
+        let mut expected_state = subscription_state.clone();
+        expected_state.failure_count = 1;
+        expected_state.status = SubscriptionStatus::PastDue;
+        expected_state.next_charge_ms = scheduled_at_ms + retry_backoff_ms;
+
+        let expected_set = InstructionBox::from(SetKeyValue::nft(
+            nft_id.clone(),
+            subscription_key,
+            Json::new(expected_state),
+        ));
+        let expected_invoice = SubscriptionInvoice {
+            subscription_nft_id: nft_id.clone(),
+            period_start_ms: scheduled_at_ms - period_ms,
+            period_end_ms: scheduled_at_ms,
+            attempted_at_ms: scheduled_at_ms,
+            amount: amount.clone(),
+            asset_definition: charge_asset_id.clone(),
+            status: SubscriptionInvoiceStatus::Failed,
+            tx_hash: None,
+        };
+        let invoice_key: Name = SUBSCRIPTION_INVOICE_METADATA_KEY.parse().unwrap();
+        let expected_invoice_set = InstructionBox::from(SetKeyValue::nft(
+            nft_id.clone(),
+            invoice_key,
+            Json::new(expected_invoice),
+        ));
+        let expected_unregister = InstructionBox::from(Unregister::trigger(trigger_id.clone()));
+        let expected_schedule = Schedule {
+            start_ms: scheduled_at_ms + retry_backoff_ms,
+            period_ms: None,
+        };
+        let expected_action = iroha_data_model::trigger::action::Action::new(
+            Executable::Ivm(bytecode),
+            Repeats::Exactly(1),
+            subscriber.clone(),
+            TimeEventFilter(ExecutionTime::Schedule(expected_schedule)),
+        )
+        .with_metadata(trigger_metadata);
+        let expected_trigger = Trigger::new(trigger_id.clone(), expected_action);
+        let expected_register = InstructionBox::from(Register::trigger(expected_trigger));
+
+        assert_eq!(
+            host.queued,
+            vec![
+                expected_set.clone(),
+                expected_invoice_set.clone(),
+                expected_unregister.clone(),
+                expected_register.clone()
+            ]
+        );
+        let expected_gas = crate::gas::meter_instruction(&expected_set)
+            .saturating_add(crate::gas::meter_instruction(&expected_invoice_set))
+            .saturating_add(crate::gas::meter_instruction(&expected_unregister))
+            .saturating_add(crate::gas::meter_instruction(&expected_register));
+        assert_eq!(gas, expected_gas);
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn subscription_bill_suspends_after_max_failures() {
+        crate::test_alias::ensure();
+        let provider: AccountId = "acme@commerce".parse().unwrap();
+        let subscriber: AccountId = "alice@users".parse().unwrap();
+        let plan_id: AssetDefinitionId = "fixed_plan#commerce".parse().unwrap();
+        let charge_asset_id: AssetDefinitionId = "usd#pay".parse().unwrap();
+        let period_ms = 1_000_u64;
+        let scheduled_at_ms = 10_000_u64;
+        let trigger_id: TriggerId = "sub-bill-suspend".parse().unwrap();
+        let amount = Numeric::new(120_u32, 0);
+
+        let plan = SubscriptionPlan {
+            provider: provider.clone(),
+            billing: SubscriptionBilling {
+                cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
+                    period_ms,
+                }),
+                bill_for: SubscriptionBillFor::PreviousPeriod,
+                retry_backoff_ms: 500,
+                max_failures: 2,
+                grace_ms: 0,
+            },
+            pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
+                amount: amount.clone(),
+                asset_definition: charge_asset_id.clone(),
+            }),
+        };
+
+        let mut plan_def =
+            AssetDefinition::new(plan_id.clone(), NumericSpec::integer()).build(&provider);
+        let plan_key: Name = SUBSCRIPTION_PLAN_METADATA_KEY.parse().unwrap();
+        plan_def.metadata.insert(plan_key, Json::new(plan));
+        let charge_def =
+            AssetDefinition::new(charge_asset_id.clone(), NumericSpec::integer()).build(&provider);
+
+        let subscription_state = SubscriptionState {
+            plan_id: plan_id.clone(),
+            provider: provider.clone(),
+            subscriber: subscriber.clone(),
+            status: SubscriptionStatus::Active,
+            current_period_start_ms: scheduled_at_ms - period_ms,
+            current_period_end_ms: scheduled_at_ms,
+            next_charge_ms: scheduled_at_ms,
+            cancel_at_period_end: false,
+            cancel_at_ms: None,
+            failure_count: 2,
+            usage_accumulated: BTreeMap::new(),
+            billing_trigger_id: trigger_id.clone(),
+        };
+        let mut nft_meta = Metadata::default();
+        let subscription_key: Name = SUBSCRIPTION_METADATA_KEY.parse().unwrap();
+        nft_meta.insert(
+            subscription_key.clone(),
+            Json::new(subscription_state.clone()),
+        );
+        let nft_id: NftId = "sub-suspend$subscriptions".parse().unwrap();
+        let nft = Nft::new(nft_id.clone(), nft_meta).build(&subscriber);
+
+        let domains = vec![
+            Domain::new("commerce".parse().unwrap()).build(&provider),
+            Domain::new("users".parse().unwrap()).build(&provider),
+            Domain::new("pay".parse().unwrap()).build(&provider),
+            Domain::new("subscriptions".parse().unwrap()).build(&provider),
+        ];
+        let accounts = vec![
+            Account::new(provider.clone()).build(&provider),
+            Account::new(subscriber.clone()).build(&provider),
+        ];
+        let world = World::with_assets(
+            domains,
+            accounts,
+            [plan_def, charge_def],
+            Vec::<Asset>::new(),
+            [nft],
+        );
+
+        let bytecode = IvmBytecode::from_compiled(ivm::ProgramMetadata::default().encode());
+        let mut trigger_metadata = Metadata::default();
+        let trigger_ref_key: Name = SUBSCRIPTION_TRIGGER_REF_METADATA_KEY.parse().unwrap();
+        trigger_metadata.insert(
+            trigger_ref_key,
+            Json::new(SubscriptionTriggerRef {
+                subscription_nft_id: nft_id.clone(),
+            }),
+        );
+        let schedule = Schedule {
+            start_ms: scheduled_at_ms,
+            period_ms: None,
+        };
+        let mut action = SpecializedAction::new(
+            Executable::Ivm(bytecode.clone()),
+            Repeats::Exactly(1),
+            subscriber.clone(),
+            TimeEventFilter(ExecutionTime::Schedule(schedule)),
+        );
+        action.metadata = trigger_metadata.clone();
+        let trigger = SpecializedTrigger::new(trigger_id.clone(), action);
+        {
+            let mut block = world.triggers.block();
+            let mut tx = block.transaction();
+            tx.add_time_trigger(trigger).expect("add trigger");
+            tx.apply();
+            block.commit();
+        }
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let view = state.view();
+        let mut host = CoreHostImpl::new(subscriber.clone());
+        host.set_query_state(&view);
+        host.set_trigger_id(trigger_id.clone());
+        host.set_block_time_ms(scheduled_at_ms);
+        let mut vm = IVM::new(1_000_000);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_SUBSCRIPTION_BILL, &mut vm)
+            .expect("billing");
+
+        let mut expected_state = subscription_state.clone();
+        expected_state.failure_count = 3;
+        expected_state.status = SubscriptionStatus::Suspended;
+
+        let expected_set = InstructionBox::from(SetKeyValue::nft(
+            nft_id.clone(),
+            subscription_key,
+            Json::new(expected_state),
+        ));
+        let expected_invoice = SubscriptionInvoice {
+            subscription_nft_id: nft_id.clone(),
+            period_start_ms: scheduled_at_ms - period_ms,
+            period_end_ms: scheduled_at_ms,
+            attempted_at_ms: scheduled_at_ms,
+            amount: amount.clone(),
+            asset_definition: charge_asset_id.clone(),
+            status: SubscriptionInvoiceStatus::Failed,
+            tx_hash: None,
+        };
+        let invoice_key: Name = SUBSCRIPTION_INVOICE_METADATA_KEY.parse().unwrap();
+        let expected_invoice_set = InstructionBox::from(SetKeyValue::nft(
+            nft_id.clone(),
+            invoice_key,
+            Json::new(expected_invoice),
+        ));
+        let expected_unregister = InstructionBox::from(Unregister::trigger(trigger_id));
+
+        assert_eq!(
+            host.queued,
+            vec![
+                expected_set.clone(),
+                expected_invoice_set.clone(),
+                expected_unregister.clone(),
+            ]
+        );
+        let expected_gas = crate::gas::meter_instruction(&expected_set)
+            .saturating_add(crate::gas::meter_instruction(&expected_invoice_set))
+            .saturating_add(crate::gas::meter_instruction(&expected_unregister));
+        assert_eq!(gas, expected_gas);
+    }
+
+    #[test]
+    fn queue_instructions_accumulates_gas_and_enqueues() {
+        let authority = (*ALICE_ID).clone();
         let mut host = CoreHost::new(authority);
         let instr_one =
             InstructionBox::from(Log::new(iroha_logger::Level::INFO, "one".to_string()));
@@ -5518,12 +8789,7 @@ mod tests {
         let expected = crate::gas::meter_instruction(&InstructionBox::from(TransferBox::from(isi)));
         assert_eq!(gas, expected);
         assert!(host.queued.is_empty());
-        assert_eq!(
-            host.fastpq_batch_entries
-                .as_ref()
-                .map(|entries| entries.len()),
-            Some(1)
-        );
+        assert_eq!(host.fastpq_batch_entries.as_ref().map(Vec::len), Some(1));
     }
 
     #[test]
@@ -6046,6 +9312,53 @@ mod tests {
     }
 
     #[test]
+    fn zk_verify_batch_returns_statuses_with_registry_binding() {
+        crate::test_alias::ensure();
+        let mut host = CoreHost::new("alice@wonderland".parse().unwrap());
+        host.set_chain_id_bytes(b"chain".to_vec());
+        host.set_current_manifest_id(Some("core".to_string()));
+
+        let backend = "halo2/ipa";
+        let vk_bytes = vec![9, 9, 9];
+        let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+        let schema_hash = [4u8; 32];
+        let mut rec = active_vk_record(commitment, schema_hash, backend);
+        rec.key = Some(VerifyingKeyBox::new(backend.into(), vk_bytes.clone()));
+        let mut map = BTreeMap::new();
+        map.insert(VerifyingKeyId::new(backend, "vk"), rec);
+        host.set_verifying_keys(map).expect("set registry");
+
+        let domain_inputs = DomainHashInputs {
+            backend,
+            curve: "pallas",
+            vk_commitment: commitment,
+            schema_hash,
+            syscall_label: ivm::host::LABEL_BATCH,
+            manifest: "core",
+            namespace: "transfer",
+        };
+        let domain = host.compute_domain_hash(&domain_inputs);
+        let env_bytes = dummy_env(ivm::host::LABEL_BATCH, commitment, schema_hash, domain);
+        let env: iroha_zkp_halo2::OpenVerifyEnvelope =
+            norito::decode_from_bytes(&env_bytes).expect("decode envelope");
+        let payload = norito::to_bytes(&vec![env]).expect("encode batch");
+
+        let mut vm = IVM::new(1_000_000);
+        let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
+        vm.set_register(10, ptr);
+
+        host.syscall(ivm_sys::SYSCALL_ZK_VERIFY_BATCH, &mut vm)
+            .expect("batch verify");
+        let out_ptr = vm.register(10);
+        let tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
+        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+        let statuses: Vec<u8> = norito::decode_from_bytes(tlv.payload).expect("decode statuses");
+        assert_eq!(statuses, vec![0]);
+        assert_eq!(vm.register(11), ivm::host::ERR_DECODE);
+        assert_eq!(vm.register(12), 0);
+    }
+
+    #[test]
     fn input_publish_tlv_is_forwarded_to_default_host() {
         crate::test_alias::ensure();
         // Build a minimal program that calls INPUT_PUBLISH_TLV and then HALT
@@ -6095,6 +9408,126 @@ mod tests {
             .expect("validate copied tlv");
         assert_eq!(v.type_id, ivm::PointerType::Blob);
         assert_eq!(v.payload, payload.as_slice());
+    }
+
+    #[test]
+    fn get_public_input_uses_wsv_registry_and_charges_gas() {
+        crate::test_alias::ensure();
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let name: Name = "pub_key".parse().unwrap();
+        let payload = b"hello".to_vec();
+        let tlv = make_tlv(PointerType::Blob as u16, &payload);
+        let entry = norito::json::object([
+            ("name", norito::json::Value::from(name.as_ref())),
+            (
+                "type_id",
+                norito::json::Value::from(u64::from(PointerType::Blob as u16)),
+            ),
+            ("tlv_hex", norito::json::Value::from(hex::encode(&tlv))),
+        ])
+        .expect("registry entry");
+        let registry = norito::json::Value::Array(vec![entry]);
+        let custom = CustomParameter::new(ivm_metadata::public_inputs_id(), Json::from(registry));
+        let mut params = Parameters::default();
+        params.set_parameter(Parameter::Custom(custom));
+
+        let mut host = CoreHost::new(authority);
+        host.set_public_inputs_from_parameters(&params);
+        let mut vm = IVM::new(10_000);
+        let name_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&name));
+        vm.set_register(10, name_ptr);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, &mut vm)
+            .expect("public input syscall");
+        let out_ptr = vm.register(10);
+        let out_tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
+        assert_eq!(out_tlv.type_id, PointerType::Blob);
+        assert_eq!(out_tlv.payload, payload.as_slice());
+        let expected_gas = PUBLIC_INPUT_GAS_BASE_DEFAULT.saturating_add(
+            PUBLIC_INPUT_GAS_PER_BYTE_DEFAULT
+                .saturating_mul(u64::try_from(tlv.len()).unwrap_or(u64::MAX)),
+        );
+        assert_eq!(gas, expected_gas);
+    }
+
+    #[test]
+    fn get_public_input_uses_programmatic_setters() {
+        crate::test_alias::ensure();
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let name: Name = "pub_key".parse().unwrap();
+        let payload = b"hello".to_vec();
+        let tlv = make_tlv(PointerType::Blob as u16, &payload);
+        let mut inputs = BTreeMap::new();
+        inputs.insert(name.clone(), tlv.clone());
+
+        let mut host = CoreHost::new(authority).with_public_inputs(inputs);
+        let mut vm = IVM::new(10_000);
+        let name_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&name));
+        vm.set_register(10, name_ptr);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, &mut vm)
+            .expect("public input syscall");
+        let out_ptr = vm.register(10);
+        let out_tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
+        assert_eq!(out_tlv.type_id, PointerType::Blob);
+        assert_eq!(out_tlv.payload, payload.as_slice());
+        let expected_gas = PUBLIC_INPUT_GAS_BASE_DEFAULT.saturating_add(
+            PUBLIC_INPUT_GAS_PER_BYTE_DEFAULT
+                .saturating_mul(u64::try_from(tlv.len()).unwrap_or(u64::MAX)),
+        );
+        assert_eq!(gas, expected_gas);
+    }
+
+    #[test]
+    fn get_public_input_missing_name_is_error() {
+        crate::test_alias::ensure();
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let name: Name = "missing".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+        let mut vm = IVM::new(10_000);
+        let name_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&name));
+        vm.set_register(10, name_ptr);
+
+        let err = host
+            .syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, &mut vm)
+            .expect_err("missing name should error");
+        assert!(matches!(err, VMError::PermissionDenied));
+    }
+
+    #[test]
+    fn get_public_input_rejects_registry_type_mismatch() {
+        crate::test_alias::ensure();
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let name: Name = "pub_key".parse().unwrap();
+        let payload = b"hello".to_vec();
+        let tlv = make_tlv(PointerType::Blob as u16, &payload);
+        let entry = norito::json::object([
+            ("name", norito::json::Value::from(name.as_ref())),
+            (
+                "type_id",
+                norito::json::Value::from(u64::from(PointerType::Name as u16)),
+            ),
+            ("tlv_hex", norito::json::Value::from(hex::encode(&tlv))),
+        ])
+        .expect("registry entry");
+        let registry = norito::json::Value::Array(vec![entry]);
+        let custom = CustomParameter::new(ivm_metadata::public_inputs_id(), Json::from(registry));
+        let mut params = Parameters::default();
+        params.set_parameter(Parameter::Custom(custom));
+
+        let mut host = CoreHost::new(authority);
+        host.set_public_inputs_from_parameters(&params);
+        assert!(host.public_inputs.is_empty());
+
+        let mut vm = IVM::new(10_000);
+        let name_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&name));
+        vm.set_register(10, name_ptr);
+        let err = host
+            .syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, &mut vm)
+            .expect_err("mismatched registry entry should error");
+        assert!(matches!(err, VMError::PermissionDenied));
     }
 
     #[test]
@@ -6272,11 +9705,19 @@ mod tests {
     // NOTE: Additional CoreHost tests for NFT syscalls can be added once the VM instruction
     // builder helpers stabilize across metadata header formats.
     #[test]
-    fn sentinel_nft_mint_enqueues_register() {
+    fn nft_mint_enqueues_register_and_transfer() {
         let authority: AccountId =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
                 .parse()
                 .unwrap();
+        let authority_clone = authority.clone();
+        let owner: AccountId =
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
+                .parse()
+                .unwrap();
+        let nft_id: NftId = "gold$wonderland".parse().unwrap();
+        let nft_tlv = make_tlv(PointerType::NftId as u16, &norito_blob(&nft_id));
+        let owner_tlv = make_tlv(PointerType::AccountId as u16, &norito_blob(&owner));
 
         let mut code = Vec::new();
         code.extend_from_slice(
@@ -6291,21 +9732,42 @@ mod tests {
         let program = build_program(&code, 4);
 
         let mut vm = IVM::new(10_000);
-        vm.set_host(CoreHost::new(authority));
+        vm.set_host(CoreHost::new(authority_clone));
         vm.load_program(&program).unwrap();
-        // a0=a1=0 => sentinels
-        vm.set_register(10, 0);
-        vm.set_register(11, 0);
+        vm.memory
+            .preload_input(0, &nft_tlv)
+            .expect("preload nft tlv");
+        vm.memory
+            .preload_input(256, &owner_tlv)
+            .expect("preload owner tlv");
+        vm.set_register(10, ivm::Memory::INPUT_START);
+        vm.set_register(11, ivm::Memory::INPUT_START + 256);
         vm.run().unwrap();
 
         let host_any = vm.host_mut_any().unwrap();
         let host = host_any.downcast_mut::<CoreHost>().unwrap();
         let queued = host.drain_instructions();
-        assert_eq!(queued.len(), 1);
-        assert!(matches!(
-            queued[0].as_any().downcast_ref::<RegisterBox>(),
-            Some(RegisterBox::Nft(_))
-        ));
+        assert_eq!(queued.len(), 2);
+        let reg = queued[0]
+            .as_any()
+            .downcast_ref::<RegisterBox>()
+            .expect("register instruction");
+        match reg {
+            RegisterBox::Nft(inner) => assert_eq!(&inner.object.id, &nft_id),
+            _ => panic!("expected NFT register"),
+        }
+        let xfer = queued[1]
+            .as_any()
+            .downcast_ref::<TransferBox>()
+            .expect("transfer instruction");
+        match xfer {
+            TransferBox::Nft(inner) => {
+                assert_eq!(&inner.source, &authority);
+                assert_eq!(&inner.destination, &owner);
+                assert_eq!(&inner.object, &nft_id);
+            }
+            _ => panic!("expected NFT transfer"),
+        }
     }
 
     #[cfg(feature = "telemetry")]

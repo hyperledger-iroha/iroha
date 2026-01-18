@@ -25,7 +25,8 @@ pub use iroha_data_model::block::consensus::{
     CertPhase, ConsensusBlockHeader, ConsensusGenesisParams, Evidence, EvidenceKind,
     EvidencePayload, ExecKv, ExecWitness, ExecWitnessMsg, Height, NPOS_TAG, NposGenesisParams,
     PERMISSIONED_TAG, PROTO_VERSION, Proposal, Qc, QcAggregate, QcRef, QcVote, RbcChunk,
-    RbcDeliver, RbcInit, RbcReady, Reconfig, ValidatorIndex, View, VrfCommit, VrfReveal,
+    RbcDeliver, RbcInit, RbcReady, RbcReadySignature, Reconfig, ValidatorIndex, View, VrfCommit,
+    VrfReveal,
 };
 
 // Transitional aliases to reduce churn while the QC terminology is removed.
@@ -54,7 +55,7 @@ pub use iroha_data_model::block::consensus::{BlockMultiproof, ReadNode, TxReadSp
 /// Build the canonical preimage for a QC vote signature under the given chain and mode tag.
 pub fn vote_preimage(chain_id: &ChainId, mode_tag: &str, v: &Vote) -> Vec<u8> {
     let mut out = Vec::with_capacity(32 + 32 * 3 + 8 * 3 + 1);
-    let domain = consensus_domain(chain_id, "Vote", b"v2", mode_tag);
+    let domain = consensus_domain(chain_id, "Vote", b"v1", mode_tag);
     out.extend_from_slice(&domain);
     out.extend_from_slice(v.block_hash.as_ref().as_ref());
     out.extend_from_slice(v.parent_state_root.as_ref());
@@ -161,6 +162,7 @@ pub fn compute_consensus_fingerprint_from_params(
 }
 
 /// Derive consensus handshake capabilities (mode tag, BLS domain, fingerprint) from the current state view and configuration.
+#[allow(clippy::too_many_lines)]
 pub fn compute_consensus_handshake_caps_from_view(
     view: &StateView<'_>,
     common_config: &CommonConfig,
@@ -183,69 +185,72 @@ pub fn compute_consensus_handshake_caps_from_view(
         ),
     };
     let (npos_params, epoch_length_blocks) = if matches!(effective_mode, ConsensusMode::Npos) {
-        if let Some(npos) = view.world().sumeragi_npos_parameters() {
-            (
-                Some(NposGenesisParams {
-                    block_time_ms: npos.block_time_ms(),
-                    timeout_propose_ms: npos.timeout_propose_ms(),
-                    timeout_prevote_ms: npos.timeout_prevote_ms(),
-                    timeout_precommit_ms: npos.timeout_precommit_ms(),
-                    timeout_commit_ms: npos.timeout_commit_ms(),
-                    timeout_da_ms: npos.timeout_da_ms(),
-                    timeout_aggregator_ms: npos.timeout_aggregator_ms(),
-                    k_aggregators: npos.k_aggregators(),
-                    redundant_send_r: npos.redundant_send_r(),
-                    epoch_seed: npos.epoch_seed(),
-                    vrf_commit_window_blocks: npos.vrf_commit_window_blocks(),
-                    vrf_reveal_window_blocks: npos.vrf_reveal_window_blocks(),
-                    max_validators: npos.max_validators(),
-                    min_self_bond: npos.min_self_bond(),
-                    min_nomination_bond: npos.min_nomination_bond(),
-                    max_nominator_concentration_pct: npos.max_nominator_concentration_pct(),
-                    seat_band_pct: npos.seat_band_pct(),
-                    max_entity_correlation_pct: npos.max_entity_correlation_pct(),
-                    finality_margin_blocks: npos.finality_margin_blocks(),
-                    evidence_horizon_blocks: npos.evidence_horizon_blocks(),
-                    activation_lag_blocks: npos.activation_lag_blocks(),
-                }),
-                npos.epoch_length_blocks().max(1),
-            )
-        } else {
-            let npos_cfg = &sumeragi_config.npos;
-            let duration_ms = |d: Duration| -> u64 {
-                let ms = d.as_millis();
-                u64::try_from(ms).expect("NPoS timeout exceeds supported millisecond range")
-            };
-            (
-                Some(NposGenesisParams {
-                    block_time_ms: duration_ms(npos_cfg.block_time),
-                    timeout_propose_ms: duration_ms(npos_cfg.timeouts.propose),
-                    timeout_prevote_ms: duration_ms(npos_cfg.timeouts.prevote),
-                    timeout_precommit_ms: duration_ms(npos_cfg.timeouts.precommit),
-                    timeout_commit_ms: duration_ms(npos_cfg.timeouts.commit),
-                    timeout_da_ms: duration_ms(npos_cfg.timeouts.da),
-                    timeout_aggregator_ms: duration_ms(npos_cfg.timeouts.aggregator),
-                    k_aggregators: u16::try_from(npos_cfg.k_aggregators)
-                        .expect("npos.k_aggregators must fit into u16"),
-                    redundant_send_r: npos_cfg.redundant_send_r,
-                    epoch_seed: super::chain_epoch_seed(&common_config.chain),
-                    vrf_commit_window_blocks: npos_cfg.vrf.commit_window_blocks,
-                    vrf_reveal_window_blocks: npos_cfg.vrf.reveal_window_blocks,
-                    max_validators: npos_cfg.election.max_validators,
-                    min_self_bond: npos_cfg.election.min_self_bond,
-                    min_nomination_bond: npos_cfg.election.min_nomination_bond,
-                    max_nominator_concentration_pct: npos_cfg
-                        .election
-                        .max_nominator_concentration_pct,
-                    seat_band_pct: npos_cfg.election.seat_band_pct,
-                    max_entity_correlation_pct: npos_cfg.election.max_entity_correlation_pct,
-                    finality_margin_blocks: npos_cfg.election.finality_margin_blocks,
-                    evidence_horizon_blocks: npos_cfg.reconfig.evidence_horizon_blocks,
-                    activation_lag_blocks: npos_cfg.reconfig.activation_lag_blocks,
-                }),
-                sumeragi_config.epoch_length_blocks.max(1),
-            )
-        }
+        view.world().sumeragi_npos_parameters().map_or_else(
+            || {
+                let npos_cfg = &sumeragi_config.npos;
+                let duration_ms = |d: Duration| -> u64 {
+                    let ms = d.as_millis();
+                    u64::try_from(ms).expect("NPoS timeout exceeds supported millisecond range")
+                };
+                (
+                    Some(NposGenesisParams {
+                        block_time_ms: duration_ms(npos_cfg.block_time),
+                        timeout_propose_ms: duration_ms(npos_cfg.timeouts.propose),
+                        timeout_prevote_ms: duration_ms(npos_cfg.timeouts.prevote),
+                        timeout_precommit_ms: duration_ms(npos_cfg.timeouts.precommit),
+                        timeout_commit_ms: duration_ms(npos_cfg.timeouts.commit),
+                        timeout_da_ms: duration_ms(npos_cfg.timeouts.da),
+                        timeout_aggregator_ms: duration_ms(npos_cfg.timeouts.aggregator),
+                        k_aggregators: u16::try_from(npos_cfg.k_aggregators)
+                            .expect("npos.k_aggregators must fit into u16"),
+                        redundant_send_r: npos_cfg.redundant_send_r,
+                        epoch_seed: super::chain_epoch_seed(&common_config.chain),
+                        vrf_commit_window_blocks: npos_cfg.vrf.commit_window_blocks,
+                        vrf_reveal_window_blocks: npos_cfg.vrf.reveal_window_blocks,
+                        max_validators: npos_cfg.election.max_validators,
+                        min_self_bond: npos_cfg.election.min_self_bond,
+                        min_nomination_bond: npos_cfg.election.min_nomination_bond,
+                        max_nominator_concentration_pct: npos_cfg
+                            .election
+                            .max_nominator_concentration_pct,
+                        seat_band_pct: npos_cfg.election.seat_band_pct,
+                        max_entity_correlation_pct: npos_cfg.election.max_entity_correlation_pct,
+                        finality_margin_blocks: npos_cfg.election.finality_margin_blocks,
+                        evidence_horizon_blocks: npos_cfg.reconfig.evidence_horizon_blocks,
+                        activation_lag_blocks: npos_cfg.reconfig.activation_lag_blocks,
+                    }),
+                    sumeragi_config.epoch_length_blocks.max(1),
+                )
+            },
+            |npos| {
+                (
+                    Some(NposGenesisParams {
+                        block_time_ms: npos.block_time_ms(),
+                        timeout_propose_ms: npos.timeout_propose_ms(),
+                        timeout_prevote_ms: npos.timeout_prevote_ms(),
+                        timeout_precommit_ms: npos.timeout_precommit_ms(),
+                        timeout_commit_ms: npos.timeout_commit_ms(),
+                        timeout_da_ms: npos.timeout_da_ms(),
+                        timeout_aggregator_ms: npos.timeout_aggregator_ms(),
+                        k_aggregators: npos.k_aggregators(),
+                        redundant_send_r: npos.redundant_send_r(),
+                        epoch_seed: npos.epoch_seed(),
+                        vrf_commit_window_blocks: npos.vrf_commit_window_blocks(),
+                        vrf_reveal_window_blocks: npos.vrf_reveal_window_blocks(),
+                        max_validators: npos.max_validators(),
+                        min_self_bond: npos.min_self_bond(),
+                        min_nomination_bond: npos.min_nomination_bond(),
+                        max_nominator_concentration_pct: npos.max_nominator_concentration_pct(),
+                        seat_band_pct: npos.seat_band_pct(),
+                        max_entity_correlation_pct: npos.max_entity_correlation_pct(),
+                        finality_margin_blocks: npos.finality_margin_blocks(),
+                        evidence_horizon_blocks: npos.evidence_horizon_blocks(),
+                        activation_lag_blocks: npos.activation_lag_blocks(),
+                    }),
+                    npos.epoch_length_blocks().max(1),
+                )
+            },
+        )
     } else {
         (None, 0)
     };
@@ -293,7 +298,7 @@ pub struct HandshakeGate {
 /// Build canonical preimage for signing an RBC READY message.
 pub fn rbc_ready_preimage(chain_id: &ChainId, mode_tag: &str, ready: &RbcReady) -> Vec<u8> {
     let mut out = Vec::with_capacity(32 + 32 + 8 * 3 + 4 + 32 + 32);
-    let domain = consensus_domain(chain_id, "RbcReady", b"v2", mode_tag);
+    let domain = consensus_domain(chain_id, "RbcReady", b"v1", mode_tag);
     out.extend_from_slice(&domain);
     out.extend_from_slice(ready.block_hash.as_ref().as_ref());
     out.extend_from_slice(&ready.height.to_be_bytes());
@@ -307,8 +312,17 @@ pub fn rbc_ready_preimage(chain_id: &ChainId, mode_tag: &str, ready: &RbcReady) 
 
 /// Build canonical preimage for signing an RBC DELIVER message.
 pub fn rbc_deliver_preimage(chain_id: &ChainId, mode_tag: &str, deliver: &RbcDeliver) -> Vec<u8> {
-    let mut out = Vec::with_capacity(32 + 32 + 8 * 3 + 4 + 32 + 32);
-    let domain = consensus_domain(chain_id, "RbcDeliver", b"v2", mode_tag);
+    let ready_bytes = deliver
+        .ready_signatures
+        .iter()
+        .map(|entry| {
+            std::mem::size_of::<u32>()
+                .saturating_add(std::mem::size_of::<u32>())
+                .saturating_add(entry.signature.len())
+        })
+        .sum::<usize>();
+    let mut out = Vec::with_capacity(32 + 32 + 8 * 3 + 4 + 32 + 32 + 4 + ready_bytes);
+    let domain = consensus_domain(chain_id, "RbcDeliver", b"v1", mode_tag);
     out.extend_from_slice(&domain);
     out.extend_from_slice(deliver.block_hash.as_ref().as_ref());
     out.extend_from_slice(&deliver.height.to_be_bytes());
@@ -317,6 +331,14 @@ pub fn rbc_deliver_preimage(chain_id: &ChainId, mode_tag: &str, deliver: &RbcDel
     out.extend_from_slice(deliver.roster_hash.as_ref());
     out.extend_from_slice(deliver.chunk_root.as_ref());
     out.extend_from_slice(&deliver.sender.to_be_bytes());
+    let ready_len = u32::try_from(deliver.ready_signatures.len()).unwrap_or(u32::MAX);
+    out.extend_from_slice(&ready_len.to_be_bytes());
+    for entry in &deliver.ready_signatures {
+        out.extend_from_slice(&entry.sender.to_be_bytes());
+        let sig_len = u32::try_from(entry.signature.len()).unwrap_or(u32::MAX);
+        out.extend_from_slice(&sig_len.to_be_bytes());
+        out.extend_from_slice(&entry.signature);
+    }
     out
 }
 
@@ -478,6 +500,77 @@ mod tests {
         let d1 = consensus_domain(&cid_a, "Vote", b"x", PERMISSIONED_TAG);
         let d2 = consensus_domain(&cid_b, "Vote", b"x", PERMISSIONED_TAG);
         assert_ne!(d1, d2);
+    }
+
+    #[test]
+    fn preimages_use_v1_domain_tags() {
+        let chain = ChainId::from("iroha:test:preimage-tags");
+        let block_hash = HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([7u8; 32]));
+        let roster_hash = iroha_crypto::Hash::prehashed([3u8; 32]);
+        let chunk_root = iroha_crypto::Hash::prehashed([4u8; 32]);
+
+        let vote = Vote {
+            block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([1u8; 32]),
+            post_state_root: iroha_crypto::Hash::prehashed([2u8; 32]),
+            height: 11,
+            view: 2,
+            epoch: 0,
+            phase: Phase::Prepare,
+            highest_qc: None,
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        let vote_preimage = vote_preimage(&chain, PERMISSIONED_TAG, &vote);
+        assert_eq!(
+            &vote_preimage[..32],
+            &consensus_domain(&chain, "Vote", b"v1", PERMISSIONED_TAG)
+        );
+        assert_ne!(
+            &vote_preimage[..32],
+            &consensus_domain(&chain, "Vote", b"v2", PERMISSIONED_TAG)
+        );
+
+        let ready = RbcReady {
+            block_hash,
+            height: 11,
+            view: 2,
+            epoch: 0,
+            roster_hash,
+            chunk_root,
+            sender: 1,
+            signature: vec![0xAA],
+        };
+        let ready_preimage = rbc_ready_preimage(&chain, PERMISSIONED_TAG, &ready);
+        assert_eq!(
+            &ready_preimage[..32],
+            &consensus_domain(&chain, "RbcReady", b"v1", PERMISSIONED_TAG)
+        );
+        assert_ne!(
+            &ready_preimage[..32],
+            &consensus_domain(&chain, "RbcReady", b"v2", PERMISSIONED_TAG)
+        );
+
+        let deliver = RbcDeliver {
+            block_hash,
+            height: 11,
+            view: 2,
+            epoch: 0,
+            roster_hash,
+            chunk_root,
+            sender: 1,
+            signature: vec![0xBB],
+            ready_signatures: Vec::new(),
+        };
+        let deliver_preimage = rbc_deliver_preimage(&chain, PERMISSIONED_TAG, &deliver);
+        assert_eq!(
+            &deliver_preimage[..32],
+            &consensus_domain(&chain, "RbcDeliver", b"v1", PERMISSIONED_TAG)
+        );
+        assert_ne!(
+            &deliver_preimage[..32],
+            &consensus_domain(&chain, "RbcDeliver", b"v2", PERMISSIONED_TAG)
+        );
     }
 
     #[test]

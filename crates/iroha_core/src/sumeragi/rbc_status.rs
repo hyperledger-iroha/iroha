@@ -187,6 +187,30 @@ impl Handle {
             .collect()
     }
 
+    /// Return the duration until the next session summary becomes stale.
+    pub(super) fn next_stale_due(&self, ttl: Duration, now: SystemTime) -> Option<Duration> {
+        if ttl == Duration::ZERO {
+            return None;
+        }
+        let inner = self.store.inner.lock().expect("rbc status lock poisoned");
+        let mut next_due: Option<Duration> = None;
+        for entry in inner.map.values() {
+            let age = now
+                .duration_since(entry.updated_at)
+                .unwrap_or(Duration::ZERO);
+            let remaining = if age >= ttl {
+                Duration::ZERO
+            } else {
+                ttl.saturating_sub(age)
+            };
+            if remaining == Duration::ZERO {
+                return Some(Duration::ZERO);
+            }
+            next_due = Some(next_due.map_or(remaining, |prev| prev.min(remaining)));
+        }
+        next_due
+    }
+
     /// Remove a session summary by key.
     pub fn remove(&self, key: &(HashOf<BlockHeader>, u64, u64)) {
         let mut inner = self.store.inner.lock().expect("rbc status lock poisoned");
@@ -427,8 +451,7 @@ impl DiskStore {
             })
             .collect();
         entries.sort_by_key(|stored| stored.updated_at_ms);
-        let encoded =
-            to_bytes(&entries).map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+        let encoded = to_bytes(&entries).map_err(io::Error::other)?;
         let tmp = temp_store_path(&self.file);
         {
             let mut file = fs::OpenOptions::new()
@@ -758,6 +781,52 @@ mod tests {
         assert!(!items[0].invalid);
         assert!(items[0].lane_backlog.is_empty());
         assert!(items[0].dataspace_backlog.is_empty());
+    }
+
+    #[test]
+    fn next_stale_due_picks_earliest_entry() {
+        let handle = Handle::new();
+        let now = UNIX_EPOCH + Duration::from_secs(100);
+        let summary_one = Summary {
+            block_hash: hash(1),
+            height: 1,
+            view: 0,
+            total_chunks: 0,
+            received_chunks: 0,
+            ready_count: 0,
+            delivered: false,
+            payload_hash: None,
+            recovered_from_disk: false,
+            invalid: false,
+            lane_backlog: Vec::new(),
+            dataspace_backlog: Vec::new(),
+        };
+        let summary_two = Summary {
+            block_hash: hash(2),
+            height: 2,
+            view: 0,
+            total_chunks: 0,
+            received_chunks: 0,
+            ready_count: 0,
+            delivered: false,
+            payload_hash: None,
+            recovered_from_disk: false,
+            invalid: false,
+            lane_backlog: Vec::new(),
+            dataspace_backlog: Vec::new(),
+        };
+        handle.update(summary_one, now - Duration::from_secs(5));
+        handle.update(summary_two, now - Duration::from_secs(2));
+
+        let due = handle
+            .next_stale_due(Duration::from_secs(10), now)
+            .expect("entries should report a due time");
+        assert_eq!(due, Duration::from_secs(5));
+
+        let due = handle
+            .next_stale_due(Duration::from_secs(3), now)
+            .expect("entries should be stale under shorter TTL");
+        assert_eq!(due, Duration::ZERO);
     }
 
     #[test]

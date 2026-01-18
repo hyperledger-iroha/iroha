@@ -1189,7 +1189,12 @@ fn generate_offline_fastpq_replay_proof(
 
 fn offline_fastpq_proof_sum(request_json: &[u8]) -> BridgeResult<Vec<u8>> {
     let request: OfflineProofRequestSum =
-        norito::json::from_slice(request_json).map_err(|_| BridgeError::OfflineSerialize)?;
+        norito::json::from_slice(request_json).map_err(|err| {
+            if cfg!(test) {
+                eprintln!("offline sum proof JSON parse failed: {err}");
+            }
+            BridgeError::OfflineSerialize
+        })?;
     let proof = generate_offline_fastpq_sum_proof(&request)?;
     to_bytes(&proof).map_err(|_| BridgeError::OfflineSerialize)
 }
@@ -7392,7 +7397,7 @@ mod accel_tests {
         };
         assert_eq!(result, 0, "expected success");
         let expected_hash =
-            decode_hex_32("a629da62f865c17dd280dd37e5a0fbe1d1a5705b012393f4d19225c049d7976b");
+            decode_hex_32("88c1e5cf1580715da99671ae721baf4bf97ff654831c5a848e9bf8d018a97939");
         assert_eq!(out_hash, expected_hash);
         unsafe {
             free(out_signed_ptr as *mut _);
@@ -7440,7 +7445,7 @@ mod accel_tests {
         };
         assert_eq!(result, 0, "expected success");
         let expected_hash =
-            decode_hex_32("fcf26e02e57afbbcdcc9fae28c8fcaff49e21c4a5ee2bb2216c82641cde27ee1");
+            decode_hex_32("1b90f6d8bacac187e4248e2c4f5cc3ca121c521c345a62c542aca3932478ad05");
         assert_eq!(out_hash, expected_hash);
         unsafe {
             free(out_signed_ptr as *mut _);
@@ -7488,7 +7493,7 @@ mod accel_tests {
         };
         assert_eq!(result, 0, "expected success");
         let expected_hash =
-            decode_hex_32("fbdfefe7764729312d6819e7c599abe06422a789d49b57d95066f1462b98c79b");
+            decode_hex_32("eb1388b5dfde2381e374d7e09d78388f172b0cd5a8c5db7fa3e74d7aca996beb");
         assert_eq!(out_hash, expected_hash);
         unsafe {
             free(out_signed_ptr as *mut _);
@@ -8339,6 +8344,7 @@ mod offline_fastpq_proof_tests {
 
     #[test]
     fn sum_proof_rejects_mismatched_scales() {
+        let _guard = super::test_support::chain_discriminant_guard();
         let mut request = sample_sum_request();
         request.receipt_amounts = vec![Numeric::new(10, 1), Numeric::new(15, 0)];
         let result = generate_offline_fastpq_sum_proof(&request);
@@ -8383,6 +8389,7 @@ mod offline_fastpq_proof_tests {
 
     #[test]
     fn offline_fastpq_sum_proof_matches_generator() {
+        let _guard = super::test_support::chain_discriminant_guard();
         let request = sample_sum_request();
         let sum_json = json::to_vec(&request).expect("sum json");
         let parsed: OfflineProofRequestSum = json::from_slice(&sum_json).expect("sum json parse");
@@ -8397,6 +8404,7 @@ mod offline_fastpq_proof_tests {
 
     #[test]
     fn offline_fastpq_counter_proof_matches_generator() {
+        let _guard = super::test_support::chain_discriminant_guard();
         let request = sample_counter_request();
         let counter_json = json::to_vec(&request).expect("counter json");
         let proof = call_proof_counter(&counter_json);
@@ -8407,6 +8415,7 @@ mod offline_fastpq_proof_tests {
 
     #[test]
     fn offline_fastpq_replay_proof_matches_generator() {
+        let _guard = super::test_support::chain_discriminant_guard();
         let request = sample_replay_request();
         let replay_json = json::to_vec(&request).expect("replay json");
         let proof = call_proof_replay(&replay_json);

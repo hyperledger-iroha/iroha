@@ -185,9 +185,11 @@ value; deterministic replay must reproduce the same reduction.
   avoid unbounded growth on long-running nodes. Recovery truncates partial or
   oversized merge-ledger tail entries, and append rejects entries above the
   maximum payload size guard to cap allocations.
-- `crates/iroha_core/src/block.rs`: block validation rejects empty payloads
-  (`BlockValidationError::EmptyBlock`), ensuring the non-empty policy is
-  enforced before signatures are requested and carried into the merge ledger.
+- `crates/iroha_core/src/block.rs`: block validation rejects blocks without
+  entrypoints (external transactions or time triggers) and without deterministic
+  artifacts such as DA bundles (`BlockValidationError::EmptyBlock`), ensuring
+  the non-empty policy is enforced before signatures are requested and carried
+  into the merge ledger.
 - Deterministic reduction helper lives in the merge service: `reduce_merge_hint_roots`
   (`crates/iroha_core/src/merge.rs`) implements the Poseidon2 fold described above.
   Hardware acceleration hooks remain future work, but the scalar path now enforces

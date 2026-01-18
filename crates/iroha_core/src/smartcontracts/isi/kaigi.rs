@@ -689,10 +689,7 @@ fn load_allowlist(
     let key = kaigi_relay_allowlist_key().map_err(|err| {
         Error::InvalidParameter(InvalidParameterError::SmartContract(err.to_string()))
     })?;
-    let domain = match state_transaction.world.domain(domain_id) {
-        Ok(domain) => domain,
-        Err(err) => return Err(err.into()),
-    };
+    let domain = state_transaction.world.domain(domain_id)?;
     let Some(stored) = domain.metadata().get(&key) else {
         return Ok(None);
     };

@@ -9,10 +9,12 @@ use norito::codec::{Decode, Encode};
 
 pub use crate::block::consensus::{
     CertPhase, Qc, QcAggregate, QcRef, QcVote, SumeragiBlockSyncRosterStatus,
-    SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus, SumeragiMembershipMismatchStatus,
+    SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus, SumeragiConsensusMessageHandlingEntry,
+    SumeragiConsensusMessageHandlingStatus, SumeragiMembershipMismatchStatus,
     SumeragiPeerKeyPolicyStatus, SumeragiQcEntry, SumeragiQcSnapshot, SumeragiQcStatus,
-    SumeragiStatusWire, SumeragiViewChangeCauseStatus, SumeragiWorkerLoopStatus,
-    SumeragiWorkerQueueDepths,
+    SumeragiStatusWire, SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropEntry,
+    SumeragiVoteValidationDropPeerEntry, SumeragiVoteValidationDropReasonCount,
+    SumeragiVoteValidationDropStatus, SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
 };
 use crate::prelude::*;
 
@@ -56,6 +58,7 @@ pub struct ValidatorSetCheckpoint {
 impl ValidatorSetCheckpoint {
     /// Construct a checkpoint using the supplied block hash, validator set, and signatures.
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         height: u64,
         view: u64,

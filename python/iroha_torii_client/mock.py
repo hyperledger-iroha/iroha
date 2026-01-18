@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Dict, Iterable, List, Mapping, Optional
+from typing import Any, Dict, Iterable, List, Mapping, Optional
 from urllib.parse import parse_qs, urlparse
 
 from .client import ToriiClient
@@ -83,33 +83,33 @@ class _MockState:
         self._lock = threading.Lock()
         self._attachment_seq = 0
         self._report_seq = 0
-        self.attachments: Dict[str, Dict[str, object]] = {}
-        self.prover_reports: Dict[str, Dict[str, object]] = {}
-        self.sumeragi_status: Dict[str, object] = {}
-        self.sumeragi_leader: Dict[str, object] = {}
-        self.sumeragi_telemetry: Dict[str, object] = {}
-        self.sumeragi_rbc_status: Dict[str, object] = {}
-        self.sumeragi_rbc_sessions: Dict[str, object] = {}
-        self.pipeline_sequences: Dict[str, Dict[str, object]] = {}
-        self.pipeline_next_plan: Optional[Dict[str, object]] = None
+        self.attachments: Dict[str, Dict[str, Any]] = {}
+        self.prover_reports: Dict[str, Dict[str, Any]] = {}
+        self.sumeragi_status: Dict[str, Any] = {}
+        self.sumeragi_leader: Dict[str, Any] = {}
+        self.sumeragi_telemetry: Dict[str, Any] = {}
+        self.sumeragi_rbc_status: Dict[str, Any] = {}
+        self.sumeragi_rbc_sessions: Dict[str, Any] = {}
+        self.pipeline_sequences: Dict[str, Dict[str, Any]] = {}
+        self.pipeline_next_plan: Optional[Dict[str, Any]] = None
         self.pipeline_scenario = "success"
         self._pipeline_submit_seq = 0
-        self.gov_referenda: Dict[str, Dict[str, object]] = {}
-        self.gov_council_current: Dict[str, object] = {}
-        self.gov_council_audit: Dict[str, object] = {}
-        self.gov_council_derive_result: Dict[str, object] = {}
-        self.gov_council_persist_result: Dict[str, object] = {}
-        self.gov_instances: Dict[str, Dict[str, object]] = {}
-        self.contract_manifests: Dict[str, Dict[str, object]] = {}
-        self.contract_code_bytes: Dict[str, Dict[str, object]] = {}
-        self.gov_proposals: Dict[str, Dict[str, object]] = {}
-        self.gov_propose_deploy_response: Dict[str, object] = {}
-        self.gov_finalize_response: Dict[str, object] = {}
-        self.gov_enact_response: Dict[str, object] = {}
-        self.gov_protected_namespaces: Dict[str, object] = {}
-        self.gov_locks: Dict[str, Dict[str, object]] = {}
-        self.gov_tallies: Dict[str, Dict[str, object]] = {}
-        self.gov_unlock_stats: Dict[str, object] = {}
+        self.gov_referenda: Dict[str, Dict[str, Any]] = {}
+        self.gov_council_current: Dict[str, Any] = {}
+        self.gov_council_audit: Dict[str, Any] = {}
+        self.gov_council_derive_result: Dict[str, Any] = {}
+        self.gov_council_persist_result: Dict[str, Any] = {}
+        self.gov_instances: Dict[str, Dict[str, Any]] = {}
+        self.contract_manifests: Dict[str, Dict[str, Any]] = {}
+        self.contract_code_bytes: Dict[str, Dict[str, Any]] = {}
+        self.gov_proposals: Dict[str, Dict[str, Any]] = {}
+        self.gov_propose_deploy_response: Dict[str, Any] = {}
+        self.gov_finalize_response: Dict[str, Any] = {}
+        self.gov_enact_response: Dict[str, Any] = {}
+        self.gov_protected_namespaces: Dict[str, Any] = {}
+        self.gov_locks: Dict[str, Dict[str, Any]] = {}
+        self.gov_tallies: Dict[str, Dict[str, Any]] = {}
+        self.gov_unlock_stats: Dict[str, Any] = {}
         self.reset()
 
     # ------------------------------------------------------------------
@@ -145,9 +145,9 @@ class _MockState:
             return self._prover_delete(report_id)
         if method == "DELETE" and path == "/v1/zk/prover/reports":
             return self._prover_delete_filtered(params)
-        if method == "POST" and path == "/v1/pipeline/transactions":
+        if method == "POST" and path in {"/transaction", "/v1/pipeline/transactions", "/v1/transactions"}:
             return self._pipeline_submit(body)
-        if method == "GET" and path == "/v1/pipeline/transactions/status":
+        if method == "GET" and path in {"/v1/pipeline/transactions/status", "/v1/transactions/status"}:
             return self._pipeline_status(params)
         if method == "POST" and path == "/v1/gov/proposals/deploy-contract":
             return self._gov_propose_deploy(body)
@@ -264,7 +264,7 @@ class _MockState:
         referenda = payload.get("referenda", [])
         if not isinstance(referenda, list):
             raise ValueError("referenda must be a list")
-        new_state: Dict[str, Dict[str, object]] = {}
+        new_state: Dict[str, Dict[str, Any]] = {}
         for entry in referenda:
             if not isinstance(entry, dict):
                 raise ValueError("referendum entry must be an object")
@@ -327,7 +327,7 @@ class _MockState:
         if instances_payload is not None:
             if not isinstance(instances_payload, dict):
                 raise ValueError("instances must be an object")
-            normalized_instances: Dict[str, Dict[str, object]] = {}
+            normalized_instances: Dict[str, Dict[str, Any]] = {}
             for ns, page in instances_payload.items():
                 if not isinstance(page, dict):
                     raise ValueError("instances entry must be an object")
@@ -340,7 +340,7 @@ class _MockState:
         if manifests_payload is not None:
             if not isinstance(manifests_payload, dict):
                 raise ValueError("manifests must be an object")
-            normalized_manifests: Dict[str, Dict[str, object]] = {}
+            normalized_manifests: Dict[str, Dict[str, Any]] = {}
             for key, value in manifests_payload.items():
                 if not isinstance(value, dict):
                     raise ValueError("manifest entry must be an object")
@@ -353,7 +353,7 @@ class _MockState:
         if code_bytes_payload is not None:
             if not isinstance(code_bytes_payload, dict):
                 raise ValueError("code_bytes must be an object")
-            normalized_code_bytes: Dict[str, Dict[str, object]] = {}
+            normalized_code_bytes: Dict[str, Dict[str, Any]] = {}
             for key, value in code_bytes_payload.items():
                 if not isinstance(value, dict):
                     raise ValueError("code_bytes entry must be an object")
@@ -366,7 +366,7 @@ class _MockState:
         if proposals_payload is not None:
             if not isinstance(proposals_payload, dict):
                 raise ValueError("proposals must be an object")
-            normalized_proposals: Dict[str, Dict[str, object]] = {}
+            normalized_proposals: Dict[str, Dict[str, Any]] = {}
             for key, value in proposals_payload.items():
                 if not isinstance(value, dict):
                     raise ValueError("proposal entry must be an object")
@@ -432,7 +432,7 @@ class _MockState:
         if locks_payload is not None:
             if not isinstance(locks_payload, dict):
                 raise ValueError("locks must be an object")
-            normalized_locks: Dict[str, Dict[str, object]] = {}
+            normalized_locks: Dict[str, Dict[str, Any]] = {}
             for key, value in locks_payload.items():
                 if not isinstance(value, dict):
                     raise ValueError("locks entry must be an object")
@@ -445,7 +445,7 @@ class _MockState:
         if tallies_payload is not None:
             if not isinstance(tallies_payload, dict):
                 raise ValueError("tallies must be an object")
-            normalized_tallies: Dict[str, Dict[str, object]] = {}
+            normalized_tallies: Dict[str, Dict[str, Any]] = {}
             for key, value in tallies_payload.items():
                 if not isinstance(value, dict):
                     raise ValueError("tally entry must be an object")
@@ -565,7 +565,7 @@ class _MockState:
         with self._lock:
             entry = self.gov_locks.get(referendum_id)
         if entry is None:
-            payload: Dict[str, object] = {
+            payload: Dict[str, Any] = {
                 "found": False,
                 "referendum_id": referendum_id,
             }
@@ -579,7 +579,7 @@ class _MockState:
         with self._lock:
             entry = self.gov_tallies.get(referendum_id)
         if entry is None:
-            payload: Dict[str, object] = {
+            payload: Dict[str, Any] = {
                 "referendum_id": referendum_id,
                 "approve": 0,
                 "reject": 0,
@@ -755,7 +755,7 @@ class _MockState:
                 raise ValueError(f"invalid JSON: {err}") from err
             if not isinstance(raw, dict):
                 raise ValueError("pipeline config must be a JSON object")
-            payload: Dict[str, object] = raw
+            payload: Dict[str, Any] = raw
         else:
             payload = {}
 
@@ -774,7 +774,7 @@ class _MockState:
                 raise ValueError("statuses must be a list")
             statuses_override = [self._normalize_status_entry(item) for item in statuses_value]
 
-        overrides: Dict[str, object] = {
+        overrides: Dict[str, Any] = {
             "hash": payload.get("hash"),
             "submit_status": payload.get("submit_status"),
             "accepted": payload.get("accepted"),
@@ -789,7 +789,7 @@ class _MockState:
 
         return _json_response(HTTPStatus.OK, {"configured": True, "scenario": self.pipeline_scenario})
 
-    def _make_pipeline_plan(self) -> Dict[str, object]:
+    def _make_pipeline_plan(self) -> Dict[str, Any]:
         with self._lock:
             overrides = self.pipeline_next_plan
             self.pipeline_next_plan = None
@@ -811,19 +811,22 @@ class _MockState:
         repeat_last = overrides.get("repeat_last") if overrides and overrides.get("repeat_last") is not None else base["repeat_last"]
         statuses_source = overrides.get("statuses") if overrides and overrides.get("statuses") is not None else base["statuses"]
 
+        if statuses_source is None:
+            statuses_source = []
+        submit_status_value = submit_status if submit_status is not None else HTTPStatus.ACCEPTED
         statuses = [self._normalize_status_entry(entry) for entry in statuses_source]
         plan = {
             "hash": hash_value,
-            "submit_status": int(submit_status),
+            "submit_status": int(submit_status_value),
             "accepted": bool(accepted),
             "repeat_last": bool(repeat_last),
             "statuses": statuses,
         }
         return plan
 
-    def _scenario_plan(self, scenario: Optional[str]) -> Dict[str, object]:
+    def _scenario_plan(self, scenario: Optional[str]) -> Dict[str, Any]:
         if scenario == "failure":
-            statuses: List[Dict[str, object]] = [
+            statuses: List[Dict[str, Any]] = [
                 {"kind": "Queued", "content": None},
                 {"kind": "Rejected", "content": "mock rejection"},
             ]
@@ -844,7 +847,7 @@ class _MockState:
         }
 
     @staticmethod
-    def _normalize_status_entry(entry: object) -> Dict[str, object]:
+    def _normalize_status_entry(entry: object) -> Dict[str, Any]:
         if isinstance(entry, str):
             return {"kind": entry, "content": None}
         if isinstance(entry, Mapping):
@@ -862,7 +865,7 @@ class _MockState:
         raise ValueError("invalid status entry")
 
     @staticmethod
-    def _make_status_payload(hash_value: str, entry: Mapping[str, object]) -> Dict[str, object]:
+    def _make_status_payload(hash_value: str, entry: Mapping[str, Any]) -> Dict[str, Any]:
         kind = str(entry.get("kind", "Queued"))
         content = entry.get("content")
         if isinstance(content, (bytes, bytearray)):
@@ -905,7 +908,10 @@ class _MockState:
             record = self.attachments.get(attachment_id)
             if record is None:
                 raise KeyError("attachment")
-            body = record["bytes"]  # type: ignore[index]
+            body_value = record.get("bytes")
+            if not isinstance(body_value, (bytes, bytearray)):
+                raise KeyError("attachment bytes")
+            body = bytes(body_value)
             ct = str(record.get("content_type", "application/octet-stream"))
         return _Response(HTTPStatus.OK, body=body, headers={"Content-Type": ct})
 
@@ -916,12 +922,12 @@ class _MockState:
             del self.attachments[attachment_id]
         return _Response(HTTPStatus.NO_CONTENT)
 
-    def _register_attachment(self, body: bytes, content_type: str) -> Dict[str, object]:
+    def _register_attachment(self, body: bytes, content_type: str) -> Dict[str, Any]:
         with self._lock:
             self._attachment_seq += 1
             attachment_id = f"att-{self._attachment_seq:04d}"
             created_ms = self._timestamp_ms(self._attachment_seq)
-            record: Dict[str, object] = {
+            record: Dict[str, Any] = {
                 "id": attachment_id,
                 "content_type": content_type,
                 "size": len(body),
@@ -932,7 +938,7 @@ class _MockState:
             return self._attachment_meta(record)
 
     @staticmethod
-    def _attachment_meta(record: Mapping[str, object]) -> Dict[str, object]:
+    def _attachment_meta(record: Mapping[str, Any]) -> Dict[str, Any]:
         return {
             "id": record.get("id", ""),
             "content_type": record.get("content_type", "application/octet-stream"),
@@ -982,14 +988,14 @@ class _MockState:
                     deleted += 1
         return _json_response(HTTPStatus.OK, {"deleted": deleted})
 
-    def _filter_reports(self, params: Mapping[str, List[str]]) -> List[Dict[str, object]]:
+    def _filter_reports(self, params: Mapping[str, List[str]]) -> List[Dict[str, Any]]:
         with self._lock:
             reports = [self._report_public_fields(r) for r in self.prover_reports.values()]
         reports.sort(key=lambda r: r.get("processed_ms", 0))
         if params.get("order", ["asc"])[0].lower() == "desc":
             reports.reverse()
 
-        def matches(report: Mapping[str, object]) -> bool:
+        def matches(report: Mapping[str, Any]) -> bool:
             if _is_true(params.get("ok_only")) and not report.get("ok", False):
                 return False
             if _is_true(params.get("failed_only")) and report.get("ok", False):
@@ -1026,7 +1032,7 @@ class _MockState:
             filtered = filtered[:limit]
         return filtered
 
-    def _report_public_fields(self, record: Mapping[str, object]) -> Dict[str, object]:
+    def _report_public_fields(self, record: Mapping[str, Any]) -> Dict[str, Any]:
         allowed = {
             "id",
             "ok",
@@ -1213,7 +1219,8 @@ class ToriiMockServer:
     @property
     def base_url(self) -> str:
         host, port = self._server.server_address[:2]
-        return f"http://{host}:{port}/"
+        host_value = host.decode("utf-8") if isinstance(host, (bytes, bytearray)) else host
+        return f"http://{host_value}:{port}/"
 
     def start(self) -> "ToriiMockServer":
         if self._thread is None:

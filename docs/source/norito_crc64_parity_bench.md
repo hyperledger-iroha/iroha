@@ -2,7 +2,8 @@
 
 This guide shows how to verify CRC64 parity and benchmark Norito’s CRC64 and encode/decode performance on your hardware.
 
-Norito computes a CRC64‑ECMA checksum (`0x42F0E1EBA9EA3693`) for each payload using the `crc64fast` crate. The `hardware_crc64`
+Norito computes a CRC64-XZ checksum (ECMA polynomial `0x42F0E1EBA9EA3693`, reflected, init/xor all ones)
+for each payload using the `crc64fast` crate. The `hardware_crc64`
 and `crc64_fallback` functions are identical, providing a consistent implementation across platforms.
 
 ## 1) Quick Parity Checks

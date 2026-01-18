@@ -389,12 +389,12 @@ pub enum BridgeFinalityVerifyError {
     /// Proof carries an empty validator set.
     #[error("validator set is empty")]
     EmptyValidatorSet,
-    /// Validator-set PoP length does not match the validator-set length.
+    /// Validator-set `PoP` length does not match the validator-set length.
     #[error("validator set pop length {got} does not match expected {expected}")]
     ValidatorSetPopLengthMismatch {
-        /// Expected PoP count.
+        /// Expected `PoP` count.
         expected: usize,
-        /// Actual PoP count.
+        /// Actual `PoP` count.
         got: usize,
     },
     /// Signer bitmap length does not match the validator-set length.
@@ -805,7 +805,7 @@ mod tests {
     }
 
     fn full_signer_bitmap(len: usize) -> Vec<u8> {
-        let bytes = (len + 7) / 8;
+        let bytes = len.div_ceil(8);
         let mut bitmap = vec![0u8; bytes];
         for idx in 0..len {
             let byte_idx = idx / 8;
@@ -863,7 +863,7 @@ mod tests {
             let signature = Signature::new(kp.private_key(), &preimage);
             sig_payloads.push(signature.payload().to_vec());
         }
-        let sig_refs: Vec<&[u8]> = sig_payloads.iter().map(|sig| sig.as_slice()).collect();
+        let sig_refs: Vec<&[u8]> = sig_payloads.iter().map(Vec::as_slice).collect();
         let aggregate =
             iroha_crypto::bls_normal_aggregate_signatures(&sig_refs).expect("aggregate signatures");
         let signers_bitmap = full_signer_bitmap(validator_set.len());

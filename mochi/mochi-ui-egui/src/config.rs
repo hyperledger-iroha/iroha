@@ -800,13 +800,30 @@ fn parse_path_override(
 
 fn resolve_path(base: &Path, raw: &str) -> PathBuf {
     let candidate = PathBuf::from(raw);
-    if candidate.is_absolute() {
+    let resolved = if candidate.is_absolute() {
         candidate
     } else {
         base.join(candidate)
-            .canonicalize()
-            .unwrap_or_else(|_| base.join(raw))
+    };
+    normalize_path(&resolved)
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    use std::path::Component;
+
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    normalized.push(component.as_os_str());
+                }
+            }
+            _ => normalized.push(component.as_os_str()),
+        }
     }
+    normalized
 }
 
 fn parse_profile(value: &str) -> Result<ProfilePreset, String> {
@@ -1248,11 +1265,8 @@ data_root = "./env-data"
             .data_root
             .as_deref()
             .expect("data root should be populated by env override");
-        let expected_root = dir.path().join("env-data");
-        let normalise = |path: &Path| -> PathBuf {
-            fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
-        };
-        assert_eq!(normalise(actual_root), normalise(&expected_root));
+        let expected_root = resolve_path(dir.path(), "./env-data");
+        assert_eq!(normalize_path(actual_root), expected_root);
     }
 
     #[test]

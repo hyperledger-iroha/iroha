@@ -16,7 +16,7 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Mapping, MutableMapping, Sequence
+from typing import Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence
 
 
 DEFAULT_CANONICAL = Path("fixtures/norito_rpc/transaction_fixtures.manifest.json")
@@ -30,10 +30,15 @@ DEFAULT_TARGETS: Mapping[str, Path] = {
 @dataclass(frozen=True)
 class FixtureDigest:
     name: str
+    chain: str
+    authority: str
     payload_hash: str
     signed_hash: str
     encoded_len: int
     signed_len: int
+    creation_time_ms: int
+    time_to_live_ms: Optional[int]
+    nonce: Optional[int]
 
 
 @dataclass(frozen=True)
@@ -71,18 +76,34 @@ def _fingerprint_manifest(payload: MutableMapping[str, object]) -> str:
 def _fixture_digest(entry: Mapping[str, object]) -> FixtureDigest:
     try:
         name = str(entry["name"])
+        chain = str(entry["chain"])
+        authority = str(entry["authority"])
         payload_hash = str(entry["payload_hash"])
         signed_hash = str(entry["signed_hash"])
         encoded_len = int(entry["encoded_len"])
         signed_len = int(entry["signed_len"])
+        creation_time_ms = int(entry["creation_time_ms"])
+        if "time_to_live_ms" not in entry or "nonce" not in entry:
+            raise KeyError("missing time_to_live_ms/nonce")
+        time_to_live_ms = entry.get("time_to_live_ms")
+        nonce = entry.get("nonce")
     except (KeyError, TypeError, ValueError) as exc:  # pragma: no cover - defensive guard
         raise SystemExit(f"[error] malformed fixture entry: {entry}") from exc
+    if not isinstance(time_to_live_ms, (int, type(None))) or isinstance(time_to_live_ms, bool):
+        raise SystemExit(f"[error] malformed fixture entry: {entry}")
+    if not isinstance(nonce, (int, type(None))) or isinstance(nonce, bool):
+        raise SystemExit(f"[error] malformed fixture entry: {entry}")
     return FixtureDigest(
         name=name,
+        chain=chain,
+        authority=authority,
         payload_hash=payload_hash,
         signed_hash=signed_hash,
         encoded_len=encoded_len,
         signed_len=signed_len,
+        creation_time_ms=creation_time_ms,
+        time_to_live_ms=time_to_live_ms,
+        nonce=nonce,
     )
 
 
@@ -131,6 +152,20 @@ def compare_manifests(
             differences["encoded_len"] = f"{found.encoded_len} != {expected.encoded_len}"
         if expected.signed_len != found.signed_len:
             differences["signed_len"] = f"{found.signed_len} != {expected.signed_len}"
+        if expected.creation_time_ms != found.creation_time_ms:
+            differences["creation_time_ms"] = (
+                f"{found.creation_time_ms} != {expected.creation_time_ms}"
+            )
+        if expected.chain != found.chain:
+            differences["chain"] = f"{found.chain} != {expected.chain}"
+        if expected.authority != found.authority:
+            differences["authority"] = f"{found.authority} != {expected.authority}"
+        if expected.time_to_live_ms != found.time_to_live_ms:
+            differences["time_to_live_ms"] = (
+                f"{found.time_to_live_ms} != {expected.time_to_live_ms}"
+            )
+        if expected.nonce != found.nonce:
+            differences["nonce"] = f"{found.nonce} != {expected.nonce}"
         if differences:
             mismatched.append(FixtureMismatch(name=name, differences=differences))
     return AlignmentResult(label=label, snapshot=target, missing=missing, extra=extra, mismatched=sorted(mismatched, key=lambda m: m.name))

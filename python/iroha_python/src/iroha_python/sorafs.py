@@ -8,6 +8,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import (
+    TYPE_CHECKING,
     Any,
     Callable,
     Dict,
@@ -20,9 +21,11 @@ from typing import (
     Union,
 )
 
-from . import _crypto
+from . import _crypto as _crypto_module
 
-try:
+_crypto: Any = _crypto_module
+
+if TYPE_CHECKING:
     from .client import (
         SorafsPorIngestionProviderStatus,
         SorafsPorIngestionStatus,
@@ -30,31 +33,40 @@ try:
         SorafsPorSubmissionResponse,
         SorafsPorVerdictResponse,
     )
-except ImportError:  # pragma: no cover - circular import during boot
-    class SorafsPorSubmissionResponse:  # type: ignore[too-many-ancestors]
-        """Fallback placeholder until the client module finishes importing."""
+else:
+    try:
+        from .client import (
+            SorafsPorIngestionProviderStatus,
+            SorafsPorIngestionStatus,
+            SorafsPorObservationResponse,
+            SorafsPorSubmissionResponse,
+            SorafsPorVerdictResponse,
+        )
+    except ImportError:  # pragma: no cover - circular import during boot
+        class SorafsPorSubmissionResponse:
+            """Fallback placeholder until the client module finishes importing."""
 
-        pass
+            pass
 
-    class SorafsPorObservationResponse(SorafsPorSubmissionResponse):
-        """Fallback placeholder until the client module finishes importing."""
+        class SorafsPorObservationResponse(SorafsPorSubmissionResponse):
+            """Fallback placeholder until the client module finishes importing."""
 
-        pass
+            pass
 
-    class SorafsPorVerdictResponse(SorafsPorSubmissionResponse):
-        """Fallback placeholder until the client module finishes importing."""
+        class SorafsPorVerdictResponse(SorafsPorSubmissionResponse):
+            """Fallback placeholder until the client module finishes importing."""
 
-        pass
+            pass
 
-    class SorafsPorIngestionStatus:  # type: ignore[too-many-ancestors]
-        """Fallback placeholder until the client module finishes importing."""
+        class SorafsPorIngestionStatus:
+            """Fallback placeholder until the client module finishes importing."""
 
-        pass
+            pass
 
-    class SorafsPorIngestionProviderStatus(SorafsPorIngestionStatus):
-        """Fallback placeholder until the client module finishes importing."""
+        class SorafsPorIngestionProviderStatus(SorafsPorIngestionStatus):
+            """Fallback placeholder until the client module finishes importing."""
 
-        pass
+            pass
 
 __all__ = [
     "SorafsAliasPolicy",
@@ -90,13 +102,22 @@ _HEADER_SORA_NAME = "Sora-Name"
 _HEADER_SORA_PROOF = "Sora-Proof"
 _HEADER_SORA_PROOF_STATUS = "Sora-Proof-Status"
 
-try:
-    SorafsMultiFetchError = _crypto.SorafsMultiFetchError
-except AttributeError:  # pragma: no cover - optional dependency
+if TYPE_CHECKING:
     class SorafsMultiFetchError(RuntimeError):
-        """Stub used when the native extension is unavailable in dev environments."""
+        """Raised when multi-source fetch fails in the native extension."""
 
         pass
+else:
+    try:
+        class SorafsMultiFetchError(_crypto.SorafsMultiFetchError):
+            """Raised when multi-source fetch fails in the native extension."""
+
+            pass
+    except AttributeError:  # pragma: no cover - optional dependency
+        class SorafsMultiFetchError(RuntimeError):
+            """Stub used when the native extension is unavailable in dev environments."""
+
+            pass
 
 
 def _coerce_positive_int(value: Any, field: str) -> int:

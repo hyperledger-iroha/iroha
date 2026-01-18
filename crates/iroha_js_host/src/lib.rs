@@ -492,13 +492,15 @@ pub fn blake3_hash_bytes(payload: Uint8Array) -> napi::Result<Buffer> {
 
 /// Generate an Ed25519 key pair using `iroha_crypto`.
 #[napi]
+#[allow(clippy::unnecessary_wraps)]
 pub fn ed25519_keypair(seed: Option<Uint8Array>) -> napi::Result<JsKeyPair> {
-    let keypair = if let Some(seed) = seed {
-        let bytes = seed.to_vec();
-        KeyPair::from_seed(bytes, Algorithm::Ed25519)
-    } else {
-        KeyPair::random_with_algorithm(Algorithm::Ed25519)
-    };
+    let keypair = seed.map_or_else(
+        || KeyPair::random_with_algorithm(Algorithm::Ed25519),
+        |seed| {
+            let bytes = seed.to_vec();
+            KeyPair::from_seed(bytes, Algorithm::Ed25519)
+        },
+    );
 
     let (_, public_bytes) = keypair.public_key().to_bytes();
     let (_, private_bytes) = keypair.private_key().to_bytes();
@@ -4654,7 +4656,7 @@ fn parse_string_value(value: json::Value, context: &str) -> napi::Result<String>
     }
 }
 
-fn normalize_zk_ballot_public_inputs_json(raw: String, context: &str) -> napi::Result<String> {
+fn normalize_zk_ballot_public_inputs_json(raw: &str, context: &str) -> napi::Result<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(napi::Error::new(
@@ -4807,8 +4809,7 @@ fn canonicalize_hex32_value(raw: &str) -> Option<String> {
 
 fn zk_hint_present(map: &json::Map, key: &str) -> bool {
     map.get(key)
-        .map(|value| !matches!(value, json::Value::Null))
-        .unwrap_or(false)
+        .is_some_and(|value| !matches!(value, json::Value::Null))
 }
 
 fn parse_u64_value(value: json::Value, context: &str) -> napi::Result<u64> {
@@ -5599,7 +5600,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     "CastZkBallot.public_inputs_json",
                 )?;
                 let public_inputs_json = normalize_zk_ballot_public_inputs_json(
-                    public_inputs_json,
+                    public_inputs_json.as_str(),
                     "CastZkBallot.public_inputs_json",
                 )?;
                 let ballot = CastZkBallot {

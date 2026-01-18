@@ -86,6 +86,12 @@ use crate::{
     http::{Method as HttpMethod, RequestBuilder, Response, StatusCode},
     http_default::{self, DefaultRequest, DefaultRequestBuilder, WebSocketError, WebSocketMessage},
     nexus::{CrossLaneTransferProof, verify_lane_relay_envelopes},
+    subscriptions::{
+        SubscriptionActionRequest, SubscriptionActionResponse, SubscriptionCreateRequest,
+        SubscriptionCreateResponse, SubscriptionGetResponse, SubscriptionListParams,
+        SubscriptionListResponse, SubscriptionPlanCreateRequest, SubscriptionPlanCreateResponse,
+        SubscriptionPlanListParams, SubscriptionPlanListResponse, SubscriptionUsageRequest,
+    },
 };
 // (No query imports needed here)
 
@@ -1599,6 +1605,58 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
         "last_timestamp_ms".into(),
         Value::from(wire.validation_rejects.last_timestamp_ms),
     );
+    let consensus_message_handling_entries = Value::Array(
+        wire.consensus_message_handling
+            .entries
+            .iter()
+            .map(|entry| {
+                let mut map = Map::new();
+                map.insert("kind".into(), Value::from(entry.kind.clone()));
+                map.insert("outcome".into(), Value::from(entry.outcome.clone()));
+                map.insert("reason".into(), Value::from(entry.reason.clone()));
+                map.insert("total".into(), Value::from(entry.total));
+                Value::Object(map)
+            })
+            .collect(),
+    );
+    let mut consensus_message_handling = Map::new();
+    consensus_message_handling.insert("entries".into(), consensus_message_handling_entries);
+
+    let mut block_sync_roster = Map::new();
+    block_sync_roster.insert(
+        "commit_qc_hint_total".into(),
+        Value::from(wire.block_sync_roster.commit_qc_hint_total),
+    );
+    block_sync_roster.insert(
+        "checkpoint_hint_total".into(),
+        Value::from(wire.block_sync_roster.checkpoint_hint_total),
+    );
+    block_sync_roster.insert(
+        "commit_qc_history_total".into(),
+        Value::from(wire.block_sync_roster.commit_qc_history_total),
+    );
+    block_sync_roster.insert(
+        "checkpoint_history_total".into(),
+        Value::from(wire.block_sync_roster.checkpoint_history_total),
+    );
+    block_sync_roster.insert(
+        "roster_sidecar_total".into(),
+        Value::from(wire.block_sync_roster.roster_sidecar_total),
+    );
+    block_sync_roster.insert(
+        "commit_roster_journal_total".into(),
+        Value::from(wire.block_sync_roster.commit_roster_journal_total),
+    );
+    block_sync_roster.insert(
+        "drop_missing_total".into(),
+        Value::from(wire.block_sync_roster.drop_missing_total),
+    );
+    block_sync_roster.insert(
+        "drop_unsolicited_share_blocks_total".into(),
+        Value::from(wire.block_sync_roster.drop_unsolicited_share_blocks_total),
+    );
+    let mut block_sync = Map::new();
+    block_sync.insert("roster".into(), Value::Object(block_sync_roster));
 
     let mut tx_queue = Map::new();
     tx_queue.insert("depth".into(), Value::from(wire.tx_queue_depth));
@@ -1858,6 +1916,35 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
         Value::Array(recent_rbc_evictions),
     );
 
+    let rbc_mismatch_entries: Vec<Value> = wire
+        .rbc_mismatch
+        .entries
+        .iter()
+        .map(|entry| {
+            let mut map = Map::new();
+            map.insert("peer_id".into(), Value::from(entry.peer_id.to_string()));
+            map.insert(
+                "chunk_digest_mismatch_total".into(),
+                Value::from(entry.chunk_digest_mismatch_total),
+            );
+            map.insert(
+                "payload_hash_mismatch_total".into(),
+                Value::from(entry.payload_hash_mismatch_total),
+            );
+            map.insert(
+                "chunk_root_mismatch_total".into(),
+                Value::from(entry.chunk_root_mismatch_total),
+            );
+            map.insert(
+                "last_timestamp_ms".into(),
+                Value::from(entry.last_timestamp_ms),
+            );
+            Value::Object(map)
+        })
+        .collect();
+    let mut rbc_mismatch = Map::new();
+    rbc_mismatch.insert("entries".into(), Value::Array(rbc_mismatch_entries));
+
     let mut prf = Map::new();
     prf.insert("height".into(), Value::from(wire.prf_height));
     prf.insert("view".into(), Value::from(wire.prf_view));
@@ -2085,6 +2172,7 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
         "missing_block_fetch".into(),
         Value::Object(missing_block_fetch),
     );
+    root.insert("block_sync".into(), Value::Object(block_sync));
     root.insert("kura_store".into(), Value::Object(kura_store));
     root.insert("epoch".into(), {
         let mut map = Map::new();
@@ -2143,6 +2231,10 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
         Value::from(wire.block_created_proposal_mismatch_total),
     );
     root.insert(
+        "consensus_message_handling".into(),
+        Value::Object(consensus_message_handling),
+    );
+    root.insert(
         "validation_reject_total".into(),
         Value::from(wire.validation_reject_total),
     );
@@ -2170,6 +2262,7 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
         Value::from(wire.da_reschedule_total),
     );
     root.insert("rbc_store".into(), Value::Object(rbc_store));
+    root.insert("rbc_mismatch".into(), Value::Object(rbc_mismatch));
     root.insert("prf".into(), Value::Object(prf));
     root.insert("membership".into(), Value::Object(membership));
     root.insert(
@@ -5103,13 +5196,15 @@ impl Client {
         outcome.map_or_else(
             || Err(fallback_err),
             |result| match result {
-                TxConfirmationStatus::Committed | TxConfirmationStatus::Applied => Ok(hash),
+                TxConfirmationStatus::Applied => Ok(hash),
                 TxConfirmationStatus::Rejected(Some(reason)) => {
                     Err(tx_rejection_to_report(&reason))
                 }
                 TxConfirmationStatus::Rejected(None) => Err(eyre!("Transaction rejected")),
                 TxConfirmationStatus::Expired => Err(eyre!("Transaction expired")),
-                TxConfirmationStatus::Queued | TxConfirmationStatus::Approved(_) => {
+                TxConfirmationStatus::Committed
+                | TxConfirmationStatus::Queued
+                | TxConfirmationStatus::Approved(_) => {
                     Err(eyre!("Transaction status not finalized"))
                 }
             },
@@ -5128,7 +5223,9 @@ impl Client {
         for attempt in 0..=retries {
             match check() {
                 Ok(Some(outcome)) => match outcome {
-                    status @ (TxConfirmationStatus::Queued | TxConfirmationStatus::Approved(_)) => {
+                    status @ (TxConfirmationStatus::Queued
+                    | TxConfirmationStatus::Approved(_)
+                    | TxConfirmationStatus::Committed) => {
                         debug!(
                             attempt,
                             ?delay,
@@ -7389,6 +7486,231 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
+    /// POST `/v1/subscriptions/plans` with a JSON subscription plan payload.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
+    pub fn create_subscription_plan(
+        &self,
+        request: &SubscriptionPlanCreateRequest,
+    ) -> Result<SubscriptionPlanCreateResponse> {
+        let url = join_torii_url(&self.torii_url, "v1/subscriptions/plans");
+        let body = norito::json::to_vec(request)
+            .wrap_err("failed to encode subscription plan create request")?;
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::POST, url)
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON)
+                .body(body),
+        )?;
+        let payload = Self::parse_json_ok_response(&resp, "subscription plan create request")?;
+        norito::json::from_value(payload)
+            .wrap_err("failed to decode subscription plan create response")
+    }
+
+    /// GET `/v1/subscriptions/plans` with optional query parameters.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
+    pub fn list_subscription_plans(
+        &self,
+        params: &SubscriptionPlanListParams,
+    ) -> Result<SubscriptionPlanListResponse> {
+        let url = join_torii_url(&self.torii_url, "v1/subscriptions/plans");
+        let mut req = self
+            .default_request(HttpMethod::GET, url)
+            .header("Accept", APPLICATION_JSON);
+        if let Some(provider) = &params.provider {
+            req = req.param("provider", provider);
+        }
+        if let Some(limit) = params.limit {
+            req = req.param("limit", &limit);
+        }
+        if params.offset > 0 {
+            req = req.param("offset", &params.offset);
+        }
+        let resp = self.send_builder(req)?;
+        let payload = Self::parse_json_ok_response(&resp, "subscription plan list request")?;
+        norito::json::from_value(payload)
+            .wrap_err("failed to decode subscription plan list response")
+    }
+
+    /// POST `/v1/subscriptions` with a subscription creation payload.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
+    pub fn create_subscription(
+        &self,
+        request: &SubscriptionCreateRequest,
+    ) -> Result<SubscriptionCreateResponse> {
+        let url = join_torii_url(&self.torii_url, "v1/subscriptions");
+        let body = norito::json::to_vec(request)
+            .wrap_err("failed to encode subscription create request")?;
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::POST, url)
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON)
+                .body(body),
+        )?;
+        let payload = Self::parse_json_ok_response(&resp, "subscription create request")?;
+        norito::json::from_value(payload).wrap_err("failed to decode subscription create response")
+    }
+
+    /// GET `/v1/subscriptions` with optional query parameters.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
+    pub fn list_subscriptions(
+        &self,
+        params: &SubscriptionListParams,
+    ) -> Result<SubscriptionListResponse> {
+        let url = join_torii_url(&self.torii_url, "v1/subscriptions");
+        let mut req = self
+            .default_request(HttpMethod::GET, url)
+            .header("Accept", APPLICATION_JSON);
+        if let Some(owner) = &params.owned_by {
+            req = req.param("owned_by", owner);
+        }
+        if let Some(provider) = &params.provider {
+            req = req.param("provider", provider);
+        }
+        if let Some(status) = &params.status {
+            req = req.param("status", status);
+        }
+        if let Some(limit) = params.limit {
+            req = req.param("limit", &limit);
+        }
+        if params.offset > 0 {
+            req = req.param("offset", &params.offset);
+        }
+        let resp = self.send_builder(req)?;
+        let payload = Self::parse_json_ok_response(&resp, "subscription list request")?;
+        norito::json::from_value(payload).wrap_err("failed to decode subscription list response")
+    }
+
+    /// GET `/v1/subscriptions/{subscription_id}`.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
+    pub fn get_subscription(&self, subscription_id: &NftId) -> Result<SubscriptionGetResponse> {
+        let path = format!("v1/subscriptions/{subscription_id}");
+        let url = join_torii_url(&self.torii_url, &path);
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_JSON),
+        )?;
+        let payload = Self::parse_json_ok_response(&resp, "subscription get request")?;
+        norito::json::from_value(payload).wrap_err("failed to decode subscription get response")
+    }
+
+    /// POST `/v1/subscriptions/{subscription_id}/pause`.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
+    pub fn pause_subscription(
+        &self,
+        subscription_id: &NftId,
+        request: &SubscriptionActionRequest,
+    ) -> Result<SubscriptionActionResponse> {
+        self.post_subscription_action(subscription_id, "pause", request)
+            .wrap_err("pause subscription request failed")
+    }
+
+    /// POST `/v1/subscriptions/{subscription_id}/resume`.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
+    pub fn resume_subscription(
+        &self,
+        subscription_id: &NftId,
+        request: &SubscriptionActionRequest,
+    ) -> Result<SubscriptionActionResponse> {
+        self.post_subscription_action(subscription_id, "resume", request)
+            .wrap_err("resume subscription request failed")
+    }
+
+    /// POST `/v1/subscriptions/{subscription_id}/cancel`.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
+    pub fn cancel_subscription(
+        &self,
+        subscription_id: &NftId,
+        request: &SubscriptionActionRequest,
+    ) -> Result<SubscriptionActionResponse> {
+        self.post_subscription_action(subscription_id, "cancel", request)
+            .wrap_err("cancel subscription request failed")
+    }
+
+    /// POST `/v1/subscriptions/{subscription_id}/keep`.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
+    pub fn keep_subscription(
+        &self,
+        subscription_id: &NftId,
+        request: &SubscriptionActionRequest,
+    ) -> Result<SubscriptionActionResponse> {
+        self.post_subscription_action(subscription_id, "keep", request)
+            .wrap_err("keep subscription request failed")
+    }
+
+    /// POST `/v1/subscriptions/{subscription_id}/charge-now`.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
+    pub fn charge_subscription_now(
+        &self,
+        subscription_id: &NftId,
+        request: &SubscriptionActionRequest,
+    ) -> Result<SubscriptionActionResponse> {
+        self.post_subscription_action(subscription_id, "charge-now", request)
+            .wrap_err("charge subscription request failed")
+    }
+
+    /// POST `/v1/subscriptions/{subscription_id}/usage`.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
+    pub fn record_subscription_usage(
+        &self,
+        subscription_id: &NftId,
+        request: &SubscriptionUsageRequest,
+    ) -> Result<SubscriptionActionResponse> {
+        let path = format!("v1/subscriptions/{subscription_id}/usage");
+        let url = join_torii_url(&self.torii_url, &path);
+        let body = norito::json::to_vec(request)
+            .wrap_err("failed to encode subscription usage request")?;
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::POST, url)
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON)
+                .body(body),
+        )?;
+        let payload = Self::parse_json_ok_response(&resp, "subscription usage request")?;
+        norito::json::from_value(payload).wrap_err("failed to decode subscription usage response")
+    }
+
+    fn post_subscription_action(
+        &self,
+        subscription_id: &NftId,
+        action: &str,
+        request: &SubscriptionActionRequest,
+    ) -> Result<SubscriptionActionResponse> {
+        let path = format!("v1/subscriptions/{subscription_id}/{action}");
+        let url = join_torii_url(&self.torii_url, &path);
+        let body = norito::json::to_vec(request)
+            .wrap_err("failed to encode subscription action request")?;
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::POST, url)
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON)
+                .body(body),
+        )?;
+        let payload = Self::parse_json_ok_response(&resp, "subscription action request")?;
+        norito::json::from_value(payload).wrap_err("failed to decode subscription action response")
+    }
+
     /// GET `/v1/runtime/abi/active`
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -8187,10 +8509,7 @@ where
                             }
                             PipelineEventBox::Block(block_event) => {
                                 if Some(block_event.header().height()) == block_height
-                                    && matches!(
-                                        block_event.status(),
-                                        BlockStatus::Applied | BlockStatus::Committed
-                                    )
+                                    && matches!(block_event.status(), BlockStatus::Applied)
                                 {
                                     debug!(
                                         %hash,
@@ -8260,6 +8579,337 @@ fn hashes_match(target: &HashOf<SignedTransaction>, entry_hash: impl AsRef<[u8]>
 }
 
 #[cfg(test)]
+mod subscription_http_tests {
+    use std::{
+        collections::BTreeMap,
+        sync::{Arc, Mutex},
+    };
+
+    use http::StatusCode;
+    use iroha_primitives::numeric::Numeric;
+    use iroha_test_samples::gen_account_in;
+    use norito::json::{JsonSerialize, Value as JsonValue};
+
+    use super::evidence_http_tests::{
+        SnapshotStore, base_url, client_with_base_url, json_response, with_mock_http,
+    };
+    use super::{
+        SubscriptionActionRequest, SubscriptionCreateRequest, SubscriptionPlanCreateRequest,
+    };
+    use super::{
+        SubscriptionActionResponse, SubscriptionCreateResponse, SubscriptionGetResponse,
+        SubscriptionListParams, SubscriptionListResponse, SubscriptionPlanListParams,
+        SubscriptionPlanListResponse, SubscriptionUsageRequest,
+    };
+    use crate::{
+        data_model::{
+            asset::AssetDefinitionId,
+            name::Name,
+            nft::NftId,
+            subscription::{
+                SubscriptionBilling, SubscriptionCadence, SubscriptionFixedPeriodCadence,
+                SubscriptionFixedPricing, SubscriptionPlan, SubscriptionState, SubscriptionStatus,
+            },
+            trigger::TriggerId,
+        },
+        http::{Method as HttpMethod, Response as HttpResponse},
+        http_default::RequestSnapshot,
+        subscriptions::{
+            SubscriptionListItem, SubscriptionPlanCreateResponse, SubscriptionPlanListItem,
+        },
+    };
+
+    fn encode_json<T: JsonSerialize>(value: &T) -> String {
+        norito::json::to_json(value).expect("encode json")
+    }
+
+    fn match_body<T: JsonSerialize>(snapshot: &RequestSnapshot, expected: &T) {
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode request body");
+        let expected = norito::json::to_value(expected).expect("encode expected body");
+        assert_eq!(
+            body, expected,
+            "unexpected request body for {}",
+            snapshot.url
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn subscription_endpoints_build_requests() {
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let (provider, provider_key) = gen_account_in("commerce");
+        let (subscriber, subscriber_key) = gen_account_in("users");
+        let plan_id: AssetDefinitionId = "fixed_plan#commerce".parse().unwrap();
+        let subscription_id: NftId = "sub-1$subscriptions".parse().unwrap();
+        let billing_trigger_id: TriggerId = "sub-1-bill".parse().unwrap();
+        let charge_asset_id: AssetDefinitionId = "usd#pay".parse().unwrap();
+        let unit_key: Name = "compute_ms".parse().unwrap();
+        let provider_private = provider_key.private_key().clone();
+        let subscriber_private = subscriber_key.private_key().clone();
+
+        let plan = SubscriptionPlan {
+            provider: provider.clone(),
+            billing: SubscriptionBilling {
+                cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
+                    period_ms: 1_000,
+                }),
+                bill_for: crate::data_model::subscription::SubscriptionBillFor::PreviousPeriod,
+                retry_backoff_ms: 100,
+                max_failures: 3,
+                grace_ms: 500,
+            },
+            pricing: crate::data_model::subscription::SubscriptionPricing::Fixed(
+                SubscriptionFixedPricing {
+                    amount: Numeric::new(5_u32, 0),
+                    asset_definition: charge_asset_id.clone(),
+                },
+            ),
+        };
+
+        let subscription_state = SubscriptionState {
+            plan_id: plan_id.clone(),
+            provider: provider.clone(),
+            subscriber: subscriber.clone(),
+            status: SubscriptionStatus::Active,
+            current_period_start_ms: 0,
+            current_period_end_ms: 1,
+            next_charge_ms: 1,
+            cancel_at_period_end: false,
+            cancel_at_ms: None,
+            failure_count: 0,
+            usage_accumulated: BTreeMap::new(),
+            billing_trigger_id: billing_trigger_id.clone(),
+        };
+
+        let plan_request = SubscriptionPlanCreateRequest {
+            authority: provider.clone(),
+            private_key: crate::data_model::prelude::ExposedPrivateKey(provider_private),
+            plan_id: plan_id.clone(),
+            plan: plan.clone(),
+        };
+        let plan_list_params = SubscriptionPlanListParams {
+            provider: Some(provider.to_string()),
+            limit: Some(10),
+            offset: 5,
+        };
+        let subscription_request = SubscriptionCreateRequest {
+            authority: subscriber.clone(),
+            private_key: crate::data_model::prelude::ExposedPrivateKey(subscriber_private.clone()),
+            subscription_id: subscription_id.clone(),
+            plan_id: plan_id.clone(),
+            billing_trigger_id: Some(billing_trigger_id.clone()),
+            usage_trigger_id: None,
+            first_charge_ms: Some(42),
+            grant_usage_to_provider: Some(true),
+        };
+        let subscription_list_params = SubscriptionListParams {
+            owned_by: Some(subscriber.to_string()),
+            provider: Some(provider.to_string()),
+            status: Some("active".to_string()),
+            limit: Some(25),
+            offset: 2,
+        };
+        let action_request = SubscriptionActionRequest {
+            authority: subscriber.clone(),
+            private_key: crate::data_model::prelude::ExposedPrivateKey(subscriber_private.clone()),
+            charge_at_ms: Some(170),
+            cancel_mode: None,
+        };
+        let usage_request = SubscriptionUsageRequest {
+            authority: subscriber.clone(),
+            private_key: crate::data_model::prelude::ExposedPrivateKey(subscriber_private),
+            unit_key: unit_key.clone(),
+            delta: Numeric::new(3_u32, 0),
+            usage_trigger_id: None,
+        };
+
+        let plan_create_response = SubscriptionPlanCreateResponse {
+            ok: true,
+            plan_id: plan_id.clone(),
+            tx_hash_hex: "aa".to_string(),
+        };
+        let plan_list_response = SubscriptionPlanListResponse {
+            items: vec![SubscriptionPlanListItem {
+                plan_id: plan_id.clone(),
+                plan: plan.clone(),
+            }],
+            total: 1,
+        };
+        let subscription_create_response = SubscriptionCreateResponse {
+            ok: true,
+            subscription_id: subscription_id.clone(),
+            billing_trigger_id: billing_trigger_id.clone(),
+            usage_trigger_id: None,
+            first_charge_ms: 42,
+            tx_hash_hex: "bb".to_string(),
+        };
+        let subscription_list_response = SubscriptionListResponse {
+            items: vec![SubscriptionListItem {
+                subscription_id: subscription_id.clone(),
+                subscription: subscription_state.clone(),
+                invoice: None,
+                plan: Some(plan.clone()),
+            }],
+            total: 1,
+        };
+        let subscription_get_response = SubscriptionGetResponse {
+            subscription_id: subscription_id.clone(),
+            subscription: subscription_state,
+            invoice: None,
+            plan: Some(plan),
+        };
+        let action_response = SubscriptionActionResponse {
+            ok: true,
+            subscription_id: subscription_id.clone(),
+            tx_hash_hex: "cc".to_string(),
+        };
+
+        let responder = {
+            let store = Arc::clone(&store);
+            let plan_create_json = encode_json(&plan_create_response);
+            let plan_list_json = encode_json(&plan_list_response);
+            let subscription_create_json = encode_json(&subscription_create_response);
+            let subscription_list_json = encode_json(&subscription_list_response);
+            let subscription_get_json = encode_json(&subscription_get_response);
+            let action_json = encode_json(&action_response);
+            move |snapshot: RequestSnapshot| {
+                store
+                    .lock()
+                    .expect("lock snapshot store")
+                    .push(snapshot.clone());
+                let path = snapshot.url.path();
+                let response = match (snapshot.method.clone(), path) {
+                    (HttpMethod::POST, "/v1/subscriptions/plans") => {
+                        json_response(StatusCode::OK, &plan_create_json)
+                    }
+                    (HttpMethod::GET, "/v1/subscriptions/plans") => {
+                        json_response(StatusCode::OK, &plan_list_json)
+                    }
+                    (HttpMethod::POST, "/v1/subscriptions") => {
+                        json_response(StatusCode::OK, &subscription_create_json)
+                    }
+                    (HttpMethod::GET, "/v1/subscriptions") => {
+                        json_response(StatusCode::OK, &subscription_list_json)
+                    }
+                    (HttpMethod::GET, "/v1/subscriptions/sub-1$subscriptions") => {
+                        json_response(StatusCode::OK, &subscription_get_json)
+                    }
+                    (
+                        HttpMethod::POST,
+                        "/v1/subscriptions/sub-1$subscriptions/pause"
+                        | "/v1/subscriptions/sub-1$subscriptions/resume"
+                        | "/v1/subscriptions/sub-1$subscriptions/cancel"
+                        | "/v1/subscriptions/sub-1$subscriptions/charge-now"
+                        | "/v1/subscriptions/sub-1$subscriptions/usage",
+                    ) => json_response(StatusCode::OK, &action_json),
+                    _ => HttpResponse::builder()
+                        .status(StatusCode::NOT_FOUND)
+                        .body(Vec::new())
+                        .expect("response build"),
+                };
+                Ok(response)
+            }
+        };
+
+        with_mock_http(responder, || {
+            let client = client_with_base_url(base_url());
+            client
+                .create_subscription_plan(&plan_request)
+                .expect("create subscription plan");
+            client
+                .list_subscription_plans(&plan_list_params)
+                .expect("list subscription plans");
+            client
+                .create_subscription(&subscription_request)
+                .expect("create subscription");
+            client
+                .list_subscriptions(&subscription_list_params)
+                .expect("list subscriptions");
+            client
+                .get_subscription(&subscription_id)
+                .expect("get subscription");
+            client
+                .pause_subscription(&subscription_id, &action_request)
+                .expect("pause subscription");
+            client
+                .resume_subscription(&subscription_id, &action_request)
+                .expect("resume subscription");
+            client
+                .cancel_subscription(&subscription_id, &action_request)
+                .expect("cancel subscription");
+            client
+                .charge_subscription_now(&subscription_id, &action_request)
+                .expect("charge subscription now");
+            client
+                .record_subscription_usage(&subscription_id, &usage_request)
+                .expect("record usage");
+        });
+
+        let snapshots = store.lock().expect("lock snapshots").clone();
+        assert_eq!(snapshots.len(), 10);
+        for snapshot in &snapshots {
+            match (snapshot.method.clone(), snapshot.url.path()) {
+                (HttpMethod::POST, "/v1/subscriptions/plans") => {
+                    match_body(snapshot, &plan_request);
+                }
+                (HttpMethod::GET, "/v1/subscriptions/plans") => {
+                    let params: Vec<(String, String)> = snapshot
+                        .url
+                        .query_pairs()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect();
+                    assert_eq!(
+                        params,
+                        vec![
+                            ("provider".to_string(), provider.to_string()),
+                            ("limit".to_string(), "10".to_string()),
+                            ("offset".to_string(), "5".to_string()),
+                        ]
+                    );
+                }
+                (HttpMethod::POST, "/v1/subscriptions") => {
+                    match_body(snapshot, &subscription_request);
+                }
+                (HttpMethod::GET, "/v1/subscriptions") => {
+                    let params: Vec<(String, String)> = snapshot
+                        .url
+                        .query_pairs()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect();
+                    assert_eq!(
+                        params,
+                        vec![
+                            ("owned_by".to_string(), subscriber.to_string()),
+                            ("provider".to_string(), provider.to_string()),
+                            ("status".to_string(), "active".to_string()),
+                            ("limit".to_string(), "25".to_string()),
+                            ("offset".to_string(), "2".to_string()),
+                        ]
+                    );
+                }
+                (HttpMethod::GET, "/v1/subscriptions/sub-1$subscriptions") => {
+                    assert!(snapshot.body.is_empty());
+                }
+                (
+                    HttpMethod::POST,
+                    "/v1/subscriptions/sub-1$subscriptions/pause"
+                    | "/v1/subscriptions/sub-1$subscriptions/resume"
+                    | "/v1/subscriptions/sub-1$subscriptions/cancel"
+                    | "/v1/subscriptions/sub-1$subscriptions/charge-now",
+                ) => {
+                    match_body(snapshot, &action_request);
+                }
+                (HttpMethod::POST, "/v1/subscriptions/sub-1$subscriptions/usage") => {
+                    match_body(snapshot, &usage_request);
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod tx_hash_tests {
     use std::time::Duration;
 
@@ -8301,8 +8951,10 @@ mod tx_hash_tests {
                 let count = attempts_clone.fetch_add(1, Ordering::SeqCst);
                 if count == 0 {
                     Err(eyre!("injected failure"))
-                } else {
+                } else if count == 1 {
                     Ok(Some(super::TxConfirmationStatus::Committed))
+                } else {
+                    Ok(Some(super::TxConfirmationStatus::Applied))
                 }
             },
             Duration::from_millis(0),
@@ -8313,8 +8965,8 @@ mod tx_hash_tests {
         let outcome = result
             .unwrap()
             .expect("expected committed transaction outcome");
-        assert!(matches!(outcome, super::TxConfirmationStatus::Committed));
-        assert!(attempts.load(Ordering::SeqCst) >= 2);
+        assert!(matches!(outcome, super::TxConfirmationStatus::Applied));
+        assert!(attempts.load(Ordering::SeqCst) >= 3);
     }
 
     #[tokio::test]
@@ -8331,8 +8983,10 @@ mod tx_hash_tests {
                 let count = attempts_clone.fetch_add(1, Ordering::SeqCst);
                 if count < 2 {
                     Ok(None)
-                } else {
+                } else if count == 2 {
                     Ok(Some(super::TxConfirmationStatus::Committed))
+                } else {
+                    Ok(Some(super::TxConfirmationStatus::Applied))
                 }
             },
             Duration::from_millis(0),
@@ -8343,8 +8997,8 @@ mod tx_hash_tests {
         let outcome = result
             .unwrap()
             .expect("expected committed transaction outcome");
-        assert!(matches!(outcome, super::TxConfirmationStatus::Committed));
-        assert!(attempts.load(Ordering::SeqCst) >= 3);
+        assert!(matches!(outcome, super::TxConfirmationStatus::Applied));
+        assert!(attempts.load(Ordering::SeqCst) >= 4);
     }
 
     #[tokio::test]
@@ -8362,7 +9016,8 @@ mod tx_hash_tests {
                 match count {
                     0 => Ok(Some(super::TxConfirmationStatus::Queued)),
                     1 => Ok(Some(super::TxConfirmationStatus::Approved(None))),
-                    _ => Ok(Some(super::TxConfirmationStatus::Committed)),
+                    2 => Ok(Some(super::TxConfirmationStatus::Committed)),
+                    _ => Ok(Some(super::TxConfirmationStatus::Applied)),
                 }
             },
             Duration::from_millis(0),
@@ -8373,8 +9028,8 @@ mod tx_hash_tests {
         let outcome = result
             .unwrap()
             .expect("expected committed transaction outcome");
-        assert!(matches!(outcome, super::TxConfirmationStatus::Committed));
-        assert!(attempts.load(Ordering::SeqCst) >= 3);
+        assert!(matches!(outcome, super::TxConfirmationStatus::Applied));
+        assert!(attempts.load(Ordering::SeqCst) >= 4);
     }
 
     #[tokio::test]
@@ -8603,7 +9258,7 @@ mod tx_hash_tests {
         let wrapped = err.wrap_err(super::Client::tx_confirmation_timeout_report(
             Duration::from_secs(1),
         ));
-        let messages: Vec<String> = wrapped.chain().map(|cause| cause.to_string()).collect();
+        let messages: Vec<String> = wrapped.chain().map(ToString::to_string).collect();
         assert!(
             messages
                 .iter()
@@ -8802,6 +9457,72 @@ mod tx_confirmation_stream_tests {
         .await;
         assert_eq!(result.unwrap(), hash);
         assert!(checks >= 3);
+    }
+
+    #[tokio::test]
+    async fn committed_block_event_waits_for_applied() {
+        let hash: HashOf<SignedTransaction> =
+            HashOf::from_untyped_unchecked(Hash::prehashed([14_u8; Hash::LENGTH]));
+        let height = std::num::NonZeroU64::new(15).expect("nonzero height");
+        let committed_event = EventBox::Pipeline(PipelineEventBox::Block(BlockEvent {
+            header: BlockHeader {
+                height,
+                prev_block_hash: None,
+                merkle_root: None,
+                result_merkle_root: None,
+                da_proof_policies_hash: None,
+                da_commitments_hash: None,
+                da_pin_intents_hash: None,
+                creation_time_ms: 0,
+                view_change_index: 0,
+                confidential_features: None,
+            },
+            status: BlockStatus::Committed,
+        }));
+        let applied_event = EventBox::Pipeline(PipelineEventBox::Block(BlockEvent {
+            header: BlockHeader {
+                height,
+                prev_block_hash: None,
+                merkle_root: None,
+                result_merkle_root: None,
+                da_proof_policies_hash: None,
+                da_commitments_hash: None,
+                da_pin_intents_hash: None,
+                creation_time_ms: 0,
+                view_change_index: 0,
+                confidential_features: None,
+            },
+            status: BlockStatus::Applied,
+        }));
+        let (tx, rx) = mpsc::unbounded_channel::<Result<EventBox, eyre::Report>>();
+        let mut events = UnboundedReceiverStream::new(rx);
+        let mut handle = tokio::spawn(async move {
+            listen_for_tx_confirmation_stream_with_status_check(
+                &mut events,
+                hash,
+                Duration::from_secs(1),
+                Duration::from_millis(1),
+                || Ok(Some(super::TxConfirmationStatus::Approved(Some(height)))),
+            )
+            .await
+        });
+
+        let _ = tx.send(Ok(committed_event));
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(5), &mut handle)
+                .await
+                .is_err(),
+            "confirmation should wait for applied"
+        );
+
+        let _ = tx.send(Ok(applied_event));
+        let result = tokio::time::timeout(Duration::from_secs(1), &mut handle)
+            .await
+            .expect("confirmation should finish")
+            .expect("join handle")
+            .expect("confirmation ok");
+        assert_eq!(result, hash);
     }
 
     #[tokio::test]
@@ -9397,19 +10118,21 @@ mod tests {
         time::Duration,
     };
 
-    use iroha_crypto::{Hash, HashOf};
+    use iroha_crypto::{Hash, HashOf, KeyPair};
     use iroha_data_model::{
         block::{
             BlockHeader,
             consensus::{
                 CertPhase, LaneBlockCommitment, LaneLiquidityProfile, LaneSettlementReceipt,
                 LaneSwapMetadata, LaneVolatilityClass, PERMISSIONED_TAG,
-                SumeragiBlockSyncRosterStatus, SumeragiDaGateReason, SumeragiDaGateSatisfaction,
-                SumeragiDaGateStatus, SumeragiKuraStoreStatus, SumeragiMembershipMismatchStatus,
-                SumeragiMembershipStatus, SumeragiMissingBlockFetchStatus,
-                SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcStatus, SumeragiQcEntry,
-                SumeragiQcSnapshot, SumeragiRbcStoreStatus, SumeragiStatusWire,
-                SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
+                SumeragiBlockSyncRosterStatus, SumeragiConsensusMessageHandlingEntry,
+                SumeragiConsensusMessageHandlingStatus, SumeragiDaGateReason,
+                SumeragiDaGateSatisfaction, SumeragiDaGateStatus, SumeragiKuraStoreStatus,
+                SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
+                SumeragiMissingBlockFetchStatus, SumeragiPeerKeyPolicyStatus,
+                SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcSnapshot,
+                SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus, SumeragiRbcStoreStatus,
+                SumeragiStatusWire, SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
             },
         },
         consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
@@ -9523,6 +10246,14 @@ mod tests {
             256,
         )
         .expect("construct lane relay envelope");
+        let mismatch_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let mismatch_entry = SumeragiRbcMismatchEntry {
+            peer_id: mismatch_peer,
+            chunk_digest_mismatch_total: 3,
+            payload_hash_mismatch_total: 2,
+            chunk_root_mismatch_total: 1,
+            last_timestamp_ms: 1_724_000_000_123,
+        };
         let status = SumeragiStatusWire {
             mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_string(),
             staged_mode_tag: None,
@@ -9556,11 +10287,28 @@ mod tests {
             block_created_dropped_by_lock_total: 1,
             block_created_hint_mismatch_total: 2,
             block_created_proposal_mismatch_total: 0,
+            consensus_message_handling: SumeragiConsensusMessageHandlingStatus {
+                entries: vec![SumeragiConsensusMessageHandlingEntry {
+                    kind: "block_created".to_owned(),
+                    outcome: "dropped".to_owned(),
+                    reason: "hint_mismatch".to_owned(),
+                    total: 2,
+                }],
+            },
             validation_reject_total: 0,
             validation_reject_reason: None,
             validation_rejects: SumeragiValidationRejectStatus::default(),
             peer_key_policy: SumeragiPeerKeyPolicyStatus::default(),
-            block_sync_roster: SumeragiBlockSyncRosterStatus::default(),
+            block_sync_roster: SumeragiBlockSyncRosterStatus {
+                commit_qc_hint_total: 0,
+                checkpoint_hint_total: 0,
+                commit_qc_history_total: 0,
+                checkpoint_history_total: 0,
+                roster_sidecar_total: 0,
+                commit_roster_journal_total: 0,
+                drop_missing_total: 0,
+                drop_unsolicited_share_blocks_total: 4,
+            },
             pacemaker_backpressure_deferrals_total: 6,
             commit_pipeline_tick_total: 0,
             da_reschedule_total: 0,
@@ -9592,6 +10340,9 @@ mod tests {
                 backpressure_deferrals_total: 0,
                 evictions_total: 0,
                 recent_evictions: Vec::new(),
+            },
+            rbc_mismatch: SumeragiRbcMismatchStatus {
+                entries: vec![mismatch_entry.clone()],
             },
             pending_rbc: SumeragiPendingRbcStatus::default(),
             tx_queue_depth: 7,
@@ -11419,6 +12170,7 @@ mod tests {
             block_created_dropped_by_lock_total: 0,
             block_created_hint_mismatch_total: 0,
             block_created_proposal_mismatch_total: 0,
+            consensus_message_handling: SumeragiConsensusMessageHandlingStatus::default(),
             validation_reject_total: 0,
             validation_reject_reason: None,
             validation_rejects: SumeragiValidationRejectStatus::default(),
@@ -11456,6 +12208,7 @@ mod tests {
                 evictions_total: 0,
                 recent_evictions: Vec::new(),
             },
+            rbc_mismatch: SumeragiRbcMismatchStatus::default(),
             pending_rbc: SumeragiPendingRbcStatus::default(),
             tx_queue_depth: 0,
             tx_queue_capacity: 0,
@@ -11655,6 +12408,15 @@ mod tests {
             256,
         )
         .expect("construct lane relay envelope");
+        let mismatch_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let mismatch_peer_id = mismatch_peer.to_string();
+        let mismatch_entry = SumeragiRbcMismatchEntry {
+            peer_id: mismatch_peer,
+            chunk_digest_mismatch_total: 3,
+            payload_hash_mismatch_total: 2,
+            chunk_root_mismatch_total: 1,
+            last_timestamp_ms: 1_724_000_000_123,
+        };
         let status = SumeragiStatusWire {
             mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_string(),
             staged_mode_tag: None,
@@ -11688,11 +12450,22 @@ mod tests {
             block_created_dropped_by_lock_total: 1,
             block_created_hint_mismatch_total: 2,
             block_created_proposal_mismatch_total: 0,
+            consensus_message_handling: SumeragiConsensusMessageHandlingStatus {
+                entries: vec![SumeragiConsensusMessageHandlingEntry {
+                    kind: "block_sync_update".to_owned(),
+                    outcome: "deferred".to_owned(),
+                    reason: "signature_mismatch_deferred".to_owned(),
+                    total: 4,
+                }],
+            },
             validation_reject_total: 0,
             validation_reject_reason: None,
             validation_rejects: SumeragiValidationRejectStatus::default(),
             peer_key_policy: SumeragiPeerKeyPolicyStatus::default(),
-            block_sync_roster: SumeragiBlockSyncRosterStatus::default(),
+            block_sync_roster: SumeragiBlockSyncRosterStatus {
+                drop_unsolicited_share_blocks_total: 4,
+                ..Default::default()
+            },
             pacemaker_backpressure_deferrals_total: 6,
             commit_pipeline_tick_total: 0,
             da_reschedule_total: 0,
@@ -11724,6 +12497,9 @@ mod tests {
                 backpressure_deferrals_total: 0,
                 evictions_total: 0,
                 recent_evictions: Vec::new(),
+            },
+            rbc_mismatch: SumeragiRbcMismatchStatus {
+                entries: vec![mismatch_entry],
             },
             pending_rbc: SumeragiPendingRbcStatus::default(),
             tx_queue_depth: 7,
@@ -11823,6 +12599,42 @@ mod tests {
                 "{key} mismatch"
             );
         }
+        let handling = root
+            .get("consensus_message_handling")
+            .and_then(Value::as_object)
+            .expect("consensus_message_handling object");
+        let handling_entries = handling
+            .get("entries")
+            .and_then(Value::as_array)
+            .expect("consensus_message_handling entries");
+        assert_eq!(
+            handling_entries.len(),
+            1,
+            "expected one consensus_message_handling entry"
+        );
+        let handling_entry = handling_entries[0]
+            .as_object()
+            .expect("consensus_message_handling entry object");
+        assert_eq!(
+            handling_entry.get("kind").and_then(Value::as_str),
+            Some("block_sync_update"),
+            "consensus_message_handling kind mismatch"
+        );
+        assert_eq!(
+            handling_entry.get("outcome").and_then(Value::as_str),
+            Some("deferred"),
+            "consensus_message_handling outcome mismatch"
+        );
+        assert_eq!(
+            handling_entry.get("reason").and_then(Value::as_str),
+            Some("signature_mismatch_deferred"),
+            "consensus_message_handling reason mismatch"
+        );
+        assert_eq!(
+            handling_entry.get("total").and_then(Value::as_u64),
+            Some(4),
+            "consensus_message_handling total mismatch"
+        );
         assert_eq!(
             root.get("lane_governance_sealed_total")
                 .and_then(Value::as_u64),
@@ -11835,6 +12647,68 @@ mod tests {
                 .map(Vec::len),
             Some(0),
             "lane_governance_sealed_aliases mismatch"
+        );
+
+        let block_sync = root
+            .get("block_sync")
+            .and_then(Value::as_object)
+            .expect("block_sync object");
+        let roster = block_sync
+            .get("roster")
+            .and_then(Value::as_object)
+            .expect("block_sync roster object");
+        assert_eq!(
+            roster
+                .get("drop_unsolicited_share_blocks_total")
+                .and_then(Value::as_u64),
+            Some(4),
+            "block_sync roster drop_unsolicited_share_blocks_total mismatch"
+        );
+
+        let rbc_mismatch = root
+            .get("rbc_mismatch")
+            .and_then(Value::as_object)
+            .expect("rbc_mismatch object");
+        let mismatch_entries = rbc_mismatch
+            .get("entries")
+            .and_then(Value::as_array)
+            .expect("rbc_mismatch entries array");
+        assert_eq!(mismatch_entries.len(), 1, "expected one rbc_mismatch entry");
+        let mismatch_entry = mismatch_entries[0]
+            .as_object()
+            .expect("rbc_mismatch entry object");
+        assert_eq!(
+            mismatch_entry.get("peer_id").and_then(Value::as_str),
+            Some(mismatch_peer_id.as_str()),
+            "rbc_mismatch peer_id mismatch"
+        );
+        assert_eq!(
+            mismatch_entry
+                .get("chunk_digest_mismatch_total")
+                .and_then(Value::as_u64),
+            Some(3),
+            "rbc_mismatch chunk_digest_mismatch_total mismatch"
+        );
+        assert_eq!(
+            mismatch_entry
+                .get("payload_hash_mismatch_total")
+                .and_then(Value::as_u64),
+            Some(2),
+            "rbc_mismatch payload_hash_mismatch_total mismatch"
+        );
+        assert_eq!(
+            mismatch_entry
+                .get("chunk_root_mismatch_total")
+                .and_then(Value::as_u64),
+            Some(1),
+            "rbc_mismatch chunk_root_mismatch_total mismatch"
+        );
+        assert_eq!(
+            mismatch_entry
+                .get("last_timestamp_ms")
+                .and_then(Value::as_u64),
+            Some(1_724_000_000_123),
+            "rbc_mismatch last_timestamp_ms mismatch"
         );
 
         let lane_governance = root

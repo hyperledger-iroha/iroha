@@ -1,10 +1,13 @@
 //! Runtime consensus-mode flip helpers.
 
+use std::time::SystemTime;
+
 use iroha_logger::prelude::*;
 
 use super::*;
 
 impl Actor {
+    #[allow(clippy::unnecessary_wraps)]
     fn rebuild_npos_state(&mut self) -> Result<Option<[u8; 32]>> {
         let view = self.state.view();
         let mut collectors = super::load_npos_collector_config(&view).or_else(|| {
@@ -70,6 +73,31 @@ impl Actor {
             self.pending_mode_flip = None;
             return Ok(());
         }
+        let processing_hash = self.pending.pending_processing.get();
+        let inflight = self.subsystems.commit.inflight.as_ref();
+        if processing_hash.is_some() || inflight.is_some() {
+            let reason = match (processing_hash.is_some(), inflight.is_some()) {
+                (true, true) => "commit_pipeline_busy",
+                (true, false) => "pending_processing",
+                (false, true) => "commit_inflight",
+                (false, false) => "commit_pipeline_idle",
+            };
+            let now_ms = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+                .unwrap_or(0);
+            super::status::note_mode_flip_blocked(reason, now_ms);
+            #[cfg(feature = "telemetry")]
+            self.telemetry
+                .inc_mode_flip_blocked(self.mode_tag(), now_ms);
+            debug!(
+                reason,
+                processing = ?processing_hash,
+                inflight_hash = ?inflight.as_ref().map(|entry| entry.block_hash),
+                "deferring runtime consensus mode flip while commit pipeline is active"
+            );
+            return Ok(());
+        }
         info!(
             from = ?self.consensus_mode,
             to = ?target,
@@ -95,10 +123,16 @@ impl Actor {
         self.pending.pending_blocks.clear();
         self.subsystems.da_rbc.rbc.pending.clear();
         self.subsystems.da_rbc.rbc.sessions.clear();
+        self.subsystems.da_rbc.rbc.deliver_deferral.clear();
+        self.subsystems.da_rbc.rbc.outbound_chunks.clear();
+        self.subsystems.da_rbc.rbc.outbound_cursor = None;
         self.subsystems.propose.proposal_cache = ProposalCache::new(PROPOSAL_CACHE_LIMIT);
         self.subsystems.propose.proposals_seen.clear();
         self.qc_cache.clear();
         self.vote_log.clear();
+        self.deferred_votes.clear();
+        self.deferred_qcs.clear();
+        self.vote_roster_cache.clear();
         let now = Instant::now();
         let (effective_mode, pacemaker_block_time, pacemaker_timeouts) = {
             let view = self.state.view();
@@ -118,7 +152,6 @@ impl Actor {
         };
         let (_, redundant_r) = self.collector_plan_params_for_mode(effective_mode);
         self.subsystems.propose.collector_redundant_limit = redundant_r.max(1);
-        self.pending.pending_replay_last_sent.clear();
         self.pending.missing_block_requests.clear();
         self.subsystems.da_rbc.da.da_bundles.clear();
         self.subsystems.da_rbc.da.da_pin_bundles.clear();
@@ -146,7 +179,6 @@ impl Actor {
             &mut self.qc_signer_tally,
             &mut self.voting_block,
             &mut self.pending_roster_activation,
-            &mut self.subsystems.propose.last_empty_child_attempt,
             &self.subsystems.da_rbc.rbc.status_handle,
             &mut self.subsystems.vrf,
             base_pacemaker_interval,

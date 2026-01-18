@@ -148,7 +148,7 @@ Derivations follow Appendix A. CI harness produces malformed proofs and fails i
 ## Public IO Schema
 | Field            | Bytes | Encoding                              | Notes                               |
 |-----------------|-------|---------------------------------------|-------------------------------------|
-| `dsid`           | 16    | little-endian UUID                    | Hashed with tag `fastpq:v1:dsid`.    |
+| `dsid`           | 16    | little-endian UUID                    | Dataspace ID for the entry's lane (global for default lane), hashed with tag `fastpq:v1:dsid`. |
 | `slot`           | 8     | little-endian u64                     | Nanoseconds since epoch.            |
 | `old_root`       | 32    | little-endian Poseidon2 field bytes   | SMT root before batch.              |
 | `new_root`       | 32    | little-endian Poseidon2 field bytes   | SMT root after batch.               |

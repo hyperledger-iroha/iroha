@@ -59,7 +59,7 @@ pub enum BridgeFinalityError {
         /// Hash of the stored block header.
         block_hash: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
     },
-    /// Validator PoP missing for the validator set entry.
+    /// Validator `PoP` missing for the validator set entry.
     #[error("validator PoP missing for index {index}")]
     MissingValidatorPop {
         /// Index into the validator set.
@@ -89,10 +89,7 @@ fn compute_block_mmr(
     let mut guard = cache.lock().expect("mmr cache mutex poisoned");
     let chain_id = state.chain_id().clone();
 
-    let mut rebuild = height < guard.height;
-    if guard.chain_id.as_ref() != Some(&chain_id) {
-        rebuild = true;
-    }
+    let mut rebuild = height < guard.height || guard.chain_id.as_ref() != Some(&chain_id);
     if !rebuild && guard.height > 0 {
         let cached_tip = guard.tip_hash;
         let current_tip = block_hash_at(state, guard.height)?;
@@ -331,12 +328,12 @@ pub enum BridgeFinalityVerificationError {
     /// Validator set is empty, so no quorum can be reached.
     #[error("validator set is empty")]
     EmptyValidatorSet,
-    /// Validator-set PoP length does not match the validator-set length.
+    /// Validator-set `PoP` length does not match the validator-set length.
     #[error("validator set pop length mismatch: expected {expected}, got {actual}")]
     ValidatorSetPopLengthMismatch {
-        /// Expected PoP count.
+        /// Expected `PoP` count.
         expected: usize,
-        /// Actual PoP count.
+        /// Actual `PoP` count.
         actual: usize,
     },
     /// Signer bitmap length does not match the validator set size.
@@ -405,6 +402,7 @@ const fn min_votes_for_len(len: usize) -> usize {
 /// # Errors
 /// Returns [`BridgeFinalityVerificationError`] when the proof fails chain/height checks,
 /// validator set hashing/anchors, or signature validation.
+#[allow(clippy::too_many_lines)]
 pub fn verify_finality_proof(
     proof: &BridgeFinalityProof,
     config: &FinalityProofVerificationConfig<'_>,

@@ -360,6 +360,8 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         | LoadVar { .. }
         | MapNew { .. }
         | CreateNftsForAllUsers
+        | SubscriptionBill
+        | SubscriptionRecordUsage
         | DataRef { .. }
         | GetAuthority { .. }
         | TransferBatchBegin
@@ -592,9 +594,9 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
                 f(*t);
             }
         }
-        Instr::ZkVerify { payload, .. } | Instr::VendorExecuteInstruction { payload } => {
-            f(*payload)
-        }
+        Instr::ZkVerify { payload, .. }
+        | Instr::VendorExecuteInstruction { payload }
+        | Instr::VendorExecuteQuery { payload, .. } => f(*payload),
         StateGet { path, .. } => f(*path),
         StateSet { path, value } => {
             f(*path);
@@ -769,6 +771,7 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         Instr::TupleGet { dest, .. } => Some(*dest),
         Instr::BuildSubmitBallotInline { dest, .. } => Some(*dest),
         Instr::BuildUnshieldInline { dest, .. } => Some(*dest),
+        Instr::VendorExecuteQuery { dest, .. } => Some(*dest),
         Instr::Call { dest, .. } => dest.as_ref().copied(),
         Instr::GrantPermission { .. }
         | Instr::RevokePermission { .. }
@@ -798,6 +801,8 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::RevokeRole { .. }
         | Instr::ZkVerify { .. }
         | Instr::VendorExecuteInstruction { .. }
+        | Instr::SubscriptionBill
+        | Instr::SubscriptionRecordUsage
         | Instr::AssertEq { .. }
         | Instr::Assert { .. }
         | Instr::Info { .. }

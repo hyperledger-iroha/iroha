@@ -6,12 +6,11 @@ Status: implemented EMA-derived base window, RTT floor, and configurable jitter/
 
 ## Concepts
 - Base window: exponential moving average of the observed consensus phases
-  (propose, collect_da, collect_prevote, collect_precommit, collect_aggregator,
-  commit). The EMA is seeded from `sumeragi.npos.timeouts.*`; until sufficient
-  samples arrive it effectively matches the configured defaults. Execution and
-  witness EMAs are exported for observability but are not yet included in the
-  pacemaker window. The smoothed values surface via
-  `sumeragi_phase_latency_ema_ms{phase=…}`.
+  (propose, collect_da, collect_prevote, collect_precommit, commit). The EMA is
+  seeded from `sumeragi.npos.timeouts.*`; until sufficient samples arrive it
+  effectively matches the configured defaults. `collect_aggregator` EMA is
+  exported for observability but is not included in the pacemaker window. The
+  smoothed values surface via `sumeragi_phase_latency_ema_ms{phase=…}`.
 - Backoff multiplier: `sumeragi.pacemaker_backoff_multiplier` (default 1). Each timeout adds `base * multiplier` to the current window.
 - RTT floor: `avg_rtt_ms * sumeragi.pacemaker_rtt_floor_multiplier` (default 2). Prevents too-aggressive timeouts on higher-latency links.
 - Cap: `sumeragi.pacemaker_max_backoff_ms` (default 60_000 ms). Hard ceiling on the window.

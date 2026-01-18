@@ -6,13 +6,19 @@
 //!
 //! The host also exposes basic hardware feature discovery and proof generation
 //! helpers used by some tests.
-use std::{any::Any, collections::HashSet};
+use std::{
+    any::Any,
+    collections::{BTreeMap, HashSet},
+    num::NonZeroU16,
+};
 
 use iroha_crypto::{Sm2PublicKey, Sm2Signature, Sm3Digest, Sm4Key};
 use iroha_data_model::{
     isi::transfer::TransferAssetBatch,
+    name::Name,
     nexus::{AxtPolicySnapshot, DataSpaceId},
 };
+use iroha_primitives::json::Json;
 use norito::{NoritoSerialize, decode_from_bytes};
 
 use crate::{
@@ -101,6 +107,9 @@ pub const LABEL_VOTE_BALLOT: &str = "zk_verify_ballot/v1";
 pub const LABEL_VOTE_TALLY: &str = "zk_verify_tally/v1";
 pub const LABEL_BATCH: &str = "zk_verify_batch/v1";
 
+const PUBLIC_INPUT_GAS_BASE: u64 = 16;
+const PUBLIC_INPUT_GAS_PER_BYTE: u64 = 1;
+
 /// Trait for IVM host environment to handle syscalls (SCALL).
 pub trait IVMHost {
     /// Handle a syscall invoked by the VM. `number` is the syscall ID and the
@@ -112,7 +121,9 @@ pub trait IVMHost {
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError>;
 
     /// Downcast support for hosts with extra methods/state.
-    fn as_any(&mut self) -> &mut dyn Any;
+    fn as_any(&mut self) -> &mut dyn Any
+    where
+        Self: 'static;
 
     /// Whether this host is safe to share across worker threads during block execution.
     /// Hosts with internal mutable state should override and return `false` so the VM
@@ -181,6 +192,7 @@ const _: FinishTxSignatureGuard = finish_tx_signature_guard;
 #[derive(Clone)]
 pub struct DefaultHost {
     private_inputs: Vec<u64>,
+    public_inputs: BTreeMap<Name, Vec<u8>>,
     pub_output: Vec<u8>,
     nullifiers: HashSet<u64>,
     zk_cfg: ZkHalo2Config,
@@ -198,6 +210,7 @@ impl DefaultHost {
     pub fn new() -> Self {
         DefaultHost {
             private_inputs: Vec::new(),
+            public_inputs: BTreeMap::new(),
             pub_output: Vec::new(),
             nullifiers: HashSet::new(),
             zk_cfg: ZkHalo2Config::default(),
@@ -216,6 +229,7 @@ impl DefaultHost {
     pub fn with_private_inputs(inputs: Vec<u64>) -> Self {
         DefaultHost {
             private_inputs: inputs,
+            public_inputs: BTreeMap::new(),
             pub_output: Vec::new(),
             nullifiers: HashSet::new(),
             zk_cfg: ZkHalo2Config::default(),
@@ -234,6 +248,17 @@ impl DefaultHost {
     pub fn with_zk_halo2_config(mut self, cfg: ZkHalo2Config) -> Self {
         self.zk_cfg = cfg;
         self
+    }
+
+    /// Provide public inputs retrievable via `SYSCALL_GET_PUBLIC_INPUT`.
+    pub fn with_public_inputs(mut self, inputs: BTreeMap<Name, Vec<u8>>) -> Self {
+        self.public_inputs = inputs;
+        self
+    }
+
+    /// Replace the public input map used by `SYSCALL_GET_PUBLIC_INPUT`.
+    pub fn set_public_inputs(&mut self, inputs: BTreeMap<Name, Vec<u8>>) {
+        self.public_inputs = inputs;
     }
 
     /// Expose the current Halo2 verifier config (for tests/introspection).
@@ -589,7 +614,81 @@ impl Default for DefaultHost {
 impl IVMHost for DefaultHost {
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
         match number {
+            crate::syscalls::SYSCALL_DEBUG_PRINT => {
+                let value = vm.register(10);
+                if cfg!(any(test, debug_assertions)) {
+                    eprintln!("[IVM] debug_print r10={value}");
+                }
+                Ok(0)
+            }
+            crate::syscalls::SYSCALL_EXIT => {
+                let status = vm.register(10);
+                vm.request_exit();
+                vm.set_register(10, status);
+                Ok(0)
+            }
+            crate::syscalls::SYSCALL_ABORT => {
+                vm.set_register(10, 0);
+                vm.request_abort();
+                Ok(0)
+            }
+            crate::syscalls::SYSCALL_DEBUG_LOG => {
+                let ptr = vm.register(10);
+                if ptr == 0 {
+                    return Ok(0);
+                }
+                let tlv = vm.memory.validate_tlv(ptr)?;
+                let policy = vm.syscall_policy();
+                if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
+                    return Err(VMError::AbiTypeNotAllowed {
+                        abi: vm.abi_version(),
+                        type_id: tlv.type_id as u16,
+                    });
+                }
+                match tlv.type_id {
+                    PointerType::Blob | PointerType::NoritoBytes | PointerType::Json => {
+                        if cfg!(any(test, debug_assertions)) {
+                            let msg = if tlv.type_id == PointerType::Json {
+                                decode_from_bytes::<Json>(tlv.payload)
+                                    .map(|json| json.to_string())
+                                    .unwrap_or_else(|_| {
+                                        core::str::from_utf8(tlv.payload)
+                                            .unwrap_or("<non-utf8>")
+                                            .to_string()
+                                    })
+                            } else {
+                                core::str::from_utf8(tlv.payload)
+                                    .unwrap_or("<non-utf8>")
+                                    .to_string()
+                            };
+                            eprintln!("[IVM] {msg}");
+                        }
+                        Ok(0)
+                    }
+                    _ => Err(VMError::NoritoInvalid),
+                }
+            }
             // Basic pointer‑ABI validations to mirror core host behavior in tests
+            crate::syscalls::SYSCALL_ADD_SIGNATORY => {
+                // r10=&AccountId, r11=&Json
+                Self::expect_tlv(vm, 10, PointerType::AccountId)?;
+                Self::expect_tlv(vm, 11, PointerType::Json)?;
+                Ok(0)
+            }
+            crate::syscalls::SYSCALL_REMOVE_SIGNATORY => {
+                // r10=&AccountId, r11=&Json
+                Self::expect_tlv(vm, 10, PointerType::AccountId)?;
+                Self::expect_tlv(vm, 11, PointerType::Json)?;
+                Ok(0)
+            }
+            crate::syscalls::SYSCALL_SET_ACCOUNT_QUORUM => {
+                // r10=&AccountId, r11=quorum:u64
+                Self::expect_tlv(vm, 10, PointerType::AccountId)?;
+                let quorum_raw = vm.register(11);
+                let quorum_u16 = u16::try_from(quorum_raw).map_err(|_| VMError::DecodeError)?;
+                NonZeroU16::new(quorum_u16).ok_or(VMError::DecodeError)?;
+                Ok(0)
+            }
             crate::syscalls::SYSCALL_SET_ACCOUNT_DETAIL => {
                 // r10=&AccountId, r11=&Name, r12=&Json
                 Self::expect_tlv(vm, 10, PointerType::AccountId)?;
@@ -1031,6 +1130,38 @@ impl IVMHost for DefaultHost {
                     Err(VMError::UnknownSyscall(number))
                 }
             }
+            crate::syscalls::SYSCALL_GET_PUBLIC_INPUT => {
+                // Load a named public input provided by the host.
+                let ptr = vm.register(10);
+                let tlv = vm.memory.validate_tlv(ptr)?;
+                if tlv.type_id != PointerType::Name {
+                    return Err(VMError::NoritoInvalid);
+                }
+                let policy = vm.syscall_policy();
+                if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
+                    return Err(VMError::AbiTypeNotAllowed {
+                        abi: vm.abi_version(),
+                        type_id: tlv.type_id as u16,
+                    });
+                }
+                let name: Name =
+                    norito::decode_from_bytes(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+                let Some(bytes) = self.public_inputs.get(&name) else {
+                    return Err(VMError::PermissionDenied);
+                };
+                let tlv = pointer_abi::validate_tlv_bytes(bytes)?;
+                if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
+                    return Err(VMError::AbiTypeNotAllowed {
+                        abi: vm.abi_version(),
+                        type_id: tlv.type_id as u16,
+                    });
+                }
+                let dst = vm.alloc_input_tlv(bytes)?;
+                vm.set_register(10, dst);
+                let len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+                Ok(PUBLIC_INPUT_GAS_BASE
+                    .saturating_add(PUBLIC_INPUT_GAS_PER_BYTE.saturating_mul(len)))
+            }
             crate::syscalls::SYSCALL_COMMIT_OUTPUT => {
                 // Make the VM's output buffer available to the host.
                 self.pub_output = vm.read_output().to_vec();
@@ -1080,56 +1211,19 @@ impl IVMHost for DefaultHost {
                 let msg = decode_blob(vm, 10)?;
                 let sig = decode_blob(vm, 11)?;
                 let pk = decode_blob(vm, 12)?;
-                // Ensure these bindings are considered used even if signature schemes are disabled.
-                let _ = (&msg, &sig, &pk);
                 let scheme_code = vm.register(13) as u8;
-                let _scheme = match scheme_code {
-                    1 => {
-                        #[cfg(feature = "ed25519")]
-                        {
-                            crate::signature::SignatureScheme::Ed25519
-                        }
-                        #[cfg(not(feature = "ed25519"))]
-                        {
-                            vm.set_register(10, 0);
-                            return Ok(0);
-                        }
-                    }
-                    2 => {
-                        #[cfg(feature = "secp256k1")]
-                        {
-                            crate::signature::SignatureScheme::Secp256k1
-                        }
-                        #[cfg(not(feature = "secp256k1"))]
-                        {
-                            vm.set_register(10, 0);
-                            return Ok(0);
-                        }
-                    }
-                    3 => {
-                        #[cfg(feature = "ml-dsa")]
-                        {
-                            crate::signature::SignatureScheme::MlDsa
-                        }
-                        #[cfg(not(feature = "ml-dsa"))]
-                        {
-                            vm.set_register(10, 0);
-                            return Ok(0);
-                        }
-                    }
+                let scheme = match scheme_code {
+                    1 => crate::signature::SignatureScheme::Ed25519,
+                    2 => crate::signature::SignatureScheme::Secp256k1,
+                    3 => crate::signature::SignatureScheme::MlDsa,
                     _ => {
                         vm.set_register(10, 0);
                         return Ok(0);
                     }
                 };
-                #[cfg(any(feature = "ed25519", feature = "secp256k1", feature = "ml-dsa"))]
-                {
-                    let ok = crate::signature::verify_signature(_scheme, &msg, &sig, &pk);
-                    vm.set_register(10, if ok { 1 } else { 0 });
-                    Ok(0)
-                }
-                // When no signature scheme features are enabled, the match above already
-                // returned Ok(0) for all codes; nothing remains to execute here.
+                let ok = crate::signature::verify_signature(scheme, &msg, &sig, &pk);
+                vm.set_register(10, if ok { 1 } else { 0 });
+                Ok(0)
             }
             crate::syscalls::SYSCALL_SM3_HASH => {
                 if !self.sm_enabled {
@@ -1904,7 +1998,10 @@ impl IVMHost for DefaultHost {
     }
 
     /// Downcast support for hosts with extra methods/state.
-    fn as_any(&mut self) -> &mut dyn Any {
+    fn as_any(&mut self) -> &mut dyn Any
+    where
+        Self: 'static,
+    {
         self
     }
 

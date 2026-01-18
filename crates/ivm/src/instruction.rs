@@ -1,9 +1,9 @@
 //! Instruction opcode constants, field extractors and helpers for the canonical
 //! IVM wide instruction format. Each 32-bit word encodes an 8-bit primary
 //! opcode followed by three 8-bit operand slots. The nested modules enumerate
-//! opcode families (arithmetic, memory, control-flow, crypto, ISO20022 and
-//! zero-knowledge helpers) and provide convenience extractors for working with
-//! raw instruction words.
+//! opcode families (arithmetic, memory, control-flow, crypto and zero-knowledge
+//! helpers) and provide convenience extractors for working with raw instruction
+//! words. ISO20022 opcode values remain reserved for future releases.
 
 /// Helpers for the canonical wide encoding (8-bit opcode + three 8-bit operands).
 pub mod wide {
@@ -117,7 +117,7 @@ pub mod wide {
         pub const PAIRING: u8 = 0x8E;
     }
 
-    /// ISO20022 helpers.
+    /// Reserved ISO20022 helpers (not enabled in ABI v1).
     pub mod iso20022 {
         pub const MSG_CREATE: u8 = 0x90;
         pub const MSG_CLONE: u8 = 0x91;
@@ -246,7 +246,7 @@ pub mod wide {
                 // System
                 | system::SCALL
                 | system::GETGAS
-                | system::SYSTEM
+                // NOTE: system::SYSTEM is reserved and currently invalid.
                 // Crypto/vector
                 | crypto::VADD32
                 | crypto::VADD64
@@ -273,23 +273,6 @@ pub mod wide {
                 | crypto::ECDSAVERIFY
                 | crypto::DILITHIUMVERIFY
                 | crypto::PAIRING
-                // ISO20022 helpers
-                | iso20022::MSG_CREATE
-                | iso20022::MSG_CLONE
-                | iso20022::MSG_SET
-                | iso20022::MSG_GET
-                | iso20022::MSG_ADD
-                | iso20022::MSG_REMOVE
-                | iso20022::MSG_CLEAR
-                | iso20022::MSG_PARSE
-                | iso20022::MSG_SERIALIZE
-                | iso20022::MSG_VALIDATE
-                | iso20022::MSG_SIGN
-                | iso20022::MSG_VERIFY_SIG
-                | iso20022::MSG_SEND
-                | iso20022::ENCODE_STR
-                | iso20022::DECODE_STR
-                | iso20022::VALIDATE_FORMAT
                 // Zero-knowledge helpers
                 | zk::ASSERT
                 | zk::ASSERT_EQ

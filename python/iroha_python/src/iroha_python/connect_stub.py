@@ -9,8 +9,8 @@ Never use this stub for production traffic.
 
 from __future__ import annotations
 
-import inspect
 import hashlib
+import inspect
 import pickle
 import secrets
 from typing import Any, Mapping, Tuple

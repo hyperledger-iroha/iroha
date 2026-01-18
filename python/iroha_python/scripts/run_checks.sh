@@ -11,7 +11,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 
 SKIP_LINT="${SKIP_LINT:-0}"
 SKIP_TESTS="${SKIP_TESTS:-0}"
@@ -37,8 +37,14 @@ if [[ "${SKIP_LINT}" != "1" ]]; then
         echo "ruff is not installed. Install with 'pip install iroha-python[dev]'." >&2
         exit 1
     fi
-    run "${PYTHON_BIN}" -m ruff check --config "${IROHA_PYTHON_RUFF_CFG}" "${IROHA_PYTHON_SRC}" "${IROHA_PYTHON_TESTS}"
-    run "${PYTHON_BIN}" -m ruff check --config "${TORII_RUFF_CFG}" "${TORII_CLIENT_SRC}"
+    (
+        cd "${REPO_ROOT}/${IROHA_PYTHON_ROOT}"
+        run "${PYTHON_BIN}" -m ruff check "src/iroha_python" "tests"
+    )
+    (
+        cd "${REPO_ROOT}/${TORII_CLIENT_SRC}"
+        run "${PYTHON_BIN}" -m ruff check "."
+    )
 
     if ! "${PYTHON_BIN}" -m mypy --version >/dev/null 2>&1; then
         echo "mypy is not installed. Install with 'pip install iroha-python[dev]'." >&2

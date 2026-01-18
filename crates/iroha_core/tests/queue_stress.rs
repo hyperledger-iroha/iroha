@@ -38,6 +38,7 @@ fn queue_config(capacity: usize, ttl: Duration) -> QueueConfig {
         capacity: NonZeroUsize::new(capacity).expect("non-zero capacity"),
         capacity_per_user: NonZeroUsize::new(capacity).expect("non-zero per-user capacity"),
         transaction_time_to_live: ttl,
+        ..QueueConfig::default()
     }
 }
 
@@ -87,6 +88,6 @@ fn expired_transactions_drain_without_panic() {
         drop(view);
 
         assert!(guards.is_empty(), "expired tx should not remain available");
-        assert_eq!(queue.tx_len(), 0, "queue drained expired transaction");
+        assert_eq!(queue.queued_len(), 0, "queue drained expired transaction");
     }
 }

@@ -9,7 +9,8 @@ use eyre::{Result, WrapErr, ensure};
 use integration_tests::sandbox;
 use iroha::client::Client;
 use iroha_data_model::{
-    isi::SetParameter,
+    Level,
+    isi::{Log, SetParameter},
     parameter::{
         Parameter,
         system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
@@ -45,11 +46,15 @@ async fn npos_late_vrf_reveal_clears_penalty_and_preserves_seed() -> Result<()> 
     };
 
     // Ensure the network produces a couple of blocks so the epoch manager is initialised.
+    let client = network.client();
+    let status = client.get_status()?;
+    for idx in status.blocks..2 {
+        client.submit_blocking(Log::new(Level::INFO, format!("vrf seed {idx}")))?;
+    }
     network
         .ensure_blocks_with(|height| height.total >= 2)
         .await?;
 
-    let client = network.client();
     let http = HttpClient::new();
     let telemetry_url = client
         .torii_url
@@ -161,6 +166,10 @@ async fn npos_late_vrf_reveal_clears_penalty_and_preserves_seed() -> Result<()> 
     );
 
     // Wait for the epoch to finalize (height multiple of epoch length).
+    let status = client.get_status()?;
+    for idx in status.blocks..EPOCH_LENGTH_BLOCKS {
+        client.submit_blocking(Log::new(Level::INFO, format!("vrf finalize tick {idx}")))?;
+    }
     network
         .ensure_blocks_with(|height| height.total >= EPOCH_LENGTH_BLOCKS)
         .await?;
@@ -255,11 +264,19 @@ async fn npos_zero_participation_epoch_reports_full_no_participation() -> Result
     };
 
     // Allow the first epoch to elapse without any VRF commits/reveals.
+    let client = network.client();
+    let target_height = EPOCH_LENGTH_BLOCKS.saturating_add(1);
+    let status = client.get_status()?;
+    for idx in status.blocks..target_height {
+        client.submit_blocking(Log::new(
+            Level::INFO,
+            format!("vrf no-participation tick {idx}"),
+        ))?;
+    }
     network
         .ensure_blocks_with(|height| height.total > EPOCH_LENGTH_BLOCKS)
         .await?;
 
-    let client = network.client();
     let http = HttpClient::new();
     let telemetry_url = client
         .torii_url
@@ -566,7 +583,7 @@ where
 async fn wait_for_height_at_least(client: &Client, min_pos_in_epoch: u64) -> Result<()> {
     const RETRY_INTERVAL: Duration = Duration::from_millis(200);
     const RETRIES: usize = 30;
-    for _ in 0..RETRIES {
+    for attempt in 0..RETRIES {
         let status = client.get_status()?;
         let height = status.blocks;
         if height > 0 {
@@ -575,6 +592,7 @@ async fn wait_for_height_at_least(client: &Client, min_pos_in_epoch: u64) -> Res
                 return Ok(());
             }
         }
+        client.submit_blocking(Log::new(Level::INFO, format!("vrf height tick {attempt}")))?;
         sleep(RETRY_INTERVAL).await;
     }
     eyre::bail!(

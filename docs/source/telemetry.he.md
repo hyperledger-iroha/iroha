@@ -24,7 +24,7 @@ Iroha חושפת מדדים תואמי Prometheus ותמצית סטטוס בפו
 - `/v1/sumeragi/new_view/sse` (SSE): זרם תקופתי של אותו מטען JSON לדשבורדים חיים.
 - `/v1/sumeragi/status` (ברירת מחדל Norito): צילום מצב של הקונסנזוס. בקשת `Accept: application/json` מחזירה `{ leader_index, view_change_index, highest_qc { height, view, subject_block_hash }, locked_qc { height, view, subject_block_hash }, tx_queue { depth, capacity, saturated }, epoch { length_blocks, commit_deadline_offset, reveal_deadline_offset }, gossip_fallback_total, block_created_dropped_by_lock_total, block_created_hint_mismatch_total, block_created_proposal_mismatch_total, pacemaker_backpressure_deferrals_total, da_reschedule_total, rbc_store { sessions, bytes, pressure_level, backpressure_deferrals_total, evictions_total, recent_evictions[...] }, prf { height, view, epoch_seed }, vrf_penalty_epoch, vrf_committed_no_reveal_total, vrf_no_participation_total, vrf_late_reveals_total, collectors_targeted_{current,last_per_block}, redundant_sends_total, lane_governance { ... }, lane_governance_sealed_total, lane_governance_sealed_aliases, worker_loop { stage, stage_started_ms, last_iteration_ms, queue_depths { vote_rx, block_payload_rx, rbc_chunk_rx, block_rx, consensus_rx, lane_relay_rx, background_rx } } }`.
 - `/v1/sumeragi/status/sse` (SSE): זרם ≈1 שנייה עם אותו JSON כמו `/v1/sumeragi/status`.
-- `/v1/sumeragi/rbc` (JSON): מדדי RBC: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, deliver_broadcasts_total, payload_bytes_delivered_total }`.
+- `/v1/sumeragi/rbc` (JSON): מדדי RBC: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, ready_rebroadcasts_skipped_total, deliver_broadcasts_total, payload_bytes_delivered_total, payload_rebroadcasts_skipped_total }`.
 - `/v1/sumeragi/rbc/sessions` (JSON): מצב סשני RBC: `{ sessions_active, items: [{ block_hash, height, view, total_chunks, received_chunks, ready_count, delivered, invalid, payload_hash, recovered, lane_backlog: [{ lane_id, tx_count, total_chunks, pending_chunks, rbc_bytes_total }], dataspace_backlog: [{ lane_id, dataspace_id, tx_count, total_chunks, pending_chunks, rbc_bytes_total }] }] }`.
 - `/v1/sumeragi/pacemaker` (JSON): טיימרים ותצורת pacemaker: `{ backoff_ms, rtt_floor_ms, jitter_ms, backoff_multiplier, rtt_floor_multiplier, max_backoff_ms, jitter_frac_permille }`.
 - `/v1/sumeragi/qc` (ברירת מחדל Norito): צילום Highest/Locked commit certificate (`highest_qc`/`locked_qc`); כולל `subject_block_hash` עבור Highest commit certificate אם ידוע. ניתן לבקש JSON דרך הכותרת `Accept`.
@@ -104,7 +104,7 @@ Iroha חושפת מדדים תואמי Prometheus ותמצית סטטוס בפו
 - `sumeragi_view_changes_total`: ספירת שינויי View.
 - `sumeragi_heartbeat_view_index`: view נוכחי לפי heartbeat.
 - `sumeragi_new_view_height`: גובה הבלוק של קבלת NEW_VIEW אחרונה.
-- `pacemaker_backpressure_deferrals_total`: מספר דחיות pacemaker בגלל עומס.
+- `pacemaker_backpressure_deferrals_total`: מספר דחיות pacemaker בגלל עומס (עומס בתור, backlog של relay/RBC או בלוק ממתין שחוסם הצעה).
 - `sumeragi_block_created_dropped_by_lock_total`, ‏`hint_mismatch_total`, ‏`proposal_mismatch_total`: מדדי נשירה של הצעות.
 - `sumeragi_da_gate_block_total{reason="missing_local_data"}`: מונה של הפעלות מחדש של עיבוד DA כאשר לא ניתן היה להרכיב availability evidence בזמן.
 - `sumeragi_rbc_sessions_active`: סשני RBC פעילים כרגע.
@@ -139,7 +139,7 @@ Iroha חושפת מדדים תואמי Prometheus ותמצית סטטוס בפו
 increase(pacemaker_backpressure_deferrals_total[5m])
 ```
 
-פיק ספייק מרמז על עומס ברשת או בעיות חומרה. אפשר לשלב עם
+פיק ספייק מרמז על עומס ברשת, עומס בתור, backlog של relay/RBC או בלוק ממתין שחוסם הצעה. אפשר לשלב עם
 
 ```promql
 histogram_quantile(0.95, sum(rate(sumeragi_phase_latency_ms_bucket[5m])) by (phase, le))
@@ -199,7 +199,7 @@ torii_tx_queue_depth / torii_tx_queue_capacity
 
 תהליך טיפול:
 1. לאסוף `/status` ולבדוק `pacemaker_backpressure_deferrals_total`.
-2. לבדוק את עומק תור העסקאות ותור RBC.
+2. לבדוק את עומק תור העסקאות, עומק/סטטוס RBC, ואותות backpressure של relay או בלוקים ממתינים.
 3. להשוות זמני שלבים ב-`/v1/sumeragi/phases`.
 
 ### חוסר פעילות VRF

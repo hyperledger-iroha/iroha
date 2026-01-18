@@ -672,6 +672,7 @@ mod tests {
         State::with_telemetry(World::default(), kura, query, StateTelemetry::default())
     }
 
+    #[allow(clippy::too_many_lines)]
     fn test_sumeragi_config() -> SumeragiConfig {
         SumeragiConfig {
             debug_force_soft_fork: false,
@@ -693,6 +694,8 @@ mod tests {
             collectors_redundant_send_r: 1,
             block_max_transactions: None,
             block_max_payload_bytes: None,
+            proposal_queue_scan_multiplier:
+                iroha_config::parameters::defaults::sumeragi::PROPOSAL_QUEUE_SCAN_MULTIPLIER,
             msg_channel_cap_votes:
                 iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_VOTES,
             msg_channel_cap_block_payload:
@@ -722,6 +725,18 @@ mod tests {
                 iroha_config::parameters::defaults::sumeragi::MEMBERSHIP_MISMATCH_ALERT_THRESHOLD,
             membership_mismatch_fail_closed:
                 iroha_config::parameters::defaults::sumeragi::MEMBERSHIP_MISMATCH_FAIL_CLOSED,
+            consensus_future_height_window:
+                iroha_config::parameters::defaults::sumeragi::CONSENSUS_FUTURE_HEIGHT_WINDOW,
+            consensus_future_view_window:
+                iroha_config::parameters::defaults::sumeragi::CONSENSUS_FUTURE_VIEW_WINDOW,
+            invalid_sig_penalty_threshold:
+                iroha_config::parameters::defaults::sumeragi::INVALID_SIG_PENALTY_THRESHOLD,
+            invalid_sig_penalty_window: Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::INVALID_SIG_PENALTY_WINDOW_MS,
+            ),
+            invalid_sig_penalty_cooldown: Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::INVALID_SIG_PENALTY_COOLDOWN_MS,
+            ),
             da_max_commitments_per_block: 0,
             da_max_proof_openings_per_block: 0,
             proof_policy: ProofPolicy::Off,
@@ -729,10 +744,13 @@ mod tests {
             zk_finality_k: 0,
             require_precommit_qc: false,
             rbc_chunk_max_bytes: 0,
+            rbc_chunk_fanout: None,
             rbc_pending_max_chunks: 0,
             rbc_pending_max_bytes: 0,
             rbc_pending_ttl: Duration::from_secs(0),
             rbc_session_ttl: Duration::from_secs(0),
+            rbc_rebroadcast_sessions_per_tick: 1,
+            rbc_payload_chunks_per_tick: 1,
             rbc_store_max_sessions: 0,
             rbc_store_soft_sessions: 0,
             rbc_store_max_bytes: 0,
@@ -1369,6 +1387,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn consensus_penalties_apply_censorship_evidence() -> Result<()> {
         let state = fresh_state();
         let mut config = test_sumeragi_config();

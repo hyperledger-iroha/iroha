@@ -21,10 +21,15 @@ incrementally.
   both GitHub Actions and GitLab.
 - Lint gating: `ci/check_rust_1_92_lints.sh` adds the new never-type fallback
   and macro-export lint gates for a focused `cargo check` sweep.
+- Lint sweep: ran the 1.92 lint gate and removed dead-code/unused-import hits
+  in the RBC chunk broadcaster and Norito RPC fixture tests.
 - Std features in use:
   - `NonZero::div_ceil` now backs the operator-auth rate conversion so minute
     budgets map to per-second caps without hand-rolled ceil division
     (`crates/iroha_torii/src/operator_auth.rs`).
+- Std `RwLock` sweep: no write→read handoffs required a downgrade; no code
+  changes needed.
+- Const rotation sweep: no const helpers reimplementing slice rotation remain.
 
 ## Task matrix
 
@@ -34,22 +39,16 @@ entries.
 
 | Area | Highlight | Action | Status | Notes |
 |------|-----------|--------|--------|-------|
-| Language | `never_type_fallback_flowing_into_unsafe`, `dependency_on_unit_never_type_fallback` deny-by-default | Run the 1.92 lint sweep and fix any new findings | TODO | `ci/check_rust_1_92_lints.sh` is ready; run it before merging new unsafe work. |
-| Libraries | `RwLockWriteGuard::downgrade` | Replace write-then-read lock handoffs where a downgrade suffices | TODO | Focus on std `RwLock` sites that drop a write guard just to re-acquire read. |
+| Language | `never_type_fallback_flowing_into_unsafe`, `dependency_on_unit_never_type_fallback` deny-by-default | Run the 1.92 lint sweep and fix any new findings | DONE | Lint sweep completed; removed unused RBC chunk helpers + redundant base64 import. |
+| Libraries | `RwLockWriteGuard::downgrade` | Replace write-then-read lock handoffs where a downgrade suffices | DONE | Audit complete; no std `RwLock` write→read handoffs found. |
 | Libraries | `Location::file_as_c_str` | Use when feeding caller file paths into FFI or logging C APIs | TODO | Consider for any `Location::caller()` -> C string conversions. |
 | Libraries | `NonZero::div_ceil` | Adopt in rate/limit conversions that currently rely on `get().div_ceil()` | DONE | Operator auth rate limit conversion updated in this change. |
-| Const APIs | `slice::rotate_left`/`rotate_right` const | Audit const helpers that roll their own rotation | TODO | Apply where const eval currently blocks `rotate_*` usage. |
+| Const APIs | `slice::rotate_left`/`rotate_right` const | Audit const helpers that roll their own rotation | DONE | No const rotation helpers remain; no changes needed. |
 
 ## Next steps
 
-1. **Lint sweep** (`TODO: lint sweep`): run `ci/check_rust_1_92_lints.sh` and
-   clear any new deny-by-default findings (never-type fallback, macro export).
-2. **Lock downgrade sweep** (`TODO: rwlock downgrade`): scan std `RwLock`
-   write-then-read patterns and replace with `RwLockWriteGuard::downgrade` where
-   it preserves semantics.
-3. **Const rotation sweep** (`TODO: const rotate`): re-check const helpers that
-   reimplement rotate logic and migrate to the standard API now that it is
-   const-stable.
+1. **`Location::file_as_c_str` adoption**: review C-FFI call sites that pass
+   `Location::caller()` data and use the new API where appropriate.
 
 Link future PRs to this document so we can tick off rows (convert TODO -> WIP ->
 DONE) and keep `status.md` honest about the rollout.

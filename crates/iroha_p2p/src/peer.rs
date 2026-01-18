@@ -1455,6 +1455,7 @@ pub mod handles {
     pub(super) struct TopicSenders<T> {
         pub(super) hi_consensus: post_channel::Sender<T>,
         pub(super) hi_control: post_channel::Sender<T>,
+        pub(super) lo_consensus_chunk: post_channel::Sender<T>,
         pub(super) lo_block_sync: post_channel::Sender<T>,
         pub(super) lo_tx_gossip: post_channel::Sender<T>,
         pub(super) lo_peer_gossip: post_channel::Sender<T>,
@@ -1491,7 +1492,9 @@ pub mod handles {
 
             let topic = msg.topic();
             let sender = match topic {
-                crate::network::message::Topic::Consensus => &self.senders.hi_consensus,
+                crate::network::message::Topic::Consensus
+                | crate::network::message::Topic::ConsensusPayload => &self.senders.hi_consensus,
+                crate::network::message::Topic::ConsensusChunk => &self.senders.lo_consensus_chunk,
                 crate::network::message::Topic::Control => &self.senders.hi_control,
                 crate::network::message::Topic::BlockSync => &self.senders.lo_block_sync,
                 crate::network::message::Topic::TxGossip
@@ -1531,19 +1534,21 @@ mod run {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum LowTopic {
         BlockSync,
+        ConsensusChunk,
         TxGossip,
         PeerGossip,
         Health,
         Other,
     }
 
-    const LOW_TOPIC_COUNT: usize = 5;
+    const LOW_TOPIC_COUNT: usize = 6;
     const HI_BUDGET_RESET: u8 = 32;
     const HI_BUDGET_FALLBACK: u8 = 1;
 
     fn low_topic_label(topic: LowTopic) -> &'static str {
         match topic {
             LowTopic::BlockSync => "low:block_sync",
+            LowTopic::ConsensusChunk => "low:consensus_chunk",
             LowTopic::TxGossip => "low:tx_gossip",
             LowTopic::PeerGossip => "low:peer_gossip",
             LowTopic::Health => "low:health",
@@ -1559,6 +1564,7 @@ mod run {
     fn try_recv_low_rr<T>(
         low_rr: &mut u8,
         lo_block_sync_rx: &mut post_channel::Receiver<T>,
+        lo_consensus_chunk_rx: &mut post_channel::Receiver<T>,
         lo_tx_gossip_rx: &mut post_channel::Receiver<T>,
         lo_peer_gossip_rx: &mut post_channel::Receiver<T>,
         lo_health_rx: &mut post_channel::Receiver<T>,
@@ -1568,17 +1574,19 @@ mod run {
             let idx = ((*low_rr as usize) + offset) % LOW_TOPIC_COUNT;
             let msg = match idx {
                 0 => lo_block_sync_rx.try_recv_now(),
-                1 => lo_tx_gossip_rx.try_recv_now(),
-                2 => lo_peer_gossip_rx.try_recv_now(),
-                3 => lo_health_rx.try_recv_now(),
+                1 => lo_consensus_chunk_rx.try_recv_now(),
+                2 => lo_tx_gossip_rx.try_recv_now(),
+                3 => lo_peer_gossip_rx.try_recv_now(),
+                4 => lo_health_rx.try_recv_now(),
                 _ => lo_other_rx.try_recv_now(),
             };
             if let Some(msg) = msg {
                 let topic = match idx {
                     0 => LowTopic::BlockSync,
-                    1 => LowTopic::TxGossip,
-                    2 => LowTopic::PeerGossip,
-                    3 => LowTopic::Health,
+                    1 => LowTopic::ConsensusChunk,
+                    2 => LowTopic::TxGossip,
+                    3 => LowTopic::PeerGossip,
+                    4 => LowTopic::Health,
                     _ => LowTopic::Other,
                 };
                 bump_low_rr(low_rr, idx);
@@ -1592,6 +1600,7 @@ mod run {
         hi_budget: &mut u8,
         low_rr: &mut u8,
         lo_block_sync_rx: &mut post_channel::Receiver<T>,
+        lo_consensus_chunk_rx: &mut post_channel::Receiver<T>,
         lo_tx_gossip_rx: &mut post_channel::Receiver<T>,
         lo_peer_gossip_rx: &mut post_channel::Receiver<T>,
         lo_health_rx: &mut post_channel::Receiver<T>,
@@ -1603,6 +1612,7 @@ mod run {
         if let Some(msg) = try_recv_low_rr(
             low_rr,
             lo_block_sync_rx,
+            lo_consensus_chunk_rx,
             lo_tx_gossip_rx,
             lo_peer_gossip_rx,
             lo_health_rx,
@@ -1618,6 +1628,7 @@ mod run {
     async fn recv_low_rr<T>(
         low_rr: &mut u8,
         lo_block_sync_rx: &mut post_channel::Receiver<T>,
+        lo_consensus_chunk_rx: &mut post_channel::Receiver<T>,
         lo_tx_gossip_rx: &mut post_channel::Receiver<T>,
         lo_peer_gossip_rx: &mut post_channel::Receiver<T>,
         lo_health_rx: &mut post_channel::Receiver<T>,
@@ -1629,18 +1640,20 @@ mod run {
                 let idx = ((*low_rr as usize) + offset) % LOW_TOPIC_COUNT;
                 let poll = match idx {
                     0 => lo_block_sync_rx.poll_recv(cx),
-                    1 => lo_tx_gossip_rx.poll_recv(cx),
-                    2 => lo_peer_gossip_rx.poll_recv(cx),
-                    3 => lo_health_rx.poll_recv(cx),
+                    1 => lo_consensus_chunk_rx.poll_recv(cx),
+                    2 => lo_tx_gossip_rx.poll_recv(cx),
+                    3 => lo_peer_gossip_rx.poll_recv(cx),
+                    4 => lo_health_rx.poll_recv(cx),
                     _ => lo_other_rx.poll_recv(cx),
                 };
                 match poll {
                     Poll::Ready(Some(msg)) => {
                         let topic = match idx {
                             0 => LowTopic::BlockSync,
-                            1 => LowTopic::TxGossip,
-                            2 => LowTopic::PeerGossip,
-                            3 => LowTopic::Health,
+                            1 => LowTopic::ConsensusChunk,
+                            2 => LowTopic::TxGossip,
+                            3 => LowTopic::PeerGossip,
+                            4 => LowTopic::Health,
                             _ => LowTopic::Other,
                         };
                         bump_low_rr(low_rr, idx);
@@ -1731,6 +1744,8 @@ mod run {
             // Create per-topic substreams (bounded or unbounded depending on feature).
             let (hi_consensus_tx, mut hi_consensus_rx) = post_channel::channel(post_capacity);
             let (hi_control_tx, mut hi_control_rx) = post_channel::channel(post_capacity);
+            let (lo_consensus_chunk_tx, mut lo_consensus_chunk_rx) =
+                post_channel::channel(post_capacity);
             let (lo_block_sync_tx, mut lo_block_sync_rx) = post_channel::channel(post_capacity);
             let (lo_tx_gossip_tx, mut lo_tx_gossip_rx) = post_channel::channel(post_capacity);
             let (lo_peer_gossip_tx, mut lo_peer_gossip_rx) = post_channel::channel(post_capacity);
@@ -1741,6 +1756,7 @@ mod run {
                 senders: handles::TopicSenders {
                     hi_consensus: hi_consensus_tx,
                     hi_control: hi_control_tx,
+                    lo_consensus_chunk: lo_consensus_chunk_tx,
                     lo_block_sync: lo_block_sync_tx,
                     lo_tx_gossip: lo_tx_gossip_tx,
                     lo_peer_gossip: lo_peer_gossip_tx,
@@ -1795,6 +1811,7 @@ mod run {
                     &mut hi_budget,
                     &mut low_rr,
                     &mut lo_block_sync_rx,
+                    &mut lo_consensus_chunk_rx,
                     &mut lo_tx_gossip_rx,
                     &mut lo_peer_gossip_rx,
                     &mut lo_health_rx,
@@ -1837,6 +1854,7 @@ mod run {
                     low = recv_low_rr(
                         &mut low_rr,
                         &mut lo_block_sync_rx,
+                        &mut lo_consensus_chunk_rx,
                         &mut lo_tx_gossip_rx,
                         &mut lo_peer_gossip_rx,
                         &mut lo_health_rx,
@@ -1909,6 +1927,7 @@ mod run {
                     if let Some((topic, m)) = try_recv_low_rr(
                         &mut low_rr,
                         &mut lo_block_sync_rx,
+                        &mut lo_consensus_chunk_rx,
                         &mut lo_tx_gossip_rx,
                         &mut lo_peer_gossip_rx,
                         &mut lo_health_rx,
@@ -2157,7 +2176,7 @@ mod run {
         Pong,
     }
 
-    pub(crate) fn data_message_wire_len<T: Encode>(payload: T) -> usize {
+    pub fn data_message_wire_len<T: Encode>(payload: T) -> usize {
         Message::Data(payload).encode().len()
     }
 
@@ -2246,6 +2265,7 @@ mod run {
         #[tokio::test(flavor = "current_thread")]
         async fn low_round_robin_serves_all_topics() {
             let (_bs_tx, mut lo_block_sync_rx) = post_channel::channel(4);
+            let (_chunk_tx, mut lo_consensus_chunk_rx) = post_channel::channel(4);
             let (tx_tx, mut lo_tx_gossip_rx) = post_channel::channel(4);
             let (peer_tx, mut lo_peer_gossip_rx) = post_channel::channel(4);
             let (_health_tx, mut lo_health_rx) = post_channel::channel(4);
@@ -2259,6 +2279,7 @@ mod run {
             let first = recv_low_rr(
                 &mut low_rr,
                 &mut lo_block_sync_rx,
+                &mut lo_consensus_chunk_rx,
                 &mut lo_tx_gossip_rx,
                 &mut lo_peer_gossip_rx,
                 &mut lo_health_rx,
@@ -2267,11 +2288,12 @@ mod run {
             .await
             .expect("first low message");
             assert_eq!(first.0, LowTopic::TxGossip);
-            assert_eq!(low_rr, 2);
+            assert_eq!(low_rr, 3);
 
             let second = recv_low_rr(
                 &mut low_rr,
                 &mut lo_block_sync_rx,
+                &mut lo_consensus_chunk_rx,
                 &mut lo_tx_gossip_rx,
                 &mut lo_peer_gossip_rx,
                 &mut lo_health_rx,
@@ -2280,11 +2302,12 @@ mod run {
             .await
             .expect("second low message");
             assert_eq!(second.0, LowTopic::PeerGossip);
-            assert_eq!(low_rr, 3);
+            assert_eq!(low_rr, 4);
 
             let third = recv_low_rr(
                 &mut low_rr,
                 &mut lo_block_sync_rx,
+                &mut lo_consensus_chunk_rx,
                 &mut lo_tx_gossip_rx,
                 &mut lo_peer_gossip_rx,
                 &mut lo_health_rx,
@@ -2298,6 +2321,7 @@ mod run {
         #[tokio::test(flavor = "current_thread")]
         async fn high_budget_exhaustion_services_low_message() {
             let (_bs_tx, mut lo_block_sync_rx) = post_channel::channel(4);
+            let (_chunk_tx, mut lo_consensus_chunk_rx) = post_channel::channel(4);
             let (tx_tx, mut lo_tx_gossip_rx) = post_channel::channel(4);
             let (_peer_tx, mut lo_peer_gossip_rx) = post_channel::channel(4);
             let (_health_tx, mut lo_health_rx) = post_channel::channel(4);
@@ -2310,6 +2334,7 @@ mod run {
                 &mut hi_budget,
                 &mut low_rr,
                 &mut lo_block_sync_rx,
+                &mut lo_consensus_chunk_rx,
                 &mut lo_tx_gossip_rx,
                 &mut lo_peer_gossip_rx,
                 &mut lo_health_rx,
@@ -2324,6 +2349,7 @@ mod run {
         #[test]
         fn high_budget_unblocks_when_no_low_pending() {
             let (_bs_tx, mut lo_block_sync_rx) = post_channel::channel::<Dummy>(4);
+            let (_chunk_tx, mut lo_consensus_chunk_rx) = post_channel::channel::<Dummy>(4);
             let (_tx_tx, mut lo_tx_gossip_rx) = post_channel::channel::<Dummy>(4);
             let (_peer_tx, mut lo_peer_gossip_rx) = post_channel::channel::<Dummy>(4);
             let (_health_tx, mut lo_health_rx) = post_channel::channel::<Dummy>(4);
@@ -2335,6 +2361,7 @@ mod run {
                 &mut hi_budget,
                 &mut low_rr,
                 &mut lo_block_sync_rx,
+                &mut lo_consensus_chunk_rx,
                 &mut lo_tx_gossip_rx,
                 &mut lo_peer_gossip_rx,
                 &mut lo_health_rx,
