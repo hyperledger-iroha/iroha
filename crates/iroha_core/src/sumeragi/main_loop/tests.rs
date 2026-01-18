@@ -14659,6 +14659,53 @@ async fn handle_rbc_init_rejects_epoch_mismatch() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn handle_rbc_init_caches_vote_roster() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da_enabled = true;
+    consensus_cfg.epoch_length_blocks = 2;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let height = 5u64;
+    let view = 0u64;
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC1; 32]));
+    let epoch = actor.epoch_for_height(height);
+    let roster = actor.effective_commit_topology();
+    let (block_header, leader_signature) =
+        rbc_header_and_signature(actor, &roster, height, view, &harness.key_pairs);
+    let init = crate::sumeragi::consensus::RbcInit {
+        block_hash,
+        height,
+        view,
+        epoch,
+        roster: roster.clone(),
+        roster_hash: roster_hash(&roster),
+        total_chunks: 1,
+        chunk_digests: vec![[0x55; 32]],
+        payload_hash: Hash::prehashed([0x44; 32]),
+        chunk_root: Hash::prehashed([0x55; 32]),
+        block_header,
+        leader_signature,
+    };
+
+    assert!(actor.vote_roster_cache.get(&block_hash).is_none());
+    actor.handle_rbc_init(init).expect("init handled");
+    let cached = actor
+        .vote_roster_cache
+        .get(&block_hash)
+        .expect("vote roster cached");
+    let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
+    let expected = super::roster::canonicalize_roster_for_mode(roster, consensus_mode);
+    assert_eq!(cached.roster, expected);
+    assert_eq!(cached.height, height);
+    assert_eq!(cached.view, view);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn handle_rbc_init_rejects_roster_hash_mismatch() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -29834,6 +29881,39 @@ async fn leader_index_for_uses_height_prf_seed() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn leader_index_for_canonicalizes_npos_roster_order() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da_enabled = true;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let mut canonical = actor.effective_commit_topology();
+    canonical.sort();
+    let mut scrambled = canonical.clone();
+    scrambled.rotate_left(1);
+
+    let height = 1u64;
+    let view = 0u64;
+    let mut canonical_topology = super::network_topology::Topology::new(canonical);
+    let mut scrambled_topology = super::network_topology::Topology::new(scrambled);
+    actor
+        .leader_index_for(&mut canonical_topology, height, view)
+        .expect("canonical leader index");
+    actor
+        .leader_index_for(&mut scrambled_topology, height, view)
+        .expect("scrambled leader index");
+
+    assert_eq!(
+        canonical_topology.as_ref().first(),
+        scrambled_topology.as_ref().first()
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn leader_index_for_uses_activation_height_mode() {
     use iroha_data_model::parameter::system::SumeragiConsensusMode;
 
@@ -36524,6 +36604,50 @@ fn topology_for_view_rotates_npos_prf_leader() {
     let rotated = super::topology_for_view(&topology, height, view, super::NPOS_TAG, Some(seed));
     let expected = topology.as_ref().get(leader).expect("leader peer exists");
     assert_eq!(rotated.as_ref().first(), Some(expected));
+}
+
+#[test]
+fn topology_for_view_canonicalizes_npos_roster_order() {
+    let kp_a = KeyPair::from_seed(vec![0xA1; 32], Algorithm::BlsNormal);
+    let kp_b = KeyPair::from_seed(vec![0xB2; 32], Algorithm::BlsNormal);
+    let kp_c = KeyPair::from_seed(vec![0xC3; 32], Algorithm::BlsNormal);
+    let kp_d = KeyPair::from_seed(vec![0xD4; 32], Algorithm::BlsNormal);
+    let mut canonical = vec![
+        PeerId::new(kp_a.public_key().clone()),
+        PeerId::new(kp_b.public_key().clone()),
+        PeerId::new(kp_c.public_key().clone()),
+        PeerId::new(kp_d.public_key().clone()),
+    ];
+    canonical.sort();
+    let topology = super::network_topology::Topology::new(canonical.clone());
+    let mut scrambled = canonical.clone();
+    scrambled.rotate_left(1);
+    let scrambled_topology = super::network_topology::Topology::new(scrambled);
+
+    let seed = [0x44_u8; 32];
+    let mut height = 1u64;
+    let mut view = 0u64;
+    let mut leader = topology.leader_index_prf(seed, height, view);
+    if leader == 0 {
+        'search: for h in 1u64..=64 {
+            for v in 0u64..=8 {
+                let candidate = topology.leader_index_prf(seed, h, v);
+                if candidate != 0 {
+                    height = h;
+                    view = v;
+                    leader = candidate;
+                    break 'search;
+                }
+            }
+        }
+    }
+    assert_ne!(leader, 0, "test requires non-zero PRF leader index");
+
+    let rotated =
+        super::topology_for_view(&topology, height, view, super::NPOS_TAG, Some(seed));
+    let rotated_scrambled =
+        super::topology_for_view(&scrambled_topology, height, view, super::NPOS_TAG, Some(seed));
+    assert_eq!(rotated.as_ref(), rotated_scrambled.as_ref());
 }
 
 #[test]
@@ -43309,6 +43433,46 @@ async fn stale_view_accepts_rbc_messages_with_da() {
     assert!(
         actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
         "stale-view DELIVER should be queued for known sessions"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn stale_view_stashes_rbc_ready_without_session_with_da() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da_enabled = true;
+    consensus_cfg.rbc_chunk_max_bytes = 1024;
+    consensus_cfg.rbc_pending_max_chunks = 10;
+    consensus_cfg.rbc_pending_max_bytes = 4096;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let height = 7;
+    let local_view = 3;
+    let stale_view = 2;
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor.phase_tracker.on_view_change(height, local_view, now);
+
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x55; 32]));
+    let payload_hash = Hash::prehashed([0x66; 32]);
+    let chunk_root = Hash::prehashed([0x77; 32]);
+    let key = (block_hash, height, stale_view);
+    let roster = actor.effective_commit_topology();
+    actor.record_rbc_session_roster(key, roster, RbcRosterSource::Derived);
+
+    let session = RbcSession::test_new(1, Some(payload_hash), Some(chunk_root), 0);
+    let ready = actor.build_rbc_ready(key, &session).expect("ready");
+    assert!(
+        !actor.subsystems.da_rbc.rbc.sessions.contains_key(&key),
+        "session should be missing to exercise pending stash path"
+    );
+
+    actor.handle_rbc_ready(ready).expect("rbc ready");
+    assert!(
+        actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
+        "stale-view READY should be stashed when INIT is missing in DA mode"
     );
 
     harness.shutdown.send();

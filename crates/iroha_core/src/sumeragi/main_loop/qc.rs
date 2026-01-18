@@ -1499,22 +1499,30 @@ impl Actor {
             );
             return;
         };
-        if highest.phase != crate::sumeragi::consensus::Phase::Commit {
+        let valid_phase = matches!(highest.phase, crate::sumeragi::consensus::Phase::Commit)
+            || matches!(highest.phase, crate::sumeragi::consensus::Phase::Prepare);
+        if !valid_phase {
             warn!(
                 height = qc.height,
                 view = qc.view,
                 highest_height = highest.height,
                 highest_view = highest.view,
                 phase = ?highest.phase,
-                "ignoring NEW_VIEW certificate with non-commit highest certificate"
+                "ignoring NEW_VIEW certificate with invalid highest certificate phase"
             );
             return;
         }
-        if qc.height != highest.height.saturating_add(1) {
+        let expected_height = if highest.phase == crate::sumeragi::consensus::Phase::Commit {
+            highest.height.saturating_add(1)
+        } else {
+            highest.height
+        };
+        if qc.height != expected_height {
             warn!(
                 height = qc.height,
                 view = qc.view,
                 highest_height = highest.height,
+                expected_height,
                 "ignoring NEW_VIEW certificate with mismatched height"
             );
             return;
