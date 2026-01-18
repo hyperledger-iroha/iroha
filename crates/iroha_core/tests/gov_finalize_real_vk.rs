@@ -12,7 +12,10 @@ fn zk_finalize_verifies_with_inline_vk_public_input() {
     use core::num::NonZeroU64;
 
     use iroha_core::{
-        kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute, state::State,
+        kura::Kura,
+        query::store::LiveQueryStore,
+        smartcontracts::Execute,
+        state::{State, WorldReadOnly},
         zk::test_utils::halo2_fixture_envelope,
     };
     use iroha_data_model::{
@@ -24,12 +27,13 @@ fn zk_finalize_verifies_with_inline_vk_public_input() {
         },
         permission::Permission,
         prelude::Grant,
-        proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
+        proof::{ProofAttachment, VerifyingKeyId, VerifyingKeyRecord},
         zk::BackendTag,
     };
     use iroha_executor_data_model::permission::governance::CanManageParliament;
     use iroha_primitives::json::Json;
     use iroha_test_samples::ALICE_ID;
+    use mv::storage::StorageReadOnly;
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -87,7 +91,11 @@ fn zk_finalize_verifies_with_inline_vk_public_input() {
     // Finalize with tally [4] and inline VK
     let att =
         ProofAttachment::new_inline("halo2/ipa".into(), fixture.proof_box("halo2/ipa"), vk_box);
-    let fin = FinalizeElection::new("ref-final".to_string(), vec![4], att);
+    let fin = FinalizeElection {
+        election_id: "ref-final".to_string(),
+        tally: vec![4],
+        tally_proof: att,
+    };
     fin.execute(&ALICE_ID, &mut stx).expect("finalize ok");
 
     // Assert finalized

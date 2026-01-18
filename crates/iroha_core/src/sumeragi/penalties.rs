@@ -12,6 +12,7 @@ use iroha_data_model::{
     prelude::{AccountId, PeerId},
     transaction::TransactionSubmissionReceipt,
 };
+use iroha_logger::prelude::*;
 use iroha_primitives::numeric::Numeric;
 use mv::storage::StorageReadOnly;
 
@@ -23,6 +24,10 @@ use crate::{
     state::{State, WorldReadOnly, WorldTransaction},
     sumeragi::consensus::ValidatorIndex,
 };
+
+/// Controls whether penalty enforcement mutates validator records.
+/// TODO: Apply penalties through on-chain instructions so every peer enforces them deterministically.
+const ENFORCE_NPOS_PENALTIES_IN_WSV: bool = false;
 
 #[derive(Clone, Copy, Default)]
 pub struct PenaltyOutcome {
@@ -94,6 +99,7 @@ impl<'a> PenaltyApplier<'a> {
 
     pub(crate) fn apply_vrf_penalties(&self, current_height: u64) -> PenaltyOutcome {
         let mut outcome = PenaltyOutcome::default();
+        let enforce_penalties = ENFORCE_NPOS_PENALTIES_IN_WSV;
         let activation_lag = {
             let view = self.state.view();
             crate::sumeragi::resolve_npos_activation_lag_blocks(&view, &self.config.npos)
@@ -142,20 +148,29 @@ impl<'a> PenaltyApplier<'a> {
             let mut tx = block.trasaction(self.telemetry, lane_config.clone(), current_height);
             #[cfg(not(feature = "telemetry"))]
             let mut tx = block.trasaction(lane_config.clone(), current_height);
-            for locator in locators {
-                if jail_in_transaction(
-                    &mut tx,
-                    &locator,
-                    &format!("vrf_penalty_epoch_{}", record.epoch),
-                    #[cfg(feature = "telemetry")]
-                    self.telemetry,
-                    #[cfg(not(feature = "telemetry"))]
-                    None,
-                ) {
-                    outcome.applied = outcome.applied.saturating_add(1);
-                    outcome.jailed = outcome.jailed.saturating_add(1);
-                    applied_here = true;
+            if enforce_penalties {
+                for locator in locators {
+                    if jail_in_transaction(
+                        &mut tx,
+                        &locator,
+                        &format!("vrf_penalty_epoch_{}", record.epoch),
+                        #[cfg(feature = "telemetry")]
+                        self.telemetry,
+                        #[cfg(not(feature = "telemetry"))]
+                        None,
+                    ) {
+                        outcome.applied = outcome.applied.saturating_add(1);
+                        outcome.jailed = outcome.jailed.saturating_add(1);
+                        applied_here = true;
+                    }
                 }
+            } else if !locators.is_empty() {
+                applied_here = true;
+                warn!(
+                    epoch = record.epoch,
+                    offenders = locators.len(),
+                    "skipping VRF penalty enforcement; on-chain adjudication required for determinism"
+                );
             }
 
             let mut updated = record.clone();
@@ -174,6 +189,7 @@ impl<'a> PenaltyApplier<'a> {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn apply_consensus_penalties(&self, current_height: u64) -> Result<PenaltyOutcome> {
         let mut outcome = PenaltyOutcome::default();
+        let enforce_penalties = ENFORCE_NPOS_PENALTIES_IN_WSV;
         let activation_lag = {
             let view = self.state.view();
             crate::sumeragi::resolve_npos_activation_lag_blocks(&view, &self.config.npos)
@@ -296,26 +312,35 @@ impl<'a> PenaltyApplier<'a> {
             #[cfg(not(feature = "telemetry"))]
             let mut tx = block.trasaction(lane_config.clone(), current_height);
             let mut applied_here = false;
-            for locator in locators {
-                if let Some(amount) =
-                    max_slash_amount_for_validator(&tx, &locator, staking_cfg.max_slash_bps)?
-                {
-                    apply_slash_to_validator(
-                        &mut tx,
-                        &staking_cfg,
-                        locator.lane_id,
-                        &locator.validator,
-                        slash_id,
-                        &amount,
-                        #[cfg(feature = "telemetry")]
-                        self.telemetry,
-                        #[cfg(not(feature = "telemetry"))]
-                        None,
-                    )?;
-                    outcome.applied = outcome.applied.saturating_add(1);
-                    outcome.slashed = outcome.slashed.saturating_add(1);
-                    applied_here = true;
+            if enforce_penalties {
+                for locator in locators {
+                    if let Some(amount) =
+                        max_slash_amount_for_validator(&tx, &locator, staking_cfg.max_slash_bps)?
+                    {
+                        apply_slash_to_validator(
+                            &mut tx,
+                            &staking_cfg,
+                            locator.lane_id,
+                            &locator.validator,
+                            slash_id,
+                            &amount,
+                            #[cfg(feature = "telemetry")]
+                            self.telemetry,
+                            #[cfg(not(feature = "telemetry"))]
+                            None,
+                        )?;
+                        outcome.applied = outcome.applied.saturating_add(1);
+                        outcome.slashed = outcome.slashed.saturating_add(1);
+                        applied_here = true;
+                    }
                 }
+            } else if !locators.is_empty() {
+                applied_here = true;
+                warn!(
+                    ?slash_id,
+                    offenders = locators.len(),
+                    "skipping consensus penalty enforcement; on-chain adjudication required for determinism"
+                );
             }
             if applied_here {
                 record.penalty_applied = true;
@@ -974,7 +999,7 @@ mod tests {
     }
 
     #[test]
-    fn vrf_penalties_jail_offenders_and_mark_record() {
+    fn vrf_penalties_mark_records_without_enforcement() {
         let state = fresh_state();
         let mut config = test_sumeragi_config();
         config.npos.reconfig.activation_lag_blocks = 0;
@@ -1043,8 +1068,8 @@ mod tests {
         );
         let outcome = applier.apply_vrf_penalties(5);
 
-        assert_eq!(outcome.applied, 1);
-        assert_eq!(outcome.jailed, 1);
+        assert_eq!(outcome.applied, 0);
+        assert_eq!(outcome.jailed, 0);
         assert_eq!(outcome.pending, 0);
 
         let view = state.world.vrf_epochs.view();
@@ -1053,10 +1078,13 @@ mod tests {
         assert_eq!(updated.penalties_applied_at_height, Some(5));
 
         let validators = state.world.public_lane_validators.view();
-        let jailed = validators
+        let retained = validators
             .get(&(LaneId::new(1), validator.clone()))
             .expect("validator present");
-        matches!(jailed.status, PublicLaneValidatorStatus::Jailed(_));
+        assert!(matches!(
+            retained.status,
+            PublicLaneValidatorStatus::Active
+        ));
     }
 
     #[test]
@@ -1387,7 +1415,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn consensus_penalties_apply_censorship_evidence() -> Result<()> {
+    fn consensus_penalties_mark_censorship_without_enforcement() -> Result<()> {
         let state = fresh_state();
         let mut config = test_sumeragi_config();
         config.consensus_mode = ConsensusMode::Permissioned;
@@ -1509,14 +1537,23 @@ mod tests {
             None,
         );
         let outcome = applier.apply_consensus_penalties(5)?;
-        assert_eq!(outcome.applied, 1);
-        assert_eq!(outcome.slashed, 1);
+        assert_eq!(outcome.applied, 0);
+        assert_eq!(outcome.slashed, 0);
         assert_eq!(outcome.pending, 0);
 
         let view = state.world.consensus_evidence.view();
         let updated = view.get(&key).expect("evidence present");
         assert!(updated.penalty_applied);
         assert_eq!(updated.penalty_applied_at_height, Some(5));
+
+        let validators = state.world.public_lane_validators.view();
+        let retained = validators
+            .get(&(LaneId::new(1), validator.clone()))
+            .expect("validator present");
+        assert!(matches!(
+            retained.status,
+            PublicLaneValidatorStatus::Active
+        ));
 
         Ok(())
     }

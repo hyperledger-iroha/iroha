@@ -327,6 +327,16 @@ MANIFEST_TYPE_TABLES: dict[str, dict] = {
                 "description": "Advisory write set scoped to the entrypoint.",
             },
             {
+                "name": "access_hints_complete",
+                "type": "Option<bool>",
+                "description": "Whether access-set hints are complete or explicitly provided.",
+            },
+            {
+                "name": "access_hints_skipped",
+                "type": "Vec<String>",
+                "description": "Reasons access hints were skipped for this entrypoint.",
+            },
+            {
                 "name": "triggers",
                 "type": "Vec<TriggerDescriptor>",
                 "description": "Trigger declarations that call this entrypoint.",

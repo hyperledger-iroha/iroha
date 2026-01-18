@@ -54,6 +54,7 @@ fn zk_referendum_auto_close_defers_decision_without_tally() {
         },
     );
     stx1.apply();
+    sblock1.commit().unwrap();
 
     let header2 = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let mut sblock2 = state.block(header2);

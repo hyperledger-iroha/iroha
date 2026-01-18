@@ -16,6 +16,9 @@ operateur actualisees pour l alea VRF et l evidence de slashing. Utilisez-le ave
 {doc}`sumeragi` et {doc}`sumeragi_chaos_performance_runbook` lorsque vous preparez
 un nouveau build de validateur ou capturez des artefacts de readiness pour governance.
 
+
+Note: For the v1 release, VRF/evidence penalties are recorded for telemetry only; enforcement that mutates validator status is deferred to on-chain adjudication to keep rosters deterministic across peers.
+
 ## Portee et prerequis
 
 - `iroha_cli` configure pour le cluster cible (voir `docs/source/cli.md`).

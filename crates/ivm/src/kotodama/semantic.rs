@@ -428,8 +428,23 @@ fn is_int_like(ty: &Type) -> bool {
 }
 
 fn numeric_result_type(lhs: &Type, rhs: &Type) -> Option<Type> {
-    let lhs_kind = numeric_kind(lhs)?;
-    let rhs_kind = numeric_kind(rhs)?;
+    let lhs_resolved = resolve_struct_type(lhs);
+    let rhs_resolved = resolve_struct_type(rhs);
+    let lhs_bool = matches!(lhs_resolved, Type::Bool);
+    let rhs_bool = matches!(rhs_resolved, Type::Bool);
+    if (lhs_bool && !matches!(rhs_resolved, Type::Bool | Type::Int))
+        || (rhs_bool && !matches!(lhs_resolved, Type::Bool | Type::Int))
+    {
+        return None;
+    }
+    let lhs_kind = match lhs_resolved {
+        Type::Bool => NumericKind::Int,
+        _ => numeric_kind(&lhs_resolved)?,
+    };
+    let rhs_kind = match rhs_resolved {
+        Type::Bool => NumericKind::Int,
+        _ => numeric_kind(&rhs_resolved)?,
+    };
     let out = match (lhs_kind, rhs_kind) {
         (NumericKind::Int, NumericKind::Int) => NumericKind::Int,
         (NumericKind::Int, other) | (other, NumericKind::Int) => other,

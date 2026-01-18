@@ -16,6 +16,9 @@ para la aleatoriedad VRF y la evidencia de slashing. Usala junto con
 {doc}`sumeragi` y {doc}`sumeragi_chaos_performance_runbook` cuando prepares
 un nuevo build de validador o captures artefactos de readiness para governance.
 
+
+Note: For the v1 release, VRF/evidence penalties are recorded for telemetry only; enforcement that mutates validator status is deferred to on-chain adjudication to keep rosters deterministic across peers.
+
 ## Alcance y prerrequisitos
 
 - `iroha_cli` configurado para el cluster objetivo (ver `docs/source/cli.md`).

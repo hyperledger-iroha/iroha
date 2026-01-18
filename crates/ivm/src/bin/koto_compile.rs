@@ -65,14 +65,14 @@ fn print_access_hint_diagnostics(diag: &AccessHintDiagnostics) {
     }
     if diag.state_wildcards > 0 {
         eprintln!(
-            "access-hint: {} state accesses used dynamic keys; emitted '{}' wildcards",
-            diag.state_wildcards, "state:*"
+            "access-hint: {} state accesses used dynamic keys; entrypoint hints may be incomplete",
+            diag.state_wildcards
         );
     }
     if diag.isi_wildcards > 0 {
         eprintln!(
-            "access-hint: {} ISI instructions used opaque or non-literal targets; emitted '{}' wildcards",
-            diag.isi_wildcards, "*"
+            "access-hint: {} ISI instructions used opaque or non-literal targets; entrypoint hints may be incomplete",
+            diag.isi_wildcards
         );
     }
 }

@@ -28609,6 +28609,26 @@ async fn new_view_tracker_counts_local_with_rotated_indices() {
     harness.shutdown.send();
 }
 
+#[test]
+fn permissioned_topology_for_view_applies_prf_shuffle_and_rotation() {
+    let peers: Vec<PeerId> = (0..5)
+        .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
+        .collect();
+    let topology = super::network_topology::Topology::new(peers);
+    let seed = [0x1C; 32];
+    let height = 10;
+    let view = 2;
+
+    let rotated = super::topology_for_view(&topology, height, view, PERMISSIONED_TAG, Some(seed));
+
+    let mut expected = topology.clone();
+    expected.canonicalize_order();
+    expected.shuffle_prf(seed, height);
+    expected.nth_rotation(view);
+
+    assert_eq!(rotated, expected);
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn new_view_vote_rejects_mismatched_highest_block_hash() {
     let mut harness = test_actor_harness(4).await;

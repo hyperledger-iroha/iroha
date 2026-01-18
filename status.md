@@ -1,9 +1,11 @@
 # Status
 
 ## Latest Updates
+- Merge: resolve conflict markers in Kotodama compiler access-hint handling, update access-hint CLI messaging, and reconcile Kotodama gap analysis/roadmap entries. Tests: not run (not requested).
+- NPoS penalties: VRF/evidence enforcement no longer mutates validator records; penalties are recorded for telemetry only until on-chain adjudication is added. Tests: not run (not requested).
 - Torii DA follow-up: fix `iroha_test_network` state view import so `nexus()` resolves, add BLS PoP verification test file (`crates/iroha_crypto/tests/check_pop.rs`) gated behind the `bls` feature. Tests: `cargo test --workspace` (terminated by sandbox; timeout before completion).
 - Torii DA refactor: add an oversized chunk-length guard test, fix Kotodama access-hint parsing type inference + wildcard constant import, and update Sumeragi status fixtures for vote-validation drops. Tests: `cargo test -p iroha_torii da::ingest::tests -- --nocapture` (pass); `cargo test --workspace` skipped per request. `cargo fmt --all` ran (nightly-only config warnings).
-- Sumeragi: permissioned leader/collector selection now uses PRF-based shuffles seeded from the epoch VRF state (no previous-block-hash rotation); fallback collectors use the contiguous tail slice when a PRF seed is missing; VRF/epoch managers run in permissioned mode, PRF seeds threaded through block sync/replay/roster handling, and tests/docs updated (sumeragi, pipeline, whitepaper/i18n). Tests: not run (not requested).
+- Sumeragi: permissioned leader/collector selection now uses PRF-based shuffles seeded from the epoch VRF state (no previous-block-hash rotation); fallback collectors use the contiguous tail slice when a PRF seed is missing; VRF/epoch managers run in permissioned mode, PRF seeds threaded through block sync/replay/roster handling, and tests/docs updated (sumeragi, pipeline, whitepaper/i18n, rotation integration tests). Tests: not run (not requested).
 - Torii DA refactor: split DA ingest into `crates/iroha_torii/src/da/` modules, moved DA tests into `crates/iroha_torii/src/da/tests.rs`, and exposed persistence/Taikai helpers for the new test layout. Tests: not run (not requested).
 - Sumeragi: fix canonical/view index rotation mapping to use the computed rotation offset, restore `ValidatorElectionOutcome::empty` fallback, and add regression tests for both. Tests: `cargo check -p iroha_core`, `cargo test -p iroha_data_model validator_election_outcome_empty_has_expected_defaults -- --nocapture`, `cargo test -p iroha_core view_index_for_canonical_signer_accounts_for_rotation_offset -- --nocapture`.
 - Torii DA refactor: split DA into `crates/iroha_torii/src/da/` modules, moved RS16 parity into `iroha_primitives` with SIMD backends + parity tests, wired `torii_da_chunking_seconds`, and updated DA docs/fixtures. Tests: not run (not requested).
@@ -16,6 +18,26 @@
 - RBC: throttle READY chunk-root mismatch logs via mismatch throttling, make pending-session stash cap configurable, refactor allocation weighting, unify chunking logic, add persist-queue drop telemetry + status exposure (incl. Python status parsing + CLI summary), move chunk/root/empty-payload + session-init errors into RbcError variants, add a session-init wrapper test, and refresh docs/templates/tests. Tests: not run (not requested).
 - Integration tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-roadmap-target IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture --test-threads=1` (failed: `permissioned_localnet_reaches_100_blocks` stalled at height 2/101 within 230s; logs in `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_IFXgRd`).
 - Sumeragi commit pipeline: fall back to commit-QC history when the in-memory cache is missing so aggregate signatures are preserved for derived QCs and precommit signer records; unit coverage added in `commit_qc_from_history_falls_back_when_cache_missing`. Tests: not run (not requested).
+- Governance ZK ballot: tighten error assertions, keep referendum window active for VK-commitment mismatch test, and disable per-tx verify-call cap in alias checks. Tests: `cargo test -p iroha_core --test gov_zk_ballot --features "zk-tests halo2-dev-tests" -- --nocapture` (pass; warnings: norito dead_code helpers, existing iroha_core unused warnings).
+- Kotodama: suppress opaque-access lint warnings for literal `execute_instruction`/`execute_query` payloads that decode into hintable InstructionBox/QueryRequest; add lint coverage.
+- Tests: not run (not requested).
+- ZK: wire Kaigi usage backend into Halo2 verifier dispatch and restore `Identifiable` import for Kotodama register access-hint paths.
+- Tests: `cargo test -p iroha_core --tests --features "zk-tests halo2-dev-tests" zk` (timed out after 1800s while running `gov_auto_close_zk_requires_tally`; ZK unit tests passed, including `kaigi_usage_backend_accepts_valid_proof`).
+- Roadmap: add governance flow tasks for repair escalation/slash proposals under no-admin launch invariants.
+- Tests: not run (docs-only change).
+- Kotodama: decode literal `execute_query` NoritoBytes payloads (`QueryRequest::FindAssetById`) to derive access hints and add compiler coverage; update docs/roadmap.
+- Tests: not run (not requested).
+- Kotodama: decode literal `execute_instruction` NoritoBytes payloads (InstructionBox) to derive access hints, including detail-key coverage for domain/asset/NFT/trigger metadata; add regression coverage and update docs/roadmap.
+- Tests: not run (not requested).
+- Kotodama: emit map-level access hints for dynamic state-map keys and include map base keys alongside literal entries; update tests/docs.
+- Tests: not run (not requested).
+- Kotodama: add per-entrypoint access hint coverage reporting (`access_hints_complete`/`access_hints_skipped`), update tests and Android manifest docs.
+- Tests: not run (not requested).
+- Tests: `cargo test -p iroha_core --tests --features "zk-tests halo2-dev-tests"` (timed out after 300s while running 2820 tests; build completed).
+- Kotodama: skip access hints for dynamic state paths/opaque host calls, gate entrypoint hints per-function, and add lints for nonliteral state paths + opaque access; tests/docs updated.
+- Tests: `cargo test -p ivm` (failed: `iso20022::tests::msg_sign_and_verify_roundtrip_secp256k1`).
+- Kotodama: allow `call` keyword in trigger DSL fields, permit bool arithmetic with int, and fix create_trigger access-hint tests (permissions + valid account id).
+- Tests: `cargo test -p ivm` (failed: `iso20022::tests::msg_sign_and_verify_roundtrip_secp256k1`).
 - Kotodama: add `register_trigger` DSL (time/execute filters, metadata), emit trigger descriptors in entrypoint manifests, update manifest/docs coverage.
 - Tests: not run (not requested).
 - Python SDK: pin `urllib3<2` to avoid LibreSSL warnings on macOS when using `requests`.

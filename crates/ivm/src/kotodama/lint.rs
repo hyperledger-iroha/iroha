@@ -7,8 +7,17 @@
 
 use std::collections::{HashMap, HashSet};
 
+use iroha_data_model::{
+    isi::{
+        BurnBox, ExecuteTrigger, GrantBox, InstructionBox, Log, MintBox, RegisterBox,
+        RemoveKeyValueBox, RevokeBox, SetKeyValueBox, TransferBox, UnregisterBox,
+    },
+    query::{QueryRequest, SingularQueryBox},
+};
+
 use super::ast::{Block, Expr, Item, Pattern, Program, Statement};
 use crate::kotodama::i18n::{self, Language, Message as I18nMessage, StateShadowContext};
+use crate::pointer_abi::{self, PointerType};
 
 /// A lint warning produced by [`lint_program`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,7 +106,129 @@ pub fn lint_program(program: &Program) -> Vec<LintWarning> {
     lint_pointer_constructor_usage(program, &mut warnings);
     lint_nonliteral_trigger_specs(program, &mut warnings);
     lint_nonliteral_state_map_keys(program, &mut warnings);
+    lint_nonliteral_state_paths(program, &mut warnings);
+    lint_opaque_access_hints(program, &mut warnings);
     warnings
+}
+
+const OPAQUE_ACCESS_HINT_CALLS: &[&str] = &[
+    "register_asset",
+    "create_new_asset",
+    "transfer_domain",
+    "register_peer",
+    "unregister_peer",
+    "nft_set_metadata",
+    "sc_execute_submit_ballot",
+    "sc_execute_unshield",
+    "subscription_bill",
+    "subscription_record_usage",
+    "build_submit_ballot_inline",
+    "build_unshield_inline",
+    "axt_begin",
+    "axt_touch",
+    "verify_ds_proof",
+    "use_asset_handle",
+    "axt_commit",
+];
+
+const EXECUTE_INSTRUCTION_CALL: &str = "execute_instruction";
+const EXECUTE_QUERY_CALL: &str = "execute_query";
+
+fn decode_hex_or_raw_bytes(raw: &str) -> Option<Vec<u8>> {
+    if let Some(trimmed) = raw.strip_prefix("0x") {
+        if trimmed.len() % 2 == 0 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+            let mut out = Vec::with_capacity(trimmed.len() / 2);
+            for chunk in trimmed.as_bytes().chunks(2) {
+                let byte_str = std::str::from_utf8(chunk).ok()?;
+                let byte = u8::from_str_radix(byte_str, 16).ok()?;
+                out.push(byte);
+            }
+            return Some(out);
+        }
+        return None;
+    }
+    Some(raw.as_bytes().to_vec())
+}
+
+fn decode_norito_bytes_literal(expr: &Expr) -> Option<Vec<u8>> {
+    let Expr::Call { name, args } = expr else {
+        return None;
+    };
+    if name != "norito_bytes" || args.len() != 1 {
+        return None;
+    }
+    let raw = match &args[0] {
+        Expr::String(value) => decode_hex_or_raw_bytes(value)?,
+        Expr::Bytes(value) => value.clone(),
+        _ => return None,
+    };
+    let payload = match pointer_abi::validate_tlv_bytes(&raw) {
+        Ok(tlv) => {
+            if tlv.type_id != PointerType::NoritoBytes {
+                return None;
+            }
+            tlv.payload.to_vec()
+        }
+        Err(_) => raw,
+    };
+    Some(payload)
+}
+
+fn decode_instruction_box_literal(args: &[Expr]) -> Option<InstructionBox> {
+    let payload = decode_norito_bytes_literal(args.first()?)?;
+    norito::decode_from_bytes(&payload).ok()
+}
+
+fn decode_query_request_literal(args: &[Expr]) -> Option<QueryRequest> {
+    let payload = decode_norito_bytes_literal(args.first()?)?;
+    norito::decode_from_bytes(&payload).ok()
+}
+
+fn instruction_box_is_hintable(instr: &InstructionBox) -> bool {
+    let any = instr.as_any();
+
+    if any.downcast_ref::<Log>().is_some() {
+        return true;
+    }
+    if any.downcast_ref::<TransferBox>().is_some() {
+        return true;
+    }
+    if any.downcast_ref::<MintBox>().is_some() {
+        return true;
+    }
+    if any.downcast_ref::<BurnBox>().is_some() {
+        return true;
+    }
+    if any.downcast_ref::<SetKeyValueBox>().is_some() {
+        return true;
+    }
+    if any.downcast_ref::<RemoveKeyValueBox>().is_some() {
+        return true;
+    }
+    if let Some(rb) = any.downcast_ref::<RegisterBox>() {
+        return !matches!(rb, RegisterBox::Peer(_));
+    }
+    if let Some(ub) = any.downcast_ref::<UnregisterBox>() {
+        return !matches!(ub, UnregisterBox::Peer(_));
+    }
+    if any.downcast_ref::<GrantBox>().is_some() {
+        return true;
+    }
+    if any.downcast_ref::<RevokeBox>().is_some() {
+        return true;
+    }
+    if any.downcast_ref::<ExecuteTrigger>().is_some() {
+        return true;
+    }
+
+    false
+}
+
+fn query_request_is_hintable(request: &QueryRequest) -> bool {
+    match request {
+        QueryRequest::Singular(query) => matches!(query, SingularQueryBox::FindAssetById(_)),
+        QueryRequest::Start(_) | QueryRequest::Continue(_) => false,
+    }
 }
 
 fn lint_nonliteral_state_map_keys(program: &Program, warnings: &mut Vec<LintWarning>) {
@@ -116,6 +247,241 @@ fn lint_nonliteral_state_map_keys(program: &Program, warnings: &mut Vec<LintWarn
         if let Item::Function(func) = item {
             lint_block_map_keys(&func.body, &state_maps, warnings);
         }
+    }
+}
+
+fn lint_nonliteral_state_paths(program: &Program, warnings: &mut Vec<LintWarning>) {
+    for item in &program.items {
+        if let Item::Function(func) = item {
+            lint_state_path_block(&func.body, warnings);
+        }
+    }
+}
+
+fn lint_state_path_block(block: &Block, warnings: &mut Vec<LintWarning>) {
+    for stmt in &block.statements {
+        lint_state_path_stmt(stmt, warnings);
+    }
+}
+
+fn lint_state_path_stmt(stmt: &Statement, warnings: &mut Vec<LintWarning>) {
+    match stmt {
+        Statement::Let { value, .. } => lint_state_path_expr(value, warnings),
+        Statement::Assign { value, .. } => lint_state_path_expr(value, warnings),
+        Statement::AssignExpr { target, value, .. } => {
+            lint_state_path_expr(target, warnings);
+            lint_state_path_expr(value, warnings);
+        }
+        Statement::Expr(expr) => lint_state_path_expr(expr, warnings),
+        Statement::Return(Some(expr)) => lint_state_path_expr(expr, warnings),
+        Statement::Return(None) | Statement::Break | Statement::Continue => {}
+        Statement::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
+            lint_state_path_expr(cond, warnings);
+            lint_state_path_block(then_branch, warnings);
+            if let Some(b) = else_branch {
+                lint_state_path_block(b, warnings);
+            }
+        }
+        Statement::While { cond, body } => {
+            lint_state_path_expr(cond, warnings);
+            lint_state_path_block(body, warnings);
+        }
+        Statement::For {
+            init,
+            cond,
+            step,
+            body,
+            ..
+        } => {
+            if let Some(init_stmt) = init {
+                lint_state_path_stmt(init_stmt, warnings);
+            }
+            if let Some(cond_expr) = cond {
+                lint_state_path_expr(cond_expr, warnings);
+            }
+            if let Some(step_stmt) = step {
+                lint_state_path_stmt(step_stmt, warnings);
+            }
+            lint_state_path_block(body, warnings);
+        }
+        Statement::ForEachMap { map, body, .. } => {
+            lint_state_path_expr(map, warnings);
+            lint_state_path_block(body, warnings);
+        }
+    }
+}
+
+fn lint_state_path_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
+    match expr {
+        Expr::Call { name, args } => {
+            if matches!(name.as_str(), "state_get" | "state_set" | "state_del") {
+                if let Some(path) = args.first() {
+                    if !is_literal_state_path(path) {
+                        warnings.push(LintWarning {
+                            code: "nonliteral-state-path",
+                            message: LintMessage::Custom {
+                                message: format!(
+                                    "{name} uses a non-literal path; access hints will be skipped"
+                                ),
+                            },
+                        });
+                    }
+                }
+            }
+            for arg in args {
+                lint_state_path_expr(arg, warnings);
+            }
+        }
+        Expr::Binary { left, right, .. } => {
+            lint_state_path_expr(left, warnings);
+            lint_state_path_expr(right, warnings);
+        }
+        Expr::Unary { expr, .. } => lint_state_path_expr(expr, warnings),
+        Expr::Conditional {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            lint_state_path_expr(cond, warnings);
+            lint_state_path_expr(then_expr, warnings);
+            lint_state_path_expr(else_expr, warnings);
+        }
+        Expr::Tuple(items) => {
+            for item in items {
+                lint_state_path_expr(item, warnings);
+            }
+        }
+        Expr::Member { object, .. } => lint_state_path_expr(object, warnings),
+        Expr::Index { target, index } => {
+            lint_state_path_expr(target, warnings);
+            lint_state_path_expr(index, warnings);
+        }
+        Expr::Number(_) | Expr::Bool(_) | Expr::String(_) | Expr::Bytes(_) | Expr::Ident(_) => {}
+    }
+}
+
+fn lint_opaque_access_hints(program: &Program, warnings: &mut Vec<LintWarning>) {
+    for item in &program.items {
+        if let Item::Function(func) = item {
+            lint_opaque_access_block(&func.body, warnings);
+        }
+    }
+}
+
+fn lint_opaque_access_block(block: &Block, warnings: &mut Vec<LintWarning>) {
+    for stmt in &block.statements {
+        lint_opaque_access_stmt(stmt, warnings);
+    }
+}
+
+fn lint_opaque_access_stmt(stmt: &Statement, warnings: &mut Vec<LintWarning>) {
+    match stmt {
+        Statement::Let { value, .. } => lint_opaque_access_expr(value, warnings),
+        Statement::Assign { value, .. } => lint_opaque_access_expr(value, warnings),
+        Statement::AssignExpr { target, value, .. } => {
+            lint_opaque_access_expr(target, warnings);
+            lint_opaque_access_expr(value, warnings);
+        }
+        Statement::Expr(expr) => lint_opaque_access_expr(expr, warnings),
+        Statement::Return(Some(expr)) => lint_opaque_access_expr(expr, warnings),
+        Statement::Return(None) | Statement::Break | Statement::Continue => {}
+        Statement::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
+            lint_opaque_access_expr(cond, warnings);
+            lint_opaque_access_block(then_branch, warnings);
+            if let Some(b) = else_branch {
+                lint_opaque_access_block(b, warnings);
+            }
+        }
+        Statement::While { cond, body } => {
+            lint_opaque_access_expr(cond, warnings);
+            lint_opaque_access_block(body, warnings);
+        }
+        Statement::For {
+            init,
+            cond,
+            step,
+            body,
+            ..
+        } => {
+            if let Some(init_stmt) = init {
+                lint_opaque_access_stmt(init_stmt, warnings);
+            }
+            if let Some(cond_expr) = cond {
+                lint_opaque_access_expr(cond_expr, warnings);
+            }
+            if let Some(step_stmt) = step {
+                lint_opaque_access_stmt(step_stmt, warnings);
+            }
+            lint_opaque_access_block(body, warnings);
+        }
+        Statement::ForEachMap { map, body, .. } => {
+            lint_opaque_access_expr(map, warnings);
+            lint_opaque_access_block(body, warnings);
+        }
+    }
+}
+
+fn lint_opaque_access_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
+    match expr {
+        Expr::Call { name, args } => {
+            let warn = if name == EXECUTE_INSTRUCTION_CALL {
+                !decode_instruction_box_literal(args)
+                    .map(|isi| instruction_box_is_hintable(&isi))
+                    .unwrap_or(false)
+            } else if name == EXECUTE_QUERY_CALL {
+                !decode_query_request_literal(args)
+                    .map(|query| query_request_is_hintable(&query))
+                    .unwrap_or(false)
+            } else {
+                OPAQUE_ACCESS_HINT_CALLS.contains(&name.as_str())
+            };
+            if warn {
+                warnings.push(LintWarning {
+                    code: "opaque-access-hints",
+                    message: LintMessage::Custom {
+                        message: format!(
+                            "call to `{name}` uses opaque host access; access hints will be skipped"
+                        ),
+                    },
+                });
+            }
+            for arg in args {
+                lint_opaque_access_expr(arg, warnings);
+            }
+        }
+        Expr::Binary { left, right, .. } => {
+            lint_opaque_access_expr(left, warnings);
+            lint_opaque_access_expr(right, warnings);
+        }
+        Expr::Unary { expr, .. } => lint_opaque_access_expr(expr, warnings),
+        Expr::Conditional {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            lint_opaque_access_expr(cond, warnings);
+            lint_opaque_access_expr(then_expr, warnings);
+            lint_opaque_access_expr(else_expr, warnings);
+        }
+        Expr::Tuple(items) => {
+            for item in items {
+                lint_opaque_access_expr(item, warnings);
+            }
+        }
+        Expr::Member { object, .. } => lint_opaque_access_expr(object, warnings),
+        Expr::Index { target, index } => {
+            lint_opaque_access_expr(target, warnings);
+            lint_opaque_access_expr(index, warnings);
+        }
+        Expr::Number(_) | Expr::Bool(_) | Expr::String(_) | Expr::Bytes(_) | Expr::Ident(_) => {}
     }
 }
 
@@ -195,7 +561,7 @@ fn lint_expr_map_keys(expr: &Expr, state_maps: &HashSet<String>, warnings: &mut 
                     code: "nonliteral-state-map-key",
                     message: LintMessage::Custom {
                         message: format!(
-                            "state map `{name}` uses a non-literal key; access hints will use a wildcard"
+                            "state map `{name}` uses a non-literal key; access hints will be skipped"
                         ),
                     },
                 });
@@ -254,6 +620,32 @@ fn is_literal_state_key(expr: &Expr) -> bool {
                     | "proof_blob"
             )
         }
+        _ => false,
+    }
+}
+
+fn is_literal_state_path(expr: &Expr) -> bool {
+    match expr {
+        Expr::String(_) | Expr::Bytes(_) => true,
+        Expr::Call { name, args } => match name.as_str() {
+            "name" => {
+                args.len() == 1
+                    && matches!(args.first(), Some(Expr::String(_)) | Some(Expr::Bytes(_)))
+            }
+            "path_map_key" => {
+                if args.len() != 2 {
+                    return false;
+                }
+                is_literal_state_path(&args[0]) && matches!(args[1], Expr::Number(_))
+            }
+            "path_map_key_norito" => {
+                if args.len() != 2 {
+                    return false;
+                }
+                is_literal_state_path(&args[0]) && is_literal_state_key(&args[1])
+            }
+            _ => false,
+        },
         _ => false,
     }
 }
@@ -1210,6 +1602,91 @@ mod tests {
             !warnings
                 .iter()
                 .any(|w| w.code == "nonliteral-state-map-key")
+        );
+    }
+
+    #[test]
+    fn lint_nonliteral_state_path_warns() {
+        let program =
+            parse("fn main() { let p = name(\"foo\"); state_get(p); }").expect("parse state path");
+        let warnings = lint_program(&program);
+        assert!(warnings.iter().any(|w| w.code == "nonliteral-state-path"));
+    }
+
+    #[test]
+    fn lint_literal_state_path_is_silent() {
+        let program =
+            parse("fn main() { let _x = state_get(name(\"foo\")); }").expect("parse state path");
+        let warnings = lint_program(&program);
+        assert!(!warnings.iter().any(|w| w.code == "nonliteral-state-path"));
+    }
+
+    #[test]
+    fn lint_opaque_access_hints_warns() {
+        let program =
+            parse("fn main() { execute_query(json(\"{}\")); }").expect("parse opaque call");
+        let warnings = lint_program(&program);
+        assert!(warnings.iter().any(|w| w.code == "opaque-access-hints"));
+    }
+
+    #[test]
+    fn lint_opaque_access_hints_execute_instruction_literal_is_silent() {
+        use iroha_data_model::{
+            account::AccountId,
+            asset::id::{AssetDefinitionId, AssetId},
+            isi::{InstructionBox, Mint},
+        };
+
+        let account: AccountId =
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
+                .parse()
+                .unwrap();
+        let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_id = AssetId::of(asset_def, account);
+        let isi = InstructionBox::from(Mint::asset_numeric(1u32, asset_id));
+        let bytes = norito::to_bytes(&isi).expect("encode InstructionBox");
+        let hex_payload = format!("0x{}", hex::encode(bytes));
+        let src = format!(
+            "fn main() {{ execute_instruction(norito_bytes(\"{hex_payload}\")); }}"
+        );
+
+        let program = parse(&src).expect("parse execute_instruction literal");
+        let warnings = lint_program(&program);
+        assert!(
+            !warnings.iter().any(|w| w.code == "opaque-access-hints"),
+            "literal execute_instruction payloads should not warn"
+        );
+    }
+
+    #[test]
+    fn lint_opaque_access_hints_execute_query_literal_is_silent() {
+        use iroha_data_model::{
+            account::AccountId,
+            asset::id::{AssetDefinitionId, AssetId},
+            query::asset::FindAssetById,
+            query::{QueryRequest, SingularQueryBox},
+        };
+
+        let account: AccountId =
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
+                .parse()
+                .unwrap();
+        let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_id = AssetId::of(asset_def, account);
+        let request = QueryRequest::Singular(SingularQueryBox::FindAssetById(
+            FindAssetById::new(asset_id),
+        ));
+        let bytes = norito::to_bytes(&request).expect("encode QueryRequest");
+        let hex_payload = format!("0x{}", hex::encode(bytes));
+        let src = format!(
+            "fn main() {{ execute_query(norito_bytes(\"{hex_payload}\")); }}"
+        );
+
+        let program = parse(&src).expect("parse execute_query literal");
+        let warnings = lint_program(&program);
+        assert!(
+            !warnings.iter().any(|w| w.code == "opaque-access-hints"),
+            "literal execute_query payloads should not warn"
         );
     }
 }

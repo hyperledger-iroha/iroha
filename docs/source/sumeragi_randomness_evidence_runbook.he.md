@@ -20,6 +20,9 @@ translation_last_reviewed: 2026-01-01
 {doc}`sumeragi_chaos_performance_runbook` בכל פעם שמרימים גרסת ולידטור חדשה
 או אוספים artifacts של readiness עבור governance.
 
+
+Note: For the v1 release, VRF/evidence penalties are recorded for telemetry only; enforcement that mutates validator status is deferred to on-chain adjudication to keep rosters deterministic across peers.
+
 ## היקף ודרישות מקדימות
 
 - `iroha_cli` מוגדר לקלאסטר היעד (ראו `docs/source/cli.md`).

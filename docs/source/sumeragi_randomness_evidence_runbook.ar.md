@@ -20,6 +20,9 @@ translation_last_reviewed: 2026-01-01
 {doc}`sumeragi_chaos_performance_runbook` عند تجهيز نسخة مدقق جديدة او جمع
 artefacts الجاهزية من اجل governance.
 
+
+Note: For the v1 release, VRF/evidence penalties are recorded for telemetry only; enforcement that mutates validator status is deferred to on-chain adjudication to keep rosters deterministic across peers.
+
 ## النطاق والمتطلبات
 
 - ضبط `iroha_cli` على العنقود المستهدف (انظر `docs/source/cli.md`).

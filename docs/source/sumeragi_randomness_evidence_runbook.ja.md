@@ -18,6 +18,9 @@ translation_last_reviewed: 2026-01-01
 ガバナンス向けの readiness アーティファクトを収集する場合は、{doc}`sumeragi` と
 {doc}`sumeragi_chaos_performance_runbook` と併せて使用してください。
 
+
+Note: For the v1 release, VRF/evidence penalties are recorded for telemetry only; enforcement that mutates validator status is deferred to on-chain adjudication to keep rosters deterministic across peers.
+
 ## スコープと前提条件
 
 - 対象クラスタ向けに `iroha_cli` が設定済み（`docs/source/cli.md` を参照）。

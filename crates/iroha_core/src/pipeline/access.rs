@@ -1593,6 +1593,8 @@ mod tests {
                 permission: None,
                 read_keys: vec!["state:alpha".to_owned()],
                 write_keys: vec!["state:beta".to_owned()],
+                access_hints_complete: None,
+                access_hints_skipped: Vec::new(),
                 triggers: Vec::new(),
             },
             EntrypointDescriptor {
@@ -1601,6 +1603,8 @@ mod tests {
                 permission: None,
                 read_keys: vec!["state:run-read".to_owned()],
                 write_keys: vec!["state:run-write".to_owned()],
+                access_hints_complete: None,
+                access_hints_skipped: Vec::new(),
                 triggers: Vec::new(),
             },
         ];
@@ -1674,6 +1678,8 @@ mod tests {
             permission: None,
             read_keys: vec!["state:alpha".to_owned()],
             write_keys: vec!["state:beta".to_owned()],
+            access_hints_complete: None,
+            access_hints_skipped: Vec::new(),
             triggers: Vec::new(),
         }];
         let manifest = ContractManifest {
@@ -1745,6 +1751,8 @@ mod tests {
             permission: None,
             read_keys: vec![format!("account:{alice}")],
             write_keys: vec![format!("asset:{asset_id}")],
+            access_hints_complete: None,
+            access_hints_skipped: Vec::new(),
             triggers: Vec::new(),
         }];
         let manifest = ContractManifest {

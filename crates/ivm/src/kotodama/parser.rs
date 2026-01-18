@@ -520,10 +520,12 @@ impl<'a> Parser<'a> {
         let mut metadata: Vec<TriggerMetadataEntry> = Vec::new();
         while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
             let field_tok = self.bump();
-            let field_name = if let TokenKind::Ident(name) = field_tok.kind.clone() {
-                name
-            } else {
-                return Err(self.error(field_tok, "trigger field"));
+            let field_name = match field_tok.kind.clone() {
+                TokenKind::Ident(name) => name,
+                TokenKind::Call => "call".to_string(),
+                _ => {
+                    return Err(self.error(field_tok, "trigger field"));
+                }
             };
             match field_name.as_str() {
                 "call" => {
