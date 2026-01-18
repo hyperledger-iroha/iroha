@@ -35,10 +35,8 @@ fn gas_scales_with_setvl_for_vector_op() {
 #[test]
 fn branch_executed_set_gas_matches() {
     // addi x1, x0, 1; addi x2, x0, 2; beq x1,x2, +8; jal 0, +4; halt
-    let a1 = ivm::kotodama::compiler::encode_addi(1, 0, 1)
-        .expect("encode addi");
-    let a2 = ivm::kotodama::compiler::encode_addi(2, 0, 2)
-        .expect("encode addi");
+    let a1 = ivm::kotodama::compiler::encode_addi(1, 0, 1).expect("encode addi");
+    let a2 = ivm::kotodama::compiler::encode_addi(2, 0, 2).expect("encode addi");
     let beq = encoding::wide::encode_branch(instruction::wide::control::BEQ, 1, 2, 2);
     let jmp = encoding::wide::encode_jump(instruction::wide::control::JMP, 0, 1);
     let halt = encoding::wide::encode_halt();

@@ -14,8 +14,7 @@ fn run_prog(code_words: &[u32]) -> IVM {
         let funct3 = ((*first >> 12) & 0x7) as u8;
         let rs1 = ((*first >> 15) & 0x1f) as u8;
         if op_lo == 0x13 && rd == 2 && funct3 == 0 && rs1 == 0 {
-            *first = ivm::kotodama::compiler::encode_addi(2, 2, 0)
-                .expect("encode addi");
+            *first = ivm::kotodama::compiler::encode_addi(2, 2, 0).expect("encode addi");
         }
     }
     let mut bytes = ProgramMetadata::default().encode();
@@ -32,8 +31,7 @@ fn run_prog(code_words: &[u32]) -> IVM {
 
 #[test]
 fn loads_stores_alignment_semantics() {
-    let addi_base = ivm::kotodama::compiler::encode_addi(2, 2, 0)
-        .expect("encode addi");
+    let addi_base = ivm::kotodama::compiler::encode_addi(2, 2, 0).expect("encode addi");
     let store64 = encoding::wide::encode_store(instruction::wide::memory::STORE64, 2, 3, 0);
     let load64 = encoding::wide::encode_load(instruction::wide::memory::LOAD64, 4, 2, 0);
     let halt = encoding::wide::encode_halt();
@@ -78,10 +76,8 @@ fn loads_stores_alignment_semantics() {
 
 #[test]
 fn classic_word_ops_rejected() {
-    let addi_base = ivm::kotodama::compiler::encode_addi(2, 2, 0)
-        .expect("encode addi");
-    let addi_val = ivm::kotodama::compiler::encode_addi(3, 3, 0)
-        .expect("encode addi");
+    let addi_base = ivm::kotodama::compiler::encode_addi(2, 2, 0).expect("encode addi");
+    let addi_val = ivm::kotodama::compiler::encode_addi(3, 3, 0).expect("encode addi");
     let stw = CLASSIC_STORE_OPCODE | (0x2 << 12) | (2 << 15) | (3 << 20);
     let ldw = CLASSIC_LOAD_OPCODE | (0x2 << 12) | (2 << 15) | (4 << 7);
     let mut bytes = ProgramMetadata::default().encode();

@@ -3,7 +3,9 @@ use std::collections::HashSet;
 use super::{AnalysisCategory, AnalysisFinding};
 use crate::kotodama::{
     ast::{Block, Expr, Item, Program, Statement},
-    semantic::{self, ExprKind, TypedBlock, TypedExpr, TypedFunction, TypedProgram, TypedStatement},
+    semantic::{
+        self, ExprKind, TypedBlock, TypedExpr, TypedFunction, TypedProgram, TypedStatement,
+    },
 };
 
 /// Run static analysis on a parsed Kotodama program using the associated typed

@@ -405,10 +405,7 @@ pub mod manifest {
 
         #[test]
         fn entrypoint_descriptor_includes_triggers() {
-            use crate::{
-                events::EventFilterBox,
-                trigger::action::Repeats,
-            };
+            use crate::{events::EventFilterBox, trigger::action::Repeats};
 
             let trigger = TriggerDescriptor {
                 id: "wake".parse().expect("trigger id"),

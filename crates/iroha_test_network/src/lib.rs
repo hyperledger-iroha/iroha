@@ -42,6 +42,7 @@ use iroha_core::sumeragi::consensus::{
     NPOS_TAG, PERMISSIONED_TAG, PROTO_VERSION, compute_consensus_fingerprint_from_params,
 };
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PrivateKey, PublicKey};
+use iroha_data_model::da::commitment::DaProofPolicyBundle;
 use iroha_data_model::{
     ChainId,
     account::AccountId,
@@ -2148,12 +2149,18 @@ impl Network {
     pub fn genesis(&self) -> GenesisBlock {
         self.cached_genesis
             .get_or_init(|| {
-                config::genesis_with_keypair_and_post_topology(
+                let config_layers: Vec<Table> = self.config_layers().map(Cow::into_owned).collect();
+                let da_proof_policies = self
+                    .peers
+                    .first()
+                    .and_then(|peer| resolve_da_proof_policies(peer, &config_layers));
+                config::genesis_with_keypair_and_post_topology_with_policies(
                     self.genesis_isi.clone(),
                     self.genesis_post_topology_isi.clone(),
                     self.peers.iter().map(NetworkPeer::id).collect(),
                     self.topology_entries.clone(),
                     self.genesis_key_pair.clone(),
+                    da_proof_policies,
                 )
             })
             .clone()
@@ -2888,6 +2895,42 @@ fn config_requires_sora_profile(config_layers: &[Table]) -> bool {
             read_bool(&merged, &["torii", "sorafs_discovery", "discovery_enabled"])
                 .unwrap_or(false);
         sorafs_storage || sorafs_discovery || raw_nexus_overrides(&merged)
+    }
+}
+
+fn resolve_da_proof_policies(
+    peer: &NetworkPeer,
+    config_layers: &[Table],
+) -> Option<DaProofPolicyBundle> {
+    let mut merged = peer.base_config_table();
+    for layer in config_layers {
+        merge_tables(&mut merged, layer);
+    }
+    let user = match ConfigReader::new()
+        .with_env(MockEnv::default())
+        .with_toml_source(TomlSource::inline(merged))
+        .read_and_complete::<iroha_config::parameters::user::Root>()
+    {
+        Ok(user) => user,
+        Err(err) => {
+            warn!(
+                ?err,
+                "failed to read merged config for genesis DA proof policies"
+            );
+            return None;
+        }
+    };
+    match user.parse() {
+        Ok(config) => Some(iroha_core::da::proof_policy_bundle(
+            &config.nexus.lane_config,
+        )),
+        Err(err) => {
+            warn!(
+                ?err,
+                "failed to parse merged config for genesis DA proof policies"
+            );
+            None
+        }
     }
 }
 
@@ -4948,9 +4991,19 @@ impl NetworkPeer {
     }
 
     fn write_base_config(&self) {
+        let cfg = self.base_config_table();
+        std::fs::write(
+            self.dir.join("config.base.toml"),
+            toml::to_string(&cfg).unwrap(),
+        )
+        .unwrap();
+        self.ensure_rans_tables();
+    }
+
+    fn base_config_table(&self) -> Table {
         let p2p_literal = self.p2p_address().to_literal();
         let torii_literal = self.api_address().to_literal();
-        let cfg = Table::new()
+        Table::new()
             .write("public_key", self.key_pair.public_key().to_string())
             .write(
                 "private_key",
@@ -4971,13 +5024,7 @@ impl NetworkPeer {
             .write(
                 ["torii", "max_content_len"],
                 toml::Value::Integer(16 * 1024 * 1024),
-            );
-        std::fs::write(
-            self.dir.join("config.base.toml"),
-            toml::to_string(&cfg).unwrap(),
-        )
-        .unwrap();
-        self.ensure_rans_tables();
+            )
     }
 
     fn ensure_rans_tables(&self) {
@@ -7340,6 +7387,31 @@ exit 0
         assert_eq!(
             actual, expected,
             "NPoS fingerprint must match runtime profile"
+        );
+    }
+
+    #[test]
+    fn genesis_embeds_da_proof_policies_from_config_layers() {
+        init_instruction_registry();
+        let network = NetworkBuilder::new()
+            .with_peers(4)
+            .with_config_layer(|layer| {
+                layer
+                    .write(["nexus", "enabled"], true)
+                    .write(["nexus", "lane_count"], 2i64);
+            })
+            .build();
+
+        let genesis = network.genesis();
+        let policies = genesis
+            .0
+            .da_proof_policies()
+            .expect("genesis should embed da proof policies");
+
+        assert_eq!(policies.policies.len(), 2);
+        assert_eq!(
+            genesis.0.header().da_proof_policies_hash(),
+            Some(HashOf::new(policies))
         );
     }
 

@@ -664,10 +664,7 @@ impl<'a> Parser<'a> {
                 TokenKind::Ident(ref s) => s.clone(),
                 TokenKind::String(ref s) => s.clone(),
                 _ => {
-                    return Err(self.error(
-                        key_tok,
-                        "metadata key (identifier or string literal)",
-                    ));
+                    return Err(self.error(key_tok, "metadata key (identifier or string literal)"));
                 }
             };
             self.expect(TokenKind::Colon)?;
@@ -2381,7 +2378,11 @@ mod tests {
         fn main() {}
         "#;
         let prog = parse(src).expect("parse kotoba block");
-        assert!(prog.items.iter().any(|item| matches!(item, Item::Function(_))));
+        assert!(
+            prog.items
+                .iter()
+                .any(|item| matches!(item, Item::Function(_)))
+        );
     }
 
     #[test]

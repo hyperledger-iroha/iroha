@@ -1837,13 +1837,28 @@ fn validate_qc_against_votes(
             let Some(vote_highest) = vote.highest_qc else {
                 return Err(QcValidationError::HighestQcMismatch);
             };
-            if vote_highest.phase != crate::sumeragi::consensus::Phase::Commit {
+            let valid_phase = matches!(
+                vote_highest.phase,
+                crate::sumeragi::consensus::Phase::Commit
+                    | crate::sumeragi::consensus::Phase::Prepare
+            );
+            if !valid_phase {
                 return Err(QcValidationError::HighestQcMismatch);
             }
             if vote_highest.subject_block_hash != qc.subject_block_hash {
                 return Err(QcValidationError::HighestQcMismatch);
             }
-            if (vote_highest.height, vote_highest.view) > (qc_highest.height, qc_highest.view) {
+            let vote_rank = (
+                vote_highest.height,
+                vote_highest.view,
+                phase_rank(vote_highest.phase),
+            );
+            let qc_rank = (
+                qc_highest.height,
+                qc_highest.view,
+                phase_rank(qc_highest.phase),
+            );
+            if vote_rank > qc_rank {
                 return Err(QcValidationError::HighestQcMismatch);
             }
             if vote_highest.height == qc_highest.height
@@ -2123,7 +2138,10 @@ fn build_invalid_proposal_evidence(
 
 #[cfg(test)]
 fn new_view_highest_qc_phase_valid(qc: &crate::sumeragi::consensus::Qc) -> bool {
-    matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit)
+    matches!(
+        qc.phase,
+        crate::sumeragi::consensus::Phase::Commit | crate::sumeragi::consensus::Phase::Prepare
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -6954,7 +6972,9 @@ impl Actor {
     ) -> Result<usize> {
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         if matches!(consensus_mode, ConsensusMode::Npos) && prf_seed.is_none() {
-            return Err(eyre!("missing NPoS PRF seed for height {height} in leader selection"));
+            return Err(eyre!(
+                "missing NPoS PRF seed for height {height} in leader selection"
+            ));
         }
         rotate_topology_for_mode(
             topology,
@@ -8862,6 +8882,10 @@ impl Actor {
         let Some(base_view) = self.phase_tracker.current_view(height) else {
             return false;
         };
+        if matches!(kind, "NewViewVote" | "NewViewCert") {
+            // Allow view-change signals to flow so lagging peers can catch up.
+            return false;
+        }
         if let Some(view_age) = self.phase_tracker.view_age(height, Instant::now()) {
             if view_age >= self.commit_quorum_timeout() {
                 return false;
@@ -10612,7 +10636,7 @@ fn active_round_height(
     committed_qc: Option<crate::sumeragi::consensus::QcHeaderRef>,
     committed_height: u64,
 ) -> u64 {
-    // NEW_VIEW requires a precommit HighestQC, so ignore prevote-only headers for round height.
+    // NEW_VIEW accepts commit or same-height prepare QCs, but round height should advance on commit.
     let highest_precommit =
         highest_qc.filter(|qc| qc.phase == crate::sumeragi::consensus::Phase::Commit);
     highest_precommit.or(committed_qc).map_or_else(

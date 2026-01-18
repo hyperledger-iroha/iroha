@@ -15,8 +15,11 @@ fn zk_ballot_creates_and_extends_lock_on_verified_proof() {
     use core::num::NonZeroU64;
 
     use iroha_core::{
-        executor::Executor, kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute,
-        state::State,
+        executor::Executor,
+        kura::Kura,
+        query::store::LiveQueryStore,
+        smartcontracts::Execute,
+        state::{State, WorldReadOnly},
     };
     use iroha_data_model::{
         block::BlockHeader,
@@ -29,6 +32,7 @@ fn zk_ballot_creates_and_extends_lock_on_verified_proof() {
         CanManageParliament, CanSubmitGovernanceBallot,
     };
     use iroha_test_samples::ALICE_ID;
+    use mv::storage::StorageReadOnly;
 
     // Build State (dev toggle OFF)
     let kura = Kura::blank_kura_for_testing();

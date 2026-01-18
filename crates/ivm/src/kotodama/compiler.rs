@@ -33,8 +33,8 @@ use norito::json;
 
 use super::{
     ast::{
-        BinaryOp, ContractFeature, ContractMeta, FunctionKind, FunctionModifiers, FunctionVisibility,
-        Program, UnaryOp,
+        BinaryOp, ContractFeature, ContractMeta, FunctionKind, FunctionModifiers,
+        FunctionVisibility, Program, UnaryOp,
     },
     i18n::{self, Language, Message},
     ir::{self, Instr, Terminator},
@@ -355,8 +355,8 @@ fn decode_hex_or_raw_bytes(raw: &str) -> Result<Vec<u8>, String> {
 }
 
 fn encode_pointer_tlv_bytes(kind: ir::DataRefKind, raw: &str) -> Option<Vec<u8>> {
-    use norito::codec::{DecodeAll, Encode as NoritoEncode};
     use ir::DataRefKind as DRK;
+    use norito::codec::{DecodeAll, Encode as NoritoEncode};
 
     let (type_id, payload) = match kind {
         DRK::Account => {
@@ -389,10 +389,7 @@ fn encode_pointer_tlv_bytes(kind: ir::DataRefKind, raw: &str) -> Option<Vec<u8>>
             (PointerType::Json, minified.into_bytes())
         }
         DRK::Blob => (PointerType::Blob, decode_hex_or_raw_bytes(raw).ok()?),
-        DRK::NoritoBytes => (
-            PointerType::NoritoBytes,
-            decode_hex_or_raw_bytes(raw).ok()?,
-        ),
+        DRK::NoritoBytes => (PointerType::NoritoBytes, decode_hex_or_raw_bytes(raw).ok()?),
         DRK::DataSpaceId => {
             if let Some(raw_id) = parse_u64_literal(raw) {
                 let id = iroha_data_model::nexus::DataSpaceId::new(raw_id);
@@ -511,8 +508,8 @@ impl Default for CompilerOptions {
 mod tests {
     use super::{
         Compiler, CompilerOptions, ContractFeature, DEFAULT_MAX_CYCLES, WIDE_IMM_MAX, emit_addi,
-        emit_load64, emit_store64, patch_pointer_literal_stub,
-        pointer_type_for_kind, reserve_pointer_literal_stub, stack_slot_offset_bytes,
+        emit_load64, emit_store64, patch_pointer_literal_stub, pointer_type_for_kind,
+        reserve_pointer_literal_stub, stack_slot_offset_bytes,
     };
     use crate::kotodama::ast::ContractMeta;
     use crate::{IVM, ProgramMetadata, encoding, instruction, pointer_abi::PointerType};
@@ -812,7 +809,7 @@ seiyaku Test {
     }
 
     #[test]
-    fn manifest_access_set_hints_include_create_trigger() {
+    fn manifest_access_set_hints_include_create_trigger_from_json() {
         let src = r#"
 seiyaku Test {
   kotoage fn make() {
@@ -868,15 +865,29 @@ seiyaku Test {
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert!(hints.read_keys.contains(&"account:alice@wonderland".to_string()));
-        assert!(hints.write_keys.contains(&"account:alice@wonderland".to_string()));
+        assert!(
+            hints
+                .read_keys
+                .contains(&"account:alice@wonderland".to_string())
+        );
+        assert!(
+            hints
+                .write_keys
+                .contains(&"account:alice@wonderland".to_string())
+        );
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
             .find(|e| e.name == "move")
             .expect("entrypoint present");
-        assert!(main.read_keys.contains(&"account:alice@wonderland".to_string()));
-        assert!(main.write_keys.contains(&"account:alice@wonderland".to_string()));
+        assert!(
+            main.read_keys
+                .contains(&"account:alice@wonderland".to_string())
+        );
+        assert!(
+            main.write_keys
+                .contains(&"account:alice@wonderland".to_string())
+        );
     }
 
     #[test]
@@ -939,7 +950,10 @@ seiyaku Test {
             events::{EventFilterBox, execute_trigger::ExecuteTriggerEventFilter},
             name::Name,
             transaction::{Executable, IvmBytecode},
-            trigger::{action::{Action, Repeats}, Trigger, TriggerId},
+            trigger::{
+                Trigger, TriggerId,
+                action::{Action, Repeats},
+            },
         };
 
         let trigger_id = TriggerId::new(Name::from_str("wake").expect("trigger name"));
@@ -1301,8 +1315,7 @@ impl Compiler {
                     }
                     if let ir::Instr::PointerToNorito { dest, value } = instr {
                         dataref_kind_map.insert((func_idx, *dest), DRK::NoritoBytes);
-                        let literal_kind =
-                            dataref_kind_map.get(&(func_idx, *value)).copied();
+                        let literal_kind = dataref_kind_map.get(&(func_idx, *value)).copied();
                         let literal_raw = string_map.get(&(func_idx, *value)).cloned();
                         if let (Some(kind), Some(raw)) = (literal_kind, literal_raw) {
                             if let Some(tlv_bytes) = encode_pointer_tlv_bytes(kind, &raw) {
@@ -1329,18 +1342,20 @@ impl Compiler {
                                 .insert((func_idx, *dest), StatePathHint::Map { base: map_base });
                         }
                     }
-                    if let ir::Instr::PathMapKeyNorito { dest, base, key_blob } = instr
+                    if let ir::Instr::PathMapKeyNorito {
+                        dest,
+                        base,
+                        key_blob,
+                    } = instr
                         && let Some(base_hint) = state_path_hints.get(&(func_idx, *base)).cloned()
                     {
                         let map_base = base_hint.base_name();
-                        let literal_path = string_map
-                            .get(&(func_idx, *key_blob))
-                            .and_then(|raw| {
-                                dataref_kind_map
-                                    .get(&(func_idx, *key_blob))
-                                    .filter(|kind| matches!(**kind, DRK::NoritoBytes))
-                                    .and_then(|_| state_path_for_norito_key(&map_base, raw))
-                            });
+                        let literal_path = string_map.get(&(func_idx, *key_blob)).and_then(|raw| {
+                            dataref_kind_map
+                                .get(&(func_idx, *key_blob))
+                                .filter(|kind| matches!(**kind, DRK::NoritoBytes))
+                                .and_then(|_| state_path_for_norito_key(&map_base, raw))
+                        });
                         if let Some(path) = literal_path {
                             state_path_hints
                                 .insert((func_idx, *dest), StatePathHint::Literal(path));
@@ -1560,18 +1575,17 @@ impl Compiler {
             let durable_required_msg = "durable state requires ABI v1. Add `meta { abi_version: 1; }` or compile with `--abi 1`.";
 
             // Helpers to handle spilled temporaries at use/def sites
-            let src_reg =
-                |t: &ir::Temp, scratch: u8, code: &mut Vec<u8>| -> Result<u8, String> {
-                    if let Some(r) = alloc.regs.get(t) {
-                        Ok(*r as u8)
-                    } else if let Some(off) = alloc.stack.get(t) {
-                        let total = stack_slot_offset_bytes(*off);
-                        emit_load64(code, scratch, sp, total, Some(scratch))?;
-                        Ok(scratch)
-                    } else {
-                        Ok(0)
-                    }
-                };
+            let src_reg = |t: &ir::Temp, scratch: u8, code: &mut Vec<u8>| -> Result<u8, String> {
+                if let Some(r) = alloc.regs.get(t) {
+                    Ok(*r as u8)
+                } else if let Some(off) = alloc.stack.get(t) {
+                    let total = stack_slot_offset_bytes(*off);
+                    emit_load64(code, scratch, sp, total, Some(scratch))?;
+                    Ok(scratch)
+                } else {
+                    Ok(0)
+                }
+            };
             let dst_reg = |t: &ir::Temp| -> (u8, bool, i64) {
                 if let Some(r) = alloc.regs.get(t) {
                     (*r as u8, false, 0)
@@ -3345,19 +3359,19 @@ impl Compiler {
                             let publish_bytes = publish.to_le_bytes();
                             let mut load_blob =
                                 |temp: &ir::Temp, target: Option<u8>| -> Result<(), String> {
-                                if let Some(bytes) = string_map.get(&(func_idx, *temp)) {
-                                    let key = DataKey(DataKind::Blob, bytes.clone());
-                                    emit_literal_stub(&mut code, &mut fixups, 10, key);
-                                } else {
-                                    let rs = src_reg(temp, scratch1, &mut code)?;
-                                    push_word(&mut code, encode_addi(10, rs, 0)?);
-                                }
-                                code.extend_from_slice(&publish_bytes);
-                                if let Some(rd) = target {
-                                    push_word(&mut code, encode_addi(rd, 10, 0)?);
-                                }
-                                Ok(())
-                            };
+                                    if let Some(bytes) = string_map.get(&(func_idx, *temp)) {
+                                        let key = DataKey(DataKind::Blob, bytes.clone());
+                                        emit_literal_stub(&mut code, &mut fixups, 10, key);
+                                    } else {
+                                        let rs = src_reg(temp, scratch1, &mut code)?;
+                                        push_word(&mut code, encode_addi(10, rs, 0)?);
+                                    }
+                                    code.extend_from_slice(&publish_bytes);
+                                    if let Some(rd) = target {
+                                        push_word(&mut code, encode_addi(rd, 10, 0)?);
+                                    }
+                                    Ok(())
+                                };
                             load_blob(plaintext, Some(13))?;
                             load_blob(aad, Some(12))?;
                             load_blob(nonce, Some(11))?;
@@ -3385,19 +3399,19 @@ impl Compiler {
                             let publish_bytes = publish.to_le_bytes();
                             let mut load_blob =
                                 |temp: &ir::Temp, target: Option<u8>| -> Result<(), String> {
-                                if let Some(bytes) = string_map.get(&(func_idx, *temp)) {
-                                    let key = DataKey(DataKind::Blob, bytes.clone());
-                                    emit_literal_stub(&mut code, &mut fixups, 10, key);
-                                } else {
-                                    let rs = src_reg(temp, scratch1, &mut code)?;
-                                    push_word(&mut code, encode_addi(10, rs, 0)?);
-                                }
-                                code.extend_from_slice(&publish_bytes);
-                                if let Some(rd) = target {
-                                    push_word(&mut code, encode_addi(rd, 10, 0)?);
-                                }
-                                Ok(())
-                            };
+                                    if let Some(bytes) = string_map.get(&(func_idx, *temp)) {
+                                        let key = DataKey(DataKind::Blob, bytes.clone());
+                                        emit_literal_stub(&mut code, &mut fixups, 10, key);
+                                    } else {
+                                        let rs = src_reg(temp, scratch1, &mut code)?;
+                                        push_word(&mut code, encode_addi(10, rs, 0)?);
+                                    }
+                                    code.extend_from_slice(&publish_bytes);
+                                    if let Some(rd) = target {
+                                        push_word(&mut code, encode_addi(rd, 10, 0)?);
+                                    }
+                                    Ok(())
+                                };
                             load_blob(ciphertext_and_tag, Some(13))?;
                             load_blob(aad, Some(12))?;
                             load_blob(nonce, Some(11))?;
@@ -3426,19 +3440,19 @@ impl Compiler {
                             let publish_bytes = publish.to_le_bytes();
                             let mut load_blob =
                                 |temp: &ir::Temp, target: Option<u8>| -> Result<(), String> {
-                                if let Some(bytes) = string_map.get(&(func_idx, *temp)) {
-                                    let key = DataKey(DataKind::Blob, bytes.clone());
-                                    emit_literal_stub(&mut code, &mut fixups, 10, key);
-                                } else {
-                                    let rs = src_reg(temp, scratch1, &mut code)?;
-                                    push_word(&mut code, encode_addi(10, rs, 0)?);
-                                }
-                                code.extend_from_slice(&publish_bytes);
-                                if let Some(rd) = target {
-                                    push_word(&mut code, encode_addi(rd, 10, 0)?);
-                                }
-                                Ok(())
-                            };
+                                    if let Some(bytes) = string_map.get(&(func_idx, *temp)) {
+                                        let key = DataKey(DataKind::Blob, bytes.clone());
+                                        emit_literal_stub(&mut code, &mut fixups, 10, key);
+                                    } else {
+                                        let rs = src_reg(temp, scratch1, &mut code)?;
+                                        push_word(&mut code, encode_addi(10, rs, 0)?);
+                                    }
+                                    code.extend_from_slice(&publish_bytes);
+                                    if let Some(rd) = target {
+                                        push_word(&mut code, encode_addi(rd, 10, 0)?);
+                                    }
+                                    Ok(())
+                                };
                             load_blob(plaintext, Some(13))?;
                             load_blob(aad, Some(12))?;
                             load_blob(nonce, Some(11))?;
@@ -3473,19 +3487,19 @@ impl Compiler {
                             let publish_bytes = publish.to_le_bytes();
                             let mut load_blob =
                                 |temp: &ir::Temp, target: Option<u8>| -> Result<(), String> {
-                                if let Some(bytes) = string_map.get(&(func_idx, *temp)) {
-                                    let key = DataKey(DataKind::Blob, bytes.clone());
-                                    emit_literal_stub(&mut code, &mut fixups, 10, key);
-                                } else {
-                                    let rs = src_reg(temp, scratch1, &mut code)?;
-                                    push_word(&mut code, encode_addi(10, rs, 0)?);
-                                }
-                                code.extend_from_slice(&publish_bytes);
-                                if let Some(rd) = target {
-                                    push_word(&mut code, encode_addi(rd, 10, 0)?);
-                                }
-                                Ok(())
-                            };
+                                    if let Some(bytes) = string_map.get(&(func_idx, *temp)) {
+                                        let key = DataKey(DataKind::Blob, bytes.clone());
+                                        emit_literal_stub(&mut code, &mut fixups, 10, key);
+                                    } else {
+                                        let rs = src_reg(temp, scratch1, &mut code)?;
+                                        push_word(&mut code, encode_addi(10, rs, 0)?);
+                                    }
+                                    code.extend_from_slice(&publish_bytes);
+                                    if let Some(rd) = target {
+                                        push_word(&mut code, encode_addi(rd, 10, 0)?);
+                                    }
+                                    Ok(())
+                                };
                             load_blob(ciphertext_and_tag, Some(13))?;
                             load_blob(aad, Some(12))?;
                             load_blob(nonce, Some(11))?;
@@ -3640,19 +3654,18 @@ impl Compiler {
                                                 scratch: u8,
                                                 code: &mut Vec<u8>|
                              -> Result<(), String> {
-                                    if let Some(kind) =
-                                        dataref_kind_map.get(&(func_idx, *temp)).copied()
-                                        && let Some(lit) =
-                                            string_map.get(&(func_idx, *temp)).cloned()
-                                    {
-                                        let key = data_key_for_pointer(kind, &lit);
-                                        emit_literal_stub(code, &mut fixups, target, key);
-                                    } else {
-                                        let rs = src_reg(temp, scratch, code)?;
-                                        push_word(code, encode_addi(target, rs, 0)?);
-                                    }
-                                    Ok(())
-                                };
+                                if let Some(kind) =
+                                    dataref_kind_map.get(&(func_idx, *temp)).copied()
+                                    && let Some(lit) = string_map.get(&(func_idx, *temp)).cloned()
+                                {
+                                    let key = data_key_for_pointer(kind, &lit);
+                                    emit_literal_stub(code, &mut fixups, target, key);
+                                } else {
+                                    let rs = src_reg(temp, scratch, code)?;
+                                    push_word(code, encode_addi(target, rs, 0)?);
+                                }
+                                Ok(())
+                            };
                             load_ptr(left, 10, scratch1, &mut code)?;
                             code.extend_from_slice(&publish_tlv);
                             push_word(&mut code, encode_addi(11, 10, 0)?);
@@ -4463,20 +4476,22 @@ impl Compiler {
                     }
                 }
                 // end for instr in &bb.instrs
-                let mut emit_return_value =
-                    |temp: &ir::Temp, rd: u8, scratch: u8, code: &mut Vec<u8>|
-                     -> Result<(), String> {
-                        if let Some(kind) = dataref_kind_map.get(&(func_idx, *temp)).copied()
-                            && let Some(lit) = string_map.get(&(func_idx, *temp)).cloned()
-                        {
-                            let key = data_key_for_pointer(kind, &lit);
-                            emit_literal_stub(code, &mut fixups, rd, key);
-                        } else {
-                            let rs = src_reg(temp, scratch, code)?;
-                            push_word(code, encode_addi(rd, rs, 0)?);
-                        }
-                        Ok(())
-                    };
+                let mut emit_return_value = |temp: &ir::Temp,
+                                             rd: u8,
+                                             scratch: u8,
+                                             code: &mut Vec<u8>|
+                 -> Result<(), String> {
+                    if let Some(kind) = dataref_kind_map.get(&(func_idx, *temp)).copied()
+                        && let Some(lit) = string_map.get(&(func_idx, *temp)).cloned()
+                    {
+                        let key = data_key_for_pointer(kind, &lit);
+                        emit_literal_stub(code, &mut fixups, rd, key);
+                    } else {
+                        let rs = src_reg(temp, scratch, code)?;
+                        push_word(code, encode_addi(rd, rs, 0)?);
+                    }
+                    Ok(())
+                };
                 match &bb.terminator {
                     Terminator::Return(ret) => {
                         if let Some(tmp) = ret {
