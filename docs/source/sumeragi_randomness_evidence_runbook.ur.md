@@ -21,6 +21,9 @@ slashing evidence کیلئے اپ ڈیٹڈ operator procedures درکار تھی
 جب بھی آپ نیا validator build stage کریں یا governance کیلئے readiness artefacts
 جمع کریں۔
 
+
+Note: For the v1 release, VRF/evidence penalties are recorded for telemetry only; enforcement that mutates validator status is deferred to on-chain adjudication to keep rosters deterministic across peers.
+
 ## دائرہ کار اور ضروریات
 
 - `iroha_cli` ہدف کلسٹر کیلئے configured ہو (دیکھیں `docs/source/cli.md`).

@@ -13,7 +13,7 @@ Paths for reference:
 
 ## Summary
 - The current implementation parses and lowers both free and contract functions (including `seiyaku`, `kotoage`, `hajimari`, and `kaizen` items), performs type checking for ints/bools/strings/pointer-ABI handles/structs/maps, and emits full multi-function IVM bytecode with durable `state` overlays when ABI v1 is selected. ✔
-- Metadata and manifest wiring now surface `meta { features: ["zk","simd"] }` toggles plus per-entrypoint permission/read/write hints. Static ISI keys (including literal `create_trigger` specs), literal map keys (including hashed pointer keys), and explicit `#[access(read=..., write=...)]` annotations are included in access hints; non-literal trigger specs and state-map keys are linted, and dynamic map keys/opaque host-driven reads now emit wildcard access hints with compiler diagnostics. ✔
+- Metadata and manifest wiring now surface `meta { features: ["zk","simd"] }` toggles plus per-entrypoint permission/read/write hints. Static ISI keys (including literal `create_trigger` specs), literal map keys (including hashed pointer keys), dynamic map paths (map-level `state:<name>` conflicts), explicit `#[access(read=..., write=...)]` annotations, and literal `execute_instruction` payloads plus `execute_query` payloads for supported queries (InstructionBox/QueryRequest decode, currently `FindAssetById`) are included in access hints; non-literal trigger specs and opaque host access patterns (including non-literal `execute_instruction`/`execute_query` payloads) emit lints, and non-literal host reads still skip hints so schedulers must fall back to dynamic analysis (entrypoint manifests report `access_hints_complete`/`access_hints_skipped` for coverage). ⚠
 - The compiler scans emitted bytecode for ZK/vector opcodes, auto-enables header bits, and rejects `meta` feature requests that do not match actual opcode usage. ✔
 - Numeric aliases (`fixed_u128`, `Amount`, `Balance`) are distinct numeric types with 64-bit scalar semantics; arithmetic preserves the alias and mixing aliases is rejected unless routed through an `int` binding. Trigger declarations (`register_trigger`) now parse time/execute filters and attach metadata to entrypoint manifests; data/pipeline filters and authority overrides remain pending. ⚠
 
@@ -49,7 +49,7 @@ Note: Kotodama compiles to Iroha Virtual Machine (IVM) bytecode (`.to`). It does
   - Emitted bytecode is scanned for ZK/vector opcodes; header bits are auto-enabled and mismatched `meta` requests are rejected.
 - Missing:
   - Trigger declarations are manifest-only metadata; cross-contract callback wiring (`call domain::fn`) is recorded but not yet consumed by runtime tooling.
-- Access-set hints now include static ISI WSV keys (including literal `create_trigger` specs), literal map keys, and explicit `#[access]` annotations; non-literal trigger specs and state-map keys emit lints, and dynamic map keys/opaque helper syscalls emit wildcard hints with diagnostics.
+- Access-set hints now include static ISI WSV keys (including literal `create_trigger` specs), literal map keys, dynamic map paths (map-level conflict keys), explicit `#[access]` annotations, and literal `execute_instruction` payloads plus `execute_query` payloads for supported queries (currently `FindAssetById`); non-literal trigger specs and opaque helper syscalls (including non-literal `execute_instruction`/`execute_query` payloads) emit lints, and non-literal host reads still skip hints.
 
 ## Samples vs. Implementation
 Modern samples compile, but the following grammar-level expectations remain unmet:
@@ -61,7 +61,9 @@ Modern samples compile, but the following grammar-level expectations remain unme
 Short-to-mid term steps to align implementation with the designed grammar and safety goals:
 
 1) Metadata + manifest parity
-- Done: dynamic map keys and opaque host-driven reads now emit wildcard access hints (`state:<map>[*]`, `state:*`, `*`) with compiler diagnostics.
+- Extend the current best-effort read/write hints beyond static ISI targets to cover dynamic map key patterns and host-driven reads so schedulers can do conflict analysis directly from manifests (dynamic map keys now emit map-level hints; literal `execute_instruction` payloads and supported `execute_query` payloads are decoded; non-literal host reads still skip hints with lints).
+- Done: lints now report dynamic state paths and opaque host reads; opaque host reads still skip hints.
+- Done: entrypoint manifests now report `access_hints_complete`/`access_hints_skipped` when coverage is incomplete.
 
 2) Permission and trigger plumbing
 - Extend trigger DSL support beyond time/execute filters (data/pipeline) and add explicit authority overrides.
@@ -79,10 +81,12 @@ Short-to-mid term steps to align implementation with the designed grammar and sa
 - Extract the Kotodama compiler into `crates/kotodama_lang` once dependencies are untangled.
 
 ## Quick Wins (Low Risk, High Impact)
-- Keep access-hint diagnostics surfaced when dynamic map keys or opaque host reads force wildcard fallbacks.
+- Done: lint now reports dynamic state paths and opaque host reads (non-literal trigger specs and state-map keys were already covered).
+- Emit a compiler hint when literal trigger specs cannot be decoded for access hints.
 
 ## Known Limitations to Call Out in Docs
-- Access hints cover static ISI targets, literal map keys, and explicit `#[access]` annotations; dynamic map keys and opaque helper syscalls now emit wildcard hints, which are conservative and may reduce parallelism.
+- Access hints cover static ISI targets (including literal trigger specs), dynamic map paths via map-level keys, explicit `#[access]` annotations, and literal `execute_instruction` payloads plus supported `execute_query` payloads, but opaque helper syscalls and non-literal host reads still skip hints (with lints, including non-literal `execute_instruction`/`execute_query` payloads), so schedulers need fallback analysis for complex contracts.
+- Entrypoint manifests report `access_hints_complete`/`access_hints_skipped` so coverage gaps can be surfaced without reading lints.
 - Meta feature flags (`zk`, `vector`, `features`) are validated against emitted opcodes; requesting features that are unused now fails compilation.
 - Numeric aliases (e.g., `fixed_u128`) are distinct types with 64-bit semantics; true 128-bit or fixed-point math still requires dedicated helpers.
 - `permission(...)` annotations are enforced by compiler diagnostics and written into manifests; runtime enforcement depends on consuming the metadata.

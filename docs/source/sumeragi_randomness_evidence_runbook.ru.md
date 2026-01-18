@@ -17,6 +17,9 @@ translation_last_reviewed: 2026-01-01
 раз, когда вы разворачиваете новую сборку валидатора или фиксируете readiness
 артефакты для governance.
 
+
+Note: For the v1 release, VRF/evidence penalties are recorded for telemetry only; enforcement that mutates validator status is deferred to on-chain adjudication to keep rosters deterministic across peers.
+
 ## Область и предпосылки
 
 - `iroha_cli` настроен для целевого кластера (см. `docs/source/cli.md`).

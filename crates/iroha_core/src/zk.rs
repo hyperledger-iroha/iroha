@@ -49,7 +49,10 @@ use iroha_data_model::proof::{ProofBox, VerifyingKeyBox};
 #[cfg(feature = "zk-preverify")]
 use ivm::halo2::VMExecutionCircuit;
 #[cfg(feature = "zk-halo2")]
-use kaigi_zk::{KAIGI_ROSTER_BACKEND, KaigiRosterJoinCircuit};
+use kaigi_zk::{
+    KAIGI_ROSTER_BACKEND, KAIGI_USAGE_BACKEND, KaigiRosterJoinCircuit,
+    KaigiUsageCommitmentCircuit,
+};
 #[cfg(feature = "zk-preverify")]
 use norito::streaming::CapabilityFlags;
 use sha2::{Digest, Sha256};
@@ -7442,6 +7445,24 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 normalized.as_str(),
                 vk_box,
                 KaigiRosterJoinCircuit::default(),
+                |vk| {
+                    let mut transcript =
+                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
+                    let strategy = SingleVerifier::new(&params);
+                    let proofs_instances = [&col_refs[..]];
+                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                }
+            )
+        }
+        KAIGI_USAGE_BACKEND => {
+            if col_refs.is_empty() {
+                return false;
+            }
+            cached_vk_for!(
+                &params,
+                normalized.as_str(),
+                vk_box,
+                KaigiUsageCommitmentCircuit::default(),
                 |vk| {
                     let mut transcript =
                         Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));

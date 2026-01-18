@@ -1331,7 +1331,7 @@ mod tests {
     }
 
     #[test]
-    fn collectors_k3_follow_block_committed_rotation_of_set_a() {
+    fn collectors_k3_follow_block_committed_canonical_order() {
         // After a commit, ordering is canonicalized; no prev-hash rotation is applied.
         let peers = test_peers(7);
         let mut topo = Topology::new(peers.clone());
@@ -1406,7 +1406,7 @@ mod tests {
     }
 
     #[test]
-    fn collectors_k2_follow_block_committed_rotation_of_set_a_n4() {
+    fn collectors_k2_follow_block_committed_canonical_order_n4() {
         // N=4 -> min_votes=3 -> canonicalized ordering only.
         let peers = test_peers(4);
         let mut topo = Topology::new(peers.clone());
@@ -1443,7 +1443,7 @@ mod tests {
     }
 
     #[test]
-    fn collectors_k3_follow_block_committed_rotation_of_set_a_n5() {
+    fn collectors_k3_follow_block_committed_canonical_order_n5() {
         // N=5 -> min_votes=3 -> canonicalized ordering only.
         let peers = test_peers(5);
         let mut topo = Topology::new(peers.clone());
