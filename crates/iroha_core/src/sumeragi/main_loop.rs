@@ -5400,6 +5400,14 @@ impl Actor {
             .copied()
     }
 
+    fn allow_unverified_rbc_roster(&self, key: super::rbc_store::SessionKey) -> bool {
+        let (consensus_mode, _mode_tag, _prf_seed) = self.consensus_context_for_height(key.1);
+        if !matches!(consensus_mode, ConsensusMode::Permissioned) {
+            return false;
+        }
+        self.rbc_roster_for_session(key).is_empty()
+    }
+
     fn ensure_rbc_session_roster(&mut self, key: super::rbc_store::SessionKey) -> Vec<PeerId> {
         if let Some(roster) = self
             .subsystems
@@ -8954,16 +8962,17 @@ impl Actor {
                 );
                 return Ok(None);
             }
-            let roster_source = self
-                .rbc_session_roster_source(key)
-                .unwrap_or(RbcRosterSource::Init);
-            if !roster_source.is_authoritative() {
-                debug!(
-                    height = key.1,
-                    view = key.2,
-                    "deferring RBC READY until commit roster is verified"
-                );
-                return Ok(None);
+        let roster_source = self
+            .rbc_session_roster_source(key)
+            .unwrap_or(RbcRosterSource::Init);
+        let allow_unverified = self.allow_unverified_rbc_roster(key);
+        if !roster_source.is_authoritative() && !allow_unverified {
+            debug!(
+                height = key.1,
+                view = key.2,
+                "deferring RBC READY until commit roster is verified"
+            );
+            return Ok(None);
             }
 
             let total = session.total_chunks();
@@ -9788,7 +9797,8 @@ impl Actor {
         let roster_source = self
             .rbc_session_roster_source(key)
             .unwrap_or(RbcRosterSource::Init);
-        if !roster_source.is_authoritative() {
+        let allow_unverified = self.allow_unverified_rbc_roster(key);
+        if !roster_source.is_authoritative() && !allow_unverified {
             debug!(
                 height = key.1,
                 view = key.2,
