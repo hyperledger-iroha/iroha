@@ -26,7 +26,7 @@ const ELIGIBLE_STAKE: u64 = 2_000;
 const INELIGIBLE_STAKE: u64 = 100;
 const WAIT_HEIGHT: u64 = 16;
 const COLLECTOR_RETRY: Duration = Duration::from_secs(60);
-const COLLECTOR_POLL: Duration = Duration::from_millis(500);
+const COLLECTOR_POLL: Duration = Duration::from_millis(100);
 
 fn register_validator_instructions(
     asset_def: &AssetDefinitionId,

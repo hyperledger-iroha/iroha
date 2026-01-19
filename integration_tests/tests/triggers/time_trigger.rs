@@ -38,19 +38,32 @@ where
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mint_asset_after_3_sec() -> Result<()> {
+#[allow(clippy::too_many_lines)]
+async fn time_trigger_scenarios() -> Result<()> {
     let Some(network) = sandbox::start_network_async_or_skip(
-        NetworkBuilder::new().with_default_pipeline_time(),
-        stringify!(mint_asset_after_3_sec),
+        NetworkBuilder::new().with_pipeline_time(std::time::Duration::from_secs(2)),
+        stringify!(time_trigger_scenarios),
     )
     .await?
     else {
         return Ok(());
     };
     let test_client = network.client();
-    let sync_timeout = network.sync_timeout();
     network.ensure_blocks_with(|h| h.total >= 1).await?;
 
+    mint_asset_after_3_sec_scenario(&network, &test_client).await?;
+    pre_commit_trigger_should_be_executed_scenario(&network, &test_client).await?;
+    mint_nft_for_every_user_every_1_sec_scenario(&network, &test_client).await?;
+
+    Ok(())
+}
+
+async fn mint_asset_after_3_sec_scenario(
+    network: &sandbox::SerializedNetwork,
+    test_client: &Client,
+) -> Result<()> {
+    let test_client = test_client.clone();
+    let sync_timeout = network.sync_timeout();
     run_or_skip(stringify!(mint_asset_after_3_sec), || async {
         let asset_definition_id = "rose#wonderland"
             .parse::<AssetDefinitionId>()
@@ -78,7 +91,7 @@ async fn mint_asset_after_3_sec() -> Result<()> {
         let schedule = TimeSchedule::starting_at(start_time + gap);
         let instruction = Mint::asset_numeric(1_u32, asset_id.clone());
         let register_trigger = Register::trigger(Trigger::new(
-            "mint_rose".parse().expect("Valid"),
+            "mint_rose_schedule".parse().expect("Valid"),
             Action::new(
                 vec![instruction],
                 Repeats::from(1_u32),
@@ -141,21 +154,14 @@ async fn mint_asset_after_3_sec() -> Result<()> {
     .await
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[allow(clippy::items_after_statements)]
-async fn pre_commit_trigger_should_be_executed() -> Result<()> {
+async fn pre_commit_trigger_should_be_executed_scenario(
+    network: &sandbox::SerializedNetwork,
+    test_client: &Client,
+) -> Result<()> {
     const CHECKS_COUNT: usize = 3;
 
-    let Some(network) = sandbox::start_network_async_or_skip(
-        NetworkBuilder::new(),
-        stringify!(pre_commit_trigger_should_be_executed),
-    )
-    .await?
-    else {
-        return Ok(());
-    };
-    let test_client = network.client();
-
+    let test_client = test_client.clone();
     run_or_skip(
         stringify!(pre_commit_trigger_should_be_executed),
         || async {
@@ -165,7 +171,7 @@ async fn pre_commit_trigger_should_be_executed() -> Result<()> {
 
             let instruction = Mint::asset_numeric(1u32, asset_id.clone());
             let register_trigger = Register::trigger(Trigger::new(
-                "mint_rose".parse()?,
+                "mint_rose_precommit".parse()?,
                 Action::new(
                     vec![instruction],
                     Repeats::Indefinitely,
@@ -225,23 +231,25 @@ async fn pre_commit_trigger_should_be_executed() -> Result<()> {
             .await
             .wrap_err("pre_commit_trigger_should_be_executed poll timed out")??;
 
+            let trigger_id: TriggerId = "mint_rose_precommit".parse()?;
+            spawn_blocking({
+                let client = test_client.clone();
+                let trigger_id = trigger_id.clone();
+                move || client.submit_blocking(Unregister::trigger(trigger_id))
+            })
+            .await??;
+
             Ok(())
         },
     )
     .await
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mint_nft_for_every_user_every_1_sec() -> Result<()> {
-    let Some(network) = sandbox::start_network_async_or_skip(
-        NetworkBuilder::new().with_default_pipeline_time(),
-        stringify!(mint_nft_for_every_user_every_1_sec),
-    )
-    .await?
-    else {
-        return Ok(());
-    };
-    let test_client = network.client();
+async fn mint_nft_for_every_user_every_1_sec_scenario(
+    network: &sandbox::SerializedNetwork,
+    test_client: &Client,
+) -> Result<()> {
+    let test_client = test_client.clone();
     let trigger_period = std::cmp::max(
         Duration::from_millis(300),
         network

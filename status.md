@@ -2,12 +2,21 @@
 
 Last update: 2026-01-19
 
+- Sumeragi pacemaker: rebroadcast cached proposals + BlockCreated payloads when the local leader already has the proposal cached, avoiding stalls when proposal messages are dropped; added `pacemaker_rebroadcasts_cached_proposal_when_leader` coverage.
+- Tests: `cargo test -p iroha_core pacemaker_rebroadcasts_cached_proposal_when_leader -- --nocapture` (ok).
+- Tests: `cargo test --workspace` failed during compile (missing `connect_startup_delay` in `iroha_p2p` integration test Network configs).
+- Format: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
 - Integration tests (asset): submit helpers now broadcast signed transactions across peers and tolerate duplicate-enqueue responses to avoid queued timeouts; added duplicate-error detection coverage. Tests not re-run yet.
+- Integration tests: NetworkBuilder::new now defaults to a 1s pipeline time for faster test networks; `with_default_pipeline_time` keeps Sumeragi defaults. Tests not run yet.
+- Torii/client: queue rejections now include `x-iroha-reject-code`; client ResponseReport decodes Norito error envelopes to surface codes/messages. Tests: `cargo test -p iroha --lib response_report::with_msg_decodes_norito_error_envelope`, `cargo test -p iroha_torii --lib push_into_queue_error_sets_reject_code_header` (ok).
+- Integration tests: consolidated asset mint quantity cases into one network, tightened polling delays, and moved most integration tests to a 2s pipeline time for faster runs (unstable_network and NPoS performance timing left unchanged). Tests not run yet.
+- Integration tests: collapsed misc, pagination, non-mintable, NFT, subscription, telemetry (permissioned), and time-trigger suites to reuse a single network per file and set 2s pipeline time where safe. Tests not run yet.
 - Genesis: consensus handshake metadata now refreshes during manifest parse/normalize to keep fingerprints aligned with effective parameters (added `build_and_sign_refreshes_stale_consensus_fingerprint` test).
 - Config: fixed `connect_startup_delay` initialization in torii test utils and p2p start wiring.
 - Tests: `cargo test -p integration_tests genesis_asset_minted_across_peers -- --nocapture` (ok).
 - Tests: `cargo test -p integration_tests genesis_norito_bytes_roundtrip_network -- --nocapture` (ok).
 - NPoS bootstrap: RBC roster derivation now falls back to the active topology near the tip to avoid empty-session snapshots; added `rbc_roster_for_session_uses_active_topology_in_npos_bootstrap` (tests not run).
+- RBC ingress/backlog: treat RbcInit as blocking ingress to avoid non-blocking drops under load, and count pending RBC stashes for the next height as unresolved backlog so pacemaker won’t trigger view changes while BlockCreated/INIT is missing; added `rbc_backlog_counts_pending_stash_for_next_height` + updated relay blocking-variant test (tests not run).
 - Lint: not run
 - Build: not run
 - Tests: `cargo test -p ivm` (timed out after 20m while running `kotodama_foreach_reads_durable_state_map_entries`)

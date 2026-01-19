@@ -3607,7 +3607,7 @@ async fn block_sync_update_accepts_uncertified_next_height_after_block_created_i
         .position(leader_kp.public_key())
         .expect("signer index in topology");
     let parent_hash = committed_hash.expect("committed hash available");
-    let mut block = heartbeat_block_for_state(
+    let block = heartbeat_block_for_state(
         actor.state.as_ref(),
         &actor.common_config.chain,
         block_height,
@@ -3616,30 +3616,6 @@ async fn block_sync_update_accepts_uncertified_next_height_after_block_created_i
         leader_kp,
         u64::try_from(leader_idx).expect("signer index fits u64"),
     );
-    let required = signature_topology.min_votes_for_commit().max(1);
-    for (idx, peer) in signature_topology
-        .as_ref()
-        .iter()
-        .enumerate()
-        .take(required)
-    {
-        if idx == leader_idx {
-            continue;
-        }
-        let kp = harness
-            .key_pairs
-            .iter()
-            .find(|kp| kp.public_key() == peer.public_key())
-            .expect("signer keypair exists in harness");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
-        block
-            .add_signature(BlockSignature::new(
-                u64::try_from(idx).expect("signer index fits u64"),
-                sig,
-            ))
-            .expect("signature added");
-    }
-
     actor
         .handle_block_created(
             super::message::BlockCreated {
@@ -32737,6 +32713,111 @@ async fn pacemaker_allows_proposal_with_unknown_precommit_votes() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn pacemaker_rebroadcasts_cached_proposal_when_leader() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+
+    let roster = actor.effective_commit_topology();
+    let local_pos = roster
+        .iter()
+        .position(|peer| peer == actor.common_config.peer.id())
+        .expect("local peer in topology");
+    let view = u64::try_from(local_pos).unwrap_or_default();
+
+    let parent_hash = actor.state.view().latest_block_hash();
+    let parent_hash_for_qc = parent_hash.unwrap_or_else(|| {
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH]))
+    });
+    let block = sample_block(height, view, parent_hash);
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor.pending.pending_blocks.insert(
+        block.hash(),
+        PendingBlock::new(block.clone(), payload_hash, height, view),
+    );
+
+    let highest_qc = QcHeaderRef {
+        subject_block_hash: parent_hash_for_qc,
+        height: committed_height,
+        view: 0,
+        epoch: actor.epoch_for_height(committed_height),
+        phase: Phase::Commit,
+    };
+    let proposer = u32::try_from(local_pos).expect("local index fits u32");
+    let epoch = actor.epoch_for_height(height);
+    let proposal =
+        Actor::build_consensus_proposal(&block, payload_hash, highest_qc, proposer, view, epoch);
+    actor
+        .subsystems
+        .propose
+        .proposal_cache
+        .insert_proposal(proposal);
+
+    let sender_a_pos = (local_pos + 1) % roster.len();
+    let sender_b_pos = (local_pos + 2) % roster.len();
+    let sender_a = roster.get(sender_a_pos).cloned().expect("sender peer");
+    let sender_b = roster.get(sender_b_pos).cloned().expect("sender peer");
+    actor
+        .subsystems
+        .propose
+        .new_view_tracker
+        .record(height, view, sender_a, highest_qc);
+    actor
+        .subsystems
+        .propose
+        .new_view_tracker
+        .record(height, view, sender_b, highest_qc);
+
+    let offline_grace = actor.commit_quorum_timeout();
+    let now = Instant::now();
+    let start = now
+        .checked_sub(offline_grace + Duration::from_millis(1))
+        .unwrap_or(now);
+    actor.phase_tracker.on_view_change(height, view, start);
+
+    let _ = harness.background_rx.try_iter().count();
+    let proposed = actor.on_pacemaker_propose_ready(now);
+    assert!(
+        !proposed,
+        "pacemaker should not assemble a new proposal when cached"
+    );
+
+    let posts: Vec<_> = harness.background_rx.try_iter().collect();
+    let proposal_posts = posts
+        .iter()
+        .filter(|post| match post {
+            BackgroundPost::Post { msg, .. } => matches!(
+                msg,
+                BlockMessage::Proposal(proposal)
+                    if proposal.header.height == height && proposal.header.view == view
+            ),
+            _ => false,
+        })
+        .count();
+    let block_posts = posts
+        .iter()
+        .filter(|post| match post {
+            BackgroundPost::Post { msg, .. } => matches!(
+                msg,
+                BlockMessage::BlockCreated(created)
+                    if created.block.header().height().get() == height
+                        && created.block.header().view_change_index() == view
+            ),
+            _ => false,
+        })
+        .count();
+    assert!(proposal_posts > 0, "cached proposal should be rebroadcast");
+    assert!(
+        block_posts > 0,
+        "cached block payload should be rebroadcast"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn pacemaker_uses_commit_qc_roster_for_proposal_leader() {
     use crate::sumeragi::status;
 
@@ -45861,6 +45942,35 @@ async fn rbc_backlog_ignores_inactive_sessions() {
     assert!(
         !harness.actor.has_unresolved_rbc_backlog(),
         "inactive RBC sessions should not gate proposal assembly"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rbc_backlog_counts_pending_stash_for_next_height() {
+    let mut harness = test_actor_harness(4).await;
+    let tip_height = harness.actor.state.view().height();
+    let next_height = u64::try_from(tip_height)
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x46; 32]));
+    let key: SessionKey = (block_hash, next_height, 0);
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .pending
+        .insert(key, PendingRbcMessages::new(Instant::now()));
+
+    assert!(
+        !harness.actor.block_payload_available_locally(block_hash),
+        "pending RBC stash should not report a local payload"
+    );
+    assert!(
+        harness.actor.has_unresolved_rbc_backlog(),
+        "pending RBC stash for next height should gate view changes"
     );
 
     harness.shutdown.send();

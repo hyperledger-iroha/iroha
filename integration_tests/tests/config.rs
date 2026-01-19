@@ -20,18 +20,69 @@ const TEST_POW_TIME_COST: u32 = 4;
 const TEST_POW_LANES: u32 = 3;
 
 #[test]
-fn retrieve_update_config() -> eyre::Result<()> {
-    let builder = NetworkBuilder::new().with_config_layer(|c| {
-        c.write(["network", "block_gossip_size"], 100)
-            .write(["queue", "capacity"], 100_000);
-    });
-    let Some((network, _rt)) =
-        sandbox::start_network_blocking_or_skip(builder, stringify!(retrieve_update_config))?
+fn config_scenarios() -> eyre::Result<()> {
+    let builder = NetworkBuilder::new()
+        .with_min_peers(4)
+        .with_config_layer(|c| {
+            c.write(["network", "block_gossip_size"], 100)
+                .write(["queue", "capacity"], 100_000)
+                .write(["network", "soranet_handshake", "pow", "required"], true)
+                .write(["network", "soranet_handshake", "pow", "difficulty"], 6_i64)
+                .write(
+                    [
+                        "network",
+                        "soranet_handshake",
+                        "pow",
+                        "max_future_skew_secs",
+                    ],
+                    900_i64,
+                )
+                .write(
+                    ["network", "soranet_handshake", "pow", "min_ticket_ttl_secs"],
+                    120_i64,
+                )
+                .write(
+                    ["network", "soranet_handshake", "pow", "ticket_ttl_secs"],
+                    240_i64,
+                )
+                .write(
+                    ["network", "soranet_handshake", "pow", "puzzle", "enabled"],
+                    true,
+                )
+                .write(
+                    [
+                        "network",
+                        "soranet_handshake",
+                        "pow",
+                        "puzzle",
+                        "memory_kib",
+                    ],
+                    131_072_i64,
+                )
+                .write(
+                    ["network", "soranet_handshake", "pow", "puzzle", "time_cost"],
+                    3_i64,
+                )
+                .write(
+                    ["network", "soranet_handshake", "pow", "puzzle", "lanes"],
+                    2_i64,
+                );
+        });
+    let Some((network, rt)) =
+        sandbox::start_network_blocking_or_skip(builder, stringify!(config_scenarios))?
     else {
         return Ok(());
     };
     let client = network.client();
 
+    soranet_pow_puzzle_config_roundtrips_scenario(&client)?;
+    retrieve_update_config_scenario(&client)?;
+    soranet_pow_puzzle_update_propagates_across_peers_scenario(&network, &rt)?;
+
+    Ok(())
+}
+
+fn retrieve_update_config_scenario(client: &iroha::client::Client) -> eyre::Result<()> {
     let config = client.get_config()?;
 
     assert_eq!(config.network.block_gossip_size, nonzero!(100u32));
@@ -133,61 +184,9 @@ fn retrieve_update_config() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
-fn soranet_pow_puzzle_config_roundtrips() -> eyre::Result<()> {
-    let builder = NetworkBuilder::new().with_config_layer(|layer| {
-        layer
-            .write(["network", "soranet_handshake", "pow", "required"], true)
-            .write(["network", "soranet_handshake", "pow", "difficulty"], 6_i64)
-            .write(
-                [
-                    "network",
-                    "soranet_handshake",
-                    "pow",
-                    "max_future_skew_secs",
-                ],
-                900_i64,
-            )
-            .write(
-                ["network", "soranet_handshake", "pow", "min_ticket_ttl_secs"],
-                120_i64,
-            )
-            .write(
-                ["network", "soranet_handshake", "pow", "ticket_ttl_secs"],
-                240_i64,
-            )
-            .write(
-                ["network", "soranet_handshake", "pow", "puzzle", "enabled"],
-                true,
-            )
-            .write(
-                [
-                    "network",
-                    "soranet_handshake",
-                    "pow",
-                    "puzzle",
-                    "memory_kib",
-                ],
-                131_072_i64,
-            )
-            .write(
-                ["network", "soranet_handshake", "pow", "puzzle", "time_cost"],
-                3_i64,
-            )
-            .write(
-                ["network", "soranet_handshake", "pow", "puzzle", "lanes"],
-                2_i64,
-            );
-    });
-    let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
-        builder,
-        stringify!(soranet_pow_puzzle_config_roundtrips),
-    )?
-    else {
-        return Ok(());
-    };
-    let client = network.client();
-
+fn soranet_pow_puzzle_config_roundtrips_scenario(
+    client: &iroha::client::Client,
+) -> eyre::Result<()> {
     let config = client.get_config()?;
     let handshake = &config.network.soranet_handshake;
     assert!(handshake.pow.required, "puzzle gate must remain enabled");
@@ -203,18 +202,11 @@ fn soranet_pow_puzzle_config_roundtrips() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
 #[allow(clippy::too_many_lines)]
-fn soranet_pow_puzzle_update_propagates_across_peers() -> eyre::Result<()> {
-    let builder = NetworkBuilder::new().with_min_peers(4);
-    let Some((network, rt)) = sandbox::start_network_blocking_or_skip(
-        builder,
-        stringify!(soranet_pow_puzzle_update_propagates_across_peers),
-    )?
-    else {
-        return Ok(());
-    };
-
+fn soranet_pow_puzzle_update_propagates_across_peers_scenario(
+    network: &sandbox::SerializedNetwork,
+    rt: &tokio::runtime::Runtime,
+) -> eyre::Result<()> {
     // Wait for genesis to be committed.
     rt.block_on(async { network.ensure_blocks_with(|x| x.total >= 1).await })?;
 

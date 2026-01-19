@@ -57,157 +57,107 @@ fn is_tx_confirmation_timeout(err: &eyre::Report) -> bool {
     })
 }
 
-#[tokio::test]
-async fn verify_proof_emits_verified_event() -> Result<()> {
-    let _override_guard = sandbox::override_network_parallelism(Some(true), None);
-    let Some(network) = sandbox::start_network_async_or_skip(
-        proof_network_builder(),
-        stringify!(verify_proof_emits_verified_event),
+async fn verify_proof_emits_event(
+    network: &Network,
+    context: &'static str,
+    attachment: iroha::data_model::proof::ProofAttachment,
+    expect_verified: bool,
+) -> Result<()> {
+    network.ensure_blocks(1).await?;
+    let client = client_with_timeout(network);
+    let mut events = tokio::time::timeout(
+        proof_event_timeout(network),
+        client.listen_for_events_async([DataEventFilter::Proof(ProofEventFilter::new())]),
     )
-    .await?
-    else {
-        return Ok(());
-    };
-    let result: Result<()> = async {
-        network.ensure_blocks(1).await?;
-        let client = client_with_timeout(&network);
-        let mut events = tokio::time::timeout(
-            proof_event_timeout(&network),
-            client.listen_for_events_async([DataEventFilter::Proof(ProofEventFilter::new())]),
-        )
-        .await
-        .map_err(|_| {
-            eyre!("verify_proof_emits_verified_event: timed out opening proof event stream")
-        })??;
+    .await
+    .map_err(|_| eyre!("{context}: timed out opening proof event stream"))??;
 
-        // Build a VerifyProof ISI with inline VK on an accepted backend
-        let attachment = halo2_attachment();
-        let verify: InstructionBox =
-            iroha::data_model::isi::zk::VerifyProof::new(attachment).into();
-
-        {
-            let submit_client = client.clone();
-            let submit_result =
-                spawn_blocking(move || submit_client.submit_all_blocking([verify])).await?;
-            if let Err(err) = submit_result {
-                if is_tx_confirmation_timeout(&err) {
-                    eprintln!(
-                        "warning: verify_proof_emits_verified_event confirmation timed out; continuing to wait for events"
-                    );
-                } else {
-                    return Err(err);
-                }
+    let verify: InstructionBox = iroha::data_model::isi::zk::VerifyProof::new(attachment).into();
+    {
+        let submit_client = client.clone();
+        let submit_result =
+            spawn_blocking(move || submit_client.submit_all_blocking([verify])).await?;
+        if let Err(err) = submit_result {
+            if is_tx_confirmation_timeout(&err) {
+                eprintln!(
+                    "warning: {context} confirmation timed out; continuing to wait for events"
+                );
+            } else {
+                return Err(err);
             }
         }
-        network.ensure_blocks(2).await?;
+    }
+    network.ensure_blocks(2).await?;
 
-        let result = async {
-            // Wait for the proof event and assert it is Verified
-            let proof_event = timeout(proof_event_timeout(&network), async {
-                loop {
-                    let ev = events.next().await.expect("event stream open")?;
-                    if let EventBox::Data(event) = ev
-                        && let DataEvent::Proof(pe) = event.as_ref()
-                    {
-                        break Ok::<_, eyre::Report>(pe.clone());
-                    }
+    let result = async {
+        let proof_event = timeout(proof_event_timeout(network), async {
+            loop {
+                let ev = events.next().await.expect("event stream open")?;
+                if let EventBox::Data(event) = ev
+                    && let DataEvent::Proof(pe) = event.as_ref()
+                {
+                    break Ok::<_, eyre::Report>(pe.clone());
                 }
-            })
-            .await??;
+            }
+        })
+        .await??;
+        if expect_verified {
             assert_matches!(
                 proof_event,
                 iroha::data_model::events::data::proof::ProofEvent::Verified(_)
             );
-
-            Ok(())
-        }
-        .await;
-
-        events.close().await;
-        result
-    }
-    .await;
-    if sandbox::handle_result(result, stringify!(verify_proof_emits_verified_event))?.is_none() {
-        return Ok(());
-    }
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn verify_proof_emits_rejected_event() -> Result<()> {
-    let _override_guard = sandbox::override_network_parallelism(Some(true), None);
-    let Some(network) = sandbox::start_network_async_or_skip(
-        proof_network_builder(),
-        stringify!(verify_proof_emits_rejected_event),
-    )
-    .await?
-    else {
-        return Ok(());
-    };
-    let result: Result<()> = async {
-        network.ensure_blocks(1).await?;
-        let client = client_with_timeout(&network);
-        let mut events = tokio::time::timeout(
-            proof_event_timeout(&network),
-            client.listen_for_events_async([DataEventFilter::Proof(ProofEventFilter::new())]),
-        )
-        .await
-        .map_err(|_| {
-            eyre!("verify_proof_emits_rejected_event: timed out opening proof event stream")
-        })??;
-
-        // Build a VerifyProof ISI that deterministically rejects
-        let attachment = iroha::data_model::proof::ProofAttachment::new_inline(
-            "debug/reject".into(),
-            iroha::data_model::proof::ProofBox::new("debug/reject".into(), vec![0xaa]),
-            iroha::data_model::proof::VerifyingKeyBox::new("debug/reject".into(), vec![0xbb]),
-        );
-        let verify: InstructionBox =
-            iroha::data_model::isi::zk::VerifyProof::new(attachment).into();
-
-        {
-            let submit_client = client.clone();
-            let submit_result =
-                spawn_blocking(move || submit_client.submit_all_blocking([verify])).await?;
-            if let Err(err) = submit_result {
-                if is_tx_confirmation_timeout(&err) {
-                    eprintln!(
-                        "warning: verify_proof_emits_rejected_event confirmation timed out; continuing to wait for events"
-                    );
-                } else {
-                    return Err(err);
-                }
-            }
-        }
-        network.ensure_blocks(2).await?;
-
-        let result = async {
-            let proof_event = timeout(proof_event_timeout(&network), async {
-                loop {
-                    let ev = events.next().await.expect("event stream open")?;
-                    if let EventBox::Data(event) = ev
-                        && let DataEvent::Proof(pe) = event.as_ref()
-                    {
-                        break Ok::<_, eyre::Report>(pe.clone());
-                    }
-                }
-            })
-            .await??;
+        } else {
             assert_matches!(
                 proof_event,
                 iroha::data_model::events::data::proof::ProofEvent::Rejected(_)
             );
-
-            Ok(())
         }
-        .await;
 
-        events.close().await;
-        result
+        Ok(())
     }
     .await;
-    if sandbox::handle_result(result, stringify!(verify_proof_emits_rejected_event))?.is_none() {
+
+    events.close().await;
+    result
+}
+
+#[tokio::test]
+async fn proof_event_scenarios() -> Result<()> {
+    let _override_guard = sandbox::override_network_parallelism(Some(true), None);
+    let Some(network) =
+        sandbox::start_network_async_or_skip(proof_network_builder(), "proof_event_scenarios")
+            .await?
+    else {
+        return Ok(());
+    };
+
+    let result: Result<()> = async {
+        verify_proof_emits_event(
+            &network,
+            stringify!(verify_proof_emits_verified_event),
+            halo2_attachment(),
+            true,
+        )
+        .await?;
+
+        let rejected_attachment = iroha::data_model::proof::ProofAttachment::new_inline(
+            "debug/reject".into(),
+            iroha::data_model::proof::ProofBox::new("debug/reject".into(), vec![0xaa]),
+            iroha::data_model::proof::VerifyingKeyBox::new("debug/reject".into(), vec![0xbb]),
+        );
+        verify_proof_emits_event(
+            &network,
+            stringify!(verify_proof_emits_rejected_event),
+            rejected_attachment,
+            false,
+        )
+        .await?;
+
+        Ok(())
+    }
+    .await;
+
+    if sandbox::handle_result(result, stringify!(proof_event_scenarios))?.is_none() {
         return Ok(());
     }
 
