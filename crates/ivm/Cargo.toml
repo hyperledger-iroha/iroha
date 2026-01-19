@@ -12,6 +12,7 @@ build = "build.rs"
 [dependencies]
 poseidon-primitives = "0.2.0"
 sha2 = { version = "0.10.9" }
+sha3_hash = { package = "sha3", version = "0.10.8", default-features = false, features = ["std"] }
 ff = { version = "0.13.1", features = ["derive"] }
 halo2curves = { workspace = true }
 halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["batch", "multicore"] }

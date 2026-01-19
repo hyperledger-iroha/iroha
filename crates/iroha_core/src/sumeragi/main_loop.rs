@@ -94,7 +94,7 @@ use crate::{
     queue::{BackpressureState, Queue, RoutingDecision},
     state::{
         CellVecExt, StakeSnapshot, State, StateView, WorldReadOnly,
-        compute_confidential_feature_digest, consensus_key_pop_for_public_key,
+        compute_confidential_feature_digest,
     },
     sumeragi::evidence::EvidenceStore,
     telemetry::{MissingBlockFetchOutcome, MissingBlockFetchTargetKind},
@@ -697,6 +697,7 @@ struct RbcMismatchLogKey {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[allow(clippy::struct_field_names)]
 struct RbcMismatchLogState {
     last_logged_at: Instant,
     last_height: u64,
@@ -1844,6 +1845,7 @@ fn validate_new_view_qc_highest(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_lines)]
 fn validate_qc_against_votes(
     vote_log: &BTreeMap<
         (
@@ -1983,7 +1985,7 @@ fn validate_qc_against_votes(
 fn fallback_qc_tally_from_bitmap(
     qc: &crate::sumeragi::consensus::Qc,
     topology: &super::network_topology::Topology,
-    world: &impl WorldReadOnly,
+    _world: &impl WorldReadOnly,
     pops: &BTreeMap<PublicKey, Vec<u8>>,
     chain_id: &ChainId,
     mode_tag: &str,
@@ -8031,6 +8033,7 @@ impl Actor {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) fn on_block_message(&mut self, msg: super::InboundBlockMessage) -> Result<()> {
         let super::InboundBlockMessage {
             message: msg,
@@ -9750,7 +9753,7 @@ impl Actor {
                 }
             }
         } else {
-            for (key, _) in self.subsystems.da_rbc.rbc.sessions.iter() {
+            for key in self.subsystems.da_rbc.rbc.sessions.keys() {
                 last_key = Some(*key);
                 if self.rbc_rebroadcast_active_with_tip(*key, tip_height, tip_hash) {
                     keys.push(*key);
@@ -10511,6 +10514,7 @@ impl Actor {
         self.trigger_view_change_with_cause(height, view, ViewChangeCause::CommitFailure);
     }
 
+    #[allow(clippy::too_many_lines)]
     fn trigger_view_change_with_cause(&mut self, height: u64, view: u64, cause: ViewChangeCause) {
         if let Some(current_height) = self.phase_tracker.round_height {
             if height < current_height {

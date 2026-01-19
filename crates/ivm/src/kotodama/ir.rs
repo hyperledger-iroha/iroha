@@ -108,12 +108,12 @@ pub enum Instr {
         op: UnaryOp,
         operand: Temp,
     },
-    /// Convert an int (i64) to a Numeric NoritoBytes payload pointer (scale = 0).
+    /// Convert a non-negative int (i64) to a Numeric NoritoBytes payload pointer (scale = 0).
     NumericFromInt {
         dest: Temp,
         value: Temp,
     },
-    /// Convert a Numeric NoritoBytes payload pointer (scale = 0) to an int (i64).
+    /// Convert a Numeric NoritoBytes payload pointer (scale = 0, unsigned) to an int (i64).
     NumericToInt {
         dest: Temp,
         value: Temp,
@@ -190,6 +190,16 @@ pub enum Instr {
     },
     /// Compute SM3 hash of a Blob pointer and return the resulting Blob pointer.
     Sm3Hash {
+        dest: Temp,
+        message: Temp,
+    },
+    /// Compute SHA-256 hash of a Blob pointer and return the resulting Blob pointer.
+    Sha256Hash {
+        dest: Temp,
+        message: Temp,
+    },
+    /// Compute SHA3-256 hash of a Blob pointer and return the resulting Blob pointer.
+    Sha3Hash {
         dest: Temp,
         message: Temp,
     },
@@ -346,6 +356,10 @@ pub enum Instr {
     CreateNftsForAllUsers,
     /// Host helper: set SmartContract execution depth parameter.
     SetExecutionDepth {
+        value: Temp,
+    },
+    /// Host helper: set logical vector length (SETVL immediate).
+    SetVl {
         value: Temp,
     },
     /// Call a user-defined function by name with positional arguments.
@@ -1535,12 +1549,19 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             let t = ctx.new_temp();
             match raw.parse::<Numeric>() {
                 Ok(numeric) => {
-                    let hex = hex::encode(numeric.encode());
-                    ctx.current_instr(Instr::DataRef {
-                        dest: t,
-                        kind: DataRefKind::NoritoBytes,
-                        value: format!("0x{hex}"),
-                    });
+                    if numeric.scale() != 0 || numeric.mantissa().is_negative() {
+                        ctx.record_error(format!(
+                            "numeric literal `{raw}` must be an unsigned integer (scale=0)"
+                        ));
+                        ctx.current_instr(Instr::Const { dest: t, value: 0 });
+                    } else {
+                        let hex = hex::encode(numeric.encode());
+                        ctx.current_instr(Instr::DataRef {
+                            dest: t,
+                            kind: DataRefKind::NoritoBytes,
+                            value: format!("0x{hex}"),
+                        });
+                    }
                 }
                 Err(err) => {
                     ctx.record_error(format!("invalid numeric literal `{raw}`: {err}"));
@@ -1898,17 +1919,17 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                         });
                         return dest;
                     }
-                    if name == "norito_bytes" {
-                        if let semantic::ExprKind::Bytes(bytes) = &arg.expr {
-                            let dest = ctx.new_temp();
-                            let hex = hex::encode(bytes);
-                            ctx.current_instr(Instr::DataRef {
-                                dest,
-                                kind: DataRefKind::NoritoBytes,
-                                value: format!("0x{hex}"),
-                            });
-                            return dest;
-                        }
+                    if name == "norito_bytes"
+                        && let semantic::ExprKind::Bytes(bytes) = &arg.expr
+                    {
+                        let dest = ctx.new_temp();
+                        let hex = hex::encode(bytes);
+                        ctx.current_instr(Instr::DataRef {
+                            dest,
+                            kind: DataRefKind::NoritoBytes,
+                            value: format!("0x{hex}"),
+                        });
+                        return dest;
                     }
                     let src = lower_expr(ctx, arg, vars);
                     let resolved_arg = semantic::resolve_struct_type(&arg.ty);
@@ -1989,6 +2010,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 "set_execution_depth" => {
                     let v = lower_expr_as_int(ctx, &args[0], vars);
                     ctx.current_instr(Instr::SetExecutionDepth { value: v });
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
+                    t
+                }
+                "setvl" => {
+                    let v = lower_expr_as_int(ctx, &args[0], vars);
+                    ctx.current_instr(Instr::SetVl { value: v });
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::Const { dest: t, value: 0 });
                     t
@@ -2115,6 +2143,24 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     let msg = lower_expr(ctx, &args[0], vars);
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::Sm3Hash {
+                        dest: t,
+                        message: msg,
+                    });
+                    t
+                }
+                "sha256_hash" => {
+                    let msg = lower_expr(ctx, &args[0], vars);
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::Sha256Hash {
+                        dest: t,
+                        message: msg,
+                    });
+                    t
+                }
+                "sha3_hash" => {
+                    let msg = lower_expr(ctx, &args[0], vars);
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::Sha3Hash {
                         dest: t,
                         message: msg,
                     });
@@ -3763,14 +3809,33 @@ mod tests {
         let mut saw_blob = false;
         for bb in &f.blocks {
             for instr in &bb.instrs {
-                if let Instr::DataRef { kind, value, .. } = instr {
-                    if *kind == DataRefKind::Blob && value == "0x6162" {
-                        saw_blob = true;
-                    }
+                if let Instr::DataRef { kind, value, .. } = instr
+                    && *kind == DataRefKind::Blob
+                    && value == "0x6162"
+                {
+                    saw_blob = true;
                 }
             }
         }
         assert!(saw_blob, "expected blob dataref for bytes literal");
+    }
+
+    #[test]
+    fn lower_setvl_builtin() {
+        let src = "fn main() { setvl(8); }";
+        let prog = parse(src).unwrap();
+        let typed = analyze(&prog).unwrap();
+        let ir = lower(&typed).expect("lower");
+        let f = &ir.functions[0];
+        let mut saw_setvl = false;
+        for bb in &f.blocks {
+            for instr in &bb.instrs {
+                if let Instr::SetVl { .. } = instr {
+                    saw_setvl = true;
+                }
+            }
+        }
+        assert!(saw_setvl, "expected SetVl instruction in lowered IR");
     }
 
     #[test]
@@ -3783,10 +3848,11 @@ mod tests {
         let mut saw_norito = false;
         for bb in &f.blocks {
             for instr in &bb.instrs {
-                if let Instr::DataRef { kind, value, .. } = instr {
-                    if *kind == DataRefKind::NoritoBytes && value == "0x6162" {
-                        saw_norito = true;
-                    }
+                if let Instr::DataRef { kind, value, .. } = instr
+                    && *kind == DataRefKind::NoritoBytes
+                    && value == "0x6162"
+                {
+                    saw_norito = true;
                 }
             }
         }

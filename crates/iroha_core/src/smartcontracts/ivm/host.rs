@@ -4333,8 +4333,6 @@ impl<QS> CoreHostImpl<QS> {
     }
 
     fn amount_from_trigger_args(&self) -> Option<Numeric> {
-        let args = self.args.as_ref()?;
-        let value: json::Value = args.try_into_any_norito().ok()?;
         fn parse_numeric(value: &json::Value) -> Option<Numeric> {
             match value {
                 json::Value::String(raw) => raw.parse::<Numeric>().ok(),
@@ -4346,6 +4344,8 @@ impl<QS> CoreHostImpl<QS> {
                 _ => None,
             }
         }
+        let args = self.args.as_ref()?;
+        let value: json::Value = args.try_into_any_norito().ok()?;
         match value {
             json::Value::Object(map) => map.get("val").and_then(parse_numeric),
             other => parse_numeric(&other),

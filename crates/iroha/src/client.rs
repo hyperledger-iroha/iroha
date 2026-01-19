@@ -8983,12 +8983,10 @@ mod tx_hash_tests {
         let result = super::Client::retry_transaction_committed(
             move || {
                 let count = attempts_clone.fetch_add(1, Ordering::SeqCst);
-                if count < 2 {
-                    Ok(None)
-                } else if count == 2 {
-                    Ok(Some(super::TxConfirmationStatus::Committed))
-                } else {
-                    Ok(Some(super::TxConfirmationStatus::Applied))
+                match count {
+                    0 | 1 => Ok(None),
+                    2 => Ok(Some(super::TxConfirmationStatus::Committed)),
+                    _ => Ok(Some(super::TxConfirmationStatus::Applied)),
                 }
             },
             Duration::from_millis(0),

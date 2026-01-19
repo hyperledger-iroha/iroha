@@ -8976,9 +8976,8 @@ async fn rebroadcast_highest_pending_block_skips_on_relay_backpressure() {
         .actor
         .rebroadcast_highest_pending_block(Instant::now());
 
-    let posts: Vec<_> = harness.background_rx.try_iter().collect();
     assert!(
-        posts.is_empty(),
+        harness.background_rx.try_iter().next().is_none(),
         "expected pending block rebroadcast to pause under relay backpressure"
     );
 
@@ -10832,7 +10831,7 @@ async fn handle_vote_prunes_committed_block_commit_vote() {
         .expect("store committed block");
     let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
     state.push_block_hash_for_testing(committed_block.hash());
-    drop(state);
+    let _ = state;
 
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let chain = actor.common_config.chain.clone();
@@ -13248,7 +13247,7 @@ async fn handle_rbc_ready_accepts_init_roster_when_derived_missing_permissioned(
     actor.handle_rbc_ready(ready).expect("ready handled");
 
     assert!(
-        actor.subsystems.da_rbc.rbc.pending.get(&key).is_none(),
+        !actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
         "READY should not be stashed when no derived roster is available"
     );
     let stored = actor
@@ -15018,7 +15017,7 @@ async fn handle_rbc_init_caches_vote_roster() {
         leader_signature,
     };
 
-    assert!(actor.vote_roster_cache.get(&block_hash).is_none());
+    assert!(!actor.vote_roster_cache.contains_key(&block_hash));
     actor.handle_rbc_init(init, None).expect("init handled");
     let cached = actor
         .vote_roster_cache
@@ -29172,7 +29171,7 @@ async fn new_view_highest_qc_fetch_uses_commit_qc_history_fallback_when_roster_e
         .expect("store committed block");
     let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
     state.push_block_hash_for_testing(committed_block.hash());
-    drop(state);
+    let _ = state;
 
     let committed_height = actor.state.view().height() as u64;
     let height = committed_height.saturating_add(3);
@@ -32486,7 +32485,7 @@ async fn pacemaker_bootstraps_with_commit_qc_when_active_roster_empty() {
     state.push_block_hash_for_testing(block1.hash());
     state.push_block_hash_for_testing(block2.hash());
 
-    let local = actor.common_config.peer.id().clone();
+    let _local = actor.common_config.peer.id().clone();
     let validator_set = actor.effective_commit_topology();
     let parent_hash = block2.hash();
 

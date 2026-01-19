@@ -607,6 +607,7 @@ impl Kura {
     }
 
     /// Evict persisted block bodies into DA-backed storage to reclaim disk budget.
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn evict_block_bodies(&self, bytes_needed: u64) -> Result<u64> {
         if bytes_needed == 0 || self.store_root.as_os_str().is_empty() {
             return Ok(0);
@@ -2077,6 +2078,7 @@ impl Kura {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     fn check_replace_storage_budget(&self, block: &SignedBlock) -> Result<()> {
         if self.max_disk_usage_bytes == 0 || self.store_root.as_os_str().is_empty() {
             return Ok(());

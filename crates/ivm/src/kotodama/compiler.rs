@@ -777,8 +777,10 @@ seiyaku NegTest {
 
     #[test]
     fn validate_feature_requests_reports_forbidden_usage() {
-        let mut meta = ContractMeta::default();
-        meta.force_zk = Some(false);
+        let meta = ContractMeta {
+            force_zk: Some(false),
+            ..Default::default()
+        };
         let err = super::validate_feature_requests(Some(&meta), true, false)
             .expect_err("expected zk mismatch");
         assert!(err.contains("meta disables zk"));
@@ -812,6 +814,43 @@ seiyaku Test {
             .compile_source(src)
             .expect_err("expected zk disabled mismatch");
         assert!(err.contains("meta disables zk"));
+    }
+
+    #[test]
+    fn setvl_emits_setvl_opcode() {
+        let src = r#"
+seiyaku Test {
+  meta { vector: true; }
+  kotoage fn main() { setvl(8); }
+}
+"#;
+        let compiler = Compiler::new();
+        let bytes = compiler.compile_source(src).expect("compile setvl");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let mut found = false;
+        for chunk in bytes[parsed.code_offset..].chunks_exact(4) {
+            let word = u32::from_le_bytes(chunk.try_into().unwrap());
+            if instruction::wide::opcode(word) == instruction::wide::crypto::SETVL {
+                found = true;
+                break;
+            }
+        }
+        assert!(found, "expected SETVL opcode in compiled code");
+    }
+
+    #[test]
+    fn setvl_requires_literal_int() {
+        let src = r#"
+seiyaku Test {
+  kotoage fn main() { helper(1); }
+  fn helper(a: int) { setvl(a); }
+}
+"#;
+        let compiler = Compiler::new();
+        let err = compiler
+            .compile_source(src)
+            .expect_err("expected setvl literal error");
+        assert!(err.contains("setvl expects a literal int"));
     }
 
     #[test]
@@ -1427,29 +1466,39 @@ seiyaku Test {
 
     #[test]
     fn entry_spills_use_stack_frame() {
-        let mut src = String::from("seiyaku SpillTest {\n  kotoage fn main() -> int {\n");
-        let mut expected: i64 = 0;
-        let count = 32;
-        for i in 0..count {
-            let value = (i + 1) as i64;
-            expected += value;
-            src.push_str(&format!("    let a{i} = {value};\n"));
-        }
-        src.push_str("    let sum = ");
-        for i in 0..count {
-            if i > 0 {
-                src.push_str(" + ");
-            }
-            src.push_str(&format!("a{i}"));
-        }
-        src.push_str(";\n    return sum;\n  }\n}\n");
+        const TEST_STACK_SIZE: usize = 8 * 1024 * 1024;
+        let handle = std::thread::Builder::new()
+            .name("entry_spills_use_stack_frame".to_string())
+            .stack_size(TEST_STACK_SIZE)
+            .spawn(|| {
+                let mut src = String::from("seiyaku SpillTest {\n  kotoage fn main() -> int {\n");
+                let mut expected: i64 = 0;
+                let count = 32;
+                for i in 0..count {
+                    let value = (i + 1) as i64;
+                    expected += value;
+                    src.push_str(&format!("    let a{i} = {value};\n"));
+                }
+                src.push_str("    let sum = ");
+                for i in 0..count {
+                    if i > 0 {
+                        src.push_str(" + ");
+                    }
+                    src.push_str(&format!("a{i}"));
+                }
+                src.push_str(";\n    return sum;\n  }\n}\n");
 
-        let compiler = Compiler::new();
-        let bytes = compiler.compile_source(&src).expect("compile spill test");
-        let mut vm = IVM::new(1_000_000);
-        vm.load_program(&bytes).expect("load spill program");
-        vm.run().expect("run spill program");
-        assert_eq!(vm.register(10), expected as u64);
+                let compiler = Compiler::new();
+                let bytes = compiler.compile_source(&src).expect("compile spill test");
+                let mut vm = IVM::new(1_000_000);
+                vm.load_program(&bytes).expect("load spill program");
+                vm.run().expect("run spill program");
+                assert_eq!(vm.register(10), expected as u64);
+            })
+            .expect("spawn entry_spills_use_stack_frame thread");
+        if let Err(err) = handle.join() {
+            std::panic::resume_unwind(err);
+        }
     }
 }
 
@@ -1755,11 +1804,11 @@ impl Compiler {
                         dataref_kind_map.insert((func_idx, *dest), DRK::NoritoBytes);
                         let literal_kind = dataref_kind_map.get(&(func_idx, *value)).copied();
                         let literal_raw = string_map.get(&(func_idx, *value)).cloned();
-                        if let (Some(kind), Some(raw)) = (literal_kind, literal_raw) {
-                            if let Some(tlv_bytes) = encode_pointer_tlv_bytes(kind, &raw) {
-                                let hex = hex::encode(tlv_bytes);
-                                string_map.insert((func_idx, *dest), format!("0x{hex}"));
-                            }
+                        if let (Some(kind), Some(raw)) = (literal_kind, literal_raw)
+                            && let Some(tlv_bytes) = encode_pointer_tlv_bytes(kind, &raw)
+                        {
+                            let hex = hex::encode(tlv_bytes);
+                            string_map.insert((func_idx, *dest), format!("0x{hex}"));
                         }
                     }
                     if let ir::Instr::LoadVar { dest, name } = instr
@@ -3489,6 +3538,30 @@ impl Compiler {
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                         }
+                        Instr::SetVl { value } => {
+                            let raw = int_const_map.get(&(func_idx, *value)).copied().ok_or_else(
+                                || {
+                                    let err =
+                                        "setvl expects a literal int in range 0..=255".to_string();
+                                    i18n::translate(self.lang, Message::SemanticError(&err))
+                                },
+                            )?;
+                            if !(0..=u8::MAX as i64).contains(&raw) {
+                                let err =
+                                    format!("setvl value must be in range 0..=255, got {raw}");
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::SemanticError(&err),
+                                ));
+                            }
+                            let word = encoding::wide::encode_rr(
+                                instruction::wide::crypto::SETVL,
+                                0,
+                                0,
+                                raw as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                        }
                         Instr::SetAccountDetail {
                             account,
                             key,
@@ -3805,6 +3878,50 @@ impl Compiler {
                             let call = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_SM3_HASH as u8,
+                            );
+                            code.extend_from_slice(&call.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::Sha256Hash { dest, message } => {
+                            if let Some(bytes) = string_map.get(&(func_idx, *message)) {
+                                let key = DataKey(DataKind::Blob, bytes.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let rs = src_reg(message, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, rs, 0)?);
+                            }
+                            let publish = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&publish.to_le_bytes());
+                            let call = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_SHA256_HASH as u8,
+                            );
+                            code.extend_from_slice(&call.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::Sha3Hash { dest, message } => {
+                            if let Some(bytes) = string_map.get(&(func_idx, *message)) {
+                                let key = DataKey(DataKind::Blob, bytes.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let rs = src_reg(message, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, rs, 0)?);
+                            }
+                            let publish = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&publish.to_le_bytes());
+                            let call = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_SHA3_HASH as u8,
                             );
                             code.extend_from_slice(&call.to_le_bytes());
                             let (rd, spilled, imm) = dst_reg(dest);
@@ -4617,7 +4734,7 @@ impl Compiler {
                                     emit_literal_stub(code, &mut fixups, target, key);
                                 } else {
                                     if string_map.contains_key(&(func_idx, *temp))
-                                        && dataref_kind_map.get(&(func_idx, *temp)).is_none()
+                                        && !dataref_kind_map.contains_key(&(func_idx, *temp))
                                     {
                                         return Err(i18n::translate(
                                             self.lang,
@@ -4690,7 +4807,7 @@ impl Compiler {
                                     emit_literal_stub(code, &mut fixups, target, key);
                                 } else {
                                     if string_map.contains_key(&(func_idx, *temp))
-                                        && dataref_kind_map.get(&(func_idx, *temp)).is_none()
+                                        && !dataref_kind_map.contains_key(&(func_idx, *temp))
                                     {
                                         return Err(i18n::translate(
                                             self.lang,

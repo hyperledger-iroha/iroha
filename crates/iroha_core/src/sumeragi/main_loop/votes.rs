@@ -362,6 +362,7 @@ impl Actor {
         });
     }
 
+    #[allow(clippy::too_many_lines)]
     fn drop_vote_for_height_or_view(
         &self,
         vote: &crate::sumeragi::consensus::Vote,
@@ -780,7 +781,7 @@ impl Actor {
                 epoch: vote.epoch,
                 signer_index: vote.signer,
                 peer_id: peer_id.clone(),
-                roster_hash: Some(roster_hash.clone()),
+                roster_hash: Some(roster_hash),
                 roster_len,
                 block_hash: vote.block_hash,
             });

@@ -6296,8 +6296,7 @@ pub mod isi {
         if attachment.vk_ref.is_none() && attachment.vk_inline.is_none() {
             return Err(InstructionExecutionError::InvariantViolation(
                 "proof missing verifying key reference or inline key".into(),
-            )
-            .into());
+            ));
         }
         let record = if let Some(binding) = binding {
             let record = state_transaction
@@ -6316,14 +6315,12 @@ pub mod isi {
             if record.status != ConfidentialStatus::Active {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "verifying key is not active".into(),
-                )
-                .into());
+                ));
             }
             if record.commitment != binding.commitment {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "verifying key commitment mismatch".into(),
-                )
-                .into());
+                ));
             }
             Some(record)
         } else if let Some(vk_ref) = &attachment.vk_ref {
@@ -6343,8 +6340,7 @@ pub mod isi {
             if record.status != ConfidentialStatus::Active {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "verifying key is not active".into(),
-                )
-                .into());
+                ));
             }
             Some(record)
         } else {
@@ -6355,8 +6351,7 @@ pub mod isi {
             if record.commitment != inline_commitment {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "inline verifying key commitment mismatch".into(),
-                )
-                .into());
+                ));
             }
         }
         let vk_box = if let Some(inline) = attachment.vk_inline.clone() {
@@ -6368,14 +6363,12 @@ pub mod isi {
         } else {
             return Err(InstructionExecutionError::InvariantViolation(
                 "verifying key bytes missing".into(),
-            )
-            .into());
+            ));
         };
         if vk_box.backend != attachment.backend {
             return Err(InstructionExecutionError::InvariantViolation(
                 "verifying key backend mismatch".into(),
-            )
-            .into());
+            ));
         }
         Ok((vk_box, record))
     }
@@ -12582,8 +12575,10 @@ pub mod isi {
 
             {
                 let mut stx = state_block.transaction();
-                let mut params = SumeragiNposParameters::default();
-                params.evidence_horizon_blocks = 0;
+                let params = SumeragiNposParameters {
+                    evidence_horizon_blocks: 0,
+                    ..Default::default()
+                };
                 let update = SetParameter(Parameter::Custom(params.into_custom_parameter()));
                 let err = update
                     .execute(&ALICE_ID, &mut stx)
@@ -12601,8 +12596,10 @@ pub mod isi {
 
             {
                 let mut stx = state_block.transaction();
-                let mut params = SumeragiNposParameters::default();
-                params.activation_lag_blocks = 0;
+                let params = SumeragiNposParameters {
+                    activation_lag_blocks: 0,
+                    ..Default::default()
+                };
                 let update = SetParameter(Parameter::Custom(params.into_custom_parameter()));
                 let err = update
                     .execute(&ALICE_ID, &mut stx)
@@ -12620,8 +12617,10 @@ pub mod isi {
 
             {
                 let mut stx = state_block.transaction();
-                let mut params = SumeragiNposParameters::default();
-                params.slashing_delay_blocks = 0;
+                let params = SumeragiNposParameters {
+                    slashing_delay_blocks: 0,
+                    ..Default::default()
+                };
                 let update = SetParameter(Parameter::Custom(params.into_custom_parameter()));
                 let err = update
                     .execute(&ALICE_ID, &mut stx)

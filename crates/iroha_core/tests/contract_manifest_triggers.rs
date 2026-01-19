@@ -57,6 +57,7 @@ fn setup_state() -> (State, AccountId, KeyPair) {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn activate_registers_manifest_triggers_and_deactivate_removes() {
     let (state, authority, kp) = setup_state();
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);

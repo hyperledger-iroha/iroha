@@ -21,6 +21,8 @@ use norito::{
     codec::{Decode as NoritoDecode, Encode as NoritoEncode},
     decode_from_bytes, json as njson,
 };
+use sha2::{Digest as Sha2Digest, Sha256};
+use sha3_hash::{Digest as Sha3Digest, Sha3_256};
 
 use crate::{
     VMError,
@@ -898,9 +900,18 @@ impl CoreHost {
         vm.alloc_input_tlv(&out)
     }
 
+    fn ensure_unsigned_scale0(numeric: Numeric) -> Result<Numeric, VMError> {
+        if numeric.scale() != 0 || numeric.mantissa().is_negative() {
+            return Err(VMError::AssertionFailed);
+        }
+        Ok(numeric)
+    }
+
     fn decode_numeric(&self, vm: &IVM, ptr: u64) -> Result<Numeric, VMError> {
         let tlv = self.decode_tlv(vm, ptr, PointerType::NoritoBytes)?;
-        decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)
+        let mut cursor = Cursor::new(tlv.payload);
+        let numeric = Numeric::decode(&mut cursor).map_err(|_| VMError::DecodeError)?;
+        Self::ensure_unsigned_scale0(numeric)
     }
 }
 
@@ -1097,6 +1108,9 @@ impl IVMHost for CoreHost {
             }
             syscalls::SYSCALL_NUMERIC_FROM_INT => {
                 let val = vm.register(10) as i64;
+                if val < 0 {
+                    return Err(VMError::AssertionFailed);
+                }
                 let payload = Numeric::new(val, 0).encode();
                 let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, p);
@@ -1108,14 +1122,10 @@ impl IVMHost for CoreHost {
                     return Err(VMError::NoritoInvalid);
                 }
                 let numeric = self.decode_numeric(vm, ptr)?;
-                let trimmed = numeric.trim_trailing_zeros();
-                if trimmed.scale() != 0 {
-                    return Err(VMError::AssertionFailed);
-                }
-                let value = trimmed
+                let value = numeric
                     .try_mantissa_i128()
                     .ok_or(VMError::AssertionFailed)?;
-                if value < i64::MIN as i128 || value > i64::MAX as i128 {
+                if value > i64::MAX as i128 {
                     return Err(VMError::AssertionFailed);
                 }
                 vm.set_register(10, (value as i64) as u64);
@@ -1134,6 +1144,9 @@ impl IVMHost for CoreHost {
                 let lhs = self.decode_numeric(vm, vm.register(10))?;
                 let rhs = self.decode_numeric(vm, vm.register(11))?;
                 let out = lhs.checked_sub(rhs).ok_or(VMError::AssertionFailed)?;
+                if out.mantissa().is_negative() {
+                    return Err(VMError::AssertionFailed);
+                }
                 let payload = out.encode();
                 let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, p);
@@ -1174,9 +1187,10 @@ impl IVMHost for CoreHost {
             }
             syscalls::SYSCALL_NUMERIC_NEG => {
                 let val = self.decode_numeric(vm, vm.register(10))?;
-                let out = Numeric::try_new(val.mantissa().neg(), val.scale())
-                    .map_err(|_| VMError::AssertionFailed)?;
-                let payload = out.encode();
+                if !val.is_zero() {
+                    return Err(VMError::AssertionFailed);
+                }
+                let payload = val.encode();
                 let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, p);
                 Ok(0)
@@ -1675,6 +1689,42 @@ impl IVMHost for CoreHost {
                 vm.set_register(10, addr);
                 Ok(0)
             }
+            syscalls::SYSCALL_SHA256_HASH => {
+                let ptr = vm.register(10);
+                if ptr == 0 {
+                    return Err(VMError::NoritoInvalid);
+                }
+                let tlv = self.decode_tlv(vm, ptr, PointerType::Blob)?;
+                let digest = <Sha256 as Sha2Digest>::digest(tlv.payload);
+                let mut out = Vec::with_capacity(7 + digest.len() + IrohaHash::LENGTH);
+                out.extend_from_slice(&(PointerType::Blob as u16).to_be_bytes());
+                out.push(1);
+                out.extend_from_slice(&(digest.len() as u32).to_be_bytes());
+                out.extend_from_slice(digest.as_slice());
+                let hash: [u8; IrohaHash::LENGTH] = IrohaHash::new(digest.as_slice()).into();
+                out.extend_from_slice(&hash);
+                let addr = vm.alloc_input_tlv(&out)?;
+                vm.set_register(10, addr);
+                Ok(0)
+            }
+            syscalls::SYSCALL_SHA3_HASH => {
+                let ptr = vm.register(10);
+                if ptr == 0 {
+                    return Err(VMError::NoritoInvalid);
+                }
+                let tlv = self.decode_tlv(vm, ptr, PointerType::Blob)?;
+                let digest = <Sha3_256 as Sha3Digest>::digest(tlv.payload);
+                let mut out = Vec::with_capacity(7 + digest.len() + IrohaHash::LENGTH);
+                out.extend_from_slice(&(PointerType::Blob as u16).to_be_bytes());
+                out.push(1);
+                out.extend_from_slice(&(digest.len() as u32).to_be_bytes());
+                out.extend_from_slice(digest.as_slice());
+                let hash: [u8; IrohaHash::LENGTH] = IrohaHash::new(digest.as_slice()).into();
+                out.extend_from_slice(&hash);
+                let addr = vm.alloc_input_tlv(&out)?;
+                vm.set_register(10, addr);
+                Ok(0)
+            }
             syscalls::SYSCALL_SM2_VERIFY
             | syscalls::SYSCALL_SM4_GCM_SEAL
             | syscalls::SYSCALL_SM4_GCM_OPEN
@@ -1946,6 +1996,11 @@ mod tests {
         make_pointer_tlv(PointerType::NoritoBytes, payload)
     }
 
+    fn make_numeric_tlv(value: Numeric) -> Vec<u8> {
+        let payload = norito::to_bytes(&value).expect("encode numeric");
+        make_pointer_tlv(PointerType::NoritoBytes, &payload)
+    }
+
     #[test]
     fn decode_int_syscall_sets_register() {
         let mut vm = IVM::new(u64::MAX);
@@ -2125,13 +2180,18 @@ mod tests {
         vm.memory
             .preload_input(from.len() as u64 + to.len() as u64 + 16, &asset)
             .expect("preload asset");
+        let amount_offset = from.len() as u64 + to.len() as u64 + asset.len() as u64 + 24;
+        let amount = make_numeric_tlv(Numeric::from(10_u64));
+        vm.memory
+            .preload_input(amount_offset, &amount)
+            .expect("preload amount");
         vm.set_register(10, Memory::INPUT_START);
         vm.set_register(11, Memory::INPUT_START + from.len() as u64 + 8);
         vm.set_register(
             12,
             Memory::INPUT_START + from.len() as u64 + to.len() as u64 + 16,
         );
-        vm.set_register(13, 10);
+        vm.set_register(13, Memory::INPUT_START + amount_offset);
 
         host.syscall(syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN, &mut vm)
             .expect("begin batch");

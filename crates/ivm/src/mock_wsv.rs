@@ -583,7 +583,7 @@ impl MockWorldStateView {
         if !self.asset_definitions.contains_key(asset) {
             return false;
         }
-        if amount.mantissa().is_negative() {
+        if !Self::is_unsigned_scale0(&amount) {
             return false;
         }
         let st = self.zk_assets.entry(asset.clone()).or_default();
@@ -678,7 +678,7 @@ impl MockWorldStateView {
         if st.mode != ZkAssetMode::Hybrid || !st.allow_unshield {
             return false;
         }
-        if public_amount.mantissa().is_negative() {
+        if !Self::is_unsigned_scale0(&public_amount) {
             return false;
         }
         if let Some(binding) = st.vk_unshield.as_ref()
@@ -1000,8 +1000,8 @@ impl MockWorldStateView {
         let mut wsv = Self::new();
         for ((account, asset), amount) in entries.iter().cloned() {
             assert!(
-                !amount.mantissa().is_negative(),
-                "mock WSV balances must be non-negative"
+                Self::is_unsigned_scale0(&amount),
+                "mock WSV balances must be unsigned scale=0"
             );
             wsv.domains.entry(account.domain().clone()).or_default();
             wsv.domains.entry(asset.domain().clone()).or_default();
@@ -1161,6 +1161,10 @@ impl MockWorldStateView {
             .unwrap_or_else(Numeric::zero)
     }
 
+    fn is_unsigned_scale0(amount: &Numeric) -> bool {
+        amount.scale() == 0 && !amount.mantissa().is_negative()
+    }
+
     /// Get the balance of `account_id` for `asset_id` if `caller` is allowed to
     /// view it. Returns `None` if the caller lacks permission.
     pub fn balance_checked(
@@ -1194,7 +1198,7 @@ impl MockWorldStateView {
         if !self.accounts.contains_key(&from) || !self.accounts.contains_key(&to) {
             return false;
         }
-        if amount.mantissa().is_negative() {
+        if !Self::is_unsigned_scale0(&amount) {
             return false;
         }
         if caller != &from {
@@ -1261,7 +1265,7 @@ impl MockWorldStateView {
         if !self.accounts.contains_key(&account_id) {
             return false;
         }
-        if amount.mantissa().is_negative() {
+        if !Self::is_unsigned_scale0(&amount) {
             return false;
         }
         let token = PermissionToken::MintAsset(asset_id.clone());
@@ -1305,7 +1309,7 @@ impl MockWorldStateView {
         if !self.accounts.contains_key(&account_id) {
             return false;
         }
-        if amount.mantissa().is_negative() {
+        if !Self::is_unsigned_scale0(&amount) {
             return false;
         }
         if caller != &account_id {
@@ -2114,6 +2118,13 @@ impl WsvHost {
         }
     }
 
+    fn ensure_unsigned_scale0(numeric: Numeric) -> Result<Numeric, VMError> {
+        if numeric.scale() != 0 || numeric.mantissa().is_negative() {
+            return Err(VMError::AssertionFailed);
+        }
+        Ok(numeric)
+    }
+
     /// Decode a Numeric from a register that points at NoritoBytes TLV.
     fn decode_numeric_reg(&self, vm: &IVM, reg: usize) -> Result<Numeric, VMError> {
         let v = vm.register(reg);
@@ -2122,9 +2133,14 @@ impl WsvHost {
                 if tlv.type_id != PointerType::NoritoBytes {
                     return Err(VMError::NoritoInvalid);
                 }
-                decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)
+                let mut cursor = Cursor::new(tlv.payload);
+                let numeric = Numeric::decode(&mut cursor).map_err(|_| VMError::DecodeError)?;
+                Self::ensure_unsigned_scale0(numeric)
             }
-            Err(_) => self.decode_tlv_from_code(vm, v, PointerType::NoritoBytes),
+            Err(_) => {
+                let numeric = self.decode_tlv_from_code(vm, v, PointerType::NoritoBytes)?;
+                Self::ensure_unsigned_scale0(numeric)
+            }
         }
     }
 
@@ -2141,7 +2157,9 @@ impl WsvHost {
                         type_id: tlv.type_id as u16,
                     });
                 }
-                decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)
+                let mut cursor = Cursor::new(tlv.payload);
+                let numeric = Numeric::decode(&mut cursor).map_err(|_| VMError::DecodeError)?;
+                Self::ensure_unsigned_scale0(numeric)
             }
             Err(_) => {
                 let policy = vm.syscall_policy();
@@ -2151,7 +2169,8 @@ impl WsvHost {
                         type_id: PointerType::NoritoBytes as u16,
                     });
                 }
-                self.decode_tlv_from_code(vm, ptr, PointerType::NoritoBytes)
+                let numeric = self.decode_tlv_from_code(vm, ptr, PointerType::NoritoBytes)?;
+                Self::ensure_unsigned_scale0(numeric)
             }
         }
     }
@@ -2954,6 +2973,9 @@ impl IVMHost for WsvHost {
             }
             crate::syscalls::SYSCALL_NUMERIC_FROM_INT => {
                 let val = vm.register(10) as i64;
+                if val < 0 {
+                    return Err(VMError::AssertionFailed);
+                }
                 let payload = Numeric::new(val, 0).encode();
                 let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, p);
@@ -2965,14 +2987,10 @@ impl IVMHost for WsvHost {
                     return Err(VMError::NoritoInvalid);
                 }
                 let numeric = self.decode_numeric_ptr(vm, ptr)?;
-                let trimmed = numeric.trim_trailing_zeros();
-                if trimmed.scale() != 0 {
-                    return Err(VMError::AssertionFailed);
-                }
-                let value = trimmed
+                let value = numeric
                     .try_mantissa_i128()
                     .ok_or(VMError::AssertionFailed)?;
-                if value < i64::MIN as i128 || value > i64::MAX as i128 {
+                if value > i64::MAX as i128 {
                     return Err(VMError::AssertionFailed);
                 }
                 vm.set_register(10, (value as i64) as u64);
@@ -2991,6 +3009,9 @@ impl IVMHost for WsvHost {
                 let lhs = self.decode_numeric_ptr(vm, vm.register(10))?;
                 let rhs = self.decode_numeric_ptr(vm, vm.register(11))?;
                 let out = lhs.checked_sub(rhs).ok_or(VMError::AssertionFailed)?;
+                if out.mantissa().is_negative() {
+                    return Err(VMError::AssertionFailed);
+                }
                 let payload = out.encode();
                 let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, p);
@@ -3031,9 +3052,10 @@ impl IVMHost for WsvHost {
             }
             crate::syscalls::SYSCALL_NUMERIC_NEG => {
                 let val = self.decode_numeric_ptr(vm, vm.register(10))?;
-                let out = Numeric::try_new(val.mantissa().neg(), val.scale())
-                    .map_err(|_| VMError::AssertionFailed)?;
-                let payload = out.encode();
+                if !val.is_zero() {
+                    return Err(VMError::AssertionFailed);
+                }
+                let payload = val.encode();
                 let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, p);
                 Ok(0)
@@ -3526,6 +3548,10 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, p);
                 Ok(0)
             }
+            crate::syscalls::SYSCALL_SHA256_HASH | crate::syscalls::SYSCALL_SHA3_HASH => {
+                let mut default = crate::host::DefaultHost::new();
+                default.syscall(number, vm)
+            }
             crate::syscalls::SYSCALL_SM3_HASH
             | crate::syscalls::SYSCALL_SM2_VERIFY
             | crate::syscalls::SYSCALL_SM4_GCM_SEAL
@@ -3905,18 +3931,17 @@ impl IVMHost for WsvHost {
                                  key: &str|
                                  -> Result<Numeric, VMError> {
                                     let value = payload.get(key).ok_or(VMError::NoritoInvalid)?;
-                                    if let Some(raw) = value.as_str() {
-                                        return raw
-                                            .parse::<Numeric>()
-                                            .map_err(|_| VMError::NoritoInvalid);
-                                    }
-                                    if let Some(raw) = value.as_u64() {
-                                        return Ok(Numeric::from(raw));
-                                    }
-                                    if let Some(raw) = value.as_i64() {
-                                        return Ok(Numeric::from(raw));
-                                    }
-                                    Err(VMError::NoritoInvalid)
+                                    let numeric = if let Some(raw) = value.as_str() {
+                                        raw.parse::<Numeric>()
+                                            .map_err(|_| VMError::NoritoInvalid)?
+                                    } else if let Some(raw) = value.as_u64() {
+                                        Numeric::from(raw)
+                                    } else if let Some(raw) = value.as_i64() {
+                                        Numeric::from(raw)
+                                    } else {
+                                        return Err(VMError::NoritoInvalid);
+                                    };
+                                    Self::ensure_unsigned_scale0(numeric)
                                 };
                             match Self::decode_instruction_envelope(ty_ref, payload.clone())? {
                                 Some(instr) => instr,

@@ -475,6 +475,7 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         TupleGet { tuple, .. } => f(*tuple),
         Copy { src, .. } => f(*src),
         SetExecutionDepth { value } => f(*value),
+        SetVl { value } => f(*value),
         Call { args, .. } | CallMulti { args, .. } => {
             for arg in args {
                 f(*arg);
@@ -528,7 +529,9 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             f(*name);
             f(*enabled);
         }
-        Instr::Sm3Hash { message, .. } => f(*message),
+        Instr::Sm3Hash { message, .. }
+        | Instr::Sha256Hash { message, .. }
+        | Instr::Sha3Hash { message, .. } => f(*message),
         Instr::Sm2Verify {
             message,
             signature,
@@ -770,7 +773,9 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::NumericBinary { dest, .. }
         | Instr::NumericCompare { dest, .. } => Some(*dest),
         Instr::SchemaInfo { dest, .. } => Some(*dest),
-        Instr::Sm3Hash { dest, .. } => Some(*dest),
+        Instr::Sm3Hash { dest, .. }
+        | Instr::Sha256Hash { dest, .. }
+        | Instr::Sha3Hash { dest, .. } => Some(*dest),
         Instr::Sm2Verify { dest, .. } => Some(*dest),
         Instr::VerifySignature { dest, .. } => Some(*dest),
         Instr::Sm4GcmSeal { dest, .. } => Some(*dest),
@@ -806,6 +811,7 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::TransferNft { .. }
         | Instr::CreateNftsForAllUsers
         | Instr::SetExecutionDepth { .. }
+        | Instr::SetVl { .. }
         | Instr::SetAccountDetail { .. }
         | Instr::RegisterDomain { .. }
         | Instr::RegisterAccount { .. }

@@ -1,4 +1,4 @@
-//! Validate trusted_peers_pop coverage and parsing rules.
+//! Validate `trusted_peers_pop` coverage and parsing rules.
 
 use std::{path::PathBuf, str::FromStr};
 

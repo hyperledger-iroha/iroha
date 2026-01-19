@@ -19,13 +19,14 @@ use crate::sync::get_status_with_retry;
 /// to override or `IROHA_TEST_SERIALIZE_NETWORKS=1` to force serialization explicitly.
 #[must_use]
 pub struct SerialGuard {
-    _guard: Option<NetworkPermit>,
+    #[allow(dead_code)]
+    guard: Option<NetworkPermit>,
 }
 
 /// Network wrapper that keeps the optional serial guard alive for the entire test scope.
 pub struct SerializedNetwork {
     network: Option<Network>,
-    _guard: Option<SerialGuard>,
+    guard: Option<SerialGuard>,
     shutdown_done: bool,
     runtime_handle: Option<Handle>,
 }
@@ -35,7 +36,7 @@ impl SerializedNetwork {
     pub fn new(network: Network, guard: SerialGuard) -> Self {
         Self {
             network: Some(network),
-            _guard: Some(guard),
+            guard: Some(guard),
             shutdown_done: false,
             runtime_handle: Handle::try_current().ok(),
         }
@@ -45,7 +46,7 @@ impl SerializedNetwork {
     pub fn new_with_handle(network: Network, guard: SerialGuard, handle: Handle) -> Self {
         Self {
             network: Some(network),
-            _guard: Some(guard),
+            guard: Some(guard),
             shutdown_done: false,
             runtime_handle: Some(handle),
         }
@@ -61,7 +62,7 @@ impl SerializedNetwork {
         let Some(network) = self.network.take() else {
             return;
         };
-        let Some(guard) = self._guard.take() else {
+        let Some(guard) = self.guard.take() else {
             return;
         };
 
@@ -74,7 +75,7 @@ impl SerializedNetwork {
             .runtime_handle
             .clone()
             .or_else(|| Handle::try_current().ok());
-        let runtime_flavor = handle.as_ref().map(|handle| handle.runtime_flavor());
+        let runtime_flavor = handle.as_ref().map(Handle::runtime_flavor);
         let inside_runtime = Handle::try_current().is_ok();
         let shutdown = move || {
             if let Some(handle) = handle {
@@ -325,7 +326,7 @@ fn acquire_network_permit() -> NetworkPermit {
 /// Acquire the global integration-test permit to bound concurrent network startup.
 pub fn serial_guard() -> SerialGuard {
     SerialGuard {
-        _guard: Some(acquire_network_permit()),
+        guard: Some(acquire_network_permit()),
     }
 }
 

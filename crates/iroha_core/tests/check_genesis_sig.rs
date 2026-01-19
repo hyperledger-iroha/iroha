@@ -27,7 +27,7 @@ fn check_genesis_signature() {
     println!("Signatures: {:?}", block.signatures().count());
 
     for sig in block.signatures() {
-        println!("Verifying signature against {:?}", pub_key);
+        println!("Verifying signature against {pub_key:?}");
         let signature: &SignatureOf<BlockHeader> = sig.signature();
         signature
             .verify_hash(&pub_key, block.hash())

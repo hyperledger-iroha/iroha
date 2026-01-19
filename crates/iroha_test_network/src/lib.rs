@@ -3569,11 +3569,12 @@ impl NetworkBuilder {
             let definition = AssetDefinition::new(stake_asset_id.clone(), NumericSpec::default())
                 .with_metadata(Metadata::default());
 
-            let mut bootstrap_tx = Vec::new();
-            bootstrap_tx.push(Register::domain(Domain::new(nexus_domain.clone())).into());
-            bootstrap_tx.push(Register::domain(Domain::new(ivm_domain.clone())).into());
-            bootstrap_tx.push(Register::account(Account::new(gas_account_id.clone())).into());
-            bootstrap_tx.push(Register::asset_definition(definition).into());
+            let mut bootstrap_tx = vec![
+                Register::domain(Domain::new(nexus_domain.clone())).into(),
+                Register::domain(Domain::new(ivm_domain.clone())).into(),
+                Register::account(Account::new(gas_account_id.clone())).into(),
+                Register::asset_definition(definition).into(),
+            ];
 
             for peer in &peer_ids {
                 let validator_id = AccountId::new(nexus_domain.clone(), peer.public_key().clone());

@@ -91,6 +91,7 @@ pub mod isi {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn register_trigger_internal(
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,

@@ -16462,14 +16462,12 @@ pub(crate) mod tests_runtime_handlers {
         let (block, _) = make_signed_block(1, None);
         let tx_hash = block.external_transactions().next().expect("tx").hash();
         let now = Instant::now();
+        let stale = now
+            .checked_sub(Duration::from_secs(5))
+            .expect("time subtraction");
         cache.record_entry(
             tx_hash,
-            PipelineStatusEntry::at_time(
-                PipelineStatusKind::Queued,
-                None,
-                None,
-                now - Duration::from_secs(5),
-            ),
+            PipelineStatusEntry::at_time(PipelineStatusKind::Queued, None, None, stale),
         );
         cache.prune(now);
         assert!(cache.lookup(&tx_hash).is_none());
@@ -16483,14 +16481,12 @@ pub(crate) mod tests_runtime_handlers {
         let hash_a = block_a.external_transactions().next().expect("tx").hash();
         let hash_b = block_b.external_transactions().next().expect("tx").hash();
         let now = Instant::now();
+        let stale = now
+            .checked_sub(Duration::from_secs(5))
+            .expect("time subtraction");
         cache.record_entry(
             hash_a,
-            PipelineStatusEntry::at_time(
-                PipelineStatusKind::Queued,
-                None,
-                None,
-                now - Duration::from_secs(5),
-            ),
+            PipelineStatusEntry::at_time(PipelineStatusKind::Queued, None, None, stale),
         );
         cache.record_entry(
             hash_b,

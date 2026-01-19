@@ -170,6 +170,7 @@ where
 }
 
 #[derive(Debug, Clone, Copy)]
+#[allow(clippy::struct_field_names)]
 struct PermissionTableEntry {
     role_bytes: [u8; 32],
     permission_bytes: [u8; 32],
@@ -615,11 +616,11 @@ mod tests {
             id: role_b.clone(),
             permissions: BTreeSet::from([perm_a]),
         };
-        let first = vec![
+        let first = [
             (role_b.id.clone(), role_b.clone()),
             (role_a.id.clone(), role_a.clone()),
         ];
-        let second = vec![
+        let second = [
             (role_a.id.clone(), role_a.clone()),
             (role_b.id.clone(), role_b.clone()),
         ];

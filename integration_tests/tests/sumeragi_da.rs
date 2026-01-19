@@ -92,6 +92,7 @@ impl SumeragiSnapshot {
     }
 }
 
+#[allow(clippy::struct_field_names)]
 #[derive(Clone, Copy, Debug, Default)]
 struct PendingRbcStashCounters {
     stash_ready_total: u64,
@@ -147,15 +148,15 @@ fn json_u64(root: &Value, key: &str) -> u64 {
         .unwrap_or_default()
 }
 
-fn parse_pending_rbc_stash_counters(root: &Value) -> Result<PendingRbcStashCounters> {
+fn parse_pending_rbc_stash_counters(root: &Value) -> PendingRbcStashCounters {
     let pending = root
         .as_object()
         .and_then(|obj| obj.get("pending_rbc"))
         .and_then(Value::as_object);
     let Some(pending) = pending else {
-        return Ok(PendingRbcStashCounters::default());
+        return PendingRbcStashCounters::default();
     };
-    Ok(PendingRbcStashCounters {
+    PendingRbcStashCounters {
         stash_ready_total: pending
             .get("stash_ready_total")
             .and_then(Value::as_u64)
@@ -200,7 +201,7 @@ fn parse_pending_rbc_stash_counters(root: &Value) -> Result<PendingRbcStashCount
             .get("stash_chunk_total")
             .and_then(Value::as_u64)
             .unwrap_or_default(),
-    })
+    }
 }
 
 // Keep the payload light to avoid overwhelming Torii/queue on constrained hosts.
@@ -365,6 +366,7 @@ async fn sumeragi_rbc_background_queue_synchronous() -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
     let scenario_name = stringify!(sumeragi_da_kura_eviction_rehydrates_from_da_store);
@@ -568,7 +570,9 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
             hashes.len() % 32 == 0,
             "blocks.hashes size is not aligned to 32-byte entries"
         );
-        let hash_offset = (evicted_height - 1) as usize * 32;
+        let hash_offset = usize::try_from(evicted_height.saturating_sub(1))
+            .unwrap_or(usize::MAX)
+            .saturating_mul(32);
         let expected_hash = hashes
             .get(hash_offset..hash_offset + 32)
             .ok_or_else(|| eyre!("missing hash for evicted height {evicted_height}"))?;
@@ -1290,7 +1294,7 @@ async fn sumeragi_rbc_unverified_roster_stash_requests_missing_block() -> Result
                 let body = response.text().await.wrap_err("baseline sumeragi status body")?;
                 let status_value: Value = json::from_str(&body)
                     .wrap_err("parse baseline sumeragi status JSON")?;
-                baseline_stash.push(parse_pending_rbc_stash_counters(&status_value)?);
+                baseline_stash.push(parse_pending_rbc_stash_counters(&status_value));
 
                 let response = http
                     .get(peer_metrics_urls[idx].clone())
@@ -1352,7 +1356,7 @@ async fn sumeragi_rbc_unverified_roster_stash_requests_missing_block() -> Result
                     let body = response.text().await.wrap_err("sumeragi status body")?;
                     let status_value: Value =
                         json::from_str(&body).wrap_err("parse sumeragi status JSON")?;
-                    let counters = parse_pending_rbc_stash_counters(&status_value)?;
+                    let counters = parse_pending_rbc_stash_counters(&status_value);
                     let total = counters.total();
                     last_stash_totals[idx] = total;
                     if total > baseline_stash_totals[idx] {
@@ -1402,6 +1406,7 @@ async fn sumeragi_rbc_unverified_roster_stash_requests_missing_block() -> Result
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sumeragi_idle_view_change_recovers_after_leader_shutdown() -> Result<()> {
     let scenario_name = stringify!(sumeragi_idle_view_change_recovers_after_leader_shutdown);
@@ -1459,7 +1464,7 @@ async fn sumeragi_idle_view_change_recovers_after_leader_shutdown() -> Result<()
         })?;
 
         let mut baseline_view_changes = Vec::with_capacity(peers.len());
-        for peer in peers.iter() {
+        for peer in peers {
             let status = peer.status().await?;
             let view_changes = status
                 .sumeragi
@@ -2437,7 +2442,7 @@ fn parse_pending_rbc_stash_counters_reads_fields() {
         }
     }"#;
     let value: Value = json::from_str(raw).expect("parse JSON");
-    let counters = parse_pending_rbc_stash_counters(&value).expect("parse pending rbc");
+    let counters = parse_pending_rbc_stash_counters(&value);
     assert_eq!(counters.stash_ready_total, 2);
     assert_eq!(counters.stash_ready_init_missing_total, 1);
     assert_eq!(counters.stash_ready_roster_missing_total, 0);
@@ -2807,6 +2812,7 @@ async fn wait_for_recovered_flag(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
     let scenario_name = stringify!(sumeragi_da_eviction_rehydrates_block_bodies);

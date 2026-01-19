@@ -16,7 +16,7 @@ Paths for reference:
 - Contract-level localization (`kotoba { ... }`) is parsed, validated for duplicates/empties, and emitted into manifest translation tables for tooling. ✔
 - Metadata and manifest wiring now surface `meta { features: ["zk","simd"] }` toggles plus per-entrypoint permission/read/write hints. Static ISI keys (including literal `create_trigger` specs and `transfer_domain`), literal map keys (including hashed pointer keys), dynamic map paths (map-level `state:<name>` conflicts), explicit `#[access(read=..., write=...)]` annotations, and literal `execute_instruction` payloads plus `execute_query` payloads for supported queries (InstructionBox/QueryRequest decode, currently `FindAssetById`) are included in access hints; non-literal trigger specs and opaque host access patterns (including non-literal `execute_instruction`/`execute_query` payloads) emit lints, and opaque host reads now fall back to conservative wildcard hints (`*`) with diagnostics so schedulers can opt into a dynamic prepass when finer-grained keys are needed (entrypoint manifests emit hints when enabled; `access_hints_skipped` is empty, and fallback counts are reported via diagnostics). ⚠
 - The compiler scans emitted bytecode for ZK/vector opcodes, auto-enables header bits, and rejects `meta` feature requests that do not match actual opcode usage. ✔
-- Numeric aliases (`fixed_u128`, `Amount`, `Balance`) are distinct `Numeric`-backed scalar types (mantissa+scale). Kotodama supports signed, fractional literals; arithmetic preserves the alias and mixing aliases is rejected unless routed through an `int` binding. Conversions to/from `int` are checked at runtime (integral, range-limited). Trigger declarations (`register_trigger`) now parse time/execute filters, attach metadata to entrypoint manifests, and are auto-registered when a contract instance is activated (removed on deactivation); data/pipeline filters and authority overrides remain pending, and cross-contract callbacks are rejected. ⚠
+- Numeric aliases (`fixed_u128`, `Amount`, `Balance`) are distinct `Numeric`-backed scalar types (mantissa+scale) restricted to unsigned, scale‑0 values. Decimal literals are rejected in v1; arithmetic preserves the alias and mixing aliases is rejected unless routed through an `int` binding. Conversions to/from `int` are checked at runtime (range‑limited, non‑negative). Trigger declarations (`register_trigger`) now parse time/execute filters, attach metadata to entrypoint manifests, and are auto-registered when a contract instance is activated (removed on deactivation); data/pipeline filters and authority overrides remain pending, and cross-contract callbacks are rejected. ⚠
 
 Note: Kotodama compiles to Iroha Virtual Machine (IVM) bytecode (`.to`). It does not target “risc5”/RISC‑V as a standalone ISA. Any RISC‑V–like encodings mentioned in the compiler are IVM’s mixed instruction format and an implementation detail.
 
@@ -70,7 +70,7 @@ Short-to-mid term steps to align implementation with the designed grammar and sa
 - Done: wire manifest trigger descriptors into runtime registration on activation/deactivation (local callbacks only).
 
 3) Type system extensions
-- Done: numeric aliases (`fixed_u128`, `Amount`, `Balance`) now use deterministic `Numeric` semantics via Numeric syscalls, and Kotodama accepts decimal literals for fractional values.
+- Done: numeric aliases (`fixed_u128`, `Amount`, `Balance`) now use deterministic `Numeric` syscalls with unsigned, scale‑0 values; decimal literals are rejected in v1.
 - Teach the type checker how to reason about Norito pointer wrappers (`Json`, `Blob`, `NoritoBytes`) beyond simple assignment so builders from the grammar work without manual casts.
 
 4) Access hints and host integration
@@ -89,7 +89,7 @@ Short-to-mid term steps to align implementation with the designed grammar and sa
 - Access hints cover static ISI targets (including literal trigger specs and `transfer_domain`), dynamic map paths via map-level keys, explicit `#[access]` annotations, and literal `execute_instruction` payloads plus supported `execute_query` payloads; opaque helper syscalls and non-literal host reads now emit conservative wildcard hints (`*`) with lints, so schedulers should still prefer the dynamic prepass for higher precision.
 - Entrypoint manifests emit hints when enabled; fallback usage is surfaced via diagnostics rather than skip reasons.
 - Meta feature flags (`zk`, `vector`, `features`) are validated against emitted opcodes; requesting features that are unused now fails compilation.
-- Numeric aliases (e.g., `fixed_u128`) are distinct `Numeric` types; fractional values can flow through state/host and via decimal literals.
+- Numeric aliases (e.g., `fixed_u128`) are distinct `Numeric` types; v1 restricts them to unsigned integers (scale = 0), rejecting fractional values and decimal literals.
 - `permission(...)` annotations are enforced by compiler diagnostics and written into manifests; runtime enforcement depends on consuming the metadata.
 - Trigger declarations currently support time/execute filters only; data/pipeline filters and explicit authority overrides remain pending, and cross-contract callbacks are rejected (local only).
 

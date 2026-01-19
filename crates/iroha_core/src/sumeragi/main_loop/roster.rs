@@ -278,7 +278,7 @@ pub(super) fn derive_active_topology(
     derive_active_topology_from_views(view.world(), view.commit_topology().as_slice(), trusted, me)
 }
 
-/// Mode-aware roster selection with NPoS staking bootstrap.
+/// Mode-aware roster selection with `NPoS` staking bootstrap.
 pub(super) fn derive_active_topology_for_mode(
     view: &StateView<'_>,
     trusted: &iroha_config::parameters::actual::TrustedPeers,
@@ -542,13 +542,15 @@ mod tests {
 
         let trusted = iroha_config::parameters::actual::TrustedPeers {
             myself: make_peer(peers[0].clone(), 10_000),
-            others: UniqueVec::from_iter(
-                peers
-                    .iter()
-                    .skip(1)
-                    .enumerate()
-                    .map(|(idx, peer_id)| make_peer(peer_id.clone(), 10_001 + idx as u16)),
-            ),
+            others: peers
+                .iter()
+                .skip(1)
+                .enumerate()
+                .map(|(idx, peer_id)| {
+                    let port = 10_001 + u16::try_from(idx).expect("peer index fits u16");
+                    make_peer(peer_id.clone(), port)
+                })
+                .collect::<UniqueVec<_>>(),
             pops,
         };
 
@@ -688,7 +690,7 @@ mod tests {
         {
             let mut block = state.world.public_lane_validators.block();
             for (idx, account) in accounts.iter().enumerate() {
-                let lane_id = LaneId::new(idx as u32 + 1);
+                let lane_id = LaneId::new(u32::try_from(idx).expect("lane index fits u32") + 1);
                 block.insert(
                     (lane_id, account.clone()),
                     PublicLaneValidatorRecord {
@@ -716,13 +718,15 @@ mod tests {
 
         let trusted = iroha_config::parameters::actual::TrustedPeers {
             myself: make_peer(peers[0].clone(), 11_000),
-            others: UniqueVec::from_iter(
-                peers
-                    .iter()
-                    .skip(1)
-                    .enumerate()
-                    .map(|(idx, peer_id)| make_peer(peer_id.clone(), 11_001 + idx as u16)),
-            ),
+            others: peers
+                .iter()
+                .skip(1)
+                .enumerate()
+                .map(|(idx, peer_id)| {
+                    let port = 11_001 + u16::try_from(idx).expect("peer index fits u16");
+                    make_peer(peer_id.clone(), port)
+                })
+                .collect::<UniqueVec<_>>(),
             pops,
         };
 

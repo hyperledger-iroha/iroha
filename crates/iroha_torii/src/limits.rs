@@ -4,6 +4,8 @@
 //! (API token or authority id). This protects the node from abuse without
 //! introducing gas/fees on read endpoints.
 
+#![allow(clippy::redundant_pub_crate)]
+
 use std::{
     collections::{HashMap, VecDeque},
     fmt,
@@ -332,12 +334,12 @@ pub(crate) fn nofile_soft_limit() -> Option<u64> {
         rlim_max: 0,
     };
     // SAFETY: libc::getrlimit expects a valid, mutable rlimit pointer.
-    let result = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) };
+    let result = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &raw mut limit) };
     if result != 0 {
         return None;
     }
-    let soft = limit.rlim_cur as u64;
-    if soft == libc::RLIM_INFINITY as u64 || soft == 0 {
+    let soft = limit.rlim_cur;
+    if soft == libc::RLIM_INFINITY || soft == 0 {
         return None;
     }
     Some(soft)
@@ -371,10 +373,7 @@ pub(crate) fn clamp_preauth_max_per_ip(
     max_total: Option<usize>,
 ) -> Option<usize> {
     let configured = configured?;
-    Some(match max_total {
-        Some(max_total) => configured.min(max_total),
-        None => configured,
-    })
+    Some(max_total.map_or(configured, |max_total| configured.min(max_total)))
 }
 
 /// Per-scheme concurrency limit description.
