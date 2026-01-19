@@ -14712,10 +14712,11 @@ impl<'state> StateBlock<'state> {
         Ok(())
     }
 
-    /// Validate that DA shard cursors would advance monotonically for the supplied block.
+    /// Validate that DA shard cursors advance monotonically for the supplied block.
     ///
     /// Returns an error when any commitment attempts to regress an existing cursor or when the
-    /// lane is not present in the current lane catalog.
+    /// lane is not present in the current lane catalog. Touched-lane cursor checks only apply
+    /// when the block embeds a DA commitment bundle.
     pub(crate) fn validate_da_shard_cursors(
         &self,
         block: &SignedBlock,
@@ -14730,18 +14731,13 @@ impl<'state> StateBlock<'state> {
         let mut cursors = self.da_shard_cursors.read().clone();
         let height = block.header().height().get();
 
-        // Allow blocks without DA commitments to pass without gating. This keeps
-        // genesis and DA-free localnets from failing before any shard cursors
-        // can be recorded.
-        let Some(bundle) = block.da_commitments() else {
-            return Ok(());
-        };
-        if bundle.commitments.is_empty() {
-            return Ok(());
+        // DA bundles advance shard cursors; touched lanes require a cursor only when a
+        // commitment bundle is supplied for the block.
+        let bundle_opt = block.da_commitments();
+        if let Some(bundle) = bundle_opt {
+            self.validate_da_commitment_bundle(&mut cursors, height, bundle)?;
+            self.validate_touched_lane_cursors(&cursors, height)?;
         }
-
-        self.validate_da_commitment_bundle(&mut cursors, height, bundle)?;
-        self.validate_touched_lane_cursors(&cursors, height)?;
 
         Ok(())
     }
@@ -22364,7 +22360,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_shard_cursor_blocks_touched_lane() {
+    fn genesis_allows_missing_shard_cursor_without_da_bundle() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
@@ -22384,7 +22380,36 @@ mod tests {
 
         state_block
             .validate_da_shard_cursors(&signed)
-            .expect_err("missing cursor should reject touched lane");
+            .expect("genesis should allow missing cursors without DA bundle");
+    }
+
+    #[test]
+    fn touched_lane_without_da_bundle_allows_missing_cursor() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        let mut sumeragi = state.world.parameters.view().get().sumeragi().clone();
+        sumeragi.da_enabled = true;
+        state.set_sumeragi_parameters(&sumeragi);
+
+        let keypair = KeyPair::random();
+        let genesis_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .sign(keypair.private_key())
+            .unpack(|_| {})
+            .into();
+        let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, Some(&genesis_block))
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let signed: SignedBlock = new_block.into();
+
+        let mut state_block = state.block(signed.header());
+        state_block.touched_lanes.insert(LaneId::new(0));
+
+        state_block
+            .validate_da_shard_cursors(&signed)
+            .expect("missing cursor should be allowed when no DA bundle is present");
     }
 
     #[test]

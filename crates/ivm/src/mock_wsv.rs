@@ -3901,10 +3901,10 @@ impl IVMHost for WsvHost {
                             let ty_ref = ty.as_str();
                             let alias_matches = |aliases: &[&str]| aliases.contains(&ty_ref);
                             let parse_numeric_field =
-                                |payload: &norito::json::Value, key: &str| -> Result<Numeric, VMError> {
-                                    let value = payload
-                                        .get(key)
-                                        .ok_or(VMError::NoritoInvalid)?;
+                                |payload: &norito::json::Value,
+                                 key: &str|
+                                 -> Result<Numeric, VMError> {
+                                    let value = payload.get(key).ok_or(VMError::NoritoInvalid)?;
                                     if let Some(raw) = value.as_str() {
                                         return raw
                                             .parse::<Numeric>()
@@ -5755,7 +5755,12 @@ mod tests_zk_asset_bindings {
                 vk_shield: None,
             },
         ));
-        wsv.mint(&caller, caller.clone(), asset.clone(), Numeric::from(10_u64));
+        wsv.mint(
+            &caller,
+            caller.clone(),
+            asset.clone(),
+            Numeric::from(10_u64),
+        );
         assert!(wsv.shield(&caller, &asset, Numeric::from(3_u64), [7u8; 32]));
     }
 }

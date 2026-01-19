@@ -2865,9 +2865,8 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                 "verify_signature" => {
                     if arg_typed.len() != 4 {
                         return Err(SemanticError {
-                            message:
-                                "verify_signature expects (Blob, Blob, Blob, int) arguments"
-                                    .into(),
+                            message: "verify_signature expects (Blob, Blob, Blob, int) arguments"
+                                .into(),
                         });
                     }
                     if arg_typed[..3].iter().any(|t| !is_blob_like(&t.ty)) {

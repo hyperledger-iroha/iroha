@@ -79,8 +79,8 @@ pub mod isi {
 
     use super::*;
     use crate::{
-        governance::selector::derive_parliament_bodies, state::derive_validator_key_id,
-        smartcontracts::triggers::isi::register_trigger_internal,
+        governance::selector::derive_parliament_bodies,
+        smartcontracts::triggers::isi::register_trigger_internal, state::derive_validator_key_id,
         sumeragi::status::PeerKeyPolicyRejectReason, zk::hash_vk,
     };
 
@@ -3174,16 +3174,18 @@ pub mod isi {
                 // idempotent when same
                 return Ok(());
             }
-            let Some(manifest) = state_transaction.world.contract_manifests.get(&key).cloned()
+            let Some(manifest) = state_transaction
+                .world
+                .contract_manifests
+                .get(&key)
+                .cloned()
             else {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract("manifest for code_hash not found".into()),
                 ));
             };
-            let needs_trigger_registration = manifest
-                .entrypoints
-                .as_ref()
-                .is_some_and(|entrypoints| {
+            let needs_trigger_registration =
+                manifest.entrypoints.as_ref().is_some_and(|entrypoints| {
                     entrypoints
                         .iter()
                         .any(|entrypoint| !entrypoint.triggers.is_empty())

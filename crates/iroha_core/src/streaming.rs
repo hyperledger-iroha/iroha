@@ -3322,8 +3322,16 @@ where
             hint.stream_id = manifest.stream_id;
         }
 
-        self.streaming
-            .queue_privacy_route_updates_for_manifest(&manifest)?;
+        if let Err(err) = self
+            .streaming
+            .queue_privacy_route_updates_for_manifest(&manifest)
+        {
+            match err {
+                StreamingProcessError::PrivacyRouteExpired { .. }
+                | StreamingProcessError::NoActivePrivacyRoutes { .. } => {}
+                other => return Err(other),
+            }
+        }
 
         match self
             .streaming

@@ -34,7 +34,7 @@ Options:
   --public-host <HOST>       Public host (default: 127.0.0.1)
   --release                  Build and run release binaries
   --no-sample-asset          Do not include kagami's sample asset
-  --asset-id <ID>            Asset definition to register (default: pkr#wonderland)
+  --asset-id <ID>            Asset definition to register (default: rose#wonderland)
   --skip-asset-register      Skip asset definition registration
   --telemetry-profile <NAME> Set telemetry_profile in generated peer configs (e.g., extended)
   --timeout <SECS>           Seconds to wait for readiness (default: 30)
@@ -56,7 +56,7 @@ BIND_HOST="127.0.0.1"
 PUBLIC_HOST="127.0.0.1"
 PROFILE="debug"
 SAMPLE_ASSET=true
-ASSET_ID="pkr#wonderland"
+ASSET_ID="rose#wonderland"
 SKIP_ASSET_REGISTER=false
 TELEMETRY_PROFILE=""
 TIMEOUT_SECS=30

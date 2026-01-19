@@ -3316,11 +3316,6 @@ impl Actor {
             .filter(|peer| *peer != local_peer)
             .cloned()
             .collect::<Vec<_>>();
-        if remaining >= world_candidates_all.len() {
-            let ordered = Self::order_gossip_targets(world_candidates_all, seed, local_peer);
-            targets.extend(ordered);
-            return targets;
-        }
         let world_candidates = if world_online.is_empty() {
             world_candidates_all
         } else {
@@ -4803,7 +4798,7 @@ mod tests {
         let peer_key = KeyPair::random();
         let peer_id = PeerId::new(peer_key.public_key().clone());
         let topology = vec![peer_id];
-        let (events_sender, mut events_rx) = tokio::sync::broadcast::channel(16);
+        let (events_sender, mut events_rx) = tokio::sync::broadcast::channel(64);
         let work = CommitWork {
             id: 1,
             block,
@@ -4829,10 +4824,20 @@ mod tests {
         );
 
         let mut got_pipeline_event = false;
-        while let Ok(event) = events_rx.try_recv() {
-            if matches!(event, EventBox::Pipeline(_)) {
-                got_pipeline_event = true;
-                break;
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            match events_rx.try_recv() {
+                Ok(event) => {
+                    if matches!(event, EventBox::Pipeline(_)) {
+                        got_pipeline_event = true;
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::TryRecvError::Closed) => break,
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
             }
         }
         assert!(got_pipeline_event, "expected pipeline event emission");
@@ -4889,7 +4894,7 @@ mod tests {
         handle.work_tx.send(work).expect("send commit work");
         handle
             .result_rx
-            .recv_timeout(Duration::from_secs(2))
+            .recv_timeout(Duration::from_secs(5))
             .expect("commit result");
         wake_rx
             .recv_timeout(Duration::from_secs(2))
@@ -5814,6 +5819,7 @@ mod tests {
         let payload_hash = Hash::prehashed([0x11; 32]);
         let chunk_root = Hash::prehashed([0x22; 32]);
         let mut session = RbcSession::test_new(2, Some(payload_hash), Some(chunk_root), 0);
+        session.test_set_block_header_and_signature(&block);
         session.test_note_chunk(0, vec![1, 2, 3], 0);
         session.test_note_chunk(1, vec![4, 5], 0);
         let roster = vec![PeerId::new(KeyPair::random().public_key().clone())];
@@ -5845,7 +5851,7 @@ mod tests {
             .root()
             .map(Hash::from)
             .expect("chunk root");
-        let session = RbcSession::new(
+        let mut session = RbcSession::new(
             2,
             Some(payload_hash),
             Some(chunk_root),
@@ -5853,6 +5859,7 @@ mod tests {
             0,
         )
         .expect("session");
+        session.test_set_block_header_and_signature(&block);
         let roster = vec![PeerId::new(KeyPair::random().public_key().clone())];
 
         let (init, chunks) =

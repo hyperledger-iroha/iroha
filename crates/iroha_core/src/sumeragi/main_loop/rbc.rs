@@ -626,7 +626,15 @@ mod tests {
             .count();
         assert_eq!(rebroadcasters, rbc_rebroadcasters_count(roster.len()));
 
-        let outsider = sample_roster(1).pop().expect("sample peer");
+        let outsider = PeerId::new(
+            KeyPair::from_seed(b"rbc-outsider".to_vec(), Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        assert!(
+            !roster.contains(&outsider),
+            "outsider peer must not be part of the roster"
+        );
         assert!(!is_payload_rebroadcaster(&roster, &outsider, seed));
         assert!(!is_ready_rebroadcaster(&roster, &outsider, seed));
     }

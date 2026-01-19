@@ -1911,9 +1911,14 @@ async fn actor_next_tick_deadline_tracks_pending_quorum_timeout() {
     let actor = &mut harness.actor;
 
     let now = Instant::now();
-    let quorum_timeout = super::commit_quorum_timeout_for_config(&actor.config);
-    let tip_hash = actor.state.view().latest_block_hash();
-    let height = 1;
+    let quorum_timeout = actor.commit_quorum_timeout();
+    let (height, tip_hash) = {
+        let view = actor.state.view();
+        (
+            u64::try_from(view.height()).unwrap_or(0).saturating_add(1),
+            view.latest_block_hash(),
+        )
+    };
     let block = sample_block(height, 0, tip_hash);
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     let mut pending = PendingBlock::new(block, payload_hash, height, 0);
@@ -1955,7 +1960,7 @@ async fn actor_next_tick_deadline_tracks_aborted_retention() {
     let actor = &mut harness.actor;
 
     let now = Instant::now();
-    let quorum_timeout = super::commit_quorum_timeout_for_config(&actor.config);
+    let quorum_timeout = actor.commit_quorum_timeout();
     let quorum_reschedule_cooldown = quorum_timeout.max(super::QUORUM_RESCHEDULE_COOLDOWN);
     let retention_factor = actor
         .config
@@ -1964,8 +1969,13 @@ async fn actor_next_tick_deadline_tracks_aborted_retention() {
         .max(4);
     let aborted_retention = quorum_reschedule_cooldown.saturating_mul(retention_factor);
 
-    let tip_hash = actor.state.view().latest_block_hash();
-    let height = 1;
+    let (height, tip_hash) = {
+        let view = actor.state.view();
+        (
+            u64::try_from(view.height()).unwrap_or(0).saturating_add(1),
+            view.latest_block_hash(),
+        )
+    };
     let block = sample_block(height, 0, tip_hash);
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     let mut pending = PendingBlock::new(block, payload_hash, height, 0);
@@ -1974,7 +1984,7 @@ async fn actor_next_tick_deadline_tracks_aborted_retention() {
     let block_hash = pending.block.hash();
     actor.pending.pending_blocks.insert(block_hash, pending);
 
-    let expected = actor
+    let expected_retention = actor
         .pending
         .pending_blocks
         .get(&block_hash)
@@ -1982,10 +1992,28 @@ async fn actor_next_tick_deadline_tracks_aborted_retention() {
         .inserted_at
         .checked_add(aborted_retention)
         .unwrap_or(now);
+    let pending_due = actor
+        .pending_block_next_due(now)
+        .expect("aborted pending block should schedule retention cleanup");
+    assert_eq!(pending_due, expected_retention);
+
+    let committed_qc = actor.latest_committed_qc();
+    let committed_height = committed_qc
+        .as_ref()
+        .map_or_else(|| actor.state.view().height() as u64, |qc| qc.height);
+    let active_height =
+        super::active_round_height(actor.highest_qc, committed_qc, committed_height);
+    actor.phase_tracker.start_new_round(active_height, now);
+    let idle_timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+    );
+    let idle_due = now + idle_timeout;
     let deadline = actor
         .next_tick_deadline(now)
-        .expect("aborted pending block should schedule retention cleanup");
-    assert_eq!(deadline, expected);
+        .expect("aborted pending block should schedule a deadline");
+    assert_eq!(deadline, pending_due.min(idle_due));
 
     harness.shutdown.send();
 }
