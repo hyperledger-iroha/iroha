@@ -3426,6 +3426,106 @@ async fn block_sync_update_accepts_uncertified_missing_block_in_npos() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn block_sync_update_accepts_uncertified_next_height_in_npos_genesis_bootstrap() {
+    use crate::sumeragi::status;
+
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let _genesis_hash = seed_genesis_block_for_state(&actor.state);
+    let (committed_height, committed_hash) = {
+        let view = actor.state.view();
+        (
+            u64::try_from(view.height()).unwrap_or(u64::MAX),
+            view.latest_block_hash(),
+        )
+    };
+    let block_height = committed_height.saturating_add(1).max(1);
+    let view_index = 0_u64;
+
+    let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(block_height);
+    let signature_topology =
+        super::topology_for_view(&topology, block_height, view_index, mode_tag, prf_seed);
+    let leader_peer = signature_topology
+        .as_ref()
+        .first()
+        .expect("signer in topology");
+    let leader_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == leader_peer.public_key())
+        .expect("signer keypair exists in harness");
+    let leader_idx = signature_topology
+        .position(leader_kp.public_key())
+        .expect("signer index in topology");
+    let parent_hash = if block_height == 1 {
+        None
+    } else {
+        committed_hash
+    };
+    let mut block = heartbeat_block_for_state(
+        actor.state.as_ref(),
+        &actor.common_config.chain,
+        block_height,
+        view_index,
+        parent_hash,
+        leader_kp,
+        u64::try_from(leader_idx).expect("signer index fits u64"),
+    );
+    let required = signature_topology.min_votes_for_commit().max(1);
+    for (idx, peer) in signature_topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .take(required)
+    {
+        if idx == leader_idx {
+            continue;
+        }
+        let kp = harness
+            .key_pairs
+            .iter()
+            .find(|kp| kp.public_key() == peer.public_key())
+            .expect("signer keypair exists in harness");
+        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        block
+            .add_signature(BlockSignature::new(
+                u64::try_from(idx).expect("signer index fits u64"),
+                sig,
+            ))
+            .expect("signature added");
+    }
+
+    let update = super::message::BlockSyncUpdate::from(&block);
+    actor
+        .handle_block_sync_update(update, None)
+        .expect("block sync update");
+
+    assert!(
+        actor.vote_roster_cache.contains_key(&block.hash()),
+        "block sync roster should be cached for vote validation"
+    );
+    let pending = actor.pending.pending_blocks.get(&block.hash());
+    assert!(pending.is_some(), "pending block should be inserted");
+    assert!(
+        pending.is_some_and(|pending| !pending.aborted),
+        "pending block should not be marked aborted"
+    );
+    assert!(
+        actor.block_known_locally(block.hash()),
+        "block sync should accept next-height payloads under NPOS bootstrap"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn block_sync_update_defers_signature_mismatch_when_parent_missing() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
