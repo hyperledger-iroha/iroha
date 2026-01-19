@@ -28,9 +28,9 @@ def send_tx():
     ]
     # Suppress output to keep logs clean, unless error
     try:
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-    except subprocess.CalledProcessError:
-        print("Failed to send transaction")
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to send transaction: {e.stderr.decode()}")
 
 def main():
     print("Starting simulation...")
