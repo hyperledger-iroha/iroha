@@ -617,6 +617,7 @@ mod tests {
                 require_sm_handshake_match: true,
                 require_sm_openssl_preview_match: true,
                 idle_timeout: std::time::Duration::from_secs(5),
+                connect_startup_delay: defaults::network::CONNECT_STARTUP_DELAY,
                 peer_gossip_period: defaults::network::PEER_GOSSIP_PERIOD,
                 peer_gossip_max_period: defaults::network::PEER_GOSSIP_PERIOD,
                 trust_decay_half_life: defaults::network::TRUST_DECAY_HALF_LIFE,

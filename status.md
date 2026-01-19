@@ -2,6 +2,7 @@
 
 Last update: 2026-01-19
 
+- Integration tests (asset): submit helpers now broadcast signed transactions across peers and tolerate duplicate-enqueue responses to avoid queued timeouts; added duplicate-error detection coverage. Tests not re-run yet.
 - Genesis: consensus handshake metadata now refreshes during manifest parse/normalize to keep fingerprints aligned with effective parameters (added `build_and_sign_refreshes_stale_consensus_fingerprint` test).
 - Config: fixed `connect_startup_delay` initialization in torii test utils and p2p start wiring.
 - Tests: `cargo test -p integration_tests genesis_asset_minted_across_peers -- --nocapture` (ok).

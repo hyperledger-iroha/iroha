@@ -2893,8 +2893,7 @@ fn sora_profile_detection_defaults() -> Table {
         .write(
             ["genesis", "public_key"],
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().to_string(),
-        )
-        ;
+        );
     ensure_sora_profile_trusted_peer_pop(&mut table);
     table
 }
@@ -5723,10 +5722,9 @@ mod sora_profile_tests {
 
     #[test]
     fn sora_profile_detection_pop_survives_trusted_peers_pop_override() {
-        let other =
-            KeyPair::from_seed(b"sora-profile-pop-merge".to_vec(), Algorithm::BlsNormal);
-        let other_pop = iroha_crypto::bls_normal_pop_prove(other.private_key())
-            .expect("BLS PoP generation");
+        let other = KeyPair::from_seed(b"sora-profile-pop-merge".to_vec(), Algorithm::BlsNormal);
+        let other_pop =
+            iroha_crypto::bls_normal_pop_prove(other.private_key()).expect("BLS PoP generation");
         let other_pk = other.public_key().to_string();
 
         let mut pop_entry = Table::new();
