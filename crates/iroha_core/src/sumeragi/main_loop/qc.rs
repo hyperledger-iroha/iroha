@@ -1357,6 +1357,7 @@ impl Actor {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) fn process_precommit_qc(
         &mut self,
         qc: &crate::sumeragi::consensus::Qc,

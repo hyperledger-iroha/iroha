@@ -26,11 +26,11 @@ use tokio::{
 #[tokio::test]
 async fn transaction_with_ok_instruction_should_be_committed() -> Result<()> {
     let register = Register::domain(Domain::new("looking_glass".parse()?));
-    test_with_instruction_and_status(
+    Box::pin(test_with_instruction_and_status(
         stringify!(transaction_with_ok_instruction_should_be_committed),
         [register],
         &TransactionStatus::Approved,
-    )
+    ))
     .await
 }
 
@@ -39,7 +39,7 @@ async fn transaction_with_fail_instruction_should_be_rejected() -> Result<()> {
     let unknown_domain_id = "dummy".parse::<DomainId>()?;
     let fail_isi = Unregister::domain(unknown_domain_id.clone());
 
-    test_with_instruction_and_status(
+    Box::pin(test_with_instruction_and_status(
         stringify!(transaction_with_fail_instruction_should_be_rejected),
         [fail_isi],
         &TransactionStatus::Rejected(Box::new(TransactionRejectionReason::Validation(
@@ -47,7 +47,7 @@ async fn transaction_with_fail_instruction_should_be_rejected() -> Result<()> {
                 unknown_domain_id,
             ))),
         ))),
-    )
+    ))
     .await
 }
 

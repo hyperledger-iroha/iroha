@@ -40,7 +40,7 @@ const SUMERAGI_STACK_SIZE_BYTES: usize = 64 * 1024 * 1024;
 const WORKER_WAKE_CHANNEL_CAP: usize = 1;
 
 /// Build the initial validator topology from trusted peers.
-/// Enforces BLS-normal keys and, when configured with a complete PoP map, valid PoP entries.
+/// Enforces BLS-normal keys and, when configured with a complete `PoP` map, valid `PoP` entries.
 /// Observers are not included; this helper filters the validator set only.
 pub fn filter_validators_from_trusted(
     tp: &iroha_config::parameters::actual::TrustedPeers,
@@ -2585,6 +2585,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn incoming_block_message_waits_when_block_payload_queue_full() {
         const CAP: usize = 1;
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(CAP);
@@ -2699,6 +2700,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn try_incoming_block_message_waits_when_block_payload_queue_full() {
         const CAP: usize = 1;
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(CAP);
@@ -6298,6 +6300,7 @@ pub struct SumeragiStartArgs {
 
 impl SumeragiStartArgs {
     /// Launch the Sumeragi actor, returning handles for control and supervision.
+    #[allow(clippy::too_many_lines)]
     pub fn start(self, shutdown_signal: ShutdownSignal) -> (SumeragiHandle, Child) {
         let SumeragiStartArgs {
             config,

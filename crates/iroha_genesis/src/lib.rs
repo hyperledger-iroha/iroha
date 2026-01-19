@@ -935,11 +935,7 @@ pub mod genesis_instructions_json {
                 u32::try_from(v).map_err(|_| json::Error::Message(format!("invalid {label}: {v}")))
             }
             Value::Number(Number::I64(v)) => {
-                if v < 0 {
-                    return Err(json::Error::Message(format!("invalid {label}: {v}")));
-                }
-                u32::try_from(v as u64)
-                    .map_err(|_| json::Error::Message(format!("invalid {label}: {v}")))
+                u32::try_from(v).map_err(|_| json::Error::Message(format!("invalid {label}: {v}")))
             }
             other => Err(json::Error::Message(format!(
                 "expected numeric {label} value, found {other:?}"

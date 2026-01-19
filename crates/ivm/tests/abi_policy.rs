@@ -9,8 +9,19 @@ fn syscall_policy_allows_known_and_rejects_unknown_for_v1() {
         ivm::syscalls::SYSCALL_EXIT
     ));
 
-    // A number not present in the canonical surface (0xFC) is disallowed
-    let unknown = 0xFC;
+    // Pick a number not present in the canonical surface.
+    let list = ivm::syscalls::abi_syscall_list();
+    let unknown = list
+        .windows(2)
+        .find_map(|w| {
+            let candidate = w[0].saturating_add(1);
+            if candidate < w[1] {
+                Some(candidate)
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| list.last().copied().unwrap_or(0).saturating_add(1));
     assert!(!ivm::syscalls::abi_syscall_list().contains(&unknown));
     assert!(!ivm::syscalls::is_syscall_allowed(
         SyscallPolicy::AbiV1,

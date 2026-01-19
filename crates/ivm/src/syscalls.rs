@@ -84,14 +84,14 @@ pub const SYSCALL_STATE_DEL: u32 = 0x52;
 /// Args: r10 = &NoritoBytes (ASCII decimal)
 /// Ret:  r10 = value (as u64 bits)
 pub const SYSCALL_DECODE_INT: u32 = 0x53;
-/// Construct a Numeric (mantissa+scale) from a signed 64-bit integer and return
+/// Construct a Numeric (mantissa+scale) from a non-negative 64-bit integer and return
 /// a NoritoBytes TLV pointer. The Numeric is encoded with scale = 0.
 ///
 /// Args: r10 = value (i64 as u64)
 /// Ret:  r10 = &NoritoBytes (Numeric payload)
 pub const SYSCALL_NUMERIC_FROM_INT: u32 = 0x69;
 /// Convert a Numeric NoritoBytes payload into a signed 64-bit integer.
-/// The payload must use scale = 0 and fit within `i64`; otherwise the host rejects it.
+/// The payload must be unsigned and use scale = 0; otherwise the host rejects it.
 ///
 /// Args: r10 = &NoritoBytes (Numeric payload)
 /// Ret:  r10 = value (i64 as u64)
@@ -100,7 +100,7 @@ pub const SYSCALL_NUMERIC_TO_INT: u32 = 0x6A;
 /// -> r10 = &NoritoBytes(result).
 pub const SYSCALL_NUMERIC_ADD: u32 = 0x6B;
 /// Numeric subtraction: r10 = &NoritoBytes(lhs), r11 = &NoritoBytes(rhs)
-/// -> r10 = &NoritoBytes(result).
+/// -> r10 = &NoritoBytes(result). Rejects underflow (negative result).
 pub const SYSCALL_NUMERIC_SUB: u32 = 0x6C;
 /// Numeric multiplication: r10 = &NoritoBytes(lhs), r11 = &NoritoBytes(rhs)
 /// -> r10 = &NoritoBytes(result).
@@ -112,6 +112,7 @@ pub const SYSCALL_NUMERIC_DIV: u32 = 0x6E;
 /// -> r10 = &NoritoBytes(result).
 pub const SYSCALL_NUMERIC_REM: u32 = 0x6F;
 /// Numeric negation: r10 = &NoritoBytes(value) -> r10 = &NoritoBytes(result).
+/// Rejects non-zero inputs (numeric aliases are unsigned).
 pub const SYSCALL_NUMERIC_NEG: u32 = 0x70;
 /// Numeric equality: r10 = &NoritoBytes(lhs), r11 = &NoritoBytes(rhs)
 /// -> r10 = 1 if equal else 0.
@@ -276,6 +277,10 @@ pub const SYSCALL_SM4_GCM_OPEN: u32 = 0x93;
 pub const SYSCALL_SM4_CCM_SEAL: u32 = 0x94;
 /// SM4-CCM decrypt: returns plaintext Blob TLV or 0 on failure.
 pub const SYSCALL_SM4_CCM_OPEN: u32 = 0x95;
+/// Compute SHA-256 hash of a blob (`&Blob` -> `&Blob`).
+pub const SYSCALL_SHA256_HASH: u32 = 0x96;
+/// Compute SHA3-256 hash of a blob (`&Blob` -> `&Blob`).
+pub const SYSCALL_SHA3_HASH: u32 = 0x97;
 /// Developer helper: copy a TLV from program memory into the INPUT region and return its pointer.
 ///
 /// Expects `x10` to hold a pointer to a valid TLV in program memory (data/heap). The host validates
@@ -364,6 +369,8 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_SM4_GCM_OPEN,
             SYSCALL_SM4_CCM_SEAL,
             SYSCALL_SM4_CCM_OPEN,
+            SYSCALL_SHA256_HASH,
+            SYSCALL_SHA3_HASH,
         ]);
         // Codec helpers
         v.push(SYSCALL_JSON_ENCODE);
@@ -523,6 +530,8 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_SM4_GCM_OPEN => "SM4_GCM_OPEN",
         SYSCALL_SM4_CCM_SEAL => "SM4_CCM_SEAL",
         SYSCALL_SM4_CCM_OPEN => "SM4_CCM_OPEN",
+        SYSCALL_SHA256_HASH => "SHA256_HASH",
+        SYSCALL_SHA3_HASH => "SHA3_HASH",
         // Hardware / helpers
         SYSCALL_PROVE_EXECUTION => "PROVE_EXECUTION",
         SYSCALL_VERIFY_PROOF => "VERIFY_PROOF",

@@ -1165,7 +1165,7 @@ impl Actor {
             return;
         }
         let local_peer_id = self.common_config.peer.id().clone();
-        for (idx, peer_id) in targets.iter() {
+        for (idx, peer_id) in targets {
             if peer_id == &local_peer_id {
                 continue;
             }
@@ -1375,7 +1375,7 @@ impl Actor {
             let log_outcome = sender.map(|peer| {
                 self.record_rbc_mismatch(peer, status::RbcMismatchKind::PayloadHash, key.1, key.2)
             });
-            if log_outcome.map_or(true, |outcome| outcome.should_log()) {
+            if log_outcome.is_none_or(super::RbcMismatchLogOutcome::should_log) {
                 warn!(
                     height = key.1,
                     view = key.2,
@@ -1399,7 +1399,7 @@ impl Actor {
             let log_outcome = sender.map(|peer| {
                 self.record_rbc_mismatch(peer, status::RbcMismatchKind::ChunkDigest, key.1, key.2)
             });
-            if log_outcome.map_or(true, |outcome| outcome.should_log()) {
+            if log_outcome.is_none_or(super::RbcMismatchLogOutcome::should_log) {
                 warn!(
                     height = key.1,
                     view = key.2,
@@ -1421,7 +1421,7 @@ impl Actor {
             });
             let expected_root = session.expected_chunk_root;
             let observed_root = outcome.observed_chunk_root.or_else(|| session.chunk_root());
-            if log_outcome.map_or(true, |outcome| outcome.should_log()) {
+            if log_outcome.is_none_or(super::RbcMismatchLogOutcome::should_log) {
                 warn!(
                     height = key.1,
                     view = key.2,
@@ -1544,27 +1544,12 @@ impl Actor {
             if let (Some(block_header), Some(leader_signature)) =
                 (session.block_header, session.leader_signature.clone())
             {
-                if block_header.hash() != key.0 {
-                    warn!(
-                        height = key.1,
-                        view = key.2,
-                        expected = ?key.0,
-                        observed = ?block_header.hash(),
-                        "skipping RBC payload recovery: block header hash mismatch"
-                    );
-                } else {
+                if block_header.hash() == key.0 {
                     match BlockPayload::decode(&mut &payload[..]) {
                         Ok(mut payload) => {
                             let mut expected_header = block_header;
                             expected_header.result_merkle_root = None;
-                            if payload.header != expected_header {
-                                warn!(
-                                    height = key.1,
-                                    view = key.2,
-                                    block = %key.0,
-                                    "skipping RBC payload recovery: header mismatch"
-                                );
-                            } else {
+                            if payload.header == expected_header {
                                 payload.header = block_header;
                                 let block =
                                     SignedBlock::presigned_with_payload(leader_signature, payload);
@@ -1588,18 +1573,33 @@ impl Actor {
                                     );
                                     return;
                                 }
+                            } else {
+                                warn!(
+                                    height = key.1,
+                                    view = key.2,
+                                    block = %key.0,
+                                    "skipping RBC payload recovery: header mismatch"
+                                );
                             }
                         }
                         Err(err) => {
                             warn!(
-                                ?err,
-                                height = key.1,
-                                view = key.2,
-                                block = %key.0,
+                            ?err,
+                            height = key.1,
+                            view = key.2,
+                            block = %key.0,
                                 "skipping RBC payload recovery: decode failed"
                             );
                         }
                     }
+                } else {
+                    warn!(
+                        height = key.1,
+                        view = key.2,
+                        expected = ?key.0,
+                        observed = ?block_header.hash(),
+                        "skipping RBC payload recovery: block header hash mismatch"
+                    );
                 }
             }
         }
@@ -2677,7 +2677,7 @@ impl Actor {
                     chunk.view,
                 )
             });
-            if log_outcome.map_or(true, |outcome| outcome.should_log()) {
+            if log_outcome.is_none_or(super::RbcMismatchLogOutcome::should_log) {
                 warn!(
                     height = chunk.height,
                     view = chunk.view,
@@ -3118,7 +3118,7 @@ impl Actor {
                                 ready.view,
                             )
                         });
-                        if log_outcome.map_or(true, |outcome| outcome.should_log()) {
+                        if log_outcome.is_none_or(super::RbcMismatchLogOutcome::should_log) {
                             warn!(
                                 height = ready.height,
                                 view = ready.view,
@@ -3156,7 +3156,7 @@ impl Actor {
                                     ready.view,
                                 )
                             });
-                            if log_outcome.map_or(true, |outcome| outcome.should_log()) {
+                            if log_outcome.is_none_or(super::RbcMismatchLogOutcome::should_log) {
                                 warn!(
                                     height = ready.height,
                                     view = ready.view,

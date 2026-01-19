@@ -5768,7 +5768,7 @@ pub async fn handle_get_contract_state(
     let view = state.view();
     let storage = view.world().smart_contract_state();
 
-    let mut encode_entry = |path: &str, value: Option<&Vec<u8>>, found: bool| {
+    let encode_entry = |path: &str, value: Option<&Vec<u8>>, found: bool| {
         if !include_value {
             return ContractStateEntry {
                 path: path.to_string(),
@@ -22258,13 +22258,15 @@ mod status_tests {
         let hash = Hash::prehashed([0x11; Hash::LENGTH]);
         let hash_typed = HashOf::from_untyped_unchecked(hash);
         let hash_str = format!("{hash_typed}");
-        let mut entry = status::PendingRbcEntrySnapshot::default();
-        entry.block_hash = hash_typed;
-        entry.height = 9;
-        entry.view = 1;
-        entry.ready = 2;
-        entry.deliver = 1;
-        entry.age_ms = 42;
+        let entry = status::PendingRbcEntrySnapshot {
+            block_hash: hash_typed,
+            height: 9,
+            view: 1,
+            ready: 2,
+            deliver: 1,
+            age_ms: 42,
+            ..Default::default()
+        };
 
         let pending_rbc = status::PendingRbcSnapshot {
             sessions: 1,
@@ -22860,7 +22862,6 @@ pub async fn handle_v1_sumeragi_status(
                         age_ms: entry.age_ms,
                     })
                     .collect(),
-                ..Default::default()
             },
             tx_queue_depth: snap.tx_queue_depth,
             tx_queue_capacity: snap.tx_queue_capacity,

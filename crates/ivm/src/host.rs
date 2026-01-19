@@ -9,6 +9,7 @@
 use std::{
     any::Any,
     collections::{BTreeMap, HashSet},
+    io::Cursor,
     num::NonZeroU16,
 };
 
@@ -23,6 +24,8 @@ use iroha_primitives::{
     numeric::{Numeric, NumericSpec},
 };
 use norito::{NoritoSerialize, decode_from_bytes};
+use sha2::{Digest as Sha2Digest, Sha256};
+use sha3_hash::{Digest as Sha3Digest, Sha3_256};
 
 use crate::{
     axt::{self, AssetHandle, ProofBlob, RemoteSpendIntent, TouchManifest},
@@ -460,6 +463,13 @@ impl DefaultHost {
         vm.alloc_input_tlv(&out)
     }
 
+    fn ensure_unsigned_scale0(numeric: Numeric) -> Result<Numeric, VMError> {
+        if numeric.scale() != 0 || numeric.mantissa().is_negative() {
+            return Err(VMError::AssertionFailed);
+        }
+        Ok(numeric)
+    }
+
     fn decode_numeric(vm: &IVM, ptr: u64) -> Result<Numeric, VMError> {
         let tlv = match vm.memory.validate_tlv(ptr) {
             Ok(tlv) => tlv,
@@ -500,7 +510,9 @@ impl DefaultHost {
                 type_id: tlv.type_id as u16,
             });
         }
-        decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)
+        let mut cursor = Cursor::new(tlv.payload);
+        let numeric = Numeric::decode(&mut cursor).map_err(|_| VMError::DecodeError)?;
+        Self::ensure_unsigned_scale0(numeric)
     }
 
     /// Override the default allow-all AXT policy (test/dependency injection).
@@ -800,6 +812,9 @@ impl IVMHost for DefaultHost {
             }
             crate::syscalls::SYSCALL_NUMERIC_FROM_INT => {
                 let val = vm.register(10) as i64;
+                if val < 0 {
+                    return Err(VMError::AssertionFailed);
+                }
                 let payload = Numeric::new(val, 0).encode();
                 let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, p);
@@ -811,14 +826,10 @@ impl IVMHost for DefaultHost {
                     return Err(VMError::NoritoInvalid);
                 }
                 let numeric = Self::decode_numeric(vm, ptr)?;
-                let trimmed = numeric.trim_trailing_zeros();
-                if trimmed.scale() != 0 {
-                    return Err(VMError::AssertionFailed);
-                }
-                let value = trimmed
+                let value = numeric
                     .try_mantissa_i128()
                     .ok_or(VMError::AssertionFailed)?;
-                if value < i64::MIN as i128 || value > i64::MAX as i128 {
+                if value > i64::MAX as i128 {
                     return Err(VMError::AssertionFailed);
                 }
                 vm.set_register(10, (value as i64) as u64);
@@ -837,6 +848,9 @@ impl IVMHost for DefaultHost {
                 let lhs = Self::decode_numeric(vm, vm.register(10))?;
                 let rhs = Self::decode_numeric(vm, vm.register(11))?;
                 let out = lhs.checked_sub(rhs).ok_or(VMError::AssertionFailed)?;
+                if out.mantissa().is_negative() {
+                    return Err(VMError::AssertionFailed);
+                }
                 let payload = out.encode();
                 let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, p);
@@ -877,9 +891,10 @@ impl IVMHost for DefaultHost {
             }
             crate::syscalls::SYSCALL_NUMERIC_NEG => {
                 let val = Self::decode_numeric(vm, vm.register(10))?;
-                let out = Numeric::try_new(val.mantissa().neg(), val.scale())
-                    .map_err(|_| VMError::AssertionFailed)?;
-                let payload = out.encode();
+                if !val.is_zero() {
+                    return Err(VMError::AssertionFailed);
+                }
+                let payload = val.encode();
                 let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, p);
                 Ok(0)
@@ -1411,6 +1426,28 @@ impl IVMHost for DefaultHost {
                 let digest = Sm3Digest::hash(tlv.payload);
                 let bytes = digest.as_bytes();
                 let addr = DefaultHost::alloc_blob_tlv(vm, bytes)?;
+                vm.set_register(10, addr);
+                Ok(0)
+            }
+            crate::syscalls::SYSCALL_SHA256_HASH => {
+                let ptr = vm.register(10);
+                let tlv = vm.memory.validate_tlv(ptr)?;
+                if tlv.type_id != PointerType::Blob {
+                    return Err(VMError::NoritoInvalid);
+                }
+                let digest = <Sha256 as Sha2Digest>::digest(tlv.payload);
+                let addr = DefaultHost::alloc_blob_tlv(vm, digest.as_slice())?;
+                vm.set_register(10, addr);
+                Ok(0)
+            }
+            crate::syscalls::SYSCALL_SHA3_HASH => {
+                let ptr = vm.register(10);
+                let tlv = vm.memory.validate_tlv(ptr)?;
+                if tlv.type_id != PointerType::Blob {
+                    return Err(VMError::NoritoInvalid);
+                }
+                let digest = <Sha3_256 as Sha3Digest>::digest(tlv.payload);
+                let addr = DefaultHost::alloc_blob_tlv(vm, digest.as_slice())?;
                 vm.set_register(10, addr);
                 Ok(0)
             }

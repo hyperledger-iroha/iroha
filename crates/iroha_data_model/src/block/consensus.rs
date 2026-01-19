@@ -1136,7 +1136,7 @@ pub struct SumeragiViewChangeCauseStatus {
     /// Total view changes triggered after quorum timeouts/missing commits.
     #[norito(default)]
     pub quorum_timeout_total: u64,
-    /// Total view changes triggered after stake-quorum timeouts (NPoS only).
+    /// Total view changes triggered after stake-quorum timeouts (`NPoS` only).
     #[norito(default)]
     pub stake_quorum_timeout_total: u64,
     /// Total view changes triggered after DA availability aborts (unused when DA is advisory).
@@ -2014,7 +2014,7 @@ pub struct RbcInit {
     pub payload_hash: Hash,
     /// Merkle root of chunk digests for integrity proofs.
     pub chunk_root: Hash,
-    /// Full block header used to recover signed payloads without BlockCreated.
+    /// Full block header used to recover signed payloads without `BlockCreated`.
     pub block_header: BlockHeader,
     /// Leader signature over the block header.
     pub leader_signature: BlockSignature,

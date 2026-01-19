@@ -2336,7 +2336,7 @@ pub enum ConsensusMessageReason {
     MissingHighestQc,
     /// Highest QC header mismatch.
     HighestQcMismatch,
-    /// BlockCreated hint validation failed.
+    /// `BlockCreated` hint validation failed.
     HintMismatch,
     /// Payload hash mismatched the expected value.
     PayloadMismatch,
@@ -2479,9 +2479,9 @@ pub enum VoteValidationDropReason {
     SignerOutOfRange,
     /// Signature payload fails cryptographic validation.
     SignatureInvalid,
-    /// NEW_VIEW vote missing the highest QC reference.
+    /// `NEW_VIEW` vote missing the highest QC reference.
     MissingHighestQc,
-    /// NEW_VIEW highest QC mismatch.
+    /// `NEW_VIEW` highest QC mismatch.
     HighestQcMismatch,
     /// Conflicting vote already recorded for the signer.
     ConflictingVote,
@@ -2631,7 +2631,7 @@ pub struct ViewChangeCauseSnapshot {
     pub commit_failure_total: u64,
     /// Total view changes triggered after quorum timeouts/missing commits.
     pub quorum_timeout_total: u64,
-    /// Total view changes triggered after stake-quorum timeouts (NPoS only).
+    /// Total view changes triggered after stake-quorum timeouts (`NPoS` only).
     pub stake_quorum_timeout_total: u64,
     /// Total view changes triggered after DA availability aborts (unused when DA is advisory).
     pub da_gate_total: u64,
@@ -4147,11 +4147,11 @@ fn should_log_vote_drop_count(count: u64) -> bool {
     if count == 1 {
         return true;
     }
-    if count < 10 || count % 10 != 0 {
+    if count < 10 || !count.is_multiple_of(10) {
         return false;
     }
     let mut value = count;
-    while value % 10 == 0 {
+    while value.is_multiple_of(10) {
         value /= 10;
     }
     value == 1
@@ -4187,13 +4187,13 @@ pub fn record_vote_validation_drop(record: VoteValidationDropRecord) {
     let Some(peer_id) = peer_id else {
         return;
     };
-    let roster_hash = record.roster_hash.clone();
+    let roster_hash = record.roster_hash;
     let Some(mut registry) = vote_validation_drop_peer_registry() else {
         return;
     };
     let key = VoteValidationDropPeerKey {
         peer_id: peer_id.clone(),
-        roster_hash: roster_hash.clone(),
+        roster_hash,
     };
     let entry = registry.entry(key).or_default();
     entry.total = entry.total.saturating_add(1);

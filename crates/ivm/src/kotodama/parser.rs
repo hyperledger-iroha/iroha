@@ -1125,37 +1125,6 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_item(&mut self) -> ParseResult<Item> {
-        self.expect(TokenKind::Fn)?;
-        let name = self.expect_ident()?;
-        self.expect(TokenKind::LParen)?;
-        let mut params = Vec::new();
-        if !self.peek(TokenKind::RParen) {
-            loop {
-                params.push(self.parse_param()?);
-                if self.peek(TokenKind::Comma) {
-                    self.bump();
-                } else {
-                    break;
-                }
-            }
-        }
-        self.expect(TokenKind::RParen)?;
-        let mut ret_ty = None;
-        if self.peek(TokenKind::Arrow) {
-            self.bump();
-            ret_ty = Some(self.parse_type_expr()?);
-        }
-        let body = self.parse_block()?;
-        Ok(Item::Function(Function {
-            name,
-            params,
-            ret_ty,
-            body,
-            modifiers: FunctionModifiers::default(),
-        }))
-    }
-
     fn parse_block(&mut self) -> ParseResult<Block> {
         self.expect(TokenKind::LBrace)?;
         let mut statements = Vec::new();

@@ -210,58 +210,31 @@ fn numeric_alias_u128_arithmetic_roundtrip() {
 }
 
 #[test]
-fn numeric_alias_negative_literal_roundtrip() {
+fn numeric_alias_negative_literal_rejected() {
     let src = r#"
         fn main() -> int {
             let a: Amount = -1;
             return a;
         }
     "#;
-    let code = Compiler::new()
+    let err = Compiler::new()
         .compile_source(src)
-        .expect("compile negative alias literal");
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&code).expect("load program");
-    vm.run().expect("run negative alias literal");
-    assert_eq!(vm.register(10) as i64, -1);
+        .expect_err("negative alias literal should fail");
+    assert!(err.to_string().contains("unsigned"));
 }
 
 #[test]
-fn numeric_alias_decimal_literal_roundtrip() {
+fn numeric_alias_decimal_literal_rejected() {
     let src = r#"
         fn main() -> bool {
             let a: Amount = 1.50;
-            let b: Amount = 0.25;
-            let c: Amount = a + b;
-            return c == 1.75;
+            return a == 1;
         }
     "#;
-    let code = Compiler::new()
+    let err = Compiler::new()
         .compile_source(src)
-        .expect("compile decimal alias literal");
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&code).expect("load program");
-    vm.run().expect("run decimal alias literal");
-    assert_eq!(vm.register(10), 1);
-}
-
-#[test]
-fn numeric_alias_negative_decimal_literal_roundtrip() {
-    let src = r#"
-        fn main() -> bool {
-            let a: Amount = -1.25;
-            let b: Amount = 0.25;
-            let c: Amount = a + b;
-            return c == -1.0;
-        }
-    "#;
-    let code = Compiler::new()
-        .compile_source(src)
-        .expect("compile negative decimal alias literal");
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&code).expect("load program");
-    vm.run().expect("run negative decimal alias literal");
-    assert_eq!(vm.register(10), 1);
+        .expect_err("decimal alias literal should fail");
+    assert!(err.to_string().contains("scale=0"));
 }
 
 #[test]
@@ -277,7 +250,7 @@ fn decimal_literal_rejects_int_annotation() {
     .expect("parse decimal literal");
     let err = analyze(&prog).expect_err("expected decimal literal type error");
     assert!(
-        err.message.contains("decimal"),
+        err.message.contains("scale=0"),
         "unexpected error message: {}",
         err.message
     );
@@ -1907,6 +1880,8 @@ fn manifest_includes_entrypoints_and_features() {
             }
 
             kotoage fn run() permission(Admin) {
+                setvl(8);
+                assert(true);
                 let current = counter;
                 if current > 0 {
                     info("counter tick");
@@ -2031,7 +2006,7 @@ fn manifest_emits_wildcard_hints_when_isi_targets_are_opaque() {
             transfer_domain(
                 account_id("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"),
                 domain("wonderland"),
-                account_id("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland")
+                authority()
             );
         }
     "#;
@@ -2227,7 +2202,11 @@ seiyaku MyC {
     zk: true;
     vector: true;
   }
-  hajimari() { let a = 1; }
+  hajimari() {
+    setvl(8);
+    assert(true);
+    let a = 1;
+  }
 }
 "#;
     let code = Compiler::new()

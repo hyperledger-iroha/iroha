@@ -18,7 +18,7 @@ use std::{
 };
 
 use ed25519_dalek::{Signer as _, SigningKey};
-use iroha_crypto::EcdsaSecp256k1Sha256;
+use iroha_crypto::{Algorithm, EcdsaSecp256k1Sha256};
 
 use crate::signature::{SignatureScheme, verify_signature};
 
@@ -3495,8 +3495,38 @@ fn send_http(endpoint: &HttpEndpoint, payload: &[u8]) -> Result<(), MsgError> {
     {
         return override_cb(endpoint, payload);
     }
-    let _ = (endpoint, payload);
-    Err(MsgError::UnsupportedChannel)
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+
+    let mut stream = TcpStream::connect((endpoint.host.as_str(), endpoint.port))?;
+    let host_header = if endpoint.port == 80 {
+        endpoint.host.clone()
+    } else {
+        format!("{}:{}", endpoint.host, endpoint.port)
+    };
+    let request = format!(
+        "POST {} HTTP/1.1\r\nHost: {}\r\nContent-Length: {}\r\nContent-Type: application/xml\r\nConnection: close\r\n\r\n",
+        endpoint.path,
+        host_header,
+        payload.len()
+    );
+    stream.write_all(request.as_bytes())?;
+    stream.write_all(payload)?;
+    stream.flush()?;
+
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response)?;
+    let status = response
+        .splitn(2, |b| *b == b'\n')
+        .next()
+        .and_then(|line| std::str::from_utf8(line).ok())
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| code.parse::<u16>().ok())
+        .ok_or(MsgError::InvalidFormat)?;
+    if !(200..300).contains(&status) {
+        return Err(MsgError::HttpStatus(status));
+    }
+    Ok(())
 }
 
 /// Encode a numeric amount as an ASCII string.
@@ -3804,36 +3834,54 @@ pub fn msg_validate() -> bool {
 /// Sign the current ISO 20022 message.
 ///
 /// Uses Ed25519, secp256k1, or ML-DSA (Dilithium3) depending on the key
-/// length. The function signs the serialized message bytes and returns the
-/// signature or an empty vector if signing fails.
+/// length. Secret keys may be prefixed with an `iroha_crypto::Algorithm` tag;
+/// secp256k1 signing requires the `Algorithm::Secp256k1` tag to disambiguate
+/// 32-byte secret keys. The function signs the serialized message bytes and
+/// returns the signature or an empty vector if signing fails.
 #[allow(unused_variables)]
 pub fn msg_sign(key: &[u8]) -> Vec<u8> {
     let msg = match msg_serialize("XML") {
         Ok(bytes) => bytes,
         Err(_) => return Vec::new(),
     };
-    {
-        if let Ok(sk_bytes) = <[u8; 32]>::try_from(key) {
+    use pqcrypto_dilithium::dilithium3 as dilithium;
+    use pqcrypto_traits::sign::{DetachedSignature as _, SecretKey as _};
+
+    if let Some((tag, rest)) = key.split_first() {
+        if *tag == Algorithm::Ed25519 as u8 && rest.len() == 32 {
+            let Ok(sk_bytes) = <[u8; 32]>::try_from(rest) else {
+                return Vec::new();
+            };
             let sk = SigningKey::from_bytes(&sk_bytes);
             return sk.sign(&msg).to_bytes().to_vec();
         }
-    }
-    {
-        use pqcrypto_dilithium::dilithium3 as dilithium;
-        use pqcrypto_traits::sign::{DetachedSignature as _, SecretKey as _};
-        if key.len() == dilithium::secret_key_bytes()
-            && let Ok(sk) = dilithium::SecretKey::from_bytes(key)
-        {
+        if *tag == Algorithm::Secp256k1 as u8 && rest.len() == 32 {
+            let Ok(sk_bytes) = <[u8; 32]>::try_from(rest) else {
+                return Vec::new();
+            };
+            let Ok(sk) = EcdsaSecp256k1Sha256::parse_private_key(&sk_bytes) else {
+                return Vec::new();
+            };
+            return EcdsaSecp256k1Sha256::sign(&msg, &sk);
+        }
+        if *tag == Algorithm::MlDsa as u8 && rest.len() == dilithium::secret_key_bytes() {
+            let Ok(sk) = dilithium::SecretKey::from_bytes(rest) else {
+                return Vec::new();
+            };
             let sig = dilithium::detached_sign(&msg, &sk);
             return sig.as_bytes().to_vec();
         }
     }
+
+    if let Ok(sk_bytes) = <[u8; 32]>::try_from(key) {
+        let sk = SigningKey::from_bytes(&sk_bytes);
+        return sk.sign(&msg).to_bytes().to_vec();
+    }
+    if key.len() == dilithium::secret_key_bytes()
+        && let Ok(sk) = dilithium::SecretKey::from_bytes(key)
     {
-        if let Ok(sk_bytes) = <[u8; 32]>::try_from(key)
-            && let Ok(sk) = EcdsaSecp256k1Sha256::parse_private_key(&sk_bytes)
-        {
-            return EcdsaSecp256k1Sha256::sign(&msg, &sk);
-        }
+        let sig = dilithium::detached_sign(&msg, &sk);
+        return sig.as_bytes().to_vec();
     }
     Vec::new()
 }
@@ -3887,10 +3935,9 @@ pub fn set_msg_sender(callback: Option<MsgSendCallback>) {
 /// validation fails the function returns `false` and nothing is sent. When the
 /// message is valid it is serialised using [`msg_serialize`] and either passed
 /// to a custom backend registered via [`set_msg_sender`] or recorded in a
-/// thread‑local log for inspection. HTTP channels are only supported in tests
-/// via overrides; non-test invocations return [`MsgError::UnsupportedChannel`].
-/// The serialised bytes are sent and the function returns `true` to indicate
-/// success.
+/// thread‑local log for inspection. HTTP channels are delivered via a simple
+/// TCP client; tests can override delivery. The serialised bytes are sent and
+/// the function returns `true` to indicate success.
 pub fn msg_send(channel: &str) -> Result<(), MsgError> {
     if !msg_validate() {
         return Err(MsgError::ValidationFailed);
@@ -3942,6 +3989,12 @@ fn set_http_sender_override(callback: Option<TestHttpSender>) {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        io::{BufRead, BufReader, ErrorKind, Read, Write},
+        net::TcpListener,
+        thread,
+    };
+
     use ed25519_dalek::SigningKey;
     use norito::codec::{Decode, Encode};
 
@@ -5643,7 +5696,10 @@ mod tests {
         reset();
         msg_parse("pacs.008", b"field=value").unwrap();
         let (pk, sk) = dilithium::keypair();
-        let sig = msg_sign(sk.as_bytes());
+        let mut tagged = Vec::with_capacity(1 + sk.as_bytes().len());
+        tagged.push(Algorithm::MlDsa as u8);
+        tagged.extend_from_slice(sk.as_bytes());
+        let sig = msg_sign(&tagged);
         assert!(msg_verify_sig(&sig, pk.as_bytes()));
     }
 
@@ -5653,7 +5709,11 @@ mod tests {
         reset();
         msg_parse("pacs.008", b"field=value").unwrap();
         let sk = SigningKey::from_bytes(&[9u8; 32].into()).expect("sk");
-        let sig = msg_sign(sk.to_bytes().as_slice());
+        let sk_bytes = sk.to_bytes();
+        let mut tagged = Vec::with_capacity(1 + sk_bytes.len());
+        tagged.push(Algorithm::Secp256k1 as u8);
+        tagged.extend_from_slice(sk_bytes.as_slice());
+        let sig = msg_sign(&tagged);
         let pk = VerifyingKey::from(&sk);
         let pk_bytes = pk.to_encoded_point(true);
         assert!(msg_verify_sig(&sig, pk_bytes.as_bytes()));
@@ -5808,15 +5868,52 @@ mod tests {
     }
 
     #[test]
-    fn msg_send_http_without_override_is_unsupported() {
+    fn msg_send_http_without_override_sends_payload() {
         reset();
         msg_create("pacs.008");
         populate_pacs008_minimal();
-        assert!(matches!(
-            msg_send("http://example.com/submit"),
-            Err(MsgError::UnsupportedChannel)
-        ));
-        HTTP_CALLS.with(|calls| assert!(calls.borrow().is_empty()));
+        let listener = match TcpListener::bind("127.0.0.1:0") {
+            Ok(listener) => listener,
+            Err(err) if err.kind() == ErrorKind::PermissionDenied => {
+                eprintln!("skipping msg_send_http_without_override_sends_payload: {err}");
+                return;
+            }
+            Err(err) => panic!("listener: {err}"),
+        };
+        let addr = listener.local_addr().unwrap();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut headers = String::new();
+            let mut line = String::new();
+            let mut content_len = 0usize;
+            loop {
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some((_, value)) = line
+                    .split_once(':')
+                    .filter(|_| line.to_ascii_lowercase().starts_with("content-length"))
+                {
+                    content_len = value.trim().parse().unwrap_or(0);
+                }
+                headers.push_str(&line);
+            }
+            let mut body = vec![0u8; content_len];
+            reader.read_exact(&mut body).unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                .unwrap();
+            (headers, body)
+        });
+
+        let url = format!("http://{addr}/submit");
+        msg_send(&url).unwrap();
+        let (headers, body) = handle.join().unwrap();
+        assert!(headers.contains("POST /submit HTTP/1.1"));
+        assert!(String::from_utf8_lossy(&body).contains("ISO20022"));
     }
 
     #[test]

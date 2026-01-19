@@ -28,29 +28,27 @@ fn decode_numeric(vm: &IVM, ptr: u64) -> Numeric {
 }
 
 #[test]
-fn numeric_from_int_accepts_negative() {
+fn numeric_from_int_rejects_negative() {
     let mut vm = IVM::new(u64::MAX);
     let mut host = DefaultHost::new();
 
     vm.set_register(10, (-12_i64) as u64);
-    host.syscall(syscalls::SYSCALL_NUMERIC_FROM_INT, &mut vm)
-        .expect("numeric from int negative");
-
-    let out = decode_numeric(&vm, vm.register(10));
-    assert_eq!(out, Numeric::new(-12_i32, 0));
+    let err = host
+        .syscall(syscalls::SYSCALL_NUMERIC_FROM_INT, &mut vm)
+        .expect_err("negative numeric from int should fail");
+    assert!(matches!(err, VMError::AssertionFailed));
 }
 
 #[test]
-fn numeric_from_int_accepts_negative_core_host() {
+fn numeric_from_int_rejects_negative_core_host() {
     let mut vm = IVM::new(u64::MAX);
     let mut host = CoreHost::new();
 
     vm.set_register(10, (-12_i64) as u64);
-    host.syscall(syscalls::SYSCALL_NUMERIC_FROM_INT, &mut vm)
-        .expect("numeric from int negative (core host)");
-
-    let out = decode_numeric(&vm, vm.register(10));
-    assert_eq!(out, Numeric::new(-12_i32, 0));
+    let err = host
+        .syscall(syscalls::SYSCALL_NUMERIC_FROM_INT, &mut vm)
+        .expect_err("negative numeric from int should fail (core host)");
+    assert!(matches!(err, VMError::AssertionFailed));
 }
 
 #[test]
@@ -67,7 +65,7 @@ fn numeric_from_int_encodes_i64() {
 }
 
 #[test]
-fn numeric_to_int_accepts_negative() {
+fn numeric_to_int_rejects_negative() {
     let mut vm = IVM::new(u64::MAX);
     let mut host = DefaultHost::new();
 
@@ -77,9 +75,10 @@ fn numeric_to_int_accepts_negative() {
         .expect("alloc numeric");
     vm.set_register(10, ptr);
 
-    host.syscall(syscalls::SYSCALL_NUMERIC_TO_INT, &mut vm)
-        .expect("negative numeric to int");
-    assert_eq!(vm.register(10) as i64, -1);
+    let err = host
+        .syscall(syscalls::SYSCALL_NUMERIC_TO_INT, &mut vm)
+        .expect_err("negative numeric to int should fail");
+    assert!(matches!(err, VMError::AssertionFailed));
 }
 
 #[test]
@@ -128,12 +127,12 @@ fn numeric_to_int_rejects_overflow() {
 }
 
 #[test]
-fn numeric_add_sub_mul_decimal() {
+fn numeric_add_sub_mul_reject_fractional() {
     let mut vm = IVM::new(u64::MAX);
     let mut host = DefaultHost::new();
 
     let lhs = Numeric::new(15_i32, 1); // 1.5
-    let rhs = Numeric::new(-25_i32, 2); // -0.25
+    let rhs = Numeric::new(25_i32, 2); // 0.25
     let lhs_ptr = vm
         .alloc_input_tlv(&make_numeric_tlv(lhs))
         .expect("alloc lhs");
@@ -143,28 +142,28 @@ fn numeric_add_sub_mul_decimal() {
 
     vm.set_register(10, lhs_ptr);
     vm.set_register(11, rhs_ptr);
-    host.syscall(syscalls::SYSCALL_NUMERIC_ADD, &mut vm)
-        .expect("numeric add");
-    let out = decode_numeric(&vm, vm.register(10));
-    assert_eq!(out, Numeric::new(125_i32, 2)); // 1.25
+    let err = host
+        .syscall(syscalls::SYSCALL_NUMERIC_ADD, &mut vm)
+        .expect_err("numeric add should reject fractional");
+    assert!(matches!(err, VMError::AssertionFailed));
 
     vm.set_register(10, lhs_ptr);
     vm.set_register(11, rhs_ptr);
-    host.syscall(syscalls::SYSCALL_NUMERIC_SUB, &mut vm)
-        .expect("numeric sub");
-    let out = decode_numeric(&vm, vm.register(10));
-    assert_eq!(out, Numeric::new(175_i32, 2)); // 1.75
+    let err = host
+        .syscall(syscalls::SYSCALL_NUMERIC_SUB, &mut vm)
+        .expect_err("numeric sub should reject fractional");
+    assert!(matches!(err, VMError::AssertionFailed));
 
     vm.set_register(10, lhs_ptr);
     vm.set_register(11, rhs_ptr);
-    host.syscall(syscalls::SYSCALL_NUMERIC_MUL, &mut vm)
-        .expect("numeric mul");
-    let out = decode_numeric(&vm, vm.register(10));
-    assert_eq!(out, Numeric::new(-375_i32, 3)); // -0.375
+    let err = host
+        .syscall(syscalls::SYSCALL_NUMERIC_MUL, &mut vm)
+        .expect_err("numeric mul should reject fractional");
+    assert!(matches!(err, VMError::AssertionFailed));
 }
 
 #[test]
-fn numeric_sub_allows_negative_result() {
+fn numeric_sub_rejects_underflow() {
     let mut vm = IVM::new(u64::MAX);
     let mut host = DefaultHost::new();
 
@@ -179,10 +178,10 @@ fn numeric_sub_allows_negative_result() {
 
     vm.set_register(10, lhs_ptr);
     vm.set_register(11, rhs_ptr);
-    host.syscall(syscalls::SYSCALL_NUMERIC_SUB, &mut vm)
-        .expect("numeric sub negative");
-    let out = decode_numeric(&vm, vm.register(10));
-    assert_eq!(out, Numeric::new(-1_i32, 0));
+    let err = host
+        .syscall(syscalls::SYSCALL_NUMERIC_SUB, &mut vm)
+        .expect_err("numeric sub underflow should fail");
+    assert!(matches!(err, VMError::AssertionFailed));
 }
 
 #[test]
@@ -244,37 +243,37 @@ fn numeric_div_rem_outputs_expected() {
 }
 
 #[test]
-fn numeric_neg_inverts_sign() {
+fn numeric_neg_rejects_nonzero() {
     let mut vm = IVM::new(u64::MAX);
     let mut host = DefaultHost::new();
 
-    let value = Numeric::new(125_i32, 2); // 1.25
+    let value = Numeric::new(1_u32, 0);
     let value_ptr = vm
         .alloc_input_tlv(&make_numeric_tlv(value))
         .expect("alloc value");
     vm.set_register(10, value_ptr);
-    host.syscall(syscalls::SYSCALL_NUMERIC_NEG, &mut vm)
-        .expect("numeric neg");
-    let out = decode_numeric(&vm, vm.register(10));
-    assert_eq!(out, Numeric::new(-125_i32, 2));
+    let err = host
+        .syscall(syscalls::SYSCALL_NUMERIC_NEG, &mut vm)
+        .expect_err("numeric neg should reject non-zero");
+    assert!(matches!(err, VMError::AssertionFailed));
 
-    let value = Numeric::new(-1_i32, 0);
-    let value_ptr = vm
-        .alloc_input_tlv(&make_numeric_tlv(value))
-        .expect("alloc value");
-    vm.set_register(10, value_ptr);
+    let zero = Numeric::new(0_u32, 0);
+    let zero_ptr = vm
+        .alloc_input_tlv(&make_numeric_tlv(zero))
+        .expect("alloc zero");
+    vm.set_register(10, zero_ptr);
     host.syscall(syscalls::SYSCALL_NUMERIC_NEG, &mut vm)
-        .expect("numeric neg");
+        .expect("numeric neg zero");
     let out = decode_numeric(&vm, vm.register(10));
-    assert_eq!(out, Numeric::new(1_i32, 0));
+    assert_eq!(out, Numeric::new(0_u32, 0));
 }
 
 #[test]
-fn numeric_cmp_signed() {
+fn numeric_cmp_unsigned() {
     let mut vm = IVM::new(u64::MAX);
     let mut host = DefaultHost::new();
 
-    let lhs = Numeric::new(-5_i32, 0);
+    let lhs = Numeric::new(5_i32, 0);
     let rhs = Numeric::new(7_i32, 0);
     let lhs_ptr = vm
         .alloc_input_tlv(&make_numeric_tlv(lhs))

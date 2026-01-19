@@ -208,8 +208,8 @@ mod tests {
         let mut square = [0u64; 64];
         let mut row = 1u64;
         mat[0] = POLY;
-        for n in 1..64 {
-            mat[n] = row;
+        for slot in mat.iter_mut().skip(1) {
+            *slot = row;
             row <<= 1;
         }
 

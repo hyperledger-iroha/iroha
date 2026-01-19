@@ -1,5 +1,7 @@
 //! Data availability ingest handlers for Torii.
 
+#![allow(clippy::redundant_pub_crate)]
+
 use std::{
     borrow::{Cow, ToOwned},
     io::{ErrorKind, Read},
@@ -1646,6 +1648,7 @@ fn registry_owner_from_metadata(
     Ok(Some(owner))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn verify_manifest_against_request(
     request: &DaIngestRequest,
     manifest: &DaManifestV1,

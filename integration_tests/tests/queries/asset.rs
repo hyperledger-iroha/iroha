@@ -54,9 +54,9 @@ fn find_asset_total_quantity() -> Result<()> {
             &accounts,
             "quantity#wonderland",
             NumericSpec::default(),
-            numeric!(1),
-            numeric!(10),
-            numeric!(5),
+            &numeric!(1),
+            &numeric!(10),
+            &numeric!(5),
             &numeric!(30),
         )?;
         test_total_quantity(
@@ -64,9 +64,9 @@ fn find_asset_total_quantity() -> Result<()> {
             &accounts,
             "fixed#wonderland",
             NumericSpec::default(),
-            numeric!(1.0),
-            numeric!(10.0),
-            numeric!(5.0),
+            &numeric!(1.0),
+            &numeric!(10.0),
+            &numeric!(5.0),
             &numeric!(30.0),
         )?;
         Ok(())
@@ -84,9 +84,9 @@ fn test_total_quantity(
     accounts: &[AccountId; 5],
     definition: &str,
     asset_spec: NumericSpec,
-    initial_value: Numeric,
-    to_mint: Numeric,
-    to_burn: Numeric,
+    initial_value: &Numeric,
+    to_mint: &Numeric,
+    to_burn: &Numeric,
     expected_total_asset_quantity: &Numeric,
 ) -> Result<()> {
     let context = stringify!(find_asset_total_quantity);
@@ -97,9 +97,9 @@ fn test_total_quantity(
     test_client.submit_blocking(Register::asset_definition(asset_definition))?;
     let account_count = accounts.len();
 
-    let expected_initial_total = sum_value(&initial_value, account_count)?;
-    let expected_minted_total = sum_value(&to_mint, account_count)?;
-    let expected_burned_total = sum_value(&to_burn, account_count)?;
+    let expected_initial_total = sum_value(initial_value, account_count)?;
+    let expected_minted_total = sum_value(to_mint, account_count)?;
+    let expected_burned_total = sum_value(to_burn, account_count)?;
     let expected_after_mint = expected_initial_total
         .clone()
         .checked_add(expected_minted_total.clone())
