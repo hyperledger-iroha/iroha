@@ -183,6 +183,7 @@ pub fn record_delete_account_kv(id: &AccountId, key: &Name, pre: &iroha_primitiv
     g.writes.insert(k, Vec::new());
 }
 
+/// Record a read (pre-value) of domain metadata.
 pub fn record_read_domain_kv(
     id: &DomainId,
     key: &Name,
@@ -193,12 +194,14 @@ pub fn record_read_domain_kv(
     let mut g = slot().lock().unwrap();
     g.reads.entry(k).or_insert(v);
 }
+/// Record a write (post-value) of domain metadata.
 pub fn record_write_domain_kv(id: &DomainId, key: &Name, val: &iroha_primitives::json::Json) {
     let k = key_domain_kv(id, key);
     let v = bytes_from_json(val);
     let mut g = slot().lock().unwrap();
     g.writes.insert(k, v);
 }
+/// Record a delete (post empty) of domain metadata, with read pre-value supplied.
 pub fn record_delete_domain_kv(id: &DomainId, key: &Name, pre: &iroha_primitives::json::Json) {
     let k = key_domain_kv(id, key);
     let mut g = slot().lock().unwrap();
@@ -208,18 +211,21 @@ pub fn record_delete_domain_kv(id: &DomainId, key: &Name, pre: &iroha_primitives
     g.writes.insert(k, Vec::new());
 }
 
+/// Record a read (pre-value) of NFT metadata.
 pub fn record_read_nft_kv(id: &NftId, key: &Name, val: Option<&iroha_primitives::json::Json>) {
     let k = key_nft_kv(id, key);
     let v = val.map(bytes_from_json).unwrap_or_default();
     let mut g = slot().lock().unwrap();
     g.reads.entry(k).or_insert(v);
 }
+/// Record a write (post-value) of NFT metadata.
 pub fn record_write_nft_kv(id: &NftId, key: &Name, val: &iroha_primitives::json::Json) {
     let k = key_nft_kv(id, key);
     let v = bytes_from_json(val);
     let mut g = slot().lock().unwrap();
     g.writes.insert(k, v);
 }
+/// Record a delete (post empty) of NFT metadata, with read pre-value supplied.
 pub fn record_delete_nft_kv(id: &NftId, key: &Name, pre: &iroha_primitives::json::Json) {
     let k = key_nft_kv(id, key);
     let mut g = slot().lock().unwrap();
@@ -280,6 +286,7 @@ pub fn record_fastpq_transcript(transcript: &TransferTranscript) {
         .push(transcript.clone());
 }
 
+/// Record a read (pre-value) of asset-definition metadata.
 pub fn record_read_asset_def_kv(
     id: &AssetDefinitionId,
     key: &Name,
@@ -290,6 +297,7 @@ pub fn record_read_asset_def_kv(
     let mut g = slot().lock().unwrap();
     g.reads.entry(k).or_insert(v);
 }
+/// Record a write (post-value) of asset-definition metadata.
 pub fn record_write_asset_def_kv(
     id: &AssetDefinitionId,
     key: &Name,
@@ -300,6 +308,7 @@ pub fn record_write_asset_def_kv(
     let mut g = slot().lock().unwrap();
     g.writes.insert(k, v);
 }
+/// Record a delete (post empty) of asset-definition metadata, with read pre-value supplied.
 pub fn record_delete_asset_def_kv(
     id: &AssetDefinitionId,
     key: &Name,

@@ -4416,20 +4416,21 @@ async fn block_sync_update_skips_commit_roster_for_unaccepted_block() {
     let actor = &mut harness.actor;
 
     let state_height = actor.state.view().height() as u64;
-    let block_height = state_height.saturating_add(2).max(2);
-    let mut missing_parent =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x6b; Hash::LENGTH]));
-    if actor.block_known_locally(missing_parent) {
-        missing_parent =
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x6c; Hash::LENGTH]));
-    }
-    let block = nonempty_block_for_actor(
+    let block_height = state_height.saturating_add(1).max(1);
+    let valid_block = nonempty_block_for_actor(
         actor,
         &harness.key_pairs,
         block_height,
         0,
-        Some(missing_parent),
+        actor.state.view().latest_block_hash(),
     );
+    let header = valid_block.header();
+    let signature = valid_block
+        .signatures()
+        .next()
+        .cloned()
+        .expect("block signature exists");
+    let block = SignedBlock::presigned(signature, header, Vec::new());
     let block_hash = block.hash();
 
     let roster = actor.effective_commit_topology();
@@ -4486,7 +4487,7 @@ async fn block_sync_update_skips_commit_roster_for_unaccepted_block() {
 
     assert!(
         !actor.block_known_locally(block_hash),
-        "test requires block to remain unaccepted"
+        "tampered block should not be accepted"
     );
     assert!(
         actor
