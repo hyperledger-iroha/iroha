@@ -1240,7 +1240,8 @@ mod tests {
         super::apply_preexec_nexus_overrides(&mut state, &genesis_key_pair, None, Some(&bundle))
             .expect("preexec should apply proof policy overrides");
 
-        let nexus = state.view().nexus();
+        let view = state.view();
+        let nexus = view.nexus();
         let expected =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         assert_eq!(

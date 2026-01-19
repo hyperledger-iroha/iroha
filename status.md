@@ -1,6 +1,8 @@
 # Status
 
 ## Latest Updates
+- Sumeragi block sync: record commit-roster sidecars only after the block payload is accepted/known to prevent conflicting block-sync updates from overwriting roster metadata; added unit coverage. Tests: not run (not requested).
+- iroha_core test fix: import trigger set read-only trait and compare JSON metadata using `&str` conversions for code hash/trigger id in `contract_manifest_triggers`. Tests: not run (not requested).
 - Merge: resolve conflict markers in Kotodama access-hint handling/docs and client status fixtures; keep literal `transfer_domain` hints and wildcard fallback wording aligned. Tests: not run (not requested).
 - ZK tests: commit ZK scaffold blocks before new views, honor policy transition notice window, scope state views to avoid lock contention, and use generated accounts in proof-hash metadata; run `cargo test -p iroha_core --features "zk-tests halo2-dev-tests" zk -- --nocapture` (pass; warnings in norito/ivm/iroha_core/zk_testkit/zk_lane_warning).
 - Kotodama: derive access hints for literal `transfer_domain` calls (domain + destination account) and add manifest regression coverage; update gap analysis.
