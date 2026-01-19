@@ -2407,6 +2407,60 @@ mod tests {
     }
 
     #[test]
+    fn incoming_block_message_routes_fetch_pending_block_via_payload_queue() {
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>> = Arc::new(Mutex::new(
+            DedupCache::new(VOTE_DEDUP_CACHE_CAP, VOTE_DEDUP_CACHE_TTL),
+        ));
+        let block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>> =
+            Arc::new(Mutex::new(BlockPayloadDedupCache::new(
+                BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
+                BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
+            )));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        let requester = PeerId::new(KeyPair::random().public_key().clone());
+        let block_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
+        let request = message::FetchPendingBlock {
+            requester,
+            block_hash,
+        };
+        handle.incoming_block_message(BlockMessage::FetchPendingBlock(request));
+
+        let received = block_payload_rx
+            .try_recv()
+            .expect("FetchPendingBlock should be enqueued to block payload channel");
+        assert!(matches!(
+            received,
+            InboundBlockMessage {
+                message: BlockMessage::FetchPendingBlock(_),
+                ..
+            }
+        ));
+        assert!(matches!(
+            block_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    }
+
+    #[test]
     fn incoming_block_message_blocks_block_sync_update_when_block_payload_queue_full() {
         const CAP: usize = 1;
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(CAP);
@@ -5945,6 +5999,12 @@ impl SumeragiHandle {
                 InboundBlockMessage::new(BlockMessage::RbcChunk(chunk), sender),
                 "RbcChunk",
                 status::WorkerQueueKind::RbcChunks,
+            ),
+            BlockMessage::FetchPendingBlock(request) => enqueue_blocking(
+                &self.block_payload,
+                InboundBlockMessage::new(BlockMessage::FetchPendingBlock(request), sender),
+                "FetchPendingBlock",
+                status::WorkerQueueKind::BlockPayload,
             ),
             other => enqueue_blocking(
                 &self.block,
