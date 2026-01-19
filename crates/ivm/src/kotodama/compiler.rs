@@ -3684,6 +3684,48 @@ impl Compiler {
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
+                        Instr::VerifySignature {
+                            dest,
+                            message,
+                            signature,
+                            public_key,
+                            scheme,
+                        } => {
+                            let publish = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            let load_blob_into_x10 =
+                                |code: &mut Vec<u8>,
+                                 fixups: &mut Vec<LiteralFixup>,
+                                 temp: &ir::Temp|
+                                 -> Result<(), String> {
+                                    if let Some(bytes) = string_map.get(&(func_idx, *temp)) {
+                                        let key = DataKey(DataKind::Blob, bytes.clone());
+                                        emit_literal_stub(code, fixups, 10, key);
+                                    } else {
+                                        let rs = src_reg(temp, scratch1, code)?;
+                                        push_word(code, encode_addi(10, rs, 0)?);
+                                    }
+                                    code.extend_from_slice(&publish.to_le_bytes());
+                                    Ok(())
+                                };
+                            load_blob_into_x10(&mut code, &mut fixups, signature)?;
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            load_blob_into_x10(&mut code, &mut fixups, public_key)?;
+                            push_word(&mut code, encode_addi(12, 10, 0)?);
+                            let rs = src_reg(scheme, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(13, rs, 0)?);
+                            load_blob_into_x10(&mut code, &mut fixups, message)?;
+                            let call = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_VERIFY_SIGNATURE as u8,
+                            );
+                            code.extend_from_slice(&call.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
                         Instr::Sm4GcmSeal {
                             dest,
                             key,

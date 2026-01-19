@@ -5656,6 +5656,213 @@ pub async fn handle_get_contract_code(
     Ok(resp)
 }
 
+#[cfg(feature = "app_api")]
+#[derive(
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    Default,
+)]
+pub struct ContractStateQuery {
+    /// Exact state key path (Name).
+    pub path: Option<String>,
+    /// Comma-separated list of state key paths (Names).
+    pub paths: Option<String>,
+    /// Prefix for state key paths (Name).
+    pub prefix: Option<String>,
+    /// Include base64-encoded values (default true).
+    pub include_value: Option<bool>,
+    /// Prefix query offset (default 0).
+    pub offset: Option<u64>,
+    /// Prefix query limit (default 1000, max 10_000).
+    pub limit: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+pub struct ContractStateEntry {
+    pub path: String,
+    pub found: bool,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub value_b64: Option<String>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub value_len: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+pub struct ContractStateResponse {
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub paths: Option<Vec<String>>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
+    pub entries: Vec<ContractStateEntry>,
+    pub offset: u64,
+    pub limit: u64,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub next_offset: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[iroha_futures::telemetry_future]
+pub async fn handle_get_contract_state(
+    state: Arc<CoreState>,
+    NoritoQuery(q): NoritoQuery<ContractStateQuery>,
+) -> Result<JsonBody<ContractStateResponse>> {
+    fn conversion_error(message: String) -> Error {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+        ))
+    }
+
+    fn parse_name(value: &str, label: &str) -> Result<Name> {
+        Name::from_str(value).map_err(|err| {
+            conversion_error(format!("invalid {label} name `{value}`: {err}"))
+        })
+    }
+
+    let mut mode_count = 0u8;
+    if q.path.is_some() {
+        mode_count += 1;
+    }
+    if q.paths.is_some() {
+        mode_count += 1;
+    }
+    if q.prefix.is_some() {
+        mode_count += 1;
+    }
+    if mode_count != 1 {
+        return Err(conversion_error(
+            "exactly one of path, paths, or prefix is required".to_string(),
+        ));
+    }
+
+    let include_value = q.include_value.unwrap_or(true);
+    let default_limit = 1000u64;
+    let max_limit = 10_000u64;
+
+    let view = state.view();
+    let storage = view.world().smart_contract_state();
+
+    let mut encode_entry = |path: &str, value: Option<&Vec<u8>>, found: bool| {
+        if !include_value {
+            return ContractStateEntry {
+                path: path.to_string(),
+                found,
+                value_b64: None,
+                value_len: None,
+            };
+        }
+        let (value_b64, value_len) = if let Some(bytes) = value {
+            (
+                Some(base64::engine::general_purpose::STANDARD.encode(bytes.as_slice())),
+                Some(bytes.len() as u64),
+            )
+        } else {
+            (None, None)
+        };
+        ContractStateEntry {
+            path: path.to_string(),
+            found,
+            value_b64,
+            value_len,
+        }
+    };
+
+    if let Some(path_raw) = q.path {
+        let name = parse_name(&path_raw, "path")?;
+        let path = name.as_ref();
+        let stored = storage.get(path).ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound,
+            ))
+        })?;
+        let entry = encode_entry(path, Some(stored), true);
+        return Ok(JsonBody(ContractStateResponse {
+            path: Some(path.to_string()),
+            paths: None,
+            prefix: None,
+            entries: vec![entry],
+            offset: 0,
+            limit: 1,
+            next_offset: None,
+        }));
+    }
+
+    if let Some(paths_raw) = q.paths {
+        let mut parsed = Vec::new();
+        for raw in paths_raw.split(',') {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let name = parse_name(trimmed, "paths")?;
+            parsed.push(name);
+        }
+        if parsed.is_empty() {
+            return Err(conversion_error("paths is empty".to_string()));
+        }
+        let mut entries = Vec::with_capacity(parsed.len());
+        let mut paths = Vec::with_capacity(parsed.len());
+        for name in parsed {
+            let path = name.as_ref();
+            let stored = storage.get(path);
+            let found = stored.is_some();
+            entries.push(encode_entry(path, stored, found));
+            paths.push(path.to_string());
+        }
+        return Ok(JsonBody(ContractStateResponse {
+            path: None,
+            paths: Some(paths),
+            prefix: None,
+            entries,
+            offset: 0,
+            limit: entries.len() as u64,
+            next_offset: None,
+        }));
+    }
+
+    let prefix_raw = q.prefix.unwrap_or_default();
+    let prefix = parse_name(&prefix_raw, "prefix")?;
+    let prefix_str = prefix.as_ref();
+    let offset = q.offset.unwrap_or(0);
+    let limit = q.limit.unwrap_or(default_limit).min(max_limit);
+    let mut entries = Vec::new();
+    let mut skipped = 0u64;
+    let mut has_more = false;
+    for (key, value) in storage.range(prefix_str..) {
+        let key_str = key.as_ref();
+        if !key_str.starts_with(prefix_str) {
+            break;
+        }
+        if skipped < offset {
+            skipped += 1;
+            continue;
+        }
+        if entries.len() >= limit as usize {
+            has_more = true;
+            break;
+        }
+        entries.push(encode_entry(key_str, Some(value), true));
+    }
+    let next_offset = if has_more {
+        Some(offset + entries.len() as u64)
+    } else {
+        None
+    };
+    Ok(JsonBody(ContractStateResponse {
+        path: None,
+        paths: None,
+        prefix: Some(prefix_str.to_string()),
+        entries,
+        offset,
+        limit,
+        next_offset,
+    }))
+}
+
 /// Fetch on-chain contract code bytes (base64) by code_hash.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]

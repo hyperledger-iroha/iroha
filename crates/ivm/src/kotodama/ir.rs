@@ -175,6 +175,14 @@ pub enum Instr {
         public_key: Temp,
         distid: Option<Temp>,
     },
+    /// Verify a signature (message, signature, public key, scheme code) returning a bool.
+    VerifySignature {
+        dest: Temp,
+        message: Temp,
+        signature: Temp,
+        public_key: Temp,
+        scheme: Temp,
+    },
     /// SM4-GCM seal: key, nonce, aad, plaintext -> ciphertext||tag blob.
     Sm4GcmSeal {
         dest: Temp,
@@ -1969,6 +1977,21 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                         signature: sig,
                         public_key: pk,
                         distid,
+                    });
+                    t
+                }
+                "verify_signature" => {
+                    let msg = lower_expr(ctx, &args[0], vars);
+                    let sig = lower_expr(ctx, &args[1], vars);
+                    let pk = lower_expr(ctx, &args[2], vars);
+                    let scheme = lower_expr(ctx, &args[3], vars);
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::VerifySignature {
+                        dest: t,
+                        message: msg,
+                        signature: sig,
+                        public_key: pk,
+                        scheme,
                     });
                     t
                 }
