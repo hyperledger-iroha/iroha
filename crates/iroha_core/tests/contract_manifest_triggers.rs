@@ -4,6 +4,7 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
+    smartcontracts::triggers::set::SetReadOnly,
     state::{State, World, WorldReadOnly},
 };
 use iroha_crypto::KeyPair;
@@ -150,14 +151,10 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
     assert_eq!(metadata.get(&key_namespace), Some(&Json::from("apps")));
     assert_eq!(metadata.get(&key_contract), Some(&Json::from("demo.contract")));
     assert_eq!(metadata.get(&key_entrypoint), Some(&Json::from("run")));
-    assert_eq!(
-        metadata.get(&key_code),
-        Some(&Json::from(code_hash.to_string()))
-    );
-    assert_eq!(
-        metadata.get(&key_trigger),
-        Some(&Json::from(trigger_id.to_string()))
-    );
+    let code_hash_json = Json::from(code_hash.to_string().as_str());
+    assert_eq!(metadata.get(&key_code), Some(&code_hash_json));
+    let trigger_id_json = Json::from(trigger_id.to_string().as_str());
+    assert_eq!(metadata.get(&key_trigger), Some(&trigger_id_json));
     let tag_key: Name = "tag".parse().expect("tag key");
     assert_eq!(metadata.get(&tag_key), Some(&Json::from("alpha")));
 

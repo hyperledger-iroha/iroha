@@ -4403,6 +4403,110 @@ async fn block_sync_update_known_block_records_commit_qc() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn block_sync_update_skips_commit_roster_for_unaccepted_block() {
+    use crate::sumeragi::status;
+
+    let _guard = status::commit_history_test_guard();
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let state_height = actor.state.view().height() as u64;
+    let block_height = state_height.saturating_add(2).max(2);
+    let mut missing_parent =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x6b; Hash::LENGTH]));
+    if actor.block_known_locally(missing_parent) {
+        missing_parent =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x6c; Hash::LENGTH]));
+    }
+    let block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        block_height,
+        0,
+        Some(missing_parent),
+    );
+    let block_hash = block.hash();
+
+    let roster = actor.effective_commit_topology();
+    assert!(!roster.is_empty(), "test requires commit roster");
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let required = topology.min_votes_for_commit().max(1);
+    let mut signers = BTreeSet::new();
+    for idx in 0..required {
+        signers.insert(ValidatorIndex::try_from(idx).expect("signer index fits"));
+    }
+    let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        block_height,
+        0,
+        actor.epoch_for_height(block_height),
+        signers_bitmap.clone(),
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let checkpoint = ValidatorSetCheckpoint::new(
+        block_height,
+        0,
+        block_hash,
+        qc.parent_state_root,
+        qc.post_state_root,
+        roster,
+        signers_bitmap,
+        qc.aggregate.bls_aggregate_signature.clone(),
+        VALIDATOR_SET_HASH_VERSION_V1,
+        None,
+    );
+    let roster_cache =
+        roster_cache_for_state(actor.state.as_ref(), actor.config.epoch_length_blocks);
+    let mut update = super::block_sync_update_with_roster(
+        &block,
+        actor.state.as_ref(),
+        actor.kura.as_ref(),
+        ConsensusMode::Permissioned,
+        actor.common_config.trusted_peers.value(),
+        actor.common_config.peer.id(),
+        &roster_cache,
+    );
+    update.commit_qc = Some(qc);
+    update.validator_checkpoint = Some(checkpoint);
+    update.stake_snapshot = None;
+    update.commit_votes.clear();
+
+    actor
+        .handle_block_sync_update(update, None)
+        .expect("block sync update");
+
+    assert!(
+        !actor.block_known_locally(block_hash),
+        "test requires block to remain unaccepted"
+    );
+    assert!(
+        actor
+            .state
+            .commit_roster_snapshot_for_block(block_height, block_hash)
+            .is_none(),
+        "commit roster should not be recorded for unaccepted block"
+    );
+    let view = actor.state.view();
+    assert!(
+        view.world().commit_qcs().get(&block_hash).is_none(),
+        "commit certificate should not be recorded for unaccepted block"
+    );
+
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn block_sync_update_known_block_prunes_commit_votes_without_roster_hint() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;

@@ -370,7 +370,8 @@ impl Actor {
         if let Some(checkpoint) = selection.checkpoint.clone() {
             super::status::record_validator_checkpoint(checkpoint);
         }
-        if let Some(cert) = selection.commit_qc.as_ref() {
+        // Persist commit rosters only once the block is known locally.
+        let commit_roster_record = selection.commit_qc.as_ref().map(|cert| {
             let checkpoint = selection.checkpoint.clone().unwrap_or_else(|| {
                 ValidatorSetCheckpoint::new(
                     cert.height,
@@ -385,10 +386,13 @@ impl Actor {
                     None,
                 )
             });
-            self.state
-                .record_commit_roster(cert, &checkpoint, selection.stake_snapshot.clone());
-        }
+            (cert.clone(), checkpoint, selection.stake_snapshot.clone())
+        });
         if block_known {
+            if let Some((cert, checkpoint, stake_snapshot)) = commit_roster_record.as_ref() {
+                self.state
+                    .record_commit_roster(cert, checkpoint, stake_snapshot.clone());
+            }
             info!(
                 hash = ?block_hash,
                 height = block_height,
@@ -850,6 +854,12 @@ impl Actor {
         let block_known_after_creation = self.block_known_locally(block_hash);
         let creation_ok = creation_result.is_ok();
         let ready_for_qc = block_sync_ready_for_qc(block_known_after_creation, &creation_result);
+        if block_known_after_creation {
+            if let Some((cert, checkpoint, stake_snapshot)) = commit_roster_record.as_ref() {
+                self.state
+                    .record_commit_roster(cert, checkpoint, stake_snapshot.clone());
+            }
+        }
         if !ready_for_qc {
             if let Err(err) = &creation_result {
                 warn!(
