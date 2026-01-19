@@ -3631,6 +3631,8 @@ pub struct Sumeragi {
     pub rbc_pending_max_chunks: usize,
     /// Maximum pending RBC bytes per session before INIT.
     pub rbc_pending_max_bytes: usize,
+    /// Maximum pending RBC sessions stashed before INIT.
+    pub rbc_pending_session_limit: usize,
     /// TTL for pending RBC messages awaiting INIT.
     pub rbc_pending_ttl: Duration,
     /// RBC session TTL for pruning inactive sessions.
@@ -3770,6 +3772,8 @@ pub struct SumeragiNposReconfig {
     pub evidence_horizon_blocks: u64,
     /// Activation lag in blocks before a newly scheduled validator set takes effect.
     pub activation_lag_blocks: u64,
+    /// Slashing delay in blocks before evidence penalties apply.
+    pub slashing_delay_blocks: u64,
 }
 
 impl Default for SumeragiNpos {
@@ -3836,6 +3840,7 @@ impl Default for SumeragiNposReconfig {
         Self {
             evidence_horizon_blocks: defaults::sumeragi::npos::RECONFIG_EVIDENCE_HORIZON_BLOCKS,
             activation_lag_blocks: defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_BLOCKS,
+            slashing_delay_blocks: defaults::sumeragi::npos::SLASHING_DELAY_BLOCKS,
         }
     }
 }

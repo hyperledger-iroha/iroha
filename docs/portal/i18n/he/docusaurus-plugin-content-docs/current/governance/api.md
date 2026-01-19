@@ -284,7 +284,7 @@ Unlock sweep (מפעיל/ביקורת)
 
 ### זרימת Slashing ו-Jailing
 
-הקונצנזוס מפיק `Evidence` בקידוד Norito כאשר מאמת מפר את הפרוטוקול. כל payload נכנס ל-`EvidenceStore` בזיכרון ואם טרם נראה הוא מתממש למפת `consensus_evidence` הנתמכת ב-WSV. רשומות ישנות מ-`sumeragi.npos.reconfig.evidence_horizon_blocks` (ברירת מחדל `7200` בלוקים) נדחות כדי להשאיר את הארכיון מוגבל, אך הדחיה נרשמת עבור המפעילים.
+הקונצנזוס מפיק `Evidence` בקידוד Norito כאשר מאמת מפר את הפרוטוקול. כל payload נכנס ל-`EvidenceStore` בזיכרון ואם טרם נראה הוא מתממש למפת `consensus_evidence` הנתמכת ב-WSV. רשומות ישנות מ-`sumeragi.npos.reconfig.evidence_horizon_blocks` (ברירת מחדל `7200` בלוקים) נדחות כדי להשאיר את הארכיון מוגבל, אך הדחיה נרשמת עבור המפעילים. Evidence within the horizon also respects `sumeragi.npos.reconfig.activation_lag_blocks` (default `1`) and the slashing delay `sumeragi.npos.reconfig.slashing_delay_blocks` (default `259200`); governance can cancel penalties with `CancelConsensusEvidencePenalty` before slashing applies; the record is marked `penalty_cancelled` and `penalty_cancelled_at_height`.
 
 עבירות מוכרות ממופות אחד-לאחד ל-`EvidenceKind`; המבדילים יציבים ומאולצים על ידי מודל הנתונים:
 
@@ -327,6 +327,7 @@ for (expected, kind) in offences.iter().enumerate() {
 
 - `SumeragiParameter::NextMode` ו-`SumeragiParameter::ModeActivationHeight` חייבים להתחייב באותו **בלוק**. `mode_activation_height` חייב להיות גדול באופן מוחלט מגובה הבלוק שנשא את העדכון, וכך מספק לפחות בלוק lag אחד.
 - `sumeragi.npos.reconfig.activation_lag_blocks` (ברירת מחדל `1`) הוא guard קונפיגורציה שמונע hand-offs ללא lag:
+- `sumeragi.npos.reconfig.slashing_delay_blocks` (default `259200`) delays consensus slashing so governance can cancel penalties before they apply.
 
 ```rust
 use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_BLOCKS;

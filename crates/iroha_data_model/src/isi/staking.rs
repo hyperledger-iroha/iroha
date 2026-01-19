@@ -7,6 +7,7 @@ use super::*;
 use crate::{
     account::AccountId,
     asset::AssetId,
+    block::consensus::Evidence,
     metadata::Metadata,
     nexus::{LaneId, PublicLaneRewardShare},
 };
@@ -192,6 +193,14 @@ isi! {
 }
 
 isi! {
+    /// Cancel a pending consensus evidence penalty before slashing executes.
+    pub struct CancelConsensusEvidencePenalty {
+        /// Evidence entry to cancel.
+        pub evidence: Evidence,
+    }
+}
+
+isi! {
     /// Record a reward distribution for a public lane epoch.
     pub struct RecordPublicLaneRewards {
         /// Lane identifier.
@@ -228,6 +237,7 @@ impl crate::seal::Instruction for BondPublicLaneStake {}
 impl crate::seal::Instruction for SchedulePublicLaneUnbond {}
 impl crate::seal::Instruction for FinalizePublicLaneUnbond {}
 impl crate::seal::Instruction for SlashPublicLaneValidator {}
+impl crate::seal::Instruction for CancelConsensusEvidencePenalty {}
 impl crate::seal::Instruction for RecordPublicLaneRewards {}
 impl crate::seal::Instruction for ClaimPublicLaneRewards {}
 

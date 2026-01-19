@@ -6,6 +6,8 @@
 
 use std::collections::{BTreeSet, HashMap};
 
+use iroha_primitives::numeric::Numeric;
+
 use super::{
     ast::{BinaryOp, UnaryOp},
     semantic::{
@@ -105,6 +107,30 @@ pub enum Instr {
         dest: Temp,
         op: UnaryOp,
         operand: Temp,
+    },
+    /// Convert an int (i64) to a Numeric NoritoBytes payload pointer (scale = 0).
+    NumericFromInt {
+        dest: Temp,
+        value: Temp,
+    },
+    /// Convert a Numeric NoritoBytes payload pointer (scale = 0) to an int (i64).
+    NumericToInt {
+        dest: Temp,
+        value: Temp,
+    },
+    /// Numeric arithmetic using NoritoBytes payloads.
+    NumericBinary {
+        dest: Temp,
+        op: BinaryOp,
+        left: Temp,
+        right: Temp,
+    },
+    /// Numeric comparison using NoritoBytes payloads (result is 0/1).
+    NumericCompare {
+        dest: Temp,
+        op: BinaryOp,
+        left: Temp,
+        right: Temp,
     },
     Min {
         dest: Temp,
@@ -638,6 +664,7 @@ pub enum DataRefKind {
 enum KeyCodec {
     Int,
     Pointer,
+    NoritoBytes,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -645,6 +672,7 @@ enum ValueCodec {
     Int,
     Pointer(DataRefKind),
     Json,
+    NoritoBytes,
 }
 
 fn pointer_kind_for_type(ty: &Type) -> Option<DataRefKind> {
@@ -672,7 +700,16 @@ fn is_pointer_eq_type(ty: &Type) -> bool {
 }
 
 fn lower_map_key_eq(ctx: &mut LowerCtx, key_ty: &Type, left: Temp, right: Temp) -> Temp {
-    if is_pointer_eq_type(key_ty) {
+    if semantic::is_wide_numeric_type(key_ty) {
+        let t = ctx.new_temp();
+        ctx.current_instr(Instr::NumericCompare {
+            dest: t,
+            op: BinaryOp::Eq,
+            left,
+            right,
+        });
+        t
+    } else if is_pointer_eq_type(key_ty) {
         let t = ctx.new_temp();
         ctx.current_instr(Instr::PointerEq {
             dest: t,
@@ -694,7 +731,8 @@ fn lower_map_key_eq(ctx: &mut LowerCtx, key_ty: &Type, left: Temp, right: Temp) 
 
 fn key_codec_for_type(ty: &Type) -> Option<KeyCodec> {
     match semantic::resolve_struct_type(ty) {
-        ty if semantic::is_numeric_type(&ty) => Some(KeyCodec::Int),
+        Type::Int => Some(KeyCodec::Int),
+        ty if semantic::is_wide_numeric_type(&ty) => Some(KeyCodec::NoritoBytes),
         Type::String => Some(KeyCodec::Pointer),
         other if semantic::is_pointer_type(&other) => Some(KeyCodec::Pointer),
         _ => None,
@@ -703,7 +741,8 @@ fn key_codec_for_type(ty: &Type) -> Option<KeyCodec> {
 
 fn value_codec_for_type(ty: &Type) -> Option<ValueCodec> {
     match semantic::resolve_struct_type(ty) {
-        ty if semantic::is_numeric_type(&ty) => Some(ValueCodec::Int),
+        Type::Int => Some(ValueCodec::Int),
+        ty if semantic::is_wide_numeric_type(&ty) => Some(ValueCodec::NoritoBytes),
         Type::Bool => Some(ValueCodec::Int),
         Type::Json => Some(ValueCodec::Json),
         other if semantic::is_pointer_type(&other) => {
@@ -1446,6 +1485,36 @@ fn lower_state_foreach_int_map(
     ctx.start_block(exit_label);
 }
 
+fn lower_expr_as_int(
+    ctx: &mut LowerCtx,
+    expr: &TypedExpr,
+    vars: &mut HashMap<String, Temp>,
+) -> Temp {
+    let value = lower_expr(ctx, expr, vars);
+    if semantic::is_wide_numeric_type(&expr.ty) {
+        let out = ctx.new_temp();
+        ctx.current_instr(Instr::NumericToInt { dest: out, value });
+        out
+    } else {
+        value
+    }
+}
+
+fn lower_expr_as_numeric(
+    ctx: &mut LowerCtx,
+    expr: &TypedExpr,
+    vars: &mut HashMap<String, Temp>,
+) -> Temp {
+    let value = lower_expr(ctx, expr, vars);
+    if semantic::is_wide_numeric_type(&expr.ty) {
+        value
+    } else {
+        let out = ctx.new_temp();
+        ctx.current_instr(Instr::NumericFromInt { dest: out, value });
+        out
+    }
+}
+
 fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, Temp>) -> Temp {
     match &expr.expr {
         semantic::ExprKind::Tuple(elems) => {
@@ -1460,6 +1529,24 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
         semantic::ExprKind::Number(n) => {
             let t = ctx.new_temp();
             ctx.current_instr(Instr::Const { dest: t, value: *n });
+            t
+        }
+        semantic::ExprKind::Decimal(raw) => {
+            let t = ctx.new_temp();
+            match raw.parse::<Numeric>() {
+                Ok(numeric) => {
+                    let hex = hex::encode(numeric.encode());
+                    ctx.current_instr(Instr::DataRef {
+                        dest: t,
+                        kind: DataRefKind::NoritoBytes,
+                        value: format!("0x{hex}"),
+                    });
+                }
+                Err(err) => {
+                    ctx.record_error(format!("invalid numeric literal `{raw}`: {err}"));
+                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
+                }
+            }
             t
         }
         semantic::ExprKind::Bool(b) => {
@@ -1508,17 +1595,89 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
         }
         semantic::ExprKind::Unary { op, expr: inner } => {
             let v = lower_expr(ctx, inner, vars);
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Unary {
-                dest: t,
-                op: *op,
-                operand: v,
-            });
-            t
+            if matches!(op, UnaryOp::Neg) && semantic::is_wide_numeric_type(&inner.ty) {
+                let zero_int = ctx.new_temp();
+                ctx.current_instr(Instr::Const {
+                    dest: zero_int,
+                    value: 0,
+                });
+                let zero_numeric = ctx.new_temp();
+                ctx.current_instr(Instr::NumericFromInt {
+                    dest: zero_numeric,
+                    value: zero_int,
+                });
+                let t = ctx.new_temp();
+                ctx.current_instr(Instr::NumericBinary {
+                    dest: t,
+                    op: BinaryOp::Sub,
+                    left: zero_numeric,
+                    right: v,
+                });
+                t
+            } else {
+                let t = ctx.new_temp();
+                ctx.current_instr(Instr::Unary {
+                    dest: t,
+                    op: *op,
+                    operand: v,
+                });
+                t
+            }
+        }
+        semantic::ExprKind::NumericCast { expr: inner } => {
+            let v = lower_expr(ctx, inner, vars);
+            let src_ty = semantic::resolve_struct_type(&inner.ty);
+            let dst_ty = semantic::resolve_struct_type(&expr.ty);
+            if semantic::is_wide_numeric_type(&dst_ty) && matches!(src_ty, Type::Int) {
+                let t = ctx.new_temp();
+                ctx.current_instr(Instr::NumericFromInt { dest: t, value: v });
+                return t;
+            }
+            if matches!(dst_ty, Type::Int) && semantic::is_wide_numeric_type(&src_ty) {
+                let t = ctx.new_temp();
+                ctx.current_instr(Instr::NumericToInt { dest: t, value: v });
+                return t;
+            }
+            v
         }
         semantic::ExprKind::Binary { op, left, right } => {
             let l = lower_expr(ctx, left, vars);
             let r = lower_expr(ctx, right, vars);
+            let lhs_wide = semantic::is_wide_numeric_type(&left.ty);
+            let rhs_wide = semantic::is_wide_numeric_type(&right.ty);
+            if matches!(
+                op,
+                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod
+            ) && (lhs_wide || rhs_wide)
+            {
+                let t = ctx.new_temp();
+                ctx.current_instr(Instr::NumericBinary {
+                    dest: t,
+                    op: *op,
+                    left: l,
+                    right: r,
+                });
+                return t;
+            }
+            if matches!(
+                op,
+                BinaryOp::Eq
+                    | BinaryOp::Ne
+                    | BinaryOp::Lt
+                    | BinaryOp::Le
+                    | BinaryOp::Gt
+                    | BinaryOp::Ge
+            ) && (lhs_wide || rhs_wide)
+            {
+                let t = ctx.new_temp();
+                ctx.current_instr(Instr::NumericCompare {
+                    dest: t,
+                    op: *op,
+                    left: l,
+                    right: r,
+                });
+                return t;
+            }
             if matches!(op, BinaryOp::Eq | BinaryOp::Ne)
                 && is_pointer_eq_type(&left.ty)
                 && is_pointer_eq_type(&right.ty)
@@ -1665,7 +1824,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 }
                 "path_map_key" => {
                     let base = lower_expr(ctx, &args[0], vars);
-                    let key = lower_expr(ctx, &args[1], vars);
+                    let key = lower_expr_as_int(ctx, &args[1], vars);
                     let d = ctx.new_temp();
                     ctx.current_instr(Instr::PathMapKey { dest: d, base, key });
                     d
@@ -1806,7 +1965,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 }
                 "info" => {
                     let msg = if semantic::is_numeric_type(&args[0].ty) {
-                        let value = lower_expr(ctx, &args[0], vars);
+                        let value = lower_expr_as_int(ctx, &args[0], vars);
                         let encoded = ctx.new_temp();
                         ctx.current_instr(Instr::EncodeInt {
                             dest: encoded,
@@ -1828,7 +1987,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     t
                 }
                 "set_execution_depth" => {
-                    let v = lower_expr(ctx, &args[0], vars);
+                    let v = lower_expr_as_int(ctx, &args[0], vars);
                     ctx.current_instr(Instr::SetExecutionDepth { value: v });
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::Const { dest: t, value: 0 });
@@ -1854,34 +2013,34 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     t
                 }
                 "isqrt" => {
-                    let v = lower_expr(ctx, &args[0], vars);
+                    let v = lower_expr_as_int(ctx, &args[0], vars);
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::Isqrt { dest: t, src: v });
                     t
                 }
                 "abs" => {
-                    let v = lower_expr(ctx, &args[0], vars);
+                    let v = lower_expr_as_int(ctx, &args[0], vars);
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::Abs { dest: t, src: v });
                     t
                 }
                 "min" => {
-                    let a = lower_expr(ctx, &args[0], vars);
-                    let b = lower_expr(ctx, &args[1], vars);
+                    let a = lower_expr_as_int(ctx, &args[0], vars);
+                    let b = lower_expr_as_int(ctx, &args[1], vars);
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::Min { dest: t, a, b });
                     t
                 }
                 "max" => {
-                    let a = lower_expr(ctx, &args[0], vars);
-                    let b = lower_expr(ctx, &args[1], vars);
+                    let a = lower_expr_as_int(ctx, &args[0], vars);
+                    let b = lower_expr_as_int(ctx, &args[1], vars);
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::Max { dest: t, a, b });
                     t
                 }
                 "div_ceil" => {
-                    let num = lower_expr(ctx, &args[0], vars);
-                    let denom = lower_expr(ctx, &args[1], vars);
+                    let num = lower_expr_as_int(ctx, &args[0], vars);
+                    let denom = lower_expr_as_int(ctx, &args[1], vars);
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::DivCeil {
                         dest: t,
@@ -1891,22 +2050,22 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     t
                 }
                 "gcd" => {
-                    let a = lower_expr(ctx, &args[0], vars);
-                    let b = lower_expr(ctx, &args[1], vars);
+                    let a = lower_expr_as_int(ctx, &args[0], vars);
+                    let b = lower_expr_as_int(ctx, &args[1], vars);
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::Gcd { dest: t, a, b });
                     t
                 }
                 "mean" => {
-                    let a = lower_expr(ctx, &args[0], vars);
-                    let b = lower_expr(ctx, &args[1], vars);
+                    let a = lower_expr_as_int(ctx, &args[0], vars);
+                    let b = lower_expr_as_int(ctx, &args[1], vars);
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::Mean { dest: t, a, b });
                     t
                 }
                 "poseidon2" => {
-                    let a = lower_expr(ctx, &args[0], vars);
-                    let b = lower_expr(ctx, &args[1], vars);
+                    let a = lower_expr_as_int(ctx, &args[0], vars);
+                    let b = lower_expr_as_int(ctx, &args[1], vars);
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::Poseidon2 { dest: t, a, b });
                     t
@@ -1946,7 +2105,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 "poseidon6" => {
                     let mut arr = [Temp(0); 6];
                     for (i, arg) in args.iter().enumerate() {
-                        arr[i] = lower_expr(ctx, arg, vars);
+                        arr[i] = lower_expr_as_int(ctx, arg, vars);
                     }
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::Poseidon6 { dest: t, args: arr });
@@ -2393,8 +2552,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     // Fixed-cap guarded iterator helper: return map key/value at (start + (which & 1))
                     // Only ephemeral maps are supported here.
                     let base = lower_expr(ctx, &args[0], vars);
-                    let start_t = lower_expr(ctx, &args[1], vars);
-                    let which_t = lower_expr(ctx, &args[2], vars);
+                    let start_t = lower_expr_as_int(ctx, &args[1], vars);
+                    let which_t = lower_expr_as_int(ctx, &args[2], vars);
                     // mask = which & 1
                     let one = ctx.new_temp();
                     ctx.current_instr(Instr::Const {
@@ -2455,8 +2614,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 "keys_values_take2" => {
                     // Build pair (k,v) at start + (which & 1) and return as tuple
                     let base = lower_expr(ctx, &args[0], vars);
-                    let start_t = lower_expr(ctx, &args[1], vars);
-                    let which_t = lower_expr(ctx, &args[2], vars);
+                    let start_t = lower_expr_as_int(ctx, &args[1], vars);
+                    let which_t = lower_expr_as_int(ctx, &args[2], vars);
                     // mask which to 0/1
                     let one = ctx.new_temp();
                     ctx.current_instr(Instr::Const {
@@ -2621,7 +2780,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 "build_unshield_inline" => {
                     let asset = lower_expr(ctx, &args[0], vars);
                     let to = lower_expr(ctx, &args[1], vars);
-                    let amount = lower_expr(ctx, &args[2], vars);
+                    let amount = lower_expr_as_int(ctx, &args[2], vars);
                     let inputs = lower_expr(ctx, &args[3], vars);
                     let backend = lower_expr(ctx, &args[4], vars);
                     let proof = lower_expr(ctx, &args[5], vars);
@@ -2640,8 +2799,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     dest
                 }
                 "valcom" => {
-                    let v = lower_expr(ctx, &args[0], vars);
-                    let bl = lower_expr(ctx, &args[1], vars);
+                    let v = lower_expr_as_int(ctx, &args[0], vars);
+                    let bl = lower_expr_as_int(ctx, &args[1], vars);
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::Valcom {
                         dest: t,
@@ -2651,7 +2810,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     t
                 }
                 "pubkgen" => {
-                    let s = lower_expr(ctx, &args[0], vars);
+                    let s = lower_expr_as_int(ctx, &args[0], vars);
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::Pubkgen { dest: t, src: s });
                     t
@@ -2722,7 +2881,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 "mint_asset" => {
                     let acc = lower_expr(ctx, &args[0], vars);
                     let asset = lower_expr(ctx, &args[1], vars);
-                    let amt = lower_expr(ctx, &args[2], vars);
+                    let amt = match &args[2].expr {
+                        semantic::ExprKind::Number(0)
+                            if !semantic::is_wide_numeric_type(&args[2].ty) =>
+                        {
+                            let t = ctx.new_temp();
+                            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+                            t
+                        }
+                        _ => lower_expr_as_numeric(ctx, &args[2], vars),
+                    };
                     ctx.current_instr(Instr::MintAsset {
                         account: acc,
                         asset,
@@ -2735,7 +2903,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 "burn_asset" => {
                     let acc = lower_expr(ctx, &args[0], vars);
                     let asset = lower_expr(ctx, &args[1], vars);
-                    let amt = lower_expr(ctx, &args[2], vars);
+                    let amt = lower_expr_as_numeric(ctx, &args[2], vars);
                     ctx.current_instr(Instr::BurnAsset {
                         account: acc,
                         asset,
@@ -2749,7 +2917,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     let from = lower_expr(ctx, &args[0], vars);
                     let to = lower_expr(ctx, &args[1], vars);
                     let asset = lower_expr(ctx, &args[2], vars);
-                    let amt = lower_expr(ctx, &args[3], vars);
+                    let amt = lower_expr_as_numeric(ctx, &args[3], vars);
                     ctx.current_instr(Instr::TransferAsset {
                         from,
                         to,
@@ -2782,12 +2950,33 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                             tuple,
                             index: 2,
                         });
-                        let amount = ctx.new_temp();
+                        let amount_raw = ctx.new_temp();
                         ctx.current_instr(Instr::TupleGet {
-                            dest: amount,
+                            dest: amount_raw,
                             tuple,
                             index: 3,
                         });
+                        let amount =
+                            if let Type::Tuple(items) = semantic::resolve_struct_type(&entry.ty) {
+                                let entry_ty = items.get(3);
+                                if entry_ty.is_some_and(semantic::is_wide_numeric_type) {
+                                    amount_raw
+                                } else {
+                                    let out = ctx.new_temp();
+                                    ctx.current_instr(Instr::NumericFromInt {
+                                        dest: out,
+                                        value: amount_raw,
+                                    });
+                                    out
+                                }
+                            } else {
+                                let out = ctx.new_temp();
+                                ctx.current_instr(Instr::NumericFromInt {
+                                    dest: out,
+                                    value: amount_raw,
+                                });
+                                out
+                            };
                         ctx.current_instr(Instr::TransferAsset {
                             from,
                             to,
@@ -2958,7 +3147,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 "register_asset" => {
                     let name = lower_expr(ctx, &args[0], vars);
                     let symbol = lower_expr(ctx, &args[1], vars);
-                    let qty = lower_expr(ctx, &args[2], vars);
+                    let qty = lower_expr_as_numeric(ctx, &args[2], vars);
                     let mint = lower_expr(ctx, &args[3], vars);
                     ctx.current_instr(Instr::RegisterAsset {
                         name,
@@ -2973,7 +3162,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 "create_new_asset" => {
                     let name = lower_expr(ctx, &args[0], vars);
                     let symbol = lower_expr(ctx, &args[1], vars);
-                    let qty = lower_expr(ctx, &args[2], vars);
+                    let qty = lower_expr_as_numeric(ctx, &args[2], vars);
                     let account = lower_expr(ctx, &args[3], vars);
                     let mint = lower_expr(ctx, &args[4], vars);
                     ctx.current_instr(Instr::CreateNewAsset {
@@ -3062,7 +3251,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             }
             // Fallback to ephemeral map get
             let m = lower_expr(ctx, target, vars);
-            if is_pointer_eq_type(&index.ty) {
+            if is_pointer_eq_type(&index.ty) || semantic::is_wide_numeric_type(&index.ty) {
                 let sk = ctx.new_temp();
                 let sv = ctx.new_temp();
                 ctx.current_instr(Instr::MapLoadPair {
@@ -3182,12 +3371,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
 fn lower_state_field(ctx: &mut LowerCtx, literal: &str, ty: &Type) -> Option<Temp> {
     let resolved = semantic::resolve_struct_type(ty);
     match resolved {
-        ty if semantic::is_numeric_type(&ty) => {
+        Type::Int => {
             let blob = state_get_blob(ctx, literal);
             let dest = ctx.new_temp();
             ctx.current_instr(Instr::DecodeInt { dest, blob });
             Some(dest)
         }
+        ty if semantic::is_wide_numeric_type(&ty) => Some(state_get_blob(ctx, literal)),
         Type::Bool => {
             let blob = state_get_blob(ctx, literal);
             let decoded = ctx.new_temp();
@@ -3407,6 +3597,15 @@ fn build_state_path(ctx: &mut LowerCtx, name: &str, key: Temp, key_codec: &KeyCo
             });
             t_path
         }
+        KeyCodec::NoritoBytes => {
+            let t_path = ctx.new_temp();
+            ctx.current_instr(Instr::PathMapKeyNorito {
+                dest: t_path,
+                base: t_base,
+                key_blob: key,
+            });
+            t_path
+        }
     }
 }
 
@@ -3447,6 +3646,7 @@ fn encode_value_to_norito(ctx: &mut LowerCtx, value: Temp, codec: &ValueCodec) -
             ctx.current_instr(Instr::PointerToNorito { dest: t, value });
             t
         }
+        ValueCodec::NoritoBytes => value,
     }
 }
 
@@ -3471,6 +3671,7 @@ fn decode_value_from_norito(ctx: &mut LowerCtx, blob: Temp, codec: &ValueCodec) 
             });
             t
         }
+        ValueCodec::NoritoBytes => blob,
     }
 }
 
@@ -3742,6 +3943,41 @@ mod tests {
         assert!(
             !saw_map_get,
             "pointer-key map lookup should not use integer MapGet"
+        );
+    }
+
+    #[test]
+    fn lower_map_get_numeric_key_uses_numeric_compare() {
+        let src =
+            "fn f() { let m: Map<Amount, int> = Map::new(); let k: Amount = 7; let _v = m[k]; }";
+        let prog = parse(src).unwrap();
+        let typed = analyze(&prog).unwrap();
+        let ir = lower(&typed).expect("lower");
+        let f = &ir.functions[0];
+        let mut saw_numeric_compare = false;
+        let mut saw_map_get = false;
+        let mut saw_map_load_pair = false;
+        for bb in &f.blocks {
+            for instr in &bb.instrs {
+                match instr {
+                    Instr::NumericCompare { .. } => saw_numeric_compare = true,
+                    Instr::MapGet { .. } => saw_map_get = true,
+                    Instr::MapLoadPair { .. } => saw_map_load_pair = true,
+                    _ => {}
+                }
+            }
+        }
+        assert!(
+            saw_numeric_compare,
+            "expected NumericCompare for numeric map key"
+        );
+        assert!(
+            saw_map_load_pair,
+            "expected MapLoadPair for numeric map key"
+        );
+        assert!(
+            !saw_map_get,
+            "numeric-key map lookup should not use integer MapGet"
         );
     }
 

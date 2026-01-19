@@ -278,6 +278,7 @@ mod tests {
             features_bitmap: Some(0),
             access_set_hints: None,
             entrypoints: None,
+            kotoba: None,
             provenance: None,
         }
         .signed(&kp);
@@ -349,6 +350,7 @@ mod tests {
             features_bitmap: None,
             access_set_hints: None,
             entrypoints: None,
+            kotoba: None,
             provenance: None,
         }
         .signed(&kp);
@@ -423,6 +425,7 @@ mod tests {
             features_bitmap: None,
             access_set_hints: None,
             entrypoints: None,
+            kotoba: None,
             provenance: None,
         };
         let err = register_manifest(&authority, manifest, &mut stx).unwrap_err();

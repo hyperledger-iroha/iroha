@@ -1,6 +1,7 @@
 //! JSON envelope queries via SMARTCONTRACT_EXECUTE_QUERY (0xA1).
 //! Ensures the mock WSV host parses query envelopes and returns results as INPUT TLVs.
 
+use iroha_primitives::numeric::Numeric;
 use ivm::{
     IVM, Memory, PointerType,
     instruction::wide,
@@ -70,7 +71,10 @@ fn query_get_balance_returns_json_tlv() {
             .parse()
             .unwrap();
     let rose: AssetDefinitionId = "rose#domain".parse().unwrap();
-    let wsv = MockWorldStateView::with_balances(&[((alice.clone(), rose.clone()), 42)]);
+    let wsv = MockWorldStateView::with_balances(&[(
+        (alice.clone(), rose.clone()),
+        Numeric::from(42_u64),
+    )]);
     let host = WsvHost::new(wsv, alice.clone(), Default::default(), Default::default());
 
     let mut vm = IVM::new(u64::MAX);
@@ -102,8 +106,9 @@ fn query_get_balance_returns_json_tlv() {
     let tlv = vm.memory.validate_tlv(p).expect("valid output TLV");
     assert_eq!(tlv.type_id as u16, PointerType::Json as u16);
     let v: norito::json::Value = norito::json::from_slice(tlv.payload).expect("parse json");
-    let bal = v.get("balance").and_then(|v| v.as_u64()).unwrap();
-    assert_eq!(bal, 42);
+    let bal = v.get("balance").and_then(|v| v.as_str()).unwrap();
+    let bal: Numeric = bal.parse().expect("parse numeric balance");
+    assert_eq!(bal, Numeric::from(42_u64));
 }
 
 #[test]

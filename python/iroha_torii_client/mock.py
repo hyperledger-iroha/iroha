@@ -1116,6 +1116,7 @@ class _MockState:
             "rbc_store": {
                 "sessions": 9,
                 "bytes": 1000,
+                "persist_drops_total": 2,
                 "evictions_total": 10,
                 "pressure_level": 11,
                 "recent_evictions": [

@@ -15,7 +15,7 @@ fn sample_peers(n: usize) -> Vec<PeerId> {
 }
 
 #[test]
-fn permissioned_collectors_rotate_by_height_and_view() {
+fn permissioned_collectors_fallback_to_tail_without_seed() {
     let peers = sample_peers(5);
     let topology = Topology::new(peers.clone());
 
@@ -23,9 +23,15 @@ fn permissioned_collectors_rotate_by_height_and_view() {
     let round2 = deterministic_collectors(&topology, ConsensusMode::Permissioned, 2, None, 3, 0);
     let view_bump = deterministic_collectors(&topology, ConsensusMode::Permissioned, 2, None, 2, 1);
 
-    assert_eq!(round1, vec![peers[2].clone(), peers[3].clone()]);
-    assert_eq!(round2, vec![peers[3].clone(), peers[2].clone()]);
-    assert_eq!(view_bump, vec![peers[3].clone(), peers[2].clone()]);
+    let expected: Vec<_> = topology
+        .collector_indices_k(2)
+        .into_iter()
+        .map(|idx| peers[idx].clone())
+        .collect();
+
+    assert_eq!(round1, expected);
+    assert_eq!(round2, expected);
+    assert_eq!(view_bump, expected);
 }
 
 #[test]

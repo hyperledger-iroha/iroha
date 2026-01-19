@@ -247,13 +247,19 @@ fn build_samples(param_specs: &[ParamSpec]) -> Option<Vec<Vec<Value>>> {
 
 fn supported_type_samples(ty: &Type) -> Option<Vec<Value>> {
     match ty {
-        Type::Int | Type::FixedU128 | Type::Amount | Type::Balance => Some(vec![
+        Type::Int => Some(vec![
             Value::Int(-2),
             Value::Int(-1),
             Value::Int(0),
             Value::Int(1),
             Value::Int(2),
             Value::Int(i32::MIN as i64),
+            Value::Int(i32::MAX as i64),
+        ]),
+        Type::FixedU128 | Type::Amount | Type::Balance => Some(vec![
+            Value::Int(0),
+            Value::Int(1),
+            Value::Int(2),
             Value::Int(i32::MAX as i64),
         ]),
         Type::Bool => Some(vec![Value::Bool(false), Value::Bool(true)]),
@@ -473,6 +479,7 @@ impl<'a> Evaluator<'a> {
     ) -> Result<Value, EvalError> {
         match &expr.expr {
             ExprKind::Number(n) => Ok(Value::Int(*n)),
+            ExprKind::Decimal(_) => Err(EvalError::UnsupportedFeature("decimal literal")),
             ExprKind::Bool(b) => Ok(Value::Bool(*b)),
             ExprKind::String(_) | ExprKind::Bytes(_) => {
                 Err(EvalError::UnsupportedFeature("string literal"))
@@ -498,6 +505,16 @@ impl<'a> Evaluator<'a> {
                         })?;
                         Ok(Value::Bool(!val))
                     }
+                }
+            }
+            ExprKind::NumericCast { expr } => {
+                let inner = self.eval_expr(expr, locals, depth)?;
+                if inner.as_int().is_some() {
+                    Ok(inner)
+                } else {
+                    Err(EvalError::Runtime(
+                        "numeric cast expects integer operand".into(),
+                    ))
                 }
             }
             ExprKind::Binary { op, left, right } => {

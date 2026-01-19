@@ -5275,6 +5275,12 @@ pub struct Sumeragi {
         default = "defaults::sumeragi::RBC_PENDING_MAX_BYTES"
     )]
     pub rbc_pending_max_bytes: usize,
+    /// Maximum pending RBC sessions stashed before INIT is observed.
+    #[config(
+        env = "SUMERAGI_RBC_PENDING_SESSION_LIMIT",
+        default = "defaults::sumeragi::RBC_PENDING_SESSION_LIMIT"
+    )]
+    pub rbc_pending_session_limit: usize,
     /// TTL (milliseconds) for pending RBC messages awaiting INIT.
     #[config(
         env = "SUMERAGI_RBC_PENDING_TTL_MS",
@@ -5549,6 +5555,9 @@ pub struct SumeragiNposReconfig {
     /// Blocks between governance approval and activation of a new validator set.
     #[config(default = "defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_BLOCKS")]
     pub activation_lag_blocks: u64,
+    /// Slashing delay in blocks before evidence penalties apply.
+    #[config(default = "defaults::sumeragi::npos::SLASHING_DELAY_BLOCKS")]
+    pub slashing_delay_blocks: u64,
 }
 
 /// Node role in consensus participation (user view).
@@ -5821,6 +5830,7 @@ impl Sumeragi {
             rbc_chunk_fanout,
             rbc_pending_max_chunks,
             rbc_pending_max_bytes,
+            rbc_pending_session_limit,
             rbc_pending_ttl_ms,
             rbc_session_ttl_secs,
             rbc_rebroadcast_sessions_per_tick,
@@ -6005,6 +6015,12 @@ impl Sumeragi {
                 "sumeragi.rbc_pending_max_bytes must be at least sumeragi.rbc_chunk_max_bytes",
             ));
             false
+        } else if rbc_pending_session_limit == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig)
+                    .attach("sumeragi.rbc_pending_session_limit must be greater than zero"),
+            );
+            false
         } else {
             true
         };
@@ -6160,6 +6176,7 @@ impl Sumeragi {
             rbc_chunk_fanout,
             rbc_pending_max_chunks,
             rbc_pending_max_bytes,
+            rbc_pending_session_limit,
             rbc_pending_ttl: std::time::Duration::from_millis(rbc_pending_ttl_ms),
             rbc_session_ttl: std::time::Duration::from_secs(rbc_session_ttl_secs),
             rbc_rebroadcast_sessions_per_tick,
@@ -6443,14 +6460,24 @@ impl SumeragiNposReconfig {
             } else {
                 true
             };
+        let slashing_ok =
+            if self.slashing_delay_blocks == 0 {
+                emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                    "sumeragi.npos.reconfig.slashing_delay_blocks must be greater than zero",
+                ));
+                false
+            } else {
+                true
+            };
 
-        if !(evidence_ok && activation_ok) {
+        if !(evidence_ok && activation_ok && slashing_ok) {
             return None;
         }
 
         Some(actual::SumeragiNposReconfig {
             evidence_horizon_blocks: self.evidence_horizon_blocks,
             activation_lag_blocks: self.activation_lag_blocks,
+            slashing_delay_blocks: self.slashing_delay_blocks,
         })
     }
 }
@@ -6492,6 +6519,7 @@ mod sumeragi_npos_tests {
             reconfig: SumeragiNposReconfig {
                 evidence_horizon_blocks: 256,
                 activation_lag_blocks: 2,
+                slashing_delay_blocks: 9,
             },
         };
 
@@ -6533,6 +6561,7 @@ mod sumeragi_npos_tests {
         assert_eq!(actual.election.finality_margin_blocks, 12);
         assert_eq!(actual.reconfig.evidence_horizon_blocks, 256);
         assert_eq!(actual.reconfig.activation_lag_blocks, 2);
+        assert_eq!(actual.reconfig.slashing_delay_blocks, 9);
     }
 
     #[test]
@@ -6567,6 +6596,7 @@ mod sumeragi_npos_tests {
             reconfig: SumeragiNposReconfig {
                 evidence_horizon_blocks: 1,
                 activation_lag_blocks: 1,
+                slashing_delay_blocks: 1,
             },
         };
 
@@ -6618,6 +6648,7 @@ mod sumeragi_npos_tests {
             reconfig: SumeragiNposReconfig {
                 evidence_horizon_blocks: 1,
                 activation_lag_blocks: 1,
+                slashing_delay_blocks: 1,
             },
         };
 

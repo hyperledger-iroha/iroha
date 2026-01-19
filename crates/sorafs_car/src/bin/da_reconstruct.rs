@@ -370,6 +370,7 @@ mod tests {
         nexus::LaneId,
         sorafs::pin_registry::ManifestDigest,
     };
+    use iroha_primitives::erasure::rs16;
     use norito::{
         json::{self as norito_json, Map as JsonMap, Value as JsonValue},
         to_bytes,
@@ -597,7 +598,7 @@ mod tests {
             let start = chunk.offset as usize;
             let end = start + chunk.length as usize;
             let slice = &payload[start..end];
-            let symbols = symbols_from_chunk(symbol_count, slice);
+            let symbols = rs16::symbols_from_chunk(symbol_count, slice);
             stripe_symbols.push(symbols);
             let stripe_id = u32::try_from(index / usize::from(data_shards)).unwrap_or(u32::MAX);
             chunk_commitments.push(ChunkCommitment::new_with_role(
@@ -624,7 +625,7 @@ mod tests {
         let mut parity_payloads = Vec::new();
         let mut next_index = chunk_commitments.len() as u32;
         for (stripe_idx, stripe) in stripes.into_iter().enumerate() {
-            let parity_vectors = fixture_rs16::encode_parity(&stripe, parity_shards as usize)
+            let parity_vectors = rs16::encode_parity(&stripe, parity_shards as usize)
                 .expect("encode parity vectors");
             for (parity_idx, symbols) in parity_vectors.into_iter().enumerate() {
                 let mut bytes = Vec::with_capacity(chunk_size as usize);
@@ -632,13 +633,14 @@ mod tests {
                     bytes.extend_from_slice(&symbol.to_le_bytes());
                 }
                 let digest = blake3::hash(&bytes);
-                let offset = parity_offset(
+                let offset = rs16::parity_offset(
                     payload.len() as u64,
                     stripe_idx,
                     parity_idx,
                     parity_shards as usize,
                     chunk_size,
-                );
+                )
+                .expect("parity offset");
                 let stripe_id = u32::try_from(stripe_idx).unwrap_or(u32::MAX);
                 chunk_commitments.push(ChunkCommitment::new_with_role(
                     next_index,
@@ -685,33 +687,6 @@ mod tests {
         (manifest, parity_payloads)
     }
 
-    fn symbols_from_chunk(symbol_count: usize, chunk: &[u8]) -> Vec<u16> {
-        let mut symbols = vec![0u16; symbol_count];
-        let mut cursor = 0usize;
-        for slot in &mut symbols {
-            if cursor >= chunk.len() {
-                break;
-            }
-            let mut pair = [0u8; 2];
-            let remaining = 2.min(chunk.len() - cursor);
-            pair[..remaining].copy_from_slice(&chunk[cursor..cursor + remaining]);
-            *slot = u16::from_le_bytes(pair);
-            cursor += remaining;
-        }
-        symbols
-    }
-
-    fn parity_offset(
-        total_size: u64,
-        stripe_index: usize,
-        parity_index: usize,
-        parity_shards: usize,
-        chunk_size: u32,
-    ) -> u64 {
-        let slot = stripe_index * parity_shards + parity_index;
-        total_size + slot as u64 * u64::from(chunk_size)
-    }
-
     fn fixture_root_path() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .ancestors()
@@ -737,187 +712,6 @@ mod tests {
         let rendered =
             norito_json::to_json_pretty(&JsonValue::Array(rows)).expect("render chunk matrix json");
         fs::write(output, rendered.as_bytes()).expect("write chunk matrix json");
-    }
-
-    mod fixture_rs16 {
-        use std::sync::OnceLock;
-
-        const FIELD_ORDER: usize = 1 << 16;
-        const FIELD_MASK: u32 = 0x1_0000;
-        const FIELD_POLY: u32 = 0x1_100B;
-        const ORDER_MINUS_ONE: usize = FIELD_ORDER - 1;
-
-        struct FieldTables {
-            exp: Vec<u16>,
-            log: Vec<u16>,
-        }
-
-        fn tables() -> &'static FieldTables {
-            static TABLES: OnceLock<FieldTables> = OnceLock::new();
-            TABLES.get_or_init(|| {
-                let mut exp = vec![0u16; ORDER_MINUS_ONE * 2];
-                let mut log = vec![0u16; FIELD_ORDER];
-
-                let mut value: u32 = 1;
-                for (idx, slot) in exp.iter_mut().take(ORDER_MINUS_ONE).enumerate() {
-                    *slot = value as u16;
-                    log[value as usize] = idx as u16;
-
-                    value <<= 1;
-                    if (value & FIELD_MASK) != 0 {
-                        value ^= FIELD_POLY;
-                    }
-                    value &= FIELD_MASK - 1;
-                }
-
-                let (lower, upper) = exp.split_at_mut(ORDER_MINUS_ONE);
-                upper.copy_from_slice(lower);
-
-                FieldTables { exp, log }
-            })
-        }
-
-        #[inline]
-        fn gf_add(a: u16, b: u16) -> u16 {
-            a ^ b
-        }
-
-        #[inline]
-        fn gf_mul(a: u16, b: u16) -> u16 {
-            if a == 0 || b == 0 {
-                return 0;
-            }
-            let tables = tables();
-            let log_a = tables.log[a as usize] as usize;
-            let log_b = tables.log[b as usize] as usize;
-            tables.exp[log_a + log_b]
-        }
-
-        #[inline]
-        fn gf_inv(value: u16) -> Option<u16> {
-            if value == 0 {
-                return None;
-            }
-            let tables = tables();
-            let log_v = tables.log[value as usize] as usize;
-            Some(tables.exp[ORDER_MINUS_ONE - log_v])
-        }
-
-        #[inline]
-        fn gf_pow(exp: usize) -> u16 {
-            let tables = tables();
-            tables.exp[exp % ORDER_MINUS_ONE]
-        }
-
-        #[allow(clippy::needless_range_loop)]
-        fn invert_matrix(mut matrix: Vec<Vec<u16>>) -> Result<Vec<Vec<u16>>, ()> {
-            let size = matrix.len();
-            if size == 0 {
-                return Ok(Vec::new());
-            }
-            let width = matrix[0].len();
-            if size != width {
-                return Err(());
-            }
-            let mut identity = vec![vec![0u16; size]; size];
-            for i in 0..size {
-                identity[i][i] = 1;
-            }
-
-            for col in 0..size {
-                if matrix[col][col] == 0 {
-                    let mut swap_row = col + 1;
-                    while swap_row < size && matrix[swap_row][col] == 0 {
-                        swap_row += 1;
-                    }
-                    if swap_row == size {
-                        return Err(());
-                    }
-                    matrix.swap(col, swap_row);
-                    identity.swap(col, swap_row);
-                }
-
-                let inv = gf_inv(matrix[col][col]).ok_or(())?;
-                for entry in &mut matrix[col] {
-                    *entry = gf_mul(*entry, inv);
-                }
-                for entry in &mut identity[col] {
-                    *entry = gf_mul(*entry, inv);
-                }
-
-                for row in 0..size {
-                    if row == col {
-                        continue;
-                    }
-                    let factor = matrix[row][col];
-                    for c in 0..size {
-                        matrix[row][c] = gf_add(matrix[row][c], gf_mul(factor, matrix[col][c]));
-                        identity[row][c] =
-                            gf_add(identity[row][c], gf_mul(factor, identity[col][c]));
-                    }
-                }
-            }
-
-            Ok(identity)
-        }
-
-        fn generator_matrix(data_shards: usize, parity_shards: usize) -> Vec<Vec<u16>> {
-            let mut matrix = Vec::with_capacity(data_shards + parity_shards);
-            for row in 0..data_shards {
-                let mut entries = vec![0u16; data_shards];
-                entries[row] = 1;
-                matrix.push(entries);
-            }
-
-            let mut parity_rows = Vec::with_capacity(parity_shards);
-            for row in 0..parity_shards {
-                let mut entries = vec![0u16; data_shards];
-                for col in 0..data_shards {
-                    entries[col] = gf_pow(row + col);
-                }
-                parity_rows.push(entries);
-            }
-            matrix.extend(parity_rows);
-            matrix
-        }
-
-        pub fn encode_parity(
-            stripe_symbols: &[Vec<u16>],
-            parity_shards: usize,
-        ) -> Result<Vec<Vec<u16>>, ()> {
-            if stripe_symbols.is_empty() || parity_shards == 0 {
-                return Ok(Vec::new());
-            }
-            let data_shards = stripe_symbols.len();
-            let symbol_count = stripe_symbols[0].len();
-
-            let generator = generator_matrix(data_shards, parity_shards);
-            let data_matrix = generator[..data_shards].to_vec();
-            let parity_matrix = generator[data_shards..].to_vec();
-            let invert = invert_matrix(data_matrix)?;
-            let mut parity_result = Vec::with_capacity(parity_shards);
-
-            for row in parity_matrix {
-                let mut combined = vec![0u16; data_shards];
-                for (idx, value) in row.iter().enumerate() {
-                    for (col, entry) in invert[idx].iter().enumerate() {
-                        combined[col] = gf_add(combined[col], gf_mul(*value, *entry));
-                    }
-                }
-
-                let mut parity_symbols = vec![0u16; symbol_count];
-                for (col, multiplier) in combined.into_iter().enumerate() {
-                    let symbols = &stripe_symbols[col];
-                    for (pos, value) in symbols.iter().enumerate() {
-                        parity_symbols[pos] =
-                            gf_add(parity_symbols[pos], gf_mul(multiplier, *value));
-                    }
-                }
-                parity_result.push(parity_symbols);
-            }
-
-            Ok(parity_result)
-        }
     }
 
     fn sample_manifest() -> (DaManifestV1, Vec<u8>) {

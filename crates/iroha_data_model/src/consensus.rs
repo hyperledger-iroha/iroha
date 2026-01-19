@@ -153,6 +153,34 @@ pub struct ValidatorElectionOutcome {
     pub tie_break: Vec<ValidatorTieBreak>,
 }
 
+impl ValidatorElectionOutcome {
+    /// Construct an empty election outcome for failed or skipped elections.
+    #[must_use]
+    pub fn empty(epoch: u64, snapshot_height: u64, seed: [u8; 32]) -> Self {
+        let validator_set = Vec::new();
+        let validator_set_hash = HashOf::new(&validator_set);
+        Self {
+            epoch,
+            snapshot_height,
+            seed,
+            candidates_total: 0,
+            validator_set,
+            validator_set_hash,
+            params: ValidatorElectionParameters {
+                max_validators: 0,
+                min_self_bond: 0,
+                min_nomination_bond: 0,
+                max_nominator_concentration_pct: 0,
+                seat_band_pct: 0,
+                max_entity_correlation_pct: 0,
+                finality_margin_blocks: 0,
+            },
+            rejection_reason: Some("validator election failed".to_owned()),
+            tie_break: Vec::new(),
+        }
+    }
+}
+
 /// Logical role for a consensus or committee key.
 #[derive(
     Debug,
@@ -576,5 +604,27 @@ mod tests {
         };
         assert!(!record.is_live_at(0, 5, 5));
         assert!(!record.is_live_at(100, 5, 5));
+    }
+
+    #[test]
+    fn validator_election_outcome_empty_has_expected_defaults() {
+        let seed = [0x44; 32];
+        let outcome = ValidatorElectionOutcome::empty(7, 42, seed);
+        assert_eq!(outcome.epoch, 7);
+        assert_eq!(outcome.snapshot_height, 42);
+        assert_eq!(outcome.seed, seed);
+        assert_eq!(outcome.candidates_total, 0);
+        assert!(outcome.validator_set.is_empty());
+        assert_eq!(
+            outcome.validator_set_hash,
+            HashOf::new(&outcome.validator_set)
+        );
+        assert_eq!(outcome.params.max_validators, 0);
+        assert_eq!(outcome.params.finality_margin_blocks, 0);
+        assert_eq!(
+            outcome.rejection_reason.as_deref(),
+            Some("validator election failed")
+        );
+        assert!(outcome.tie_break.is_empty());
     }
 }

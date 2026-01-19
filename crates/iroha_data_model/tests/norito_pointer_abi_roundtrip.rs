@@ -42,6 +42,7 @@ fn manifest_pointer_roundtrip() {
             write_keys: vec!["asset.detail:rose#wonderland:balance".to_owned()],
         }),
         entrypoints: None,
+        kotoba: None,
         provenance: None,
     };
 

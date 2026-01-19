@@ -836,31 +836,13 @@ impl Actor {
             }
         };
         let highest_qc = if phase == crate::sumeragi::consensus::Phase::NewView {
-            let mut selected: Option<crate::sumeragi::consensus::QcRef> = None;
-            for signer in &snapshot.signers {
-                let Some(vote) = self.vote_log.get(&(phase, height, view, epoch, *signer)) else {
-                    continue;
-                };
-                let Some(candidate) = vote.highest_qc else {
-                    continue;
-                };
-                if candidate.phase != crate::sumeragi::consensus::Phase::Commit {
-                    continue;
-                }
-                selected = Some(selected.map_or(candidate, |current| {
-                    let incoming = (candidate.height, candidate.view);
-                    let existing = (current.height, current.view);
-                    let promotes_phase = incoming == existing
-                        && candidate.phase == crate::sumeragi::consensus::Phase::Commit
-                        && current.phase != crate::sumeragi::consensus::Phase::Commit;
-                    if incoming > existing || promotes_phase {
-                        candidate
-                    } else {
-                        current
-                    }
-                }));
-            }
-            selected
+            super::select_new_view_highest_qc_from_votes(
+                &self.vote_log,
+                &snapshot.signers,
+                height,
+                view,
+                epoch,
+            )
         } else {
             None
         };
@@ -1512,11 +1494,7 @@ impl Actor {
             );
             return;
         }
-        let expected_height = if highest.phase == crate::sumeragi::consensus::Phase::Commit {
-            highest.height.saturating_add(1)
-        } else {
-            highest.height
-        };
+        let expected_height = highest.height.saturating_add(1);
         if qc.height != expected_height {
             warn!(
                 height = qc.height,

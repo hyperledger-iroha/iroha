@@ -42,6 +42,7 @@ use iroha_core::sumeragi::consensus::{
     NPOS_TAG, PERMISSIONED_TAG, PROTO_VERSION, compute_consensus_fingerprint_from_params,
 };
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PrivateKey, PublicKey};
+#[cfg(test)]
 use iroha_data_model::da::commitment::DaProofPolicyBundle;
 use iroha_data_model::{
     ChainId,
@@ -497,6 +498,8 @@ static IROHA_BIN: OnceLock<PathBuf> = OnceLock::new();
 
 const BUILD_CACHE_DIR: &str = ".iroha_test_network";
 const BUILD_STAMP_VERSION: u32 = 2;
+const IROHA_TEST_TARGET_DIR_ENV: &str = "IROHA_TEST_TARGET_DIR";
+const IROHA_TEST_TARGET_SUBDIR: &str = "iroha-test-network";
 
 #[derive(Debug, Clone)]
 struct BuildStamp {
@@ -505,18 +508,24 @@ struct BuildStamp {
     binary: PathBuf,
 }
 
-fn resolve_target_dir(repo: &Path) -> PathBuf {
-    match std::env::var("CARGO_TARGET_DIR") {
-        Ok(path) => {
-            let candidate = PathBuf::from(path);
-            if candidate.is_absolute() {
-                candidate
-            } else {
-                repo.join(candidate)
-            }
-        }
-        Err(_) => repo.join("target"),
+fn resolve_target_dir_path(repo: &Path, raw: &str) -> PathBuf {
+    let candidate = PathBuf::from(raw);
+    if candidate.is_absolute() {
+        candidate
+    } else {
+        repo.join(candidate)
     }
+}
+
+/// Resolve the target directory for test-network builds and artifact lookup.
+fn resolve_target_dir(repo: &Path) -> PathBuf {
+    if let Ok(path) = std::env::var(IROHA_TEST_TARGET_DIR_ENV) {
+        return resolve_target_dir_path(repo, &path);
+    }
+    if let Ok(path) = std::env::var("CARGO_TARGET_DIR") {
+        return resolve_target_dir_path(repo, &path).join(IROHA_TEST_TARGET_SUBDIR);
+    }
+    repo.join("target").join(IROHA_TEST_TARGET_SUBDIR)
 }
 
 fn build_cache_dir(target_dir: &Path) -> PathBuf {
@@ -738,12 +747,29 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 }
 
 fn add_target_dir_to_ignore(root: &Path, ignore: &mut IgnoreList) {
-    let target_dir = resolve_target_dir(root);
-    if let Ok(relative) = target_dir.strip_prefix(root)
-        && !relative.as_os_str().is_empty()
-    {
-        ignore.dirs.insert(relative.to_path_buf());
+    fn push_dir(root: &Path, ignore: &mut IgnoreList, path: &Path) {
+        if let Ok(relative) = path.strip_prefix(root)
+            && !relative.as_os_str().is_empty()
+        {
+            ignore.dirs.insert(relative.to_path_buf());
+        }
     }
+
+    push_dir(root, ignore, &root.join("target"));
+
+    if let Ok(path) = std::env::var("CARGO_TARGET_DIR") {
+        let base = resolve_target_dir_path(root, &path);
+        push_dir(root, ignore, &base);
+        push_dir(root, ignore, &base.join(IROHA_TEST_TARGET_SUBDIR));
+    }
+
+    if let Ok(path) = std::env::var(IROHA_TEST_TARGET_DIR_ENV) {
+        let custom = resolve_target_dir_path(root, &path);
+        push_dir(root, ignore, &custom);
+    }
+
+    let target_dir = resolve_target_dir(root);
+    push_dir(root, ignore, &target_dir);
 }
 
 fn workspace_members(root: &Path) -> color_eyre::Result<Vec<PathBuf>> {
@@ -1062,6 +1088,7 @@ fn ensure_binary_fresh(
         for arg in build_args {
             command.arg(arg);
         }
+        command.env("CARGO_TARGET_DIR", target_dir);
         for (key, value) in build_env_overrides() {
             command.env(key, value);
         }
@@ -1109,7 +1136,8 @@ impl Program {
     /// Tries, in order:
     /// - Explicit env override (`TEST_NETWORK_BIN_*`).
     /// - `CARGO_BIN_EXE_*` if Cargo provided a direct path to the built binary
-    /// - Common target locations (debug/release) under the repo root (and `CARGO_TARGET_DIR` if set)
+    /// - Common target locations (debug/release) under the repo root (defaulting to
+    ///   `target/iroha-test-network`, or under `IROHA_TEST_TARGET_DIR` / `CARGO_TARGET_DIR` when set)
     /// - Rebuilds with `cargo build -p <pkg>` when the cached fingerprint disagrees with the current
     ///   workspace state (skipped when `IROHA_TEST_SKIP_BUILD=1`).
     ///
@@ -2150,10 +2178,14 @@ impl Network {
         self.cached_genesis
             .get_or_init(|| {
                 let config_layers: Vec<Table> = self.config_layers().map(Cow::into_owned).collect();
-                let da_proof_policies = self
+                let actual_config = self
                     .peers
                     .first()
-                    .and_then(|peer| resolve_da_proof_policies(peer, &config_layers));
+                    .and_then(|peer| resolve_actual_config(peer, &config_layers));
+                let da_proof_policies = actual_config
+                    .as_ref()
+                    .map(|config| iroha_core::da::proof_policy_bundle(&config.nexus.lane_config));
+                let nexus_config = actual_config.map(|config| config.nexus);
                 config::genesis_with_keypair_and_post_topology_with_policies(
                     self.genesis_isi.clone(),
                     self.genesis_post_topology_isi.clone(),
@@ -2161,6 +2193,7 @@ impl Network {
                     self.topology_entries.clone(),
                     self.genesis_key_pair.clone(),
                     da_proof_policies,
+                    nexus_config,
                 )
             })
             .clone()
@@ -2898,10 +2931,10 @@ fn config_requires_sora_profile(config_layers: &[Table]) -> bool {
     }
 }
 
-fn resolve_da_proof_policies(
+fn resolve_actual_config(
     peer: &NetworkPeer,
     config_layers: &[Table],
-) -> Option<DaProofPolicyBundle> {
+) -> Option<iroha_config::parameters::actual::Root> {
     let mut merged = peer.base_config_table();
     for layer in config_layers {
         merge_tables(&mut merged, layer);
@@ -2913,25 +2946,26 @@ fn resolve_da_proof_policies(
     {
         Ok(user) => user,
         Err(err) => {
-            warn!(
-                ?err,
-                "failed to read merged config for genesis DA proof policies"
-            );
+            warn!(?err, "failed to read merged config for genesis config");
             return None;
         }
     };
     match user.parse() {
-        Ok(config) => Some(iroha_core::da::proof_policy_bundle(
-            &config.nexus.lane_config,
-        )),
+        Ok(config) => Some(config),
         Err(err) => {
-            warn!(
-                ?err,
-                "failed to parse merged config for genesis DA proof policies"
-            );
+            warn!(?err, "failed to parse merged config for genesis config");
             None
         }
     }
+}
+
+#[cfg(test)]
+fn resolve_da_proof_policies(
+    peer: &NetworkPeer,
+    config_layers: &[Table],
+) -> Option<DaProofPolicyBundle> {
+    resolve_actual_config(peer, config_layers)
+        .map(|config| iroha_core::da::proof_policy_bundle(&config.nexus.lane_config))
 }
 
 fn apply_debug_rbc_defaults(table: &mut Table) {
@@ -3004,6 +3038,29 @@ fn genesis_contains_npos_parameters(genesis_isi: &[Vec<InstructionBox>]) -> bool
         })
 }
 
+fn npos_params_from_genesis(genesis_isi: &[Vec<InstructionBox>]) -> Option<SumeragiNposParameters> {
+    let mut found = None;
+    for instruction in genesis_isi.iter().flat_map(|tx| tx.iter()) {
+        let Some(set_param) = instruction.as_any().downcast_ref::<SetParameter>() else {
+            continue;
+        };
+        let Parameter::Custom(custom) = set_param.inner() else {
+            continue;
+        };
+        if let Some(params) = SumeragiNposParameters::from_custom_parameter(custom) {
+            found = Some(params);
+        }
+    }
+    found
+}
+
+fn resolve_npos_bootstrap_stake(genesis_isi: &[Vec<InstructionBox>], requested: u64) -> u64 {
+    let min_self_bond = npos_params_from_genesis(genesis_isi)
+        .map(|params| params.min_self_bond())
+        .unwrap_or_else(|| SumeragiNposParameters::default().min_self_bond());
+    requested.max(min_self_bond)
+}
+
 fn resolve_consensus_mode_from_config(table: &Table) -> ConsensusMode {
     let Some(raw) = table.get("consensus_mode").and_then(Value::as_str) else {
         return ConsensusMode::Permissioned;
@@ -3046,7 +3103,7 @@ impl NetworkBuilder {
             sumeragi_parameters: Vec::new(),
             sumeragi_da_enabled: None,
             auto_populate_trusted_peer_pops: true,
-            npos_genesis_bootstrap_stake: None,
+            npos_genesis_bootstrap_stake: Some(SumeragiNposParameters::default().min_self_bond()),
         };
         if let Some(value) = bool_env_override(DA_ENABLED_ENV) {
             debug!(
@@ -3063,6 +3120,7 @@ impl NetworkBuilder {
             i64::try_from(test_concurrency_threads()).expect("test concurrency threads fit in i64");
         writer
             .write(["nexus", "enabled"], false)
+            .write(["telemetry_enabled"], true)
             .write(
                 ["concurrency", "scheduler_min_threads"],
                 concurrency_threads,
@@ -3178,10 +3236,11 @@ impl NetworkBuilder {
         self
     }
 
-    /// Inject NPoS bootstrap staking instructions into genesis.
+    /// Override the NPoS bootstrap stake amount injected into genesis.
     ///
     /// This registers Nexus/IVM domains, a gas account, the default stake asset, and per-peer
-    /// validator accounts funded with the requested stake amount, then activates them.
+    /// validator accounts funded with the stake amount, then activates them. NPoS bootstrap is
+    /// enabled by default when the consensus mode is `npos`.
     pub fn with_npos_genesis_bootstrap(mut self, stake_amount: u64) -> Self {
         assert!(stake_amount > 0, "stake_amount must be non-zero");
         self.npos_genesis_bootstrap_stake = Some(stake_amount);
@@ -3372,6 +3431,7 @@ impl NetworkBuilder {
                 &genesis_account_id,
                 &peer_topology,
                 &genesis_key_pair,
+                None,
             );
             cached_genesis
                 .set(block)
@@ -3476,6 +3536,7 @@ impl NetworkBuilder {
         let npos_bootstrap =
             npos_genesis_bootstrap_stake.filter(|_| matches!(consensus_mode, ConsensusMode::Npos));
         if let Some(stake_amount) = npos_bootstrap {
+            let stake_amount = resolve_npos_bootstrap_stake(&genesis_isi, stake_amount);
             let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
             let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
             let stake_asset_id: AssetDefinitionId =
@@ -3490,6 +3551,7 @@ impl NetworkBuilder {
             let mut bootstrap_layer = Table::new();
             let mut writer = TomlWriter::new(&mut bootstrap_layer);
             writer
+                .write(["nexus", "enabled"], true)
                 .write(
                     ["nexus", "staking", "stake_asset_id"],
                     stake_asset_id.to_string(),
@@ -3596,6 +3658,7 @@ impl NetworkBuilder {
                     finality_margin_blocks: npos.finality_margin_blocks(),
                     evidence_horizon_blocks: npos.evidence_horizon_blocks(),
                     activation_lag_blocks: npos.activation_lag_blocks(),
+                    slashing_delay_blocks: npos.slashing_delay_blocks(),
                 }),
             ),
             None if matches!(consensus_mode, ConsensusMode::Npos) => {
@@ -3624,6 +3687,7 @@ impl NetworkBuilder {
                         finality_margin_blocks: npos.finality_margin_blocks(),
                         evidence_horizon_blocks: npos.evidence_horizon_blocks(),
                         activation_lag_blocks: npos.activation_lag_blocks(),
+                        slashing_delay_blocks: npos.slashing_delay_blocks(),
                     }),
                 )
             }
@@ -6878,6 +6942,7 @@ mod tests {
         fs::write(root.join("member/src/lib.rs"), b"pub fn greet() {}\n")
             .expect("write source file");
 
+        let _override_guard = EnvVarGuard::cleared(IROHA_TEST_TARGET_DIR_ENV);
         let _target_guard = EnvVarRestore::set("CARGO_TARGET_DIR", "member/build-output");
         let target_dir = root.join("member/build-output");
         fs::create_dir_all(&target_dir).expect("create target directory");
@@ -6897,6 +6962,65 @@ mod tests {
         let final_fp = workspace_fingerprint(root).expect("final fingerprint");
 
         assert_ne!(after, final_fp);
+    }
+
+    #[test]
+    fn workspace_fingerprint_ignores_test_target_dir_env() {
+        let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+        let temp = tempdir().expect("temporary workspace");
+        let root = temp.path();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"member\"]\n",
+        )
+        .expect("write manifest");
+        fs::create_dir_all(root.join("member/src")).expect("create member src directory");
+        fs::write(root.join("member/src/lib.rs"), b"pub fn greet() {}\n")
+            .expect("write source file");
+
+        let _cargo_guard = EnvVarGuard::cleared("CARGO_TARGET_DIR");
+        let _target_guard = EnvVarRestore::set(IROHA_TEST_TARGET_DIR_ENV, "member/test-output");
+        let target_dir = root.join("member/test-output");
+        fs::create_dir_all(&target_dir).expect("create test target directory");
+        let artifact = target_dir.join("artifact");
+        fs::write(&artifact, b"one").expect("write target artifact");
+
+        let before = workspace_fingerprint(root).expect("initial fingerprint");
+        thread::sleep(Duration::from_millis(20));
+        fs::write(&artifact, b"two").expect("update target artifact");
+        let after = workspace_fingerprint(root).expect("post-artifact fingerprint");
+
+        assert_eq!(before, after);
+
+        thread::sleep(Duration::from_millis(20));
+        fs::write(root.join("member/src/lib.rs"), b"pub fn greet() { 5 }\n")
+            .expect("update source file");
+        let final_fp = workspace_fingerprint(root).expect("final fingerprint");
+
+        assert_ne!(after, final_fp);
+    }
+
+    #[test]
+    fn resolve_target_dir_prefers_test_override_and_namespaces_cargo() {
+        let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+        let temp = tempdir().expect("temporary workspace");
+        let root = temp.path();
+
+        let _clear_test = EnvVarGuard::cleared(IROHA_TEST_TARGET_DIR_ENV);
+        let _clear_cargo = EnvVarGuard::cleared("CARGO_TARGET_DIR");
+        assert_eq!(
+            resolve_target_dir(root),
+            root.join("target").join(IROHA_TEST_TARGET_SUBDIR)
+        );
+
+        let _cargo_guard = EnvVarRestore::set("CARGO_TARGET_DIR", "cargo-target");
+        assert_eq!(
+            resolve_target_dir(root),
+            root.join("cargo-target").join(IROHA_TEST_TARGET_SUBDIR)
+        );
+
+        let _test_guard = EnvVarRestore::set(IROHA_TEST_TARGET_DIR_ENV, "test-target");
+        assert_eq!(resolve_target_dir(root), root.join("test-target"));
     }
 
     #[cfg(unix)]
@@ -7396,22 +7520,63 @@ exit 0
         let network = NetworkBuilder::new()
             .with_peers(4)
             .with_config_layer(|layer| {
+                let mut lane0 = Table::new();
+                lane0.insert("index".into(), Value::Integer(0));
+                lane0.insert("alias".into(), Value::String("alpha".to_string()));
+                lane0.insert("metadata".into(), Value::Table(Table::new()));
+                let mut lane1 = Table::new();
+                lane1.insert("index".into(), Value::Integer(1));
+                lane1.insert("alias".into(), Value::String("beta".to_string()));
+                lane1.insert("metadata".into(), Value::Table(Table::new()));
+                let lane_catalog = Value::Array(vec![Value::Table(lane0), Value::Table(lane1)]);
                 layer
                     .write(["nexus", "enabled"], true)
-                    .write(["nexus", "lane_count"], 2i64);
+                    .write(["nexus", "lane_count"], 2i64)
+                    .write(["nexus", "lane_catalog"], lane_catalog);
             })
             .build();
 
-        let genesis = network.genesis();
-        let policies = genesis
-            .0
-            .da_proof_policies()
-            .expect("genesis should embed da proof policies");
+        let config_layers: Vec<Table> = network.config_layers().map(Cow::into_owned).collect();
+        let peer = network.peers().first().expect("network should have peers");
+        let mut merged = peer.base_config_table();
+        for layer in &config_layers {
+            merge_tables(&mut merged, layer);
+        }
+        let nexus = merged
+            .get("nexus")
+            .and_then(Value::as_table)
+            .expect("nexus table should exist");
+        assert_eq!(
+            nexus.get("enabled").and_then(Value::as_bool),
+            Some(true),
+            "config should enable nexus when lane_count is set"
+        );
+        assert_eq!(
+            nexus.get("lane_count").and_then(Value::as_integer),
+            Some(2),
+            "config should retain the overridden lane_count"
+        );
 
+        let policies = resolve_da_proof_policies(peer, &config_layers)
+            .expect("should resolve da proof policies");
         assert_eq!(policies.policies.len(), 2);
+        let actual = resolve_actual_config(peer, &config_layers)
+            .expect("should resolve full config for genesis");
+        assert_eq!(
+            actual.nexus.lane_config.entries().len(),
+            2,
+            "resolved lane config should preserve the lane catalog"
+        );
+
+        let genesis = network.genesis();
+        assert_eq!(
+            genesis.0.da_proof_policies(),
+            Some(&policies),
+            "genesis should embed da proof policies"
+        );
         assert_eq!(
             genesis.0.header().da_proof_policies_hash(),
-            Some(HashOf::new(policies))
+            Some(HashOf::new(&policies))
         );
     }
 
@@ -7808,6 +7973,83 @@ exit 0
             has_register && has_activate,
             "npos bootstrap should register and activate validators in genesis"
         );
+    }
+
+    #[test]
+    fn default_npos_builder_bootstraps_validators() {
+        init_instruction_registry();
+        let network = NetworkBuilder::new()
+            .with_peers(2)
+            .with_auto_populated_trusted_peers()
+            .with_config_layer(|layer| {
+                layer.write(["sumeragi", "consensus_mode"], "npos");
+            })
+            .build();
+        let genesis = network.genesis();
+        let mut has_register = false;
+        let mut has_activate = false;
+        for tx in genesis.0.transactions_vec() {
+            if let Executable::Instructions(instructions) = tx.instructions() {
+                for instruction in instructions {
+                    if instruction
+                        .as_any()
+                        .downcast_ref::<RegisterPublicLaneValidator>()
+                        .is_some()
+                    {
+                        has_register = true;
+                    }
+                    if instruction
+                        .as_any()
+                        .downcast_ref::<ActivatePublicLaneValidator>()
+                        .is_some()
+                    {
+                        has_activate = true;
+                    }
+                }
+            }
+        }
+        assert!(
+            has_register && has_activate,
+            "default NPoS builder should bootstrap validators in genesis"
+        );
+    }
+
+    #[test]
+    fn npos_bootstrap_clamps_to_min_self_bond() {
+        init_instruction_registry();
+        let mut npos_params = SumeragiNposParameters::default();
+        npos_params.min_self_bond = npos_params.min_self_bond().saturating_add(5_000);
+        let expected = npos_params.min_self_bond;
+        let network = NetworkBuilder::new()
+            .with_peers(1)
+            .with_auto_populated_trusted_peers()
+            .with_genesis_instruction(SetParameter::new(Parameter::Custom(
+                npos_params.into_custom_parameter(),
+            )))
+            .with_config_layer(|layer| {
+                layer.write(["sumeragi", "consensus_mode"], "npos");
+            })
+            .build();
+        let genesis = network.genesis();
+        let mut seen = false;
+        for tx in genesis.0.transactions_vec() {
+            if let Executable::Instructions(instructions) = tx.instructions() {
+                for instruction in instructions {
+                    if let Some(register) = instruction
+                        .as_any()
+                        .downcast_ref::<RegisterPublicLaneValidator>()
+                    {
+                        seen = true;
+                        assert_eq!(
+                            register.initial_stake,
+                            Numeric::from(expected),
+                            "bootstrap stake must honor min_self_bond"
+                        );
+                    }
+                }
+            }
+        }
+        assert!(seen, "expected bootstrap validator registration in genesis");
     }
 
     #[test]

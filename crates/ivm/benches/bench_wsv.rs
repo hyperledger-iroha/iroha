@@ -4,6 +4,7 @@ use std::{convert::TryFrom, sync::Arc};
 use criterion::Criterion;
 use dashmap::{DashMap, DashSet};
 use iroha_crypto::KeyPair;
+use iroha_primitives::numeric::Numeric;
 use ivm::{
     mock_wsv::{AccountId, AssetDefinitionId, DomainId, Mintable, Name},
     parallel::{Block, Scheduler, StateAccessSet, Transaction, TxResult},
@@ -16,17 +17,17 @@ const TRANSFER_ROUTES: [[(usize, usize); 3]; 4] = [
     [(0, 2), (2, 6), (6, 9)],
 ];
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct AssetDefinition {
     mintable: Mintable,
-    total_supply: u64,
+    total_supply: Numeric,
 }
 
 impl AssetDefinition {
     fn new(mintable: Mintable) -> Self {
         Self {
             mintable,
-            total_supply: 0,
+            total_supply: Numeric::zero(),
         }
     }
 }
@@ -36,7 +37,7 @@ struct ConcurrentWSV {
     domains: DashSet<DomainId>,
     accounts: DashSet<AccountId>,
     asset_definitions: DashMap<AssetDefinitionId, AssetDefinition>,
-    balances: DashMap<(AccountId, AssetDefinitionId), u64>,
+    balances: DashMap<(AccountId, AssetDefinitionId), Numeric>,
 }
 
 // DashMap and DashSet use interior mutability through `RwLock`, which prevents
@@ -65,8 +66,11 @@ impl ConcurrentWSV {
             .is_none()
     }
 
-    fn mint(&self, account_id: AccountId, asset_id: AssetDefinitionId, amount: u64) -> bool {
+    fn mint(&self, account_id: AccountId, asset_id: AssetDefinitionId, amount: Numeric) -> bool {
         if !self.accounts.contains(&account_id) {
+            return false;
+        }
+        if amount.mantissa().is_negative() {
             return false;
         }
         let mut def = match self.asset_definitions.get_mut(&asset_id) {
@@ -76,10 +80,21 @@ impl ConcurrentWSV {
         if def.mintable.consume_one().is_err() {
             return false;
         }
-        def.total_supply += amount;
+        let total = match def.total_supply.clone().checked_add(amount.clone()) {
+            Some(val) => val,
+            None => return false,
+        };
+        def.total_supply = total;
         drop(def);
-        let mut bal = self.balances.entry((account_id, asset_id)).or_insert(0);
-        *bal += amount;
+        let mut bal = self
+            .balances
+            .entry((account_id, asset_id))
+            .or_insert_with(Numeric::zero);
+        let next = match bal.clone().checked_add(amount) {
+            Some(val) => val,
+            None => return false,
+        };
+        *bal = next;
         true
     }
 
@@ -88,22 +103,36 @@ impl ConcurrentWSV {
         from: AccountId,
         to: AccountId,
         asset_id: AssetDefinitionId,
-        amount: u64,
+        amount: Numeric,
     ) -> bool {
         if !self.accounts.contains(&from) || !self.accounts.contains(&to) {
+            return false;
+        }
+        if amount.mantissa().is_negative() {
             return false;
         }
         let mut from_bal = self
             .balances
             .entry((from.clone(), asset_id.clone()))
-            .or_insert(0);
-        if *from_bal < amount {
+            .or_insert_with(Numeric::zero);
+        let remaining = match from_bal.clone().checked_sub(amount.clone()) {
+            Some(val) => val,
+            None => return false,
+        };
+        if remaining.mantissa().is_negative() {
             return false;
         }
-        *from_bal -= amount;
+        *from_bal = remaining;
         drop(from_bal);
-        let mut to_bal = self.balances.entry((to, asset_id)).or_insert(0);
-        *to_bal += amount;
+        let mut to_bal = self
+            .balances
+            .entry((to, asset_id))
+            .or_insert_with(Numeric::zero);
+        let next = match to_bal.clone().checked_add(amount) {
+            Some(val) => val,
+            None => return false,
+        };
+        *to_bal = next;
         true
     }
 }
@@ -155,14 +184,18 @@ fn bench_massive_wsv(c: &mut Criterion) {
                         Name::try_from(format!("asset{idx}")).expect("valid asset name");
                     let asset_id = AssetDefinitionId::new(domain_ref.clone(), asset_name);
                     wsv_ref.register_asset_definition(asset_id.clone(), Mintable::Infinitely);
-                    assert!(wsv_ref.mint(accounts_ref[0].clone(), asset_id.clone(), 1));
+                    assert!(wsv_ref.mint(
+                        accounts_ref[0].clone(),
+                        asset_id.clone(),
+                        Numeric::from(1_u64),
+                    ));
                     let route = &TRANSFER_ROUTES[(idx % TRANSFER_ROUTES.len() as u64) as usize];
                     for &(from_idx, to_idx) in route {
                         assert!(wsv_ref.transfer(
                             accounts_ref[from_idx].clone(),
                             accounts_ref[to_idx].clone(),
                             asset_id.clone(),
-                            1,
+                            Numeric::from(1_u64),
                         ));
                     }
                     TxResult {

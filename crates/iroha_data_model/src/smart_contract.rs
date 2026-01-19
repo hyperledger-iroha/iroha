@@ -110,6 +110,9 @@ pub mod manifest {
         /// Optional entrypoint descriptors (name, kind, permission) advertised by the compiler.
         #[norito(default)]
         pub entrypoints: Option<Vec<EntrypointDescriptor>>,
+        /// Optional localization tables extracted from `kotoba { ... }` blocks.
+        #[norito(default)]
+        pub kotoba: Option<Vec<KotobaTranslationEntry>>,
         /// Provenance metadata for the manifest, including signer and signature.
         #[norito(default)]
         pub provenance: Option<ManifestProvenance>,
@@ -247,6 +250,44 @@ pub mod manifest {
         pub triggers: Vec<TriggerDescriptor>,
     }
 
+    /// Localized message text for a specific language tag.
+    #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
+    #[cfg_attr(
+        feature = "json",
+        derive(
+            crate::DeriveFastJson,
+            crate::DeriveJsonSerialize,
+            crate::DeriveJsonDeserialize
+        )
+    )]
+    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    pub struct KotobaTranslation {
+        /// Language tag, e.g. "en", "ja".
+        pub lang: String,
+        /// Localized message text.
+        pub text: String,
+    }
+
+    /// Translation entry keyed by a stable message id.
+    #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
+    #[cfg_attr(
+        feature = "json",
+        derive(
+            crate::DeriveFastJson,
+            crate::DeriveJsonSerialize,
+            crate::DeriveJsonDeserialize
+        )
+    )]
+    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    pub struct KotobaTranslationEntry {
+        /// Stable message identifier.
+        pub msg_id: String,
+        /// Localized translations for this message.
+        pub translations: Vec<KotobaTranslation>,
+    }
+
     /// Entrypoint callback target referenced by a trigger declaration.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
     #[cfg_attr(
@@ -345,6 +386,9 @@ pub mod manifest {
         /// Optional entrypoint descriptors (name, kind, permission) advertised by the compiler.
         #[norito(default)]
         pub entrypoints: Option<Vec<EntrypointDescriptor>>,
+        /// Optional localization tables extracted from `kotoba { ... }` blocks.
+        #[norito(default)]
+        pub kotoba: Option<Vec<KotobaTranslationEntry>>,
     }
 
     impl From<&ContractManifest> for ContractManifestSignaturePayload {
@@ -356,6 +400,7 @@ pub mod manifest {
                 features_bitmap: manifest.features_bitmap,
                 access_set_hints: manifest.access_set_hints.clone(),
                 entrypoints: manifest.entrypoints.clone(),
+                kotoba: manifest.kotoba.clone(),
             }
         }
     }
@@ -476,6 +521,7 @@ pub mod manifest {
                 features_bitmap: Some(0xAA),
                 access_set_hints: None,
                 entrypoints: None,
+                kotoba: None,
                 provenance: None,
             };
 

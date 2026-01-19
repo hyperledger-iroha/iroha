@@ -91,6 +91,158 @@ pub mod isi {
         Ok(())
     }
 
+    pub(crate) fn register_trigger_internal(
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        trigger: Trigger,
+        skip_permission_check: bool,
+    ) -> Result<(), Error> {
+        let mut new_trigger = trigger;
+
+        if !skip_permission_check {
+            // Enforce minimal permission: only genesis block, domain owner of the trigger owner,
+            // or an account with CanRegisterTrigger{authority: <owner>} may register the trigger.
+            let owner = new_trigger.action().authority().clone();
+            let is_genesis = state_transaction._curr_block.is_genesis();
+            let is_domain_owner = (!is_genesis)
+                && state_transaction
+                    .world
+                    .domains
+                    .get(owner.domain())
+                    .is_some_and(|d| d.owned_by() == authority);
+            let has_permission =
+                (!is_genesis) && state_transaction.can_register_trigger_for(authority, &owner);
+            if !(is_genesis || is_domain_owner || has_permission) {
+                return Err(Error::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "Missing CanRegisterTrigger{{authority: {owner}}} permission for {authority}"
+                    )),
+                ));
+            }
+        }
+
+        if let EventFilterBox::Time(TimeEventFilter(ExecutionTime::Schedule(schedule))) =
+            new_trigger.action().filter()
+        {
+            if schedule.period_ms.is_some_and(|period| period == 0) {
+                return Err(Error::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "Time trigger period must be greater than zero".into(),
+                    ),
+                ));
+            }
+        }
+
+        // If a time trigger is scheduled at or before the current block creation time,
+        // shift its start strictly after the current block to prevent immediate firing.
+        if let EventFilterBox::Time(time_filter) = new_trigger.action().filter()
+            && let ExecutionTime::Schedule(mut schedule) = time_filter.0
+        {
+            let block_time = state_transaction._curr_block.creation_time();
+            let start = schedule.start();
+            if start <= block_time {
+                let adjusted_start = block_time
+                    .checked_add(core::time::Duration::from_millis(1))
+                    .unwrap_or(block_time);
+                schedule.start_ms = adjusted_start
+                    .as_millis()
+                    .try_into()
+                    .expect("INTERNAL BUG: Unix timestamp exceeds u64::MAX");
+                // Rebuild the action with the adjusted schedule while preserving other fields and metadata
+                let act = new_trigger.action().clone();
+                let updated = action::Action {
+                    executable: act.executable,
+                    repeats: act.repeats,
+                    authority: act.authority,
+                    filter: EventFilterBox::Time(TimeEventFilter(ExecutionTime::Schedule(
+                        schedule,
+                    ))),
+                    metadata: act.metadata,
+                };
+                new_trigger = Trigger::new(new_trigger.id().clone(), updated);
+            }
+        }
+
+        // Mark triggers registered within the current block so they do not fire in the same block.
+        // This flag is used as a secondary guard in the execution path.
+        {
+            use iroha_primitives::json::Json;
+            enforce_trigger_metadata_limits(new_trigger.action().metadata(), state_transaction)?;
+            let key_height = "__registered_block_height"
+                .parse::<Name>()
+                .expect("Valid metadata key");
+            let key_time = "__registered_at_ms"
+                .parse::<Name>()
+                .expect("Valid metadata key");
+            let height = state_transaction._curr_block.height().get();
+            let created_ms = state_transaction._curr_block.creation_time().as_millis();
+            let created_ms = u64::try_from(created_ms).unwrap_or(u64::MAX);
+            let mut metadata = new_trigger.action().clone().metadata;
+            metadata.insert(key_height, Json::from(height));
+            metadata.insert(key_time, Json::from(created_ms));
+            let action = new_trigger.action().clone().with_metadata(metadata);
+            new_trigger = Trigger::new(new_trigger.id().clone(), action);
+        }
+
+        if !new_trigger.action().filter().mintable() {
+            match new_trigger.action().repeats() {
+                Repeats::Exactly(1) => (),
+                _ => {
+                    return Err(MathError::Overflow.into());
+                }
+            }
+        }
+
+        // If the trigger is already depleted (Exactly(0)) do not register it.
+        // This enforces the lifecycle policy that zero-repeat triggers are removed immediately.
+        if new_trigger.action().repeats().is_depleted() {
+            return Ok(());
+        }
+
+        let triggers = &mut state_transaction.world.triggers;
+        let trigger_id = new_trigger.id().clone();
+        let success = match new_trigger.action().filter() {
+            EventFilterBox::Data(_) => triggers.add_data_trigger(
+                new_trigger
+                    .try_into()
+                    .map_err(|e: &str| Error::Conversion(e.to_owned()))?,
+            ),
+            EventFilterBox::Pipeline(_) => triggers.add_pipeline_trigger(
+                new_trigger
+                    .try_into()
+                    .map_err(|e: &str| Error::Conversion(e.to_owned()))?,
+            ),
+            EventFilterBox::Time(_time_filter) => triggers.add_time_trigger(
+                new_trigger
+                    .try_into()
+                    .map_err(|e: &str| Error::Conversion(e.to_owned()))?,
+            ),
+            EventFilterBox::ExecuteTrigger(_) => triggers.add_by_call_trigger(
+                new_trigger
+                    .try_into()
+                    .map_err(|e: &str| Error::Conversion(e.to_owned()))?,
+            ),
+            EventFilterBox::TriggerCompleted(_) => {
+                unreachable!("Disallowed during deserialization");
+            }
+        }
+        .map_err(|e| InvalidParameterError::SmartContract(e.to_string()))?;
+
+        if !success {
+            return Err(RepetitionError {
+                instruction: InstructionType::Register,
+                id: trigger_id.into(),
+            }
+            .into());
+        }
+
+        state_transaction
+            .world
+            .emit_events(Some(TriggerEvent::Created(trigger_id)));
+
+        Ok(())
+    }
+
     impl Execute for Register<Trigger> {
         #[metrics(+"register_trigger")]
         fn execute(
@@ -98,153 +250,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            let mut new_trigger = self.object().clone();
-
-            // Enforce minimal permission: only genesis block, domain owner of the trigger owner,
-            // or an account with CanRegisterTrigger{authority: <owner>} may register the trigger.
-            {
-                let owner = new_trigger.action().authority().clone();
-                let is_genesis = state_transaction._curr_block.is_genesis();
-                let is_domain_owner = (!is_genesis)
-                    && state_transaction
-                        .world
-                        .domains
-                        .get(owner.domain())
-                        .is_some_and(|d| d.owned_by() == authority);
-                let has_permission =
-                    (!is_genesis) && state_transaction.can_register_trigger_for(authority, &owner);
-                if !(is_genesis || is_domain_owner || has_permission) {
-                    return Err(Error::InvalidParameter(
-                        InvalidParameterError::SmartContract(format!(
-                            "Missing CanRegisterTrigger{{authority: {owner}}} permission for {authority}"
-                        )),
-                    ));
-                }
-            }
-
-            if let EventFilterBox::Time(TimeEventFilter(ExecutionTime::Schedule(schedule))) =
-                new_trigger.action().filter()
-            {
-                if schedule.period_ms.is_some_and(|period| period == 0) {
-                    return Err(Error::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "Time trigger period must be greater than zero".into(),
-                        ),
-                    ));
-                }
-            }
-
-            // If a time trigger is scheduled at or before the current block creation time,
-            // shift its start strictly after the current block to prevent immediate firing.
-            if let EventFilterBox::Time(time_filter) = new_trigger.action().filter()
-                && let ExecutionTime::Schedule(mut schedule) = time_filter.0
-            {
-                let block_time = state_transaction._curr_block.creation_time();
-                let start = schedule.start();
-                if start <= block_time {
-                    let adjusted_start = block_time
-                        .checked_add(core::time::Duration::from_millis(1))
-                        .unwrap_or(block_time);
-                    schedule.start_ms = adjusted_start
-                        .as_millis()
-                        .try_into()
-                        .expect("INTERNAL BUG: Unix timestamp exceeds u64::MAX");
-                    // Rebuild the action with the adjusted schedule while preserving other fields and metadata
-                    let act = new_trigger.action().clone();
-                    let updated = action::Action {
-                        executable: act.executable,
-                        repeats: act.repeats,
-                        authority: act.authority,
-                        filter: EventFilterBox::Time(TimeEventFilter(ExecutionTime::Schedule(
-                            schedule,
-                        ))),
-                        metadata: act.metadata,
-                    };
-                    new_trigger = Trigger::new(new_trigger.id().clone(), updated);
-                }
-            }
-
-            // Mark triggers registered within the current block so they do not fire in the same block.
-            // This flag is used as a secondary guard in the execution path.
-            {
-                use iroha_primitives::json::Json;
-                enforce_trigger_metadata_limits(
-                    new_trigger.action().metadata(),
-                    state_transaction,
-                )?;
-                let key_height = "__registered_block_height"
-                    .parse::<Name>()
-                    .expect("Valid metadata key");
-                let key_time = "__registered_at_ms"
-                    .parse::<Name>()
-                    .expect("Valid metadata key");
-                let height = state_transaction._curr_block.height().get();
-                let created_ms = state_transaction._curr_block.creation_time().as_millis();
-                let created_ms = u64::try_from(created_ms).unwrap_or(u64::MAX);
-                let mut metadata = new_trigger.action().clone().metadata;
-                metadata.insert(key_height, Json::from(height));
-                metadata.insert(key_time, Json::from(created_ms));
-                let action = new_trigger.action().clone().with_metadata(metadata);
-                new_trigger = Trigger::new(new_trigger.id().clone(), action);
-            }
-
-            if !new_trigger.action().filter().mintable() {
-                match new_trigger.action().repeats() {
-                    Repeats::Exactly(1) => (),
-                    _ => {
-                        return Err(MathError::Overflow.into());
-                    }
-                }
-            }
-
-            // If the trigger is already depleted (Exactly(0)) do not register it.
-            // This enforces the lifecycle policy that zero-repeat triggers are removed immediately.
-            if new_trigger.action().repeats().is_depleted() {
-                return Ok(());
-            }
-
-            let triggers = &mut state_transaction.world.triggers;
-            let trigger_id = new_trigger.id().clone();
-            let success = match new_trigger.action().filter() {
-                EventFilterBox::Data(_) => triggers.add_data_trigger(
-                    new_trigger
-                        .try_into()
-                        .map_err(|e: &str| Error::Conversion(e.to_owned()))?,
-                ),
-                EventFilterBox::Pipeline(_) => triggers.add_pipeline_trigger(
-                    new_trigger
-                        .try_into()
-                        .map_err(|e: &str| Error::Conversion(e.to_owned()))?,
-                ),
-                EventFilterBox::Time(_time_filter) => triggers.add_time_trigger(
-                    new_trigger
-                        .try_into()
-                        .map_err(|e: &str| Error::Conversion(e.to_owned()))?,
-                ),
-                EventFilterBox::ExecuteTrigger(_) => triggers.add_by_call_trigger(
-                    new_trigger
-                        .try_into()
-                        .map_err(|e: &str| Error::Conversion(e.to_owned()))?,
-                ),
-                EventFilterBox::TriggerCompleted(_) => {
-                    unreachable!("Disallowed during deserialization");
-                }
-            }
-            .map_err(|e| InvalidParameterError::SmartContract(e.to_string()))?;
-
-            if !success {
-                return Err(RepetitionError {
-                    instruction: InstructionType::Register,
-                    id: trigger_id.into(),
-                }
-                .into());
-            }
-
-            state_transaction
-                .world
-                .emit_events(Some(TriggerEvent::Created(trigger_id)));
-
-            Ok(())
+            register_trigger_internal(authority, state_transaction, self.object().clone(), false)
         }
     }
 

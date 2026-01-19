@@ -35,7 +35,7 @@ fn detect_literal_overflow(typed: &TypedProgram, findings: &mut Vec<AnalysisFind
     for item in &typed.items {
         let semantic::TypedItem::Function(func) = item;
         visit_exprs(func, &mut |func_name, expr| {
-            if !semantic::is_numeric_type(&expr.ty) {
+            if semantic::resolve_struct_type(&expr.ty) != semantic::Type::Int {
                 return;
             }
             if let ExprKind::Binary { op, left, right } = &expr.expr {
@@ -118,6 +118,7 @@ fn detect_division_by_zero(typed: &TypedProgram, findings: &mut Vec<AnalysisFind
 fn literal_i64(expr: &TypedExpr) -> Option<i64> {
     match &expr.expr {
         ExprKind::Number(n) => Some(*n),
+        ExprKind::NumericCast { expr } => literal_i64(expr),
         ExprKind::Unary {
             op: crate::kotodama::ast::UnaryOp::Neg,
             expr,
@@ -306,7 +307,12 @@ fn visit_expr_for_host_calls(
                 visit_expr_for_host_calls(item, state_before, func_name, findings);
             }
         }
-        Expr::Bool(_) | Expr::Number(_) | Expr::String(_) | Expr::Bytes(_) | Expr::Ident(_) => {}
+        Expr::Bool(_)
+        | Expr::Number(_)
+        | Expr::Decimal(_)
+        | Expr::String(_)
+        | Expr::Bytes(_)
+        | Expr::Ident(_) => {}
     }
 }
 
@@ -325,6 +331,7 @@ fn expr_targets_state(expr: &Expr, state_names: &HashSet<String>) -> bool {
         | Expr::Conditional { .. }
         | Expr::Bool(_)
         | Expr::Number(_)
+        | Expr::Decimal(_)
         | Expr::String(_)
         | Expr::Bytes(_) => false,
     }
@@ -531,6 +538,10 @@ where
             visitor(func_name, expr);
             visit_expr_children(expr, func_name, visitor);
         }
+        ExprKind::NumericCast { expr } => {
+            visitor(func_name, expr);
+            visit_expr_children(expr, func_name, visitor);
+        }
         ExprKind::Conditional {
             cond,
             then_expr,
@@ -566,6 +577,7 @@ where
             visit_expr_children(index, func_name, visitor);
         }
         ExprKind::Number(_)
+        | ExprKind::Decimal(_)
         | ExprKind::Bool(_)
         | ExprKind::String(_)
         | ExprKind::Bytes(_)

@@ -250,6 +250,7 @@ fn rng_npos_genesis_params(rng: &mut DeterministicRng) -> NposGenesisParams {
         finality_margin_blocks: rng.next_u64(),
         evidence_horizon_blocks: rng.next_u64(),
         activation_lag_blocks: rng.next_u64(),
+        slashing_delay_blocks: rng.next_u64(),
     }
 }
 
@@ -543,6 +544,8 @@ fn rng_evidence_record(rng: &mut DeterministicRng, evidence: Evidence) -> Eviden
         recorded_at_view: rng.next_u64(),
         recorded_at_ms: rng.next_u64(),
         penalty_applied: false,
+        penalty_cancelled: false,
+        penalty_cancelled_at_height: None,
         penalty_applied_at_height: None,
     }
 }
@@ -1001,6 +1004,7 @@ fn rng_rbc_store(rng: &mut DeterministicRng) -> SumeragiRbcStoreStatus {
         bytes: rng.next_u64(),
         pressure_level: rng.next_u8(),
         backpressure_deferrals_total: rng.next_u64(),
+        persist_drops_total: rng.next_u64(),
         evictions_total: rng.next_u64(),
         recent_evictions,
     }
@@ -1402,6 +1406,7 @@ fn sumeragi_wire_status_roundtrip() {
             bytes: 1024,
             pressure_level: 2,
             backpressure_deferrals_total: 1,
+            persist_drops_total: 2,
             evictions_total: 3,
             recent_evictions: vec![SumeragiRbcEvictedSession {
                 block_hash: sample_block_hash(0x77),
@@ -1663,6 +1668,7 @@ fn consensus_genesis_norito_roundtrip() {
         finality_margin_blocks: 9,
         evidence_horizon_blocks: 1_024,
         activation_lag_blocks: 12,
+        slashing_delay_blocks: 17,
     };
     let with_npos = ConsensusGenesisParams {
         block_time_ms: 750,
@@ -1819,6 +1825,8 @@ fn consensus_messages_norito_roundtrip() {
         recorded_at_view: 8,
         recorded_at_ms: 1_702_000_123,
         penalty_applied: false,
+        penalty_cancelled: true,
+        penalty_cancelled_at_height: Some(45),
         penalty_applied_at_height: None,
     };
     let exec_witness = ExecWitness {

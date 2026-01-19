@@ -15,19 +15,18 @@ fn sample_peers(n: usize) -> Vec<PeerId> {
 }
 
 #[test]
-fn permissioned_primary_rotates_across_heights() {
+fn permissioned_primary_stable_without_seed() {
     let peers = sample_peers(4);
     let topology = Topology::new(peers.clone());
 
     let plan_h2 = deterministic_collectors(&topology, ConsensusMode::Permissioned, 2, None, 2, 0);
     let plan_h3 = deterministic_collectors(&topology, ConsensusMode::Permissioned, 2, None, 3, 0);
 
-    assert_ne!(
+    assert_eq!(
         plan_h2, plan_h3,
-        "primary collector must rotate between heights"
+        "permissioned fallback should be stable without a PRF seed"
     );
-    assert_eq!(plan_h2[0], peers[2]);
-    assert_eq!(plan_h3[0], peers[3]);
+    assert_eq!(plan_h2, vec![peers[2].clone(), peers[3].clone()]);
 }
 
 #[test]

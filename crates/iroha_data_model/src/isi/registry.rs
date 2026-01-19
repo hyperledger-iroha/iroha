@@ -79,6 +79,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<crate::isi::staking::RegisterPublicLaneValidator>,
     InstructionRegistry::register::<crate::isi::staking::ActivatePublicLaneValidator>,
     InstructionRegistry::register::<crate::isi::staking::ExitPublicLaneValidator>,
+    InstructionRegistry::register::<crate::isi::staking::CancelConsensusEvidencePenalty>,
     InstructionRegistry::register::<nexus::SetLaneRelayEmergencyValidators>,
     InstructionRegistry::register::<oracle::RegisterOracleFeed>,
     InstructionRegistry::register::<oracle::SubmitOracleObservation>,

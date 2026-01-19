@@ -127,6 +127,32 @@ Semantics
 - Durable state maps فی الحال صرف `int` اور pointer‑ABI key types کو سپورٹ کرتے ہیں؛ دیگر key types compile‑time پر reject ہوتے ہیں۔
 - Durable state fields کو `int`, `bool`, `Json`, `Blob`/`bytes`, یا pointer‑ABI types ہونا چاہیے (ان سے بنی structs/tuples سمیت)؛ durable state کے لیے `string` سپورٹ نہیں۔
 
+## ٹرگر ڈیکلیریشنز
+
+ٹرگر ڈیکلیریشنز entrypoint manifests میں scheduling metadata شامل کرتی ہیں اور contract instance
+کے activate ہونے پر خودکار طور پر register ہوتی ہیں (deactivate ہونے پر ہٹا دی جاتی ہیں)۔
+انہیں `seiyaku` بلاک کے اندر parse کیا جاتا ہے۔
+
+Syntax
+```
+register_trigger wake {
+  call run;
+  on time pre_commit;
+  repeats 2;
+  metadata { tag: "alpha"; count: 1; enabled: true; }
+}
+```
+
+Notes
+- `call` کو اسی contract میں public `kotoage fn` entrypoint کی طرف اشارہ کرنا چاہیے؛
+  optional `namespace::entrypoint` manifest میں record ہوتا ہے مگر cross‑contract callbacks
+  فی الحال runtime میں reject ہوتے ہیں (صرف local callbacks)۔
+- Supported filters: `time pre_commit` اور `time schedule(start_ms, period_ms?)`, نیز
+  by-call triggers کے لیے `execute trigger <name>`۔ data/pipeline filters ابھی supported نہیں۔
+- Metadata values JSON literals (`string`, `number`, `bool`, `null`) یا `json!(...)` ہونی چاہئیں۔
+- Runtime-injected metadata keys: `contract_namespace`, `contract_id`, `contract_entrypoint`,
+  `contract_code_hash`, `contract_trigger_id`۔
+
 ## فنکشنز اور پیرامیٹرز
 
 Syntax
@@ -211,9 +237,9 @@ Implementation status
   - Method sugar سپورٹ ہے: `s.name()`, `s.json()`, `b.blob()`, `b.norito_bytes()`.
 
 Host/syscall builtins (SCALL میں map ہوتے ہیں؛ درست نمبرز ivm.md میں)
-- `mint_asset(AccountId*, AssetDefinitionId*, int)`
-- `burn_asset(AccountId*, AssetDefinitionId*, int)`
-- `transfer_asset(AccountId*, AccountId*, AssetDefinitionId*, int)`
+- `mint_asset(AccountId*, AssetDefinitionId*, numeric)`
+- `burn_asset(AccountId*, AssetDefinitionId*, numeric)`
+- `transfer_asset(AccountId*, AccountId*, AssetDefinitionId*, numeric)`
 - `set_account_detail(AccountId*, Name*, Json*)`
 - `nft_mint_asset(NftId*, AccountId*)`
 - `nft_transfer_asset(AccountId*, NftId*, AccountId*)`

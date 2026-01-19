@@ -1,7 +1,7 @@
 # DA-2 Golden Fixtures
 
 These fixtures capture the canonical outputs of the DA ingest pipeline for the
-`sample_request()` payload used in `crates/iroha_torii/src/da.rs` tests:
+`sample_request()` payload used in `crates/iroha_torii/src/da/tests.rs` tests:
 
 - `manifests/<blob_class>/manifest.norito.hex` – hex-encoded Norito
   `DaManifestV1` bytes persisted by `/v1/da/ingest` after chunking and

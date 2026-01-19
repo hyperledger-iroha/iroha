@@ -5,8 +5,6 @@
 //! higher-level crates and integration tests can exercise fairness and
 //! backoff behaviour without constructing a full consensus actor.
 
-use core::convert::TryFrom;
-
 use iroha_config::parameters::actual::ConsensusMode;
 use iroha_data_model::prelude::PeerId;
 
@@ -90,13 +88,13 @@ impl Iterator for CollectorPlan {
 
 /// Compute the deterministic collector order for a `(height, view)` pair.
 ///
-/// * In permissioned mode we rotate the contiguous tail collector set by
-///   `height + view` to evenly distribute primary collector load.
+/// * In permissioned mode we use PRF-based selection keyed by `(seed, height, view)`
+///   to randomize collector ordering per height/view.
 /// * In `NPoS` mode we reuse the PRF-based selection from `Topology` to
 ///   derive a pseudo-random but fully deterministic ordering.
 ///
-/// `seed` is only used for the `NPoS` path; callers may pass `None` when
-/// operating in permissioned mode.
+/// `seed` must be provided for PRF-based selection; callers may pass `None`
+/// to fall back to the contiguous tail slice starting at `proxy_tail_index()`.
 pub fn deterministic_collectors(
     topology: &Topology,
     mode: ConsensusMode,
@@ -107,16 +105,16 @@ pub fn deterministic_collectors(
 ) -> Vec<PeerId> {
     match mode {
         ConsensusMode::Permissioned => {
-            let mut idxs = topology.collector_indices_k(k);
-            if idxs.is_empty() {
-                return Vec::new();
+            if let Some(seed) = seed {
+                let idxs = topology.collector_indices_k_prf(k, seed, height, view);
+                return idxs
+                    .into_iter()
+                    .map(|idx| topology.as_ref()[idx].clone())
+                    .collect();
             }
-            let offset_seed = height.wrapping_add(view);
-            let len_u64 = u64::try_from(idxs.len()).expect("collector count fits into u64");
-            let offset = usize::try_from(offset_seed % len_u64)
-                .expect("offset must be within collector set");
-            idxs.rotate_left(offset);
-            idxs.into_iter()
+            topology
+                .collector_indices_k(k)
+                .into_iter()
                 .map(|idx| topology.as_ref()[idx].clone())
                 .collect()
         }
@@ -159,29 +157,20 @@ mod tests {
     }
 
     #[test]
-    fn permissioned_collectors_rotate_with_height_and_view() {
+    fn permissioned_collectors_use_prf_seed() {
         let peers: Vec<PeerId> = (0..5)
             .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
             .collect();
         let topology = Topology::new(peers.clone());
-        // min_votes_for_commit = 3 -> collectors indices [2,3,4]
-        let plan_h2_v0 =
-            deterministic_collectors(&topology, ConsensusMode::Permissioned, 2, None, 2, 0);
-        let plan_h3_v0 =
-            deterministic_collectors(&topology, ConsensusMode::Permissioned, 2, None, 3, 0);
-        assert_eq!(plan_h2_v0.len(), 2);
-        assert_eq!(plan_h3_v0.len(), 2);
-        assert_eq!(plan_h2_v0[0], peers[2]);
-        assert_eq!(plan_h2_v0[1], peers[3]);
-        // Height increment rotates the primary collector.
-        assert_eq!(plan_h3_v0[0], peers[3]);
-        assert_eq!(plan_h3_v0[1], peers[2]);
-
-        // View change also rotates.
-        let plan_h2_v1 =
-            deterministic_collectors(&topology, ConsensusMode::Permissioned, 2, None, 2, 1);
-        assert_eq!(plan_h2_v1[0], peers[3]);
-        assert_eq!(plan_h2_v1[1], peers[2]);
+        let seed = [0x11; 32];
+        let plan =
+            deterministic_collectors(&topology, ConsensusMode::Permissioned, 2, Some(seed), 2, 0);
+        let expected_idxs = topology.collector_indices_k_prf(2, seed, 2, 0);
+        let expected: Vec<_> = expected_idxs
+            .into_iter()
+            .map(|idx| peers[idx].clone())
+            .collect();
+        assert_eq!(plan, expected);
     }
 
     #[test]

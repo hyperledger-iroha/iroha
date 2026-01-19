@@ -5430,6 +5430,7 @@ mod tests {
                 bytes: 0,
                 pressure_level: 0,
                 backpressure_deferrals_total: 0,
+                persist_drops_total: 0,
                 evictions_total: 0,
                 recent_evictions: Vec::new(),
             },

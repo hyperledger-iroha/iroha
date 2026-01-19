@@ -269,3 +269,10 @@ NX-9 کے بعد runtime logic `PublicLaneRewardRecord` annotations emit کرے 
   تاکہ validator rosters deterministic رہیں۔
 
 </div>
+
+### 2.7 `CancelConsensusEvidencePenalty`
+
+Cancels consensus slashing before the delayed penalty applies.
+
+- `evidence`: the Norito-encoded `Evidence` payload that was recorded in `consensus_evidence`.
+- The record is marked `penalty_cancelled` and `penalty_cancelled_at_height`, preventing slashing when `slashing_delay_blocks` elapses.

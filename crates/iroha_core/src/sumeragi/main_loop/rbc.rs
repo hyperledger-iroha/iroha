@@ -15,7 +15,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-use eyre::{Result, eyre};
+use eyre::Result;
 use iroha_crypto::{Hash, HashOf, MerkleTree, Signature};
 use iroha_data_model::{
     ChainId, Encode as _,
@@ -31,9 +31,10 @@ use sha2::{Digest, Sha256};
 use super::{
     Actor, DataspaceAllocation, InvalidSigKind, InvalidSigOutcome, LaneAllocation,
     MissingBlockFetchDecision, PipelinePhase, RBC_MAX_TOTAL_CHUNKS, RbcRosterSource, RbcSession,
+    RbcSessionError,
     pending_rbc::{
-        PENDING_RBC_STASH_LIMIT, PendingChunkOutcome, PendingRbcDropReason, PendingRbcMessages,
-        rbc_deliver_stash_bytes, rbc_ready_stash_bytes,
+        PendingChunkOutcome, PendingRbcDropReason, PendingRbcMessages, rbc_deliver_stash_bytes,
+        rbc_ready_stash_bytes,
     },
     proposals::block_payload_bytes,
 };
@@ -103,6 +104,62 @@ pub(super) struct RbcPersistWorkerHandle {
     pub(super) join_handle: std::thread::JoinHandle<()>,
 }
 
+#[derive(Debug)]
+enum RbcError {
+    TransactionPayloadTooLarge { len: usize },
+    EmptyPayload,
+    ChunkCountOverflow { count: usize },
+    ChunkCountExceedsCap { count: u32, cap: u32 },
+    ChunkRootUnavailable,
+    MissingLeaderSignature,
+    ChunkIndexOverflow { idx: usize },
+    SessionInit(RbcSessionError),
+}
+
+impl std::fmt::Display for RbcError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TransactionPayloadTooLarge { len } => {
+                write!(
+                    f,
+                    "transaction payload length {len} exceeds addressable range"
+                )
+            }
+            Self::EmptyPayload => write!(f, "cannot seed RBC session from empty payload"),
+            Self::ChunkCountOverflow { count } => {
+                write!(f, "RBC payload requires {count} chunks")
+            }
+            Self::ChunkCountExceedsCap { count, cap } => {
+                write!(
+                    f,
+                    "RBC payload requires {count} chunks, exceeding hard cap {cap}"
+                )
+            }
+            Self::ChunkRootUnavailable => write!(f, "failed to compute chunk root"),
+            Self::MissingLeaderSignature => write!(f, "missing leader signature for RBC init"),
+            Self::ChunkIndexOverflow { idx } => {
+                write!(f, "RBC chunk index {idx} exceeds u32 range")
+            }
+            Self::SessionInit(err) => write!(f, "RBC session init failed: {err}"),
+        }
+    }
+}
+
+impl std::error::Error for RbcError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::SessionInit(err) => Some(err),
+            _ => None,
+        }
+    }
+}
+
+impl From<RbcSessionError> for RbcError {
+    fn from(err: RbcSessionError) -> Self {
+        Self::SessionInit(err)
+    }
+}
+
 fn spawn_rbc_persist_worker(
     cfg: crate::sumeragi::RbcStoreConfig,
     wake_tx: Option<mpsc::SyncSender<()>>,
@@ -141,11 +198,17 @@ fn spawn_rbc_persist_worker(
 
 pub(super) fn chunk_payload_bytes(payload: &[u8], chunk_size: usize) -> Vec<Vec<u8>> {
     let effective = chunk_size.max(1);
+    let chunk_total = chunk_count(payload.len(), chunk_size);
+    let mut chunks = Vec::with_capacity(chunk_total);
     if payload.is_empty() {
         // Represent empty payloads as a single empty chunk to avoid zero-length sessions.
-        return vec![Vec::new()];
+        chunks.push(Vec::new());
+        return chunks;
     }
-    payload.chunks(effective).map(<[_]>::to_vec).collect()
+    for chunk in payload.chunks(effective) {
+        chunks.push(chunk.to_vec());
+    }
+    chunks
 }
 
 #[inline]
@@ -456,6 +519,32 @@ pub(super) fn distribute_chunks(total_chunks: u32, weights: &[u128]) -> Vec<u32>
     allocations
 }
 
+fn distribute_allocation_weights(total_chunks: u32, weights: &[u128]) -> Vec<u32> {
+    let mut allocations = distribute_chunks(total_chunks, weights);
+    if total_chunks == 0 {
+        return allocations;
+    }
+    for (allocation, weight) in allocations.iter_mut().zip(weights.iter()) {
+        if *allocation == 0 && *weight > 0 {
+            *allocation = 1;
+        }
+    }
+    let assigned_total: u32 = allocations.iter().copied().sum();
+    if assigned_total > total_chunks {
+        let mut excess = assigned_total - total_chunks;
+        for allocation in allocations.iter_mut().rev() {
+            if excess == 0 {
+                break;
+            }
+            if *allocation > 0 {
+                *allocation -= 1;
+                excess -= 1;
+            }
+        }
+    }
+    allocations
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -540,6 +629,36 @@ mod tests {
         let outsider = sample_roster(1).pop().expect("sample peer");
         assert!(!is_payload_rebroadcaster(&roster, &outsider, seed));
         assert!(!is_ready_rebroadcaster(&roster, &outsider, seed));
+    }
+
+    #[test]
+    fn distribute_allocation_weights_enforces_minimums() {
+        let allocations = distribute_allocation_weights(5, &[1, 100, 1]);
+        assert_eq!(allocations, vec![1, 4, 0]);
+    }
+
+    #[test]
+    fn distribute_allocation_weights_returns_zero_for_empty_total() {
+        let allocations = distribute_allocation_weights(0, &[1, 1, 1]);
+        assert_eq!(allocations, vec![0, 0, 0]);
+    }
+
+    #[test]
+    fn rbc_error_wraps_session_init_error() {
+        let err = RbcError::from(RbcSessionError::TooManyChunks {
+            total_chunks: 10,
+            max_chunks: 2,
+        });
+        assert!(matches!(
+            err,
+            RbcError::SessionInit(RbcSessionError::TooManyChunks { .. })
+        ));
+        assert!(std::error::Error::source(&err).is_some());
+        let rendered = format!("{err}");
+        assert!(
+            rendered.contains("RBC session init failed"),
+            "unexpected error message: {rendered}"
+        );
     }
 }
 
@@ -665,13 +784,16 @@ impl Actor {
             return Ok(None);
         }
 
-        let total_chunks = u32::try_from(chunk_bytes.len())
-            .map_err(|_| eyre!("too many RBC chunks ({})", chunk_bytes.len()))?;
+        let total_chunks =
+            u32::try_from(chunk_bytes.len()).map_err(|_| RbcError::ChunkCountOverflow {
+                count: chunk_bytes.len(),
+            })?;
         if total_chunks > RBC_MAX_TOTAL_CHUNKS {
-            return Err(eyre!(
-                "RBC payload requires {total_chunks} chunks, exceeding hard cap {}",
-                RBC_MAX_TOTAL_CHUNKS
-            ));
+            return Err(RbcError::ChunkCountExceedsCap {
+                count: total_chunks,
+                cap: RBC_MAX_TOTAL_CHUNKS,
+            }
+            .into());
         }
 
         let (lane_allocations, dataspace_allocations) =
@@ -689,14 +811,14 @@ impl Actor {
         let chunk_root = merkle
             .root()
             .map(Hash::from)
-            .ok_or_else(|| eyre!("failed to compute RBC chunk root"))?;
+            .ok_or(RbcError::ChunkRootUnavailable)?;
 
         let block_hash = signed_block.hash();
         let leader_signature = signed_block
             .signatures()
             .find(|signature| signature.index() == u64::from(local_validator_index))
             .cloned()
-            .ok_or_else(|| eyre!("missing leader signature for RBC init"))?;
+            .ok_or(RbcError::MissingLeaderSignature)?;
         let block_header = signed_block.header();
         let mut session = RbcSession::new(
             total_chunks,
@@ -705,7 +827,7 @@ impl Actor {
             Some(digests.clone()),
             epoch,
         )
-        .map_err(|err| eyre!(err))?;
+        .map_err(RbcError::from)?;
         session.block_header = Some(block_header);
         session.leader_signature = Some(leader_signature.clone());
         for (idx, chunk) in chunk_bytes.iter().enumerate() {
@@ -878,8 +1000,9 @@ impl Actor {
         }))
     }
 
+    /// Derive per-lane and per-dataspace chunk allocations for the RBC plan.
     #[allow(clippy::too_many_lines)]
-    fn derive_rbc_allocations(
+    pub(super) fn derive_rbc_allocations(
         &self,
         transactions: &[AcceptedTransaction<'static>],
         routing: &[RoutingDecision],
@@ -894,7 +1017,7 @@ impl Actor {
         for (tx, decision) in transactions.iter().zip(routing.iter()) {
             let encoded = tx.as_ref().encode();
             let len = u64::try_from(encoded.len())
-                .map_err(|_| eyre!("transaction payload exceeds addressable length"))?;
+                .map_err(|_| RbcError::TransactionPayloadTooLarge { len: encoded.len() })?;
             let teu = Queue::estimate_teu(tx);
 
             lane_map
@@ -945,30 +1068,9 @@ impl Actor {
             .iter()
             .map(|alloc| u128::from(alloc.rbc_bytes_total))
             .collect();
-        let lane_chunks = distribute_chunks(total_chunks, &lane_weights);
+        let lane_chunks = distribute_allocation_weights(total_chunks, &lane_weights);
         for (alloc, chunk_count) in lane_allocations.iter_mut().zip(lane_chunks.into_iter()) {
             alloc.total_chunks = chunk_count;
-            if alloc.total_chunks == 0 && alloc.rbc_bytes_total > 0 && total_chunks > 0 {
-                alloc.total_chunks = 1;
-            }
-        }
-
-        // Ensure total chunks remain bounded after enforcing minimums.
-        let assigned_total: u32 = lane_allocations
-            .iter()
-            .map(|alloc| alloc.total_chunks)
-            .sum();
-        if assigned_total > total_chunks && !lane_allocations.is_empty() {
-            let mut excess = assigned_total - total_chunks;
-            for alloc in lane_allocations.iter_mut().rev() {
-                if excess == 0 {
-                    break;
-                }
-                if alloc.total_chunks > 0 {
-                    alloc.total_chunks -= 1;
-                    excess -= 1;
-                }
-            }
         }
 
         let mut lane_chunk_map: StdBTreeMap<LaneId, u32> = StdBTreeMap::new();
@@ -989,32 +1091,12 @@ impl Actor {
                 .iter()
                 .map(|alloc| u128::from(alloc.rbc_bytes_total))
                 .collect();
-            let allocated = distribute_chunks(lane_total_chunks, &weights);
+            let allocated = distribute_allocation_weights(lane_total_chunks, &weights);
             for (alloc, chunk_count) in dataspace_allocations[idx..end]
                 .iter_mut()
                 .zip(allocated.into_iter())
             {
                 alloc.total_chunks = chunk_count;
-                if alloc.total_chunks == 0 && alloc.rbc_bytes_total > 0 && lane_total_chunks > 0 {
-                    alloc.total_chunks = 1;
-                }
-            }
-
-            let assigned: u32 = dataspace_allocations[idx..end]
-                .iter()
-                .map(|alloc| alloc.total_chunks)
-                .sum();
-            if assigned > lane_total_chunks {
-                let mut excess = assigned - lane_total_chunks;
-                for alloc in dataspace_allocations[idx..end].iter_mut().rev() {
-                    if excess == 0 {
-                        break;
-                    }
-                    if alloc.total_chunks > 0 {
-                        alloc.total_chunks -= 1;
-                        excess -= 1;
-                    }
-                }
             }
 
             idx = end;
@@ -1172,15 +1254,19 @@ impl Actor {
     ) -> Result<RbcSession> {
         let chunk_bytes = chunk_payload_bytes(payload_bytes, chunk_size);
         if chunk_bytes.is_empty() {
-            return Err(eyre!("cannot seed RBC session from empty payload"));
+            return Err(RbcError::EmptyPayload.into());
         }
 
-        let total_chunks = u32::try_from(chunk_bytes.len())
-            .map_err(|_| eyre!("RBC payload requires {} chunks", chunk_bytes.len()))?;
+        let total_chunks =
+            u32::try_from(chunk_bytes.len()).map_err(|_| RbcError::ChunkCountOverflow {
+                count: chunk_bytes.len(),
+            })?;
         if total_chunks > RBC_MAX_TOTAL_CHUNKS {
-            return Err(eyre!(
-                "RBC payload requires {total_chunks} chunks, exceeding cap {RBC_MAX_TOTAL_CHUNKS}"
-            ));
+            return Err(RbcError::ChunkCountExceedsCap {
+                count: total_chunks,
+                cap: RBC_MAX_TOTAL_CHUNKS,
+            }
+            .into());
         }
 
         let mut digests = Vec::with_capacity(chunk_bytes.len());
@@ -1192,7 +1278,7 @@ impl Actor {
         }
         let chunk_root = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(digests.clone())
             .root()
-            .ok_or_else(|| eyre!("failed to compute chunk root"))?;
+            .ok_or(RbcError::ChunkRootUnavailable)?;
 
         let mut session = RbcSession::new(
             total_chunks,
@@ -1201,11 +1287,10 @@ impl Actor {
             Some(digests),
             epoch,
         )
-        .map_err(|err| eyre!(err))?;
+        .map_err(RbcError::from)?;
 
         for (idx, chunk) in chunk_bytes.into_iter().enumerate() {
-            let idx =
-                u32::try_from(idx).map_err(|_| eyre!("RBC chunk index {idx} exceeds u32 range"))?;
+            let idx = u32::try_from(idx).map_err(|_| RbcError::ChunkIndexOverflow { idx })?;
             session.ingest_chunk(idx, chunk, None);
         }
 
@@ -1773,6 +1858,17 @@ impl Actor {
             return false;
         };
         let key = Self::session_key(block_hash, height, view);
+        let pending_aborted_payload =
+            self.pending
+                .pending_blocks
+                .get(block_hash)
+                .is_some_and(|pending| {
+                    pending.aborted
+                        && !matches!(
+                            pending.validation_status,
+                            super::pending_block::ValidationStatus::Invalid
+                        )
+                });
         if self.subsystems.da_rbc.rbc.sessions.contains_key(&key)
             || self.block_known_locally(*block_hash)
         {
@@ -1786,12 +1882,19 @@ impl Actor {
             );
             return false;
         }
-        if self.runtime_da_enabled() && !self.block_payload_available_locally(*block_hash) {
+        if self.runtime_da_enabled()
+            && (!self.block_payload_available_locally(*block_hash) || pending_aborted_payload)
+        {
             let committed_height = {
                 let view = self.state.view();
                 u64::try_from(view.height()).unwrap_or(u64::MAX)
             };
             if height > committed_height {
+                let reason = if pending_aborted_payload {
+                    "pending block aborted"
+                } else {
+                    "payload missing"
+                };
                 debug!(
                     height,
                     view,
@@ -1799,7 +1902,8 @@ impl Actor {
                     committed_height,
                     block = %block_hash,
                     kind,
-                    "accepting RBC message for stale view while payload is missing"
+                    reason,
+                    "accepting RBC message for stale view while availability is unresolved"
                 );
                 return false;
             }
@@ -1827,7 +1931,7 @@ impl Actor {
     }
 
     #[allow(clippy::too_many_lines)]
-    pub(super) fn handle_rbc_init(&mut self, init: RbcInit) -> Result<()> {
+    pub(super) fn handle_rbc_init(&mut self, init: RbcInit, sender: Option<PeerId>) -> Result<()> {
         if self.should_drop_stale_rbc_message(init.height, init.view, &init.block_hash, "RbcInit") {
             self.record_consensus_message_handling(
                 super::status::ConsensusMessageKind::RbcInit,
@@ -1913,25 +2017,8 @@ impl Actor {
             );
             return Ok(());
         }
-        let computed_root =
-            MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(init.chunk_digests.clone())
-                .root()
-                .map(Hash::from);
-        if computed_root != Some(init.chunk_root) {
-            warn!(
-                height = init.height,
-                view = init.view,
-                expected = ?init.chunk_root,
-                observed = ?computed_root,
-                "rejecting RBC init with mismatched chunk digests root"
-            );
-            self.record_consensus_message_handling(
-                super::status::ConsensusMessageKind::RbcInit,
-                super::status::ConsensusMessageOutcome::Dropped,
-                super::status::ConsensusMessageReason::ChunkRootMismatch,
-            );
-            return Ok(());
-        }
+
+        // 1. Basic Roster Validation
         if init.roster.is_empty() {
             warn!(
                 height = init.height,
@@ -1977,110 +2064,26 @@ impl Actor {
             );
             return Ok(());
         }
-        let header_hash = init.block_header.hash();
-        if header_hash != init.block_hash {
+
+        // 2. Consistency Checks (Session & Roster)
+        // Check against derived roster *before* signature verification to ensure we use the correct leader derivation context if available.
+        let derived_roster = self.rbc_roster_for_session(key);
+        if !derived_roster.is_empty() && derived_roster != init.roster {
             warn!(
                 height = init.height,
                 view = init.view,
                 block = %init.block_hash,
-                expected = ?init.block_hash,
-                observed = ?header_hash,
-                "rejecting RBC init with mismatched block header hash"
+                "rejecting RBC init with roster snapshot that mismatches local commit topology"
             );
             self.record_consensus_message_handling(
                 super::status::ConsensusMessageKind::RbcInit,
                 super::status::ConsensusMessageOutcome::Dropped,
-                super::status::ConsensusMessageReason::PayloadMismatch,
+                super::status::ConsensusMessageReason::RosterHashMismatch,
             );
             return Ok(());
         }
-        if init.block_header.height().get() != init.height
-            || init.block_header.view_change_index() != init.view
-        {
-            warn!(
-                height = init.height,
-                view = init.view,
-                block = %init.block_hash,
-                "rejecting RBC init with header height/view mismatch"
-            );
-            self.record_consensus_message_handling(
-                super::status::ConsensusMessageKind::RbcInit,
-                super::status::ConsensusMessageOutcome::Dropped,
-                super::status::ConsensusMessageReason::InvalidPayload,
-            );
-            return Ok(());
-        }
-        let mut signature_topology =
-            crate::sumeragi::network_topology::Topology::new(init.roster.clone());
-        let expected_leader_index =
-            match self.leader_index_for(&mut signature_topology, init.height, init.view) {
-                Ok(idx) => idx,
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        height = init.height,
-                        view = init.view,
-                        block = %init.block_hash,
-                        "rejecting RBC init: failed to derive leader index"
-                    );
-                    self.record_consensus_message_handling(
-                        super::status::ConsensusMessageKind::RbcInit,
-                        super::status::ConsensusMessageOutcome::Dropped,
-                        super::status::ConsensusMessageReason::InvalidPayload,
-                    );
-                    return Ok(());
-                }
-            };
-        let Some(leader_peer) = signature_topology.as_ref().get(expected_leader_index) else {
-            warn!(
-                height = init.height,
-                view = init.view,
-                block = %init.block_hash,
-                "rejecting RBC init: leader index out of range"
-            );
-            self.record_consensus_message_handling(
-                super::status::ConsensusMessageKind::RbcInit,
-                super::status::ConsensusMessageOutcome::Dropped,
-                super::status::ConsensusMessageReason::InvalidPayload,
-            );
-            return Ok(());
-        };
-        let expected_leader_index = u64::try_from(expected_leader_index).unwrap_or(u64::MAX);
-        if init.leader_signature.index() != expected_leader_index {
-            warn!(
-                height = init.height,
-                view = init.view,
-                block = %init.block_hash,
-                expected = expected_leader_index,
-                observed = init.leader_signature.index(),
-                "rejecting RBC init: leader signature index mismatch"
-            );
-            self.record_consensus_message_handling(
-                super::status::ConsensusMessageKind::RbcInit,
-                super::status::ConsensusMessageOutcome::Dropped,
-                super::status::ConsensusMessageReason::InvalidSignature,
-            );
-            return Ok(());
-        }
-        if init
-            .leader_signature
-            .signature()
-            .verify_hash(leader_peer.public_key(), header_hash)
-            .is_err()
-        {
-            warn!(
-                height = init.height,
-                view = init.view,
-                block = %init.block_hash,
-                "rejecting RBC init: leader signature invalid"
-            );
-            self.record_consensus_message_handling(
-                super::status::ConsensusMessageKind::RbcInit,
-                super::status::ConsensusMessageOutcome::Dropped,
-                super::status::ConsensusMessageReason::InvalidSignature,
-            );
-            return Ok(());
-        }
+
+        // Check against existing session to fail fast on conflicts.
         if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {
             if let Some(expected_hash) = session.payload_hash() {
                 if expected_hash != init.payload_hash {
@@ -2179,21 +2182,169 @@ impl Actor {
                 }
             }
         }
-        let derived_roster = self.rbc_roster_for_session(key);
-        if !derived_roster.is_empty() && derived_roster != init.roster {
+
+        // 3. Header & Authority Checks
+        let header_hash = init.block_header.hash();
+        if header_hash != init.block_hash {
             warn!(
                 height = init.height,
                 view = init.view,
                 block = %init.block_hash,
-                "rejecting RBC init with roster snapshot that mismatches local commit topology"
+                expected = ?init.block_hash,
+                observed = ?header_hash,
+                "rejecting RBC init with mismatched block header hash"
             );
             self.record_consensus_message_handling(
                 super::status::ConsensusMessageKind::RbcInit,
                 super::status::ConsensusMessageOutcome::Dropped,
-                super::status::ConsensusMessageReason::RosterHashMismatch,
+                super::status::ConsensusMessageReason::PayloadMismatch,
             );
             return Ok(());
         }
+        if init.block_header.height().get() != init.height
+            || init.block_header.view_change_index() != init.view
+        {
+            warn!(
+                height = init.height,
+                view = init.view,
+                block = %init.block_hash,
+                "rejecting RBC init with header height/view mismatch"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcInit,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidPayload,
+            );
+            return Ok(());
+        }
+        let mut signature_topology =
+            crate::sumeragi::network_topology::Topology::new(init.roster.clone());
+        let expected_leader_index =
+            match self.leader_index_for(&mut signature_topology, init.height, init.view) {
+                Ok(idx) => idx,
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        height = init.height,
+                        view = init.view,
+                        block = %init.block_hash,
+                        "rejecting RBC init: failed to derive leader index"
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::RbcInit,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::InvalidPayload,
+                    );
+                    return Ok(());
+                }
+            };
+        let Some(leader_peer) = signature_topology.as_ref().get(expected_leader_index) else {
+            warn!(
+                height = init.height,
+                view = init.view,
+                block = %init.block_hash,
+                "rejecting RBC init: leader index out of range"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcInit,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidPayload,
+            );
+            return Ok(());
+        };
+        let expected_leader_index = u64::try_from(expected_leader_index).unwrap_or(u64::MAX);
+        if init.leader_signature.index() != expected_leader_index {
+            warn!(
+                height = init.height,
+                view = init.view,
+                block = %init.block_hash,
+                expected = expected_leader_index,
+                observed = init.leader_signature.index(),
+                "rejecting RBC init: leader signature index mismatch"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcInit,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidSignature,
+            );
+            return Ok(());
+        }
+        if init
+            .leader_signature
+            .signature()
+            .verify_hash(leader_peer.public_key(), header_hash)
+            .is_err()
+        {
+            if let Some(sender) = sender {
+                // If the leader signature is invalid, penalize the sender (who might be the leader, or relaying bad data).
+                // Note: If the sender != leader, they are relaying bad data which is also penalizable (spam).
+                let sender_index = signature_topology
+                    .position(sender.public_key())
+                    .and_then(|idx| u64::try_from(idx).ok())
+                    .unwrap_or(u64::MAX);
+                let outcome = self.record_invalid_signature(
+                    InvalidSigKind::RbcInit,
+                    init.height,
+                    init.view,
+                    sender_index,
+                );
+                if matches!(outcome, InvalidSigOutcome::Logged) {
+                    warn!(
+                        height = init.height,
+                        view = init.view,
+                        block = %init.block_hash,
+                        sender = %sender,
+                        sender_index,
+                        "rejecting RBC init: leader signature invalid"
+                    );
+                } else {
+                    debug!(
+                        height = init.height,
+                        view = init.view,
+                        block = %init.block_hash,
+                        sender = %sender,
+                        sender_index,
+                        "suppressing repeated invalid RBC init signature log"
+                    );
+                }
+            } else {
+                warn!(
+                    height = init.height,
+                    view = init.view,
+                    block = %init.block_hash,
+                    "rejecting RBC init: leader signature invalid (unknown sender)"
+                );
+            }
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcInit,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidSignature,
+            );
+            return Ok(());
+        }
+
+        // 4. Integrity Checks (Expensive)
+        // Perform the expensive Merkle root calculation only after verifying the leader's signature and consistency.
+        let computed_root =
+            MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(init.chunk_digests.clone())
+                .root()
+                .map(Hash::from);
+        if computed_root != Some(init.chunk_root) {
+            warn!(
+                height = init.height,
+                view = init.view,
+                expected = ?init.chunk_root,
+                observed = ?computed_root,
+                "rejecting RBC init with mismatched chunk digests root"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcInit,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::ChunkRootMismatch,
+            );
+            return Ok(());
+        }
+
         let (roster, roster_source) = if derived_roster.is_empty() {
             (init.roster.clone(), RbcRosterSource::Init)
         } else {
@@ -2416,7 +2567,7 @@ impl Actor {
                 );
                 warn!(
                     ?key,
-                    limit = PENDING_RBC_STASH_LIMIT,
+                    limit = self.config.rbc_pending_session_limit,
                     dropped_bytes,
                     "dropping pending RBC chunk: stash session limit reached"
                 );
@@ -2652,7 +2803,7 @@ impl Actor {
                     );
                     warn!(
                         ?key,
-                        limit = PENDING_RBC_STASH_LIMIT,
+                        limit = self.config.rbc_pending_session_limit,
                         ready_sender,
                         ready_view,
                         dropped_bytes,
@@ -2749,7 +2900,7 @@ impl Actor {
                     );
                     warn!(
                         ?key,
-                        limit = PENDING_RBC_STASH_LIMIT,
+                        limit = actor.config.rbc_pending_session_limit,
                         reason,
                         ready_sender,
                         ready_view,
@@ -2945,17 +3096,39 @@ impl Actor {
         }
         let mut inferred_chunk_root: Option<Hash> = None;
         if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {
+            let ready_peer = usize::try_from(ready.sender)
+                .ok()
+                .and_then(|idx| signature_topology.as_ref().get(idx));
             match session.expected_chunk_root {
                 Some(expected) => {
                     if expected != ready.chunk_root {
-                        warn!(
-                            height = ready.height,
-                            view = ready.view,
-                            sender = ready.sender,
-                            ?expected,
-                            observed = ?ready.chunk_root,
-                            "dropping RBC READY with mismatched chunk root"
-                        );
+                        let log_outcome = ready_peer.map(|peer| {
+                            self.record_rbc_mismatch(
+                                peer,
+                                status::RbcMismatchKind::ChunkRoot,
+                                ready.height,
+                                ready.view,
+                            )
+                        });
+                        if log_outcome.map_or(true, |outcome| outcome.should_log()) {
+                            warn!(
+                                height = ready.height,
+                                view = ready.view,
+                                sender = ready.sender,
+                                ?expected,
+                                observed = ?ready.chunk_root,
+                                "dropping RBC READY with mismatched chunk root"
+                            );
+                        } else {
+                            debug!(
+                                height = ready.height,
+                                view = ready.view,
+                                sender = ready.sender,
+                                ?expected,
+                                observed = ?ready.chunk_root,
+                                "suppressing repeated RBC READY chunk-root mismatch log"
+                            );
+                        }
                         self.record_consensus_message_handling(
                             super::status::ConsensusMessageKind::RbcReady,
                             super::status::ConsensusMessageOutcome::Dropped,
@@ -2967,14 +3140,33 @@ impl Actor {
                 None => {
                     if let Some(computed) = session.chunk_root() {
                         if computed != ready.chunk_root {
-                            warn!(
-                                height = ready.height,
-                                view = ready.view,
-                                sender = ready.sender,
-                                ?computed,
-                                observed = ?ready.chunk_root,
-                                "dropping RBC READY with mismatched computed chunk root"
-                            );
+                            let log_outcome = ready_peer.map(|peer| {
+                                self.record_rbc_mismatch(
+                                    peer,
+                                    status::RbcMismatchKind::ChunkRoot,
+                                    ready.height,
+                                    ready.view,
+                                )
+                            });
+                            if log_outcome.map_or(true, |outcome| outcome.should_log()) {
+                                warn!(
+                                    height = ready.height,
+                                    view = ready.view,
+                                    sender = ready.sender,
+                                    ?computed,
+                                    observed = ?ready.chunk_root,
+                                    "dropping RBC READY with mismatched computed chunk root"
+                                );
+                            } else {
+                                debug!(
+                                    height = ready.height,
+                                    view = ready.view,
+                                    sender = ready.sender,
+                                    ?computed,
+                                    observed = ?ready.chunk_root,
+                                    "suppressing repeated RBC READY computed chunk-root mismatch log"
+                                );
+                            }
                             self.record_consensus_message_handling(
                                 super::status::ConsensusMessageKind::RbcReady,
                                 super::status::ConsensusMessageOutcome::Dropped,
@@ -3319,7 +3511,7 @@ impl Actor {
                     );
                     warn!(
                         ?key,
-                        limit = PENDING_RBC_STASH_LIMIT,
+                        limit = self.config.rbc_pending_session_limit,
                         dropped_bytes,
                         "dropping pending RBC DELIVER: stash session limit reached before INIT"
                     );
@@ -3423,7 +3615,7 @@ impl Actor {
                     );
                     warn!(
                         ?key,
-                        limit = PENDING_RBC_STASH_LIMIT,
+                        limit = actor.config.rbc_pending_session_limit,
                         reason,
                         dropped_bytes,
                         "dropping pending RBC DELIVER: stash session limit reached"
@@ -3829,7 +4021,7 @@ impl Actor {
                         height = key.1,
                         view = key.2,
                         sender,
-                        limit = PENDING_RBC_STASH_LIMIT,
+                        limit = self.config.rbc_pending_session_limit,
                         dropped_bytes,
                         "dropping deferred RBC DELIVER: stash session limit reached"
                     );
@@ -4168,6 +4360,10 @@ impl Actor {
                             ?key,
                             "RBC persist queue full; deferring session persistence"
                         );
+                        status::inc_rbc_store_persist_drops();
+                        if let Some(telemetry) = self.telemetry_handle() {
+                            telemetry.inc_rbc_persist_drops();
+                        }
                     }
                     Err(mpsc::TrySendError::Disconnected(_work)) => {
                         warn!(
@@ -4378,11 +4574,13 @@ impl Actor {
         let telemetry_ref = self.telemetry_handle();
         let caps = self.pending_rbc_caps();
         let ttl = self.config.rbc_pending_ttl;
+        let session_limit = self.config.rbc_pending_session_limit;
         Self::update_rbc_backlog_snapshot(
             &self.subsystems.da_rbc.rbc.sessions,
             &self.subsystems.da_rbc.rbc.pending,
             caps,
             ttl,
+            session_limit,
             telemetry_ref,
         );
     }
@@ -4393,6 +4591,7 @@ impl Actor {
         pending: &BTreeMap<SessionKey, PendingRbcMessages>,
         pending_caps: (usize, usize),
         pending_ttl: Duration,
+        pending_session_limit: usize,
         telemetry: Option<&crate::telemetry::Telemetry>,
     ) {
         let mut total_missing = 0u64;
@@ -4480,7 +4679,7 @@ impl Actor {
         let (max_pending_chunks, max_pending_bytes) = pending_caps;
         let mut pending_snapshot = status::pending_rbc_snapshot();
         pending_snapshot.sessions = pending_stash_sessions;
-        pending_snapshot.session_cap = u64::try_from(PENDING_RBC_STASH_LIMIT).unwrap_or(u64::MAX);
+        pending_snapshot.session_cap = u64::try_from(pending_session_limit).unwrap_or(u64::MAX);
         pending_snapshot.chunks = pending_stash_chunks;
         pending_snapshot.bytes = pending_stash_bytes;
         pending_snapshot.max_chunks_per_session =

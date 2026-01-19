@@ -13,7 +13,13 @@ manifest = [
     "dep:iroha_crypto",
     "dep:ed25519-dalek",
 ]
-da_harness = ["manifest", "dep:eyre", "dep:clap", "dep:iroha_crypto"]
+da_harness = [
+    "manifest",
+    "dep:eyre",
+    "dep:clap",
+    "dep:iroha_crypto",
+    "dep:iroha_primitives",
+]
 cli = [
     "manifest",
     "dep:ed25519-dalek",
@@ -37,6 +43,7 @@ sorafs_manifest = { path = "../sorafs_manifest", default-features = false, optio
 iroha_crypto = { workspace = true, optional = true }
 iroha_data_model = { workspace = true, optional = true }
 iroha_config = { workspace = true, optional = true }
+iroha_primitives = { workspace = true, optional = true, features = ["simd-accel"] }
 ivm = { workspace = true, optional = true }
 sha3 = { version = "0.10.8" }
 eyre = { workspace = true, optional = true }

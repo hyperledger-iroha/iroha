@@ -2337,6 +2337,8 @@ pub mod sumeragi {
     pub const RBC_PENDING_MAX_CHUNKS: usize = 128;
     /// Default maximum pending RBC chunk bytes per session before INIT.
     pub const RBC_PENDING_MAX_BYTES: usize = 8 * 1024 * 1024; // 8 MiB
+    /// Default maximum pending RBC sessions stashed before INIT.
+    pub const RBC_PENDING_SESSION_LIMIT: usize = 256;
     /// Default TTL (milliseconds) for pending RBC stashes awaiting INIT.
     pub const RBC_PENDING_TTL_MS: u64 = 30_000;
     /// Default: do not force RBC deliver quorum to 1.
@@ -2457,6 +2459,8 @@ pub mod sumeragi {
         pub const RECONFIG_EVIDENCE_HORIZON_BLOCKS: u64 = 7_200;
         /// Activation lag in blocks for newly scheduled validator sets.
         pub const RECONFIG_ACTIVATION_LAG_BLOCKS: u64 = 1;
+        /// Slashing delay in blocks before evidence penalties apply (3 days at 1s block time).
+        pub const SLASHING_DELAY_BLOCKS: u64 = 259_200;
         /// Finality margin (blocks) required before activating a newly elected set.
         pub const FINALITY_MARGIN_BLOCKS: u64 = 8;
     }

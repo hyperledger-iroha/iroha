@@ -24,7 +24,7 @@ remaining Sumeragi/NPoS work incrementally. Status annotations follow the conven
 4. ✅ Former message variants, telemetry counters, and pending commit caches were deleted; the compatibility matrix now reflects the Vote/commit-certificate-only surface.
 
 ### A3 — Engine & Pacemaker Enforcement
-- ✅ Lock/Highest commit-certificate invariants enforced in `handle_message` (see `block_created_header_sanity`).
+- ✅ Lock/Highest QC invariants enforced in `handle_message` (see `block_created_header_sanity`).
 - ✅ Data-availability tracking validates the RBC payload hash when recording delivery (`Actor::ensure_block_matches_rbc_payload`) so mismatched sessions cannot be treated as delivered.
 - ✅ Wire precommit commit-certificate requirement (`require_precommit_qc`) into default configs and add negative tests (default now `true`; tests cover both gated and opt-out paths).
 - ✅ Replace view-wide redundant-send heuristics with EMA-backed pacemaker controllers (`aggregator_retry_deadline` now derives from the live EMA and drives redundant send deadlines).

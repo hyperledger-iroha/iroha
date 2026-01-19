@@ -313,6 +313,9 @@ fn select_entrypoint(entrypoints: &[EntrypointDescriptor]) -> Option<&Entrypoint
 /// Normalize manifest/entrypoint hint keys into canonical WSV keys plus state keys.
 #[allow(clippy::too_many_lines)]
 fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Option<AccessSet> {
+    if read_keys.iter().any(|key| key == "*") || write_keys.iter().any(|key| key == "*") {
+        return Some(AccessSet::global());
+    }
     let mut advisory = StateAccessSetAdvisory::default();
     let mut state_reads: BTreeSet<String> = BTreeSet::new();
     let mut state_writes: BTreeSet<String> = BTreeSet::new();
@@ -1349,6 +1352,14 @@ mod tests {
     }
 
     #[test]
+    fn access_set_hints_accept_global_wildcard() {
+        let reads = vec!["*".to_owned()];
+        let set = access_set_from_hint_keys(&reads, &[]).expect("expected global access set");
+        assert!(set.read_keys.is_empty());
+        assert!(set.write_keys.contains("*"));
+    }
+
+    #[test]
     fn ivm_access_uses_manifest_hints_when_present() {
         use iroha_data_model::{
             asset::{AssetDefinitionId, AssetId},
@@ -1386,6 +1397,7 @@ mod tests {
             features_bitmap: None,
             access_set_hints: Some(hints.clone()),
             entrypoints: None,
+            kotoba: None,
             provenance: None,
         }
         .signed(&kp);
@@ -1449,6 +1461,7 @@ mod tests {
             features_bitmap: None,
             access_set_hints: Some(hints_a.clone()),
             entrypoints: None,
+            kotoba: None,
             provenance: None,
         }
         .signed(&kp);
@@ -1479,6 +1492,7 @@ mod tests {
             features_bitmap: None,
             access_set_hints: Some(hints_b.clone()),
             entrypoints: None,
+            kotoba: None,
             provenance: None,
         }
         .signed(&kp);
@@ -1524,6 +1538,7 @@ mod tests {
             features_bitmap: None,
             access_set_hints: Some(hints),
             entrypoints: None,
+            kotoba: None,
             provenance: None,
         }
         .signed(&kp);
@@ -1604,6 +1619,7 @@ mod tests {
             features_bitmap: None,
             access_set_hints: None,
             entrypoints: Some(entrypoints),
+            kotoba: None,
             provenance: None,
         }
         .signed(&kp);
@@ -1678,6 +1694,7 @@ mod tests {
             features_bitmap: None,
             access_set_hints: None,
             entrypoints: Some(entrypoints),
+            kotoba: None,
             provenance: None,
         }
         .signed(&kp);
@@ -1751,6 +1768,7 @@ mod tests {
             features_bitmap: None,
             access_set_hints: None,
             entrypoints: Some(entrypoints),
+            kotoba: None,
             provenance: None,
         }
         .signed(&kp);

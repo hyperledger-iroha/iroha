@@ -284,7 +284,7 @@ CastZkBallot Verification Path
 
 ### Slashing اور Jailing workflow
 
-Consensus جب کوئی validator پروٹوکول کی خلاف ورزی کرے تو Norito-encoded `Evidence` emit کرتا ہے۔ ہر payload in-memory `EvidenceStore` میں آتا ہے اور اگر پہلے نہ دیکھا گیا ہو تو WSV-backed `consensus_evidence` map میں materialize ہو جاتا ہے۔ `sumeragi.npos.reconfig.evidence_horizon_blocks` (default `7200` blocks) سے پرانے ریکارڈ reject ہو جاتے ہیں تاکہ archive bounded رہے، مگر rejection کو operators کے لئے log کیا جاتا ہے۔
+Consensus جب کوئی validator پروٹوکول کی خلاف ورزی کرے تو Norito-encoded `Evidence` emit کرتا ہے۔ ہر payload in-memory `EvidenceStore` میں آتا ہے اور اگر پہلے نہ دیکھا گیا ہو تو WSV-backed `consensus_evidence` map میں materialize ہو جاتا ہے۔ `sumeragi.npos.reconfig.evidence_horizon_blocks` (default `7200` blocks) سے پرانے ریکارڈ reject ہو جاتے ہیں تاکہ archive bounded رہے، مگر rejection کو operators کے لئے log کیا جاتا ہے۔ Evidence within the horizon also respects `sumeragi.npos.reconfig.activation_lag_blocks` (default `1`) and the slashing delay `sumeragi.npos.reconfig.slashing_delay_blocks` (default `259200`); governance can cancel penalties with `CancelConsensusEvidencePenalty` before slashing applies; the record is marked `penalty_cancelled` and `penalty_cancelled_at_height`.
 
 Recognized offences `EvidenceKind` سے one-to-one map ہوتے ہیں؛ discriminants مستحکم ہیں اور data model کے ذریعے enforce ہوتے ہیں:
 
@@ -327,6 +327,7 @@ Joint consensus اس بات کی ضمانت دیتا ہے کہ outgoing validato
 
 - `SumeragiParameter::NextMode` اور `SumeragiParameter::ModeActivationHeight` کو **اسی بلاک** میں commit ہونا چاہیے۔ `mode_activation_height` کو update لانے والے بلاک کی height سے strictly بڑا ہونا چاہیے، تاکہ کم از کم ایک بلاک lag ملے۔
 - `sumeragi.npos.reconfig.activation_lag_blocks` (default `1`) configuration guard ہے جو zero-lag hand-offs کو روکتا ہے:
+- `sumeragi.npos.reconfig.slashing_delay_blocks` (default `259200`) delays consensus slashing so governance can cancel penalties before they apply.
 
 ```rust
 use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_BLOCKS;

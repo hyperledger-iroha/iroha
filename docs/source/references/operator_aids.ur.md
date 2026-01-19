@@ -27,11 +27,11 @@ translation_last_reviewed: 2026-01-01
     - `curl -Ns http://127.0.0.1:8080/v1/sumeragi/new_view/sse`
 - میٹرکس: `sumeragi_new_view_receipts_by_hv{height,view}` گیجز کاؤنٹس کو ظاہر کرتے ہیں۔
 - GET `/v1/sumeragi/status`
-  - لیڈر انڈیکس، Highest/Locked commit certificates (`highest_qc`/`locked_qc`, ہائٹس/ویوز/سبجیکٹ ہیشز)، کلیکٹر/VRF کاؤنٹرز، pacemaker ڈفرلز، ٹرانزیکشن کیو ڈیپتھ، اور RBC اسٹور ہیلتھ (`rbc_store.{sessions,bytes,pressure_level,evictions_total,recent_evictions[...]}`) کا سنیپ شاٹ۔
+  - لیڈر انڈیکس، Highest/Locked QCs (`highest_qc`/`locked_qc`, ہائٹس/ویوز/سبجیکٹ ہیشز)، کلیکٹر/VRF کاؤنٹرز، pacemaker ڈفرلز، ٹرانزیکشن کیو ڈیپتھ، اور RBC اسٹور ہیلتھ (`rbc_store.{sessions,bytes,pressure_level,persist_drops_total,evictions_total,recent_evictions[...]}`) کا سنیپ شاٹ۔
 - GET `/v1/sumeragi/status/sse`
   - `/v1/sumeragi/status` والے payload کا SSE اسٹریم (≈1 سیکنڈ) لائیو ڈیش بورڈز کے لیے۔
 - GET `/v1/sumeragi/qc`
-  - highest/locked commit certificates کا سنیپ شاٹ؛ معلوم ہونے پر highest commit certificate کے لیے `subject_block_hash` شامل ہوتا ہے۔
+  - highest/locked QCs کا سنیپ شاٹ؛ معلوم ہونے پر highest QC کے لیے `subject_block_hash` شامل ہوتا ہے۔
 - GET `/v1/sumeragi/pacemaker`
   - pacemaker ٹائمر/کنفیگ: `{ backoff_ms, rtt_floor_ms, jitter_ms, backoff_multiplier, rtt_floor_multiplier, max_backoff_ms, jitter_frac_permille }`۔
 - GET `/v1/sumeragi/leader`

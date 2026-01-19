@@ -16,6 +16,9 @@ operateur actualisees pour l alea VRF et l evidence de slashing. Utilisez-le ave
 {doc}`sumeragi` et {doc}`sumeragi_chaos_performance_runbook` lorsque vous preparez
 un nouveau build de validateur ou capturez des artefacts de readiness pour governance.
 
+
+Note: For the v1 release, VRF penalties jail offenders after the activation lag, and consensus slashing is delayed by `sumeragi.npos.reconfig.slashing_delay_blocks` (default 259200 blocks, ~3 days at 1s) so governance can cancel with `CancelConsensusEvidencePenalty` before it applies.
+
 ## Portee et prerequis
 
 - `iroha_cli` configure pour le cluster cible (voir `docs/source/cli.md`).

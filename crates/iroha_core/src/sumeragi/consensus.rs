@@ -218,6 +218,7 @@ pub fn compute_consensus_handshake_caps_from_view(
                         finality_margin_blocks: npos_cfg.election.finality_margin_blocks,
                         evidence_horizon_blocks: npos_cfg.reconfig.evidence_horizon_blocks,
                         activation_lag_blocks: npos_cfg.reconfig.activation_lag_blocks,
+                        slashing_delay_blocks: npos_cfg.reconfig.slashing_delay_blocks,
                     }),
                     sumeragi_config.epoch_length_blocks.max(1),
                 )
@@ -246,6 +247,7 @@ pub fn compute_consensus_handshake_caps_from_view(
                         finality_margin_blocks: npos.finality_margin_blocks(),
                         evidence_horizon_blocks: npos.evidence_horizon_blocks(),
                         activation_lag_blocks: npos.activation_lag_blocks(),
+                        slashing_delay_blocks: npos.slashing_delay_blocks(),
                     }),
                     npos.epoch_length_blocks().max(1),
                 )
@@ -641,6 +643,7 @@ mod tests {
                 finality_margin_blocks: 8,
                 evidence_horizon_blocks: 50,
                 activation_lag_blocks: 1,
+                slashing_delay_blocks: 9,
             }),
         };
 
@@ -762,6 +765,7 @@ mod tests {
                 finality_margin_blocks: 8,
                 evidence_horizon_blocks: 7_200,
                 activation_lag_blocks: 1,
+                slashing_delay_blocks: 9,
             }),
         };
         let a = compute_consensus_fingerprint_from_params(&chain, &p, NPOS_TAG);

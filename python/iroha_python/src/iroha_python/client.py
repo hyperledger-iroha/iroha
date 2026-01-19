@@ -4065,6 +4065,7 @@ class SumeragiRbcStoreStatus:
     bytes: int
     pressure_level: int
     backpressure_deferrals_total: int
+    persist_drops_total: int
     evictions_total: int
     recent_evictions: List[SumeragiRbcEviction]
 
@@ -4077,6 +4078,7 @@ class SumeragiRbcStoreStatus:
             bytes_used = int(payload.get("bytes", 0))
             pressure_level = int(payload.get("pressure_level", 0))
             backpressure_deferrals_total = int(payload.get("backpressure_deferrals_total", 0))
+            persist_drops_total = int(payload.get("persist_drops_total", 0))
             evictions_total = int(payload.get("evictions_total", 0))
         except (TypeError, ValueError) as exc:
             raise TypeError("RBC store counters must be numeric") from exc
@@ -4093,6 +4095,7 @@ class SumeragiRbcStoreStatus:
             bytes=bytes_used,
             pressure_level=pressure_level,
             backpressure_deferrals_total=backpressure_deferrals_total,
+            persist_drops_total=persist_drops_total,
             evictions_total=evictions_total,
             recent_evictions=recent_evictions,
         )

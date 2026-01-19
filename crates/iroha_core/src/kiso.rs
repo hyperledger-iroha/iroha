@@ -1020,6 +1020,8 @@ mod tests {
                     iroha_config::parameters::defaults::sumeragi::RBC_PENDING_MAX_CHUNKS,
                 rbc_pending_max_bytes:
                     iroha_config::parameters::defaults::sumeragi::RBC_PENDING_MAX_BYTES,
+                rbc_pending_session_limit:
+                    iroha_config::parameters::defaults::sumeragi::RBC_PENDING_SESSION_LIMIT,
                 rbc_pending_ttl: std::time::Duration::from_millis(
                     iroha_config::parameters::defaults::sumeragi::RBC_PENDING_TTL_MS,
                 ),
@@ -1122,6 +1124,8 @@ mod tests {
                             iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_EVIDENCE_HORIZON_BLOCKS,
                         activation_lag_blocks:
                             iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_BLOCKS,
+                        slashing_delay_blocks:
+                            iroha_config::parameters::defaults::sumeragi::npos::SLASHING_DELAY_BLOCKS,
                     },
                 },
                 use_stake_snapshot_roster: false,

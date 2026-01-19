@@ -57,6 +57,8 @@ pub enum Item {
     State(StateDecl),
     /// Contract-level trigger declaration (manifest-only metadata).
     Trigger(TriggerDecl),
+    /// Contract-level localization table (`kotoba { ... }`).
+    Kotoba(KotobaBlock),
 }
 
 /// Metadata declared at the `seiyaku` contract level.
@@ -177,6 +179,26 @@ pub struct TriggerMetadataEntry {
     pub value: Expr,
 }
 
+/// Contract-level localization table.
+#[derive(Debug, PartialEq, Clone)]
+pub struct KotobaBlock {
+    pub entries: Vec<KotobaEntry>,
+}
+
+/// Localized message entry keyed by a stable message id.
+#[derive(Debug, PartialEq, Clone)]
+pub struct KotobaEntry {
+    pub msg_id: String,
+    pub translations: Vec<KotobaTranslation>,
+}
+
+/// Localization entry for a specific language tag.
+#[derive(Debug, PartialEq, Clone)]
+pub struct KotobaTranslation {
+    pub lang: String,
+    pub text: String,
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub enum Pattern {
     Name(String),
@@ -284,6 +306,7 @@ pub enum Expr {
     Tuple(Vec<Expr>),
     Bool(bool),
     Number(i64),
+    Decimal(String),
     String(String),
     Bytes(Vec<u8>),
     Ident(String),

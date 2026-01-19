@@ -123,6 +123,34 @@ Semántica
 - Los mapas de estado durables actualmente admiten solo tipos de clave `int` y pointer-ABI; otros tipos de clave se rechazan en compilación.
 - Los campos de estado durable deben ser `int`, `bool`, `Json`, `Blob`/`bytes` o tipos pointer-ABI (incluidas structs/tuplas compuestas por estos campos); `string` no se admite para estado durable.
 
+## Declaraciones de disparadores
+
+Las declaraciones de disparadores adjuntan metadatos de programación a los manifiestos de puntos
+de entrada y se registran automáticamente cuando se activa una instancia de contrato (se eliminan
+al desactivarla). Se analizan dentro de un bloque `seiyaku`.
+
+Sintaxis
+```
+register_trigger wake {
+  call run;
+  on time pre_commit;
+  repeats 2;
+  metadata { tag: "alpha"; count: 1; enabled: true; }
+}
+```
+
+Notas
+- `call` debe referenciar un `kotoage fn` público del mismo contrato; un `namespace::entrypoint`
+  opcional se registra en el manifiesto pero los callbacks entre contratos se rechazan por ahora
+  (solo callbacks locales).
+- Filtros soportados: `time pre_commit` y `time schedule(start_ms, period_ms?)`, más
+  `execute trigger <name>` para triggers por llamada. Los filtros de datos/pipeline aún no están
+  soportados.
+- Los valores de metadata deben ser literales JSON (`string`, `number`, `bool`, `null`) o
+  `json!(...)`.
+- Claves de metadata inyectadas por el runtime: `contract_namespace`, `contract_id`,
+  `contract_entrypoint`, `contract_code_hash`, `contract_trigger_id`.
+
 ## Funciones y parámetros
 
 Sintaxis
@@ -207,9 +235,9 @@ Estado de implementación
   - Se admite azúcar de método: `s.name()`, `s.json()`, `b.blob()`, `b.norito_bytes()`.
 
 Builtins de host/syscall (mapean a SCALL; números exactos en ivm.md)
-- `mint_asset(AccountId*, AssetDefinitionId*, int)`
-- `burn_asset(AccountId*, AssetDefinitionId*, int)`
-- `transfer_asset(AccountId*, AccountId*, AssetDefinitionId*, int)`
+- `mint_asset(AccountId*, AssetDefinitionId*, numeric)`
+- `burn_asset(AccountId*, AssetDefinitionId*, numeric)`
+- `transfer_asset(AccountId*, AccountId*, AssetDefinitionId*, numeric)`
 - `set_account_detail(AccountId*, Name*, Json*)`
 - `nft_mint_asset(NftId*, AccountId*)`
 - `nft_transfer_asset(AccountId*, NftId*, AccountId*)`

@@ -523,6 +523,35 @@ struct AccessIds {
     writes: SmallVec<[u32; 8]>,
 }
 
+const GLOBAL_WILDCARD_KEY: &str = "*";
+const STATE_KEY_PREFIX: &str = "state:";
+const STATE_WILDCARD_SUFFIX: &str = "[*]";
+
+fn state_wildcard_base(key: &str) -> Option<&str> {
+    let rest = key.strip_prefix(STATE_KEY_PREFIX)?;
+    if rest == "*" {
+        return Some("*");
+    }
+    rest.strip_suffix(STATE_WILDCARD_SUFFIX)
+}
+
+fn state_map_entry_base(key: &str) -> Option<&str> {
+    let rest = key.strip_prefix(STATE_KEY_PREFIX)?;
+    let (base, _) = rest.split_once('/')?;
+    if base.is_empty() {
+        return None;
+    }
+    Some(base)
+}
+
+fn state_wildcard_key(base: &str) -> String {
+    if base == "*" {
+        format!("{STATE_KEY_PREFIX}*")
+    } else {
+        format!("{STATE_KEY_PREFIX}{base}{STATE_WILDCARD_SUFFIX}")
+    }
+}
+
 fn union_from_sorted_triplets(
     dsu: &mut DisjointSet,
     triplets: &[crate::pipeline::gpu::AccessTriplet],
@@ -559,7 +588,25 @@ fn union_from_sorted_triplets(
 
 #[allow(clippy::explicit_iter_loop)]
 fn intern_access(access: &[crate::pipeline::access::AccessSet]) -> (usize, Vec<AccessIds>) {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let mut wildcard_bases: BTreeSet<String> = BTreeSet::new();
+    let mut global_present = false;
+    for aset in access.iter() {
+        for key in aset.read_keys.iter().chain(aset.write_keys.iter()) {
+            if key == GLOBAL_WILDCARD_KEY {
+                global_present = true;
+            }
+            if let Some(base) = state_wildcard_base(key) {
+                wildcard_bases.insert(base.to_string());
+            }
+        }
+    }
+
+    let mut wildcard_keys: BTreeMap<String, String> = BTreeMap::new();
+    for base in &wildcard_bases {
+        wildcard_keys.insert(base.clone(), state_wildcard_key(base));
+    }
 
     let mut map: BTreeMap<&str, u32> = BTreeMap::new();
     // Assign stable IDs by iterating lexicographically over all keys
@@ -570,6 +617,12 @@ fn intern_access(access: &[crate::pipeline::access::AccessSet]) -> (usize, Vec<A
         for k in aset.write_keys.iter() {
             map.entry(k.as_str()).or_insert(u32::MAX);
         }
+    }
+    for k in wildcard_keys.values() {
+        map.entry(k.as_str()).or_insert(u32::MAX);
+    }
+    if global_present {
+        map.entry(GLOBAL_WILDCARD_KEY).or_insert(u32::MAX);
     }
 
     let mut next: u32 = 0;
@@ -583,11 +636,41 @@ fn intern_access(access: &[crate::pipeline::access::AccessSet]) -> (usize, Vec<A
     for aset in access.iter() {
         let mut reads: SmallVec<[u32; 8]> = SmallVec::new();
         let mut writes: SmallVec<[u32; 8]> = SmallVec::new();
+        let has_global = aset.read_keys.contains(GLOBAL_WILDCARD_KEY)
+            || aset.write_keys.contains(GLOBAL_WILDCARD_KEY);
+        let mut add_state_wildcard = |key: &str, reads: &mut SmallVec<[u32; 8]>| {
+            if let Some(base) = state_map_entry_base(key) {
+                if let Some(wildcard_key) = wildcard_keys.get(base) {
+                    reads.push(*map.get(wildcard_key.as_str()).expect("key interned"));
+                }
+                return;
+            }
+            if wildcard_bases.contains("*") && key.starts_with(STATE_KEY_PREFIX) {
+                if let Some(wildcard_key) = wildcard_keys.get("*") {
+                    reads.push(*map.get(wildcard_key.as_str()).expect("key interned"));
+                }
+            }
+        };
         for key in aset.read_keys.iter() {
-            reads.push(*map.get(key.as_str()).expect("all keys interned"));
+            if state_wildcard_base(key).is_some() {
+                writes.push(*map.get(key.as_str()).expect("all keys interned"));
+            } else {
+                reads.push(*map.get(key.as_str()).expect("all keys interned"));
+            }
+            add_state_wildcard(key, &mut reads);
         }
         for key in aset.write_keys.iter() {
-            writes.push(*map.get(key.as_str()).expect("all keys interned"));
+            if state_wildcard_base(key).is_some() {
+                writes.push(*map.get(key.as_str()).expect("all keys interned"));
+            } else {
+                writes.push(*map.get(key.as_str()).expect("all keys interned"));
+            }
+            add_state_wildcard(key, &mut reads);
+        }
+        if has_global {
+            writes.push(*map.get(GLOBAL_WILDCARD_KEY).expect("all keys interned"));
+        } else if global_present {
+            reads.push(*map.get(GLOBAL_WILDCARD_KEY).expect("all keys interned"));
         }
         let len_reads = sort_dedup_u32_in_place(reads.0.as_mut_slice());
         reads.0.truncate(len_reads);
@@ -10835,6 +10918,42 @@ mod dag_tests {
         assert_eq!(indeg, vec![0, 1]);
         assert_eq!(&adj[0][..], &[1]);
         assert!(adj[1].is_empty());
+    }
+
+    #[test]
+    fn state_map_wildcard_conflicts_with_map_entries() {
+        let a = rw(&[], &["state:Foo/1"]);
+        let b = rw(&[], &["state:Foo/2"]);
+        let c = rw(&[], &["state:Foo[*]"]);
+        let (adj, indeg) = build_conflict_graph(&[a, b, c]);
+        assert_eq!(indeg, vec![0, 0, 2]);
+        assert_eq!(&adj[0][..], &[2]);
+        assert_eq!(&adj[1][..], &[2]);
+        assert!(adj[2].is_empty());
+    }
+
+    #[test]
+    fn global_wildcard_conflicts_with_all() {
+        let a = rw(&[], &["k1"]);
+        let b = rw(&[], &["*"]);
+        let c = rw(&[], &["k2"]);
+        let (adj, indeg) = build_conflict_graph(&[a, b, c]);
+        assert_eq!(indeg, vec![0, 1, 1]);
+        assert_eq!(&adj[0][..], &[1]);
+        assert_eq!(&adj[1][..], &[2]);
+        assert!(adj[2].is_empty());
+    }
+
+    #[test]
+    fn state_global_wildcard_conflicts_with_state_entries() {
+        let a = rw(&[], &["state:Foo/1"]);
+        let b = rw(&[], &["state:*"]);
+        let c = rw(&[], &["state:Foo/2"]);
+        let (adj, indeg) = build_conflict_graph(&[a, b, c]);
+        assert_eq!(indeg, vec![0, 1, 1]);
+        assert_eq!(&adj[0][..], &[1]);
+        assert_eq!(&adj[1][..], &[2]);
+        assert!(adj[2].is_empty());
     }
 
     #[test]

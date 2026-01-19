@@ -42,6 +42,7 @@ pub mod isi {
             governance::{
                 GovernanceEvent, GovernanceParliamentApprovalRecorded, GovernanceSlashReason,
             },
+            prelude::TriggerEvent,
             smart_contract::{
                 ContractCodeRegistered, ContractCodeRemoved, ContractInstanceActivated,
                 ContractInstanceDeactivated, SmartContractEvent,
@@ -79,8 +80,114 @@ pub mod isi {
     use super::*;
     use crate::{
         governance::selector::derive_parliament_bodies, state::derive_validator_key_id,
+        smartcontracts::triggers::isi::register_trigger_internal,
         sumeragi::status::PeerKeyPolicyRejectReason, zk::hash_vk,
     };
+
+    fn ensure_metadata_value(
+        metadata: &mut Metadata,
+        key: &Name,
+        value: iroha_primitives::json::Json,
+    ) -> Result<(), Error> {
+        if let Some(existing) = metadata.get(key) {
+            if existing != &value {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "trigger metadata `{key}` does not match contract deployment context"
+                    )),
+                ));
+            }
+            return Ok(());
+        }
+        metadata.insert(key.clone(), value);
+        Ok(())
+    }
+
+    fn register_manifest_triggers(
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        namespace: &str,
+        contract_id: &str,
+        code_bytes: &[u8],
+        manifest: &ContractManifest,
+    ) -> Result<(), Error> {
+        let Some(entrypoints) = manifest.entrypoints.as_ref() else {
+            return Ok(());
+        };
+        let has_triggers = entrypoints
+            .iter()
+            .any(|entrypoint| !entrypoint.triggers.is_empty());
+        if !has_triggers {
+            return Ok(());
+        }
+        let code_hash = manifest.code_hash.ok_or_else(|| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                "contract manifest missing code_hash for trigger registration".into(),
+            ))
+        })?;
+
+        for entrypoint in entrypoints {
+            for descriptor in &entrypoint.triggers {
+                let code_hash_string = code_hash.to_string();
+                let trigger_id_string = descriptor.id.to_string();
+                if let Some(ref target_ns) = descriptor.callback.namespace
+                    && target_ns != namespace
+                {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "cross-contract trigger callbacks are not supported yet".into(),
+                        ),
+                    ));
+                }
+                let mut metadata = descriptor.metadata.clone();
+                let ns_key = Name::from_str("contract_namespace").expect("static metadata key");
+                let cid_key = Name::from_str("contract_id").expect("static metadata key");
+                let ep_key = Name::from_str("contract_entrypoint").expect("static metadata key");
+                let code_key = Name::from_str("contract_code_hash").expect("static metadata key");
+                let trigger_key = Name::from_str("contract_trigger_id").expect("static metadata");
+                ensure_metadata_value(
+                    &mut metadata,
+                    &ns_key,
+                    iroha_primitives::json::Json::from(namespace),
+                )?;
+                ensure_metadata_value(
+                    &mut metadata,
+                    &cid_key,
+                    iroha_primitives::json::Json::from(contract_id),
+                )?;
+                ensure_metadata_value(
+                    &mut metadata,
+                    &ep_key,
+                    iroha_primitives::json::Json::from(descriptor.callback.entrypoint.as_str()),
+                )?;
+                ensure_metadata_value(
+                    &mut metadata,
+                    &code_key,
+                    iroha_primitives::json::Json::from(code_hash_string.as_str()),
+                )?;
+                ensure_metadata_value(
+                    &mut metadata,
+                    &trigger_key,
+                    iroha_primitives::json::Json::from(trigger_id_string.as_str()),
+                )?;
+
+                let trigger_authority = descriptor
+                    .authority
+                    .clone()
+                    .unwrap_or_else(|| authority.clone());
+                let action = iroha_data_model::trigger::action::Action::new(
+                    Executable::Ivm(IvmBytecode::from_compiled(code_bytes.to_vec())),
+                    descriptor.repeats,
+                    trigger_authority,
+                    descriptor.filter.clone(),
+                )
+                .with_metadata(metadata);
+                let trigger = Trigger::new(descriptor.id.clone(), action);
+                register_trigger_internal(authority, state_transaction, trigger, true)?;
+            }
+        }
+        Ok(())
+    }
 
     fn has_permission(world: &WorldTransaction<'_, '_>, who: &AccountId, name: &str) -> bool {
         world
@@ -2804,6 +2911,7 @@ pub mod isi {
                 features_bitmap: None,
                 access_set_hints: None,
                 entrypoints: None,
+                kotoba: None,
                 provenance: Some(provenance.clone()),
             };
             ensure_manifest_signature(&manifest)?;
@@ -3066,16 +3174,42 @@ pub mod isi {
                 // idempotent when same
                 return Ok(());
             }
-            // Optional: ensure manifest exists for code_hash
-            if state_transaction
-                .world
-                .contract_manifests
-                .get(&key)
-                .is_none()
-            {
+            let Some(manifest) = state_transaction.world.contract_manifests.get(&key).cloned()
+            else {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract("manifest for code_hash not found".into()),
                 ));
+            };
+            let needs_trigger_registration = manifest
+                .entrypoints
+                .as_ref()
+                .is_some_and(|entrypoints| {
+                    entrypoints
+                        .iter()
+                        .any(|entrypoint| !entrypoint.triggers.is_empty())
+                });
+            if needs_trigger_registration {
+                let code_bytes = state_transaction
+                    .world
+                    .contract_code
+                    .get(&key)
+                    .cloned()
+                    .ok_or_else(|| {
+                        InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(
+                                "contract bytecode is required to register manifest triggers"
+                                    .into(),
+                            ),
+                        )
+                    })?;
+                register_manifest_triggers(
+                    authority,
+                    state_transaction,
+                    self.namespace(),
+                    self.contract_id(),
+                    &code_bytes,
+                    &manifest,
+                )?;
             }
             state_transaction
                 .world
@@ -3136,6 +3270,30 @@ pub mod isi {
                     Some(trimmed.to_owned())
                 }
             });
+            let trigger_ids: Vec<TriggerId> = state_transaction
+                .world
+                .contract_manifests
+                .get(&prev_hash)
+                .and_then(|manifest| manifest.entrypoints.as_ref())
+                .map(|entrypoints| {
+                    entrypoints
+                        .iter()
+                        .flat_map(|entrypoint| {
+                            entrypoint
+                                .triggers
+                                .iter()
+                                .map(|descriptor| descriptor.id.clone())
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            for trigger_id in trigger_ids {
+                if state_transaction.world.triggers.remove(&trigger_id) {
+                    state_transaction
+                        .world
+                        .emit_events(Some(TriggerEvent::Deleted(trigger_id)));
+                }
+            }
             state_transaction
                 .world
                 .emit_events(Some(SmartContractEvent::InstanceDeactivated(
@@ -9334,6 +9492,32 @@ pub mod isi {
                             );
                         })*
                         Parameter::Custom(next) => {
+                            if let Some(npos) = iroha_data_model::parameter::system::SumeragiNposParameters::from_custom_parameter(&next) {
+                                if npos.evidence_horizon_blocks() == 0 {
+                                    return Err(InstructionExecutionError::InvalidParameter(
+                                        InvalidParameterError::SmartContract(
+                                            "sumeragi.npos.reconfig.evidence_horizon_blocks must be greater than zero"
+                                                .to_owned(),
+                                        ),
+                                    ));
+                                }
+                                if npos.activation_lag_blocks() == 0 {
+                                    return Err(InstructionExecutionError::InvalidParameter(
+                                        InvalidParameterError::SmartContract(
+                                            "sumeragi.npos.reconfig.activation_lag_blocks must be greater than zero"
+                                                .to_owned(),
+                                        ),
+                                    ));
+                                }
+                                if npos.slashing_delay_blocks() == 0 {
+                                    return Err(InstructionExecutionError::InvalidParameter(
+                                        InvalidParameterError::SmartContract(
+                                            "sumeragi.npos.reconfig.slashing_delay_blocks must be greater than zero"
+                                                .to_owned(),
+                                        ),
+                                    ));
+                                }
+                            }
                             let params = state_transaction.world.parameters.get_mut();
                             // Set new value via public setter; previous value is unknown via public API
                             params.set_parameter(Parameter::Custom(next.clone()));
@@ -9475,7 +9659,7 @@ pub mod isi {
         };
         use iroha_data_model::{
             isi::{SetParameter, bridge::RecordBridgeReceipt},
-            parameter::system::{SumeragiConsensusMode, SumeragiParameter},
+            parameter::system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
             prelude::Parameter,
             zk::OpenVerifyEnvelope,
         };
@@ -12382,6 +12566,73 @@ pub mod isi {
                     "sumeragi.collectors_redundant_send_r must be greater than zero"
                 ),
                 other => panic!("unexpected error type: {other:?}"),
+            }
+        }
+
+        #[test]
+        fn set_parameter_rejects_zero_npos_reconfig_fields() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+
+            {
+                let mut stx = state_block.transaction();
+                let mut params = SumeragiNposParameters::default();
+                params.evidence_horizon_blocks = 0;
+                let update = SetParameter(Parameter::Custom(params.into_custom_parameter()));
+                let err = update
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect_err("evidence_horizon_blocks=0 must be rejected");
+                match err {
+                    Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => {
+                        assert_eq!(
+                            msg,
+                            "sumeragi.npos.reconfig.evidence_horizon_blocks must be greater than zero"
+                        )
+                    }
+                    other => panic!("unexpected error type: {other:?}"),
+                }
+            }
+
+            {
+                let mut stx = state_block.transaction();
+                let mut params = SumeragiNposParameters::default();
+                params.activation_lag_blocks = 0;
+                let update = SetParameter(Parameter::Custom(params.into_custom_parameter()));
+                let err = update
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect_err("activation_lag_blocks=0 must be rejected");
+                match err {
+                    Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => {
+                        assert_eq!(
+                            msg,
+                            "sumeragi.npos.reconfig.activation_lag_blocks must be greater than zero"
+                        )
+                    }
+                    other => panic!("unexpected error type: {other:?}"),
+                }
+            }
+
+            {
+                let mut stx = state_block.transaction();
+                let mut params = SumeragiNposParameters::default();
+                params.slashing_delay_blocks = 0;
+                let update = SetParameter(Parameter::Custom(params.into_custom_parameter()));
+                let err = update
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect_err("slashing_delay_blocks=0 must be rejected");
+                match err {
+                    Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => {
+                        assert_eq!(
+                            msg,
+                            "sumeragi.npos.reconfig.slashing_delay_blocks must be greater than zero"
+                        )
+                    }
+                    other => panic!("unexpected error type: {other:?}"),
+                }
             }
         }
 

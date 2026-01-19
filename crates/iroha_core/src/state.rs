@@ -16203,17 +16203,16 @@ pub fn replay_blocks_from_kura_range(
         let (effective_mode, prf_seed) = {
             let view = state.view();
             let mode = crate::sumeragi::effective_consensus_mode(&view, fallback_consensus_mode);
-            let seed = match mode {
-                ConsensusMode::Permissioned => None,
-                ConsensusMode::Npos => Some(crate::sumeragi::npos_seed_for_height(&view, height)),
-            };
+            let seed = Some(crate::sumeragi::prf_seed_for_height(&view, height));
             (mode, seed)
         };
         match effective_mode {
             ConsensusMode::Permissioned => {
-                if view > 0 {
-                    block_topology.nth_rotation(view);
+                block_topology.canonicalize_order();
+                if let Some(seed) = prf_seed {
+                    block_topology.shuffle_prf(seed, height);
                 }
+                block_topology.nth_rotation(view);
             }
             ConsensusMode::Npos => {
                 if let Some(seed) = prf_seed {

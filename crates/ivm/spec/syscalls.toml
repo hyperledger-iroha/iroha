@@ -96,19 +96,19 @@ gas = "G_unreg_asset"
 
 [[syscall]]
 number = "0x22"
-args = "r10=&AccountId, r11=&AssetDefinitionId, r12=amount:u64"
+args = "r10=&AccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric)"
 ret = "u64=0"
 gas = "G_mint"
 
 [[syscall]]
 number = "0x23"
-args = "r10=&AccountId, r11=&AssetDefinitionId, r12=amount:u64"
+args = "r10=&AccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric)"
 ret = "u64=0"
 gas = "G_burn"
 
 [[syscall]]
 number = "0x24"
-args = "r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=amount:u64"
+args = "r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric)"
 ret = "u64=0"
 gas = "G_transfer"
 
@@ -397,6 +397,90 @@ ret = "r10=ptr (&NoritoBytes(Vec<u8> statuses)), r11=status:u64"
 gas = "G_verify"
 
 [[syscall]]
+number = "0x69"
+args = "r10=value:i64"
+ret = "r10=ptr (&NoritoBytes(Numeric))"
+gas = "-"
+
+[[syscall]]
+number = "0x6A"
+args = "r10=&NoritoBytes(Numeric)"
+ret = "r10=value:i64"
+gas = "-"
+
+[[syscall]]
+number = "0x6B"
+args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
+ret = "r10=ptr (&NoritoBytes(Numeric))"
+gas = "-"
+
+[[syscall]]
+number = "0x6C"
+args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
+ret = "r10=ptr (&NoritoBytes(Numeric))"
+gas = "-"
+
+[[syscall]]
+number = "0x6D"
+args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
+ret = "r10=ptr (&NoritoBytes(Numeric))"
+gas = "-"
+
+[[syscall]]
+number = "0x6E"
+args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
+ret = "r10=ptr (&NoritoBytes(Numeric))"
+gas = "-"
+
+[[syscall]]
+number = "0x6F"
+args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
+ret = "r10=ptr (&NoritoBytes(Numeric))"
+gas = "-"
+
+[[syscall]]
+number = "0x70"
+args = "r10=&NoritoBytes(Numeric)"
+ret = "r10=ptr (&NoritoBytes(Numeric))"
+gas = "-"
+
+[[syscall]]
+number = "0x71"
+args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
+ret = "r10=u64(0/1)"
+gas = "-"
+
+[[syscall]]
+number = "0x72"
+args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
+ret = "r10=u64(0/1)"
+gas = "-"
+
+[[syscall]]
+number = "0x73"
+args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
+ret = "r10=u64(0/1)"
+gas = "-"
+
+[[syscall]]
+number = "0x74"
+args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
+ret = "r10=u64(0/1)"
+gas = "-"
+
+[[syscall]]
+number = "0x75"
+args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
+ret = "r10=u64(0/1)"
+gas = "-"
+
+[[syscall]]
+number = "0x76"
+args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
+ret = "r10=u64(0/1)"
+gas = "-"
+
+[[syscall]]
 number = "0x90"
 args = "r10=&Blob(message)"
 ret = "r10=ptr (&Blob(digest))"
@@ -543,7 +627,7 @@ gas = "G_mpath + len"
 [[syscall]]
 number = "0xF9"
 args = "r10=&AccountId, r11=&AssetDefinitionId"
-ret = "u64=amount"
+ret = "ptr (&NoritoBytes(Numeric))"
 gas = "G_get_bal"
 
 [[syscall]]

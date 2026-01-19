@@ -1821,10 +1821,8 @@ impl Actor {
                             highest_qc.view,
                             Some(highest_qc.subject_block_hash),
                         );
-                    } else if highest_missing {
-                        let Some(lock) = self.locked_qc else {
-                            return false;
-                        };
+                    }
+                    if highest_missing {
                         iroha_logger::info!(
                             ?reason,
                             height,
@@ -1832,10 +1830,12 @@ impl Actor {
                             queue_len = pending_queue_len,
                             highest_hash = ?highest_qc.subject_block_hash,
                             locked_hash = ?locked_hash,
-                            "highest QC missing locally; proposing on locked chain"
+                            "highest QC block missing locally; deferring proposal"
                         );
-                        highest_qc = lock;
-                    } else {
+                        self.observe_new_view_highest_qc(highest_qc);
+                        return false;
+                    }
+                    if !locked_missing {
                         iroha_logger::info!(
                             ?reason,
                             height,

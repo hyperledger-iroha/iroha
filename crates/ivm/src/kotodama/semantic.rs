@@ -80,6 +80,10 @@ pub enum ExprKind {
         op: UnaryOp,
         expr: Box<TypedExpr>,
     },
+    /// Numeric cast between int and alias types (fixed_u128/Amount/Balance).
+    NumericCast {
+        expr: Box<TypedExpr>,
+    },
     /// Ternary conditional expression: `cond ? then : else`.
     Conditional {
         cond: Box<TypedExpr>,
@@ -100,6 +104,7 @@ pub enum ExprKind {
         index: Box<TypedExpr>,
     },
     Number(i64),
+    Decimal(String),
     Bool(bool),
     String(String),
     Bytes(Vec<u8>),
@@ -116,6 +121,7 @@ pub struct TypedProgram {
     pub items: Vec<TypedItem>,
     pub triggers: Vec<TypedTrigger>,
     pub contract_meta: Option<ContractMeta>,
+    pub kotoba_entries: Vec<KotobaEntry>,
 }
 
 thread_local! {
@@ -164,6 +170,7 @@ pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
     let mut state_decls: Vec<(String, TypeExpr)> = Vec::new();
     let mut fn_returns: HashMap<String, Type> = HashMap::new();
     let mut fn_modifiers: HashMap<String, FunctionModifiers> = HashMap::new();
+    let mut kotoba_entries: Vec<KotobaEntry> = Vec::new();
     FUNCTION_SUMMARY.with(|map| map.borrow_mut().clear());
     for item in &program.items {
         match item {
@@ -187,6 +194,9 @@ pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
                 fn_modifiers.insert(f.name.clone(), f.modifiers.clone());
             }
             Item::Trigger(_) => {}
+            Item::Kotoba(block) => {
+                kotoba_entries.extend(block.entries.clone());
+            }
         }
     }
     STRUCT_ENV.with(|env| env.replace(structs));
@@ -209,8 +219,6 @@ pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
     for item in &program.items {
         match item {
             Item::Function(f) => items.push(TypedItem::Function(analyze_function(f)?)),
-            Item::Struct(_) => {}
-            Item::State(_) => {}
             Item::Trigger(trigger) => {
                 if !trigger_names.insert(trigger.name.clone()) {
                     return Err(SemanticError {
@@ -219,14 +227,79 @@ pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
                 }
                 triggers.push(analyze_trigger(trigger, &fn_modifiers)?);
             }
+            Item::Struct(_) | Item::State(_) | Item::Kotoba(_) => {}
         }
     }
     enforce_permission_requirements(&items)?;
+    let kotoba_entries = normalize_kotoba_entries(kotoba_entries)?;
     Ok(TypedProgram {
         items,
         triggers,
         contract_meta: program.contract_meta.clone(),
+        kotoba_entries,
     })
+}
+
+fn normalize_kotoba_entries(entries: Vec<KotobaEntry>) -> Result<Vec<KotobaEntry>, SemanticError> {
+    if entries.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut seen_ids: HashMap<String, Vec<KotobaTranslation>> = HashMap::new();
+    for entry in entries {
+        if entry.msg_id.trim().is_empty() {
+            return Err(SemanticError {
+                message: "E_KOTOBA_MSG_ID: kotoba keys must not be empty".into(),
+            });
+        }
+        if seen_ids.contains_key(&entry.msg_id) {
+            return Err(SemanticError {
+                message: format!(
+                    "E_KOTOBA_DUPLICATE_MSG_ID: duplicate kotoba key `{}`",
+                    entry.msg_id
+                ),
+            });
+        }
+        if entry.translations.is_empty() {
+            return Err(SemanticError {
+                message: format!(
+                    "E_KOTOBA_EMPTY_TRANSLATIONS: kotoba key `{}` has no translations",
+                    entry.msg_id
+                ),
+            });
+        }
+        let mut langs = HashSet::new();
+        let mut translations = Vec::with_capacity(entry.translations.len());
+        for translation in entry.translations {
+            if translation.lang.trim().is_empty() {
+                return Err(SemanticError {
+                    message: format!(
+                        "E_KOTOBA_EMPTY_LANG: kotoba key `{}` has an empty language tag",
+                        entry.msg_id
+                    ),
+                });
+            }
+            if !langs.insert(translation.lang.clone()) {
+                return Err(SemanticError {
+                    message: format!(
+                        "E_KOTOBA_DUPLICATE_LANG: kotoba key `{}` repeats language `{}`",
+                        entry.msg_id, translation.lang
+                    ),
+                });
+            }
+            translations.push(translation);
+        }
+        translations.sort_by(|a, b| a.lang.cmp(&b.lang));
+        seen_ids.insert(entry.msg_id, translations);
+    }
+    let mut entries: Vec<KotobaEntry> = seen_ids
+        .into_iter()
+        .map(|(msg_id, translations)| KotobaEntry {
+            msg_id,
+            translations,
+        })
+        .collect();
+    entries.sort_by(|a, b| a.msg_id.cmp(&b.msg_id));
+    Ok(entries)
 }
 
 fn type_name(ty: &Type) -> String {
@@ -366,6 +439,15 @@ fn json_from_expr(expr: &Expr) -> Result<Json, SemanticError> {
     let value = match expr {
         Expr::String(s) => json::Value::String(s.clone()),
         Expr::Number(n) => json::Value::Number(JsonNumber::I64(*n)),
+        Expr::Decimal(raw) => {
+            let value = raw.parse::<f64>().map_err(|err| SemanticError {
+                message: format!("invalid decimal metadata literal `{raw}`: {err}"),
+            })?;
+            let number = JsonNumber::from_f64(value).ok_or_else(|| SemanticError {
+                message: format!("invalid decimal metadata literal `{raw}`: not finite"),
+            })?;
+            json::Value::Number(number)
+        }
         Expr::Bool(b) => json::Value::Bool(*b),
         Expr::Ident(ident) if ident == "null" => json::Value::Null,
         Expr::Call { name, args } if name == "json" => {
@@ -423,6 +505,13 @@ pub(crate) fn is_numeric_type(ty: &Type) -> bool {
     numeric_kind(ty).is_some()
 }
 
+pub(crate) fn is_wide_numeric_type(ty: &Type) -> bool {
+    matches!(
+        resolve_struct_type(ty),
+        Type::FixedU128 | Type::Amount | Type::Balance
+    )
+}
+
 fn is_int_like(ty: &Type) -> bool {
     is_numeric_type(ty)
 }
@@ -452,6 +541,44 @@ fn numeric_result_type(lhs: &Type, rhs: &Type) -> Option<Type> {
         _ => return None,
     };
     Some(numeric_kind_to_type(out))
+}
+
+fn coerce_numeric_expr(expr: &mut TypedExpr, expected: &Type) -> Result<(), SemanticError> {
+    let expected = resolve_struct_type(expected);
+    let actual = resolve_struct_type(&expr.ty);
+    if matches!(expr.expr, ExprKind::Decimal(_)) {
+        if matches!(expected, Type::Int) {
+            return Err(SemanticError {
+                message: "decimal literal cannot be coerced to int".into(),
+            });
+        }
+        if is_wide_numeric_type(&expected) {
+            expr.ty = expected;
+            return Ok(());
+        }
+    }
+    if expected == actual {
+        return Ok(());
+    }
+    let expected_kind = numeric_kind(&expected);
+    let actual_kind = numeric_kind(&actual);
+    if expected_kind.is_none() || actual_kind.is_none() {
+        return Ok(());
+    }
+    let expected_is_int = matches!(expected, Type::Int);
+    let actual_is_int = matches!(actual, Type::Int);
+    if expected_is_int == actual_is_int {
+        return Ok(());
+    }
+    if !is_wide_numeric_type(&expected) && !is_wide_numeric_type(&actual) {
+        return Ok(());
+    }
+    let inner = expr.clone();
+    expr.expr = ExprKind::NumericCast {
+        expr: Box::new(inner),
+    };
+    expr.ty = expected;
+    Ok(())
 }
 
 fn is_supported_durable_value_type(ty: &Type) -> bool {
@@ -768,7 +895,7 @@ fn analyze_statement(
             if let Some(tann) = ty {
                 let dt = convert_type_expr(tann)?;
                 apply_map_new_type_hint(&mut expr, &dt);
-                ensure_assignable(&dt, &expr.ty)?;
+                ensure_assignable_and_coerce(&dt, &mut expr)?;
             }
             if is_state_map_expr(&expr) {
                 return Err(SemanticError {
@@ -924,7 +1051,7 @@ fn analyze_statement(
                 });
             }
             apply_map_new_type_hint(&mut expr, &expected);
-            ensure_assignable(&expected, &expr.ty)?;
+            ensure_assignable_and_coerce(&expected, &mut expr)?;
             // Rebind SSA name to new value
             vars.insert(name.clone(), expr.ty.clone());
             let mut out = Vec::new();
@@ -940,27 +1067,28 @@ fn analyze_statement(
             match target {
                 Expr::Index { target: map, index } => {
                     let map_t = analyze_expr(map, vars)?;
-                    let key_t = analyze_expr(index, vars)?;
+                    let mut key_t = analyze_expr(index, vars)?;
                     match map_t.ty.clone() {
                         Type::Map(k, v) => {
-                            ensure_assignable(&k, &key_t.ty)?;
+                            ensure_assignable_and_coerce(&k, &mut key_t)?;
                             ensure_in_memory_map_word_types(&map_t)?;
                             if *op == AssignOp::Set {
-                                let val_t = analyze_expr(value, vars)?;
-                                ensure_assignable(&v, &val_t.ty)?;
+                                let mut val_t = analyze_expr(value, vars)?;
+                                ensure_assignable_and_coerce(&v, &mut val_t)?;
                                 return Ok(vec![TypedStatement::MapSet {
                                     map: map_t,
                                     key: key_t,
                                     value: val_t,
                                 }]);
                             }
-                            let rhs_t = analyze_expr(value, vars)?;
-                            let Some(result_ty) = numeric_result_type(&v, &rhs_t.ty) else {
+                            let mut rhs_t = analyze_expr(value, vars)?;
+                            if numeric_result_type(&v, &rhs_t.ty).is_none() {
                                 return Err(SemanticError {
                                     message: format!("{op:?} expects int operands"),
                                 });
-                            };
-                            ensure_assignable(&v, &result_ty)?;
+                            }
+                            coerce_numeric_expr(&mut rhs_t, &v)?;
+                            let result_ty = (*v).clone();
                             let mut out = Vec::new();
                             let (_key_name, key_stmt, key_ident) =
                                 bind_internal_temp(vars, "key", key_t);
@@ -1027,7 +1155,7 @@ fn analyze_statement(
                     }
                     apply_map_new_type_hint(&mut expr, &expected);
                     if *op == AssignOp::Set {
-                        ensure_assignable(&expected, &expr.ty)?;
+                        ensure_assignable_and_coerce(&expected, &mut expr)?;
                         vars.insert(name.clone(), expr.ty.clone());
                         let mut out = Vec::new();
                         out.push(TypedStatement::Let {
@@ -1037,12 +1165,13 @@ fn analyze_statement(
                         bind_tuple_fields_rec(&mut out, vars, name, &expr, &expr.ty);
                         return Ok(out);
                     }
-                    let Some(result_ty) = numeric_result_type(&expected, &expr.ty) else {
+                    if numeric_result_type(&expected, &expr.ty).is_none() {
                         return Err(SemanticError {
                             message: format!("{op:?} expects int operands"),
                         });
-                    };
-                    ensure_assignable(&expected, &result_ty)?;
+                    }
+                    coerce_numeric_expr(&mut expr, &expected)?;
+                    let result_ty = expected.clone();
                     let left = TypedExpr {
                         expr: ExprKind::Ident(name.clone()),
                         ty: expected.clone(),
@@ -1084,23 +1213,22 @@ fn analyze_statement(
                     });
                 }
             } else if let Some(exp) = expected_ret {
-                if let Some(expr) = tv.as_mut() {
-                    apply_map_new_type_hint(expr, exp);
-                }
-                match (&tv, exp) {
-                    (None, Type::Unit) => {}
-                    (None, _) => {
-                        return Err(SemanticError {
-                            message: "return type mismatch: expected value".into(),
-                        });
+                match tv.as_mut() {
+                    None => {
+                        if !matches!(exp, Type::Unit) {
+                            return Err(SemanticError {
+                                message: "return type mismatch: expected value".into(),
+                            });
+                        }
                     }
-                    (Some(_t), Type::Unit) => {
-                        return Err(SemanticError {
-                            message: "return type mismatch: unexpected value".into(),
-                        });
-                    }
-                    (Some(t), e) => {
-                        if let Err(mut err) = ensure_assignable(e, &t.ty) {
+                    Some(expr) => {
+                        apply_map_new_type_hint(expr, exp);
+                        if matches!(exp, Type::Unit) {
+                            return Err(SemanticError {
+                                message: "return type mismatch: unexpected value".into(),
+                            });
+                        }
+                        if let Err(mut err) = ensure_assignable_and_coerce(exp, expr) {
                             err.message = format!("return type mismatch: {}", err.message);
                             return Err(err);
                         }
@@ -1640,6 +1768,16 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
             expr: ExprKind::Number(*n),
             ty: Type::Int,
         }),
+        Expr::Decimal(raw) => {
+            raw.parse::<iroha_primitives::numeric::Numeric>()
+                .map_err(|err| SemanticError {
+                    message: format!("invalid numeric literal `{raw}`: {err}"),
+                })?;
+            Ok(TypedExpr {
+                expr: ExprKind::Decimal(raw.clone()),
+                ty: Type::FixedU128,
+            })
+        }
         Expr::Bool(b) => Ok(TypedExpr {
             expr: ExprKind::Bool(*b),
             ty: Type::Bool,
@@ -1667,7 +1805,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                 UnaryOp::Neg => {
                     let Some(kind) = numeric_kind(&inner_t.ty) else {
                         return Err(SemanticError {
-                            message: "unary '-' expects int".into(),
+                            message: "unary '-' expects numeric".into(),
                         });
                     };
                     Ok(TypedExpr {
@@ -1815,10 +1953,10 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
         }
         Expr::Index { target, index } => {
             let tgt = analyze_expr(target, vars)?;
-            let idx = analyze_expr(index, vars)?;
+            let mut idx = analyze_expr(index, vars)?;
             match tgt.ty.clone() {
                 Type::Map(k, v) => {
-                    ensure_assignable(&k, &idx.ty)?;
+                    ensure_assignable_and_coerce(&k, &mut idx)?;
                     ensure_in_memory_map_word_types(&tgt)?;
                     Ok(TypedExpr {
                         expr: ExprKind::Index {
@@ -1834,8 +1972,14 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
             }
         }
         Expr::Binary { op, left, right } => {
-            let left_t = analyze_expr(left, vars)?;
-            let right_t = analyze_expr(right, vars)?;
+            let mut left_t = analyze_expr(left, vars)?;
+            let mut right_t = analyze_expr(right, vars)?;
+            if matches!(left_t.expr, ExprKind::Decimal(_)) && is_wide_numeric_type(&right_t.ty) {
+                left_t.ty = resolve_struct_type(&right_t.ty);
+            }
+            if matches!(right_t.expr, ExprKind::Decimal(_)) && is_wide_numeric_type(&left_t.ty) {
+                right_t.ty = resolve_struct_type(&left_t.ty);
+            }
             use BinaryOp::*;
             match op {
                 Add | Sub | Mul | Div | Mod => {
@@ -1844,6 +1988,10 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                             message: format!("{op:?} expects int operands"),
                         });
                     };
+                    if is_wide_numeric_type(&result_ty) {
+                        coerce_numeric_expr(&mut left_t, &result_ty)?;
+                        coerce_numeric_expr(&mut right_t, &result_ty)?;
+                    }
                     Ok(TypedExpr {
                         expr: ExprKind::Binary {
                             op: *op,
@@ -1869,7 +2017,8 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     })
                 }
                 Eq | Ne => {
-                    let numeric_ok = numeric_result_type(&left_t.ty, &right_t.ty).is_some();
+                    let numeric_result = numeric_result_type(&left_t.ty, &right_t.ty);
+                    let numeric_ok = numeric_result.is_some();
                     if left_t.ty != right_t.ty
                         && !(is_blob_like(&left_t.ty) && is_blob_like(&right_t.ty))
                         && !numeric_ok
@@ -1886,6 +2035,12 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                             ),
                         });
                     }
+                    if let Some(result_ty) = numeric_result {
+                        if is_wide_numeric_type(&result_ty) {
+                            coerce_numeric_expr(&mut left_t, &result_ty)?;
+                            coerce_numeric_expr(&mut right_t, &result_ty)?;
+                        }
+                    }
                     Ok(TypedExpr {
                         expr: ExprKind::Binary {
                             op: *op,
@@ -1896,10 +2051,14 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     })
                 }
                 Lt | Le | Gt | Ge => {
-                    if numeric_result_type(&left_t.ty, &right_t.ty).is_none() {
+                    let Some(result_ty) = numeric_result_type(&left_t.ty, &right_t.ty) else {
                         return Err(SemanticError {
                             message: format!("{op:?} expects int operands"),
                         });
+                    };
+                    if is_wide_numeric_type(&result_ty) {
+                        coerce_numeric_expr(&mut left_t, &result_ty)?;
+                        coerce_numeric_expr(&mut right_t, &result_ty)?;
                     }
                     Ok(TypedExpr {
                         expr: ExprKind::Binary {
@@ -2042,7 +2201,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     });
                 }
                 for (i, (_fname, fty)) in fields.iter().enumerate() {
-                    ensure_assignable(fty, &arg_typed[i].ty)?;
+                    ensure_assignable_and_coerce(fty, &mut arg_typed[i])?;
                 }
                 return Ok(TypedExpr {
                     expr: ExprKind::Tuple(arg_typed),
@@ -2063,31 +2222,33 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                 "get_or_default" => {
                     if arg_typed.len() != 3 {
                         return Err(SemanticError {
-                            message: "get_or_default expects (Map<int,int>, int, int)".into(),
+                            message: "get_or_default expects (Map<K,V>, K, V)".into(),
                         });
                     }
-                    match &arg_typed[0].ty {
-                        Type::Map(k, v) if is_int_like(k) && is_int_like(v) => {}
+                    let (key_ty, value_ty) = match &arg_typed[0].ty {
+                        Type::Map(k, v) => (k.as_ref().clone(), v.as_ref().clone()),
                         other => {
                             return Err(SemanticError {
                                 message: format!(
-                                    "get_or_default expects Map<int,int> as first arg, got {}",
+                                    "get_or_default expects Map<K,V> as first arg, got {}",
                                     type_name(other)
                                 ),
                             });
                         }
-                    }
-                    if !is_int_like(&arg_typed[1].ty) || !is_int_like(&arg_typed[2].ty) {
-                        return Err(SemanticError {
-                            message: "get_or_default expects (Map<int,int>, int, int)".into(),
-                        });
-                    }
+                    };
+                    ensure_assignable_and_coerce(&key_ty, &mut arg_typed[1])?;
+                    ensure_assignable_and_coerce(&value_ty, &mut arg_typed[2])?;
+                    ensure_in_memory_map_word_types(&arg_typed[0])?;
+                    let value_ty = match resolve_struct_type(&arg_typed[0].ty) {
+                        Type::Map(_, v) => *v,
+                        _ => Type::Int,
+                    };
                     Ok(TypedExpr {
                         expr: ExprKind::Call {
                             name: name.clone(),
                             args: arg_typed,
                         },
-                        ty: Type::Int,
+                        ty: resolve_struct_type(&value_ty),
                     })
                 }
                 // has(Map<K,V>, K) -> bool (alias to contains)
@@ -2099,7 +2260,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     }
                     match &arg_typed[0].ty {
                         Type::Map(k, _v) => {
-                            ensure_assignable(&k.clone(), &arg_typed[1].ty)?;
+                            ensure_assignable_and_coerce(&k.clone(), &mut arg_typed[1])?;
                             ensure_in_memory_map_word_types(&arg_typed[0])?;
                             Ok(TypedExpr {
                                 expr: ExprKind::Call {
@@ -2126,7 +2287,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     }
                     match &arg_typed[0].ty {
                         Type::Map(k, _v) => {
-                            ensure_assignable(&k.clone(), &arg_typed[1].ty)?;
+                            ensure_assignable_and_coerce(&k.clone(), &mut arg_typed[1])?;
                             ensure_in_memory_map_word_types(&arg_typed[0])?;
                             Ok(TypedExpr {
                                 expr: ExprKind::Call {
@@ -2169,7 +2330,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     };
                     let resolved_key_ty = resolve_struct_type(&map_key_ty);
                     let resolved_value_ty = resolve_struct_type(&map_value_ty);
-                    ensure_assignable(&resolved_key_ty, &call_args[1].ty)?;
+                    ensure_assignable_and_coerce(&resolved_key_ty, &mut call_args[1])?;
                     ensure_in_memory_map_word_types(&call_args[0])?;
 
                     if original_len == 2 {
@@ -2198,7 +2359,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                             }
                         }
                     } else {
-                        ensure_assignable(&resolved_value_ty, &call_args[2].ty)?;
+                        ensure_assignable_and_coerce(&resolved_value_ty, &mut call_args[2])?;
                     }
                     Ok(TypedExpr {
                         expr: ExprKind::Call {
@@ -2218,7 +2379,9 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         });
                     }
                     match &arg_typed[0].ty {
-                        Type::Map(k, v) if is_int_like(k) && is_int_like(v) => {}
+                        Type::Map(k, v)
+                            if matches!(resolve_struct_type(k), Type::Int)
+                                && matches!(resolve_struct_type(v), Type::Int) => {}
                         other => {
                             return Err(SemanticError {
                                 message: format!(
@@ -2228,7 +2391,9 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                             });
                         }
                     }
-                    if !is_int_like(&arg_typed[1].ty) || !is_int_like(&arg_typed[2].ty) {
+                    if !matches!(resolve_struct_type(&arg_typed[1].ty), Type::Int)
+                        || !matches!(resolve_struct_type(&arg_typed[2].ty), Type::Int)
+                    {
                         return Err(SemanticError {
                             message: format!("{name} expects (Map<int,int>, int, int)"),
                         });
@@ -2249,7 +2414,9 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         });
                     }
                     match &arg_typed[0].ty {
-                        Type::Map(k, v) if is_int_like(k) && is_int_like(v) => {}
+                        Type::Map(k, v)
+                            if matches!(resolve_struct_type(k), Type::Int)
+                                && matches!(resolve_struct_type(v), Type::Int) => {}
                         other => {
                             return Err(SemanticError {
                                 message: format!(
@@ -2259,7 +2426,9 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                             });
                         }
                     }
-                    if !is_int_like(&arg_typed[1].ty) || !is_int_like(&arg_typed[2].ty) {
+                    if !matches!(resolve_struct_type(&arg_typed[1].ty), Type::Int)
+                        || !matches!(resolve_struct_type(&arg_typed[2].ty), Type::Int)
+                    {
                         return Err(SemanticError {
                             message: "keys_values_take2 expects (Map<int,int>, int, int)".into(),
                         });
@@ -3201,7 +3370,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                             && is_int_like(&arg_typed[2].ty))
                     {
                         return Err(SemanticError {
-                            message: "mint_asset expects (AccountId, AssetDefinitionId, int)"
+                            message: "mint_asset expects (AccountId, AssetDefinitionId, numeric)"
                                 .into(),
                         });
                     }
@@ -3220,7 +3389,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                             && is_int_like(&arg_typed[2].ty))
                     {
                         return Err(SemanticError {
-                            message: "burn_asset expects (AccountId, AssetDefinitionId, int)"
+                            message: "burn_asset expects (AccountId, AssetDefinitionId, numeric)"
                                 .into(),
                         });
                     }
@@ -3241,7 +3410,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     {
                         return Err(SemanticError {
                             message:
-                                "transfer_asset expects (AccountId, AccountId, AssetDefinitionId, int)"
+                                "transfer_asset expects (AccountId, AccountId, AssetDefinitionId, numeric)"
                                     .into(),
                         });
                     }
@@ -3785,6 +3954,19 @@ fn ensure_assignable(expected: &Type, actual: &Type) -> Result<(), SemanticError
     }
 }
 
+fn ensure_assignable_and_coerce(
+    expected: &Type,
+    expr: &mut TypedExpr,
+) -> Result<(), SemanticError> {
+    let expected_resolved = resolve_struct_type(expected);
+    if matches!(expr.expr, ExprKind::Decimal(_)) && is_wide_numeric_type(&expected_resolved) {
+        expr.ty = expected_resolved;
+    }
+    ensure_assignable(expected, &expr.ty)?;
+    coerce_numeric_expr(expr, expected)?;
+    Ok(())
+}
+
 fn assign_op_to_binary(op: AssignOp) -> Option<BinaryOp> {
     match op {
         AssignOp::Set => None,
@@ -4195,7 +4377,9 @@ fn collect_state_accesses_expr(expr: &TypedExpr, reads: &mut IndexSet<String>) {
             collect_state_accesses_expr(left, reads);
             collect_state_accesses_expr(right, reads);
         }
-        ExprKind::Unary { expr: inner, .. } => collect_state_accesses_expr(inner, reads),
+        ExprKind::Unary { expr: inner, .. } | ExprKind::NumericCast { expr: inner } => {
+            collect_state_accesses_expr(inner, reads)
+        }
         ExprKind::Conditional {
             cond,
             then_expr,
@@ -4220,7 +4404,11 @@ fn collect_state_accesses_expr(expr: &TypedExpr, reads: &mut IndexSet<String>) {
                 collect_state_accesses_expr(arg, reads);
             }
         }
-        ExprKind::Bool(_) | ExprKind::Number(_) | ExprKind::String(_) | ExprKind::Bytes(_) => {}
+        ExprKind::Bool(_)
+        | ExprKind::Number(_)
+        | ExprKind::Decimal(_)
+        | ExprKind::String(_)
+        | ExprKind::Bytes(_) => {}
     }
 }
 
@@ -4309,6 +4497,7 @@ fn collect_calls_in_expr(expr: &TypedExpr, calls: &mut IndexSet<String>) {
             collect_calls_in_expr(right, calls);
         }
         ExprKind::Unary { expr: inner, .. } => collect_calls_in_expr(inner, calls),
+        ExprKind::NumericCast { expr } => collect_calls_in_expr(expr, calls),
         ExprKind::Conditional {
             cond,
             then_expr,
@@ -4330,6 +4519,7 @@ fn collect_calls_in_expr(expr: &TypedExpr, calls: &mut IndexSet<String>) {
         }
         ExprKind::Bool(_)
         | ExprKind::Number(_)
+        | ExprKind::Decimal(_)
         | ExprKind::String(_)
         | ExprKind::Bytes(_)
         | ExprKind::Ident(_) => {}
@@ -4483,6 +4673,7 @@ fn expr_contains_sensitive_syscall(expr: &TypedExpr) -> bool {
             expr_contains_sensitive_syscall(left) || expr_contains_sensitive_syscall(right)
         }
         ExprKind::Unary { expr, .. } => expr_contains_sensitive_syscall(expr),
+        ExprKind::NumericCast { expr } => expr_contains_sensitive_syscall(expr),
         ExprKind::Conditional {
             cond,
             then_expr,
@@ -4498,6 +4689,7 @@ fn expr_contains_sensitive_syscall(expr: &TypedExpr) -> bool {
             expr_contains_sensitive_syscall(target) || expr_contains_sensitive_syscall(index)
         }
         ExprKind::Number(_)
+        | ExprKind::Decimal(_)
         | ExprKind::Bool(_)
         | ExprKind::String(_)
         | ExprKind::Bytes(_)
@@ -4526,6 +4718,7 @@ mod tests {
                 count_calls_expr(left, name) + count_calls_expr(right, name)
             }
             ExprKind::Unary { expr, .. } => count_calls_expr(expr, name),
+            ExprKind::NumericCast { expr } => count_calls_expr(expr, name),
             ExprKind::Conditional {
                 cond,
                 then_expr,
@@ -4541,6 +4734,7 @@ mod tests {
                 count_calls_expr(target, name) + count_calls_expr(index, name)
             }
             ExprKind::Number(_)
+            | ExprKind::Decimal(_)
             | ExprKind::Bool(_)
             | ExprKind::String(_)
             | ExprKind::Bytes(_)
@@ -4641,6 +4835,24 @@ mod tests {
         assert!(err.is_err());
         let ok = analyze(&parse("fn g() { return; } ").unwrap());
         assert!(ok.is_ok());
+    }
+
+    #[test]
+    fn kotoba_block_is_accepted() {
+        let program = parse(
+            r#"
+            seiyaku C {
+                kotoba {
+                    "E0001": { en: "Invalid assets" }
+                }
+                kotoage fn main() {}
+            }
+            "#,
+        )
+        .expect("parse kotoba block");
+        let typed = analyze(&program).expect("analyze kotoba block");
+        assert_eq!(typed.kotoba_entries.len(), 1);
+        assert_eq!(typed.kotoba_entries[0].msg_id, "E0001");
     }
 
     #[test]

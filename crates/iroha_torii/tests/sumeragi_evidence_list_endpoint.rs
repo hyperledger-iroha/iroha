@@ -94,6 +94,8 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
             recorded_at_view: 0,
             recorded_at_ms: 10,
             penalty_applied: false,
+            penalty_cancelled: false,
+            penalty_cancelled_at_height: None,
             penalty_applied_at_height: None,
         },
         EvidenceRecord {
@@ -102,6 +104,8 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
             recorded_at_view: 0,
             recorded_at_ms: 20,
             penalty_applied: false,
+            penalty_cancelled: false,
+            penalty_cancelled_at_height: None,
             penalty_applied_at_height: None,
         },
         EvidenceRecord {
@@ -110,6 +114,8 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
             recorded_at_view: 0,
             recorded_at_ms: 30,
             penalty_applied: false,
+            penalty_cancelled: false,
+            penalty_cancelled_at_height: None,
             penalty_applied_at_height: None,
         },
     ];

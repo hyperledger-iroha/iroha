@@ -1,8 +1,8 @@
-//! Sumeragi Phase 3 integration: rotation invariants and canonical certificates.
+//! Sumeragi Phase 3 integration: Set A window invariants and canonical certificates.
 //!
 //! These tests validate that:
-//! - The signer indices in committed blocks match the expected Set A derived
-//!   deterministically from the (stable) peer list and block height.
+//! - The signer indices in committed blocks stay within Set A (the first `q` indices)
+//!   for the view-rotated topology, with leader at index 0 and proxy tail at `q - 1`.
 //! - All peers converge on the same canonical certificate (identical signer index set).
 
 use eyre::Result;
@@ -28,19 +28,12 @@ fn quorum(n: usize) -> (usize, usize) {
     (f, q)
 }
 
-/// Deterministic Set A rotation helper for audit: given the initial ordered peer list
-/// and the round number `h_in_epoch` (0-based), return the expected leader index (0)
-/// and proxy tail index (`q - 1`) after rotating the first `q` peers by `h_in_epoch % q`.
-fn expected_set_a_indices(n: usize, h_in_epoch: u64) -> (usize, usize) {
+/// Set A indices for the view-rotated topology: leader at index 0 and proxy tail at `q - 1`.
+fn expected_set_a_indices(n: usize) -> (usize, usize) {
     let (_f, q) = quorum(n);
-    let k = usize::try_from(h_in_epoch).unwrap() % q;
-    // Leader is the first in rotated Set A, proxy tail is at q-1 within Set A
-    let leader_idx = 0; // after rotation normalization
-    let tail_idx = q - 1;
-    // The absolute indices after rotating Set A by k are leader at k and tail at k+q-1
-    let leader_abs = (leader_idx + k) % q;
-    let tail_abs = (tail_idx + k) % q;
-    (leader_abs, tail_abs)
+    let leader_idx = 0;
+    let tail_idx = q.saturating_sub(1);
+    (leader_idx, tail_idx)
 }
 
 /// Extract a map of block height -> signer index set (ascending block order).
@@ -77,7 +70,7 @@ fn rotation_signer_indices_match_expected_set_a() -> Result<()> {
     // Let the network produce a few blocks
     let status = client.get_status()?;
     for idx in status.blocks..6 {
-        client.submit_blocking(Log::new(Level::INFO, format!("rotation seed {idx}")))?;
+        client.submit_blocking(Log::new(Level::INFO, format!("set a tick {idx}")))?;
     }
     rt.block_on(async { network.ensure_blocks_with(|x| x.total >= 6).await })?;
 
@@ -97,17 +90,15 @@ fn rotation_signer_indices_match_expected_set_a() -> Result<()> {
     // Check heights >= 2 (skip genesis at height=1)
     let hv = height_to_signer_indices(&blocks);
     for (h, idxs) in hv.into_iter().filter(|(h, _)| *h >= 2) {
-        // height in epoch is (h - 1) for a stable committee
-        let (leader_abs, tail_abs) = expected_set_a_indices(n, h - 1);
+        let (leader_abs, tail_abs) = expected_set_a_indices(n);
         // Expect at least quorum signatures; certificate may include more than threshold
         assert!(
             idxs.len() >= q,
             "height {h}: expected >= quorum signatures, got {} < {q}",
             idxs.len()
         );
-        // Expect all indices lie within Set A window [rot_k .. rot_k+q) modulo q
-        // Build the rotated Set A absolute indices for this height
-        let set_a: Vec<usize> = (0..q).map(|i| (leader_abs + i) % q).collect();
+        // Expect all indices lie within Set A window [0..q)
+        let set_a: Vec<usize> = (0..q).collect();
         for ix in &idxs {
             let iu = usize::try_from(*ix).unwrap();
             assert!(
@@ -148,7 +139,7 @@ fn rotation_signer_indices_match_expected_set_a_n7_multiple_heights() -> Result<
     // Let the network produce a number of blocks (>= 10 total)
     let status = client.get_status()?;
     for idx in status.blocks..10 {
-        client.submit_blocking(Log::new(Level::INFO, format!("rotation n7 seed {idx}")))?;
+        client.submit_blocking(Log::new(Level::INFO, format!("set a n7 tick {idx}")))?;
     }
     rt.block_on(async { network.ensure_blocks_with(|x| x.total >= 10).await })?;
 
@@ -169,15 +160,15 @@ fn rotation_signer_indices_match_expected_set_a_n7_multiple_heights() -> Result<
     let hv = height_to_signer_indices(&blocks);
     let mut checked = 0usize;
     for (h, idxs) in hv.into_iter().filter(|(h, _)| *h >= 2).take(12) {
-        let (leader_abs, tail_abs) = expected_set_a_indices(n, h - 1);
+        let (leader_abs, tail_abs) = expected_set_a_indices(n);
         // At least quorum signatures
         assert!(
             idxs.len() >= q,
             "height {h}: signatures {} < quorum {q}",
             idxs.len()
         );
-        // All indices within rotated Set A
-        let set_a: Vec<usize> = (0..q).map(|i| (leader_abs + i) % q).collect();
+        // All indices within Set A window [0..q)
+        let set_a: Vec<usize> = (0..q).collect();
         for ix in &idxs {
             let iu = usize::try_from(*ix).unwrap();
             assert!(
@@ -221,7 +212,7 @@ fn canonical_certificate_identical_across_peers() -> Result<()> {
     let client = network.client();
     let status = client.get_status()?;
     for idx in status.blocks..5 {
-        client.submit_blocking(Log::new(Level::INFO, format!("rotation cert seed {idx}")))?;
+        client.submit_blocking(Log::new(Level::INFO, format!("set a cert tick {idx}")))?;
     }
     rt.block_on(async { network.ensure_blocks_with(|x| x.total >= 5).await })?;
 
