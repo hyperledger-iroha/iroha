@@ -1,6 +1,7 @@
 # Status
 
 ## Latest Updates
+- Sumeragi block sync: record commit-roster sidecars only after the block payload is accepted/known to prevent conflicting block-sync updates from overwriting roster metadata; added unit coverage. Tests: not run (not requested).
 - iroha_core test fix: import trigger set read-only trait and compare JSON metadata using `&str` conversions for code hash/trigger id in `contract_manifest_triggers`. Tests: not run (not requested).
 - IVM mock WSV: store balances/total_supply as `Numeric`, decode Numeric amounts in WSV syscalls/envelopes, return JSON balances as Numeric strings, update tests/bench/examples, and add scaled Numeric mock WSV coverage. Tests: not run (not requested).
 - IVM/CoreHost/WsvHost: add NoritoBytes TLV allocation helper, fix trigger manifest metadata JSON + TriggerEvent import, adjust WSV balance tests to compare u64, and add missing manifest kotoba/slashing delay fields. Tests: not run (not requested).

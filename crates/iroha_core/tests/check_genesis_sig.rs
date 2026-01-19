@@ -1,3 +1,5 @@
+//! Verifies that the genesis block signatures match the expected public key.
+
 use iroha_crypto::{PublicKey, SignatureOf};
 use iroha_data_model::block::{
     BlockHeader, decode_framed_signed_block, decode_versioned_signed_block,
