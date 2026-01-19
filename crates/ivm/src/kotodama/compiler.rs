@@ -777,8 +777,10 @@ seiyaku NegTest {
 
     #[test]
     fn validate_feature_requests_reports_forbidden_usage() {
-        let mut meta = ContractMeta::default();
-        meta.force_zk = Some(false);
+        let meta = ContractMeta {
+            force_zk: Some(false),
+            ..Default::default()
+        };
         let err = super::validate_feature_requests(Some(&meta), true, false)
             .expect_err("expected zk mismatch");
         assert!(err.contains("meta disables zk"));
@@ -1755,11 +1757,11 @@ impl Compiler {
                         dataref_kind_map.insert((func_idx, *dest), DRK::NoritoBytes);
                         let literal_kind = dataref_kind_map.get(&(func_idx, *value)).copied();
                         let literal_raw = string_map.get(&(func_idx, *value)).cloned();
-                        if let (Some(kind), Some(raw)) = (literal_kind, literal_raw) {
-                            if let Some(tlv_bytes) = encode_pointer_tlv_bytes(kind, &raw) {
-                                let hex = hex::encode(tlv_bytes);
-                                string_map.insert((func_idx, *dest), format!("0x{hex}"));
-                            }
+                        if let (Some(kind), Some(raw)) = (literal_kind, literal_raw)
+                            && let Some(tlv_bytes) = encode_pointer_tlv_bytes(kind, &raw)
+                        {
+                            let hex = hex::encode(tlv_bytes);
+                            string_map.insert((func_idx, *dest), format!("0x{hex}"));
                         }
                     }
                     if let ir::Instr::LoadVar { dest, name } = instr
@@ -4617,7 +4619,7 @@ impl Compiler {
                                     emit_literal_stub(code, &mut fixups, target, key);
                                 } else {
                                     if string_map.contains_key(&(func_idx, *temp))
-                                        && dataref_kind_map.get(&(func_idx, *temp)).is_none()
+                                        && !dataref_kind_map.contains_key(&(func_idx, *temp))
                                     {
                                         return Err(i18n::translate(
                                             self.lang,
@@ -4690,7 +4692,7 @@ impl Compiler {
                                     emit_literal_stub(code, &mut fixups, target, key);
                                 } else {
                                     if string_map.contains_key(&(func_idx, *temp))
-                                        && dataref_kind_map.get(&(func_idx, *temp)).is_none()
+                                        && !dataref_kind_map.contains_key(&(func_idx, *temp))
                                     {
                                         return Err(i18n::translate(
                                             self.lang,

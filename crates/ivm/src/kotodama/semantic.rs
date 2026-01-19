@@ -543,6 +543,18 @@ fn numeric_result_type(lhs: &Type, rhs: &Type) -> Option<Type> {
     Some(numeric_kind_to_type(out))
 }
 
+fn literal_i64(expr: &TypedExpr) -> Option<i64> {
+    match &expr.expr {
+        ExprKind::Number(n) => Some(*n),
+        ExprKind::NumericCast { expr } => literal_i64(expr),
+        ExprKind::Unary {
+            op: UnaryOp::Neg,
+            expr,
+        } => literal_i64(expr).and_then(|v| v.checked_neg()),
+        _ => None,
+    }
+}
+
 fn coerce_numeric_expr(expr: &mut TypedExpr, expected: &Type) -> Result<(), SemanticError> {
     let expected = resolve_struct_type(expected);
     let actual = resolve_struct_type(&expr.ty);
@@ -559,6 +571,15 @@ fn coerce_numeric_expr(expr: &mut TypedExpr, expected: &Type) -> Result<(), Sema
     }
     if expected == actual {
         return Ok(());
+    }
+    if is_wide_numeric_type(&expected) && matches!(actual, Type::Int) {
+        if let Some(value) = literal_i64(expr)
+            && value < 0
+        {
+            return Err(SemanticError {
+                message: "numeric alias literals must be unsigned (scale=0)".into(),
+            });
+        }
     }
     let expected_kind = numeric_kind(&expected);
     let actual_kind = numeric_kind(&actual);
@@ -1769,10 +1790,18 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
             ty: Type::Int,
         }),
         Expr::Decimal(raw) => {
-            raw.parse::<iroha_primitives::numeric::Numeric>()
+            let numeric = raw
+                .parse::<iroha_primitives::numeric::Numeric>()
                 .map_err(|err| SemanticError {
                     message: format!("invalid numeric literal `{raw}`: {err}"),
                 })?;
+            if numeric.scale() != 0 || numeric.mantissa().is_negative() {
+                return Err(SemanticError {
+                    message: format!(
+                        "numeric literal `{raw}` must be an unsigned integer (scale=0)"
+                    ),
+                });
+            }
             Ok(TypedExpr {
                 expr: ExprKind::Decimal(raw.clone()),
                 ty: Type::FixedU128,
@@ -1808,6 +1837,12 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                             message: "unary '-' expects numeric".into(),
                         });
                     };
+                    if kind != NumericKind::Int {
+                        return Err(SemanticError {
+                            message: "unary '-' is only supported for int; numeric aliases are unsigned"
+                                .into(),
+                        });
+                    }
                     Ok(TypedExpr {
                         expr: ExprKind::Unary {
                             op: *op,
@@ -2035,11 +2070,11 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                             ),
                         });
                     }
-                    if let Some(result_ty) = numeric_result {
-                        if is_wide_numeric_type(&result_ty) {
-                            coerce_numeric_expr(&mut left_t, &result_ty)?;
-                            coerce_numeric_expr(&mut right_t, &result_ty)?;
-                        }
+                    if let Some(result_ty) = numeric_result
+                        && is_wide_numeric_type(&result_ty)
+                    {
+                        coerce_numeric_expr(&mut left_t, &result_ty)?;
+                        coerce_numeric_expr(&mut right_t, &result_ty)?;
                     }
                     Ok(TypedExpr {
                         expr: ExprKind::Binary {
@@ -3910,10 +3945,10 @@ fn ensure_assignable(expected: &Type, actual: &Type) -> Result<(), SemanticError
     if is_blob_like(&expected) && is_blob_like(&actual) {
         return Ok(());
     }
-    if let (Some(exp_kind), Some(act_kind)) = (numeric_kind(&expected), numeric_kind(&actual)) {
-        if exp_kind == act_kind || exp_kind == NumericKind::Int || act_kind == NumericKind::Int {
-            return Ok(());
-        }
+    if let (Some(exp_kind), Some(act_kind)) = (numeric_kind(&expected), numeric_kind(&actual))
+        && (exp_kind == act_kind || exp_kind == NumericKind::Int || act_kind == NumericKind::Int)
+    {
+        return Ok(());
     }
     match (&expected, &actual) {
         (Type::Map(ek, ev), Type::Map(ak, av)) => {

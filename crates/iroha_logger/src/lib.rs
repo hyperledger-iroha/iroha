@@ -59,7 +59,7 @@ impl<W: io::Write> io::Write for LossyWriter<W> {
     }
 }
 
-/// MakeWriter wrapper for LossyWriter to keep fmt layers Debug-friendly.
+/// `MakeWriter` wrapper for `LossyWriter` to keep fmt layers Debug-friendly.
 #[derive(Clone, Copy, Debug, Default)]
 struct LossyMakeWriter;
 

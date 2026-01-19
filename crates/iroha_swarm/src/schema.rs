@@ -152,14 +152,16 @@ mod json_value_tests {
     use super::*;
     use crate::peer;
 
-    fn sample_topology() -> (
+    type SampleTopology = (
         peer::ExposedKeyPair,
         [u16; 2],
         peer::ExposedKeyPair,
         iroha_data_model::ChainId,
         std::collections::BTreeSet<iroha_data_model::prelude::Peer>,
         std::collections::BTreeMap<iroha_crypto::PublicKey, Vec<u8>>,
-    ) {
+    );
+
+    fn sample_topology() -> SampleTopology {
         let chain = peer::chain();
         let (primary_pair, primary_pop) =
             peer::generate_bls_key_pair(Some(b"swarm-json-primary"), b"node-0");
@@ -940,7 +942,7 @@ impl<'a> BuildOrPull<'a> {
                 genesis_public_key,
                 network,
                 topology,
-                trusted_peers_pop,
+                &trusted_peers_pop,
             ),
         }
     }
@@ -983,7 +985,7 @@ impl<'a> BuildOrPull<'a> {
                 genesis_public_key,
                 network,
                 topology,
-                trusted_peers_pop,
+                &trusted_peers_pop,
             ),
         }
     }
@@ -1024,6 +1026,7 @@ impl<'a> BuildOrPull<'a> {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn irohads<Image: ComposeImageFields + Copy>(
         image: Image,
         volumes: Volumes<'a>,
@@ -1032,7 +1035,7 @@ impl<'a> BuildOrPull<'a> {
         genesis_public_key: &'a iroha_crypto::PublicKey,
         network: &'a std::collections::BTreeMap<u16, peer::PeerInfo>,
         topology: &'a std::collections::BTreeSet<iroha_data_model::peer::Peer>,
-        trusted_peers_pop: std::collections::BTreeMap<iroha_crypto::PublicKey, Vec<u8>>,
+        trusted_peers_pop: &std::collections::BTreeMap<iroha_crypto::PublicKey, Vec<u8>>,
     ) -> std::collections::BTreeMap<IrohadRef, Irohad<'a, Image>> {
         network
             .iter()
@@ -1048,7 +1051,7 @@ impl<'a> BuildOrPull<'a> {
                             chain,
                             genesis_public_key,
                             topology,
-                            trusted_peers_pop.clone(),
+                            (*trusted_peers_pop).clone(),
                         ),
                         *ports,
                         volumes,

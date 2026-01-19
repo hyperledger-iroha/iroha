@@ -50,6 +50,7 @@ impl ClassifyTopic for TrustTestMessage {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn make_config(addr: &SocketAddr, trust_gossip: bool) -> Config {
     Config {
         address: WithOrigin::inline(addr.clone()),

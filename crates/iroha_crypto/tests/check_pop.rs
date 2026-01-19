@@ -1,4 +1,4 @@
-//! Test PoP verification.
+//! Test `PoP` verification.
 //! Requires `--features bls`.
 
 #![cfg(feature = "bls")]
@@ -8,7 +8,7 @@ use std::str::FromStr;
 
 #[test]
 fn check_all_pops() {
-    let peers = vec![
+    let peers = [
         (
             "ea0130999C999F728B0829387F4E93732EE0479F911DE0CE1E9409C8CEA66CF99376F57DB2E709892648F222D9F4E90DB29B84",
             "afcaaf39164b7ce18a311e28efec542e2df6b32158331d2443ba9617ff8b9a7fb2fbd79d93f83b610542090a2bae89f701aff035b911cdeb3a60bdb4227a25b6c452a6664077a1bab551e537c8faa289a3031ee8dccd463e3f09344fa72fb0ae",
@@ -31,6 +31,6 @@ fn check_all_pops() {
         let pub_key = PublicKey::from_str(pub_hex).expect("parse pub");
         let pop = hex::decode(pop_hex).expect("parse pop");
         bls_normal_pop_verify(&pub_key, &pop)
-            .unwrap_or_else(|e| panic!("PoP verification failed for peer {}: {:?}", i, e));
+            .unwrap_or_else(|e| panic!("PoP verification failed for peer {i}: {e:?}"));
     }
 }

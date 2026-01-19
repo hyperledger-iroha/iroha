@@ -41,7 +41,7 @@ fn test_mock_wsv_basic_ops() {
 }
 
 #[test]
-fn test_mock_wsv_supports_scaled_numeric() {
+fn test_mock_wsv_rejects_scaled_numeric() {
     let d: DomainId = "domain".parse().unwrap();
     let pk1: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
@@ -54,21 +54,18 @@ fn test_mock_wsv_supports_scaled_numeric() {
     let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
 
     let mut wsv = MockWorldStateView::with_balances(&[
-        ((acc1.clone(), asset.clone()), Numeric::new(1_000_u64, 2)),
-        ((acc2.clone(), asset.clone()), Numeric::new(0_u64, 2)),
+        ((acc1.clone(), asset.clone()), Numeric::from(1_000_u64)),
+        ((acc2.clone(), asset.clone()), Numeric::from(0_u64)),
     ]);
-    assert!(wsv.transfer(
+    assert!(!wsv.transfer(
         &acc1,
         acc1.clone(),
         acc2.clone(),
         asset.clone(),
         Numeric::new(25_u64, 2)
     ));
-    assert_eq!(
-        wsv.balance(acc1.clone(), asset.clone()),
-        Numeric::new(975_u64, 2)
-    );
-    assert_eq!(wsv.balance(acc2.clone(), asset), Numeric::new(25_u64, 2));
+    assert_eq!(wsv.balance(acc1.clone(), asset.clone()), Numeric::from(1_000_u64));
+    assert_eq!(wsv.balance(acc2.clone(), asset), Numeric::from(0_u64));
 }
 
 #[test]

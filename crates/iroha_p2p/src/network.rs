@@ -641,7 +641,7 @@ pub fn subscriber_queue_full_count() -> u64 {
 pub fn subscriber_queue_full_consensus_count() -> u64 {
     SUBSCRIBER_QUEUE_FULL_CONSENSUS.load(Ordering::Relaxed)
 }
-/// Returns the number of subscriber-queue drops for topic ConsensusChunk.
+/// Returns the number of subscriber-queue drops for topic `ConsensusChunk`.
 pub fn subscriber_queue_full_consensus_chunk_count() -> u64 {
     SUBSCRIBER_QUEUE_FULL_CONSENSUS_CHUNK.load(Ordering::Relaxed)
 }
@@ -678,7 +678,7 @@ pub fn subscriber_unrouted_count() -> u64 {
 pub fn subscriber_unrouted_consensus_count() -> u64 {
     SUBSCRIBER_UNROUTED_CONSENSUS.load(Ordering::Relaxed)
 }
-/// Returns the number of unrouted inbound messages for topic ConsensusChunk.
+/// Returns the number of unrouted inbound messages for topic `ConsensusChunk`.
 pub fn subscriber_unrouted_consensus_chunk_count() -> u64 {
     SUBSCRIBER_UNROUTED_CONSENSUS_CHUNK.load(Ordering::Relaxed)
 }
@@ -967,8 +967,9 @@ fn inc_post_overflow_for(topic: message::Topic) {
         message::Topic::Consensus | message::Topic::ConsensusPayload => {
             POST_OVERFLOWS_CONSENSUS.fetch_add(1, Ordering::Relaxed)
         }
-        message::Topic::ConsensusChunk => POST_OVERFLOWS_BLOCK_SYNC.fetch_add(1, Ordering::Relaxed),
-        message::Topic::BlockSync => POST_OVERFLOWS_BLOCK_SYNC.fetch_add(1, Ordering::Relaxed),
+        message::Topic::ConsensusChunk | message::Topic::BlockSync => {
+            POST_OVERFLOWS_BLOCK_SYNC.fetch_add(1, Ordering::Relaxed)
+        }
         message::Topic::Control => POST_OVERFLOWS_CONTROL.fetch_add(1, Ordering::Relaxed),
         message::Topic::TxGossip | message::Topic::TxGossipRestricted => {
             POST_OVERFLOWS_TX_GOSSIP.fetch_add(1, Ordering::Relaxed)
@@ -986,10 +987,7 @@ fn inc_post_overflow_for_prio(topic: message::Topic, high: bool) {
         (true, message::Topic::Consensus | message::Topic::ConsensusPayload) => {
             POST_OVERFLOWS_HI_CONSENSUS.fetch_add(1, Ordering::Relaxed)
         }
-        (true, message::Topic::ConsensusChunk) => {
-            POST_OVERFLOWS_HI_BLOCK_SYNC.fetch_add(1, Ordering::Relaxed)
-        }
-        (true, message::Topic::BlockSync) => {
+        (true, message::Topic::ConsensusChunk | message::Topic::BlockSync) => {
             POST_OVERFLOWS_HI_BLOCK_SYNC.fetch_add(1, Ordering::Relaxed)
         }
         (true, message::Topic::Control) => {
@@ -1006,10 +1004,7 @@ fn inc_post_overflow_for_prio(topic: message::Topic, high: bool) {
         (false, message::Topic::Consensus | message::Topic::ConsensusPayload) => {
             POST_OVERFLOWS_LO_CONSENSUS.fetch_add(1, Ordering::Relaxed)
         }
-        (false, message::Topic::ConsensusChunk) => {
-            POST_OVERFLOWS_LO_BLOCK_SYNC.fetch_add(1, Ordering::Relaxed)
-        }
-        (false, message::Topic::BlockSync) => {
+        (false, message::Topic::ConsensusChunk | message::Topic::BlockSync) => {
             POST_OVERFLOWS_LO_BLOCK_SYNC.fetch_add(1, Ordering::Relaxed)
         }
         (false, message::Topic::Control) => {
@@ -1060,8 +1055,9 @@ fn inc_cap_violation(topic: message::Topic) {
         message::Topic::Consensus | message::Topic::ConsensusPayload => {
             CAP_VIOL_CONSENSUS.fetch_add(1, Ordering::Relaxed)
         }
-        message::Topic::ConsensusChunk => CAP_VIOL_BLOCK_SYNC.fetch_add(1, Ordering::Relaxed),
-        message::Topic::BlockSync => CAP_VIOL_BLOCK_SYNC.fetch_add(1, Ordering::Relaxed),
+        message::Topic::ConsensusChunk | message::Topic::BlockSync => {
+            CAP_VIOL_BLOCK_SYNC.fetch_add(1, Ordering::Relaxed)
+        }
         message::Topic::Control => CAP_VIOL_CONTROL.fetch_add(1, Ordering::Relaxed),
         message::Topic::TxGossip | message::Topic::TxGossipRestricted => {
             CAP_VIOL_TX_GOSSIP.fetch_add(1, Ordering::Relaxed)
@@ -5547,10 +5543,10 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         let cap = match topic {
             message::Topic::Consensus => self.cap_consensus,
             // Payload-heavy consensus frames share the block-sync cap.
-            message::Topic::ConsensusPayload => self.cap_block_sync,
-            message::Topic::ConsensusChunk => self.cap_block_sync,
+            message::Topic::ConsensusPayload
+            | message::Topic::ConsensusChunk
+            | message::Topic::BlockSync => self.cap_block_sync,
             message::Topic::Control => self.cap_control,
-            message::Topic::BlockSync => self.cap_block_sync,
             message::Topic::TxGossip | message::Topic::TxGossipRestricted => self.cap_tx_gossip,
             message::Topic::PeerGossip | message::Topic::TrustGossip => self.cap_peer_gossip,
             message::Topic::Health => self.cap_health,
