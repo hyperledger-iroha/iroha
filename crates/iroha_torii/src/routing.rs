@@ -5839,13 +5839,14 @@ pub async fn handle_get_contract_state(
             entries.push(encode_entry(path, stored, found));
             paths.push(path.to_string());
         }
+        let limit = entries.len() as u64;
         return Ok(JsonBody(ContractStateResponse {
             path: None,
             paths: Some(paths),
             prefix: None,
             entries,
             offset: 0,
-            limit: entries.len() as u64,
+            limit,
             next_offset: None,
         }));
     }
@@ -5858,7 +5859,7 @@ pub async fn handle_get_contract_state(
     let mut entries = Vec::new();
     let mut skipped = 0u64;
     let mut has_more = false;
-    for (key, value) in storage.range(prefix_str..) {
+    for (key, value) in storage.range(prefix.clone()..) {
         let key_str = key.as_ref();
         if !key_str.starts_with(prefix_str) {
             break;
@@ -5887,6 +5888,37 @@ pub async fn handle_get_contract_state(
         limit,
         next_offset,
     }))
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod contract_state_tests {
+    use std::sync::Arc;
+
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn contract_state_prefix_empty_on_blank_state() {
+        let state = Arc::new(CoreState::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        let query = ContractStateQuery {
+            prefix: Some("alpha".to_string()),
+            ..Default::default()
+        };
+
+        let JsonBody(response) = handle_get_contract_state(state, NoritoQuery(query))
+            .await
+            .expect("handler should succeed");
+
+        assert_eq!(response.prefix.as_deref(), Some("alpha"));
+        assert!(response.entries.is_empty());
+        assert_eq!(response.offset, 0);
+        assert_eq!(response.next_offset, None);
+    }
 }
 
 /// Fetch on-chain contract code bytes (base64) by code_hash.
