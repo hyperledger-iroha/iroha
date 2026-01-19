@@ -8,6 +8,7 @@ use iroha_core::{
     zk::{self, test_utils::halo2_fixture_envelope},
 };
 use iroha_data_model::{account::NewAccount, prelude::*};
+use iroha_test_samples::gen_account_in;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 
@@ -32,7 +33,7 @@ fn zk_transfer_and_unshield_emit_proof_hash_in_metadata() {
     let mut stx = block.transaction();
     let domain_id: DomainId = "zkd".parse().unwrap();
     let asset_def_id: AssetDefinitionId = "zcoin#zkd".parse().unwrap();
-    let owner: AccountId = "alice@zkd".parse().unwrap();
+    let (owner, _owner_key) = gen_account_in("zkd");
     let init: [InstructionBox; 5] = [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new(owner.clone())).into(),
@@ -82,21 +83,24 @@ fn zk_transfer_and_unshield_emit_proof_hash_in_metadata() {
         .execute_instruction(&mut stx, &owner, tx.into())
         .expect("transfer ok");
     stx.apply();
+    block.commit().expect("commit setup block");
 
-    let view = state.view();
-    let def = view.world.asset_definitions().get(&asset_def_id).unwrap();
-    let key_t: iroha_data_model::name::Name = "zk.transfer.last".parse().unwrap();
-    let val_t = def
-        .metadata()
-        .get(&key_t)
-        .expect("zk.transfer.last present");
-    let obj_t: norito::json::Value = val_t.try_into_any_norito().expect("json decode");
-    let got_hash_t = obj_t
-        .get("proof_hash")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    assert_eq!(got_hash_t, hex::encode(expected_hash_transfer));
+    {
+        let view = state.view();
+        let def = view.world.asset_definitions().get(&asset_def_id).unwrap();
+        let key_t: iroha_data_model::name::Name = "zk.transfer.last".parse().unwrap();
+        let val_t = def
+            .metadata()
+            .get(&key_t)
+            .expect("zk.transfer.last present");
+        let obj_t: norito::json::Value = val_t.try_into_any_norito().expect("json decode");
+        let got_hash_t = obj_t
+            .get("proof_hash")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        assert_eq!(got_hash_t, hex::encode(expected_hash_transfer));
+    }
 
     // 2) Unshield emits zk.unshield.last with proof_hash
     let header2 =
@@ -128,6 +132,7 @@ fn zk_transfer_and_unshield_emit_proof_hash_in_metadata() {
         .execute_instruction(&mut stx2, &owner, un.into())
         .expect("unshield ok");
     stx2.apply();
+    block2.commit().expect("commit unshield block");
 
     let view2 = state.view();
     let def2 = view2.world.asset_definitions().get(&asset_def_id).unwrap();

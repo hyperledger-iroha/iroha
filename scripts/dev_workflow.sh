@@ -8,10 +8,11 @@ SWIFT_DIR="${REPO_ROOT}/IrohaSwift"
 
 skip_tests=false
 skip_swift=false
+target_dir=""
 
 usage() {
 	cat <<'USAGE'
-Usage: scripts/dev_workflow.sh [--skip-tests] [--skip-swift]
+Usage: scripts/dev_workflow.sh [--skip-tests] [--skip-swift] [--target-dir DIR]
 
 Runs the default contributor workflow:
   1) cargo fmt --all
@@ -22,7 +23,8 @@ Runs the default contributor workflow:
 
 Use --skip-tests to omit cargo test for quicker iterations and --skip-swift to
 skip the Swift SDK suite. Swift tests are skipped automatically if Swift is not
-available on PATH.
+available on PATH. Use --target-dir to set CARGO_TARGET_DIR and avoid build
+directory lock timeouts.
 USAGE
 }
 
@@ -33,6 +35,15 @@ while [[ $# -gt 0 ]]; do
 		;;
 	--skip-swift)
 		skip_swift=true
+		;;
+	--target-dir)
+		shift
+		if [[ $# -eq 0 ]]; then
+			echo "error: missing argument for --target-dir" >&2
+			usage >&2
+			exit 1
+		fi
+		target_dir="$1"
 		;;
 	-h | --help)
 		usage
@@ -49,6 +60,11 @@ done
 
 echo "Running contributor workflow guardrails (fmt/clippy/build/test + swift)."
 echo "Note: cargo test --workspace may take several hours; use --skip-tests for a quicker pass."
+
+if [[ -n "${target_dir}" ]]; then
+	export CARGO_TARGET_DIR="${target_dir}"
+	echo "Using CARGO_TARGET_DIR=${CARGO_TARGET_DIR}"
+fi
 
 echo "[1/5] cargo fmt --all"
 cargo fmt --all

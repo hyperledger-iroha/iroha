@@ -14,6 +14,9 @@ new patches follow the same default gates.
 - `cargo test --workspace` is long-running (often hours). For quick iterations,
   use `scripts/dev_workflow.sh --skip-tests` or `--skip-swift`, then run the full
   sequence before shipping.
+- If `cargo test --workspace` stalls on build directory locks, rerun with
+  `scripts/dev_workflow.sh --target-dir target/codex-tests` (or set
+  `CARGO_TARGET_DIR` to an isolated path) to avoid contention.
 - All cargo steps use `--locked` to respect the repository policy of keeping
   `Cargo.lock` untouched. Prefer extending existing crates rather than adding
   new workspace members; seek approval before introducing a new crate.

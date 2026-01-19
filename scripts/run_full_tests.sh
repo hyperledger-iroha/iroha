@@ -14,6 +14,7 @@ environment.
 Options:
   --only-network    Run only the integration tests (skip workspace fast tests).
   --nocapture       Forward --nocapture to the integration tests for verbose logs.
+  --target-dir DIR  Set CARGO_TARGET_DIR to avoid build directory lock timeouts.
   -h, --help        Show this message.
 
 Examples:
@@ -24,6 +25,7 @@ EOF
 
 run_fast=1
 integration_args=()
+target_dir=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -32,6 +34,15 @@ while [[ $# -gt 0 ]]; do
             ;;
         --nocapture)
             integration_args+=("--nocapture")
+            ;;
+        --target-dir)
+            if [[ $# -lt 2 ]]; then
+                echo "Missing argument for --target-dir" >&2
+                usage >&2
+                exit 1
+            fi
+            target_dir="$2"
+            shift
             ;;
         -h|--help)
             usage
@@ -53,6 +64,11 @@ done
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)
 cd "$repo_root"
+
+if [[ -n "${target_dir}" ]]; then
+    export CARGO_TARGET_DIR="${target_dir}"
+    echo "==> using CARGO_TARGET_DIR=${CARGO_TARGET_DIR}"
+fi
 
 echo "==> cargo build --workspace"
 cargo build --workspace

@@ -1,12 +1,17 @@
 # Status
 
 ## Latest Updates
+- ZK tests: commit ZK scaffold blocks before new views, honor policy transition notice window, scope state views to avoid lock contention, and use generated accounts in proof-hash metadata; run `cargo test -p iroha_core --features "zk-tests halo2-dev-tests" zk -- --nocapture` (pass; warnings in norito/ivm/iroha_core/zk_testkit/zk_lane_warning).
+- Kotodama: derive access hints for literal `transfer_domain` calls (domain + destination account) and add manifest regression coverage; update gap analysis.
+- Tests: not run (not requested).
+- Tooling: add `--target-dir` option to `scripts/dev_workflow.sh` and `scripts/run_full_tests.sh` to set `CARGO_TARGET_DIR` and reduce build directory lock timeouts; document in `docs/source/dev_workflow.md`.
+- Tests: not run (not requested).
 - Governance ZK ballot: tighten error assertions, keep referendum window active for VK-commitment mismatch test, and disable per-tx verify-call cap in alias checks. Tests: `cargo test -p iroha_core --test gov_zk_ballot --features "zk-tests halo2-dev-tests" -- --nocapture` (pass; warnings: norito dead_code helpers, existing iroha_core unused warnings).
 - Kotodama: suppress opaque-access lint warnings for literal `execute_instruction`/`execute_query` payloads that decode into hintable InstructionBox/QueryRequest; add lint coverage.
 - Tests: not run (not requested).
 - ZK: wire Kaigi usage backend into Halo2 verifier dispatch and restore `Identifiable` import for Kotodama register access-hint paths.
 - Tests: `cargo test -p iroha_core --tests --features "zk-tests halo2-dev-tests" zk` (timed out after 1800s while running `gov_auto_close_zk_requires_tally`; ZK unit tests passed, including `kaigi_usage_backend_accepts_valid_proof`).
-- Roadmap: add governance flow tasks for repair escalation/slash proposals under no-admin launch invariants.
+- Roadmap: add cross-node reconciliation tasks for SoraFS repair/GC state consistency.
 - Tests: not run (docs-only change).
 - Kotodama: decode literal `execute_query` NoritoBytes payloads (`QueryRequest::FindAssetById`) to derive access hints and add compiler coverage; update docs/roadmap.
 - Tests: not run (not requested).

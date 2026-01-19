@@ -1081,6 +1081,43 @@ seiyaku Test {
     }
 
     #[test]
+    fn manifest_access_set_hints_include_transfer_domain_literal() {
+        use iroha_data_model::{account::AccountId, domain::DomainId};
+
+        let from: AccountId =
+            "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"
+                .parse()
+                .unwrap();
+        let to: AccountId =
+            "ed0120CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC@wonderland"
+                .parse()
+                .unwrap();
+        let domain: DomainId = "wonderland".parse().unwrap();
+        let src = format!(
+            "fn main() {{ transfer_domain(account_id(\"{from}\"), domain(\"{domain}\"), account_id(\"{to}\")); }}"
+        );
+
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(&src)
+            .expect("compile manifest");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected access_set_hints");
+        assert!(hints.read_keys.contains(&format!("domain:{domain}")));
+        assert!(hints.write_keys.contains(&format!("domain:{domain}")));
+        assert!(hints.read_keys.contains(&format!("account:{to}")));
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let main = entrypoints
+            .iter()
+            .find(|entry| entry.name == "main")
+            .expect("main entrypoint");
+        assert_eq!(main.access_hints_complete, Some(true));
+        assert!(main.access_hints_skipped.is_empty());
+    }
+
+    #[test]
     fn manifest_access_set_hints_skipped_for_isi_contract() {
         let src = r#"
 seiyaku Test {
@@ -5620,8 +5657,13 @@ fn record_isi_access(
             let request = decode_query_request_literal(raw)?;
             record_query_request_access(&request, access_set)
         }
-        // TODO: entrypoint hints do not yet model TransferDomain authority reads.
-        ir::Instr::TransferDomain { .. } => None,
+        ir::Instr::TransferDomain { domain, to } => {
+            let domain: DomainId = parse_temp(string_map, func_idx, *domain)?;
+            let to: AccountId = parse_temp(string_map, func_idx, *to)?;
+            add_domain_rw(access_set, &domain);
+            add_account_r(access_set, &to);
+            Some(())
+        }
         // TODO: SetNftData lacks a metadata key in IR; skip hints until key is modeled.
         ir::Instr::SetNftData { .. } => None,
         // TODO: Vendor execute-query and AXT/ZK helpers carry opaque payloads; skip hints for now.
