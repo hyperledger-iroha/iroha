@@ -937,7 +937,8 @@ mod tests {
         );
         mailbox.fill_slots(&budgets);
 
-        let selected = select_next_tier(now, &mailbox, &budgets, &loop_state.last_served, &cfg);
+        let selected =
+            select_next_tier(now, &mailbox, &budgets, &loop_state.last_served, &cfg, true);
         assert_eq!(selected, Some(PriorityTier::Votes));
     }
 
@@ -1030,7 +1031,8 @@ mod tests {
         );
         mailbox.fill_slots(&budgets);
 
-        let selected = select_next_tier(now, &mailbox, &budgets, &loop_state.last_served, &cfg);
+        let selected =
+            select_next_tier(now, &mailbox, &budgets, &loop_state.last_served, &cfg, false);
         assert_eq!(selected, Some(PriorityTier::BlockPayload));
     }
 
@@ -3892,7 +3894,7 @@ mod tests {
             &background_rx,
         );
 
-        assert_eq!(actor.events, vec!["rbc", "payload", "block", "vote"]);
+        assert_eq!(actor.events, vec!["vote", "rbc", "payload", "block"]);
         assert_eq!(stats.votes_handled, 1);
         assert_eq!(stats.rbc_chunks_handled, 1);
         assert_eq!(stats.block_payloads_handled, 1);
@@ -4024,7 +4026,7 @@ mod tests {
 
         assert_eq!(
             actor.events,
-            vec!["rbc", "payload", "block", "vote", "tick"]
+            vec!["vote", "rbc", "payload", "block", "tick"]
         );
         assert_eq!(actor.tick_calls, 1);
     }
@@ -4372,7 +4374,7 @@ mod tests {
             &background_rx,
         );
 
-        assert_eq!(actor.events, vec!["payload", "vote"]);
+        assert_eq!(actor.events, vec!["vote", "payload"]);
         assert_eq!(stats.votes_handled, 1);
         assert_eq!(stats.block_payloads_handled, 1);
         assert!(stats.budget_exceeded);
@@ -6465,13 +6467,7 @@ fn should_run_tick(
         || block_payload_rx_budget_exhausted
         || rbc_chunk_rx_budget_exhausted
         || block_rx_budget_exhausted;
-    let queues_pending = queue_depths.vote_rx > 0
-        || queue_depths.block_payload_rx > 0
-        || queue_depths.rbc_chunk_rx > 0
-        || queue_depths.block_rx > 0
-        || queue_depths.consensus_rx > 0
-        || queue_depths.lane_relay_rx > 0
-        || queue_depths.background_rx > 0;
+    let queues_pending = has_pending_queue_depths(queue_depths);
     if !queues_saturated && !queues_pending {
         return now.saturating_duration_since(last_tick) >= min_tick_gap;
     }
@@ -6641,6 +6637,8 @@ impl WorkerActor for crate::sumeragi::main_loop::Actor {
 }
 
 const PRIORITY_TIER_COUNT: usize = 7;
+// Keep vote processing ahead of heavy payload tiers without starving them entirely.
+const VOTE_BURST_CAP: usize = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PriorityTier {
@@ -6908,6 +6906,27 @@ struct WorkerIterationStats {
     block_rx_budget_exhausted: bool,
 }
 
+fn has_pending_queue_depths(queue_depths: status::WorkerQueueDepthSnapshot) -> bool {
+    queue_depths.vote_rx > 0
+        || queue_depths.block_payload_rx > 0
+        || queue_depths.rbc_chunk_rx > 0
+        || queue_depths.block_rx > 0
+        || queue_depths.consensus_rx > 0
+        || queue_depths.lane_relay_rx > 0
+        || queue_depths.background_rx > 0
+}
+
+fn should_warn_slow_iteration(stats: &WorkerIterationStats) -> bool {
+    stats.progress
+        || stats.budget_exceeded
+        || stats.tick_elapsed_ms > 0
+        || stats.vote_rx_budget_exhausted
+        || stats.block_payload_rx_budget_exhausted
+        || stats.rbc_chunk_rx_budget_exhausted
+        || stats.block_rx_budget_exhausted
+        || has_pending_queue_depths(stats.queue_depths)
+}
+
 fn drain_mailbox<A: WorkerActor>(
     actor: &mut A,
     cfg: &WorkerLoopConfig,
@@ -6917,6 +6936,10 @@ fn drain_mailbox<A: WorkerActor>(
     stats: &mut WorkerIterationStats,
     last_served: &mut [Instant; PRIORITY_TIER_COUNT],
 ) {
+    let vote_burst = cfg
+        .vote_rx_drain_max_messages
+        .min(VOTE_BURST_CAP)
+        .max(1);
     loop {
         if iter_start.elapsed() >= cfg.time_budget {
             stats.budget_exceeded = true;
@@ -6926,7 +6949,9 @@ fn drain_mailbox<A: WorkerActor>(
             break;
         }
         let now = Instant::now();
-        let Some(tier) = select_next_tier(now, mailbox, budgets, last_served, cfg) else {
+        let prefer_votes = stats.votes_handled < vote_burst;
+        let Some(tier) = select_next_tier(now, mailbox, budgets, last_served, cfg, prefer_votes)
+        else {
             break;
         };
         let Some(envelope) = mailbox.take(tier) else {
@@ -7160,7 +7185,14 @@ fn select_next_tier(
     budgets: &TierBudgets,
     last_served: &[Instant; PRIORITY_TIER_COUNT],
     cfg: &WorkerLoopConfig,
+    prefer_votes: bool,
 ) -> Option<PriorityTier> {
+    if prefer_votes
+        && budgets.remaining(PriorityTier::Votes) > 0
+        && mailbox.has_pending(PriorityTier::Votes)
+    {
+        return Some(PriorityTier::Votes);
+    }
     let mut starved: Option<(PriorityTier, Duration)> = None;
     for tier in PriorityTier::ORDER {
         if tier == PriorityTier::Votes {
@@ -7280,7 +7312,7 @@ fn run_worker_loop<A: WorkerActor>(
         status::record_worker_iteration(
             u64::try_from(iter_elapsed.as_millis()).unwrap_or(u64::MAX),
         );
-        if iter_elapsed >= Duration::from_millis(500) {
+        if iter_elapsed >= Duration::from_millis(500) && should_warn_slow_iteration(&stats) {
             iroha_logger::warn!(
                 elapsed_ms = iter_elapsed.as_millis(),
                 votes_handled = stats.votes_handled,
@@ -7307,6 +7339,47 @@ fn run_worker_loop<A: WorkerActor>(
                 "sumeragi worker iteration slow"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod worker_iteration_warn_tests {
+    use super::*;
+
+    fn empty_stats() -> WorkerIterationStats {
+        WorkerIterationStats {
+            block_payloads_handled: 0,
+            blocks_handled: 0,
+            rbc_chunks_handled: 0,
+            votes_handled: 0,
+            precommit_votes_handled: 0,
+            last_precommit_vote: None,
+            consensus_handled: 0,
+            lane_relays_handled: 0,
+            background_handled: 0,
+            tick_elapsed_ms: 0,
+            queue_depths: status::WorkerQueueDepthSnapshot::default(),
+            last_envelope: None,
+            budget_exceeded: false,
+            progress: false,
+            vote_rx_budget_exhausted: false,
+            block_payload_rx_budget_exhausted: false,
+            rbc_chunk_rx_budget_exhausted: false,
+            block_rx_budget_exhausted: false,
+        }
+    }
+
+    #[test]
+    fn slow_iteration_without_progress_or_backlog_does_not_warn() {
+        let stats = empty_stats();
+        assert!(!should_warn_slow_iteration(&stats));
+    }
+
+    #[test]
+    fn slow_iteration_with_pending_queue_warns() {
+        let mut stats = empty_stats();
+        stats.queue_depths.vote_rx = 1;
+        assert!(should_warn_slow_iteration(&stats));
     }
 }
 

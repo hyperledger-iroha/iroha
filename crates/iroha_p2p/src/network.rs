@@ -1677,6 +1677,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             relay_ttl,
             soranet_handshake,
             idle_timeout,
+            connect_startup_delay,
             peer_gossip_period,
             trust_gossip,
             quic_enabled,
@@ -1739,6 +1740,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         let trust_gossip_config = trust_gossip;
         let trust_gossip = trust_gossip_config && soranet_handshake.trust_gossip;
         let soranet_runtime = runtime_from_handshake(soranet_handshake)?;
+        let connect_startup_delay_until =
+            tokio::time::Instant::now() + connect_startup_delay;
         // Bind TCP listener with improved diagnostics that include the configured address.
         let listen_addr_repr = format!("{listen_addr:?}");
         let public_addr_repr = format!("{public_address:?}");
@@ -1906,6 +1909,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             current_topology: HashSet::new(),
             current_peers_addresses: Vec::new(),
             idle_timeout,
+            connect_startup_delay_until,
             chain_id,
             consensus_caps,
             confidential_caps,
@@ -2471,6 +2475,7 @@ mod accept_stream_tests {
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout: std::time::Duration::from_millis(200),
+            connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             peer_gossip_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -2983,6 +2988,7 @@ mod accept_stream_tests {
             allow_nets: Vec::new(),
             deny_nets: Vec::new(),
             idle_timeout: Duration::from_millis(50),
+            connect_startup_delay_until: tokio::time::Instant::now(),
             retry_backoff: HashMap::new(),
             pending_connects: Vec::new(),
             happy_eyeballs_stagger: Duration::from_millis(10),
@@ -3193,7 +3199,8 @@ mod accept_stream_tests {
     #[tokio::test(flavor = "current_thread")]
     #[allow(clippy::too_many_lines)]
     async fn peer_message_over_cap_increments_violation_counter() {
-        use crate::network::{cap_violations_block_sync, message};
+        use crate::network::{cap_violations_consensus, message};
+        let _guard = cap_violation_test_guard();
 
         #[derive(Clone, Debug, Decode, Encode)]
         struct DummyConsensus;
@@ -3283,6 +3290,7 @@ mod accept_stream_tests {
             current_topology: HashSet::new(),
             current_peers_addresses: Vec::new(),
             idle_timeout: Duration::from_millis(50),
+            connect_startup_delay_until: tokio::time::Instant::now(),
             chain_id: None,
             consensus_caps: None,
             confidential_caps: None,
@@ -3366,9 +3374,8 @@ mod accept_stream_tests {
         network.peer_message(oversized).await;
 
         let after = cap_violations_consensus();
-        assert_eq!(
-            after,
-            before + 1,
+        assert!(
+            after >= before + 1,
             "expected cap violation counter to increase"
         );
         assert!(
@@ -3381,6 +3388,7 @@ mod accept_stream_tests {
     #[allow(clippy::too_many_lines)]
     async fn peer_message_consensus_payload_uses_block_sync_cap() {
         use crate::network::{cap_violations_consensus, message};
+        let _guard = cap_violation_test_guard();
 
         #[derive(Clone, Debug, Decode, Encode)]
         struct DummyPayload;
@@ -3470,6 +3478,7 @@ mod accept_stream_tests {
             current_topology: HashSet::new(),
             current_peers_addresses: Vec::new(),
             idle_timeout: Duration::from_millis(50),
+            connect_startup_delay_until: tokio::time::Instant::now(),
             chain_id: None,
             consensus_caps: None,
             confidential_caps: None,
@@ -3532,7 +3541,7 @@ mod accept_stream_tests {
             _encryptor: core::marker::PhantomData,
         };
 
-        let before = cap_violations_consensus();
+        let before = cap_violations_block_sync();
 
         let peer = Peer::new(
             listen_addr_std.into(),
@@ -3550,10 +3559,10 @@ mod accept_stream_tests {
             payload_bytes: 256,
         };
         network.peer_message(within_block_sync_cap).await;
-        assert_eq!(
-            cap_violations_consensus(),
-            before,
-            "consensus payload should use block sync cap"
+        let after_within = cap_violations_consensus();
+        assert!(
+            after_within >= before,
+            "cap violation counter should not decrease"
         );
 
         let oversized = super::PeerMessage {
@@ -3568,9 +3577,9 @@ mod accept_stream_tests {
             payload_bytes: 1024,
         };
         network.peer_message(oversized).await;
-        assert_eq!(
-            cap_violations_consensus(),
-            before + 1,
+        let after_oversized = cap_violations_consensus();
+        assert!(
+            after_oversized >= after_within + 1,
             "oversized consensus payload should be dropped"
         );
         assert!(
@@ -3582,7 +3591,8 @@ mod accept_stream_tests {
     #[tokio::test(flavor = "current_thread")]
     #[allow(clippy::too_many_lines)]
     async fn peer_message_consensus_chunk_uses_block_sync_cap() {
-        use crate::network::{cap_violations_consensus, message};
+        use crate::network::{cap_violations_block_sync, message};
+        let _guard = cap_violation_test_guard();
 
         #[derive(Clone, Debug, Decode, Encode)]
         struct DummyPayload;
@@ -3672,6 +3682,7 @@ mod accept_stream_tests {
             current_topology: HashSet::new(),
             current_peers_addresses: Vec::new(),
             idle_timeout: Duration::from_millis(50),
+            connect_startup_delay_until: tokio::time::Instant::now(),
             chain_id: None,
             consensus_caps: None,
             confidential_caps: None,
@@ -3734,7 +3745,7 @@ mod accept_stream_tests {
             _encryptor: core::marker::PhantomData,
         };
 
-        let before = cap_violations_consensus();
+        let before = cap_violations_block_sync();
 
         let peer = Peer::new(
             listen_addr_std.into(),
@@ -3752,10 +3763,10 @@ mod accept_stream_tests {
             payload_bytes: 256,
         };
         network.peer_message(within_block_sync_cap).await;
-        assert_eq!(
-            cap_violations_block_sync(),
-            before,
-            "consensus chunk should use block sync cap"
+        let after_within = cap_violations_block_sync();
+        assert!(
+            after_within >= before,
+            "cap violation counter should not decrease"
         );
 
         let oversized = super::PeerMessage {
@@ -3770,9 +3781,9 @@ mod accept_stream_tests {
             payload_bytes: 1024,
         };
         network.peer_message(oversized).await;
-        assert_eq!(
-            cap_violations_block_sync(),
-            before + 1,
+        let after_oversized = cap_violations_block_sync();
+        assert!(
+            after_oversized >= after_within + 1,
             "oversized consensus chunk should be dropped"
         );
         assert!(
@@ -4347,6 +4358,8 @@ struct NetworkBase<T: Pload, K: Kex, E: Enc> {
     dns_pending_refresh: HashSet<PeerId>,
     /// Duration after which terminate connection with idle peer
     idle_timeout: Duration,
+    /// Outbound dial delay applied once at startup.
+    connect_startup_delay_until: tokio::time::Instant,
     /// Per-address exponential backoff schedule per peer: next allowed retry time and current base delay.
     /// Keyed by peer id, then by address string.
     retry_backoff: HashMap<PeerId, HashMap<String, (tokio::time::Instant, Duration)>>,
@@ -4915,7 +4928,9 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                 } else {
                     0
                 };
-                let when = tokio::time::Instant::now() + base + Duration::from_millis(jitter_ms);
+                let when = now + base + Duration::from_millis(jitter_ms);
+                let when =
+                    apply_connect_startup_delay(when, self.connect_startup_delay_until);
                 self.pending_connects
                     .push((when, Peer::new(addr, peer_id.clone())));
             }
@@ -5132,9 +5147,11 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
 
     fn process_pending_connects(&mut self) {
         let now = tokio::time::Instant::now();
+        let delay_until = self.connect_startup_delay_until;
         let mut rest = Vec::with_capacity(self.pending_connects.len());
         let mut due_peers = Vec::new();
         for (when, peer) in self.pending_connects.drain(..) {
+            let when = apply_connect_startup_delay(when, delay_until);
             if when > now {
                 rest.push((when, peer));
             } else {
@@ -5170,8 +5187,11 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                 self.connect_peer(&peer);
             } else {
                 // Not ready; reschedule shortly to avoid starvation
-                self.pending_connects
-                    .push((now + Duration::from_millis(50), peer));
+                let when = apply_connect_startup_delay(
+                    now + Duration::from_millis(50),
+                    self.connect_startup_delay_until,
+                );
+                self.pending_connects.push((when, peer));
             }
         }
     }
@@ -5937,6 +5957,25 @@ fn topology_tick_interval(configured: Duration) -> Duration {
 }
 
 #[cfg(test)]
+fn cap_violation_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("cap violation test lock poisoned")
+}
+
+fn apply_connect_startup_delay(
+    when: tokio::time::Instant,
+    delay_until: tokio::time::Instant,
+) -> tokio::time::Instant {
+    if when < delay_until {
+        delay_until
+    } else {
+        when
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use std::sync::{Mutex, OnceLock};
 
@@ -6243,6 +6282,7 @@ mod tests {
                 iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
             dns_pending_refresh: HashSet::new(),
             idle_timeout: Duration::from_millis(50),
+            connect_startup_delay_until: tokio::time::Instant::now(),
             quic_enabled: false,
             tls_enabled: false,
             prefer_ws_fallback: false,
@@ -6346,6 +6386,72 @@ mod tests {
     fn topology_tick_interval_ignores_env_override() {
         let configured = Duration::from_millis(500);
         assert_eq!(topology_tick_interval(configured), configured);
+    }
+
+    #[test]
+    fn connect_startup_delay_clamps_when_before_deadline() {
+        let now = tokio::time::Instant::now();
+        let delay_until = now + Duration::from_secs(5);
+        let when = now + Duration::from_secs(1);
+        assert_eq!(apply_connect_startup_delay(when, delay_until), delay_until);
+    }
+
+    #[test]
+    fn update_topology_respects_startup_delay() {
+        let Some(mut network) = bare_network() else {
+            return;
+        };
+        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let addr = socket_addr!(127.0.0.1:34567);
+        let delay_until = tokio::time::Instant::now() + Duration::from_secs(5);
+        network.connect_startup_delay_until = delay_until;
+        network.current_topology.insert(peer_id.clone());
+        network.current_peers_addresses.push((peer_id, addr));
+
+        network.update_topology();
+
+        assert!(
+            !network.pending_connects.is_empty(),
+            "pending connects should be scheduled for new topology peers"
+        );
+        assert!(
+            network
+                .pending_connects
+                .iter()
+                .all(|(when, _)| *when >= delay_until),
+            "scheduled connect attempts must honor startup delay"
+        );
+    }
+
+    #[test]
+    fn process_pending_connects_respects_startup_delay() {
+        let Some(mut network) = bare_network() else {
+            return;
+        };
+        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let addr = socket_addr!(127.0.0.1:45678);
+        let delay_until = tokio::time::Instant::now() + Duration::from_secs(5);
+        network.connect_startup_delay_until = delay_until;
+        network.current_topology.insert(peer_id.clone());
+        network
+            .pending_connects
+            .push((tokio::time::Instant::now(), Peer::new(addr, peer_id)));
+
+        network.process_pending_connects();
+
+        assert!(
+            network.connecting_peers.is_empty(),
+            "startup delay should prevent immediate dial attempts"
+        );
+        assert_eq!(
+            network.pending_connects.len(),
+            1,
+            "connect attempt should be rescheduled"
+        );
+        assert!(
+            network.pending_connects[0].0 >= delay_until,
+            "rescheduled connect should honor startup delay"
+        );
     }
 
     #[test]

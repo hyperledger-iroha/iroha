@@ -3526,6 +3526,40 @@ async fn block_sync_update_accepts_uncertified_next_height_in_npos_genesis_boots
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn rbc_roster_for_session_uses_active_topology_in_npos_bootstrap() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let _genesis_hash = seed_genesis_block_for_state(&actor.state);
+    let committed_height = {
+        let view = actor.state.view();
+        u64::try_from(view.height()).unwrap_or(u64::MAX)
+    };
+    let height = committed_height.saturating_add(1).max(1);
+    let view = 0_u64;
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([
+        0xA7;
+        Hash::LENGTH
+    ]));
+    let key = (block_hash, height, view);
+
+    let expected = actor.effective_commit_topology();
+    assert!(
+        !expected.is_empty(),
+        "test requires a non-empty active topology"
+    );
+    let roster = actor.rbc_roster_for_session(key);
+    assert_eq!(
+        roster, expected,
+        "RBC roster should follow active topology during NPoS bootstrap"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn block_sync_update_defers_signature_mismatch_when_parent_missing() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -24750,7 +24784,7 @@ async fn trigger_view_change_prunes_proposals_seen_for_height() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn trigger_view_change_prunes_pending_blocks_and_retains_missing_state_with_da() {
+async fn trigger_view_change_retains_aborted_pending_payloads_with_da() {
     let mut harness = test_actor_harness(4).await;
     let _guard = super::status::view_change_proof_test_guard();
     let actor = &mut harness.actor;
@@ -24853,20 +24887,18 @@ async fn trigger_view_change_prunes_pending_blocks_and_retains_missing_state_wit
 
     actor.trigger_view_change_with_cause(height, 0, super::ViewChangeCause::QuorumTimeout);
 
-    assert!(
-        !actor
-            .pending
-            .pending_blocks
-            .contains_key(&stale_block_0.hash()),
-        "stale pending block should be pruned"
-    );
-    assert!(
-        !actor
-            .pending
-            .pending_blocks
-            .contains_key(&stale_block_1.hash()),
-        "stale pending block should be pruned"
-    );
+    let stale_pending_0 = actor
+        .pending
+        .pending_blocks
+        .get(&stale_block_0.hash())
+        .expect("stale pending block should be retained");
+    assert!(stale_pending_0.aborted, "stale pending block should be aborted");
+    let stale_pending_1 = actor
+        .pending
+        .pending_blocks
+        .get(&stale_block_1.hash())
+        .expect("stale pending block should be retained");
+    assert!(stale_pending_1.aborted, "stale pending block should be aborted");
     assert!(
         actor
             .pending
@@ -24874,31 +24906,40 @@ async fn trigger_view_change_prunes_pending_blocks_and_retains_missing_state_wit
             .contains_key(&keep_block.hash()),
         "pending block for the new view should remain"
     );
+    let keep_pending = actor
+        .pending
+        .pending_blocks
+        .get(&keep_block.hash())
+        .expect("pending block for the new view should remain");
     assert!(
-        actor.subsystems.da_rbc.rbc.sessions.contains_key(&key_0),
-        "stale RBC session should remain while payload is missing"
+        !keep_pending.aborted,
+        "pending block for the new view should not be aborted"
     );
     assert!(
-        actor.subsystems.da_rbc.rbc.sessions.contains_key(&key_1),
-        "stale RBC session should remain while payload is missing"
+        !actor.subsystems.da_rbc.rbc.sessions.contains_key(&key_0),
+        "stale RBC session should be pruned once payload is retained locally"
+    );
+    assert!(
+        !actor.subsystems.da_rbc.rbc.sessions.contains_key(&key_1),
+        "stale RBC session should be pruned once payload is retained locally"
     );
     assert!(
         actor.subsystems.da_rbc.rbc.sessions.contains_key(&key_keep),
         "RBC session for the new view should remain"
     );
     assert!(
-        actor
+        !actor
             .pending
             .missing_block_requests
             .contains_key(&stale_block_0.hash()),
-        "stale missing-block request should remain while payload is missing"
+        "stale missing-block request should be pruned once payload is retained locally"
     );
     assert!(
-        actor
+        !actor
             .pending
             .missing_block_requests
             .contains_key(&stale_block_1.hash()),
-        "stale missing-block request should remain while payload is missing"
+        "stale missing-block request should be pruned once payload is retained locally"
     );
     assert!(
         actor

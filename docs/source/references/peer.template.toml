@@ -54,6 +54,7 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 # transaction_gossip_public_target_reshuffle_ms = 1_000     # public target reshuffle cadence (clamped to >= 100ms)
 # transaction_gossip_restricted_target_reshuffle_ms = 1_000 # restricted target reshuffle cadence (clamped to >= 100ms)
 # idle_timeout_ms = 60_000  # clamped to >= 100ms
+# connect_startup_delay_ms = 0 # delay outbound dials after startup (0 disables)
 # trust_decay_half_life_ms = 300_000 # halve negative trust scores every 5 minutes
 # trust_penalty_bad_gossip = 5       # penalty applied per invalid trust gossip
 # trust_penalty_unknown_peer = 3     # permissioned-only penalty when trust gossip mentions peers outside topology; logged + counted as p2p_trust_penalties_total{reason="unknown_peer"}

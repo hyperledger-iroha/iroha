@@ -7365,6 +7365,9 @@ pub struct Network {
     /// (clamped to >= 100ms).
     #[config(default = "defaults::network::IDLE_TIMEOUT.into()")]
     pub idle_timeout_ms: DurationMs,
+    /// Delay outbound peer dials after startup (milliseconds).
+    #[config(default = "defaults::network::CONNECT_STARTUP_DELAY.into()")]
+    pub connect_startup_delay_ms: DurationMs,
     /// Enable QUIC transport (feature-gated).
     #[config(env = "P2P_QUIC", default)]
     pub quic_enabled: bool,
@@ -7573,6 +7576,7 @@ impl Network {
             transaction_gossip_restricted_fallback,
             transaction_gossip_restricted_public_payload,
             idle_timeout_ms: idle_timeout,
+            connect_startup_delay_ms: connect_startup_delay,
             dns_refresh_interval_ms: dns_refresh_interval,
             dns_refresh_ttl_ms: dns_refresh_ttl,
             quic_enabled,
@@ -7741,6 +7745,7 @@ impl Network {
                 relay_hub_address: relay_hub_address.map(WithOrigin::into_value),
                 relay_ttl,
                 idle_timeout,
+                connect_startup_delay: connect_startup_delay.get(),
                 peer_gossip_period,
                 peer_gossip_max_period,
                 trust_gossip,

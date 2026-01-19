@@ -2136,15 +2136,9 @@ impl RawGenesisTransaction {
     /// - if consensus metadata cannot be populated
     /// - if instruction injection fails (e.g., invalid topology PoPs)
     pub fn normalize(self) -> Result<NormalizedGenesis> {
-        let manifest = if self.consensus_fingerprint.is_some()
-            && !self.wire_proto_versions.is_empty()
-            && self.bls_domain.is_some()
-            && self.consensus_mode.is_some()
-        {
-            self
-        } else {
-            self.with_consensus_meta()
-        };
+        // Always refresh consensus metadata so fingerprints stay aligned with
+        // effective parameters after manifest edits.
+        let manifest = self.with_consensus_meta();
 
         let consensus_mode = manifest.consensus_mode.ok_or_else(|| {
             eyre!("consensus_mode missing after normalization; call with_consensus_meta first")
@@ -3530,16 +3524,9 @@ impl RawGenesisTransaction {
     /// Fails if `self.executor` path fails to load [`Executor`].
     #[allow(clippy::too_many_lines)]
     fn parse(self) -> Result<Vec<Vec<InstructionBox>>> {
-        // Ensure consensus metadata fields are populated before building instructions.
-        let manifest = if self.consensus_fingerprint.is_some()
-            && !self.wire_proto_versions.is_empty()
-            && self.bls_domain.is_some()
-            && self.consensus_mode.is_some()
-        {
-            self
-        } else {
-            self.with_consensus_meta()
-        };
+        // Always refresh consensus metadata so fingerprints stay aligned with
+        // effective parameters after manifest edits.
+        let manifest = self.with_consensus_meta();
 
         manifest
             .crypto
@@ -4340,7 +4327,7 @@ mod tests {
         isi::SetParameter,
         parameter::{
             Parameter,
-            system::{SumeragiConsensusMode, confidential_metadata},
+            system::{SumeragiConsensusMode, confidential_metadata, consensus_metadata},
         },
         transaction::Executable,
     };
@@ -4377,6 +4364,52 @@ mod tests {
         std::fs::write(&genesis_path, genesis).unwrap();
         let kp = KeyPair::random();
         RawGenesisTransaction::from_path(&genesis_path)?.build_and_sign(&kp)?;
+        Ok(())
+    }
+
+    #[test]
+    fn build_and_sign_refreshes_stale_consensus_fingerprint() -> Result<()> {
+        init_instruction_registry();
+        let chain = ChainId::from("iroha:test:refresh-consensus-fp");
+        let mut manifest = GenesisBuilder::new_without_executor(chain, ".")
+            .build_raw()
+            .with_consensus_meta();
+        let expected = manifest
+            .clone()
+            .with_consensus_meta()
+            .consensus_fingerprint
+            .clone()
+            .expect("expected consensus fingerprint");
+        manifest.consensus_fingerprint = Some("0xdeadbeef".to_string());
+
+        let genesis = manifest.build_and_sign(&KeyPair::random())?;
+        let mut found = None;
+        for tx in genesis.0.external_transactions() {
+            if let Executable::Instructions(batch) = tx.instructions() {
+                for instr in batch {
+                    if let Some(set_param) = instr.as_any().downcast_ref::<SetParameter>()
+                        && let Parameter::Custom(custom) = set_param.inner()
+                        && custom.id() == &consensus_metadata::handshake_meta_id()
+                    {
+                        let payload: norito::json::Value = custom
+                            .payload()
+                            .try_into_any_norito()
+                            .expect("decode handshake metadata payload");
+                        if let Some(norito::json::Value::String(fp)) =
+                            payload.get("consensus_fingerprint")
+                        {
+                            found = Some(fp.clone());
+                            break;
+                        }
+                    }
+                }
+            }
+            if found.is_some() {
+                break;
+            }
+        }
+        let got = found.expect("consensus_handshake_meta not found");
+        assert_eq!(got, expected);
         Ok(())
     }
 

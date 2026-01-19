@@ -738,6 +738,8 @@ pub mod network {
     /// Keep this comfortably above the typical integration-test runtime so peers do not churn
     /// before they exchange their first gossip/status messages.
     pub const IDLE_TIMEOUT: Duration = Duration::from_mins(5);
+    /// Delay outbound peer dials after startup.
+    pub const CONNECT_STARTUP_DELAY: Duration = Duration::from_millis(0);
     /// Idle timeout before expiring accept throttle buckets.
     pub const ACCEPT_BUCKET_IDLE: Duration = Duration::from_mins(10);
     /// Maximum number of accept throttle buckets to retain.

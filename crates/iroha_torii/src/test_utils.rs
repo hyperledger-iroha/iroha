@@ -349,6 +349,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout: core::time::Duration::from_secs(5),
+            connect_startup_delay: defaults::network::CONNECT_STARTUP_DELAY,
             peer_gossip_period: defaults::network::PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: defaults::network::PEER_GOSSIP_PERIOD,
             trust_gossip: defaults::network::TRUST_GOSSIP,
