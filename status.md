@@ -2,10 +2,18 @@
 
 Last update: 2026-01-19
 
+- Sumeragi pacemaker: idle view changes now pause when consensus block-payload/RBC-chunk queues are saturated to avoid churn under payload backlog; added `force_view_change_if_idle_skips_when_consensus_queue_backpressure`.
+- Tests: `cargo test -p iroha_core force_view_change_if_idle_skips_when_consensus_queue_backpressure -- --nocapture` (timed out waiting for Cargo build dir lock).
+- Sumeragi pacemaker: defer proposal assembly while block-payload/RBC-chunk queues are saturated; added `consensus_queue_backpressure_trips_on_payload_or_rbc_queue` + `proposal_backpressure_defers_on_consensus_queue_backpressure`. Docs updated (`docs/source/sumeragi.md`, `docs/source/references/configuration.md`, `docs/source/references/peer.template.toml`).
+- Tests: `cargo test -p iroha_core consensus_queue_backpressure -- --nocapture` (ok).
+- DA/RBC: default RBC chunk fanout now targets the full roster (minus local) so READY quorum can form even with f faulty peers; unit coverage updated.
+- DA/RBC: unresolved backlog detection now gates on incomplete READY quorum/chunk coverage (even when payload is local) and pending RBC stashes; idle view changes stay suppressed while RBC backlog or relay backpressure is active; tests added/updated (not run).
+- DA/RBC: treat blocks present in Kura as committed only when their stored height is <= committed height, and keep accepting RBC messages for committed heights when payload is missing; added `rbc_message_stale_ignores_uncommitted_kura_blocks` + `rbc_message_stale_allows_missing_payload_for_committed_height_with_da` (not run).
+- DA/RBC: pending RBC stashes at the tip height now gate view changes (alongside tip+1) to prevent premature leader rotation; added `rbc_backlog_counts_pending_stash_for_tip_height` (not run).
+- Format: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
 - Sumeragi pacemaker: rebroadcast cached proposals + BlockCreated payloads when the local leader already has the proposal cached, avoiding stalls when proposal messages are dropped; added `pacemaker_rebroadcasts_cached_proposal_when_leader` coverage.
 - Tests: `cargo test -p iroha_core pacemaker_rebroadcasts_cached_proposal_when_leader -- --nocapture` (ok).
 - Tests: `cargo test --workspace` failed during compile (missing `connect_startup_delay` in `iroha_p2p` integration test Network configs).
-- Format: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
 - Integration tests (asset): submit helpers now broadcast signed transactions across peers and tolerate duplicate-enqueue responses to avoid queued timeouts; added duplicate-error detection coverage. Tests not re-run yet.
 - Integration tests: NetworkBuilder::new now defaults to a 1s pipeline time for faster test networks; `with_default_pipeline_time` keeps Sumeragi defaults. Tests not run yet.
 - Torii/client: queue rejections now include `x-iroha-reject-code`; client ResponseReport decodes Norito error envelopes to surface codes/messages. Tests: `cargo test -p iroha --lib response_report::with_msg_decodes_norito_error_envelope`, `cargo test -p iroha_torii --lib push_into_queue_error_sets_reject_code_header` (ok).

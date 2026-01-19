@@ -168,7 +168,7 @@ impl Actor {
                 )
             })
             .map(Box::new);
-        drop(pending);
+        let _ = pending;
 
         let (_requeued, failures, _duplicates, _) =
             requeue_block_transactions(self.queue.as_ref(), self.state.as_ref(), txs);

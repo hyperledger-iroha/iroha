@@ -317,6 +317,25 @@ fn submit_or_tolerate_timeout(
     submit_tx_or_skip(clients, &tx, context)
 }
 
+fn sync_after_optional(
+    network: &Network,
+    rt: &tokio::runtime::Runtime,
+    clients: &mut ClientPool,
+    last_non_empty_height: &mut u64,
+    context: &str,
+) -> Result<Option<()>> {
+    match status_or_skip(
+        sync_after_submission(network, rt, clients.next(), *last_non_empty_height, context),
+        context,
+    )? {
+        Some(status) => {
+            *last_non_empty_height = status.blocks_non_empty;
+            Ok(Some(()))
+        }
+        None => Ok(None),
+    }
+}
+
 fn is_tx_confirmation_timeout(err: &Report) -> bool {
     const NEEDLES: [&str; 4] = [
         "haven't got tx confirmation within",
@@ -473,25 +492,15 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
     {
         return Ok(());
     }
-    let mut sync_after = |context: &'static str| -> Result<Option<()>> {
-        match status_or_skip(
-            sync_after_submission(
-                &network,
-                &rt,
-                clients.next(),
-                last_non_empty_height,
-                context,
-            ),
-            context,
-        )? {
-            Some(status) => {
-                last_non_empty_height = status.blocks_non_empty;
-                Ok(Some(()))
-            }
-            None => Ok(None),
-        }
-    };
-    if sync_after("register asset definitions")?.is_none() {
+    if sync_after_optional(
+        &network,
+        &rt,
+        &mut clients,
+        &mut last_non_empty_height,
+        "register asset definitions",
+    )?
+    .is_none()
+    {
         return Ok(());
     }
     for asset_definition_id in [
@@ -526,7 +535,15 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
     if submit_tx_or_skip(&mut clients, &tx, "mint asset")?.is_none() {
         return Ok(());
     }
-    if sync_after("mint asset")?.is_none() {
+    if sync_after_optional(
+        &network,
+        &rt,
+        &mut clients,
+        &mut last_non_empty_height,
+        "mint asset",
+    )?
+    .is_none()
+    {
         return Ok(());
     }
     wait_for_asset_value(&mut clients, &asset_id, &quantity, "mint asset")?;
@@ -542,7 +559,15 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
     if submit_tx_or_skip(&mut clients, &tx, "mint large asset")?.is_none() {
         return Ok(());
     }
-    if sync_after("mint large asset")?.is_none() {
+    if sync_after_optional(
+        &network,
+        &rt,
+        &mut clients,
+        &mut last_non_empty_height,
+        "mint large asset",
+    )?
+    .is_none()
+    {
         return Ok(());
     }
     wait_for_asset_value(
@@ -571,7 +596,15 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
     {
         return Ok(());
     }
-    if sync_after("mint decimal asset")?.is_none() {
+    if sync_after_optional(
+        &network,
+        &rt,
+        &mut clients,
+        &mut last_non_empty_height,
+        "mint decimal asset",
+    )?
+    .is_none()
+    {
         return Ok(());
     }
     wait_for_asset_value(
@@ -599,7 +632,15 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
     {
         return Ok(());
     }
-    if sync_after("mint fractional asset")?.is_none() {
+    if sync_after_optional(
+        &network,
+        &rt,
+        &mut clients,
+        &mut last_non_empty_height,
+        "mint fractional asset",
+    )?
+    .is_none()
+    {
         return Ok(());
     }
     wait_for_asset_value(

@@ -557,28 +557,76 @@ impl Actor {
                 }
             }
 
-            let mut view_change = None;
-            if let Some(stats) = self.pending.missing_block_requests.get_mut(&block_hash) {
-                if stats.mark_view_change_if_due(now) {
-                    view_change = Some((stats.height, stats.view, stats.attempts));
+            let view_change_due = self
+                .pending
+                .missing_block_requests
+                .get(&block_hash)
+                .and_then(|stats| {
+                    stats
+                        .view_change_window
+                        .filter(|window| *window != Duration::ZERO)
+                        .map(|window| {
+                            (
+                                !stats.view_change_triggered_in_view()
+                                    && now.saturating_duration_since(stats.first_seen) >= window,
+                                stats.height,
+                                stats.view,
+                            )
+                        })
+                })
+                .filter(|(due, _, _)| *due)
+                .map(|(_, height, view)| (height, view));
+            if let Some((height, view)) = view_change_due {
+                if self.should_defer_missing_block_view_change(&block_hash, height, view) {
+                    debug!(
+                        height,
+                        view,
+                        dwell_ms,
+                        attempts,
+                        "missing block dwell exceeded view-change window; deferring view change while RBC availability is unresolved"
+                    );
+                } else {
+                    if let Some(stats) = self.pending.missing_block_requests.get_mut(&block_hash) {
+                        stats.view_change_triggered_view = Some(view);
+                    }
+                    warn!(
+                        height,
+                        view,
+                        dwell_ms,
+                        since_last_ms,
+                        attempts,
+                        "missing block dwell exceeded view-change window; forcing view change"
+                    );
+                    self.trigger_view_change_with_cause(
+                        height,
+                        view,
+                        ViewChangeCause::MissingPayload,
+                    );
+                    progress = true;
                 }
-            }
-            if let Some((height, view, attempts)) = view_change {
-                warn!(
-                    height,
-                    view,
-                    dwell_ms,
-                    since_last_ms,
-                    attempts,
-                    "missing block dwell exceeded view-change window; forcing view change"
-                );
-                self.trigger_view_change_with_cause(height, view, ViewChangeCause::MissingPayload);
-                progress = true;
             }
         }
 
         self.update_missing_block_gauges();
         progress
+    }
+
+    fn should_defer_missing_block_view_change(
+        &self,
+        block_hash: &HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> bool {
+        if !self.runtime_da_enabled() {
+            return false;
+        }
+        let key = (*block_hash, height, view);
+        if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {
+            if !session.is_invalid() && !session.delivered {
+                return true;
+            }
+        }
+        self.subsystems.da_rbc.rbc.pending.contains_key(&key)
     }
 
     pub(super) fn clear_missing_block_request(
@@ -1233,16 +1281,56 @@ impl Actor {
     pub(super) fn drop_missing_lock_if_unknown(&mut self, qc: &crate::sumeragi::consensus::Qc) {
         if let Some(lock) = self.locked_qc {
             if !self.block_known_locally(lock.subject_block_hash) {
+                let locked_hash = lock.subject_block_hash;
                 info!(
                     locked_height = lock.height,
                     locked_view = lock.view,
-                    locked_hash = %lock.subject_block_hash,
+                    locked_hash = %locked_hash,
                     incoming_height = qc.height,
                     incoming_view = qc.view,
-                    "clearing locked QC that is missing locally before processing incoming QC"
+                    "locked QC payload missing locally; requesting payload before processing incoming QC"
                 );
-                self.locked_qc = None;
-                super::status::set_locked_qc(0, 0, None);
+                let now = Instant::now();
+                let retry_window = self.rebroadcast_cooldown();
+                let view_change_window = Some(self.quorum_timeout(self.runtime_da_enabled()));
+                let (consensus_mode, _mode_tag, _prf_seed) =
+                    self.consensus_context_for_height(lock.height);
+                let mut roster = self.roster_for_vote_with_mode(
+                    locked_hash,
+                    lock.height,
+                    lock.view,
+                    consensus_mode,
+                );
+                if roster.is_empty() {
+                    roster = self.effective_commit_topology();
+                }
+                if !roster.is_empty() {
+                    let topology = super::network_topology::Topology::new(roster);
+                    let signers = BTreeSet::new();
+                    let peer_id = self.common_config.peer.id.clone();
+                    let network = self.network.clone();
+                    let mut requests = core::mem::take(&mut self.pending.missing_block_requests);
+                    let _ = super::defer_qc_for_missing_block(
+                        false,
+                        retry_window,
+                        view_change_window,
+                        now,
+                        locked_hash,
+                        lock.height,
+                        lock.view,
+                        lock.phase,
+                        &signers,
+                        &topology,
+                        self.config.missing_block_signer_fallback_attempts,
+                        &mut requests,
+                        self.telemetry_handle(),
+                        move |targets| {
+                            send_missing_block_request(&network, &peer_id, locked_hash, targets)
+                        },
+                    );
+                    self.pending.missing_block_requests = requests;
+                }
+                return;
             }
         }
     }

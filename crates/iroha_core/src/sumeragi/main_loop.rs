@@ -3375,25 +3375,42 @@ impl Actor {
         let tip_height_u64 = u64::try_from(tip_height).unwrap_or(u64::MAX);
         let tip_hash = view.latest_block_hash();
         drop(view);
-        let missing_payload = self
+        let session_backlog = self
             .subsystems
             .da_rbc
             .rbc
             .sessions
             .iter()
             .any(|(key, session)| {
-                self.rbc_rebroadcast_active_with_tip(*key, tip_height, tip_hash)
-                    && !session.is_invalid()
-                    && !self.block_payload_available_locally(key.0)
+                if !self.rbc_rebroadcast_active_with_tip(*key, tip_height, tip_hash) {
+                    return false;
+                }
+                if session.is_invalid() || session.delivered {
+                    return false;
+                }
+                let missing_chunks = session.total_chunks() != 0
+                    && session.received_chunks() < session.total_chunks();
+                let roster = self.rbc_session_roster(*key);
+                let roster_source = self
+                    .rbc_session_roster_source(*key)
+                    .unwrap_or(RbcRosterSource::Init);
+                let ready_quorum = if !roster.is_empty() && roster_source.is_authoritative() {
+                    let topology = super::network_topology::Topology::new(roster);
+                    session.ready_signatures.len() >= self.rbc_deliver_quorum(&topology)
+                } else {
+                    false
+                };
+                let payload_available =
+                    self.block_payload_available_locally(key.0) || session.delivered;
+                missing_chunks || !ready_quorum || !payload_available
             });
-        if missing_payload {
+        if session_backlog {
             return true;
         }
         let pending_payload = self.subsystems.da_rbc.rbc.pending.keys().any(|key| {
             self.rbc_rebroadcast_active_with_tip(*key, tip_height, tip_hash)
-                && !self.block_payload_available_locally(key.0)
-                || (!self.block_payload_available_locally(key.0)
-                    && key.1 == tip_height_u64.saturating_add(1))
+                || key.1 == tip_height_u64
+                || key.1 == tip_height_u64.saturating_add(1)
         });
         if pending_payload {
             return true;
@@ -9189,8 +9206,22 @@ impl Actor {
             let view = self.state.view();
             view.height() as u64
         };
-        let present_in_kura = self.kura.get_block_height_by_hash(*block_hash).is_some();
-        rbc_message_committed(committed_height, height, present_in_kura)
+        let present_in_kura = self
+            .kura
+            .get_block_height_by_hash(*block_hash)
+            .and_then(|block_height| {
+                let height = u64::try_from(block_height.get()).ok()?;
+                Some(height <= committed_height)
+            })
+            .unwrap_or(false);
+        let committed = rbc_message_committed(committed_height, height, present_in_kura);
+        if committed
+            && self.runtime_da_enabled()
+            && !self.block_payload_available_locally(*block_hash)
+        {
+            return false;
+        }
+        committed
     }
 
     fn rebuild_rbc_init(&self, key: super::rbc_store::SessionKey) -> Option<RbcInit> {
@@ -10444,6 +10475,13 @@ impl Actor {
         }
         let rbc_backlog = self.has_unresolved_rbc_backlog();
         let relay_backpressure = self.relay_backpressure_active(now, self.rebroadcast_cooldown());
+        let queue_depths = super::status::worker_queue_depth_snapshot();
+        let block_payload_cap =
+            u64::try_from(self.config.msg_channel_cap_block_payload.max(1)).unwrap_or(u64::MAX);
+        let rbc_chunk_cap =
+            u64::try_from(self.config.msg_channel_cap_rbc_chunks.max(1)).unwrap_or(u64::MAX);
+        let consensus_queue_backpressure = queue_depths.block_payload_rx >= block_payload_cap
+            || queue_depths.rbc_chunk_rx >= rbc_chunk_cap;
 
         let committed_qc = self.latest_committed_qc();
         let committed_height = committed_qc.as_ref().map_or_else(
@@ -10479,13 +10517,29 @@ impl Actor {
             self.subsystems.propose.pacemaker.propose_interval,
             self.runtime_da_enabled(),
         );
-        if !idle_round_timed_out(true, age, timeout) {
-            if rbc_backlog {
-                trace!("skipping idle view-change due to unresolved RBC backlog");
+        let timed_out = idle_round_timed_out(true, age, timeout);
+        if rbc_backlog || relay_backpressure || consensus_queue_backpressure {
+            if timed_out {
+                debug!(
+                    rbc_backlog,
+                    relay_backpressure,
+                    consensus_queue_backpressure,
+                    "skipping idle view-change despite timeout due to unresolved backpressure"
+                );
+            } else {
+                if rbc_backlog {
+                    trace!("skipping idle view-change due to unresolved RBC backlog");
+                }
+                if relay_backpressure {
+                    trace!("skipping idle view-change due to relay backpressure");
+                }
+                if consensus_queue_backpressure {
+                    trace!("skipping idle view-change due to consensus queue backpressure");
+                }
             }
-            if relay_backpressure {
-                trace!("skipping idle view-change due to relay backpressure");
-            }
+            return false;
+        }
+        if !timed_out {
             return false;
         }
 
@@ -10499,6 +10553,7 @@ impl Actor {
             proposal_seen,
             rbc_backlog,
             relay_backpressure,
+            consensus_queue_backpressure,
             "no proposal observed before cutoff; rotating leader via view change"
         );
         self.trigger_view_change_with_cause(height, current_view, ViewChangeCause::MissingQc);

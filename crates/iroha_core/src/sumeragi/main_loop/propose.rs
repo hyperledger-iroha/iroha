@@ -100,6 +100,7 @@ pub(super) struct ProposalBackpressure {
     pub(super) active_pending: bool,
     pub(super) rbc_backlog: bool,
     pub(super) relay_backpressure: bool,
+    pub(super) consensus_queue_backpressure: bool,
 }
 
 impl ProposalBackpressure {
@@ -108,12 +109,26 @@ impl ProposalBackpressure {
             || self.active_pending
             || self.rbc_backlog
             || self.relay_backpressure
+            || self.consensus_queue_backpressure
     }
 
     pub(super) fn only_queue_saturation(self) -> bool {
         self.queue_state.is_saturated()
-            && !(self.active_pending || self.rbc_backlog || self.relay_backpressure)
+            && !(self.active_pending
+                || self.rbc_backlog
+                || self.relay_backpressure
+                || self.consensus_queue_backpressure)
     }
+}
+
+fn consensus_queue_backpressure(
+    depths: status::WorkerQueueDepthSnapshot,
+    block_payload_cap: usize,
+    rbc_chunk_cap: usize,
+) -> bool {
+    let block_payload_cap = u64::try_from(block_payload_cap.max(1)).unwrap_or(u64::MAX);
+    let rbc_chunk_cap = u64::try_from(rbc_chunk_cap.max(1)).unwrap_or(u64::MAX);
+    depths.block_payload_rx >= block_payload_cap || depths.rbc_chunk_rx >= rbc_chunk_cap
 }
 
 fn da_payload_budget(
@@ -1292,6 +1307,12 @@ impl Actor {
         let queue_state = self.subsystems.propose.backpressure_gate.state();
         let active_pending = self.has_blocking_pending_blocks();
         let mut rbc_backlog = self.has_unresolved_rbc_backlog();
+        let queue_depths = status::worker_queue_depth_snapshot();
+        let consensus_queue_backpressure = consensus_queue_backpressure(
+            queue_depths,
+            self.config.msg_channel_cap_block_payload,
+            self.config.msg_channel_cap_rbc_chunks,
+        );
         let relay_backpressure = if self.backpressure_override_due(now) {
             // Liveness override: don't let prolonged relay/RBC backpressure stall proposals.
             rbc_backlog = false;
@@ -1304,6 +1325,7 @@ impl Actor {
             active_pending,
             rbc_backlog,
             relay_backpressure,
+            consensus_queue_backpressure,
         }
     }
 
@@ -2320,7 +2342,12 @@ impl Actor {
 
 #[cfg(test)]
 mod tests {
-    use super::{da_payload_budget, trim_batch_for_size_cap};
+    use super::{
+        ProposalBackpressure, consensus_queue_backpressure, da_payload_budget,
+        trim_batch_for_size_cap,
+    };
+    use crate::queue::BackpressureState;
+    use crate::sumeragi::status;
     use std::num::NonZeroUsize;
 
     #[test]
@@ -2342,6 +2369,21 @@ mod tests {
     fn da_payload_budget_honors_pending_caps() {
         let budget = da_payload_budget(256 * 1024, 4 * 1024, 1, None, 64 * 1024);
         assert_eq!(budget, 4 * 1024);
+    }
+
+    #[test]
+    fn consensus_queue_backpressure_flags_full_queues() {
+        let mut depths = status::WorkerQueueDepthSnapshot::default();
+        depths.block_payload_rx = 2;
+        assert!(consensus_queue_backpressure(depths, 2, 10));
+
+        depths.block_payload_rx = 1;
+        depths.rbc_chunk_rx = 5;
+        assert!(consensus_queue_backpressure(depths, 10, 5));
+
+        depths.block_payload_rx = 1;
+        depths.rbc_chunk_rx = 4;
+        assert!(!consensus_queue_backpressure(depths, 10, 5));
     }
 
     #[test]
@@ -2375,5 +2417,43 @@ mod tests {
         assert_eq!(txs.len(), 1);
         assert_eq!(routes.len(), 1);
         assert_eq!(sizes.len(), 1);
+    }
+
+    #[test]
+    fn consensus_queue_backpressure_trips_on_payload_or_rbc_queue() {
+        let depths = super::status::WorkerQueueDepthSnapshot {
+            block_payload_rx: 4,
+            ..super::status::WorkerQueueDepthSnapshot::default()
+        };
+        assert!(consensus_queue_backpressure(depths, 4, 8));
+
+        let depths = super::status::WorkerQueueDepthSnapshot {
+            rbc_chunk_rx: 8,
+            ..super::status::WorkerQueueDepthSnapshot::default()
+        };
+        assert!(consensus_queue_backpressure(depths, 4, 8));
+
+        let depths = super::status::WorkerQueueDepthSnapshot {
+            block_payload_rx: 3,
+            rbc_chunk_rx: 7,
+            ..super::status::WorkerQueueDepthSnapshot::default()
+        };
+        assert!(!consensus_queue_backpressure(depths, 4, 8));
+    }
+
+    #[test]
+    fn proposal_backpressure_defers_on_consensus_queue_backpressure() {
+        let backpressure = ProposalBackpressure {
+            queue_state: BackpressureState::Healthy {
+                queued: 0,
+                capacity: NonZeroUsize::new(1).expect("non-zero"),
+            },
+            active_pending: false,
+            rbc_backlog: false,
+            relay_backpressure: false,
+            consensus_queue_backpressure: true,
+        };
+        assert!(backpressure.should_defer());
+        assert!(!backpressure.only_queue_saturation());
     }
 }
