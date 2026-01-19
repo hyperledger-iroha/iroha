@@ -1057,6 +1057,7 @@ fn minimal_config_snapshot() {
                     reconfig: SumeragiNposReconfig {
                         evidence_horizon_blocks: 7200,
                         activation_lag_blocks: 1,
+                        slashing_delay_blocks: 259_200,
                     },
                 },
                 use_stake_snapshot_roster: false,

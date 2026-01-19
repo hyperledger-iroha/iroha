@@ -33,6 +33,7 @@ pub enum TokenKind {
     This,
     Ident(String),
     Number(u64),
+    Decimal(String),
     String(String),
     Bytes(Vec<u8>),
     Plus,
@@ -626,16 +627,13 @@ impl<'a> Lexer<'a> {
                 });
             }
         }
-        // Decimal with optional underscores
+        // Decimal with optional underscores, plus optional fractional part.
         let mut saw_digit = false;
+        let mut digits = String::new();
         while let Some(c) = self.peek() {
             if c.is_ascii_digit() {
                 saw_digit = true;
-                let digit = (c as u8 - b'0') as u64;
-                num = num
-                    .checked_mul(10)
-                    .and_then(|n| n.checked_add(digit))
-                    .ok_or_else(|| format!("numeric literal overflow at {line}:{col}"))?;
+                digits.push(c);
                 self.bump();
             } else if c == '_' {
                 self.bump();
@@ -646,6 +644,36 @@ impl<'a> Lexer<'a> {
         if !saw_digit {
             return Err(format!("expected number at {line}:{col}"));
         }
+        if self.peek() == Some('.') && self.peek_n(1).is_some_and(|c| c.is_ascii_digit()) {
+            self.bump();
+            let mut frac_digits = String::new();
+            let mut saw_frac = false;
+            while let Some(c) = self.peek() {
+                if c.is_ascii_digit() {
+                    saw_frac = true;
+                    frac_digits.push(c);
+                    self.bump();
+                } else if c == '_' {
+                    self.bump();
+                } else {
+                    break;
+                }
+            }
+            if !saw_frac {
+                return Err(format!("expected fractional digits at {line}:{col}"));
+            }
+            let mut raw = digits;
+            raw.push('.');
+            raw.push_str(&frac_digits);
+            return Ok(Token {
+                kind: TokenKind::Decimal(raw),
+                line,
+                column: col,
+            });
+        }
+        let num = digits
+            .parse::<u64>()
+            .map_err(|_| format!("numeric literal overflow at {line}:{col}"))?;
         Ok(Token {
             kind: TokenKind::Number(num),
             line,
@@ -952,6 +980,16 @@ mod tests {
         assert!(
             matches!(tokens[0].kind, TokenKind::Number(n) if n == 9_223_372_036_854_775_808),
             "expected u64 literal token, got {:?}",
+            tokens[0].kind
+        );
+    }
+
+    #[test]
+    fn decimal_fraction_literal_is_tokenized() {
+        let tokens = lex("1_234.50_0").expect("lex");
+        assert!(
+            matches!(tokens[0].kind, TokenKind::Decimal(ref s) if s == "1234.500"),
+            "expected decimal literal token, got {:?}",
             tokens[0].kind
         );
     }

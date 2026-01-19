@@ -3914,6 +3914,8 @@ mod evidence_http_tests {
             recorded_at_view: 5,
             recorded_at_ms: 123_456,
             penalty_applied: false,
+            penalty_cancelled: false,
+            penalty_cancelled_at_height: None,
             penalty_applied_at_height: None,
         }
     }

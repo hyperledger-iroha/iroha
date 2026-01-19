@@ -63,6 +63,7 @@ async fn post_and_get_contract_manifest_via_torii() -> Result<()> {
         features_bitmap: None,
         access_set_hints: None,
         entrypoints: None,
+        kotoba: None,
         provenance: None,
     }
     .signed(&iroha_test_samples::ALICE_KEYPAIR);

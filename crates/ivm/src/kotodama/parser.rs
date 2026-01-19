@@ -359,7 +359,7 @@ impl<'a> Parser<'a> {
                         "access attributes must precede a function",
                     ));
                 }
-                self.parse_kotoba_block()?;
+                items.push(self.parse_kotoba_block()?);
             } else {
                 let tok = self.bump();
                 return Err(self.error(tok, "top-level item (fn, struct, state, seiyaku)"));
@@ -466,7 +466,7 @@ impl<'a> Parser<'a> {
                         "access attributes must precede a function",
                     ));
                 }
-                self.parse_kotoba_block()?;
+                items.push(self.parse_kotoba_block()?);
             } else {
                 let tok = self.bump();
                 return Err(self.error(tok, "contract item (fn, struct, state, meta)"));
@@ -476,30 +476,50 @@ impl<'a> Parser<'a> {
         Ok(items)
     }
 
-    fn parse_kotoba_block(&mut self) -> ParseResult<()> {
+    fn parse_kotoba_block(&mut self) -> ParseResult<Item> {
         let tok = self.bump();
         if !matches!(tok.kind, TokenKind::Ident(ref s) if s == "kotoba") {
             return Err(self.error(tok, "kotoba"));
         }
         self.expect(TokenKind::LBrace)?;
-        let mut depth = 1usize;
-        while depth > 0 {
-            let tok = self.bump();
-            match tok.kind {
-                TokenKind::LBrace => depth += 1,
-                TokenKind::RBrace => depth -= 1,
-                TokenKind::EOF => {
-                    return Err(ParseError {
-                        message: "unterminated kotoba block".into(),
-                        line: tok.line,
-                        column: tok.column,
-                        snippet: String::new(),
-                    });
+        let mut entries = Vec::new();
+        while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
+            if self.peek(TokenKind::Semicolon) || self.peek(TokenKind::Comma) {
+                self.bump();
+                continue;
+            }
+            let msg_id = self.expect_ident_or_string()?;
+            self.expect(TokenKind::Colon)?;
+            self.expect(TokenKind::LBrace)?;
+            let mut translations = Vec::new();
+            while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
+                if self.peek(TokenKind::Semicolon) || self.peek(TokenKind::Comma) {
+                    self.bump();
+                    continue;
                 }
-                _ => {}
+                let lang = self.expect_ident_or_string()?;
+                self.expect(TokenKind::Colon)?;
+                let tok = self.bump();
+                let text = match tok.kind {
+                    TokenKind::String(s) => s,
+                    _ => return Err(self.error(tok, "string literal")),
+                };
+                translations.push(KotobaTranslation { lang, text });
+                if self.peek(TokenKind::Semicolon) || self.peek(TokenKind::Comma) {
+                    self.bump();
+                }
+            }
+            self.expect(TokenKind::RBrace)?;
+            entries.push(KotobaEntry {
+                msg_id,
+                translations,
+            });
+            if self.peek(TokenKind::Semicolon) || self.peek(TokenKind::Comma) {
+                self.bump();
             }
         }
-        Ok(())
+        self.expect(TokenKind::RBrace)?;
+        Ok(Item::Kotoba(KotobaBlock { entries }))
     }
 
     fn parse_trigger_decl(&mut self) -> ParseResult<Item> {
@@ -1708,6 +1728,7 @@ impl<'a> Parser<'a> {
                 let value = self.number_to_i64(&tok, *n)?;
                 Ok(Expr::Number(value))
             }
+            TokenKind::Decimal(raw) => Ok(Expr::Decimal(raw.clone())),
             TokenKind::String(s) => Ok(Expr::String(s.clone())),
             TokenKind::Bytes(bytes) => Ok(Expr::Bytes(bytes.clone())),
             TokenKind::Ident(name0) => {
@@ -2374,17 +2395,28 @@ mod tests {
     }
 
     #[test]
-    fn parse_kotoba_block_is_noop() {
+    fn parse_kotoba_block_collects_entries() {
         let src = r#"
-        kotoba { nested { ignore; } }
+        kotoba {
+            "E0001": { en: "Invalid assets", ja: "無効な資産" },
+            err_generic: { en: "Something went wrong" }
+        }
         fn main() {}
         "#;
         let prog = parse(src).expect("parse kotoba block");
-        assert!(
-            prog.items
-                .iter()
-                .any(|item| matches!(item, Item::Function(_)))
-        );
+        let kotoba = prog
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Kotoba(block) => Some(block),
+                _ => None,
+            })
+            .expect("kotoba block present");
+        assert_eq!(kotoba.entries.len(), 2);
+        assert_eq!(kotoba.entries[0].msg_id, "E0001");
+        assert_eq!(kotoba.entries[0].translations.len(), 2);
+        assert_eq!(kotoba.entries[1].msg_id, "err_generic");
+        assert_eq!(kotoba.entries[1].translations[0].lang, "en");
     }
 
     #[test]

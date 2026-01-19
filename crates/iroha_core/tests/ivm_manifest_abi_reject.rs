@@ -116,6 +116,7 @@ fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
         features_bitmap: None,
         access_set_hints: None,
         entrypoints: None,
+        kotoba: None,
         provenance: None,
     }
     .signed(&kp);
@@ -201,6 +202,7 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
         features_bitmap: None,
         access_set_hints: None,
         entrypoints: None,
+        kotoba: None,
         provenance: None,
     }
     .signed(&kp);
@@ -277,6 +279,7 @@ fn ivm_manifest_without_abi_hash_allows_admission() {
         features_bitmap: None,
         access_set_hints: None,
         entrypoints: None,
+        kotoba: None,
         provenance: None,
     }
     .signed(&kp);
@@ -349,6 +352,7 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
         features_bitmap: None,
         access_set_hints: None,
         entrypoints: None,
+        kotoba: None,
         provenance: None,
     }
     .signed(&kp);
@@ -421,6 +425,7 @@ fn ivm_manifest_unknown_syscall_rejected_before_execution() {
         features_bitmap: None,
         access_set_hints: None,
         entrypoints: None,
+        kotoba: None,
         provenance: None,
     }
     .signed(&kp);

@@ -26,6 +26,7 @@ Endpoints temporarios de auditoria para evidencia de Sumeragi.
   - Lista entradas de evidencia recentes persistidas no snapshot de auditoria WSV.
   - Parametros de query: `limit` (default 50, max 1000), `offset` (default 0), `kind` (opcional; um de `DoublePrepare|DoubleCommit|InvalidQc|InvalidProposal|Censorship`).
   - Resposta (payload Norito): `(total, Vec<EvidenceRecord>)`.
+  - EvidenceRecord entries include `penalty_applied`, `penalty_cancelled`, `penalty_cancelled_at_height`, and `penalty_applied_at_height` so operators can see delayed slashing status and governance cancellations.
   - Defina `Accept: application/json` para receber um objeto JSON `{ "total": <u64>, "items": [ ... ] }`.
 - Evidencia com subject height mais antigo que `sumeragi.npos.reconfig.evidence_horizon_blocks`
   (default 7200) e descartada na entrada; o actor registra a rejeicao para ajudar operadores

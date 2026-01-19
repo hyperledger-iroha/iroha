@@ -1397,6 +1397,7 @@ mod tests {
             features_bitmap: None,
             access_set_hints: Some(hints.clone()),
             entrypoints: None,
+            kotoba: None,
             provenance: None,
         }
         .signed(&kp);
@@ -1460,6 +1461,7 @@ mod tests {
             features_bitmap: None,
             access_set_hints: Some(hints_a.clone()),
             entrypoints: None,
+            kotoba: None,
             provenance: None,
         }
         .signed(&kp);
@@ -1490,6 +1492,7 @@ mod tests {
             features_bitmap: None,
             access_set_hints: Some(hints_b.clone()),
             entrypoints: None,
+            kotoba: None,
             provenance: None,
         }
         .signed(&kp);
@@ -1535,6 +1538,7 @@ mod tests {
             features_bitmap: None,
             access_set_hints: Some(hints),
             entrypoints: None,
+            kotoba: None,
             provenance: None,
         }
         .signed(&kp);
@@ -1615,6 +1619,7 @@ mod tests {
             features_bitmap: None,
             access_set_hints: None,
             entrypoints: Some(entrypoints),
+            kotoba: None,
             provenance: None,
         }
         .signed(&kp);
@@ -1689,6 +1694,7 @@ mod tests {
             features_bitmap: None,
             access_set_hints: None,
             entrypoints: Some(entrypoints),
+            kotoba: None,
             provenance: None,
         }
         .signed(&kp);
@@ -1762,6 +1768,7 @@ mod tests {
             features_bitmap: None,
             access_set_hints: None,
             entrypoints: Some(entrypoints),
+            kotoba: None,
             provenance: None,
         }
         .signed(&kp);

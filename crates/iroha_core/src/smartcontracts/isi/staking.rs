@@ -7,9 +7,9 @@ use iroha_data_model::{
     isi::{
         error::{InstructionExecutionError as Error, InvalidParameterError, MathError},
         staking::{
-            BondPublicLaneStake, ClaimPublicLaneRewards, FinalizePublicLaneUnbond,
-            RecordPublicLaneRewards, RegisterPublicLaneValidator, SchedulePublicLaneUnbond,
-            SlashPublicLaneValidator,
+            BondPublicLaneStake, CancelConsensusEvidencePenalty, ClaimPublicLaneRewards,
+            FinalizePublicLaneUnbond, RecordPublicLaneRewards, RegisterPublicLaneValidator,
+            SchedulePublicLaneUnbond, SlashPublicLaneValidator,
         },
     },
     metadata::Metadata,
@@ -30,6 +30,8 @@ use crate::{
     sumeragi::status as sumeragi_status,
     telemetry::StateTelemetry,
 };
+
+use crate::sumeragi::evidence::evidence_key;
 
 fn current_epoch(block_height: u64, epoch_length_blocks: u64) -> Result<u64, Error> {
     if epoch_length_blocks == 0 {
@@ -648,6 +650,38 @@ impl Execute for SlashPublicLaneValidator {
             #[cfg(not(feature = "telemetry"))]
             None,
         )
+    }
+}
+
+impl Execute for CancelConsensusEvidencePenalty {
+    #[iroha_logger::log(name = "cancel_consensus_evidence_penalty", skip_all)]
+    fn execute(
+        self,
+        _authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let key = evidence_key(&self.evidence);
+        let mut record = state_transaction
+            .world
+            .consensus_evidence
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| Error::InvariantViolation("consensus evidence not found".into()))?;
+        if record.penalty_applied {
+            return Err(Error::InvariantViolation(
+                "consensus evidence penalty already applied".into(),
+            ));
+        }
+        if record.penalty_cancelled {
+            return Ok(());
+        }
+        record.penalty_cancelled = true;
+        record.penalty_cancelled_at_height = Some(state_transaction.block_height());
+        state_transaction
+            .world
+            .consensus_evidence
+            .insert(key, record);
+        Ok(())
     }
 }
 
@@ -1533,10 +1567,14 @@ mod tests {
     use core::num::NonZeroU64;
     use std::time::Duration;
 
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         account::{Account, MultisigMember, MultisigPolicy},
         asset::{AssetDefinition, AssetDefinitionId},
+        block::consensus::{
+            CertPhase, ConsensusBlockHeader, Evidence, EvidenceKind, EvidencePayload,
+            EvidenceRecord, Proposal, QcRef,
+        },
         consensus::{ConsensusKeyRecord, ConsensusKeyStatus},
         domain::Domain,
         isi::error::InvalidParameterError,
@@ -4267,5 +4305,68 @@ mod tests {
         .execute(&ALICE_ID, &mut stx);
 
         assert!(res.is_err(), "expected zero-share reward to be rejected");
+    }
+
+    #[test]
+    fn cancel_consensus_evidence_penalty_marks_record() {
+        let state = setup_state();
+        let evidence = Evidence {
+            kind: EvidenceKind::InvalidProposal,
+            payload: EvidencePayload::InvalidProposal {
+                proposal: Proposal {
+                    header: ConsensusBlockHeader {
+                        parent_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0xAA; 32])),
+                        tx_root: Hash::prehashed([0xBB; 32]),
+                        state_root: Hash::prehashed([0xCC; 32]),
+                        proposer: 0,
+                        height: 1,
+                        view: 0,
+                        epoch: 0,
+                        highest_qc: QcRef {
+                            height: 0,
+                            view: 0,
+                            epoch: 0,
+                            subject_block_hash: HashOf::from_untyped_unchecked(Hash::prehashed(
+                                [0xDD; 32],
+                            )),
+                            phase: CertPhase::Prepare,
+                        },
+                    },
+                    payload_hash: Hash::prehashed([0xEE; 32]),
+                },
+                reason: "governance-cancel".to_string(),
+            },
+        };
+        let record = EvidenceRecord {
+            evidence: evidence.clone(),
+            recorded_at_height: 1,
+            recorded_at_view: 0,
+            recorded_at_ms: 0,
+            penalty_applied: false,
+            penalty_cancelled: false,
+            penalty_cancelled_at_height: None,
+            penalty_applied_at_height: None,
+        };
+        let key = evidence_key(&record.evidence);
+        {
+            let mut block = state.world.consensus_evidence.block();
+            block.insert(key.clone(), record);
+            block.commit();
+        }
+
+        let block = new_block_with_height(2);
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+        CancelConsensusEvidencePenalty { evidence }
+            .execute(&ALICE_ID, &mut stx)
+            .expect("cancel evidence penalty");
+        drop(stx);
+        state_block.commit().unwrap();
+
+        let view = state.world.consensus_evidence.view();
+        let updated = view.get(&key).expect("evidence record");
+        assert!(updated.penalty_cancelled);
+        assert!(!updated.penalty_applied);
+        assert_eq!(updated.penalty_cancelled_at_height, Some(2));
     }
 }

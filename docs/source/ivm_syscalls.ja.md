@@ -36,9 +36,9 @@ translator: manual
 | Hex  | 名前                              | 引数（`r10+`）                                                            | 戻り値       | ガス（基礎 + 変動）               | 備考                                   |
 |------|-----------------------------------|---------------------------------------------------------------------------|--------------|-----------------------------------|----------------------------------------|
 | 0x1A | SET_ACCOUNT_DETAIL                | `&AccountId`, `&Name`, `&Json`                                           | `u64=0`      | `G_set_detail + bytes(val)`       | アカウントにディテールを設定する      |
-| 0x22 | MINT_ASSET                        | `&AccountId`, `&AssetDefinitionId`, `amount:u64`                         | `u64=0`      | `G_mint`                          | 指定量をアカウントへ鋳造する          |
-| 0x23 | BURN_ASSET                        | `&AccountId`, `&AssetDefinitionId`, `amount:u64`                         | `u64=0`      | `G_burn`                          | 指定量をアカウントから焼却する        |
-| 0x24 | TRANSFER_ASSET                    | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `amount:u64` | `u64=0`      | `G_transfer`                      | アカウント間で資産を転送する          |
+| 0x22 | MINT_ASSET                        | `&AccountId`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)`                         | `u64=0`      | `G_mint`                          | 指定量をアカウントへ鋳造する          |
+| 0x23 | BURN_ASSET                        | `&AccountId`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)`                         | `u64=0`      | `G_burn`                          | 指定量をアカウントから焼却する        |
+| 0x24 | TRANSFER_ASSET                    | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)` | `u64=0`      | `G_transfer`                      | アカウント間で資産を転送する          |
 | 0x29 | TRANSFER_V1_BATCH_BEGIN           | –                                                                        | `u64=0`      | `G_transfer`                      | FASTPQ 転送バッチを開始し後続の転送を集約 |
 | 0x2A | TRANSFER_V1_BATCH_END             | –                                                                        | `u64=0`      | `G_transfer`                      | バッチを閉じて 1 つの命令としてコミット |
 | 0x2B | TRANSFER_V1_BATCH_APPLY           | `r10=&NoritoBytes(TransferAssetBatch)`                                   | `u64=0`      | `G_transfer`                      | Norito エンコード済みのバッチを 1 回の呼び出しで適用 |

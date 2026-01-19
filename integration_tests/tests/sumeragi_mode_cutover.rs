@@ -176,6 +176,7 @@ fn consensus_params_for_mode(
             finality_margin_blocks: payload.finality_margin_blocks,
             evidence_horizon_blocks: payload.evidence_horizon_blocks,
             activation_lag_blocks: payload.activation_lag_blocks,
+            slashing_delay_blocks: payload.slashing_delay_blocks,
         })
     } else {
         None

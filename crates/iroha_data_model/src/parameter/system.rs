@@ -281,6 +281,8 @@ mod model {
         pub evidence_horizon_blocks: u64,
         /// Activation lag in blocks for newly scheduled validator sets.
         pub activation_lag_blocks: u64,
+        /// Slashing delay in blocks before evidence penalties apply.
+        pub slashing_delay_blocks: u64,
         /// Epoch length in blocks.
         pub epoch_length_blocks: u64,
     }
@@ -432,6 +434,12 @@ mod model {
             self.activation_lag_blocks
         }
 
+        /// Slashing delay (blocks) before evidence penalties apply.
+        #[must_use]
+        pub fn slashing_delay_blocks(&self) -> u64 {
+            self.slashing_delay_blocks
+        }
+
         /// Epoch length measured in blocks.
         #[must_use]
         pub fn epoch_length_blocks(&self) -> u64 {
@@ -484,6 +492,7 @@ mod model {
                 finality_margin_blocks: finality_margin_blocks(),
                 evidence_horizon_blocks: evidence_horizon_blocks(),
                 activation_lag_blocks: activation_lag_blocks(),
+                slashing_delay_blocks: slashing_delay_blocks(),
                 epoch_length_blocks: epoch_length_blocks(),
             }
         }
@@ -1272,6 +1281,9 @@ mod defaults {
             }
             pub const fn activation_lag_blocks() -> u64 {
                 1
+            }
+            pub const fn slashing_delay_blocks() -> u64 {
+                259_200
             }
             pub const fn epoch_length_blocks() -> u64 {
                 3_600

@@ -371,6 +371,11 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             f(*right);
         }
         Unary { operand, .. } => f(*operand),
+        NumericFromInt { value, .. } | NumericToInt { value, .. } => f(*value),
+        NumericBinary { left, right, .. } | NumericCompare { left, right, .. } => {
+            f(*left);
+            f(*right);
+        }
         Min { a, b, .. } | Max { a, b, .. } | Gcd { a, b, .. } | Mean { a, b, .. } => {
             f(*a);
             f(*b);
@@ -747,7 +752,11 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::PointerToNorito { dest, .. }
         | Instr::PointerFromNorito { dest, .. }
         | Instr::Load64Imm { dest, .. }
-        | Instr::StateGet { dest, .. } => Some(*dest),
+        | Instr::StateGet { dest, .. }
+        | Instr::NumericFromInt { dest, .. }
+        | Instr::NumericToInt { dest, .. }
+        | Instr::NumericBinary { dest, .. }
+        | Instr::NumericCompare { dest, .. } => Some(*dest),
         Instr::SchemaInfo { dest, .. } => Some(*dest),
         Instr::Sm3Hash { dest, .. } => Some(*dest),
         Instr::Sm2Verify { dest, .. } => Some(*dest),

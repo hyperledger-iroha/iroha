@@ -15,6 +15,7 @@ use iroha_core::{
     state::{State, World, WorldReadOnly},
 };
 use iroha_data_model::{
+    Registrable,
     account::Account,
     asset::AssetDefinition,
     block::BlockHeader,
@@ -27,7 +28,6 @@ use iroha_data_model::{
     },
     permission::Permission,
     prelude::Grant,
-    Registrable,
 };
 use iroha_executor_data_model::permission::governance::{
     CanManageParliament, CanSubmitGovernanceBallot,
@@ -79,9 +79,9 @@ fn new_state() -> State {
 fn assert_instruction_error_contains(err: &InstructionExecutionError, expected: &str) {
     let msg = match err {
         InstructionExecutionError::InvariantViolation(reason) => reason.as_ref(),
-        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(reason)) => {
-            reason.as_str()
-        }
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            reason,
+        )) => reason.as_str(),
         _ => "",
     };
     if !msg.is_empty() {

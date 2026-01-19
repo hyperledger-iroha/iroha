@@ -10105,6 +10105,7 @@ mod cli_integration_harness {
             features_bitmap: Some(0b1010),
             access_set_hints: None,
             entrypoints: None,
+            kotoba: None,
             provenance: None,
         };
         server.manifests.insert(code_hash.clone(), manifest.clone());

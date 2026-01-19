@@ -26,6 +26,7 @@ translation_last_reviewed: 2026-01-01
   - Показывает свежие evidence записи, сохраненные в WSV audit snapshot.
   - Query params: `limit` (default 50, max 1000), `offset` (default 0), `kind` (optional; one of `DoublePrepare|DoubleCommit|InvalidQc|InvalidProposal|Censorship`).
   - Ответ (Norito payload): `(total, Vec<EvidenceRecord>)`.
+  - EvidenceRecord entries include `penalty_applied`, `penalty_cancelled`, `penalty_cancelled_at_height`, and `penalty_applied_at_height` so operators can see delayed slashing status and governance cancellations.
   - Установите `Accept: application/json`, чтобы получить `{ "total": <u64>, "items": [ ... ] }`.
 - Evidence с subject height старше `sumeragi.npos.reconfig.evidence_horizon_blocks`
   (default 7200) отбрасывается при ingest; actor логирует отклонение, чтобы операторы могли

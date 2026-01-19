@@ -50,8 +50,7 @@ use iroha_data_model::proof::{ProofBox, VerifyingKeyBox};
 use ivm::halo2::VMExecutionCircuit;
 #[cfg(feature = "zk-halo2")]
 use kaigi_zk::{
-    KAIGI_ROSTER_BACKEND, KAIGI_USAGE_BACKEND, KaigiRosterJoinCircuit,
-    KaigiUsageCommitmentCircuit,
+    KAIGI_ROSTER_BACKEND, KAIGI_USAGE_BACKEND, KaigiRosterJoinCircuit, KaigiUsageCommitmentCircuit,
 };
 #[cfg(feature = "zk-preverify")]
 use norito::streaming::CapabilityFlags;

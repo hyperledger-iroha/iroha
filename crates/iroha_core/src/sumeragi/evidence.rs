@@ -246,6 +246,8 @@ pub fn persist_record(
         recorded_at_view,
         recorded_at_ms,
         penalty_applied: false,
+        penalty_cancelled: false,
+        penalty_cancelled_at_height: None,
         penalty_applied_at_height: None,
     };
 

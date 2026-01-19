@@ -1,6 +1,7 @@
 //! Kotodama DEX demo: compile and run a simple XYK pool on IVM.
 use std::collections::HashMap;
 
+use iroha_primitives::numeric::Numeric;
 use ivm::{
     AccountId, AssetDefinitionId, IVM, MockWorldStateView, PermissionToken,
     kotodama::compiler::Compiler as KotodamaCompiler, mock_wsv::WsvHost,
@@ -23,9 +24,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initial balances: Alice has 1_000 USDC, pool has 10_000 USDC and 100 ETH
     let wsv = MockWorldStateView::with_balances(&[
-        ((alice.clone(), asset_a.clone()), 1_000),
-        ((pool.clone(), asset_a.clone()), 10_000),
-        ((pool.clone(), asset_b.clone()), 100),
+        ((alice.clone(), asset_a.clone()), Numeric::from(1_000_u64)),
+        ((pool.clone(), asset_a.clone()), Numeric::from(10_000_u64)),
+        ((pool.clone(), asset_b.clone()), Numeric::from(100_u64)),
     ]);
     let mut wsv = wsv;
     // Grant permissions for caller (Alice) to transfer these assets

@@ -25,6 +25,7 @@ Sumeragi エビデンス用の一時的な監査エンドポイント。
   - WSV の監査スナップショットに保存された最近のエビデンスを一覧表示。
   - クエリパラメータ: `limit`（既定 50、最大 1000）、`offset`（既定 0）、`kind`（任意、`DoublePrepare|DoubleCommit|InvalidQc|InvalidProposal` のいずれか）。
   - レスポンス（Norito ペイロード）: `(total, Vec<EvidenceRecord>)`
+  - EvidenceRecord entries include `penalty_applied`, `penalty_cancelled`, `penalty_cancelled_at_height`, and `penalty_applied_at_height` so operators can see delayed slashing status and governance cancellations.
   - `Accept: application/json` で `{ "total": <u64>, "items": [ ... ] }` を取得。
   - `sumeragi.npos.reconfig.evidence_horizon_blocks`（既定 7200）より古い高さのエビデンスは取り込み時に破棄され、オペレーターが古い投稿を調査できるようアクターがログを出力。
 

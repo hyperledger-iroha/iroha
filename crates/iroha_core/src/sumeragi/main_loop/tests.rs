@@ -1137,6 +1137,7 @@ fn handshake_fingerprint_uses_wsv_params_for_npos() {
         finality_margin_blocks: 9,
         evidence_horizon_blocks: 500,
         activation_lag_blocks: 7,
+        slashing_delay_blocks: 9,
         epoch_length_blocks: 12,
     };
 
@@ -1222,6 +1223,7 @@ fn handshake_fingerprint_uses_wsv_params_for_npos() {
                 finality_margin_blocks: 9,
                 evidence_horizon_blocks: 500,
                 activation_lag_blocks: 7,
+                slashing_delay_blocks: 9,
             }),
         },
         &mode_tag,
@@ -1366,6 +1368,7 @@ fn handshake_fingerprint_uses_chain_seed_without_npos_params() {
                 finality_margin_blocks: consensus_cfg.npos.election.finality_margin_blocks,
                 evidence_horizon_blocks: consensus_cfg.npos.reconfig.evidence_horizon_blocks,
                 activation_lag_blocks: consensus_cfg.npos.reconfig.activation_lag_blocks,
+                slashing_delay_blocks: consensus_cfg.npos.reconfig.slashing_delay_blocks,
             }),
         },
         &mode_tag,
@@ -10694,6 +10697,7 @@ async fn handle_vote_prunes_committed_block_commit_vote() {
         .expect("store committed block");
     let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
     state.push_block_hash_for_testing(committed_block.hash());
+    drop(state);
 
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let chain = actor.common_config.chain.clone();
@@ -29000,6 +29004,83 @@ async fn stale_new_view_vote_updates_highest_qc_without_tracking() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn new_view_highest_qc_fetch_uses_commit_qc_history_fallback_when_roster_empty() {
+    let _guard = super::status::qc_status_test_guard();
+    super::status::reset_commit_certs_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_block = sample_block(1, 0, None);
+    actor
+        .kura
+        .store_block(committed_block.clone())
+        .expect("store committed block");
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(committed_block.hash());
+    drop(state);
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(3);
+    let view = 0u64;
+    let missing_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x77; Hash::LENGTH]));
+
+    let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let signers: BTreeSet<ValidatorIndex> = (0..roster.len())
+        .filter_map(|idx| ValidatorIndex::try_from(idx).ok())
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
+    let commit_qc_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x66; Hash::LENGTH]));
+    assert_ne!(
+        commit_qc_hash,
+        committed_block.hash(),
+        "commit QC hash must not match the local committed chain"
+    );
+    let commit_qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        commit_qc_hash,
+        committed_height.max(1),
+        0,
+        actor.epoch_for_height(committed_height.max(1)),
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    super::status::record_commit_qc(commit_qc);
+
+    let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
+    let roster_for_vote =
+        actor.roster_for_vote_with_mode(missing_hash, height, view, consensus_mode);
+    assert!(
+        roster_for_vote.is_empty(),
+        "roster should be empty to exercise the commit QC history fallback"
+    );
+
+    let highest_qc = QcHeaderRef {
+        height,
+        view,
+        epoch: actor.epoch_for_height(height),
+        subject_block_hash: missing_hash,
+        phase: Phase::Commit,
+    };
+    actor.observe_new_view_highest_qc(highest_qc);
+
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .contains_key(&missing_hash),
+        "missing-block fetch should be scheduled using commit QC history fallback"
+    );
+
+    super::status::reset_commit_certs_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn new_view_tracker_corrects_highest_view_after_parent_arrives() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -30613,7 +30694,7 @@ async fn assemble_proposal_schedules_rbc_after_proposal_messages() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn assemble_proposal_allows_missing_highest_qc_hash() {
+async fn assemble_proposal_defers_when_highest_qc_block_missing() {
     use std::borrow::Cow;
 
     let _guard = super::status::qc_status_test_guard();
@@ -30677,19 +30758,26 @@ async fn assemble_proposal_allows_missing_highest_qc_hash() {
         )
         .expect("proposal assembly should succeed");
     assert!(
-        assembled,
-        "proposal assembly should proceed when highest QC is missing locally"
+        !assembled,
+        "proposal assembly should defer when highest QC block is missing locally"
+    );
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .contains_key(&missing_hash),
+        "missing-block fetch should be scheduled for the highest QC block"
     );
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
     assert!(
-        posts.iter().any(|post| matches!(
+        !posts.iter().any(|post| matches!(
             post,
             BackgroundPost::Post {
                 msg: BlockMessage::Proposal(_) | BlockMessage::BlockCreated(_),
                 ..
             }
         )),
-        "proposal messages should be enqueued"
+        "proposal messages should not be enqueued while waiting on missing block"
     );
 
     super::status::set_locked_qc(0, 0, None);

@@ -10,7 +10,9 @@ use core::fmt;
 use std::{string::String, vec::Vec};
 
 use iroha_crypto::{Hash, HashOf};
-use iroha_schema::{EnumMeta, EnumVariant, Ident, IntoSchema, MetaMap, Metadata, TypeId};
+use iroha_schema::{
+    EnumMeta, EnumVariant, Ident, IntoSchema, MetaMap, Metadata, TypeId, UnnamedFieldsMeta,
+};
 use norito::codec::{Decode, DecodeAll, Encode};
 
 use super::{BlockSignature, Header as BlockHeader};
@@ -110,6 +112,8 @@ pub struct NposGenesisParams {
     pub evidence_horizon_blocks: u64,
     /// Activation lag in blocks for newly scheduled validator sets.
     pub activation_lag_blocks: u64,
+    /// Slashing delay in blocks before evidence penalties apply.
+    pub slashing_delay_blocks: u64,
 }
 
 /// Consensus certificate phases (BLS-only).
@@ -182,7 +186,7 @@ pub struct QcRef {
 }
 
 /// Block header fields essential for consensus (proposal header subset).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 pub struct ConsensusBlockHeader {
     /// Parent block hash.
     pub parent_hash: HashOf<BlockHeader>,
@@ -203,7 +207,7 @@ pub struct ConsensusBlockHeader {
 }
 
 /// Proposal message with payload commitment.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 pub struct Proposal {
     /// Proposal header (consensus-relevant subset).
     pub header: ConsensusBlockHeader,
@@ -342,12 +346,88 @@ pub enum EvidencePayload {
 }
 
 /// Evidence wrapper.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 pub struct Evidence {
     /// High-level classification of the evidence.
     pub kind: EvidenceKind,
     /// Detailed payload carrying the offending material.
     pub payload: EvidencePayload,
+}
+
+impl TypeId for EvidenceKind {
+    fn id() -> Ident {
+        "EvidenceKind".to_owned()
+    }
+}
+
+impl IntoSchema for EvidenceKind {
+    fn type_name() -> Ident {
+        "EvidenceKind".to_owned()
+    }
+
+    fn update_schema_map(metamap: &mut MetaMap) {
+        let variants = vec![
+            EnumVariant {
+                tag: "DoublePrepare".to_owned(),
+                discriminant: EvidenceKind::DoublePrepare as u8,
+                ty: None,
+            },
+            EnumVariant {
+                tag: "DoubleCommit".to_owned(),
+                discriminant: EvidenceKind::DoubleCommit as u8,
+                ty: None,
+            },
+            EnumVariant {
+                tag: "InvalidQc".to_owned(),
+                discriminant: EvidenceKind::InvalidQc as u8,
+                ty: None,
+            },
+            EnumVariant {
+                tag: "InvalidProposal".to_owned(),
+                discriminant: EvidenceKind::InvalidProposal as u8,
+                ty: None,
+            },
+            EnumVariant {
+                tag: "Censorship".to_owned(),
+                discriminant: EvidenceKind::Censorship as u8,
+                ty: None,
+            },
+        ];
+        metamap.insert::<Self>(Metadata::Enum(EnumMeta { variants }));
+    }
+}
+
+impl TypeId for EvidencePayload {
+    fn id() -> Ident {
+        "EvidencePayload".to_owned()
+    }
+}
+
+impl IntoSchema for EvidencePayload {
+    fn type_name() -> Ident {
+        "EvidencePayload".to_owned()
+    }
+
+    fn update_schema_map(metamap: &mut MetaMap) {
+        if metamap.contains_key::<Self>() {
+            return;
+        }
+        metamap.insert::<Self>(Metadata::Tuple(UnnamedFieldsMeta { types: vec![] }));
+    }
+}
+
+impl Ord for Evidence {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        let left = self.encode();
+        let right = other.encode();
+        left.cmp(&right)
+    }
+}
+
+impl PartialOrd for Evidence {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 /// Persisted evidence entry annotated with commit metadata.
@@ -364,6 +444,13 @@ pub struct EvidenceRecord {
     /// Whether a penalty was already applied for this evidence record.
     #[norito(default)]
     pub penalty_applied: bool,
+    /// Whether governance cancelled penalty application for this evidence record.
+    #[norito(default)]
+    pub penalty_cancelled: bool,
+    /// Block height at which the penalty was cancelled, if any.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub penalty_cancelled_at_height: Option<Height>,
     /// Block height at which the penalty was applied, if any.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -2420,6 +2507,8 @@ mod tests {
             recorded_at_view: 2,
             recorded_at_ms: 1_689_000,
             penalty_applied: false,
+            penalty_cancelled: false,
+            penalty_cancelled_at_height: None,
             penalty_applied_at_height: None,
         };
         let bytes = rec.encode();

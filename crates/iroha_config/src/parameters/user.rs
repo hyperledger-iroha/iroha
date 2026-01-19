@@ -5555,6 +5555,9 @@ pub struct SumeragiNposReconfig {
     /// Blocks between governance approval and activation of a new validator set.
     #[config(default = "defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_BLOCKS")]
     pub activation_lag_blocks: u64,
+    /// Slashing delay in blocks before evidence penalties apply.
+    #[config(default = "defaults::sumeragi::npos::SLASHING_DELAY_BLOCKS")]
+    pub slashing_delay_blocks: u64,
 }
 
 /// Node role in consensus participation (user view).
@@ -6457,14 +6460,24 @@ impl SumeragiNposReconfig {
             } else {
                 true
             };
+        let slashing_ok =
+            if self.slashing_delay_blocks == 0 {
+                emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                    "sumeragi.npos.reconfig.slashing_delay_blocks must be greater than zero",
+                ));
+                false
+            } else {
+                true
+            };
 
-        if !(evidence_ok && activation_ok) {
+        if !(evidence_ok && activation_ok && slashing_ok) {
             return None;
         }
 
         Some(actual::SumeragiNposReconfig {
             evidence_horizon_blocks: self.evidence_horizon_blocks,
             activation_lag_blocks: self.activation_lag_blocks,
+            slashing_delay_blocks: self.slashing_delay_blocks,
         })
     }
 }
@@ -6506,6 +6519,7 @@ mod sumeragi_npos_tests {
             reconfig: SumeragiNposReconfig {
                 evidence_horizon_blocks: 256,
                 activation_lag_blocks: 2,
+                slashing_delay_blocks: 9,
             },
         };
 
@@ -6547,6 +6561,7 @@ mod sumeragi_npos_tests {
         assert_eq!(actual.election.finality_margin_blocks, 12);
         assert_eq!(actual.reconfig.evidence_horizon_blocks, 256);
         assert_eq!(actual.reconfig.activation_lag_blocks, 2);
+        assert_eq!(actual.reconfig.slashing_delay_blocks, 9);
     }
 
     #[test]
@@ -6581,6 +6596,7 @@ mod sumeragi_npos_tests {
             reconfig: SumeragiNposReconfig {
                 evidence_horizon_blocks: 1,
                 activation_lag_blocks: 1,
+                slashing_delay_blocks: 1,
             },
         };
 
@@ -6632,6 +6648,7 @@ mod sumeragi_npos_tests {
             reconfig: SumeragiNposReconfig {
                 evidence_horizon_blocks: 1,
                 activation_lag_blocks: 1,
+                slashing_delay_blocks: 1,
             },
         };
 

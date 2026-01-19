@@ -84,6 +84,53 @@ pub const SYSCALL_STATE_DEL: u32 = 0x52;
 /// Args: r10 = &NoritoBytes (ASCII decimal)
 /// Ret:  r10 = value (as u64 bits)
 pub const SYSCALL_DECODE_INT: u32 = 0x53;
+/// Construct a Numeric (mantissa+scale) from a signed 64-bit integer and return
+/// a NoritoBytes TLV pointer. The Numeric is encoded with scale = 0.
+///
+/// Args: r10 = value (i64 as u64)
+/// Ret:  r10 = &NoritoBytes (Numeric payload)
+pub const SYSCALL_NUMERIC_FROM_INT: u32 = 0x69;
+/// Convert a Numeric NoritoBytes payload into a signed 64-bit integer.
+/// The payload must use scale = 0 and fit within `i64`; otherwise the host rejects it.
+///
+/// Args: r10 = &NoritoBytes (Numeric payload)
+/// Ret:  r10 = value (i64 as u64)
+pub const SYSCALL_NUMERIC_TO_INT: u32 = 0x6A;
+/// Numeric addition: r10 = &NoritoBytes(lhs), r11 = &NoritoBytes(rhs)
+/// -> r10 = &NoritoBytes(result).
+pub const SYSCALL_NUMERIC_ADD: u32 = 0x6B;
+/// Numeric subtraction: r10 = &NoritoBytes(lhs), r11 = &NoritoBytes(rhs)
+/// -> r10 = &NoritoBytes(result).
+pub const SYSCALL_NUMERIC_SUB: u32 = 0x6C;
+/// Numeric multiplication: r10 = &NoritoBytes(lhs), r11 = &NoritoBytes(rhs)
+/// -> r10 = &NoritoBytes(result).
+pub const SYSCALL_NUMERIC_MUL: u32 = 0x6D;
+/// Numeric division: r10 = &NoritoBytes(lhs), r11 = &NoritoBytes(rhs)
+/// -> r10 = &NoritoBytes(result).
+pub const SYSCALL_NUMERIC_DIV: u32 = 0x6E;
+/// Numeric remainder: r10 = &NoritoBytes(lhs), r11 = &NoritoBytes(rhs)
+/// -> r10 = &NoritoBytes(result).
+pub const SYSCALL_NUMERIC_REM: u32 = 0x6F;
+/// Numeric negation: r10 = &NoritoBytes(value) -> r10 = &NoritoBytes(result).
+pub const SYSCALL_NUMERIC_NEG: u32 = 0x70;
+/// Numeric equality: r10 = &NoritoBytes(lhs), r11 = &NoritoBytes(rhs)
+/// -> r10 = 1 if equal else 0.
+pub const SYSCALL_NUMERIC_EQ: u32 = 0x71;
+/// Numeric inequality: r10 = &NoritoBytes(lhs), r11 = &NoritoBytes(rhs)
+/// -> r10 = 1 if not equal else 0.
+pub const SYSCALL_NUMERIC_NE: u32 = 0x72;
+/// Numeric less-than: r10 = &NoritoBytes(lhs), r11 = &NoritoBytes(rhs)
+/// -> r10 = 1 if lhs < rhs else 0.
+pub const SYSCALL_NUMERIC_LT: u32 = 0x73;
+/// Numeric less-or-equal: r10 = &NoritoBytes(lhs), r11 = &NoritoBytes(rhs)
+/// -> r10 = 1 if lhs <= rhs else 0.
+pub const SYSCALL_NUMERIC_LE: u32 = 0x74;
+/// Numeric greater-than: r10 = &NoritoBytes(lhs), r11 = &NoritoBytes(rhs)
+/// -> r10 = 1 if lhs > rhs else 0.
+pub const SYSCALL_NUMERIC_GT: u32 = 0x75;
+/// Numeric greater-or-equal: r10 = &NoritoBytes(lhs), r11 = &NoritoBytes(rhs)
+/// -> r10 = 1 if lhs >= rhs else 0.
+pub const SYSCALL_NUMERIC_GE: u32 = 0x76;
 /// Build a state path from a base Name and an integer key: returns a new `&Name` TLV
 /// in INPUT with the canonical form "<base>/<key>" (decimal).
 ///
@@ -324,6 +371,23 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
         v.push(SYSCALL_SCHEMA_ENCODE);
         v.push(SYSCALL_SCHEMA_DECODE);
         v.push(SYSCALL_SCHEMA_INFO);
+        // Numeric helpers (mantissa+scale)
+        v.extend_from_slice(&[
+            SYSCALL_NUMERIC_FROM_INT,
+            SYSCALL_NUMERIC_TO_INT,
+            SYSCALL_NUMERIC_ADD,
+            SYSCALL_NUMERIC_SUB,
+            SYSCALL_NUMERIC_MUL,
+            SYSCALL_NUMERIC_DIV,
+            SYSCALL_NUMERIC_REM,
+            SYSCALL_NUMERIC_NEG,
+            SYSCALL_NUMERIC_EQ,
+            SYSCALL_NUMERIC_NE,
+            SYSCALL_NUMERIC_LT,
+            SYSCALL_NUMERIC_LE,
+            SYSCALL_NUMERIC_GT,
+            SYSCALL_NUMERIC_GE,
+        ]);
         // Name decode is part of base ABI in V1
         v.push(SYSCALL_NAME_DECODE);
         // Account and asset ops (bridged by hosts)
@@ -497,6 +561,20 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_BUILD_PATH_MAP_KEY => "BUILD_PATH_MAP_KEY",
         SYSCALL_ENCODE_INT => "ENCODE_INT",
         SYSCALL_BUILD_PATH_KEY_NORITO => "BUILD_PATH_KEY_NORITO",
+        SYSCALL_NUMERIC_FROM_INT => "NUMERIC_FROM_INT",
+        SYSCALL_NUMERIC_TO_INT => "NUMERIC_TO_INT",
+        SYSCALL_NUMERIC_ADD => "NUMERIC_ADD",
+        SYSCALL_NUMERIC_SUB => "NUMERIC_SUB",
+        SYSCALL_NUMERIC_MUL => "NUMERIC_MUL",
+        SYSCALL_NUMERIC_DIV => "NUMERIC_DIV",
+        SYSCALL_NUMERIC_REM => "NUMERIC_REM",
+        SYSCALL_NUMERIC_NEG => "NUMERIC_NEG",
+        SYSCALL_NUMERIC_EQ => "NUMERIC_EQ",
+        SYSCALL_NUMERIC_NE => "NUMERIC_NE",
+        SYSCALL_NUMERIC_LT => "NUMERIC_LT",
+        SYSCALL_NUMERIC_LE => "NUMERIC_LE",
+        SYSCALL_NUMERIC_GT => "NUMERIC_GT",
+        SYSCALL_NUMERIC_GE => "NUMERIC_GE",
         // Roles/permissions
         SYSCALL_CREATE_ROLE => "CREATE_ROLE",
         SYSCALL_DELETE_ROLE => "DELETE_ROLE",

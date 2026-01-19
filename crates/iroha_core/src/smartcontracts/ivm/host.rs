@@ -3476,13 +3476,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let from_ptr = vm.register(10);
         let to_ptr = vm.register(11);
         let asset_def_ptr = vm.register(12);
-        let amount = vm.register(13);
+        let amount_ptr = vm.register(13);
         let from: AccountId = Self::decode_tlv_typed(vm, from_ptr, PointerType::AccountId)?;
         let to: AccountId = Self::decode_tlv_typed(vm, to_ptr, PointerType::AccountId)?;
         let asset_def: AssetDefinitionId =
             Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
+        let amount: Numeric = Self::decode_tlv_typed(vm, amount_ptr, PointerType::NoritoBytes)?;
         let asset_id = AssetId::of(asset_def.clone(), from.clone());
-        let isi = Transfer::asset_numeric(asset_id, amount, to.clone());
+        let isi = Transfer::asset_numeric(asset_id, amount.clone(), to.clone());
         let gas = crate::gas::meter_instruction(&InstructionBox::from(TransferBox::from(isi)));
         entries.push(TransferAssetBatchEntry::new(from, to, asset_def, amount));
         Ok(gas)
@@ -4331,16 +4332,23 @@ impl<QS> CoreHostImpl<QS> {
         self.current_block_time_ms = Some(time_ms);
     }
 
-    fn amount_from_trigger_args(&self) -> Option<u64> {
+    fn amount_from_trigger_args(&self) -> Option<Numeric> {
         let args = self.args.as_ref()?;
         let value: json::Value = args.try_into_any_norito().ok()?;
-        match value {
-            json::Value::Number(number) => number.as_u64(),
-            json::Value::Object(map) => map.get("val").and_then(|val| match val {
-                json::Value::Number(number) => number.as_u64(),
+        fn parse_numeric(value: &json::Value) -> Option<Numeric> {
+            match value {
+                json::Value::String(raw) => raw.parse::<Numeric>().ok(),
+                json::Value::Number(number) => match number {
+                    json::native::Number::I64(v) => Some(Numeric::from(*v)),
+                    json::native::Number::U64(v) => Some(Numeric::from(*v)),
+                    json::native::Number::F64(v) => Numeric::try_from(*v).ok(),
+                },
                 _ => None,
-            }),
-            _ => None,
+            }
+        }
+        match value {
+            json::Value::Object(map) => map.get("val").and_then(parse_numeric),
+            other => parse_numeric(&other),
         }
     }
 }
@@ -4474,17 +4482,18 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             ivm::syscalls::SYSCALL_MINT_ASSET => {
                 let account_ptr = vm.register(10);
                 let asset_def_ptr = vm.register(11);
-                let mut amount = vm.register(12);
+                let amount_ptr = vm.register(12);
 
                 let account: AccountId =
                     Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
                 let asset_def: AssetDefinitionId =
                     Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
-                if amount == 0 {
-                    if let Some(from_args) = self.amount_from_trigger_args() {
-                        amount = from_args;
-                    }
-                }
+                let amount = if amount_ptr == 0 {
+                    self.amount_from_trigger_args()
+                        .ok_or(ivm::VMError::DecodeError)?
+                } else {
+                    Self::decode_tlv_typed(vm, amount_ptr, PointerType::NoritoBytes)?
+                };
                 let asset_id = AssetId::of(asset_def, account);
                 let isi = Mint::asset_numeric(amount, asset_id);
                 let instr = InstructionBox::from(MintBox::from(isi));
@@ -4493,11 +4502,13 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             ivm::syscalls::SYSCALL_BURN_ASSET => {
                 let account_ptr = vm.register(10);
                 let asset_def_ptr = vm.register(11);
-                let amount = vm.register(12);
+                let amount_ptr = vm.register(12);
                 let account: AccountId =
                     Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
                 let asset_def: AssetDefinitionId =
                     Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
+                let amount: Numeric =
+                    Self::decode_tlv_typed(vm, amount_ptr, PointerType::NoritoBytes)?;
                 let asset_id = AssetId::of(asset_def, account);
                 let isi = Burn::asset_numeric(amount, asset_id);
                 let instr = InstructionBox::from(BurnBox::from(isi));
@@ -4510,11 +4521,13 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let from_ptr = vm.register(10);
                 let to_ptr = vm.register(11);
                 let asset_def_ptr = vm.register(12);
-                let amount = vm.register(13);
+                let amount_ptr = vm.register(13);
                 let from: AccountId = Self::decode_tlv_typed(vm, from_ptr, PointerType::AccountId)?;
                 let to: AccountId = Self::decode_tlv_typed(vm, to_ptr, PointerType::AccountId)?;
                 let asset_def: AssetDefinitionId =
                     Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
+                let amount: Numeric =
+                    Self::decode_tlv_typed(vm, amount_ptr, PointerType::NoritoBytes)?;
                 let asset_id = AssetId::of(asset_def, from);
                 let isi = Transfer::asset_numeric(asset_id, amount, to);
                 let instr = InstructionBox::from(TransferBox::from(isi));
@@ -4950,9 +4963,17 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     QueryResponse::Singular(SingularQueryOutputBox::Asset(asset)) => asset,
                     _ => return Err(ivm::VMError::DecodeError),
                 };
-                let amount =
-                    u64::try_from(asset.value().clone()).map_err(|_| ivm::VMError::DecodeError)?;
-                vm.set_register(10, amount);
+                let payload = asset.value().encode();
+                let payload_len = Self::len_to_u32(payload.len())?;
+                let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
+                out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
+                out.push(1);
+                out.extend_from_slice(&payload_len.to_be_bytes());
+                out.extend_from_slice(&payload);
+                let h: [u8; Hash::LENGTH] = Hash::new(&payload).into();
+                out.extend_from_slice(&h);
+                let p = vm.alloc_input_tlv(&out)?;
+                vm.set_register(10, p);
                 Ok(0)
             }
             ivm::syscalls::SYSCALL_GET_PUBLIC_INPUT => {
@@ -6946,6 +6967,7 @@ mod pointer_abi_tests {
                 features_bitmap: None,
                 access_set_hints: None,
                 entrypoints: None,
+                kotoba: None,
                 provenance: None,
             }
             .signed(&kp),
@@ -7567,6 +7589,45 @@ mod pointer_abi_tests {
     }
 
     #[test]
+    fn mint_asset_syscall_accepts_fractional_trigger_args() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority = ALICE_ID.clone();
+        let args = Json::new(norito::json!({"val": 1.25}));
+        let mut host: CoreHost = CoreHostImpl::with_accounts_and_args(
+            authority.clone(),
+            Arc::new(vec![authority.clone()]),
+            args,
+        );
+        vm.load_program(&ivm::ProgramMetadata::default().encode())
+            .expect("load header");
+
+        let account_tlv = make_tlv(PointerType::AccountId as u16, &authority.encode());
+        let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_tlv = make_tlv(PointerType::AssetDefinitionId as u16, &asset_def.encode());
+
+        vm.memory
+            .preload_input(0, &account_tlv)
+            .expect("preload account");
+        vm.memory
+            .preload_input(256, &asset_tlv)
+            .expect("preload asset def");
+        vm.set_register(10, ivm::Memory::INPUT_START);
+        vm.set_register(11, ivm::Memory::INPUT_START + 256);
+        vm.set_register(12, 0);
+
+        let gas = host
+            .syscall(ivm::syscalls::SYSCALL_MINT_ASSET, &mut vm)
+            .expect("mint syscall");
+        let asset_id = AssetId::of(asset_def, authority);
+        let amount = Numeric::new(125_u32, 2);
+        let isi = Mint::asset_numeric(amount, asset_id);
+        let expected =
+            crate::gas::meter_instruction(&InstructionBox::from(MintBox::from(isi.clone())));
+        assert_eq!(gas, expected);
+        assert_eq!(host.queued, vec![InstructionBox::from(MintBox::from(isi))]);
+    }
+
+    #[test]
     fn unknown_syscall_is_rejected_by_policy() {
         crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(10_000);
@@ -7847,7 +7908,14 @@ mod tests {
             .syscall(ivm_sys::SYSCALL_GET_ACCOUNT_BALANCE, &mut vm)
             .expect("get balance");
         assert_eq!(gas, 0);
-        assert_eq!(vm.register(10), 42);
+        let tlv = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("balance tlv");
+        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+        let value: Numeric =
+            norito::decode_from_bytes(tlv.payload).expect("decode numeric balance");
+        assert_eq!(value, Numeric::new(42_u32, 0));
     }
 
     #[test]

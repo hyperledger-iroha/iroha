@@ -5896,6 +5896,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
             features_bitmap: None,
             access_set_hints: None,
             entrypoints: None,
+            kotoba: None,
             provenance: None,
         }
         .signed(&key_pair);
@@ -6009,6 +6010,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
             features_bitmap: None,
             access_set_hints: None,
             entrypoints: None,
+            kotoba: None,
             provenance: None,
         }
         .signed(&key_pair);

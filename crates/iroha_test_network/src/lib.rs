@@ -498,6 +498,8 @@ static IROHA_BIN: OnceLock<PathBuf> = OnceLock::new();
 
 const BUILD_CACHE_DIR: &str = ".iroha_test_network";
 const BUILD_STAMP_VERSION: u32 = 2;
+const IROHA_TEST_TARGET_DIR_ENV: &str = "IROHA_TEST_TARGET_DIR";
+const IROHA_TEST_TARGET_SUBDIR: &str = "iroha-test-network";
 
 #[derive(Debug, Clone)]
 struct BuildStamp {
@@ -506,18 +508,24 @@ struct BuildStamp {
     binary: PathBuf,
 }
 
-fn resolve_target_dir(repo: &Path) -> PathBuf {
-    match std::env::var("CARGO_TARGET_DIR") {
-        Ok(path) => {
-            let candidate = PathBuf::from(path);
-            if candidate.is_absolute() {
-                candidate
-            } else {
-                repo.join(candidate)
-            }
-        }
-        Err(_) => repo.join("target"),
+fn resolve_target_dir_path(repo: &Path, raw: &str) -> PathBuf {
+    let candidate = PathBuf::from(raw);
+    if candidate.is_absolute() {
+        candidate
+    } else {
+        repo.join(candidate)
     }
+}
+
+/// Resolve the target directory for test-network builds and artifact lookup.
+fn resolve_target_dir(repo: &Path) -> PathBuf {
+    if let Ok(path) = std::env::var(IROHA_TEST_TARGET_DIR_ENV) {
+        return resolve_target_dir_path(repo, &path);
+    }
+    if let Ok(path) = std::env::var("CARGO_TARGET_DIR") {
+        return resolve_target_dir_path(repo, &path).join(IROHA_TEST_TARGET_SUBDIR);
+    }
+    repo.join("target").join(IROHA_TEST_TARGET_SUBDIR)
 }
 
 fn build_cache_dir(target_dir: &Path) -> PathBuf {
@@ -739,12 +747,29 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 }
 
 fn add_target_dir_to_ignore(root: &Path, ignore: &mut IgnoreList) {
-    let target_dir = resolve_target_dir(root);
-    if let Ok(relative) = target_dir.strip_prefix(root)
-        && !relative.as_os_str().is_empty()
-    {
-        ignore.dirs.insert(relative.to_path_buf());
+    fn push_dir(root: &Path, ignore: &mut IgnoreList, path: &Path) {
+        if let Ok(relative) = path.strip_prefix(root)
+            && !relative.as_os_str().is_empty()
+        {
+            ignore.dirs.insert(relative.to_path_buf());
+        }
     }
+
+    push_dir(root, ignore, &root.join("target"));
+
+    if let Ok(path) = std::env::var("CARGO_TARGET_DIR") {
+        let base = resolve_target_dir_path(root, &path);
+        push_dir(root, ignore, &base);
+        push_dir(root, ignore, &base.join(IROHA_TEST_TARGET_SUBDIR));
+    }
+
+    if let Ok(path) = std::env::var(IROHA_TEST_TARGET_DIR_ENV) {
+        let custom = resolve_target_dir_path(root, &path);
+        push_dir(root, ignore, &custom);
+    }
+
+    let target_dir = resolve_target_dir(root);
+    push_dir(root, ignore, &target_dir);
 }
 
 fn workspace_members(root: &Path) -> color_eyre::Result<Vec<PathBuf>> {
@@ -1063,6 +1088,7 @@ fn ensure_binary_fresh(
         for arg in build_args {
             command.arg(arg);
         }
+        command.env("CARGO_TARGET_DIR", target_dir);
         for (key, value) in build_env_overrides() {
             command.env(key, value);
         }
@@ -1110,7 +1136,8 @@ impl Program {
     /// Tries, in order:
     /// - Explicit env override (`TEST_NETWORK_BIN_*`).
     /// - `CARGO_BIN_EXE_*` if Cargo provided a direct path to the built binary
-    /// - Common target locations (debug/release) under the repo root (and `CARGO_TARGET_DIR` if set)
+    /// - Common target locations (debug/release) under the repo root (defaulting to
+    ///   `target/iroha-test-network`, or under `IROHA_TEST_TARGET_DIR` / `CARGO_TARGET_DIR` when set)
     /// - Rebuilds with `cargo build -p <pkg>` when the cached fingerprint disagrees with the current
     ///   workspace state (skipped when `IROHA_TEST_SKIP_BUILD=1`).
     ///
@@ -3631,6 +3658,7 @@ impl NetworkBuilder {
                     finality_margin_blocks: npos.finality_margin_blocks(),
                     evidence_horizon_blocks: npos.evidence_horizon_blocks(),
                     activation_lag_blocks: npos.activation_lag_blocks(),
+                    slashing_delay_blocks: npos.slashing_delay_blocks(),
                 }),
             ),
             None if matches!(consensus_mode, ConsensusMode::Npos) => {
@@ -3659,6 +3687,7 @@ impl NetworkBuilder {
                         finality_margin_blocks: npos.finality_margin_blocks(),
                         evidence_horizon_blocks: npos.evidence_horizon_blocks(),
                         activation_lag_blocks: npos.activation_lag_blocks(),
+                        slashing_delay_blocks: npos.slashing_delay_blocks(),
                     }),
                 )
             }
@@ -6913,6 +6942,7 @@ mod tests {
         fs::write(root.join("member/src/lib.rs"), b"pub fn greet() {}\n")
             .expect("write source file");
 
+        let _override_guard = EnvVarGuard::cleared(IROHA_TEST_TARGET_DIR_ENV);
         let _target_guard = EnvVarRestore::set("CARGO_TARGET_DIR", "member/build-output");
         let target_dir = root.join("member/build-output");
         fs::create_dir_all(&target_dir).expect("create target directory");
@@ -6932,6 +6962,65 @@ mod tests {
         let final_fp = workspace_fingerprint(root).expect("final fingerprint");
 
         assert_ne!(after, final_fp);
+    }
+
+    #[test]
+    fn workspace_fingerprint_ignores_test_target_dir_env() {
+        let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+        let temp = tempdir().expect("temporary workspace");
+        let root = temp.path();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"member\"]\n",
+        )
+        .expect("write manifest");
+        fs::create_dir_all(root.join("member/src")).expect("create member src directory");
+        fs::write(root.join("member/src/lib.rs"), b"pub fn greet() {}\n")
+            .expect("write source file");
+
+        let _cargo_guard = EnvVarGuard::cleared("CARGO_TARGET_DIR");
+        let _target_guard = EnvVarRestore::set(IROHA_TEST_TARGET_DIR_ENV, "member/test-output");
+        let target_dir = root.join("member/test-output");
+        fs::create_dir_all(&target_dir).expect("create test target directory");
+        let artifact = target_dir.join("artifact");
+        fs::write(&artifact, b"one").expect("write target artifact");
+
+        let before = workspace_fingerprint(root).expect("initial fingerprint");
+        thread::sleep(Duration::from_millis(20));
+        fs::write(&artifact, b"two").expect("update target artifact");
+        let after = workspace_fingerprint(root).expect("post-artifact fingerprint");
+
+        assert_eq!(before, after);
+
+        thread::sleep(Duration::from_millis(20));
+        fs::write(root.join("member/src/lib.rs"), b"pub fn greet() { 5 }\n")
+            .expect("update source file");
+        let final_fp = workspace_fingerprint(root).expect("final fingerprint");
+
+        assert_ne!(after, final_fp);
+    }
+
+    #[test]
+    fn resolve_target_dir_prefers_test_override_and_namespaces_cargo() {
+        let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+        let temp = tempdir().expect("temporary workspace");
+        let root = temp.path();
+
+        let _clear_test = EnvVarGuard::cleared(IROHA_TEST_TARGET_DIR_ENV);
+        let _clear_cargo = EnvVarGuard::cleared("CARGO_TARGET_DIR");
+        assert_eq!(
+            resolve_target_dir(root),
+            root.join("target").join(IROHA_TEST_TARGET_SUBDIR)
+        );
+
+        let _cargo_guard = EnvVarRestore::set("CARGO_TARGET_DIR", "cargo-target");
+        assert_eq!(
+            resolve_target_dir(root),
+            root.join("cargo-target").join(IROHA_TEST_TARGET_SUBDIR)
+        );
+
+        let _test_guard = EnvVarRestore::set(IROHA_TEST_TARGET_DIR_ENV, "test-target");
+        assert_eq!(resolve_target_dir(root), root.join("test-target"));
     }
 
     #[cfg(unix)]

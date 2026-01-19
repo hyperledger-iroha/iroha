@@ -16,6 +16,7 @@ Temporary audit endpoints for Sumeragi evidence.
   - Query params: `limit` (default 50, max 1000), `offset` (default 0), `kind` (optional; one of `DoublePrepare|DoubleCommit|InvalidQc|InvalidProposal|Censorship`).
   - Response (Norito payload): `(total, Vec<EvidenceRecord>)`.
   - Set `Accept: application/json` to receive a JSON object `{ "total": <u64>, "items": [ ... ] }`.
+  - `EvidenceRecord` entries include `penalty_applied`, `penalty_cancelled`, `penalty_cancelled_at_height`, and `penalty_applied_at_height` so operators can see delayed slashing status and governance cancellations.
 - Evidence with a subject height older than `sumeragi.npos.reconfig.evidence_horizon_blocks`
   (default 7 200) is dropped on ingress; the actor logs the rejection to help operators
   investigate stale submissions.

@@ -175,7 +175,7 @@ translator: manual
 
 ### スラッシング／ジャイリングのワークフロー
 
-コンセンサス層はバリデータがプロトコルに違反した際に Norito エンコードされた `Evidence` を生成します。各ペイロードはメモリ上の `EvidenceStore` に記録され、未処理であれば WSV 支援の `consensus_evidence` マップに永続化されます。`sumeragi.npos.reconfig.evidence_horizon_blocks`（既定値 7,200 ブロック）より古いレコードはアーカイブサイズを制御するために拒否されますが、拒否イベントはオペレーター向けにログ出力されます。
+コンセンサス層はバリデータがプロトコルに違反した際に Norito エンコードされた `Evidence` を生成します。各ペイロードはメモリ上の `EvidenceStore` に記録され、未処理であれば WSV 支援の `consensus_evidence` マップに永続化されます。`sumeragi.npos.reconfig.evidence_horizon_blocks`（既定値 7,200 ブロック）より古いレコードはアーカイブサイズを制御するために拒否されますが、拒否イベントはオペレーター向けにログ出力されます。 Evidence within the horizon also respects `sumeragi.npos.reconfig.activation_lag_blocks` (default `1`) and the slashing delay `sumeragi.npos.reconfig.slashing_delay_blocks` (default `259200`); governance can cancel penalties with `CancelConsensusEvidencePenalty` before slashing applies; the record is marked `penalty_cancelled` and `penalty_cancelled_at_height`.
 
 認識されている違反は `EvidenceKind` と一対一に対応し、識別子（discriminant）はデータモデルによって固定されています。
 

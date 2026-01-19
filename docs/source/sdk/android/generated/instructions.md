@@ -914,8 +914,8 @@ Metadata emitted per Kotodama entrypoint.
 | `permission` | `Option<String>` | Optional dispatcher permission required before invocation. |
 | `read_keys` | `Vec<String>` | Advisory read set scoped to the entrypoint. |
 | `write_keys` | `Vec<String>` | Advisory write set scoped to the entrypoint. |
-| `access_hints_complete` | `Option<bool>` | Whether access-set hints are complete or explicitly provided. |
-| `access_hints_skipped` | `Vec<String>` | Reasons access hints were skipped for this entrypoint. |
+| `access_hints_complete` | `Option<bool>` | Whether access-set hints were emitted (wildcards are used when coverage is conservative). |
+| `access_hints_skipped` | `Vec<String>` | Reserved; currently empty because opaque access emits wildcard hints instead of skipping. |
 | `triggers` | `Vec<TriggerDescriptor>` | Trigger declarations that call this entrypoint. |
 
 #### TriggerCallback fields

@@ -2024,7 +2024,8 @@ mod measured_bytes_impls {
         },
         smart_contract::manifest::{
             AccessSetHints, ContractManifest, EntryPointKind, EntrypointDescriptor,
-            ManifestProvenance, TriggerCallback, TriggerDescriptor,
+            KotobaTranslation, KotobaTranslationEntry, ManifestProvenance, TriggerCallback,
+            TriggerDescriptor,
         },
         trigger::{TriggerId, action::Repeats},
         zk::BackendTag,
@@ -2731,6 +2732,24 @@ mod measured_bytes_impls {
         }
     }
 
+    impl MeasuredBytes for KotobaTranslation {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<KotobaTranslation>();
+            total = total.saturating_add(self.lang.measured_bytes_extra());
+            total = total.saturating_add(self.text.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for KotobaTranslationEntry {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<KotobaTranslationEntry>();
+            total = total.saturating_add(self.msg_id.measured_bytes_extra());
+            total = total.saturating_add(self.translations.measured_bytes_extra());
+            total
+        }
+    }
+
     impl MeasuredBytes for ManifestProvenance {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<ManifestProvenance>();
@@ -2749,6 +2768,7 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.features_bitmap.measured_bytes_extra());
             total = total.saturating_add(self.access_set_hints.measured_bytes_extra());
             total = total.saturating_add(self.entrypoints.measured_bytes_extra());
+            total = total.saturating_add(self.kotoba.measured_bytes_extra());
             total = total.saturating_add(self.provenance.measured_bytes_extra());
             total
         }

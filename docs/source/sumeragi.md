@@ -70,7 +70,7 @@ DA/RBC note
    - `sumeragi.npos.timeouts.*` provide the per-phase pacemaker budget (proposal, prevote, precommit, commit, DA, aggregator). These values are milliseconds in the user config (`DurationMs`) and are mirrored directly into the runtime; `exec`/`witness` timeouts remain reserved for future witness pacing and do not influence the pacemaker today.
 5. **Record election and reconfiguration policy.**
    - `sumeragi.npos.election.*` sets self‑bond minimums and the guardrails for nominator concentration, seat variance, and validator correlation.
-   - `sumeragi.npos.reconfig.{evidence_horizon_blocks,activation_lag_blocks}` govern how long evidence is retained and how long it takes for a newly scheduled validator set to activate.
+   - `sumeragi.npos.reconfig.{evidence_horizon_blocks,activation_lag_blocks,slashing_delay_blocks}` govern how long evidence is retained, how long it takes for a newly scheduled validator set to activate, and how long consensus slashing is delayed before it applies.
 
 Minimal TOML scaffold:
 
@@ -98,6 +98,7 @@ max_entity_correlation_pct = 25
 [sumeragi.npos.reconfig]
 evidence_horizon_blocks = 7200
 activation_lag_blocks = 1
+slashing_delay_blocks = 259200
 ```
 
 The same knobs exist in `iroha_config::parameters::actual`, so runtime overrides and the `/configuration` surface use the exact field names referenced above.
@@ -191,10 +192,11 @@ accepts traffic:
 - **View-change storms:** Rising `view_change_proof_rejected_total` or `gossip_fallback_total` usually trace back to mismatched VRF windows or collectors. Cross-check the VRF commit/reveal windows and `epoch_commit_deadline_offset`/`epoch_reveal_deadline_offset`.
   1. Poll `iroha sumeragi vrf-epoch --summary --epoch <current>` to verify the recorded windows.
   2. Confirm `/v1/sumeragi/collectors` matches the expected roster, then run the VRF portion of the randomness runbook.
-- **Roster activation delays:** When slashing or onboarding validators, `view_change_proof_accepted_total` should continue increasing. If not, verify `sumeragi.npos.reconfig.activation_lag_blocks` and confirm the governance evidence is visible via `/v1/sumeragi/evidence`.
+- **Roster activation delays:** When slashing or onboarding validators, `view_change_proof_accepted_total` should continue increasing. If not, verify `sumeragi.npos.reconfig.activation_lag_blocks`, confirm the governance evidence is visible via `/v1/sumeragi/evidence`, and account for the `sumeragi.npos.reconfig.slashing_delay_blocks` window.
   1. Use `iroha sumeragi evidence list --summary` to confirm the slashing payload propagated.
-  2. Inspect `/v1/sumeragi/status.reconfig.activation_lag_blocks` to ensure the window has elapsed.
-  3. Only re-run admission once both checks succeed; otherwise escalate governance/persistence issues.
+  2. Inspect `/v1/sumeragi/status.mode_activation_lag_blocks` to ensure the window has elapsed.
+  3. Confirm `slashing_delay_blocks` in `iroha sumeragi params --summary` and whether governance cancelled the penalty before the delay expires.
+  4. Only re-run admission once both checks succeed; otherwise escalate governance/persistence issues.
 - **Evidence ingestion stalls:** Diverging `iroha sumeragi evidence count` outputs or a flat `sumeragi_evidence_records_total` time series indicates the HTTP ingest path is failing.
   1. Compare `evidence count` across at least two validators.
   2. Tail the Torii logs for `/v1/sumeragi/evidence/submit` errors and re-submit a known fixture.
@@ -213,7 +215,7 @@ Validator Key Requirements
 
 Message Flow (steady state)
 - Leader: when a block is expected (transactions queued) and the deadline elapses, the leader sends `BlockCreated` to the commit topology (validators); when there is no queued work the pacemaker stays idle (no heartbeat proposals).
-- Proposal assembly defers when relay backpressure is active, when unresolved RBC sessions exist for the active tip, or when pending blocks extend the tip and have not been quorum-rescheduled; if no proposal is observed, the liveness override uses `min(commit_quorum_timeout, 4 * propose_interval)` to allow proposals/view changes, and once a proposal is seen it waits the full commit quorum timeout before overriding backlog. Idle view-change fallbacks pause while a commit is inflight so local execution cannot be preempted by a new view.
+- Proposal assembly defers when relay backpressure is active, when unresolved RBC sessions exist for the active tip, when the highest QC block is missing locally (it first schedules a missing-block fetch using QC-history rosters if needed), or when pending blocks extend the tip and have not been quorum-rescheduled; if no proposal is observed, the liveness override uses `min(commit_quorum_timeout, 4 * propose_interval)` to allow proposals/view changes, and once a proposal is seen it waits the full commit quorum timeout before overriding backlog. Idle view-change fallbacks pause while a commit is inflight so local execution cannot be preempted by a new view.
 - Validators: validate, emit Availability votes, and send `CommitVote` (block header signature) to the deterministic collector set; if collector fan-out is below quorum, votes fall back to the full commit topology. Prepare/NewView certificates remain for pacemaker/telemetry but do not gate commit. On local timeout in view 0, the node may fan out to additional collectors up to `r`.
 - Collectors: collectors aggregate `CommitVote` signatures and gossip a `CommitCertificate` once quorum is reached; collector ordering is PRF-derived per height/view (leader excluded) with fallback to the full commit topology when collector fan-out is below quorum. Collectors may still aggregate availability evidence and prepare/new-view certificates for view-change hints.
 - Set B validators: vote/sign under the same rules as Set A; routing/collection still prioritizes Set A for throughput, but any quorum of validators is accepted.
@@ -247,7 +249,7 @@ NPoS Tunables (`sumeragi.npos.*`)
 - `election.{min_self_bond, max_nominator_concentration_pct, seat_band_pct, max_entity_correlation_pct}` with defaults `1000`, `25`, `5`, and `25`. Percentages are clamped to the 0–100 range, and `min_self_bond` must be > 0.
 - Candidates failing these staking constraints are excluded from the election; the entity correlation cap limits how many winners can share the same validator account.
 - `election.finality_margin_blocks` delays activation of the newly elected roster until the chain has advanced by the configured number of blocks after the election snapshot, preventing premature swaps before finality.
-- `reconfig.{evidence_horizon_blocks, activation_lag_blocks}` default to `7200` and `1`. Both knobs must be > 0 to prevent unusable governance/evidence windows.
+- `reconfig.{evidence_horizon_blocks, activation_lag_blocks, slashing_delay_blocks}` default to `7200`, `1`, and `259200`. All three knobs must be > 0 to prevent unusable governance/evidence windows.
 - Joint-consensus staging guard: proposals must stage `next_mode` **and** `mode_activation_height` together; manifests and governance packets missing either field are rejected, block application fails if a block sets only one of them, and handshake fingerprints derive from the effective runtime mode (configured mode until the activation height, staged mode after crossing it). Capture both values in cutover runbooks so peers agree on the pre‑activation fingerprint and the post‑activation mode tag. The runtime error surfaces as: `mode_activation_height requires next_mode to be set in the same block`.
 - Configuration parsing now validates all tunables and produces a clear `Invalid Sumeragi consensus configuration` error if any constraint is violated (e.g., zero timeout or percentages above 100). Nodes will refuse to start with invalid NPoS settings rather than silently falling back.
 
@@ -759,7 +761,7 @@ record is missing at restart.
   RBC backlog, and VRF participation summary (`reveals_total`, `late_reveals_total`,
   `committed_no_reveal`, `no_participation`). Drop `--summary` to inspect the full JSON payload.
 - `iroha_cli sumeragi params --summary` prints the active consensus parameters pulled from WSV,
-  including `evidence_horizon_blocks` and `activation_lag_blocks`, so operators can verify staged
+  including `evidence_horizon_blocks`, `activation_lag_blocks`, and `slashing_delay_blocks`, so operators can verify staged
   values before and after governance decisions.
 - Use the Torii POST endpoints directly when you need to submit commits or reveals
   manually (automation should drive them during normal operations). Example:
@@ -906,12 +908,14 @@ DA availability transitions also emit structured debug logs when the reason chan
 1. **Collect evidence** via `/v1/sumeragi/evidence` or `iroha_cli sumeragi evidence list` while the
    height remains within `evidence_horizon_blocks`.
 2. **Stage the penalty** (e.g., `Unregister::peer`) and let the old validator set commit the block.
-3. **Schedule activation** by committing `SetParameter::Sumeragi::NextMode` and
+3. **Cancel if needed** by submitting `CancelConsensusEvidencePenalty` with the evidence payload
+   before `slashing_delay_blocks` elapses; the record is marked `penalty_cancelled` and `penalty_cancelled_at_height`, and no slashing applies.
+4. **Schedule activation** by committing `SetParameter::Sumeragi::NextMode` and
    `SetParameter::Sumeragi::ModeActivationHeight` together. The activation height must exceed the
    current height by at least `activation_lag_blocks`.
-4. **Verify the schedule** with `iroha_cli sumeragi params --summary` (or `/v1/sumeragi/params`) to
-   confirm the staged `next_mode` and `mode_activation_height` values.
-5. **Observe the switchover** via `iroha_cli sumeragi status --summary` once the activation height is
+5. **Verify the schedule** with `iroha_cli sumeragi params --summary` (or `/v1/sumeragi/params`) to
+   confirm the staged `next_mode`, `mode_activation_height`, and `slashing_delay_blocks` values.
+6. **Observe the switchover** via `iroha_cli sumeragi status --summary` once the activation height is
    committed; `next_mode` clears and the new set becomes active one block later.
 
 **Evidence API & CLI quick reference**

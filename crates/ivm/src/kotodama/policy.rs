@@ -141,6 +141,7 @@ impl Checker {
                 self.visit_expr(right, origin);
             }
             ExprKind::Unary { expr: inner, .. } => self.visit_expr(inner, origin),
+            ExprKind::NumericCast { expr } => self.visit_expr(expr, origin),
             ExprKind::Conditional {
                 cond,
                 then_expr,
@@ -161,6 +162,7 @@ impl Checker {
                 self.visit_expr(index, origin);
             }
             ExprKind::Number(_)
+            | ExprKind::Decimal(_)
             | ExprKind::Bool(_)
             | ExprKind::String(_)
             | ExprKind::Bytes(_)
