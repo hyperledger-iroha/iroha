@@ -1917,6 +1917,10 @@ pub struct SumeragiQcSnapshot {
 
 /// Minimal execution witness KV pair for SBV-AM prototypes.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
 pub struct ExecKv {
     /// Raw key bytes.
     pub key: Vec<u8>,
@@ -1926,6 +1930,10 @@ pub struct ExecKv {
 
 /// Execution witness containing reads and writes for SMT recomputation.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
 pub struct ExecWitness {
     /// Witnessed reads during execution (key,value).
     pub reads: Vec<ExecKv>,

@@ -400,6 +400,17 @@ impl Actor {
         let proposal_height = height;
         let proposal_epoch = self.epoch_for_height(proposal_height);
         self.init_collector_plan(topology, proposal_height, view);
+        if proposal_height > 1 && !self.block_known_locally(highest_qc.subject_block_hash) {
+            self.observe_new_view_highest_qc(highest_qc);
+            warn!(
+                height = proposal_height,
+                view,
+                highest_height = highest_qc.height,
+                highest_hash = %highest_qc.subject_block_hash,
+                "deferring proposal assembly: highest QC block not available locally"
+            );
+            return Ok(false);
+        }
         let prev_block = resolve_prev_block_for_proposal(
             proposal_height,
             &highest_qc,
@@ -407,6 +418,9 @@ impl Actor {
             &self.pending.pending_blocks,
         );
         if prev_block.is_none() && proposal_height > 1 {
+            if !self.block_known_locally(highest_qc.subject_block_hash) {
+                self.observe_new_view_highest_qc(highest_qc);
+            }
             warn!(
                 height = proposal_height,
                 view,

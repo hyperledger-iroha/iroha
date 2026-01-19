@@ -1911,9 +1911,14 @@ async fn actor_next_tick_deadline_tracks_pending_quorum_timeout() {
     let actor = &mut harness.actor;
 
     let now = Instant::now();
-    let quorum_timeout = super::commit_quorum_timeout_for_config(&actor.config);
-    let tip_hash = actor.state.view().latest_block_hash();
-    let height = 1;
+    let quorum_timeout = actor.commit_quorum_timeout();
+    let (height, tip_hash) = {
+        let view = actor.state.view();
+        (
+            u64::try_from(view.height()).unwrap_or(0).saturating_add(1),
+            view.latest_block_hash(),
+        )
+    };
     let block = sample_block(height, 0, tip_hash);
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     let mut pending = PendingBlock::new(block, payload_hash, height, 0);
@@ -1955,7 +1960,7 @@ async fn actor_next_tick_deadline_tracks_aborted_retention() {
     let actor = &mut harness.actor;
 
     let now = Instant::now();
-    let quorum_timeout = super::commit_quorum_timeout_for_config(&actor.config);
+    let quorum_timeout = actor.commit_quorum_timeout();
     let quorum_reschedule_cooldown = quorum_timeout.max(super::QUORUM_RESCHEDULE_COOLDOWN);
     let retention_factor = actor
         .config
@@ -1964,8 +1969,13 @@ async fn actor_next_tick_deadline_tracks_aborted_retention() {
         .max(4);
     let aborted_retention = quorum_reschedule_cooldown.saturating_mul(retention_factor);
 
-    let tip_hash = actor.state.view().latest_block_hash();
-    let height = 1;
+    let (height, tip_hash) = {
+        let view = actor.state.view();
+        (
+            u64::try_from(view.height()).unwrap_or(0).saturating_add(1),
+            view.latest_block_hash(),
+        )
+    };
     let block = sample_block(height, 0, tip_hash);
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     let mut pending = PendingBlock::new(block, payload_hash, height, 0);
@@ -1974,7 +1984,7 @@ async fn actor_next_tick_deadline_tracks_aborted_retention() {
     let block_hash = pending.block.hash();
     actor.pending.pending_blocks.insert(block_hash, pending);
 
-    let expected = actor
+    let expected_retention = actor
         .pending
         .pending_blocks
         .get(&block_hash)
@@ -1982,10 +1992,29 @@ async fn actor_next_tick_deadline_tracks_aborted_retention() {
         .inserted_at
         .checked_add(aborted_retention)
         .unwrap_or(now);
+    let pending_due = actor
+        .pending_block_next_due(now)
+        .expect("aborted pending block should schedule retention cleanup");
+    assert_eq!(pending_due, expected_retention);
+
+    let committed_qc = actor.latest_committed_qc();
+    let committed_height = committed_qc
+        .as_ref()
+        .map_or_else(|| actor.state.view().height() as u64, |qc| qc.height);
+    let active_height =
+        super::active_round_height(actor.highest_qc, committed_qc, committed_height);
+    actor.phase_tracker.start_new_round(active_height, now);
+    let idle_timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    let idle_due = now + idle_timeout;
     let deadline = actor
         .next_tick_deadline(now)
-        .expect("aborted pending block should schedule retention cleanup");
-    assert_eq!(deadline, expected);
+        .expect("aborted pending block should schedule a deadline");
+    assert_eq!(deadline, pending_due.min(idle_due));
 
     harness.shutdown.send();
 }
@@ -2005,6 +2034,7 @@ async fn actor_next_tick_deadline_tracks_idle_view_timeout() {
         false,
         actor.commit_quorum_timeout(),
         actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
     );
     let age = timeout / 2;
     actor
@@ -4416,20 +4446,21 @@ async fn block_sync_update_skips_commit_roster_for_unaccepted_block() {
     let actor = &mut harness.actor;
 
     let state_height = actor.state.view().height() as u64;
-    let block_height = state_height.saturating_add(2).max(2);
-    let mut missing_parent =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x6b; Hash::LENGTH]));
-    if actor.block_known_locally(missing_parent) {
-        missing_parent =
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x6c; Hash::LENGTH]));
-    }
-    let block = nonempty_block_for_actor(
+    let block_height = state_height.saturating_add(1).max(1);
+    let valid_block = nonempty_block_for_actor(
         actor,
         &harness.key_pairs,
         block_height,
         0,
-        Some(missing_parent),
+        actor.state.view().latest_block_hash(),
     );
+    let header = valid_block.header();
+    let signature = valid_block
+        .signatures()
+        .next()
+        .cloned()
+        .expect("block signature exists");
+    let block = SignedBlock::presigned(signature, header, Vec::new());
     let block_hash = block.hash();
 
     let roster = actor.effective_commit_topology();
@@ -4486,7 +4517,7 @@ async fn block_sync_update_skips_commit_roster_for_unaccepted_block() {
 
     assert!(
         !actor.block_known_locally(block_hash),
-        "test requires block to remain unaccepted"
+        "tampered block should not be accepted"
     );
     assert!(
         actor
@@ -25611,14 +25642,28 @@ fn active_round_height_falls_back_to_committed_and_state_height() {
 fn idle_view_timeout_caps_no_proposal_grace() {
     let commit = Duration::from_millis(1_000);
     let propose = Duration::from_millis(750);
-    assert_eq!(super::idle_view_timeout(false, commit, propose), commit);
-    assert_eq!(super::idle_view_timeout(true, commit, propose), commit);
+    assert_eq!(
+        super::idle_view_timeout(false, commit, propose, false),
+        commit
+    );
+    assert_eq!(
+        super::idle_view_timeout(true, commit, propose, false),
+        commit
+    );
+    assert_eq!(
+        super::idle_view_timeout(false, commit, propose, true),
+        commit
+    );
 
     let commit = Duration::from_millis(5_000);
     let propose = Duration::from_millis(1_000);
     assert_eq!(
-        super::idle_view_timeout(false, commit, propose),
+        super::idle_view_timeout(false, commit, propose, false),
         propose.saturating_mul(4)
+    );
+    assert_eq!(
+        super::idle_view_timeout(false, commit, propose, true),
+        commit
     );
 }
 
@@ -25703,6 +25748,7 @@ async fn force_view_change_if_idle_records_missing_qc_and_advances_view() {
         false,
         actor.commit_quorum_timeout(),
         actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
     );
     let start = now
         .checked_sub(timeout + Duration::from_millis(1))
@@ -25763,6 +25809,7 @@ async fn force_view_change_if_idle_ignores_aborted_pending() {
         false,
         actor.commit_quorum_timeout(),
         actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
     );
     let start = now
         .checked_sub(timeout + Duration::from_millis(1))
@@ -25819,6 +25866,7 @@ async fn force_view_change_if_idle_skips_when_commit_inflight() {
         false,
         actor.commit_quorum_timeout(),
         actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
     );
     let start = now
         .checked_sub(timeout + Duration::from_millis(1))
@@ -25888,6 +25936,7 @@ async fn force_view_change_if_idle_skips_when_no_work() {
         false,
         actor.commit_quorum_timeout(),
         actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
     );
     let start = now
         .checked_sub(timeout + Duration::from_millis(1))
@@ -25941,6 +25990,7 @@ async fn force_view_change_if_idle_skips_when_rbc_backlog() {
         false,
         actor.commit_quorum_timeout(),
         actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
     );
     let start = now
         .checked_sub(timeout + Duration::from_millis(1))
@@ -26218,6 +26268,7 @@ async fn should_override_backpressure_after_idle_timeout_without_proposal() {
         false,
         actor.commit_quorum_timeout(),
         actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
     );
 
     actor
