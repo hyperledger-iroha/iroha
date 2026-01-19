@@ -266,3 +266,10 @@ ISI זה idempotent לכל `(lane_id, epoch)` ומהווה בסיס לחשבונ
   מבודדות כך שה‑validator rosters נשארים דטרמיניסטיים.
 
 </div>
+
+### 2.7 `CancelConsensusEvidencePenalty`
+
+Cancels consensus slashing before the delayed penalty applies.
+
+- `evidence`: the Norito-encoded `Evidence` payload that was recorded in `consensus_evidence`.
+- The record is marked `penalty_cancelled` and `penalty_cancelled_at_height`, preventing slashing when `slashing_delay_blocks` elapses.

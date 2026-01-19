@@ -134,7 +134,7 @@ fn main() {
                 ret = "ptr (&Json{\"id\":...,\"version\":...})".into();
             } else if up.contains("GET_ACCOUNT_BALANCE") || n == 0xF9 {
                 args = "r10=&AccountId, r11=&AssetDefinitionId".into();
-                ret = "u64=amount".into();
+                ret = "ptr (&NoritoBytes(Numeric))".into();
                 gas = "G_get_bal".into();
             } else if up.contains("NAME_DECODE") || n == 0x5C {
                 args = "r10=&NoritoBytes(UTF-8 string)".into();

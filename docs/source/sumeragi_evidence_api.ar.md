@@ -30,6 +30,7 @@ translation_last_reviewed: 2026-01-01
   - تسرد سجلات الادلة الحديثة المحفوظة في لقطة تدقيق WSV.
   - معاملات الاستعلام: `limit` (default 50, max 1000)، `offset` (default 0)، `kind` (اختياري؛ احد `DoublePrepare|DoubleCommit|InvalidQc|InvalidProposal|Censorship`).
   - الاستجابة (Norito payload): `(total, Vec<EvidenceRecord>)`.
+  - EvidenceRecord entries include `penalty_applied`, `penalty_cancelled`, `penalty_cancelled_at_height`, and `penalty_applied_at_height` so operators can see delayed slashing status and governance cancellations.
   - اضبط `Accept: application/json` لاستلام `{ "total": <u64>, "items": [ ... ] }`.
 - الدليل الذي يكون subject height فيه اقدم من `sumeragi.npos.reconfig.evidence_horizon_blocks`
   (default 7200) يتم اسقاطه عند الادخال؛ يسجل الممثل الرفض لمساعدة المشغلين على

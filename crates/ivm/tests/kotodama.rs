@@ -191,6 +191,118 @@ fn call_function_with_tuple_return() {
 }
 
 #[test]
+fn numeric_alias_u128_arithmetic_roundtrip() {
+    let src = r#"
+        fn main() -> int {
+            let a: Amount = 9_000_000_000;
+            let b: Amount = a * a;
+            let c: Amount = b / a;
+            return c;
+        }
+    "#;
+    let code = Compiler::new()
+        .compile_source(src)
+        .expect("compile numeric alias arithmetic");
+    let mut vm = ivm::IVM::new(u64::MAX);
+    vm.load_program(&code).expect("load program");
+    vm.run().expect("run numeric alias program");
+    assert_eq!(vm.register(10), 9_000_000_000);
+}
+
+#[test]
+fn numeric_alias_negative_literal_roundtrip() {
+    let src = r#"
+        fn main() -> int {
+            let a: Amount = -1;
+            return a;
+        }
+    "#;
+    let code = Compiler::new()
+        .compile_source(src)
+        .expect("compile negative alias literal");
+    let mut vm = ivm::IVM::new(u64::MAX);
+    vm.load_program(&code).expect("load program");
+    vm.run().expect("run negative alias literal");
+    assert_eq!(vm.register(10) as i64, -1);
+}
+
+#[test]
+fn numeric_alias_decimal_literal_roundtrip() {
+    let src = r#"
+        fn main() -> bool {
+            let a: Amount = 1.50;
+            let b: Amount = 0.25;
+            let c: Amount = a + b;
+            return c == 1.75;
+        }
+    "#;
+    let code = Compiler::new()
+        .compile_source(src)
+        .expect("compile decimal alias literal");
+    let mut vm = ivm::IVM::new(u64::MAX);
+    vm.load_program(&code).expect("load program");
+    vm.run().expect("run decimal alias literal");
+    assert_eq!(vm.register(10), 1);
+}
+
+#[test]
+fn numeric_alias_negative_decimal_literal_roundtrip() {
+    let src = r#"
+        fn main() -> bool {
+            let a: Amount = -1.25;
+            let b: Amount = 0.25;
+            let c: Amount = a + b;
+            return c == -1.0;
+        }
+    "#;
+    let code = Compiler::new()
+        .compile_source(src)
+        .expect("compile negative decimal alias literal");
+    let mut vm = ivm::IVM::new(u64::MAX);
+    vm.load_program(&code).expect("load program");
+    vm.run().expect("run negative decimal alias literal");
+    assert_eq!(vm.register(10), 1);
+}
+
+#[test]
+fn decimal_literal_rejects_int_annotation() {
+    let prog = parse(
+        r#"
+        fn main() -> int {
+            let a: int = 1.5;
+            return a;
+        }
+        "#,
+    )
+    .expect("parse decimal literal");
+    let err = analyze(&prog).expect_err("expected decimal literal type error");
+    assert!(
+        err.message.contains("decimal"),
+        "unexpected error message: {}",
+        err.message
+    );
+}
+
+#[test]
+fn numeric_alias_to_int_overflow_rejected() {
+    let src = r#"
+        fn main() -> int {
+            let a: Amount = 9_000_000_000;
+            let b: Amount = a * a;
+            let c: int = b;
+            return c;
+        }
+    "#;
+    let code = Compiler::new()
+        .compile_source(src)
+        .expect("compile numeric alias overflow");
+    let mut vm = ivm::IVM::new(u64::MAX);
+    vm.load_program(&code).expect("load program");
+    let err = vm.run().expect_err("expected overflow cast failure");
+    assert!(matches!(err, ivm::VMError::AssertionFailed));
+}
+
+#[test]
 fn many_string_literals_load_under_wide_guard() {
     // Exercise pointer literal emission with offsets beyond the wide 8-bit range.
     let mut src = String::from("fn main() {");
@@ -1941,15 +2053,25 @@ fn manifest_emits_wildcard_hints_when_isi_targets_are_opaque() {
 }
 
 #[test]
-fn kotoba_block_removed_errors() {
-    // Using kotoba block should now be rejected explicitly
+fn kotoba_block_emits_manifest_translations() {
     let src = r#"
         seiyaku C {
-            kotoba { }
+            kotoba {
+                "E0001": { en: "Invalid assets", ja: "無効な資産" }
+                hint: { en: "Check inputs" }
+            }
+            kotoage fn main() {}
         }
     "#;
-    let err = parse(src).unwrap_err();
-    assert!(err.contains("kotoba"));
+    let (_code, manifest) = Compiler::new()
+        .compile_source_with_manifest(src)
+        .expect("compile manifest with kotoba");
+    let entries = manifest.kotoba.expect("kotoba entries should be present");
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].msg_id, "E0001");
+    assert_eq!(entries[0].translations.len(), 2);
+    assert_eq!(entries[1].msg_id, "hint");
+    assert_eq!(entries[1].translations[0].lang, "en");
 }
 
 #[test]

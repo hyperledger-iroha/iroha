@@ -360,7 +360,12 @@ fn lint_state_path_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
             lint_state_path_expr(target, warnings);
             lint_state_path_expr(index, warnings);
         }
-        Expr::Number(_) | Expr::Bool(_) | Expr::String(_) | Expr::Bytes(_) | Expr::Ident(_) => {}
+        Expr::Number(_)
+        | Expr::Decimal(_)
+        | Expr::Bool(_)
+        | Expr::String(_)
+        | Expr::Bytes(_)
+        | Expr::Ident(_) => {}
     }
 }
 
@@ -448,7 +453,7 @@ fn lint_opaque_access_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
                     code: "opaque-access-hints",
                     message: LintMessage::Custom {
                         message: format!(
-                            "call to `{name}` uses opaque host access; access hints will be skipped"
+                            "call to `{name}` uses opaque host access; access hints will fall back to conservative wildcard keys"
                         ),
                     },
                 });
@@ -481,7 +486,12 @@ fn lint_opaque_access_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
             lint_opaque_access_expr(target, warnings);
             lint_opaque_access_expr(index, warnings);
         }
-        Expr::Number(_) | Expr::Bool(_) | Expr::String(_) | Expr::Bytes(_) | Expr::Ident(_) => {}
+        Expr::Number(_)
+        | Expr::Decimal(_)
+        | Expr::Bool(_)
+        | Expr::String(_)
+        | Expr::Bytes(_)
+        | Expr::Ident(_) => {}
     }
 }
 
@@ -589,13 +599,18 @@ fn lint_expr_map_keys(expr: &Expr, state_maps: &HashSet<String>, warnings: &mut 
             }
         }
         Expr::Member { object, .. } => lint_expr_map_keys(object, state_maps, warnings),
-        Expr::Number(_) | Expr::Bool(_) | Expr::String(_) | Expr::Bytes(_) | Expr::Ident(_) => {}
+        Expr::Number(_)
+        | Expr::Decimal(_)
+        | Expr::Bool(_)
+        | Expr::String(_)
+        | Expr::Bytes(_)
+        | Expr::Ident(_) => {}
     }
 }
 
 fn is_literal_state_key(expr: &Expr) -> bool {
     match expr {
-        Expr::Number(_) | Expr::String(_) | Expr::Bytes(_) => true,
+        Expr::Number(_) | Expr::Decimal(_) | Expr::String(_) | Expr::Bytes(_) => true,
         Expr::Call { name, args } => {
             let literal_arg = matches!(args.first(), Some(Expr::String(_)) | Some(Expr::Bytes(_)));
             if !literal_arg || args.len() != 1 {
@@ -1091,7 +1106,11 @@ fn record_expr_idents(expr: &Expr, state_lookup: &HashSet<String>, hits: &mut Ha
                 stack.push(target);
                 stack.push(index);
             }
-            Expr::Bool(_) | Expr::Number(_) | Expr::String(_) | Expr::Bytes(_) => {}
+            Expr::Bool(_)
+            | Expr::Number(_)
+            | Expr::Decimal(_)
+            | Expr::String(_)
+            | Expr::Bytes(_) => {}
         }
     }
 }
@@ -1245,7 +1264,12 @@ fn lint_trigger_specs_in_expr(expr: &Expr, func_name: &str, warnings: &mut Vec<L
             lint_trigger_specs_in_expr(target, func_name, warnings);
             lint_trigger_specs_in_expr(index, func_name, warnings);
         }
-        Expr::Bool(_) | Expr::Number(_) | Expr::String(_) | Expr::Bytes(_) | Expr::Ident(_) => {}
+        Expr::Bool(_)
+        | Expr::Number(_)
+        | Expr::Decimal(_)
+        | Expr::String(_)
+        | Expr::Bytes(_)
+        | Expr::Ident(_) => {}
     }
 }
 
@@ -1373,7 +1397,12 @@ fn collect_pointer_literals_from_expr(
                 collect_pointer_literals_from_expr(value, constructors, counts);
             }
         }
-        Expr::Bool(_) | Expr::Number(_) | Expr::String(_) | Expr::Bytes(_) | Expr::Ident(_) => {}
+        Expr::Bool(_)
+        | Expr::Number(_)
+        | Expr::Decimal(_)
+        | Expr::String(_)
+        | Expr::Bytes(_)
+        | Expr::Ident(_) => {}
     }
 }
 
@@ -1646,9 +1675,7 @@ mod tests {
         let isi = InstructionBox::from(Mint::asset_numeric(1u32, asset_id));
         let bytes = norito::to_bytes(&isi).expect("encode InstructionBox");
         let hex_payload = format!("0x{}", hex::encode(bytes));
-        let src = format!(
-            "fn main() {{ execute_instruction(norito_bytes(\"{hex_payload}\")); }}"
-        );
+        let src = format!("fn main() {{ execute_instruction(norito_bytes(\"{hex_payload}\")); }}");
 
         let program = parse(&src).expect("parse execute_instruction literal");
         let warnings = lint_program(&program);
@@ -1673,14 +1700,12 @@ mod tests {
                 .unwrap();
         let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
         let asset_id = AssetId::of(asset_def, account);
-        let request = QueryRequest::Singular(SingularQueryBox::FindAssetById(
-            FindAssetById::new(asset_id),
-        ));
+        let request = QueryRequest::Singular(SingularQueryBox::FindAssetById(FindAssetById::new(
+            asset_id,
+        )));
         let bytes = norito::to_bytes(&request).expect("encode QueryRequest");
         let hex_payload = format!("0x{}", hex::encode(bytes));
-        let src = format!(
-            "fn main() {{ execute_query(norito_bytes(\"{hex_payload}\")); }}"
-        );
+        let src = format!("fn main() {{ execute_query(norito_bytes(\"{hex_payload}\")); }}");
 
         let program = parse(&src).expect("parse execute_query literal");
         let warnings = lint_program(&program);

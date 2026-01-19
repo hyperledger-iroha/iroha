@@ -97,6 +97,8 @@ async fn evidence_count_endpoint_reports_increase() {
             recorded_at_view: 0,
             recorded_at_ms: 0,
             penalty_applied: false,
+            penalty_cancelled: false,
+            penalty_cancelled_at_height: None,
             penalty_applied_at_height: None,
         };
         insert_evidence_record_for_test(state_mut, record);

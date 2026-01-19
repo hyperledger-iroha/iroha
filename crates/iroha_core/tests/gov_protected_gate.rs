@@ -185,6 +185,7 @@ fn protected_namespace_requires_enacted_proposal() {
         features_bitmap: None,
         access_set_hints: None,
         entrypoints: None,
+        kotoba: None,
         provenance: None,
     }
     .signed(&iroha_crypto::KeyPair::random())

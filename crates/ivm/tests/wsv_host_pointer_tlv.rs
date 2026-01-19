@@ -34,7 +34,14 @@ fn make_asset_tlv(asset: &AssetDefinitionId) -> Vec<u8> {
     make_tlv(PointerType::AssetDefinitionId as u16, &buf)
 }
 
-fn make_transfer_batch_tlv(entries: &[(AccountId, AccountId, AssetDefinitionId, u64)]) -> Vec<u8> {
+fn make_numeric_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
+    let buf = to_bytes(&amount.into()).expect("encode numeric into Norito");
+    make_tlv(PointerType::NoritoBytes as u16, &buf)
+}
+
+fn make_transfer_batch_tlv(
+    entries: &[(AccountId, AccountId, AssetDefinitionId, Numeric)],
+) -> Vec<u8> {
     let batch_entries = entries
         .iter()
         .map(|(from, to, asset, amount)| {
@@ -42,13 +49,17 @@ fn make_transfer_batch_tlv(entries: &[(AccountId, AccountId, AssetDefinitionId, 
                 from.clone(),
                 to.clone(),
                 asset.clone(),
-                Numeric::from(*amount),
+                amount.clone(),
             )
         })
         .collect();
     let batch = TransferAssetBatch::new(batch_entries);
     let buf = to_bytes(&batch).expect("encode transfer batch into Norito");
     make_tlv(PointerType::NoritoBytes as u16, &buf)
+}
+
+fn num(value: u64) -> Numeric {
+    Numeric::from(value)
 }
 
 #[test]
@@ -63,7 +74,8 @@ fn balance_syscall_with_tlv_pointers() {
     let bob: AccountId = format!("{pk2}@domain").parse().unwrap();
     let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
 
-    let wsv = MockWorldStateView::with_balances(&[((alice.clone(), asset.clone()), 50)]);
+    let wsv =
+        MockWorldStateView::with_balances(&[((alice.clone(), asset.clone()), num(50))]);
     let host = WsvHost::new(wsv, bob.clone(), HashMap::new(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
@@ -84,13 +96,20 @@ fn balance_syscall_with_tlv_pointers() {
     assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
 
     // Grant and retry
-    let mut wsv2 = MockWorldStateView::with_balances(&[((alice.clone(), asset.clone()), 50)]);
+    let mut wsv2 =
+        MockWorldStateView::with_balances(&[((alice.clone(), asset.clone()), num(50))]);
     wsv2.grant_permission(&bob, PermissionToken::ReadAccountAssets(alice.clone()));
     let host = WsvHost::new(wsv2, bob, HashMap::new(), HashMap::new());
     vm.set_host(host);
     vm.load_program(&prog).unwrap();
     vm.run().expect("balance tlv syscall failed");
-    assert_eq!(vm.register(10), 50);
+    let tlv = vm
+        .memory
+        .validate_tlv(vm.register(10))
+        .expect("balance tlv");
+    assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+    let value: Numeric = norito::decode_from_bytes(tlv.payload).expect("decode balance");
+    assert_eq!(value, Numeric::from(50_u64));
 }
 
 #[test]
@@ -106,8 +125,8 @@ fn transfer_syscall_with_tlv_pointers() {
     let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
 
     let wsv = MockWorldStateView::with_balances(&[
-        ((alice.clone(), asset.clone()), 50),
-        ((bob.clone(), asset.clone()), 0),
+        ((alice.clone(), asset.clone()), num(50)),
+        ((bob.clone(), asset.clone()), num(0)),
     ]);
     let host = WsvHost::new(wsv, bob.clone(), HashMap::new(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
@@ -125,21 +144,26 @@ fn transfer_syscall_with_tlv_pointers() {
     vm.memory
         .preload_input(acc_from.len() as u64 + acc_to.len() as u64 + 16, &asset_tlv)
         .expect("preload input");
+    let amount_tlv = make_numeric_tlv(10_u64);
+    let amount_offset = acc_from.len() as u64 + acc_to.len() as u64 + asset_tlv.len() as u64 + 24;
+    vm.memory
+        .preload_input(amount_offset, &amount_tlv)
+        .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + acc_from.len() as u64 + 8);
     vm.set_register(
         12,
         Memory::INPUT_START + acc_from.len() as u64 + acc_to.len() as u64 + 16,
     );
-    vm.set_register(13, 10);
+    vm.set_register(13, Memory::INPUT_START + amount_offset);
 
     let prog = assemble_syscalls(&[syscalls::SYSCALL_TRANSFER_ASSET as u8]);
     vm.load_program(&prog).unwrap();
     assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
 
     let mut wsv2 = MockWorldStateView::with_balances(&[
-        ((alice.clone(), asset.clone()), 50),
-        ((bob.clone(), asset.clone()), 0),
+        ((alice.clone(), asset.clone()), num(50)),
+        ((bob.clone(), asset.clone()), num(0)),
     ]);
     wsv2.grant_permission(&bob, PermissionToken::TransferAsset(asset.clone()));
     let host = WsvHost::new(wsv2, bob, HashMap::new(), HashMap::new());
@@ -156,7 +180,7 @@ fn mint_syscall_with_tlv_pointers() {
     let bob: AccountId = format!("{pk}@domain").parse().unwrap();
     let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
 
-    let wsv = MockWorldStateView::with_balances(&[((bob.clone(), asset.clone()), 0)]);
+    let wsv = MockWorldStateView::with_balances(&[((bob.clone(), asset.clone()), num(0))]);
     let host = WsvHost::new(wsv, bob.clone(), HashMap::new(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
@@ -167,15 +191,21 @@ fn mint_syscall_with_tlv_pointers() {
     vm.memory
         .preload_input(acc.len() as u64 + 8, &asset_tlv)
         .expect("preload input");
+    let amount_tlv = make_numeric_tlv(20_u64);
+    let amount_offset = acc.len() as u64 + asset_tlv.len() as u64 + 16;
+    vm.memory
+        .preload_input(amount_offset, &amount_tlv)
+        .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + acc.len() as u64 + 8);
-    vm.set_register(12, 20);
+    vm.set_register(12, Memory::INPUT_START + amount_offset);
 
     let prog = assemble_syscalls(&[syscalls::SYSCALL_MINT_ASSET as u8]);
     vm.load_program(&prog).unwrap();
     assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
 
-    let mut wsv2 = MockWorldStateView::with_balances(&[((bob.clone(), asset.clone()), 0)]);
+    let mut wsv2 =
+        MockWorldStateView::with_balances(&[((bob.clone(), asset.clone()), num(0))]);
     wsv2.grant_permission(&bob, PermissionToken::MintAsset(asset.clone()));
     let host = WsvHost::new(wsv2, bob, HashMap::new(), HashMap::new());
     vm.set_host(host);
@@ -200,9 +230,9 @@ fn transfer_batch_syscalls_buffer_entries() {
     let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
 
     let mut wsv = MockWorldStateView::with_balances(&[
-        ((alice.clone(), asset.clone()), 50),
-        ((bob.clone(), asset.clone()), 0),
-        ((carol.clone(), asset.clone()), 0),
+        ((alice.clone(), asset.clone()), num(50)),
+        ((bob.clone(), asset.clone()), num(0)),
+        ((carol.clone(), asset.clone()), num(0)),
     ]);
     wsv.grant_permission(&bob, PermissionToken::TransferAsset(asset.clone()));
     let mut account_map = HashMap::new();
@@ -220,14 +250,18 @@ fn transfer_batch_syscalls_buffer_entries() {
     vm.set_register(10, 1);
     vm.set_register(11, 2);
     vm.set_register(12, 1);
-    vm.set_register(13, 10);
+    let amount1 = make_numeric_tlv(10_u64);
+    let amount1_ptr = vm.alloc_input_tlv(&amount1).expect("alloc amount 1 tlv");
+    vm.set_register(13, amount1_ptr);
     host.syscall(syscalls::SYSCALL_TRANSFER_ASSET, &mut vm)
         .expect("push entry 1");
 
     vm.set_register(10, 1);
     vm.set_register(11, 3);
     vm.set_register(12, 1);
-    vm.set_register(13, 5);
+    let amount2 = make_numeric_tlv(5_u64);
+    let amount2_ptr = vm.alloc_input_tlv(&amount2).expect("alloc amount 2 tlv");
+    vm.set_register(13, amount2_ptr);
     host.syscall(syscalls::SYSCALL_TRANSFER_ASSET, &mut vm)
         .expect("push entry 2");
 
@@ -236,17 +270,17 @@ fn transfer_batch_syscalls_buffer_entries() {
 
     assert_eq!(
         host.wsv.balance(bob.clone(), asset.clone()),
-        10,
+        num(10),
         "bob should receive first transfer"
     );
     assert_eq!(
         host.wsv.balance(carol.clone(), asset.clone()),
-        5,
+        num(5),
         "carol should receive second transfer"
     );
     assert_eq!(
         host.wsv.balance(alice.clone(), asset),
-        35,
+        num(35),
         "alice balance must decrease by combined amount"
     );
 }
@@ -268,9 +302,9 @@ fn transfer_batch_apply_syscall_executes_batch() {
     let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
 
     let mut wsv = MockWorldStateView::with_balances(&[
-        ((alice.clone(), asset.clone()), 50),
-        ((bob.clone(), asset.clone()), 0),
-        ((carol.clone(), asset.clone()), 0),
+        ((alice.clone(), asset.clone()), num(50)),
+        ((bob.clone(), asset.clone()), num(0)),
+        ((carol.clone(), asset.clone()), num(0)),
     ]);
     wsv.grant_permission(&bob, PermissionToken::TransferAsset(asset.clone()));
     let host = WsvHost::new(wsv, bob.clone(), HashMap::new(), HashMap::new());
@@ -278,8 +312,8 @@ fn transfer_batch_apply_syscall_executes_batch() {
     vm.set_host(host);
 
     let batch_tlv = make_transfer_batch_tlv(&[
-        (alice.clone(), bob.clone(), asset.clone(), 10),
-        (alice.clone(), carol.clone(), asset.clone(), 5),
+        (alice.clone(), bob.clone(), asset.clone(), num(10)),
+        (alice.clone(), carol.clone(), asset.clone(), num(5)),
     ]);
     vm.memory
         .preload_input(0, &batch_tlv)
@@ -296,17 +330,17 @@ fn transfer_batch_apply_syscall_executes_batch() {
         .expect("mock host");
     assert_eq!(
         host.wsv.balance(bob.clone(), asset.clone()),
-        10,
+        num(10),
         "bob receives the first transfer"
     );
     assert_eq!(
         host.wsv.balance(carol.clone(), asset.clone()),
-        5,
+        num(5),
         "carol receives the second transfer"
     );
     assert_eq!(
         host.wsv.balance(alice.clone(), asset.clone()),
-        35,
+        num(35),
         "alice decreases by the combined amount"
     );
 }

@@ -273,3 +273,10 @@ Este ISI e idempotente por `(lane_id, epoch)` e fundamenta a contabilidade notur
   para que SDKs e dashboards monitorem o estado da lane sem RPCs custom.
 - OK Config knobs e telemetria estao documentados; deployments mistos mantem lanes stake-elected e
   admin-managed isoladas para que rosters de validadores permanecam deterministas.
+
+### 2.7 `CancelConsensusEvidencePenalty`
+
+Cancels consensus slashing before the delayed penalty applies.
+
+- `evidence`: the Norito-encoded `Evidence` payload that was recorded in `consensus_evidence`.
+- The record is marked `penalty_cancelled` and `penalty_cancelled_at_height`, preventing slashing when `slashing_delay_blocks` elapses.

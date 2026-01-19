@@ -37,7 +37,7 @@ translator: manual
 - **מקבלים**: בודקים commit certificate, מעדכנים מעקב Highest/Locked QC ומנסים קומיט כאשר ה-commit certificate והבלוק תואמים.
 
 ### כלל הקומיט (פייפליין של שני commit certificate)
-- כל ולידטור עוקב אחר `highest_qc` (תעודת Prepare או Commit; לרוב לגובה הילד) ואחר `locked_qc` (שומר הבטיחות הנוכחי). הצעה נבנית רק אם `highest_qc` מרחיב את `locked_qc`; אחרת היא מושלכת גם אם קיים רוב NEW_VIEW.
+- כל ולידטור עוקב אחר `highest_qc` (תעודת Prepare או Commit; לרוב לגובה הילד) ואחר `locked_qc` (שומר הבטיחות הנוכחי). הצעה נבנית רק אם `highest_qc` מרחיב את `locked_qc` והבלוק של `highest_qc` קיים מקומית; אם הבלוק חסר ההצעה נדחית ונשלחת בקשת missing‑block עם fallback לרוסטר מהיסטוריית QC.
 - בלוק בגובה `h` מצטבר כאשר מתקבל commit certificate לגובה `h+1` שהורה שלו תואם ל-commit certificate הנעול בגובה `h`. התנאי הדו-עומקי שומר על הפייפליין ומונע משרשרת מתנגשת להשיג קומיט.
 - כך אין צורך בהודעת סופיות נוספת: כאשר commit certificate הילד מגיע הבלוק האב בטוח, וכל נוד המחזיק את הבלוק ושני ה-commit certificate מסמן קומיט. מי שפספס את ה-commit certificate הראשון משלים דרך Gossip/RBC ומגיע לאותה החלטה.
 - מכיוון שרק שני גבהים פתוחים בו-זמנית, אספנים, RBC וטלמטריה יכולים לצנר עבודה ללא סכנת קומיטים מתפצלים. האינווריאנטים מיושמים ב-`sumeragi::main_loop`: ‏`ensure_locked_qc_allows` מגן על הרכבת הצעות, בלוקים ממתינים נשמרים בזיכרון והקומיט משחרר `locked_qc` רק לאחר תצפית ב-commit certificate ילד תואם.
@@ -205,7 +205,7 @@ translator: manual
 #### CLI ותפעול
 - `iroha_cli sumeragi vrf-epoch --epoch <n>` מציג seed, השתתפות, קנסות ו-offsetים (`--summary` לשורה אחת).
 - `iroha_cli sumeragi telemetry --summary` מסכם `reveals_total`, ‏`late_reveals_total`, ‏`committed_no_reveal`. הסרת `--summary` תחזיר JSON מלא.
-- `iroha_cli sumeragi params --summary` מאפשר לוודא ערכים כגון `evidence_horizon_blocks`,‏ `activation_lag_blocks`.
+- `iroha_cli sumeragi params --summary` מאפשר לוודא ערכים כגון `evidence_horizon_blocks`,‏ `activation_lag_blocks`, `slashing_delay_blocks`.
 - לשליחות ידניות:
 
   ```bash

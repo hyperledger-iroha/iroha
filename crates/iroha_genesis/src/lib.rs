@@ -2115,6 +2115,7 @@ impl RawGenesisTransaction {
                 finality_margin_blocks: npos.finality_margin_blocks(),
                 evidence_horizon_blocks: npos.evidence_horizon_blocks(),
                 activation_lag_blocks: npos.activation_lag_blocks(),
+                slashing_delay_blocks: npos.slashing_delay_blocks(),
             }),
         };
         let fp = compute_consensus_fingerprint_v1(&self.chain, &dm_params, mode_tag);
@@ -3139,6 +3140,7 @@ mod tests2 {
                         finality_margin_blocks: npos.finality_margin_blocks(),
                         evidence_horizon_blocks: npos.evidence_horizon_blocks(),
                         activation_lag_blocks: npos.activation_lag_blocks(),
+                        slashing_delay_blocks: npos.slashing_delay_blocks(),
                     }
                 }),
             };

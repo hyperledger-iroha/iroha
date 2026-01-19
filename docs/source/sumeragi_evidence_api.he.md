@@ -27,6 +27,7 @@ translator: manual
   - מציג רשומות ראיות אחרונות שנשמרו בסנאפשוט הביקורת של ה-WSV.
   - פרמטרים: `limit` (ברירת מחדל 50, מקסימום 1000), ‏`offset` (ברירת מחדל 0), ‏`kind` (אופציונלי: `DoublePrepare|DoubleCommit|InvalidQc|InvalidProposal`).
   - תגובה (Norito): `(total, Vec<EvidenceRecord>)`.
+  - EvidenceRecord entries include `penalty_applied`, `penalty_cancelled`, `penalty_cancelled_at_height`, and `penalty_applied_at_height` so operators can see delayed slashing status and governance cancellations.
   - `Accept: application/json` יחזיר `{ "total": <u64>, "items": [ ... ] }`.
   - ראיות עם subject height ישן מ-`sumeragi.npos.reconfig.evidence_horizon_blocks` (ברירת מחדל ‎7200) נזרקות בעת קבלה; השחקן מדווח זאת בלוג לצורך חקירת הגשות ישנות.
 

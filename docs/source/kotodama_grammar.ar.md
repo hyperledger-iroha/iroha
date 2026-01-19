@@ -127,6 +127,30 @@ seiyaku Name {
 - خرائط الحالة الدائمة تدعم حاليًا مفاتيح `int` وأنواع pointer‑ABI فقط؛ الأنواع الأخرى للمفاتيح تُرفض في وقت الترجمة.
 - حقول الحالة الدائمة يجب أن تكون `int` أو `bool` أو `Json` أو `Blob`/`bytes` أو أنواع pointer‑ABI (بما فيها structs/tuples المركبة من هذه الحقول)؛ `string` غير مدعوم للحالة الدائمة.
 
+## تصريحات المشغلات
+
+تصريحات المشغلات تُلحق بيانات الجدولة الوصفية بمانيفست نقاط الدخول وتُسجّل تلقائيًا عند تفعيل
+مثيل العقد (وتُزال عند التعطيل). تُحلّل داخل كتلة `seiyaku`.
+
+الصياغة
+```
+register_trigger wake {
+  call run;
+  on time pre_commit;
+  repeats 2;
+  metadata { tag: "alpha"; count: 1; enabled: true; }
+}
+```
+
+ملاحظات
+- يجب أن يشير `call` إلى `kotoage fn` عامة داخل نفس العقد؛ يمكن تسجيل `namespace::entrypoint`
+  اختياريًا في المانيفست لكن ردود الاستدعاء بين العقود مرفوضة حاليًا (محلية فقط).
+- المرشحات المدعومة: `time pre_commit` و`time schedule(start_ms, period_ms?)`، بالإضافة إلى
+  `execute trigger <name>` لمشغلات الاستدعاء. مرشحات البيانات/الأنابيب غير مدعومة بعد.
+- يجب أن تكون قيم metadata ليتيرالات JSON (`string`, `number`, `bool`, `null`) أو `json!(...)`.
+- مفاتيح metadata التي يحقنها الـ runtime: `contract_namespace`, `contract_id`,
+  `contract_entrypoint`, `contract_code_hash`, `contract_trigger_id`.
+
 ## الدوال والمعاملات
 
 الصياغة
@@ -211,9 +235,9 @@ seiyaku Name {
   - دعم سكر الطرائق: `s.name()`, `s.json()`, `b.blob()`, `b.norito_bytes()`.
 
 الدوال المدمجة للمضيف/syscall (تُحوّل إلى SCALL؛ الأرقام الدقيقة في ivm.md)
-- `mint_asset(AccountId*, AssetDefinitionId*, int)`
-- `burn_asset(AccountId*, AssetDefinitionId*, int)`
-- `transfer_asset(AccountId*, AccountId*, AssetDefinitionId*, int)`
+- `mint_asset(AccountId*, AssetDefinitionId*, numeric)`
+- `burn_asset(AccountId*, AssetDefinitionId*, numeric)`
+- `transfer_asset(AccountId*, AccountId*, AssetDefinitionId*, numeric)`
 - `set_account_detail(AccountId*, Name*, Json*)`
 - `nft_mint_asset(NftId*, AccountId*)`
 - `nft_transfer_asset(AccountId*, NftId*, AccountId*)`

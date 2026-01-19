@@ -6332,6 +6332,7 @@ fn consensus_caps_from_genesis(
                 finality_margin_blocks: npos.finality_margin_blocks(),
                 evidence_horizon_blocks: npos.evidence_horizon_blocks(),
                 activation_lag_blocks: npos.activation_lag_blocks(),
+                slashing_delay_blocks: npos.slashing_delay_blocks(),
             },
         )
     } else {
@@ -6576,6 +6577,7 @@ fn verify_genesis_metadata(
                 finality_margin_blocks: npos.finality_margin_blocks(),
                 evidence_horizon_blocks: npos.evidence_horizon_blocks(),
                 activation_lag_blocks: npos.activation_lag_blocks(),
+                slashing_delay_blocks: npos.slashing_delay_blocks(),
             },
         )
     } else {

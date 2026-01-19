@@ -4642,9 +4642,9 @@ mod evidence_submit_tests {
     }
 
     fn sample_evidence(chain_id: &ChainId, keypair: &KeyPair) -> Evidence {
-        let mode_tag = iroha_core::sumeragi::consensus::PERMISSIONED_TAG;
-        let v1 = make_vote(chain_id, mode_tag, keypair, 10, 3, 0x11);
-        let v2 = make_vote(chain_id, mode_tag, keypair, 10, 3, 0x22);
+        let (mode_tag, _, _, _) = iroha_core::sumeragi::status::mode_tags();
+        let v1 = make_vote(chain_id, mode_tag.as_str(), keypair, 10, 3, 0x11);
+        let v2 = make_vote(chain_id, mode_tag.as_str(), keypair, 10, 3, 0x22);
         Evidence {
             kind: EvidenceKind::DoublePrepare,
             payload: EvidencePayload::DoubleVote { v1, v2 },
@@ -4748,11 +4748,23 @@ mod evidence_submit_tests {
         let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
         let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let state = test_state_with_peer(PeerId::new(keypair.public_key().clone()));
+        let (prev_mode, prev_staged, prev_activation, _) =
+            iroha_core::sumeragi::status::mode_tags();
+        iroha_core::sumeragi::status::set_mode_tags(
+            iroha_core::sumeragi::consensus::PERMISSIONED_TAG,
+            None,
+            None,
+        );
         let ev = sample_evidence(&chain_id, &keypair);
         let encoded = hex::encode(norito::to_bytes(&ev).expect("encode evidence"));
         let decoded = decode_and_validate_evidence(&encoded, &state, &chain_id)
             .expect("valid evidence should be accepted");
         assert_eq!(decoded.kind, EvidenceKind::DoublePrepare);
+        iroha_core::sumeragi::status::set_mode_tags(
+            &prev_mode,
+            prev_staged.as_deref(),
+            prev_activation,
+        );
     }
 
     #[test]
@@ -6959,6 +6971,7 @@ fn prepare_contract_deployment(
             features_bitmap: None,
             access_set_hints: None,
             entrypoints: None,
+            kotoba: None,
             provenance: None,
         });
 
@@ -7063,6 +7076,7 @@ fn prepare_contract_call(
             features_bitmap: None,
             access_set_hints: None,
             entrypoints: None,
+            kotoba: None,
             provenance: None,
         });
 

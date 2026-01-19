@@ -152,6 +152,7 @@
             "id": "sumeragi_npos_parameters",
             "payload": {
               "activation_lag_blocks": 1,
+              "slashing_delay_blocks": 259200,
               "block_time_ms": 1000,
               "epoch_length_blocks": 3600,
               "epoch_seed": "8BBF8F12EC79F8D85D18E2CE7A84B66C53E9CD4D4EBA357CD33CF28F0D65720B",

@@ -118,6 +118,30 @@ seiyaku Name {
 - `meta { ... }` מחליף ערכי ברירת מחדל של כותרת IVM: `abi_version`, ‏`vector_length` (0 = לא הוגדר), ‏`max_cycles` (0 = ברירת המחדל של הקומפיילר), ו-`features` שמדליקים ביטי כותרת (עקיבה ZK, הכרזת וקטורים). פיצ'רים לא נתמכים מתעלמים עם אזהרה. אם אין בלוק `meta {}`, הקומפיילר מוציא `abi_version = 1` ומשאיר את שאר השדות בערכי ברירת המחדל של האפשרויות.
 - `state` מצהיר על משתנים Durable שהרנטיים שומרים; ה-ABI שלהם הוא Norito ושומר על סדר ושמות שדות. שינויים בפונקציות מניבים ISI דרך קריאות מערכת; קוד ה-VM אינו משנה WSV ישירות.
 
+## הצהרות טריגרים
+
+הצהרות טריגרים מצרפות מטא-דאטה של תזמון למניפסטים של נקודות כניסה ונרשמות אוטומטית בעת
+הפעלת מופע חוזה (ונמחקות בעת השבתה). הן מפוענחות בתוך בלוק `seiyaku`.
+
+### תחביר
+```
+register_trigger wake {
+  call run;
+  on time pre_commit;
+  repeats 2;
+  metadata { tag: "alpha"; count: 1; enabled: true; }
+}
+```
+
+### הערות
+- `call` חייב להפנות ל-`kotoage fn` ציבורית באותו חוזה; `namespace::entrypoint` אופציונלי
+  נרשם במניפסט אך קריאות חוצות-חוזים נדחות כרגע (מקומי בלבד).
+- מסננים נתמכים: `time pre_commit` ו-`time schedule(start_ms, period_ms?)`, וכן
+  `execute trigger <name>` עבור טריגרים לפי קריאה. מסנני data/pipeline עדיין לא נתמכים.
+- ערכי metadata חייבים להיות ליטרלים JSON (`string`, `number`, `bool`, `null`) או `json!(...)`.
+- מפתחות metadata שמוזרקים ע"י הרנטיים: `contract_namespace`, `contract_id`,
+  `contract_entrypoint`, `contract_code_hash`, `contract_trigger_id`.
+
 ## פונקציות ופרמטרים
 
 ### תחביר
@@ -193,9 +217,9 @@ seiyaku Name {
   - סוכריות מתודה: ‎`s.name()`, ‏`s.json()`, ‏`b.blob()`, ‏`b.norito_bytes()`.
 
 ### בילט-אינים של ההוסט/קריאות מערכת (ממפים ל-SCALL; המספרים ב-`ivm.md`)
-- ‎`mint_asset(AccountId*, AssetDefinitionId*, int)`
-- ‎`burn_asset(AccountId*, AssetDefinitionId*, int)`
-- ‎`transfer_asset(AccountId*, AccountId*, AssetDefinitionId*, int)`
+- ‎`mint_asset(AccountId*, AssetDefinitionId*, numeric)`
+- ‎`burn_asset(AccountId*, AssetDefinitionId*, numeric)`
+- ‎`transfer_asset(AccountId*, AccountId*, AssetDefinitionId*, numeric)`
 - ‎`set_account_detail(AccountId*, Name*, Json*)`
 - ‎`nft_mint_asset(NftId*, AccountId*)`
 - ‎`nft_transfer_asset(AccountId*, NftId*, AccountId*)`

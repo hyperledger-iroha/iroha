@@ -350,9 +350,10 @@ Total references: **505** · Unique variables: **137**
 
 - build: crates/soranet_pq/build.rs:6 — `if std::env::var_os("CARGO_PRIMARY_PACKAGE").is_some() {`
 
-## CARGO_TARGET_DIR (prod: 3, test: 1, tool: 1)
+## CARGO_TARGET_DIR (prod: 3, test: 2, tool: 1)
 
-- test: crates/iroha_test_network/src/lib.rs:414 — `match std::env::var("CARGO_TARGET_DIR") {`
+- test: crates/iroha_test_network/src/lib.rs:524 — `if let Ok(path) = std::env::var("CARGO_TARGET_DIR") {`
+- test: crates/iroha_test_network/src/lib.rs:759 — `if let Ok(path) = std::env::var("CARGO_TARGET_DIR") {`
 - prod: mochi/mochi-core/src/supervisor.rs:575 — `let target_root = env::var_os("CARGO_TARGET_DIR")`
 - prod: mochi/mochi-core/src/supervisor.rs:629 — `let target_root = env::var_os("CARGO_TARGET_DIR")`
 - prod: mochi/mochi-core/src/supervisor.rs:683 — `let target_root = env::var_os("CARGO_TARGET_DIR")`
@@ -552,7 +553,12 @@ Total references: **505** · Unique variables: **137**
 
 ## IROHA_TEST_SKIP_BUILD (test: 1)
 
-- test: crates/iroha_test_network/src/lib.rs:1021 — `std::env::var("IROHA_TEST_SKIP_BUILD")`
+- test: crates/iroha_test_network/src/lib.rs:1244 — `std::env::var("IROHA_TEST_SKIP_BUILD")`
+
+## IROHA_TEST_TARGET_DIR (test: 2)
+
+- test: crates/iroha_test_network/src/lib.rs:521 — `if let Ok(path) = std::env::var(IROHA_TEST_TARGET_DIR_ENV) {`
+- test: crates/iroha_test_network/src/lib.rs:765 — `if let Ok(path) = std::env::var(IROHA_TEST_TARGET_DIR_ENV) {`
 
 ## IROHA_TEST_USE_DEFAULT_EXECUTOR (test: 3)
 

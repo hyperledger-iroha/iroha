@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 
 use iroha_crypto::Hash;
+use iroha_primitives::numeric::Numeric;
 use ivm::{
     IVM, Memory, PointerType,
     mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
+use norito::to_bytes;
 
 mod common;
 use common::assemble_syscalls;
@@ -19,6 +21,16 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let h: [u8; 32] = Hash::new(payload).into();
     out.extend_from_slice(&h);
     out
+}
+
+fn make_numeric_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
+    let buf = to_bytes(&amount.into()).expect("encode numeric into Norito");
+    make_tlv(PointerType::NoritoBytes as u16, &buf)
+}
+
+fn alloc_numeric(vm: &mut IVM, amount: u64) -> u64 {
+    let tlv = make_numeric_tlv(amount);
+    vm.alloc_input_tlv(&tlv).expect("alloc numeric tlv")
 }
 
 #[test]
@@ -113,7 +125,8 @@ fn create_role_grant_and_revoke_affects_permissions() {
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + tlv_bob.len() as u64 + 8);
-    vm.set_register(12, 5);
+    let amount_ptr = alloc_numeric(&mut vm, 5);
+    vm.set_register(12, amount_ptr);
     let prog_mint = assemble_syscalls(&[syscalls::SYSCALL_MINT_ASSET as u8]);
     vm.load_program(&prog_mint).unwrap();
     vm.run().expect("mint via role");
@@ -138,7 +151,8 @@ fn create_role_grant_and_revoke_affects_permissions() {
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + tlv_bob.len() as u64 + 8);
-    vm.set_register(12, 1);
+    let amount_ptr = alloc_numeric(&mut vm, 1);
+    vm.set_register(12, amount_ptr);
     vm.load_program(&prog_mint).unwrap();
     assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
 
@@ -237,7 +251,8 @@ fn create_role_with_permissions_key_then_mint() {
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + tlv_bob.len() as u64 + 8);
-    vm.set_register(12, 1);
+    let amount_ptr = alloc_numeric(&mut vm, 1);
+    vm.set_register(12, amount_ptr);
     let prog_mint = assemble_syscalls(&[syscalls::SYSCALL_MINT_ASSET as u8]);
     vm.load_program(&prog_mint).unwrap();
     vm.run()

@@ -12,7 +12,6 @@ use iroha_data_model::{
     prelude::{AccountId, PeerId},
     transaction::TransactionSubmissionReceipt,
 };
-use iroha_logger::prelude::*;
 use iroha_primitives::numeric::Numeric;
 use mv::storage::StorageReadOnly;
 
@@ -24,10 +23,6 @@ use crate::{
     state::{State, WorldReadOnly, WorldTransaction},
     sumeragi::consensus::ValidatorIndex,
 };
-
-/// Controls whether penalty enforcement mutates validator records.
-/// TODO: Apply penalties through on-chain instructions so every peer enforces them deterministically.
-const ENFORCE_NPOS_PENALTIES_IN_WSV: bool = false;
 
 #[derive(Clone, Copy, Default)]
 pub struct PenaltyOutcome {
@@ -99,7 +94,6 @@ impl<'a> PenaltyApplier<'a> {
 
     pub(crate) fn apply_vrf_penalties(&self, current_height: u64) -> PenaltyOutcome {
         let mut outcome = PenaltyOutcome::default();
-        let enforce_penalties = ENFORCE_NPOS_PENALTIES_IN_WSV;
         let activation_lag = {
             let view = self.state.view();
             crate::sumeragi::resolve_npos_activation_lag_blocks(&view, &self.config.npos)
@@ -148,29 +142,20 @@ impl<'a> PenaltyApplier<'a> {
             let mut tx = block.trasaction(self.telemetry, lane_config.clone(), current_height);
             #[cfg(not(feature = "telemetry"))]
             let mut tx = block.trasaction(lane_config.clone(), current_height);
-            if enforce_penalties {
-                for locator in locators {
-                    if jail_in_transaction(
-                        &mut tx,
-                        &locator,
-                        &format!("vrf_penalty_epoch_{}", record.epoch),
-                        #[cfg(feature = "telemetry")]
-                        self.telemetry,
-                        #[cfg(not(feature = "telemetry"))]
-                        None,
-                    ) {
-                        outcome.applied = outcome.applied.saturating_add(1);
-                        outcome.jailed = outcome.jailed.saturating_add(1);
-                        applied_here = true;
-                    }
+            for locator in locators {
+                if jail_in_transaction(
+                    &mut tx,
+                    &locator,
+                    &format!("vrf_penalty_epoch_{}", record.epoch),
+                    #[cfg(feature = "telemetry")]
+                    self.telemetry,
+                    #[cfg(not(feature = "telemetry"))]
+                    None,
+                ) {
+                    outcome.applied = outcome.applied.saturating_add(1);
+                    outcome.jailed = outcome.jailed.saturating_add(1);
+                    applied_here = true;
                 }
-            } else if !locators.is_empty() {
-                applied_here = true;
-                warn!(
-                    epoch = record.epoch,
-                    offenders = locators.len(),
-                    "skipping VRF penalty enforcement; on-chain adjudication required for determinism"
-                );
             }
 
             let mut updated = record.clone();
@@ -189,18 +174,17 @@ impl<'a> PenaltyApplier<'a> {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn apply_consensus_penalties(&self, current_height: u64) -> Result<PenaltyOutcome> {
         let mut outcome = PenaltyOutcome::default();
-        let enforce_penalties = ENFORCE_NPOS_PENALTIES_IN_WSV;
-        let activation_lag = {
+        let slashing_delay = {
             let view = self.state.view();
-            crate::sumeragi::resolve_npos_activation_lag_blocks(&view, &self.config.npos)
+            crate::sumeragi::resolve_npos_slashing_delay_blocks(&view, &self.config.npos)
         };
         let evidence_view = self.state.world.consensus_evidence.view();
         let mut pending: Vec<(Vec<u8>, EvidenceRecord)> = Vec::new();
         for (key, record) in evidence_view.iter() {
-            if record.penalty_applied {
+            if record.penalty_applied || record.penalty_cancelled {
                 continue;
             }
-            if record.recorded_at_height.saturating_add(activation_lag) > current_height {
+            if record.recorded_at_height.saturating_add(slashing_delay) > current_height {
                 outcome.pending = outcome.pending.saturating_add(1);
                 continue;
             }
@@ -312,35 +296,26 @@ impl<'a> PenaltyApplier<'a> {
             #[cfg(not(feature = "telemetry"))]
             let mut tx = block.trasaction(lane_config.clone(), current_height);
             let mut applied_here = false;
-            if enforce_penalties {
-                for locator in locators {
-                    if let Some(amount) =
-                        max_slash_amount_for_validator(&tx, &locator, staking_cfg.max_slash_bps)?
-                    {
-                        apply_slash_to_validator(
-                            &mut tx,
-                            &staking_cfg,
-                            locator.lane_id,
-                            &locator.validator,
-                            slash_id,
-                            &amount,
-                            #[cfg(feature = "telemetry")]
-                            self.telemetry,
-                            #[cfg(not(feature = "telemetry"))]
-                            None,
-                        )?;
-                        outcome.applied = outcome.applied.saturating_add(1);
-                        outcome.slashed = outcome.slashed.saturating_add(1);
-                        applied_here = true;
-                    }
+            for locator in locators {
+                if let Some(amount) =
+                    max_slash_amount_for_validator(&tx, &locator, staking_cfg.max_slash_bps)?
+                {
+                    apply_slash_to_validator(
+                        &mut tx,
+                        &staking_cfg,
+                        locator.lane_id,
+                        &locator.validator,
+                        slash_id,
+                        &amount,
+                        #[cfg(feature = "telemetry")]
+                        self.telemetry,
+                        #[cfg(not(feature = "telemetry"))]
+                        None,
+                    )?;
+                    outcome.applied = outcome.applied.saturating_add(1);
+                    outcome.slashed = outcome.slashed.saturating_add(1);
+                    applied_here = true;
                 }
-            } else if !locators.is_empty() {
-                applied_here = true;
-                warn!(
-                    ?slash_id,
-                    offenders = locators.len(),
-                    "skipping consensus penalty enforcement; on-chain adjudication required for determinism"
-                );
             }
             if applied_here {
                 record.penalty_applied = true;
@@ -999,7 +974,7 @@ mod tests {
     }
 
     #[test]
-    fn vrf_penalties_mark_records_without_enforcement() {
+    fn vrf_penalties_jail_offenders_and_mark_record() {
         let state = fresh_state();
         let mut config = test_sumeragi_config();
         config.npos.reconfig.activation_lag_blocks = 0;
@@ -1068,8 +1043,8 @@ mod tests {
         );
         let outcome = applier.apply_vrf_penalties(5);
 
-        assert_eq!(outcome.applied, 0);
-        assert_eq!(outcome.jailed, 0);
+        assert_eq!(outcome.applied, 1);
+        assert_eq!(outcome.jailed, 1);
         assert_eq!(outcome.pending, 0);
 
         let view = state.world.vrf_epochs.view();
@@ -1083,7 +1058,8 @@ mod tests {
             .expect("validator present");
         assert!(matches!(
             retained.status,
-            PublicLaneValidatorStatus::Active
+            PublicLaneValidatorStatus::Jailed(ref reason)
+                if reason == "vrf_penalty_epoch_1"
         ));
     }
 
@@ -1140,6 +1116,7 @@ mod tests {
         let state = fresh_state();
         let mut config = test_sumeragi_config();
         config.npos.reconfig.activation_lag_blocks = 0;
+        config.npos.reconfig.slashing_delay_blocks = 0;
         crate::sumeragi::status::reset_commit_certs_for_tests();
         crate::sumeragi::status::reset_validator_checkpoints_for_tests();
         insert_epoch_seed(&state, 0, [0x10; 32]);
@@ -1181,6 +1158,74 @@ mod tests {
             recorded_at_view: 1,
             recorded_at_ms: 123,
             penalty_applied: false,
+            penalty_cancelled: false,
+            penalty_cancelled_at_height: None,
+            penalty_applied_at_height: None,
+        };
+        let key = evidence_key(&record.evidence);
+        {
+            let mut block = state.world.consensus_evidence.block();
+            block.insert(key.clone(), record.clone());
+            block.commit();
+        }
+
+        let applier = PenaltyApplier::new(
+            &state,
+            &config,
+            #[cfg(feature = "telemetry")]
+            None,
+            #[cfg(not(feature = "telemetry"))]
+            None,
+        );
+        let outcome = applier.apply_consensus_penalties(5)?;
+        assert_eq!(outcome.applied, 1);
+        assert_eq!(outcome.slashed, 1);
+        assert_eq!(outcome.pending, 0);
+
+        let view = state.world.consensus_evidence.view();
+        let updated = view.get(&key).expect("evidence present");
+        assert!(updated.penalty_applied);
+        assert_eq!(updated.penalty_applied_at_height, Some(5));
+
+        Ok(())
+    }
+
+    #[test]
+    fn consensus_penalties_skip_cancelled_record() -> Result<()> {
+        let state = fresh_state();
+        let mut config = test_sumeragi_config();
+        config.npos.reconfig.activation_lag_blocks = 0;
+        config.npos.reconfig.slashing_delay_blocks = 0;
+
+        let block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x51; Hash::LENGTH]));
+        let v1 = Vote {
+            phase: Phase::Prepare,
+            block_hash,
+            parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+            post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+            height: 1,
+            view: 1,
+            epoch: 0,
+            highest_qc: None,
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        let mut v2 = v1.clone();
+        v2.block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x52; Hash::LENGTH]));
+        let evidence = Evidence {
+            kind: EvidenceKind::DoublePrepare,
+            payload: EvidencePayload::DoubleVote { v1, v2 },
+        };
+        let record = EvidenceRecord {
+            evidence,
+            recorded_at_height: 1,
+            recorded_at_view: 1,
+            recorded_at_ms: 321,
+            penalty_applied: false,
+            penalty_cancelled: true,
+            penalty_cancelled_at_height: Some(1),
             penalty_applied_at_height: None,
         };
         let key = evidence_key(&record.evidence);
@@ -1205,8 +1250,75 @@ mod tests {
 
         let view = state.world.consensus_evidence.view();
         let updated = view.get(&key).expect("evidence present");
-        assert!(updated.penalty_applied);
-        assert_eq!(updated.penalty_applied_at_height, Some(5));
+        assert!(!updated.penalty_applied);
+        assert!(updated.penalty_cancelled);
+        assert_eq!(updated.penalty_applied_at_height, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn consensus_penalties_pending_until_slashing_delay_elapses() -> Result<()> {
+        let state = fresh_state();
+        let mut config = test_sumeragi_config();
+        config.npos.reconfig.activation_lag_blocks = 0;
+        config.npos.reconfig.slashing_delay_blocks = 10;
+
+        let block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x61; Hash::LENGTH]));
+        let v1 = Vote {
+            phase: Phase::Prepare,
+            block_hash,
+            parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+            post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+            height: 5,
+            view: 1,
+            epoch: 0,
+            highest_qc: None,
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        let mut v2 = v1.clone();
+        v2.block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x62; Hash::LENGTH]));
+        let evidence = Evidence {
+            kind: EvidenceKind::DoublePrepare,
+            payload: EvidencePayload::DoubleVote { v1, v2 },
+        };
+        let record = EvidenceRecord {
+            evidence,
+            recorded_at_height: 5,
+            recorded_at_view: 1,
+            recorded_at_ms: 555,
+            penalty_applied: false,
+            penalty_cancelled: false,
+            penalty_cancelled_at_height: None,
+            penalty_applied_at_height: None,
+        };
+        let key = evidence_key(&record.evidence);
+        {
+            let mut block = state.world.consensus_evidence.block();
+            block.insert(key.clone(), record.clone());
+            block.commit();
+        }
+
+        let applier = PenaltyApplier::new(
+            &state,
+            &config,
+            #[cfg(feature = "telemetry")]
+            None,
+            #[cfg(not(feature = "telemetry"))]
+            None,
+        );
+        let outcome = applier.apply_consensus_penalties(12)?;
+        assert_eq!(outcome.applied, 0);
+        assert_eq!(outcome.slashed, 0);
+        assert_eq!(outcome.pending, 1);
+
+        let view = state.world.consensus_evidence.view();
+        let updated = view.get(&key).expect("evidence present");
+        assert!(!updated.penalty_applied);
+        assert_eq!(updated.penalty_applied_at_height, None);
 
         Ok(())
     }
@@ -1216,6 +1328,7 @@ mod tests {
         let state = fresh_state();
         let mut config = test_sumeragi_config();
         config.npos.reconfig.activation_lag_blocks = 0;
+        config.npos.reconfig.slashing_delay_blocks = 0;
         crate::sumeragi::status::reset_commit_certs_for_tests();
         crate::sumeragi::status::reset_validator_checkpoints_for_tests();
         insert_epoch_seed(&state, 0, [0x12; 32]);
@@ -1249,6 +1362,8 @@ mod tests {
             recorded_at_view: 1,
             recorded_at_ms: 456,
             penalty_applied: false,
+            penalty_cancelled: false,
+            penalty_cancelled_at_height: None,
             penalty_applied_at_height: None,
         };
         let key = evidence_key(&record.evidence);
@@ -1284,6 +1399,7 @@ mod tests {
         let state = fresh_state();
         let mut config = test_sumeragi_config();
         config.npos.reconfig.activation_lag_blocks = 0;
+        config.npos.reconfig.slashing_delay_blocks = 0;
         crate::sumeragi::status::reset_commit_certs_for_tests();
         crate::sumeragi::status::reset_validator_checkpoints_for_tests();
         insert_epoch_seed(&state, 0, [0x13; 32]);
@@ -1315,6 +1431,8 @@ mod tests {
             recorded_at_view: 1,
             recorded_at_ms: 999,
             penalty_applied: false,
+            penalty_cancelled: false,
+            penalty_cancelled_at_height: None,
             penalty_applied_at_height: None,
         };
         let key = evidence_key(&record.evidence);
@@ -1350,6 +1468,7 @@ mod tests {
         let state = fresh_state();
         let mut config = test_sumeragi_config();
         config.npos.reconfig.activation_lag_blocks = 0;
+        config.npos.reconfig.slashing_delay_blocks = 0;
         crate::sumeragi::status::reset_commit_certs_for_tests();
         crate::sumeragi::status::reset_validator_checkpoints_for_tests();
 
@@ -1383,6 +1502,8 @@ mod tests {
             recorded_at_view: 1,
             recorded_at_ms: 555,
             penalty_applied: false,
+            penalty_cancelled: false,
+            penalty_cancelled_at_height: None,
             penalty_applied_at_height: None,
         };
         let key = evidence_key(&record.evidence);
@@ -1415,11 +1536,12 @@ mod tests {
 
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn consensus_penalties_mark_censorship_without_enforcement() -> Result<()> {
+    fn consensus_penalties_mark_censorship_and_slash() -> Result<()> {
         let state = fresh_state();
         let mut config = test_sumeragi_config();
         config.consensus_mode = ConsensusMode::Permissioned;
         config.npos.reconfig.activation_lag_blocks = 0;
+        config.npos.reconfig.slashing_delay_blocks = 0;
 
         let key_pair = KeyPair::random();
         let peer = PeerId::from(key_pair.public_key().clone());
@@ -1519,6 +1641,8 @@ mod tests {
             recorded_at_view: 1,
             recorded_at_ms: 321,
             penalty_applied: false,
+            penalty_cancelled: false,
+            penalty_cancelled_at_height: None,
             penalty_applied_at_height: None,
         };
         let key = evidence_key(&record.evidence);
@@ -1550,9 +1674,10 @@ mod tests {
         let retained = validators
             .get(&(LaneId::new(1), validator.clone()))
             .expect("validator present");
+        let slash_id = Hash::new(key.clone());
         assert!(matches!(
             retained.status,
-            PublicLaneValidatorStatus::Active
+            PublicLaneValidatorStatus::Slashed(id) if id == slash_id
         ));
 
         Ok(())

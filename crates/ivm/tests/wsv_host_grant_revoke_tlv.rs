@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use iroha_crypto::Hash;
+use iroha_primitives::numeric::Numeric;
 use ivm::{
     IVM, Memory, PointerType,
     mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, WsvHost},
@@ -34,7 +35,8 @@ fn grant_revoke_permission_with_tlv() {
             .unwrap();
     let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
 
-    let wsv = MockWorldStateView::with_balances(&[((alice.clone(), asset.clone()), 50)]);
+    let wsv =
+        MockWorldStateView::with_balances(&[((alice.clone(), asset.clone()), Numeric::from(50_u64))]);
     let host = WsvHost::new(wsv, bob.clone(), HashMap::new(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
@@ -70,7 +72,13 @@ fn grant_revoke_permission_with_tlv() {
     let prog_bal = assemble_syscalls(&[syscalls::SYSCALL_GET_ACCOUNT_BALANCE as u8]);
     vm.load_program(&prog_bal).unwrap();
     vm.run().expect("balance after grant failed");
-    assert_eq!(vm.register(10), 50);
+    let tlv = vm
+        .memory
+        .validate_tlv(vm.register(10))
+        .expect("balance tlv");
+    assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+    let value: Numeric = norito::decode_from_bytes(tlv.payload).expect("decode balance");
+    assert_eq!(value, Numeric::from(50_u64));
 
     // Step 3: revoke the same permission via Json TLV
     let subj = make_tlv(PointerType::AccountId as u16, bob.to_string().as_bytes());

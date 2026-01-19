@@ -17,7 +17,7 @@ junto com {doc}`sumeragi` e {doc}`sumeragi_chaos_performance_runbook` sempre que
 preparar um novo build de validador ou capturar artefatos de readiness para governance.
 
 
-Note: For the v1 release, VRF/evidence penalties are recorded for telemetry only; enforcement that mutates validator status is deferred to on-chain adjudication to keep rosters deterministic across peers.
+Note: For the v1 release, VRF penalties jail offenders after the activation lag, and consensus slashing is delayed by `sumeragi.npos.reconfig.slashing_delay_blocks` (default 259200 blocks, ~3 days at 1s) so governance can cancel with `CancelConsensusEvidencePenalty` before it applies.
 
 ## Escopo e pre-requisitos
 

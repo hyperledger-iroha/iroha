@@ -9022,6 +9022,7 @@ mod tests {
                 write_keys: vec!["contract:foo".to_owned()],
             }),
             entrypoints: None,
+            kotoba: None,
             provenance: None,
         };
         let instruction: InstructionBox = Box::new(RegisterSmartContractCode {

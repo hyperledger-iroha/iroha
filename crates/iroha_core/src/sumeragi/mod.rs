@@ -411,7 +411,7 @@ pub(crate) fn resolve_npos_election_params(
     )
 }
 
-/// Resolve `NPoS` activation lag for penalties from on-chain parameters or config.
+/// Resolve `NPoS` activation lag for VRF penalties from on-chain parameters or config.
 pub(crate) fn resolve_npos_activation_lag_blocks(
     view: &StateView<'_>,
     fallback: &SumeragiNpos,
@@ -420,6 +420,18 @@ pub(crate) fn resolve_npos_activation_lag_blocks(
         .sumeragi_npos_parameters()
         .map_or(fallback.reconfig.activation_lag_blocks, |params| {
             params.activation_lag_blocks()
+        })
+}
+
+/// Resolve `NPoS` slashing delay (blocks) for evidence penalties from on-chain parameters or config.
+pub(crate) fn resolve_npos_slashing_delay_blocks(
+    view: &StateView<'_>,
+    fallback: &SumeragiNpos,
+) -> u64 {
+    view.world
+        .sumeragi_npos_parameters()
+        .map_or(fallback.reconfig.slashing_delay_blocks, |params| {
+            params.slashing_delay_blocks()
         })
 }
 
@@ -1525,6 +1537,31 @@ mod tests {
         assert_eq!(
             resolve_npos_activation_lag_blocks(&view, &fallback),
             fallback.reconfig.activation_lag_blocks
+        );
+    }
+
+    #[test]
+    fn resolve_npos_slashing_delay_blocks_prefers_on_chain() {
+        let mut fallback = SumeragiNpos::default();
+        fallback.reconfig.slashing_delay_blocks = 42;
+
+        let state = state_with_npos_params(SumeragiNposParameters {
+            slashing_delay_blocks: 7,
+            ..SumeragiNposParameters::default()
+        });
+        let view = state.view();
+        assert_eq!(resolve_npos_slashing_delay_blocks(&view, &fallback), 7);
+        drop(view);
+
+        let state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let view = state.view();
+        assert_eq!(
+            resolve_npos_slashing_delay_blocks(&view, &fallback),
+            fallback.reconfig.slashing_delay_blocks
         );
     }
 

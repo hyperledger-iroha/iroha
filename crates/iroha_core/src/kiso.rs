@@ -1124,6 +1124,8 @@ mod tests {
                             iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_EVIDENCE_HORIZON_BLOCKS,
                         activation_lag_blocks:
                             iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_BLOCKS,
+                        slashing_delay_blocks:
+                            iroha_config::parameters::defaults::sumeragi::npos::SLASHING_DELAY_BLOCKS,
                     },
                 },
                 use_stake_snapshot_roster: false,

@@ -263,3 +263,10 @@ Runtime ロジックは NX-9 実装時に `PublicLaneRewardRecord` 注釈を emi
   SDKs と dashboards が custom RPC なしで lane 状態を監視可能。
 - ✅ Config/telemetry knobs をドキュメント化。混在 deployments でも stake-elected と admin-managed lanes を
   分離し、validator rosters の決定性を維持。
+
+### 2.7 `CancelConsensusEvidencePenalty`
+
+Cancels consensus slashing before the delayed penalty applies.
+
+- `evidence`: the Norito-encoded `Evidence` payload that was recorded in `consensus_evidence`.
+- The record is marked `penalty_cancelled` and `penalty_cancelled_at_height`, preventing slashing when `slashing_delay_blocks` elapses.

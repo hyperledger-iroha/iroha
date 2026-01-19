@@ -1169,7 +1169,7 @@ impl Actor {
                             hint_highest_qc_hash = %hint.highest_qc.subject_block_hash,
                             height,
                             view,
-                            "highest QC missing locally; accepting BlockCreated on locked chain"
+                            "highest QC block missing locally; accepting BlockCreated on locked chain"
                         );
                         hint_highest = lock;
                     }

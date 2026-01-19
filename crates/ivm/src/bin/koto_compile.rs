@@ -65,13 +65,13 @@ fn print_access_hint_diagnostics(diag: &AccessHintDiagnostics) {
     }
     if diag.state_wildcards > 0 {
         eprintln!(
-            "access-hint: {} state accesses used dynamic keys; entrypoint hints may be incomplete",
+            "access-hint: {} state accesses used dynamic keys; entrypoint hints may be conservative",
             diag.state_wildcards
         );
     }
     if diag.isi_wildcards > 0 {
         eprintln!(
-            "access-hint: {} ISI instructions used opaque or non-literal targets; entrypoint hints may be incomplete",
+            "access-hint: {} ISI instructions used opaque or non-literal targets; entrypoint hints may be conservative",
             diag.isi_wildcards
         );
     }
@@ -388,6 +388,7 @@ mod tests {
             features_bitmap: Some(0),
             access_set_hints: None,
             entrypoints: None,
+            kotoba: None,
             provenance: None,
         };
         let s = manifest_to_json(&m).expect("json");

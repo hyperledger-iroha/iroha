@@ -30,6 +30,7 @@ Sumeragi evidence کیلئے عارضی audit endpoints۔
   - WSV audit snapshot میں محفوظ حالیہ evidence entries کی فہرست دیتا ہے۔
   - Query params: `limit` (default 50, max 1000), `offset` (default 0), `kind` (optional; one of `DoublePrepare|DoubleCommit|InvalidQc|InvalidProposal|Censorship`).
   - Response (Norito payload): `(total, Vec<EvidenceRecord>)`.
+  - EvidenceRecord entries include `penalty_applied`, `penalty_cancelled`, `penalty_cancelled_at_height`, and `penalty_applied_at_height` so operators can see delayed slashing status and governance cancellations.
   - `{ "total": <u64>, "items": [ ... ] }` حاصل کرنے کیلئے `Accept: application/json` سیٹ کریں۔
 - جس evidence کا subject height `sumeragi.npos.reconfig.evidence_horizon_blocks`
   (default 7200) سے پرانا ہو، اسے ingress پر drop کیا جاتا ہے؛ actor rejection لاگ کرتا ہے تاکہ operators
