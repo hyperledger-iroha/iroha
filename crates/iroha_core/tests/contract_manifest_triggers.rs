@@ -24,6 +24,7 @@ use iroha_data_model::{
     trigger::action::Repeats,
 };
 use iroha_primitives::json::Json;
+use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 
 fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
