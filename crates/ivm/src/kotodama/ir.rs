@@ -193,6 +193,16 @@ pub enum Instr {
         dest: Temp,
         message: Temp,
     },
+    /// Compute SHA-256 hash of a Blob pointer and return the resulting Blob pointer.
+    Sha256Hash {
+        dest: Temp,
+        message: Temp,
+    },
+    /// Compute SHA3-256 hash of a Blob pointer and return the resulting Blob pointer.
+    Sha3Hash {
+        dest: Temp,
+        message: Temp,
+    },
     /// Verify an SM2 signature (message, signature, public key, optional distid) returning a bool.
     Sm2Verify {
         dest: Temp,
@@ -346,6 +356,10 @@ pub enum Instr {
     CreateNftsForAllUsers,
     /// Host helper: set SmartContract execution depth parameter.
     SetExecutionDepth {
+        value: Temp,
+    },
+    /// Host helper: set logical vector length (SETVL immediate).
+    SetVl {
         value: Temp,
     },
     /// Call a user-defined function by name with positional arguments.
@@ -2000,6 +2014,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     ctx.current_instr(Instr::Const { dest: t, value: 0 });
                     t
                 }
+                "setvl" => {
+                    let v = lower_expr_as_int(ctx, &args[0], vars);
+                    ctx.current_instr(Instr::SetVl { value: v });
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
+                    t
+                }
                 "set_account_detail" => {
                     let a = lower_expr(ctx, &args[0], vars);
                     let k = lower_expr(ctx, &args[1], vars);
@@ -2122,6 +2143,24 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     let msg = lower_expr(ctx, &args[0], vars);
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::Sm3Hash {
+                        dest: t,
+                        message: msg,
+                    });
+                    t
+                }
+                "sha256_hash" => {
+                    let msg = lower_expr(ctx, &args[0], vars);
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::Sha256Hash {
+                        dest: t,
+                        message: msg,
+                    });
+                    t
+                }
+                "sha3_hash" => {
+                    let msg = lower_expr(ctx, &args[0], vars);
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::Sha3Hash {
                         dest: t,
                         message: msg,
                     });
@@ -3779,6 +3818,24 @@ mod tests {
             }
         }
         assert!(saw_blob, "expected blob dataref for bytes literal");
+    }
+
+    #[test]
+    fn lower_setvl_builtin() {
+        let src = "fn main() { setvl(8); }";
+        let prog = parse(src).unwrap();
+        let typed = analyze(&prog).unwrap();
+        let ir = lower(&typed).expect("lower");
+        let f = &ir.functions[0];
+        let mut saw_setvl = false;
+        for bb in &f.blocks {
+            for instr in &bb.instrs {
+                if let Instr::SetVl { .. } = instr {
+                    saw_setvl = true;
+                }
+            }
+        }
+        assert!(saw_setvl, "expected SetVl instruction in lowered IR");
     }
 
     #[test]

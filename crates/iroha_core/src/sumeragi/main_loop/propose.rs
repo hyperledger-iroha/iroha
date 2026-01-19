@@ -510,8 +510,7 @@ impl Actor {
         }
 
         let queue_len_after_pop = self.queue.queued_len();
-        let mut internal_work = None;
-        if transactions.is_empty() {
+        let mut internal_work = if transactions.is_empty() {
             let work = self.internal_proposal_work(proposal_height, prev_block.as_deref());
             if !work.has_work() {
                 info!(
@@ -522,8 +521,10 @@ impl Actor {
                 );
                 return Ok(false);
             }
-            internal_work = Some(work);
-        }
+            Some(work)
+        } else {
+            None
+        };
 
         let da_enabled = self.runtime_da_enabled();
         let mut overflow_transactions = Vec::new();
@@ -591,18 +592,16 @@ impl Actor {
 
         if tx_batch.is_empty() {
             tx_guards.clear();
-            for tx in overflow_transactions.drain(..) {
+            for tx in std::mem::take(&mut overflow_transactions) {
                 if let Err(err) = self.queue.push(tx, self.state.view()) {
                     warn!(?err.err, "failed to requeue oversized transaction");
                 }
             }
             let has_internal_work = internal_work
-                .map(InternalProposalWork::has_work)
-                .unwrap_or_else(|| {
-                    let work = self.internal_proposal_work(proposal_height, prev_block.as_deref());
-                    internal_work = Some(work);
-                    work.has_work()
-                });
+                .get_or_insert_with(|| {
+                    self.internal_proposal_work(proposal_height, prev_block.as_deref())
+                })
+                .has_work();
             if !has_internal_work {
                 info!(
                     height = proposal_height,
@@ -1105,7 +1104,7 @@ impl Actor {
                     warn!(?push_err.err, "failed to requeue transaction after assembly failure");
                 }
             }
-            for tx in overflow_transactions.drain(..) {
+            for tx in std::mem::take(&mut overflow_transactions) {
                 if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
                     continue;
                 }
@@ -1136,7 +1135,7 @@ impl Actor {
         }
 
         tx_guards.clear();
-        for tx in overflow_transactions.drain(..) {
+        for tx in std::mem::take(&mut overflow_transactions) {
             if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
                 continue;
             }
@@ -1269,6 +1268,7 @@ impl Actor {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn proposal_backpressure(&mut self) -> ProposalBackpressure {
         self.proposal_backpressure_at(Instant::now())
     }
@@ -1278,13 +1278,13 @@ impl Actor {
         let queue_state = self.subsystems.propose.backpressure_gate.state();
         let active_pending = self.has_blocking_pending_blocks();
         let mut rbc_backlog = self.has_unresolved_rbc_backlog();
-        let mut relay_backpressure =
-            self.relay_backpressure_active(now, self.rebroadcast_cooldown());
-        if self.backpressure_override_due(now) {
+        let relay_backpressure = if self.backpressure_override_due(now) {
             // Liveness override: don't let prolonged relay/RBC backpressure stall proposals.
             rbc_backlog = false;
-            relay_backpressure = false;
-        }
+            false
+        } else {
+            self.relay_backpressure_active(now, self.rebroadcast_cooldown())
+        };
         ProposalBackpressure {
             queue_state,
             active_pending,
@@ -2019,7 +2019,9 @@ impl Actor {
             return false;
         };
 
-        let has_internal_work = if !has_queue_work {
+        let has_internal_work = if has_queue_work {
+            false
+        } else {
             let prev_block = resolve_prev_block_for_proposal(
                 height,
                 &highest_qc,
@@ -2028,8 +2030,6 @@ impl Actor {
             );
             self.internal_proposal_work(height, prev_block.as_deref())
                 .has_work()
-        } else {
-            false
         };
         if !has_queue_work && !has_internal_work {
             trace!(

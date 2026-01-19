@@ -16,6 +16,7 @@ use norito::json::Value;
 use tokio::{task, time::sleep};
 use toml::Table;
 
+#[allow(clippy::too_many_lines)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sumeragi_view_change_lock_convergence() -> Result<()> {
     init_instruction_registry();
@@ -135,7 +136,7 @@ async fn sumeragi_view_change_lock_convergence() -> Result<()> {
     }
 
     let mut locked_entries = Vec::new();
-    for peer in network.peers().iter() {
+    for peer in network.peers() {
         if !peer.is_running() {
             continue;
         }
@@ -149,6 +150,7 @@ async fn sumeragi_view_change_lock_convergence() -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sumeragi_restart_retains_lock_convergence() -> Result<()> {
     init_instruction_registry();

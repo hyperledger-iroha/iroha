@@ -684,9 +684,7 @@ impl Actor {
                     &commit_topology,
                 );
                 if let Some(qc) = cached_qc.as_ref() {
-                    if !self.qc_cache.contains_key(&qc_key) {
-                        self.qc_cache.insert(qc_key, qc.clone());
-                    }
+                    self.qc_cache.entry(qc_key).or_insert_with(|| qc.clone());
                 }
                 if !allow_quorum_bypass && cached_qc.is_none() {
                     if let (Some(signers), Some(view_signers)) =
@@ -2541,6 +2539,7 @@ impl Actor {
         true
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) fn emit_new_view_vote(
         &mut self,
         height: u64,

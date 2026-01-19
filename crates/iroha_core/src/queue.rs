@@ -1852,14 +1852,13 @@ impl Queue {
                 continue;
             }
 
-            let tx_arc = match self.txs.get(&hash) {
-                Some(entry) => Arc::clone(entry.value()),
-                None => {
-                    #[cfg(test)]
-                    self.vacant_entry_warnings.fetch_add(1, Ordering::Relaxed);
-                    warn!("Looks like we're experiencing a high load");
-                    continue;
-                }
+            let tx_arc = if let Some(entry) = self.txs.get(&hash) {
+                Arc::clone(entry.value())
+            } else {
+                #[cfg(test)]
+                self.vacant_entry_warnings.fetch_add(1, Ordering::Relaxed);
+                warn!("Looks like we're experiencing a high load");
+                continue;
             };
 
             if let Err(e) = self.check_tx(tx_arc.as_ref(), state_view) {
@@ -2801,9 +2800,14 @@ pub mod tests {
 
     #[test]
     fn queue_limits_use_configured_fusion_teu_when_nexus_disabled() {
-        let mut nexus = Nexus::default();
-        nexus.enabled = false;
-        nexus.fusion.exit_teu = 120_000;
+        let nexus = Nexus {
+            enabled: false,
+            fusion: iroha_config::parameters::actual::Fusion {
+                exit_teu: 120_000,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
 
         let limits = QueueLimits::from_nexus(&nexus);
 

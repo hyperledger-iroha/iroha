@@ -12,7 +12,7 @@ use iroha_core::{
     block::ValidBlock,
     kura::Kura,
     query::store::LiveQueryStore,
-    state::{State, StateReadOnly, World},
+    state::{State, World},
     sumeragi::network_topology::Topology as CoreTopology,
     telemetry::StateTelemetry,
 };
@@ -155,6 +155,7 @@ pub fn genesis_with_keypair(
 }
 
 /// Build the default genesis using a custom signing key pair and post-topology instructions.
+#[allow(dead_code)]
 pub fn genesis_with_keypair_and_post_topology(
     extra_transactions: Vec<Vec<InstructionBox>>,
     post_topology_transactions: Vec<Vec<InstructionBox>>,
@@ -239,6 +240,7 @@ fn build_minimal_genesis_with_post_topology(
     block
 }
 
+#[allow(dead_code)]
 fn build_minimal_genesis_unexecuted(
     extra_transactions: Vec<Vec<InstructionBox>>,
     topology: UniqueVec<PeerId>,
@@ -634,64 +636,62 @@ fn apply_preexec_nexus_overrides(
     let gas_account = gas_account_id.to_string();
 
     let mut nexus = nexus_config.cloned().unwrap_or_default();
-    if let Some(policies) = block_policies {
-        if !policies.policies.is_empty() {
-            let mut lanes = Vec::with_capacity(policies.policies.len());
-            let mut dataspace_ids = BTreeSet::new();
-            let mut max_lane = 0u32;
-            for policy in &policies.policies {
-                max_lane = max_lane.max(policy.lane_id.as_u32());
-                dataspace_ids.insert(policy.dataspace_id);
-                lanes.push(iroha_data_model::nexus::LaneConfig {
-                    id: policy.lane_id,
-                    dataspace_id: policy.dataspace_id,
-                    alias: policy.alias.clone(),
-                    proof_scheme: policy.proof_scheme,
-                    ..iroha_data_model::nexus::LaneConfig::default()
+    if let Some(policies) = block_policies
+        && !policies.policies.is_empty()
+    {
+        let mut lanes = Vec::with_capacity(policies.policies.len());
+        let mut dataspace_ids = BTreeSet::new();
+        let mut max_lane = 0u32;
+        for policy in &policies.policies {
+            max_lane = max_lane.max(policy.lane_id.as_u32());
+            dataspace_ids.insert(policy.dataspace_id);
+            lanes.push(iroha_data_model::nexus::LaneConfig {
+                id: policy.lane_id,
+                dataspace_id: policy.dataspace_id,
+                alias: policy.alias.clone(),
+                proof_scheme: policy.proof_scheme,
+                ..iroha_data_model::nexus::LaneConfig::default()
+            });
+        }
+        let lane_count = std::num::NonZeroU32::new(max_lane.saturating_add(1))
+            .ok_or_else(|| eyre!("proof policies must include at least one lane"))?;
+        let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(lane_count, lanes)
+            .map_err(|err| Report::new(err).wrap_err("build lane catalog from proof policies"))?;
+
+        let mut dataspace_entries = nexus.dataspace_catalog.entries().to_vec();
+        let mut existing_ids: BTreeSet<_> =
+            dataspace_entries.iter().map(|entry| entry.id).collect();
+        let mut existing_aliases: BTreeSet<_> = dataspace_entries
+            .iter()
+            .map(|entry| entry.alias.clone())
+            .collect();
+        for dataspace_id in dataspace_ids {
+            if existing_ids.insert(dataspace_id) {
+                let base_alias = format!("policy-ds-{}", u64::from(dataspace_id));
+                let mut alias = base_alias.clone();
+                let mut idx = 1u32;
+                while existing_aliases.contains(&alias) {
+                    alias = format!("{base_alias}-{idx}");
+                    idx = idx.saturating_add(1);
+                }
+                existing_aliases.insert(alias.clone());
+                dataspace_entries.push(iroha_data_model::nexus::DataSpaceMetadata {
+                    id: dataspace_id,
+                    alias,
+                    description: None,
+                    fault_tolerance: 1,
                 });
             }
-            let lane_count = std::num::NonZeroU32::new(max_lane.saturating_add(1))
-                .ok_or_else(|| eyre!("proof policies must include at least one lane"))?;
-            let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(lane_count, lanes)
-                .map_err(|err| {
-                    Report::new(err).wrap_err("build lane catalog from proof policies")
-                })?;
-
-            let mut dataspace_entries = nexus.dataspace_catalog.entries().to_vec();
-            let mut existing_ids: BTreeSet<_> =
-                dataspace_entries.iter().map(|entry| entry.id).collect();
-            let mut existing_aliases: BTreeSet<_> = dataspace_entries
-                .iter()
-                .map(|entry| entry.alias.clone())
-                .collect();
-            for dataspace_id in dataspace_ids {
-                if existing_ids.insert(dataspace_id) {
-                    let base_alias = format!("policy-ds-{}", u64::from(dataspace_id));
-                    let mut alias = base_alias.clone();
-                    let mut idx = 1u32;
-                    while existing_aliases.contains(&alias) {
-                        alias = format!("{base_alias}-{idx}");
-                        idx = idx.saturating_add(1);
-                    }
-                    existing_aliases.insert(alias.clone());
-                    dataspace_entries.push(iroha_data_model::nexus::DataSpaceMetadata {
-                        id: dataspace_id,
-                        alias,
-                        description: None,
-                        fault_tolerance: 1,
-                    });
-                }
-            }
-            let dataspace_catalog =
-                iroha_data_model::nexus::DataSpaceCatalog::new(dataspace_entries).map_err(
-                    |err| Report::new(err).wrap_err("build dataspace catalog from proof policies"),
-                )?;
-
-            nexus.lane_catalog = lane_catalog;
-            nexus.lane_config =
-                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
-            nexus.dataspace_catalog = dataspace_catalog;
         }
+        let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(dataspace_entries)
+            .map_err(|err| {
+            Report::new(err).wrap_err("build dataspace catalog from proof policies")
+        })?;
+
+        nexus.lane_catalog = lane_catalog;
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        nexus.dataspace_catalog = dataspace_catalog;
     }
     nexus.staking.stake_escrow_account_id = gas_account.clone();
     nexus.staking.slash_sink_account_id = gas_account;
@@ -798,6 +798,7 @@ fn rebuild_block_from_parts(
 
 #[cfg(test)]
 mod tests {
+    use iroha_core::state::StateReadOnly;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         isi::{offline::RegisterOfflineAllowance, register::RegisterPeerWithPop},
@@ -1164,10 +1165,12 @@ mod tests {
         let catalog =
             LaneCatalog::new(lane_count, vec![lane0, lane1]).expect("lane catalog should validate");
 
-        let mut nexus = ActualNexus::default();
-        nexus.enabled = true;
-        nexus.lane_catalog = catalog.clone();
-        nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog);
+        let nexus = ActualNexus {
+            enabled: true,
+            lane_catalog: catalog.clone(),
+            lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog),
+            ..Default::default()
+        };
         let policies = iroha_core::da::proof_policy_bundle(&nexus.lane_config);
 
         let (block, genesis_account, topology_vec, genesis_key_pair) =

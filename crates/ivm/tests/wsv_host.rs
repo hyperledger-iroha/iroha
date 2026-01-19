@@ -39,8 +39,10 @@ fn test_balance_syscall_permission() {
     let bob: AccountId = format!("{pk2}@domain").parse().unwrap();
     let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
 
-    let wsv =
-        MockWorldStateView::with_balances(&[((alice.clone(), asset.clone()), Numeric::from(50_u64))]);
+    let wsv = MockWorldStateView::with_balances(&[(
+        (alice.clone(), asset.clone()),
+        Numeric::from(50_u64),
+    )]);
     // Bob has no permission initially
     let mut acc_map = HashMap::new();
     acc_map.insert(1, alice.clone());
@@ -59,8 +61,10 @@ fn test_balance_syscall_permission() {
     assert!(matches!(result, Err(VMError::PermissionDenied)));
 
     // Grant permission and retry using a fresh WSV instance
-    let mut wsv2 =
-        MockWorldStateView::with_balances(&[((alice.clone(), asset.clone()), Numeric::from(50_u64))]);
+    let mut wsv2 = MockWorldStateView::with_balances(&[(
+        (alice.clone(), asset.clone()),
+        Numeric::from(50_u64),
+    )]);
     wsv2.grant_permission(&bob, PermissionToken::ReadAccountAssets(alice.clone()));
     let host = WsvHost::new(wsv2, bob, acc_map, asset_map);
     vm.set_host(host);

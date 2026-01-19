@@ -731,6 +731,7 @@ fn ensure_trusted_peer_list(
     set_trusted_peers_pop(config, trusted_pops);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_vanilla_config(
     chain: &str,
     keypair: &KeyPair,

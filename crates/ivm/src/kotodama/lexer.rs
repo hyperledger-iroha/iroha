@@ -151,7 +151,9 @@ impl<'a> Lexer<'a> {
                 });
             }
         };
-        if matches!(ch, 'r' | 'b') && let Some(tok) = self.lex_prefixed_string()? {
+        if matches!(ch, 'r' | 'b')
+            && let Some(tok) = self.lex_prefixed_string()?
+        {
             return Ok(tok);
         }
         match ch {

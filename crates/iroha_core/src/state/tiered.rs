@@ -764,7 +764,7 @@ impl TieredStateBackend {
             roots.push(root);
         }
         if let Some(root) = self.da_store_root.as_ref()
-            && !roots.iter().any(|existing| *existing == root)
+            && !roots.contains(&root)
         {
             roots.push(root);
         }
@@ -1651,7 +1651,7 @@ impl TieredStateBackend {
         while total_bytes > max_bytes && sizes.len() > 1 {
             let (idx, path, size) = sizes.remove(0);
             if let Some(da_root) = self.da_store_root_for_offload() {
-                self.offload_snapshot_dir(&path, da_root, idx)?;
+                Self::offload_snapshot_dir(&path, da_root, idx)?;
                 self.record_da_churn(DA_CHURN_EVICTED, size);
             } else {
                 fs::remove_dir_all(&path).wrap_err_with(|| {
@@ -1751,20 +1751,20 @@ impl TieredStateBackend {
     fn is_cross_device_link(err: &std::io::Error) -> bool {
         #[cfg(unix)]
         {
-            return err.raw_os_error() == Some(18);
+            err.raw_os_error() == Some(18)
         }
         #[cfg(windows)]
         {
-            return err.raw_os_error() == Some(17);
+            err.raw_os_error() == Some(17)
         }
         #[cfg(not(any(unix, windows)))]
         {
             let _ = err;
-            return false;
+            false
         }
     }
 
-    fn offload_snapshot_dir(&self, source: &Path, dest_root: &Path, idx: u64) -> Result<()> {
+    fn offload_snapshot_dir(source: &Path, dest_root: &Path, idx: u64) -> Result<()> {
         fs::create_dir_all(dest_root).wrap_err_with(|| {
             format!(
                 "failed to prepare DA snapshot root {path}",
@@ -2204,7 +2204,7 @@ mod measured_bytes_impls {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<ConstVec<T>>();
             total = total.saturating_add(self.len().saturating_mul(size_of::<T>()));
-            for item in self.iter() {
+            for item in self {
                 total = total.saturating_add(item.measured_bytes_extra());
             }
             total
@@ -4155,10 +4155,10 @@ mod tests {
 
         let qc1 = dummy_qc(1);
         let qc2 = dummy_qc(2);
-        let qc1_hash = qc1.subject_block_hash.clone();
-        let qc2_hash = qc2.subject_block_hash.clone();
-        world.commit_qcs.insert(qc1_hash.clone(), qc1);
-        world.commit_qcs.insert(qc2_hash.clone(), qc2);
+        let qc1_hash = qc1.subject_block_hash;
+        let qc2_hash = qc2.subject_block_hash;
+        world.commit_qcs.insert(qc1_hash, qc1);
+        world.commit_qcs.insert(qc2_hash, qc2);
 
         backend
             .record_world_snapshot(&world)

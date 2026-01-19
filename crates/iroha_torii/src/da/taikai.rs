@@ -1,5 +1,7 @@
 //! Taikai ingest helpers and anchor integration for DA.
 
+#![allow(clippy::redundant_pub_crate)]
+
 use std::{
     borrow::Cow,
     fs::{self, OpenOptions},
@@ -804,6 +806,7 @@ pub(crate) mod taikai_ingest {
             bytes,
         )
     }
+    #[allow(clippy::too_many_arguments)]
     fn persist_artifact(
         spool_dir: &Path,
         lane_id: LaneId,

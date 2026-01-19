@@ -277,6 +277,10 @@ pub const SYSCALL_SM4_GCM_OPEN: u32 = 0x93;
 pub const SYSCALL_SM4_CCM_SEAL: u32 = 0x94;
 /// SM4-CCM decrypt: returns plaintext Blob TLV or 0 on failure.
 pub const SYSCALL_SM4_CCM_OPEN: u32 = 0x95;
+/// Compute SHA-256 hash of a blob (`&Blob` -> `&Blob`).
+pub const SYSCALL_SHA256_HASH: u32 = 0x96;
+/// Compute SHA3-256 hash of a blob (`&Blob` -> `&Blob`).
+pub const SYSCALL_SHA3_HASH: u32 = 0x97;
 /// Developer helper: copy a TLV from program memory into the INPUT region and return its pointer.
 ///
 /// Expects `x10` to hold a pointer to a valid TLV in program memory (data/heap). The host validates
@@ -365,6 +369,8 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_SM4_GCM_OPEN,
             SYSCALL_SM4_CCM_SEAL,
             SYSCALL_SM4_CCM_OPEN,
+            SYSCALL_SHA256_HASH,
+            SYSCALL_SHA3_HASH,
         ]);
         // Codec helpers
         v.push(SYSCALL_JSON_ENCODE);
@@ -524,6 +530,8 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_SM4_GCM_OPEN => "SM4_GCM_OPEN",
         SYSCALL_SM4_CCM_SEAL => "SM4_CCM_SEAL",
         SYSCALL_SM4_CCM_OPEN => "SM4_CCM_OPEN",
+        SYSCALL_SHA256_HASH => "SHA256_HASH",
+        SYSCALL_SHA3_HASH => "SHA3_HASH",
         // Hardware / helpers
         SYSCALL_PROVE_EXECUTION => "PROVE_EXECUTION",
         SYSCALL_VERIFY_PROOF => "VERIFY_PROOF",

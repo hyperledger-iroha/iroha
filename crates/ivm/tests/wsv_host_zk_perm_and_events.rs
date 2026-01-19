@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use iroha_crypto::Hash;
-use iroha_primitives::numeric::Numeric;
 use iroha_data_model::proof::VerifyingKeyId;
+use iroha_primitives::numeric::Numeric;
 use ivm::{
     IVM, IVMHost, Memory, PointerType,
     mock_wsv::{

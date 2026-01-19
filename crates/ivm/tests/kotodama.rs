@@ -1880,6 +1880,8 @@ fn manifest_includes_entrypoints_and_features() {
             }
 
             kotoage fn run() permission(Admin) {
+                setvl(8);
+                assert(true);
                 let current = counter;
                 if current > 0 {
                     info("counter tick");
@@ -2004,7 +2006,7 @@ fn manifest_emits_wildcard_hints_when_isi_targets_are_opaque() {
             transfer_domain(
                 account_id("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"),
                 domain("wonderland"),
-                account_id("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland")
+                authority()
             );
         }
     "#;
@@ -2200,7 +2202,11 @@ seiyaku MyC {
     zk: true;
     vector: true;
   }
-  hajimari() { let a = 1; }
+  hajimari() {
+    setvl(8);
+    assert(true);
+    let a = 1;
+  }
 }
 "#;
     let code = Compiler::new()

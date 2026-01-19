@@ -46,7 +46,7 @@ Contents
 - `07_set_detail_authority.ko`: Write account detail for `authority()` using the prelude macros.
 - `08_call_transfer_asset.ko`: Direct builtin `transfer_asset(...)` usage from a contract entrypoint.
 - `09_struct_and_state.ko`: Parsed-only examples for struct/state declarations.
-- `10_meta_header.ko`: seiyaku-level `meta {}` setting IVM header fields.
+- `10_meta_header.ko`: seiyaku-level `meta {}` setting IVM header fields and emitting `SETVL`/`ASSERT` to exercise vector/zk flags.
 - `11_detail_and_transfer.ko`: Pointer-ABI typed calls for metadata write and asset transfer.
 - `12_nft_flow.ko`: Create an NFT and transfer it to another account.
 - `13_register_and_mint.ko`: Register a new asset and mint to an account.
@@ -59,7 +59,7 @@ Contents
 Notes
 - Kotodama targets the Iroha Virtual Machine (IVM) and produces `.to` bytecode. RISC‑V–like encodings in the implementation are IVM’s mixed-format details and not a hardware target.
 - Pointer-ABI typed constructors (and their `account!(...)`, `name!(...)`, `json!(...)`, `nft_id!(...)`, `asset_definition!(...)` macro aliases) are compiled into Norito-encoded TLV blobs and passed to the host as pointers.
-- Seiyaku `meta {}` influences header fields (`abi_version`, `vector_length`, `max_cycles`) and mode bits (`zk`, `vector`). When omitted, the compiler defaults `abi_version` to 1 and leaves other fields at their option defaults.
+- Seiyaku `meta {}` influences header fields (`abi_version`, `vector_length`, `max_cycles`) and mode bits (`zk`, `vector`). The compiler validates that `zk`/`vector` flags match the opcodes actually emitted. When omitted, the compiler defaults `abi_version` to 1 and leaves other fields at their option defaults.
 Dynamic bounds (feature-gated)
 - Enable the `kotodama_dynamic_bounds` feature on the `ivm` crate to accept non-literal bounds for `.take(n)` and `.range(start, end)`.
 

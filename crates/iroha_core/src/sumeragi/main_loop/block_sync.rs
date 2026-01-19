@@ -92,7 +92,7 @@ impl Actor {
         self.should_drop_future_consensus_message(height, view, "BlockSyncUpdate")
     }
 
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
     pub(super) fn handle_block_sync_update(
         &mut self,
         update: super::message::BlockSyncUpdate,
@@ -1304,7 +1304,6 @@ impl Actor {
         if let Some((block, msg)) = inflight_response {
             self.send_fetch_pending_block_response(peer.clone(), msg);
             self.send_fetch_pending_block_rbc_init(peer.clone(), &block);
-            responded = true;
             return Ok(());
         }
 
@@ -1358,7 +1357,6 @@ impl Actor {
         if let Some((block, msg)) = pending_response {
             self.send_fetch_pending_block_response(peer.clone(), msg);
             self.send_fetch_pending_block_rbc_init(peer.clone(), &block);
-            responded = true;
             return Ok(());
         }
 

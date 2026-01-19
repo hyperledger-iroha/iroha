@@ -4303,10 +4303,8 @@ pub mod message {
             let state = state_with_consensus_key_pops(&[&kp_leader, &kp_validator]);
             let tip_height = u64::try_from(state.view().height()).unwrap_or(0);
             let tip_hash = state.view().latest_block_hash();
-            let (next_height, prev_hash) = match tip_hash {
-                Some(hash) => (tip_height.saturating_add(1), Some(hash)),
-                None => (1, None),
-            };
+            let (next_height, prev_hash) =
+                tip_hash.map_or((1, None), |hash| (tip_height.saturating_add(1), Some(hash)));
 
             let next_block: SignedBlock = unique_dummy_block(kp_leader.private_key(), |header| {
                 let height = NonZeroU64::new(next_height).expect("non-zero height");

@@ -913,7 +913,7 @@ impl ConsensusIngressLimiter {
         let base_ms = u128::from(iroha_config::parameters::defaults::sumeragi::BLOCK_TIME_MS)
             .max(1);
         let block_ms = block_time.as_millis().max(1);
-        let scale = (base_ms + block_ms - 1) / block_ms;
+        let scale = base_ms.div_ceil(block_ms);
         u32::try_from(scale).unwrap_or(u32::MAX).max(1)
     }
 
@@ -954,6 +954,7 @@ impl ConsensusIngressLimiter {
         configured.max(padded)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn new(
         msg_rate: Option<BucketConfig>,
         bytes_rate: Option<BucketConfig>,
@@ -1066,6 +1067,7 @@ impl ConsensusIngressLimiter {
 }
 
 impl PeerIngressState {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         now: Instant,
         msg_rate: Option<BucketConfig>,
@@ -1623,13 +1625,13 @@ impl NetworkRelayShared {
             };
             if let Some(reason) = reason {
                 #[cfg(feature = "telemetry")]
-                if let Some(metrics) = iroha_telemetry::metrics::global() {
-                    if let Some(topic) = Self::consensus_ingress_topic_label(&msg) {
-                        metrics
-                            .consensus_ingress_drop_total
-                            .with_label_values(&[topic, reason.label()])
-                            .inc();
-                    }
+                if let Some(metrics) = iroha_telemetry::metrics::global()
+                    && let Some(topic) = Self::consensus_ingress_topic_label(&msg)
+                {
+                    metrics
+                        .consensus_ingress_drop_total
+                        .with_label_values(&[topic, reason.label()])
+                        .inc();
                 }
                 let (kind, height, view) = match &msg {
                     SumeragiBlock(data) => Self::block_message_meta(data.as_ref()),
@@ -2603,7 +2605,7 @@ mod network_relay_tests {
 
     #[test]
     fn consensus_ingress_bulk_messages_use_bulk_bucket() {
-        fn assert_bulk(peer: &Peer, msg: iroha_core::NetworkMessage) {
+        fn assert_bulk(peer: &Peer, msg: &iroha_core::NetworkMessage) {
             let standard = consensus_params_msg();
             let mut limiter = ConsensusIngressLimiter::new(
                 Some(BucketConfig {
@@ -2632,19 +2634,19 @@ mod network_relay_tests {
                 limiter.should_drop(peer, &standard, 1),
                 Some(ConsensusIngressDropReason::Rate)
             );
-            assert_eq!(limiter.should_drop(peer, &msg, 1), None);
-            assert_eq!(limiter.should_drop(peer, &msg, 1), None);
+            assert_eq!(limiter.should_drop(peer, msg, 1), None);
+            assert_eq!(limiter.should_drop(peer, msg, 1), None);
             assert_eq!(
-                limiter.should_drop(peer, &msg, 1),
+                limiter.should_drop(peer, msg, 1),
                 Some(ConsensusIngressDropReason::Rate)
             );
         }
 
         let peer = sample_peer();
-        assert_bulk(&peer, block_created_msg());
-        assert_bulk(&peer, block_sync_update_msg());
-        assert_bulk(&peer, exec_witness_msg());
-        assert_bulk(&peer, rbc_chunk_msg(0x01, 2, 0));
+        assert_bulk(&peer, &block_created_msg());
+        assert_bulk(&peer, &block_sync_update_msg());
+        assert_bulk(&peer, &exec_witness_msg());
+        assert_bulk(&peer, &rbc_chunk_msg(0x01, 2, 0));
     }
 
     #[test]
@@ -6400,10 +6402,10 @@ fn npos_validator_status_counts<'a>(
         match record.status {
             PublicLaneValidatorStatus::Active => {
                 active_total = active_total.saturating_add(1);
-                if let Some(pk) = record.validator.try_signatory() {
-                    if pk.algorithm() == Algorithm::BlsNormal {
-                        active_bls = active_bls.saturating_add(1);
-                    }
+                if let Some(pk) = record.validator.try_signatory()
+                    && pk.algorithm() == Algorithm::BlsNormal
+                {
+                    active_bls = active_bls.saturating_add(1);
                 }
             }
             PublicLaneValidatorStatus::PendingActivation(_) => {
@@ -7373,7 +7375,7 @@ mod tests {
                 .allowed_signing
                 .iter()
                 .filter_map(|algo| CurveId::try_from_algorithm(*algo).ok())
-                .map(|curve| curve.as_u8())
+                .map(CurveId::as_u8)
                 .collect::<Vec<_>>();
             curve_ids.sort_unstable();
             curve_ids.dedup();

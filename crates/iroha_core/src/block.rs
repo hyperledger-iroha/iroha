@@ -638,7 +638,7 @@ fn intern_access(access: &[crate::pipeline::access::AccessSet]) -> (usize, Vec<A
         let mut writes: SmallVec<[u32; 8]> = SmallVec::new();
         let has_global = aset.read_keys.contains(GLOBAL_WILDCARD_KEY)
             || aset.write_keys.contains(GLOBAL_WILDCARD_KEY);
-        let mut add_state_wildcard = |key: &str, reads: &mut SmallVec<[u32; 8]>| {
+        let add_state_wildcard = |key: &str, reads: &mut SmallVec<[u32; 8]>| {
             if let Some(base) = state_map_entry_base(key) {
                 if let Some(wildcard_key) = wildcard_keys.get(base) {
                     reads.push(*map.get(wildcard_key.as_str()).expect("key interned"));
@@ -660,11 +660,7 @@ fn intern_access(access: &[crate::pipeline::access::AccessSet]) -> (usize, Vec<A
             add_state_wildcard(key, &mut reads);
         }
         for key in aset.write_keys.iter() {
-            if state_wildcard_base(key).is_some() {
-                writes.push(*map.get(key.as_str()).expect("all keys interned"));
-            } else {
-                writes.push(*map.get(key.as_str()).expect("all keys interned"));
-            }
+            writes.push(*map.get(key.as_str()).expect("all keys interned"));
             add_state_wildcard(key, &mut reads);
         }
         if has_global {

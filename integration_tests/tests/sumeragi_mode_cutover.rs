@@ -309,6 +309,7 @@ async fn permissioned_to_npos_cutover_switches_mode_at_activation_height() -> Re
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn staged_cutover_recomputes_consensus_fingerprint() -> Result<()> {
     init_instruction_registry();

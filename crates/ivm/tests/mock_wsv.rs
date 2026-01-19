@@ -64,7 +64,10 @@ fn test_mock_wsv_rejects_scaled_numeric() {
         asset.clone(),
         Numeric::new(25_u64, 2)
     ));
-    assert_eq!(wsv.balance(acc1.clone(), asset.clone()), Numeric::from(1_000_u64));
+    assert_eq!(
+        wsv.balance(acc1.clone(), asset.clone()),
+        Numeric::from(1_000_u64)
+    );
     assert_eq!(wsv.balance(acc2.clone(), asset), Numeric::from(0_u64));
 }
 
@@ -151,8 +154,7 @@ fn test_balance_permission() {
     let acc2: AccountId = format!("{pk2}@{d}").parse().unwrap();
     let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
 
-    let mut wsv =
-        MockWorldStateView::with_balances(&[((acc1.clone(), asset.clone()), num(100))]);
+    let mut wsv = MockWorldStateView::with_balances(&[((acc1.clone(), asset.clone()), num(100))]);
     wsv.grant_permission(&acc1, PermissionToken::ReadAccountAssets(acc1.clone()));
 
     // acc2 should not see acc1's balance without permission

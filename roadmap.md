@@ -38,8 +38,8 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Implement `kotoba { ... }` localization blocks beyond the current no-op stub.
  - [x] Treat numeric aliases (`fixed_u128`, `Amount`, `Balance`) as distinct `Numeric` scalars (mantissa+scale) with alias‑preserving arithmetic.
  - [x] Implement deterministic Numeric syscalls for `fixed_u128`/`Amount`/`Balance` (scale‑aware checked arithmetic, range‑checked int casts, signed mantissas).
- - [ ] Re-scope numeric aliases + Numeric syscalls to unsigned scale=0 for first release (reject negative/fractional) and update host/CoreHost/MockWsv paths plus syscall docs.
- - [ ] Update Kotodama numeric literal validation + IR lowering for unsigned scale=0, refresh numeric syscall/Kotodama literal tests, and re-run `cargo test -p ivm`.
+ - [x] Re-scope numeric aliases + Numeric syscalls to unsigned scale=0 for first release (reject negative/fractional) and update host/CoreHost/MockWsv paths plus syscall docs.
+ - [x] Update Kotodama numeric literal validation + IR lowering for unsigned scale=0, refresh numeric syscall/Kotodama literal tests, and re-run `cargo test -p ivm`.
  - [x] Include literal map keys (including pointer-keyed entries) and literal trigger specs in access hints; lint on non-literal trigger specs and state-map keys.
  - [x] Surface skipped-hint diagnostics for dynamic state paths and opaque host reads; skip hints when coverage is incomplete.
  - [x] Add access-hint coverage reporting beyond lints (compiler/manifest summary of skipped coverage).
