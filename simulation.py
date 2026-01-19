@@ -8,7 +8,7 @@ import os
 OUT_DIR = "target/tmp_localnet"
 CLIENT_CONFIG = os.path.join(OUT_DIR, "client.toml")
 IROHA_BIN = "target-codex/debug/iroha"
-STATUS_URL = "http://127.0.0.1:29080/status"
+STATUS_URL = "http://127.0.0.1:10080/status"
 
 def get_status():
     try:

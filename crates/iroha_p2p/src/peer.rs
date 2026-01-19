@@ -601,7 +601,7 @@ mod handshake_config_tests {
             NonZeroU32::new(64 * 1024).expect("memory"),
             NonZeroU32::new(2).expect("time"),
             NonZeroU32::new(1).expect("lanes"),
-            5,
+            2,
             Duration::from_secs(900),
             Duration::from_secs(120),
         );

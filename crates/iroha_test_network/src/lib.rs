@@ -2790,16 +2790,66 @@ fn merge_tables(dst: &mut Table, src: &Table) {
     }
 }
 
-// Deterministic BLS keypair so consensus validation doesn't reject profile detection defaults.
+// Deterministic BLS keypair/PoP so consensus validation doesn't reject profile detection defaults.
 const SORA_PROFILE_BLS_PUBLIC_KEY: &str = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2";
 const SORA_PROFILE_BLS_PRIVATE_KEY: &str =
     "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F";
 static SORA_PROFILE_BLS_KEYPAIR: OnceLock<KeyPair> = OnceLock::new();
+static SORA_PROFILE_BLS_POP_HEX: OnceLock<String> = OnceLock::new();
 const SORA_PROFILE_STREAM_PUBLIC_KEY: &str =
     "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B";
 const SORA_PROFILE_STREAM_PRIVATE_KEY: &str =
     "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E31924E101D6B1FB83";
 static SORA_PROFILE_STREAM_KEYPAIR: OnceLock<KeyPair> = OnceLock::new();
+
+fn sora_profile_bls_pop_hex() -> &'static str {
+    SORA_PROFILE_BLS_POP_HEX.get_or_init(|| {
+        let bls_keypair = SORA_PROFILE_BLS_KEYPAIR.get_or_init(|| {
+            let public_key: PublicKey = SORA_PROFILE_BLS_PUBLIC_KEY
+                .parse()
+                .expect("sora profile BLS public key should parse");
+            let private_key: PrivateKey = SORA_PROFILE_BLS_PRIVATE_KEY
+                .parse()
+                .expect("sora profile BLS private key should parse");
+            KeyPair::new(public_key, private_key).expect("sora profile BLS keypair should match")
+        });
+        let pop = iroha_crypto::bls_normal_pop_prove(bls_keypair.private_key())
+            .expect("sora profile BLS PoP should generate");
+        format!("0x{}", hex_lower(&pop))
+    })
+}
+
+fn ensure_sora_profile_trusted_peer_pop(table: &mut Table) {
+    let mut pop_entry = Table::new();
+    pop_entry.insert(
+        "public_key".into(),
+        Value::String(SORA_PROFILE_BLS_PUBLIC_KEY.to_string()),
+    );
+    pop_entry.insert(
+        "pop_hex".into(),
+        Value::String(sora_profile_bls_pop_hex().to_string()),
+    );
+    let entry = Value::Table(pop_entry);
+
+    match table.get_mut("trusted_peers_pop") {
+        Some(Value::Array(entries)) => {
+            let has_entry = entries.iter().any(|entry| {
+                entry
+                    .as_table()
+                    .and_then(|table| table.get("public_key"))
+                    .and_then(Value::as_str)
+                    .is_some_and(|pk| pk == SORA_PROFILE_BLS_PUBLIC_KEY)
+            });
+            if !has_entry {
+                entries.push(entry);
+            }
+        }
+        None => {
+            table.insert("trusted_peers_pop".into(), Value::Array(vec![entry]));
+        }
+        Some(_) => {}
+    }
+}
 
 fn sora_profile_detection_defaults() -> Table {
     let bls_keypair = SORA_PROFILE_BLS_KEYPAIR.get_or_init(|| {
@@ -2822,7 +2872,7 @@ fn sora_profile_detection_defaults() -> Table {
     });
     let p2p_literal = socket_addr!(127.0.0.1:1337).to_literal();
     let torii_literal = socket_addr!(127.0.0.1:8080).to_literal();
-    Table::new()
+    let mut table = Table::new()
         .write("chain", chain_id().to_string())
         .write("public_key", bls_keypair.public_key().to_string())
         .write(
@@ -2844,6 +2894,9 @@ fn sora_profile_detection_defaults() -> Table {
             ["genesis", "public_key"],
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().to_string(),
         )
+        ;
+    ensure_sora_profile_trusted_peer_pop(&mut table);
+    table
 }
 
 fn apply_streaming_identity_defaults_for_detection(merged: &mut Table) {
@@ -2870,6 +2923,7 @@ fn merged_sora_profile_detection_config(config_layers: &[Table]) -> Table {
         merge_tables(&mut merged, layer);
     }
     apply_streaming_identity_defaults_for_detection(&mut merged);
+    ensure_sora_profile_trusted_peer_pop(&mut merged);
     merged
 }
 
@@ -5633,6 +5687,14 @@ mod sora_profile_tests {
             config.streaming.key_material.identity().algorithm(),
             iroha_crypto::Algorithm::Ed25519
         );
+        let trusted = config.common.trusted_peers.value();
+        let myself_pk = trusted.myself.id().public_key().clone();
+        let pop = trusted
+            .pops
+            .get(&myself_pk)
+            .expect("sora profile default must provide PoP for self");
+        iroha_crypto::bls_normal_pop_verify(&myself_pk, pop)
+            .expect("sora profile default PoP should verify");
     }
 
     #[test]
@@ -5657,6 +5719,50 @@ mod sora_profile_tests {
             config.streaming.key_material.identity().algorithm(),
             iroha_crypto::Algorithm::Ed25519
         );
+    }
+
+    #[test]
+    fn sora_profile_detection_pop_survives_trusted_peers_pop_override() {
+        let other =
+            KeyPair::from_seed(b"sora-profile-pop-merge".to_vec(), Algorithm::BlsNormal);
+        let other_pop = iroha_crypto::bls_normal_pop_prove(other.private_key())
+            .expect("BLS PoP generation");
+        let other_pk = other.public_key().to_string();
+
+        let mut pop_entry = Table::new();
+        pop_entry.insert("public_key".into(), Value::String(other_pk.clone()));
+        pop_entry.insert(
+            "pop_hex".into(),
+            Value::String(format!("0x{}", hex_lower(&other_pop))),
+        );
+        let mut layer = Table::new();
+        layer.insert(
+            "trusted_peers_pop".into(),
+            Value::Array(vec![Value::Table(pop_entry)]),
+        );
+
+        let merged = merged_sora_profile_detection_config(&[layer]);
+        let entries = merged
+            .get("trusted_peers_pop")
+            .and_then(Value::as_array)
+            .expect("trusted_peers_pop array");
+        let mut has_default = false;
+        let mut has_other = false;
+        for entry in entries {
+            let Some(table) = entry.as_table() else {
+                continue;
+            };
+            if let Some(pk) = table.get("public_key").and_then(Value::as_str) {
+                if pk == SORA_PROFILE_BLS_PUBLIC_KEY {
+                    has_default = true;
+                }
+                if pk == other_pk {
+                    has_other = true;
+                }
+            }
+        }
+        assert!(has_default, "sora profile PoP should be retained");
+        assert!(has_other, "caller-supplied PoP should be retained");
     }
 
     #[test]

@@ -1175,6 +1175,8 @@ pub struct Network {
     pub require_sm_openssl_preview_match: bool,
     /// Idle connection timeout.
     pub idle_timeout: Duration,
+    /// Delay outbound peer dials after startup.
+    pub connect_startup_delay: Duration,
     /// Interval between peer gossip batches.
     pub peer_gossip_period: Duration,
     /// Maximum interval between peer gossip batches (idle backoff ceiling).

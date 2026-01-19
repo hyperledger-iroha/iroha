@@ -5502,7 +5502,24 @@ impl Actor {
 
     fn rbc_roster_for_session(&self, key: super::rbc_store::SessionKey) -> Vec<PeerId> {
         let (consensus_mode, _mode_tag, _prf_seed) = self.consensus_context_for_height(key.1);
-        self.roster_for_vote_with_mode(key.0, key.1, key.2, consensus_mode)
+        let mut roster = self.roster_for_vote_with_mode(key.0, key.1, key.2, consensus_mode);
+        if roster.is_empty() {
+            let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+            if key.1 <= committed_height.saturating_add(1) {
+                let view = self.state.view();
+                let fallback = derive_active_topology_for_mode(
+                    &view,
+                    self.common_config.trusted_peers.value(),
+                    self.common_config.peer.id(),
+                    consensus_mode,
+                );
+                drop(view);
+                if !fallback.is_empty() {
+                    roster = fallback;
+                }
+            }
+        }
+        roster
     }
 
     fn rbc_session_roster(&self, key: super::rbc_store::SessionKey) -> Vec<PeerId> {
@@ -10359,7 +10376,9 @@ impl Actor {
 
     fn prune_stale_view_state(&mut self, height: u64, min_view: u64) {
         let da_enabled = self.runtime_da_enabled();
-        // Keep DA availability state across view changes until the payload is locally available.
+        // Keep DA availability state across view changes until payloads are durably resolved.
+        // In DA mode, retain stale pending payloads (as aborted) so block sync can still
+        // serve missing payloads after view changes.
         let stale_pending: Vec<_> = self
             .pending
             .pending_blocks
@@ -10368,10 +10387,20 @@ impl Actor {
             .map(|(hash, _)| *hash)
             .collect();
         let mut pending_removed = 0usize;
+        let mut pending_retained = 0usize;
         for hash in stale_pending {
-            if let Some(pending) = self.pending.pending_blocks.remove(&hash) {
-                let payload_available = self.block_payload_available_locally(hash);
-                if !da_enabled || payload_available {
+            if let Some(mut pending) = self.pending.pending_blocks.remove(&hash) {
+                let committed = self.kura.get_block_height_by_hash(hash).is_some();
+                let invalid = matches!(pending.validation_status, ValidationStatus::Invalid);
+                if da_enabled && !committed && !invalid {
+                    if !pending.aborted {
+                        pending.mark_aborted();
+                    }
+                    self.pending.pending_blocks.insert(hash, pending);
+                    pending_retained = pending_retained.saturating_add(1);
+                    continue;
+                }
+                if !da_enabled || committed || invalid {
                     self.clean_rbc_sessions_for_block(hash, pending.height);
                 }
                 pending_removed = pending_removed.saturating_add(1);
@@ -10411,11 +10440,12 @@ impl Actor {
             rbc_removed = rbc_removed.saturating_add(1);
         }
 
-        if pending_removed > 0 || missing_removed > 0 || rbc_removed > 0 {
+        if pending_removed > 0 || pending_retained > 0 || missing_removed > 0 || rbc_removed > 0 {
             info!(
                 height,
                 min_view,
                 pending_removed,
+                pending_retained,
                 missing_removed,
                 rbc_removed,
                 "pruned stale view state after view change"

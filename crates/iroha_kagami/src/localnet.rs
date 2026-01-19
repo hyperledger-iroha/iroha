@@ -312,6 +312,8 @@ const LOCALNET_MSG_CHANNEL_CAP_BLOCKS: usize = 512;
 const LOCALNET_CONTROL_MSG_CHANNEL_CAP: usize = 1024;
 /// Capacity for the inbound P2P subscriber queue in localnet configs.
 const LOCALNET_P2P_SUBSCRIBER_QUEUE_CAP: usize = 16_384;
+/// Delay outbound P2P dials at startup to avoid connection refused spam in localnet.
+const LOCALNET_CONNECT_STARTUP_DELAY_MS: u64 = 2_000;
 /// Default consensus ingress rate cap (msgs/sec) for localnet.
 const LOCALNET_CONSENSUS_INGRESS_RATE_PER_SEC: u32 = 600;
 /// Default consensus ingress burst cap (msgs) for localnet.
@@ -1314,6 +1316,13 @@ fn render_peer_config(
         Value::Integer(
             i64::try_from(LOCALNET_P2P_SUBSCRIBER_QUEUE_CAP)
                 .expect("LOCALNET_P2P_SUBSCRIBER_QUEUE_CAP fits i64"),
+        ),
+    );
+    network.insert(
+        "connect_startup_delay_ms".into(),
+        Value::Integer(
+            i64::try_from(LOCALNET_CONNECT_STARTUP_DELAY_MS)
+                .expect("LOCALNET_CONNECT_STARTUP_DELAY_MS fits i64"),
         ),
     );
     network.insert(
@@ -2378,6 +2387,11 @@ mod tests {
             TomlSource::from_file(temp.path().join("peer0.toml")).expect("read generated config");
         let parsed = actual::Root::from_toml_source(source).expect("generated config must parse");
 
+        assert_eq!(
+            parsed.network.connect_startup_delay,
+            Duration::from_millis(LOCALNET_CONNECT_STARTUP_DELAY_MS),
+            "localnet should delay outbound dials to reduce startup connect errors"
+        );
         assert_eq!(
             parsed.sumeragi.msg_channel_cap_votes, LOCALNET_MSG_CHANNEL_CAP_VOTES,
             "localnet should raise vote channel caps to avoid RBC stalls"

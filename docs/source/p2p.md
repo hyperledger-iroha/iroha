@@ -208,6 +208,7 @@ transaction_gossip_size = 500
 transaction_gossip_period_ms = 1000
 transaction_gossip_resend_ticks = 3
 idle_timeout_ms = 60000
+connect_startup_delay_ms = 0
 # Trust decay/penalties for gossip senders (decays toward 0)
 trust_decay_half_life_ms = 300000  # halve negative scores every 5 minutes
 trust_penalty_bad_gossip = 5       # penalty applied per invalid trust gossip
@@ -222,6 +223,8 @@ trust_min_score = -20              # drop trust gossip at or below this score
 - Transaction gossip pauses when relay backpressure is active (recent subscriber-queue drops) and
   resumes after `transaction_gossip_period_ms * transaction_gossip_resend_ticks` to avoid
   flooding under load.
+- `connect_startup_delay_ms` delays outbound dials immediately after startup to reduce
+  connection-refused noise when peers come up in waves (localnet or orchestrated rollouts).
 - NEW_VIEW votes are sent to the deterministic collector set for the current view and always
   include the leader; if the collector set is below commit quorum, the sender falls back to the
   full commit topology. This provides redundancy without relying on full broadcast in the steady state.
