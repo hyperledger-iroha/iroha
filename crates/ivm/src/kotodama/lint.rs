@@ -318,19 +318,18 @@ fn lint_state_path_stmt(stmt: &Statement, warnings: &mut Vec<LintWarning>) {
 fn lint_state_path_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
     match expr {
         Expr::Call { name, args } => {
-            if matches!(name.as_str(), "state_get" | "state_set" | "state_del") {
-                if let Some(path) = args.first() {
-                    if !is_literal_state_path(path) {
-                        warnings.push(LintWarning {
-                            code: "nonliteral-state-path",
-                            message: LintMessage::Custom {
-                                message: format!(
-                                    "{name} uses a non-literal path; access hints will be skipped"
-                                ),
-                            },
-                        });
-                    }
-                }
+            if matches!(name.as_str(), "state_get" | "state_set" | "state_del")
+                && let Some(path) = args.first()
+                && !is_literal_state_path(path)
+            {
+                warnings.push(LintWarning {
+                    code: "nonliteral-state-path",
+                    message: LintMessage::Custom {
+                        message: format!(
+                            "{name} uses a non-literal path; access hints will be skipped"
+                        ),
+                    },
+                });
             }
             for arg in args {
                 lint_state_path_expr(arg, warnings);
@@ -1224,7 +1223,7 @@ fn lint_trigger_specs_in_expr(expr: &Expr, func_name: &str, warnings: &mut Vec<L
     match expr {
         Expr::Call { name, args } => {
             if matches!(name.as_str(), "create_trigger" | "register_trigger") {
-                let literal = args.first().map_or(false, is_literal_trigger_spec);
+                let literal = args.first().is_some_and(is_literal_trigger_spec);
                 if !literal {
                     warnings.push(LintWarning {
                         code: "nonliteral-trigger-spec",

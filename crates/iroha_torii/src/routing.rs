@@ -5772,7 +5772,7 @@ pub async fn handle_get_contract_state(
     let view = state.view();
     let storage = view.world().smart_contract_state();
 
-    let mut encode_entry = |path: &str, value: Option<&Vec<u8>>, found: bool| {
+    let encode_entry = |path: &str, value: Option<&Vec<u8>>, found: bool| {
         if !include_value {
             return ContractStateEntry {
                 path: path.to_string(),

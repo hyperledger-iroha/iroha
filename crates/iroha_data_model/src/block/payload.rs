@@ -174,20 +174,28 @@ impl SignedBlock {
         if !self.payload.transactions.is_empty() {
             return false;
         }
-        if let Some(result) = self.result.as_ref() {
-            if !result.time_triggers.is_empty() {
-                return false;
-            }
+        if self
+            .result
+            .as_ref()
+            .is_some_and(|result| !result.time_triggers.is_empty())
+        {
+            return false;
         }
-        if let Some(bundle) = self.payload.da_commitments.as_ref() {
-            if !bundle.is_empty() {
-                return false;
-            }
+        if self
+            .payload
+            .da_commitments
+            .as_ref()
+            .is_some_and(|bundle| !bundle.is_empty())
+        {
+            return false;
         }
-        if let Some(bundle) = self.payload.da_pin_intents.as_ref() {
-            if !bundle.is_empty() {
-                return false;
-            }
+        if self
+            .payload
+            .da_pin_intents
+            .as_ref()
+            .is_some_and(|bundle| !bundle.is_empty())
+        {
+            return false;
         }
         true
     }

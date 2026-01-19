@@ -1480,13 +1480,6 @@ fn decode_varint_from_slice(bytes: &[u8]) -> Result<(u64, usize), Error> {
 }
 
 #[inline]
-fn read_varint_len_from_slice(bytes: &[u8]) -> Result<(usize, usize), Error> {
-    let (value, used) = decode_varint_from_slice(bytes)?;
-    record_slice_access(bytes, used);
-    let len = usize::try_from(value).map_err(|_| Error::LengthMismatch)?;
-    Ok((len, used))
-}
-
 unsafe fn decode_varint_from_ptr(ptr: *const u8) -> Result<(u64, usize), Error> {
     let (payload, offset) = payload_bytes_with_offset(ptr)?;
     let slice = &payload[offset..];
@@ -4592,17 +4585,6 @@ pub mod stream {
         pub(crate) fn read_varint_len(&mut self) -> Result<usize, Error> {
             let raw = self.read_varint_u64()?;
             u64_to_usize(raw)
-        }
-
-        pub(crate) fn skip_exact(&mut self, len: usize) -> io::Result<()> {
-            let mut remaining = len;
-            let mut buf = [0u8; 1024];
-            while remaining > 0 {
-                let chunk = remaining.min(buf.len());
-                self.read_exact(&mut buf[..chunk])?;
-                remaining -= chunk;
-            }
-            Ok(())
         }
 
         pub(crate) fn finalize(self, expected_len: usize, checksum: u64) -> Result<R, Error> {

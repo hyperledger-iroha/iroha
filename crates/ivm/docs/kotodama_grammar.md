@@ -65,7 +65,7 @@ See examples under `crates/ivm/docs/examples`.
 Notes:
 - Boolean literals `true`/`false` are recognized and type‑checked as `bool`. [Implemented]
 - `++` is only usable in `for` headers as increment sugar. [Implemented]
-- Decimal fractions (e.g., `1.25`) are parsed as numeric literals and require a numeric alias type (`fixed_u128`/`Amount`/`Balance`).
+- Decimal fractions (e.g., `1.25`) are parsed but rejected in v1; numeric aliases (`fixed_u128`/`Amount`/`Balance`) accept unsigned integer literals only (scale = 0).
 
 ## Program Structure
 
@@ -136,7 +136,7 @@ ReturnTy   = "->" Type ;
 - If a function declares a non-`unit` return type, all control‑flow paths must return a value. [Enforced]
 - If a function omits a return type, `return expr;` is rejected — declaring an explicit return type is required to return a value. [Enforced]
 - Parameter typing:
-  - Recognized primitives: `int`/`i64`/`number`, `bool`, `string`, and numeric aliases (`fixed_u128`, `Amount`, `Balance`) are enforced in expressions. Numeric aliases are distinct `Numeric`-backed scalars (mantissa+scale); Kotodama supports signed, fractional literals, arithmetic preserves the alias, and mixing alias types requires converting through an `int` binding. Conversions to/from `int` are checked at runtime (integral, range-limited).
+  - Recognized primitives: `int`/`i64`/`number`, `bool`, `string`, and numeric aliases (`fixed_u128`, `Amount`, `Balance`) are enforced in expressions. Numeric aliases are distinct `Numeric`-backed scalars restricted to unsigned, scale‑0 values; decimal literals are rejected in v1. Arithmetic preserves the alias, and mixing alias types requires converting through an `int` binding. Conversions to/from `int` are checked at runtime (range‑limited, non‑negative).
   - Unknown identifiers (e.g., `AccountId`, `Asset`) are treated as opaque handle types; they cannot be used in arithmetic but can be compared for equality. [Enforced]
 
 ## Blocks and Statements [Implemented]

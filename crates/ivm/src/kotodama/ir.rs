@@ -108,12 +108,12 @@ pub enum Instr {
         op: UnaryOp,
         operand: Temp,
     },
-    /// Convert an int (i64) to a Numeric NoritoBytes payload pointer (scale = 0).
+    /// Convert a non-negative int (i64) to a Numeric NoritoBytes payload pointer (scale = 0).
     NumericFromInt {
         dest: Temp,
         value: Temp,
     },
-    /// Convert a Numeric NoritoBytes payload pointer (scale = 0) to an int (i64).
+    /// Convert a Numeric NoritoBytes payload pointer (scale = 0, unsigned) to an int (i64).
     NumericToInt {
         dest: Temp,
         value: Temp,
@@ -1535,12 +1535,19 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             let t = ctx.new_temp();
             match raw.parse::<Numeric>() {
                 Ok(numeric) => {
-                    let hex = hex::encode(numeric.encode());
-                    ctx.current_instr(Instr::DataRef {
-                        dest: t,
-                        kind: DataRefKind::NoritoBytes,
-                        value: format!("0x{hex}"),
-                    });
+                    if numeric.scale() != 0 || numeric.mantissa().is_negative() {
+                        ctx.record_error(format!(
+                            "numeric literal `{raw}` must be an unsigned integer (scale=0)"
+                        ));
+                        ctx.current_instr(Instr::Const { dest: t, value: 0 });
+                    } else {
+                        let hex = hex::encode(numeric.encode());
+                        ctx.current_instr(Instr::DataRef {
+                            dest: t,
+                            kind: DataRefKind::NoritoBytes,
+                            value: format!("0x{hex}"),
+                        });
+                    }
                 }
                 Err(err) => {
                     ctx.record_error(format!("invalid numeric literal `{raw}`: {err}"));
@@ -1898,17 +1905,17 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                         });
                         return dest;
                     }
-                    if name == "norito_bytes" {
-                        if let semantic::ExprKind::Bytes(bytes) = &arg.expr {
-                            let dest = ctx.new_temp();
-                            let hex = hex::encode(bytes);
-                            ctx.current_instr(Instr::DataRef {
-                                dest,
-                                kind: DataRefKind::NoritoBytes,
-                                value: format!("0x{hex}"),
-                            });
-                            return dest;
-                        }
+                    if name == "norito_bytes"
+                        && let semantic::ExprKind::Bytes(bytes) = &arg.expr
+                    {
+                        let dest = ctx.new_temp();
+                        let hex = hex::encode(bytes);
+                        ctx.current_instr(Instr::DataRef {
+                            dest,
+                            kind: DataRefKind::NoritoBytes,
+                            value: format!("0x{hex}"),
+                        });
+                        return dest;
                     }
                     let src = lower_expr(ctx, arg, vars);
                     let resolved_arg = semantic::resolve_struct_type(&arg.ty);
@@ -3763,10 +3770,11 @@ mod tests {
         let mut saw_blob = false;
         for bb in &f.blocks {
             for instr in &bb.instrs {
-                if let Instr::DataRef { kind, value, .. } = instr {
-                    if *kind == DataRefKind::Blob && value == "0x6162" {
-                        saw_blob = true;
-                    }
+                if let Instr::DataRef { kind, value, .. } = instr
+                    && *kind == DataRefKind::Blob
+                    && value == "0x6162"
+                {
+                    saw_blob = true;
                 }
             }
         }
@@ -3783,10 +3791,11 @@ mod tests {
         let mut saw_norito = false;
         for bb in &f.blocks {
             for instr in &bb.instrs {
-                if let Instr::DataRef { kind, value, .. } = instr {
-                    if *kind == DataRefKind::NoritoBytes && value == "0x6162" {
-                        saw_norito = true;
-                    }
+                if let Instr::DataRef { kind, value, .. } = instr
+                    && *kind == DataRefKind::NoritoBytes
+                    && value == "0x6162"
+                {
+                    saw_norito = true;
                 }
             }
         }

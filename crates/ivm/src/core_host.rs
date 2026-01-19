@@ -898,9 +898,17 @@ impl CoreHost {
         vm.alloc_input_tlv(&out)
     }
 
+    fn ensure_unsigned_scale0(numeric: Numeric) -> Result<Numeric, VMError> {
+        if numeric.scale() != 0 || numeric.mantissa().is_negative() {
+            return Err(VMError::AssertionFailed);
+        }
+        Ok(numeric)
+    }
+
     fn decode_numeric(&self, vm: &IVM, ptr: u64) -> Result<Numeric, VMError> {
         let tlv = self.decode_tlv(vm, ptr, PointerType::NoritoBytes)?;
-        decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)
+        let numeric = decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
+        Self::ensure_unsigned_scale0(numeric)
     }
 }
 
@@ -1097,6 +1105,9 @@ impl IVMHost for CoreHost {
             }
             syscalls::SYSCALL_NUMERIC_FROM_INT => {
                 let val = vm.register(10) as i64;
+                if val < 0 {
+                    return Err(VMError::AssertionFailed);
+                }
                 let payload = Numeric::new(val, 0).encode();
                 let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, p);
@@ -1108,14 +1119,10 @@ impl IVMHost for CoreHost {
                     return Err(VMError::NoritoInvalid);
                 }
                 let numeric = self.decode_numeric(vm, ptr)?;
-                let trimmed = numeric.trim_trailing_zeros();
-                if trimmed.scale() != 0 {
-                    return Err(VMError::AssertionFailed);
-                }
-                let value = trimmed
+                let value = numeric
                     .try_mantissa_i128()
                     .ok_or(VMError::AssertionFailed)?;
-                if value < i64::MIN as i128 || value > i64::MAX as i128 {
+                if value > i64::MAX as i128 {
                     return Err(VMError::AssertionFailed);
                 }
                 vm.set_register(10, (value as i64) as u64);
@@ -1134,6 +1141,9 @@ impl IVMHost for CoreHost {
                 let lhs = self.decode_numeric(vm, vm.register(10))?;
                 let rhs = self.decode_numeric(vm, vm.register(11))?;
                 let out = lhs.checked_sub(rhs).ok_or(VMError::AssertionFailed)?;
+                if out.mantissa().is_negative() {
+                    return Err(VMError::AssertionFailed);
+                }
                 let payload = out.encode();
                 let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, p);
@@ -1174,9 +1184,10 @@ impl IVMHost for CoreHost {
             }
             syscalls::SYSCALL_NUMERIC_NEG => {
                 let val = self.decode_numeric(vm, vm.register(10))?;
-                let out = Numeric::try_new(val.mantissa().neg(), val.scale())
-                    .map_err(|_| VMError::AssertionFailed)?;
-                let payload = out.encode();
+                if !val.is_zero() {
+                    return Err(VMError::AssertionFailed);
+                }
+                let payload = val.encode();
                 let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, p);
                 Ok(0)

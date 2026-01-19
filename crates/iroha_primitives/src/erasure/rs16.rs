@@ -54,8 +54,10 @@ fn tables() -> &'static FieldTables {
 
         let mut value: u32 = 1;
         for (idx, slot) in exp.iter_mut().take(ORDER_MINUS_ONE).enumerate() {
-            *slot = value as u16;
-            log[value as usize] = idx as u16;
+            let value_u16 = u16::try_from(value).expect("rs16 field element out of range");
+            let idx_u16 = u16::try_from(idx).expect("rs16 log index out of range");
+            *slot = value_u16;
+            log[usize::from(value_u16)] = idx_u16;
 
             value <<= 1;
             if (value & FIELD_MASK) != 0 {
@@ -161,8 +163,10 @@ struct ParityMatrix {
     rows: Vec<Vec<u16>>,
 }
 
+type ParityMatrixCache = OnceLock<Mutex<HashMap<(usize, usize), Arc<ParityMatrix>>>>;
+
 fn parity_matrix(data_shards: usize, parity_shards: usize) -> Result<Arc<ParityMatrix>, Rs16Error> {
-    static CACHE: OnceLock<Mutex<HashMap<(usize, usize), Arc<ParityMatrix>>>> = OnceLock::new();
+    static CACHE: ParityMatrixCache = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(entry) = cache
         .lock()
@@ -225,6 +229,10 @@ fn choose_backend() -> Backend {
 }
 
 /// Encode RS16 parity for the provided data symbols and parity shard count.
+///
+/// # Errors
+/// Returns `Rs16Error` if the data symbol rows are not the same length or the
+/// parity matrix cannot be constructed.
 pub fn encode_parity(
     data_symbols: &[Vec<u16>],
     parity_count: usize,
@@ -233,6 +241,10 @@ pub fn encode_parity(
 }
 
 /// Convert a payload slice into RS16 symbols using the configured chunk size.
+///
+/// # Errors
+/// Returns `Rs16Error` if `chunk_size` is smaller than 2, `length` exceeds
+/// `chunk_size`, or the requested range is out of bounds.
 pub fn symbols_from_payload(
     chunk_size: usize,
     payload: &[u8],
@@ -423,7 +435,7 @@ mod neon {
 
     use super::gf_mul;
 
-    /// NEON path that vectorizes the XOR accumulation; gf_mul remains scalar.
+    /// NEON path that vectorizes the XOR accumulation; `gf_mul` remains scalar.
     // TODO: Vectorize gf_mul to avoid per-symbol scalar multiplication.
     #[allow(unsafe_code)]
     #[target_feature(enable = "neon")]
@@ -477,7 +489,9 @@ mod tests {
         for row in 0..rows {
             let mut symbols_row = Vec::with_capacity(symbols);
             for idx in 0..symbols {
-                symbols_row.push(((row as u16) << 8) ^ (idx as u16));
+                let row_u16 = u16::try_from(row).expect("row index fits in u16");
+                let idx_u16 = u16::try_from(idx).expect("symbol index fits in u16");
+                symbols_row.push((row_u16 << 8) ^ idx_u16);
             }
             data.push(symbols_row);
         }

@@ -9791,38 +9791,6 @@ where
             read_exact_update(src, &mut b, d, remaining)?;
             Ok(u64::from_le_bytes(b))
         }
-        #[inline]
-        fn read_varint_update<Rd: Read>(
-            src: &mut Rd,
-            d: &mut crc64fast::Digest,
-            remaining: &mut usize,
-        ) -> Result<u64, Error> {
-            let mut result = 0u64;
-            let mut shift = 0u32;
-            let mut used = 0usize;
-            let mut b = [0u8; 1];
-            for _ in 0..STREAM_MAX_VARINT_BYTES {
-                read_exact_update(src, &mut b, d, remaining)?;
-                used += 1;
-                let byte = b[0];
-                let payload = (byte & 0x7f) as u64;
-                if shift == 63 && payload > 1 {
-                    return Err(Error::LengthMismatch);
-                }
-                result |= payload << shift;
-                if byte & 0x80 == 0 {
-                    if used != core::varint_encoded_len_u64(result) {
-                        return Err(Error::LengthMismatch);
-                    }
-                    return Ok(result);
-                }
-                shift += 7;
-                if shift >= 64 {
-                    break;
-                }
-            }
-            Err(Error::LengthMismatch)
-        }
         let entries = {
             let v = read_u64_update(&mut r, &mut digest, &mut remaining)?;
             core::payload_len_to_usize(v)?

@@ -5548,6 +5548,7 @@ pub struct SumeragiNposElection {
 /// Reconfiguration pipeline defaults.
 /// User-level configuration container for `SumeragiNposReconfig`.
 #[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
+#[allow(clippy::struct_field_names)]
 pub struct SumeragiNposReconfig {
     /// Number of blocks to retain for evidence horizon when processing reconfigurations.
     #[config(default = "defaults::sumeragi::npos::RECONFIG_EVIDENCE_HORIZON_BLOCKS")]
@@ -5709,10 +5710,7 @@ mod trusted_peers_pop_env_tests {
 
     #[test]
     fn trusted_peers_pop_from_env_parses_json() {
-        let json = format!(
-            r#"[{{"public_key":"{public_key}","pop_hex":"deadbeef"}}]"#,
-            public_key = PUBLIC_KEY_HEX
-        );
+        let json = format!(r#"[{{"public_key":"{PUBLIC_KEY_HEX}","pop_hex":"deadbeef"}}]"#);
         let parsed =
             TrustedPeerPops::from_env_str(Cow::Owned(json)).expect("parse trusted_peers_pop env");
         assert_eq!(parsed.0.len(), 1);

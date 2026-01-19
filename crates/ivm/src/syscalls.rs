@@ -84,14 +84,14 @@ pub const SYSCALL_STATE_DEL: u32 = 0x52;
 /// Args: r10 = &NoritoBytes (ASCII decimal)
 /// Ret:  r10 = value (as u64 bits)
 pub const SYSCALL_DECODE_INT: u32 = 0x53;
-/// Construct a Numeric (mantissa+scale) from a signed 64-bit integer and return
+/// Construct a Numeric (mantissa+scale) from a non-negative 64-bit integer and return
 /// a NoritoBytes TLV pointer. The Numeric is encoded with scale = 0.
 ///
 /// Args: r10 = value (i64 as u64)
 /// Ret:  r10 = &NoritoBytes (Numeric payload)
 pub const SYSCALL_NUMERIC_FROM_INT: u32 = 0x69;
 /// Convert a Numeric NoritoBytes payload into a signed 64-bit integer.
-/// The payload must use scale = 0 and fit within `i64`; otherwise the host rejects it.
+/// The payload must be unsigned and use scale = 0; otherwise the host rejects it.
 ///
 /// Args: r10 = &NoritoBytes (Numeric payload)
 /// Ret:  r10 = value (i64 as u64)
@@ -100,7 +100,7 @@ pub const SYSCALL_NUMERIC_TO_INT: u32 = 0x6A;
 /// -> r10 = &NoritoBytes(result).
 pub const SYSCALL_NUMERIC_ADD: u32 = 0x6B;
 /// Numeric subtraction: r10 = &NoritoBytes(lhs), r11 = &NoritoBytes(rhs)
-/// -> r10 = &NoritoBytes(result).
+/// -> r10 = &NoritoBytes(result). Rejects underflow (negative result).
 pub const SYSCALL_NUMERIC_SUB: u32 = 0x6C;
 /// Numeric multiplication: r10 = &NoritoBytes(lhs), r11 = &NoritoBytes(rhs)
 /// -> r10 = &NoritoBytes(result).
@@ -112,6 +112,7 @@ pub const SYSCALL_NUMERIC_DIV: u32 = 0x6E;
 /// -> r10 = &NoritoBytes(result).
 pub const SYSCALL_NUMERIC_REM: u32 = 0x6F;
 /// Numeric negation: r10 = &NoritoBytes(value) -> r10 = &NoritoBytes(result).
+/// Rejects non-zero inputs (numeric aliases are unsigned).
 pub const SYSCALL_NUMERIC_NEG: u32 = 0x70;
 /// Numeric equality: r10 = &NoritoBytes(lhs), r11 = &NoritoBytes(rhs)
 /// -> r10 = 1 if equal else 0.

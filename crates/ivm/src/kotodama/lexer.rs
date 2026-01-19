@@ -151,10 +151,8 @@ impl<'a> Lexer<'a> {
                 });
             }
         };
-        if matches!(ch, 'r' | 'b') {
-            if let Some(tok) = self.lex_prefixed_string()? {
-                return Ok(tok);
-            }
+        if matches!(ch, 'r' | 'b') && let Some(tok) = self.lex_prefixed_string()? {
+            return Ok(tok);
         }
         match ch {
             c if c.is_alphabetic() || c == '_' => self.lex_ident_or_keyword(),
@@ -688,13 +686,13 @@ impl<'a> Lexer<'a> {
                     return self
                         .lex_raw_string(true, 2)
                         .map(Some)
-                        .map_err(|e| format!("{e}"));
+                        .map_err(|e| e.to_string());
                 }
                 if matches!(self.peek_n(1), Some('"' | '#')) {
                     return self
                         .lex_raw_string(false, 1)
                         .map(Some)
-                        .map_err(|e| format!("{e}"));
+                        .map_err(|e| e.to_string());
                 }
             }
             Some('b') => {
@@ -702,10 +700,10 @@ impl<'a> Lexer<'a> {
                     return self
                         .lex_raw_string(true, 2)
                         .map(Some)
-                        .map_err(|e| format!("{e}"));
+                        .map_err(|e| e.to_string());
                 }
                 if self.peek_n(1) == Some('"') {
-                    return self.lex_byte_string().map(Some).map_err(|e| format!("{e}"));
+                    return self.lex_byte_string().map(Some).map_err(|e| e.to_string());
                 }
             }
             _ => {}
