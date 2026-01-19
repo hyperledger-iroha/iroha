@@ -538,6 +538,18 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
                 f(*d);
             }
         }
+        Instr::VerifySignature {
+            message,
+            signature,
+            public_key,
+            scheme,
+            ..
+        } => {
+            f(*message);
+            f(*signature);
+            f(*public_key);
+            f(*scheme);
+        }
         Instr::Sm4GcmSeal {
             key,
             nonce,
@@ -751,6 +763,7 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         Instr::SchemaInfo { dest, .. } => Some(*dest),
         Instr::Sm3Hash { dest, .. } => Some(*dest),
         Instr::Sm2Verify { dest, .. } => Some(*dest),
+        Instr::VerifySignature { dest, .. } => Some(*dest),
         Instr::Sm4GcmSeal { dest, .. } => Some(*dest),
         Instr::Sm4GcmOpen { dest, .. } => Some(*dest),
         Instr::Sm4CcmSeal { dest, .. } => Some(*dest),

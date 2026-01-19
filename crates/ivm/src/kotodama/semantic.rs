@@ -2693,6 +2693,34 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         ty: Type::Bool,
                     })
                 }
+                "verify_signature" => {
+                    if arg_typed.len() != 4 {
+                        return Err(SemanticError {
+                            message:
+                                "verify_signature expects (Blob, Blob, Blob, int) arguments"
+                                    .into(),
+                        });
+                    }
+                    if arg_typed[..3].iter().any(|t| !is_blob_like(&t.ty)) {
+                        return Err(SemanticError {
+                            message:
+                                "verify_signature expects message, signature, and public key as Blob|bytes pointers"
+                                    .into(),
+                        });
+                    }
+                    if !is_int_like(&arg_typed[3].ty) {
+                        return Err(SemanticError {
+                            message: "verify_signature expects scheme code as int".into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Bool,
+                    })
+                }
                 "sm4_gcm_seal" => {
                     if arg_typed.len() != 4 || arg_typed.iter().any(|t| !is_blob_like(&t.ty)) {
                         return Err(SemanticError {

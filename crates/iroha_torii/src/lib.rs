@@ -12161,7 +12161,9 @@ impl Torii {
                 );
 
             #[cfg(feature = "app_api")]
-            let group = group.route("/v1/contracts/call", post(handler_post_contract_call));
+            let group = group
+                .route("/v1/contracts/call", post(handler_post_contract_call))
+                .route("/v1/contracts/state", get(handler_get_contract_state));
             #[cfg(not(feature = "app_api"))]
             let group = group;
 
