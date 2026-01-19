@@ -294,10 +294,16 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [ ] OpenAPI/docs: publish the new repair/GC endpoints and CLI surfaces in the Torii OpenAPI output and SoraFS docs, including the no-admin invariants.
  - [ ] Active repair worker: implement an in-process agent that claims queued tickets, executes repair actions (fetch/verify/rebuild), updates task state (`InProgress`, `Completed`, `Failed`, `Escalated`), and emits telemetry with lease/claim safeguards across restarts.
  - [ ] Governance flow: define how escalations and slash proposals are submitted/approved on-chain without admin keys, and wire the submission path to the governance pipeline.
+ - [ ] Governance policy: codify quorum/thresholds for repair escalations + slashes, include dispute/appeal windows, and enforce deterministic outcomes in governance execution.
+ - [ ] Audit trail: publish repair/GC events (ticket state transitions, evictions, bytes freed) to the governance DAG with canonical Norito payloads for decentralized auditability.
+ - [ ] Signed evidence: require repair worker submissions to include signed evidence bundles (manifest digest, provider id, action summary, timestamps) so governance can verify provenance.
+ - [ ] Audit payload schema: define canonical Norito payloads for repair/GC audit events (include signer, digest, and deterministic ordering) and lock with roundtrip tests.
  - [ ] Repair leases: add lease TTL + heartbeat/reclaim logic so stuck repairs requeue safely, with per-ticket attempt caps and SLA breach escalation.
  - [ ] SLA enforcement: add a scheduler watchdog that escalates overdue tickets, emits `RepairSlashProposalV1` drafts, and records breach events for governance review (no admin escalation path).
  - [ ] Worker scheduling: integrate repair execution with the existing storage scheduler (pin/fetch/PoR budgets) so repair traffic respects operator limits and does not starve normal pin traffic.
  - [ ] Repair prioritisation: sort by SLA deadline, failure severity, and provider impact; keep ordering deterministic to avoid oscillations under load.
+ - [ ] Determinism: document and enforce deterministic ordering for repair queue selection and GC eviction (tie-breakers by ticket id/manifest id) to keep peer outputs identical.
+ - [ ] Reconciliation: add cross-node consistency checks for repair/GC state (ticket status, retention indexes, freed bytes) with periodic comparison reports and divergence telemetry.
  - [ ] GC/retention: add a deal/manifest expiry index plus a TTL sweeper that evicts expired manifests/chunks, frees capacity, and keeps PoR/repair references coherent; include grace windows, max deletions per tick, and a governance/auditable trigger path (no admin override).【crates/sorafs_node/src/store.rs】
  - [ ] Retention precedence: codify how deal end epochs, pin-policy `retention_epoch`, and governance caps resolve into a single expiry timestamp; persist that source in storage metadata.
  - [ ] Retention metadata: persist `retention_epoch` (deal end or pin policy) with stored manifests and build an index for expiry scans; update ingest paths to record the chosen retention source.
@@ -306,10 +312,14 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [ ] PoR/repair gating: stop scheduling PoR challenges for expired manifests and ensure GC skips manifests with open repair tickets or pending PoR evidence.
  - [ ] Capacity fallback: add a “least-recently-used expired” eviction fallback when storage is full and multiple expired manifests compete for space, with deterministic tie-breakers.
  - [ ] Telemetry: add gauges/counters for repair backlog age, lease expiries, GC runs, bytes freed, and eviction reasons; surface in Prometheus + OpenTelemetry.
+ - [ ] Telemetry parity: ensure governance-published audit events carry the same IDs/labels as telemetry so cross-system correlation is deterministic.
+ - [ ] Alerts: define SLA breach, repair backlog, GC stall, and retention-blocked eviction alert thresholds in docs/runbooks and emit corresponding telemetry labels.
  - [ ] Dashboards: add operator panels for repair SLA misses, repair queue depth by provider, GC frees per hour, and retention-blocked evictions.
  - [ ] Tests: unit + integration coverage for persistence reload, worker claim/lease, repair completion/failure requeue, and GC expiry/retention invariants (include restart recovery and SLA deadline checks).
  - [ ] Tests: add Torii API contract tests for worker endpoints and CLI regression tests for repair/GC commands.
+ - [ ] Tests: add governance flow tests for escalation→slash proposal acceptance/rejection and signed-evidence verification.
  - [ ] Docs/runbooks: update SoraFS operator guides with decentralized repair persistence, worker controls, GC policy/config/telemetry, and “no admin after launch” invariants.
+ - [ ] Docs/runbooks: include provider worker key rotation + evidence signing guidance and governance dispute timelines.
 
 19. **SORANET-RELAY-LIVE — Implement SoraNet relay** (Networking, Line: Iroha 3, Owner: Networking WG, Priority: Medium, Status: 🈴 Completed, target TBD)
  - [x] Implement relay protocol, persistence, and telemetry; remove stub designation.

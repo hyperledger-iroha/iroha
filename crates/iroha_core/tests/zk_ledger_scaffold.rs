@@ -1,14 +1,13 @@
 //! Scaffold tests for zk asset handlers: `RegisterZkAsset`, Shield, `ZkTransfer`, Unshield.
 #![cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
 
-use std::{num::NonZeroU64, str::FromStr};
+use std::{num::NonZeroU64, str::FromStr, sync::LazyLock};
 
 use iroha_config::parameters::defaults;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     state::{State, World, WorldReadOnly},
-    zk::test_utils::halo2_fixture_envelope,
 };
 use iroha_crypto::Hash;
 use iroha_data_model::{
@@ -19,6 +18,7 @@ use iroha_data_model::{
     name::Name,
     prelude::*,
 };
+use iroha_test_samples::gen_account_in;
 use iroha_zkp_halo2::confidential;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
@@ -30,6 +30,45 @@ fn derive_test_nullifier(
     chain_id: &str,
 ) -> [u8; 32] {
     confidential::derive_nullifier(nk, rho, asset_id.as_bytes(), chain_id.as_bytes())
+}
+
+fn native_ipa_envelope_bytes() -> Vec<u8> {
+    static BYTES: LazyLock<Vec<u8>> = LazyLock::new(|| {
+        use iroha_zkp_halo2::{
+            OpenVerifyEnvelope, Params, Polynomial, PrimeField64, Transcript,
+            backend::pallas::PallasBackend,
+            norito_helpers as nh,
+        };
+
+        let params = Params::new(4).expect("params");
+        let n = params.n();
+        let coeffs = (0..n)
+            .map(|i| PrimeField64::from((i as u64) + 1))
+            .collect::<Vec<_>>();
+        let poly = Polynomial::from_coeffs(coeffs);
+        let p_g = poly.commit(&params).expect("commit");
+        let z = PrimeField64::from(3u64);
+        let mut tr = Transcript::new("IROHA-ZK-LEDGER");
+        let (proof, t) = poly.open(&params, &mut tr, z, p_g).expect("open");
+        let env = OpenVerifyEnvelope {
+            params: nh::params_to_wire(&params),
+            public: nh::poly_open_public::<PallasBackend>(n, z, t, p_g),
+            proof: nh::proof_to_wire(&proof),
+            transcript_label: "IROHA-ZK-LEDGER".to_string(),
+            vk_commitment: None,
+            public_inputs_schema_hash: None,
+            domain_tag: None,
+        };
+        norito::to_bytes(&env).expect("encode IPA envelope")
+    });
+    BYTES.clone()
+}
+
+fn native_ipa_attachment() -> iroha_data_model::proof::ProofAttachment {
+    let backend = "halo2/ipa-v1/poly-open";
+    let proof = iroha_data_model::proof::ProofBox::new(backend.into(), native_ipa_envelope_bytes());
+    let vk = iroha_data_model::proof::VerifyingKeyBox::new(backend.into(), Vec::new());
+    iroha_data_model::proof::ProofAttachment::new_inline(backend.into(), proof, vk)
 }
 
 #[test]
@@ -53,7 +92,7 @@ fn register_zk_asset_writes_policy_metadata() {
     // Setup: domain and asset def
     let domain_id: DomainId = "zkd".parse().unwrap();
     let asset_def_id: AssetDefinitionId = "zcoin#zkd".parse().unwrap();
-    let owner: AccountId = "alice@zkd".parse().unwrap();
+    let (owner, _owner_key) = gen_account_in("zkd");
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new(owner.clone())).into(),
@@ -83,6 +122,7 @@ fn register_zk_asset_writes_policy_metadata() {
         .execute_instruction(&mut stx, &owner, ib)
         .unwrap();
     stx.apply();
+    block.commit().expect("commit setup block");
 
     // Verify metadata key exists
     let view_policy = state.view();
@@ -137,7 +177,7 @@ fn register_zk_asset_without_shielding_sets_transparent_policy() {
 
     let domain_id: DomainId = "zkd".parse().unwrap();
     let asset_def_id: AssetDefinitionId = "desk#zkd".parse().unwrap();
-    let owner: AccountId = "bob@zkd".parse().unwrap();
+    let (owner, _owner_key) = gen_account_in("zkd");
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new(owner.clone())).into(),
@@ -165,6 +205,7 @@ fn register_zk_asset_without_shielding_sets_transparent_policy() {
         .execute_instruction(&mut stx, &owner, InstructionBox::from(reg))
         .unwrap();
     stx.apply();
+    block.commit().expect("commit setup block");
 
     let view_policy = state.view();
     let def = view_policy
@@ -218,7 +259,7 @@ fn schedule_confidential_policy_transition_records_pending() {
     // Setup base entities.
     let domain_id: DomainId = "zkd".parse().unwrap();
     let asset_def_id: AssetDefinitionId = "schedule#zkd".parse().unwrap();
-    let owner: AccountId = "owner@zkd".parse().unwrap();
+    let (owner, _owner_key) = gen_account_in("zkd");
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new(owner.clone())).into(),
@@ -247,6 +288,7 @@ fn schedule_confidential_policy_transition_records_pending() {
         .execute_instruction(&mut stx, &owner, reg.into())
         .unwrap();
     stx.apply();
+    block.commit().expect("commit setup block");
 
     // New block for scheduling the transition.
     let header2 =
@@ -255,7 +297,8 @@ fn schedule_confidential_policy_transition_records_pending() {
     let mut stx2 = block2.transaction();
 
     let delay = defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS;
-    let effective_height = stx2.block_height() + delay + 5;
+    let window_blocks = defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS;
+    let effective_height = stx2.block_height() + delay + window_blocks;
     let transition_id = Hash::new(b"convert-to-shielded");
     let schedule = iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition::new(
         asset_def_id.clone(),
@@ -270,6 +313,7 @@ fn schedule_confidential_policy_transition_records_pending() {
         .execute_instruction(&mut stx2, &owner, schedule.into())
         .unwrap();
     stx2.apply();
+    block2.commit().expect("commit schedule block");
 
     let view = state.view();
     let def = view
@@ -324,7 +368,7 @@ fn confidential_policy_transition_applies_at_effective_height() {
 
     let domain_id: DomainId = "zkd".parse().unwrap();
     let asset_def_id: AssetDefinitionId = "transition#zkd".parse().unwrap();
-    let owner: AccountId = "owner@zkd".parse().unwrap();
+    let (owner, _owner_key) = gen_account_in("zkd");
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new(owner.clone())).into(),
@@ -351,13 +395,15 @@ fn confidential_policy_transition_applies_at_effective_height() {
         .execute_instruction(&mut stx, &owner, reg.into())
         .unwrap();
     stx.apply();
+    block.commit().expect("commit setup block");
 
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
     let mut stx2 = block2.transaction();
     let delay = defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS;
-    let effective_height = stx2.block_height() + delay + 3;
+    let window_blocks = defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS;
+    let effective_height = stx2.block_height() + delay + window_blocks;
     let transition_id = Hash::new(b"convert->shielded");
     let schedule = iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition::new(
         asset_def_id.clone(),
@@ -372,6 +418,7 @@ fn confidential_policy_transition_applies_at_effective_height() {
         .execute_instruction(&mut stx2, &owner, schedule.into())
         .unwrap();
     stx2.apply();
+    block2.commit().expect("commit schedule block");
 
     // New block at the scheduled effective height.
     let header3 = iroha_data_model::block::BlockHeader::new(
@@ -399,6 +446,7 @@ fn confidential_policy_transition_applies_at_effective_height() {
         .execute_instruction(&mut stx3, &owner, reschedule.into())
         .unwrap();
     stx3.apply();
+    block3.commit().expect("commit effective block");
 
     let view = state.view();
     let def = view
@@ -439,7 +487,7 @@ fn cancel_confidential_policy_transition_clears_pending() {
 
     let domain_id: DomainId = "zkd".parse().unwrap();
     let asset_def_id: AssetDefinitionId = "cancel#zkd".parse().unwrap();
-    let owner: AccountId = "owner@zkd".parse().unwrap();
+    let (owner, _owner_key) = gen_account_in("zkd");
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new(owner.clone())).into(),
@@ -466,13 +514,15 @@ fn cancel_confidential_policy_transition_clears_pending() {
         .execute_instruction(&mut stx, &owner, reg.into())
         .unwrap();
     stx.apply();
+    block.commit().expect("commit setup block");
 
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
     let mut stx2 = block2.transaction();
     let delay = defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS;
-    let effective_height = stx2.block_height() + delay + 2;
+    let window_blocks = defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS;
+    let effective_height = stx2.block_height() + delay + window_blocks;
     let transition_id = Hash::new(b"pending-cancel");
     let schedule = iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition::new(
         asset_def_id.clone(),
@@ -497,6 +547,7 @@ fn cancel_confidential_policy_transition_clears_pending() {
         .execute_instruction(&mut stx2, &owner, cancel.into())
         .unwrap();
     stx2.apply();
+    block2.commit().expect("commit cancel block");
 
     let view = state.view();
     let def = view
@@ -547,7 +598,7 @@ fn transfer_rejects_when_nullifiers_exceed_cap() {
 
     let domain_id: DomainId = "zkd".parse().unwrap();
     let asset_def_id: AssetDefinitionId = "capcoin#zkd".parse().unwrap();
-    let owner: AccountId = "alice@zkd".parse().unwrap();
+    let (owner, _owner_key) = gen_account_in("zkd");
 
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
@@ -576,19 +627,11 @@ fn transfer_rejects_when_nullifiers_exceed_cap() {
         .execute_instruction(&mut stx, &owner, InstructionBox::from(reg))
         .expect("register zk asset");
 
-    let transfer_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
-    let transfer_vk = transfer_fixture
-        .vk_box("halo2/ipa")
-        .expect("fixture verifying key");
     let transfer = iroha_data_model::isi::zk::ZkTransfer::new(
         asset_def_id.clone(),
         vec![[1u8; 32], [2u8; 32]],
         vec![[9u8; 32]],
-        iroha_data_model::proof::ProofAttachment::new_inline(
-            "halo2/ipa".into(),
-            transfer_fixture.proof_box("halo2/ipa"),
-            transfer_vk,
-        ),
+        native_ipa_attachment(),
         None,
     );
     let err = stx
@@ -626,7 +669,7 @@ fn shield_rejected_when_policy_disallows() {
 
     let domain_id: DomainId = "zkd".parse().unwrap();
     let asset_def_id: AssetDefinitionId = "denyshield#zkd".parse().unwrap();
-    let owner: AccountId = "carol@zkd".parse().unwrap();
+    let (owner, _owner_key) = gen_account_in("zkd");
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new(owner.clone())).into(),
@@ -655,6 +698,7 @@ fn shield_rejected_when_policy_disallows() {
         .execute_instruction(&mut stx, &owner, reg.into())
         .unwrap();
     stx.apply();
+    block.commit().expect("commit setup block");
 
     let mut block2 = state.block(iroha_data_model::block::BlockHeader::new(
         nonzero!(2_u64),
@@ -702,7 +746,7 @@ fn unshield_rejected_when_policy_disallows() {
 
     let domain_id: DomainId = "zkd".parse().unwrap();
     let asset_def_id: AssetDefinitionId = "denyunshield#zkd".parse().unwrap();
-    let owner: AccountId = "dave@zkd".parse().unwrap();
+    let (owner, _owner_key) = gen_account_in("zkd");
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new(owner.clone())).into(),
@@ -730,6 +774,7 @@ fn unshield_rejected_when_policy_disallows() {
         .execute_instruction(&mut stx, &owner, reg.into())
         .unwrap();
     stx.apply();
+    block.commit().expect("commit setup block");
 
     let mut block2 = state.block(iroha_data_model::block::BlockHeader::new(
         nonzero!(2_u64),
@@ -740,20 +785,12 @@ fn unshield_rejected_when_policy_disallows() {
         0,
     ));
     let mut stx2 = block2.transaction();
-    let unshield_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
-    let unshield_vk = unshield_fixture
-        .vk_box("halo2/ipa")
-        .expect("fixture verifying key");
     let unshield = iroha_data_model::isi::zk::Unshield::new(
         asset_def_id.clone(),
         owner.clone(),
         50u128,
         vec![[4u8; 32]],
-        iroha_data_model::proof::ProofAttachment::new_inline(
-            "halo2/ipa".into(),
-            unshield_fixture.proof_box("halo2/ipa"),
-            unshield_vk,
-        ),
+        native_ipa_attachment(),
         None,
     );
     let res = stx2.world.executor().clone().execute_instruction(
@@ -786,7 +823,7 @@ fn zk_transfer_rejected_when_policy_transparent() {
 
     let domain_id: DomainId = "zkd".parse().unwrap();
     let asset_def_id: AssetDefinitionId = "ztrans#zkd".parse().unwrap();
-    let owner: AccountId = "erin@zkd".parse().unwrap();
+    let (owner, _owner_key) = gen_account_in("zkd");
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new(owner.clone())).into(),
@@ -815,6 +852,7 @@ fn zk_transfer_rejected_when_policy_transparent() {
         .execute_instruction(&mut stx, &owner, reg.into())
         .unwrap();
     stx.apply();
+    block.commit().expect("commit setup block");
 
     // Shield once to create commitments.
     let mut block2 = state.block(iroha_data_model::block::BlockHeader::new(
@@ -839,6 +877,7 @@ fn zk_transfer_rejected_when_policy_transparent() {
         .execute_instruction(&mut stx2, &owner, InstructionBox::from(shield))
         .unwrap();
     stx2.apply();
+    block2.commit().expect("commit shield block");
 
     // Re-register with shielding disabled (policy becomes transparent).
     let mut block3 = state.block(iroha_data_model::block::BlockHeader::new(
@@ -865,6 +904,7 @@ fn zk_transfer_rejected_when_policy_transparent() {
         .execute_instruction(&mut stx3, &owner, disable.into())
         .unwrap();
     stx3.apply();
+    block3.commit().expect("commit policy block");
 
     // Attempt transfer; should fail under transparent policy.
     let mut block4 = state.block(iroha_data_model::block::BlockHeader::new(
@@ -876,19 +916,11 @@ fn zk_transfer_rejected_when_policy_transparent() {
         0,
     ));
     let mut stx4 = block4.transaction();
-    let transparent_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
-    let transparent_vk = transparent_fixture
-        .vk_box("halo2/ipa")
-        .expect("fixture verifying key");
     let transfer = iroha_data_model::isi::zk::ZkTransfer::new(
         asset_def_id.clone(),
         vec![[7u8; 32]],
         vec![[8u8; 32]],
-        iroha_data_model::proof::ProofAttachment::new_inline(
-            "halo2/ipa".into(),
-            transparent_fixture.proof_box("halo2/ipa"),
-            transparent_vk,
-        ),
+        native_ipa_attachment(),
         None,
     );
     let res = stx4.world.executor().clone().execute_instruction(
@@ -921,7 +953,7 @@ fn shield_burns_and_unshield_mints() {
 
     let domain_id: DomainId = "zkd".parse().unwrap();
     let asset_def_id: AssetDefinitionId = "zcoin#zkd".parse().unwrap();
-    let owner: AccountId = "alice@zkd".parse().unwrap();
+    let (owner, _owner_key) = gen_account_in("zkd");
 
     // Setup: register domain/account/asset and mint
     for instr in [
@@ -929,6 +961,16 @@ fn shield_burns_and_unshield_mints() {
         Register::account(NewAccount::new(owner.clone())).into(),
         Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
         Mint::asset_numeric(1000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
+        iroha_data_model::isi::zk::RegisterZkAsset::new(
+            asset_def_id.clone(),
+            iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
+            true,
+            true,
+            None,
+            None,
+            None,
+        )
+        .into(),
     ] {
         stx.world
             .executor()
@@ -952,6 +994,7 @@ fn shield_burns_and_unshield_mints() {
         .execute_instruction(&mut stx, &owner, ib)
         .unwrap();
     stx.apply();
+    block.commit().expect("commit shield block");
 
     let asset_id = AssetId::of(asset_def_id.clone(), owner.clone());
     let bal_after_shield = state
@@ -964,10 +1007,12 @@ fn shield_burns_and_unshield_mints() {
     assert_eq!(bal_after_shield, 600u64.into());
 
     // Check ZK state exists and root updated
-    let view = state.view();
-    let zk_state = view.world.zk_assets().get(&asset_def_id).expect("zk state");
-    assert!(zk_state.root_history.last().copied().unwrap_or([0u8; 32]) != [0u8; 32]);
-    assert_eq!(zk_state.commitments.len(), 1);
+    {
+        let view = state.view();
+        let zk_state = view.world.zk_assets().get(&asset_def_id).expect("zk state");
+        assert!(zk_state.root_history.last().copied().unwrap_or([0u8; 32]) != [0u8; 32]);
+        assert_eq!(zk_state.commitments.len(), 1);
+    }
 
     // Unshield 250
     let nk = [7u8; 32];
@@ -979,20 +1024,12 @@ fn shield_burns_and_unshield_mints() {
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
     let mut stx2 = block2.transaction();
-    let unshield_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
-    let unshield_vk = unshield_fixture
-        .vk_box("halo2/ipa")
-        .expect("fixture verifying key");
     let unshield = iroha_data_model::isi::zk::Unshield::new(
         asset_def_id.clone(),
         owner.clone(),
         250u128,
         vec![nullifier],
-        iroha_data_model::proof::ProofAttachment::new_inline(
-            "halo2/ipa".into(),
-            unshield_fixture.proof_box("halo2/ipa"),
-            unshield_vk,
-        ),
+        native_ipa_attachment(),
         None,
     );
     let ib2: InstructionBox = unshield.into();
@@ -1002,6 +1039,7 @@ fn shield_burns_and_unshield_mints() {
         .execute_instruction(&mut stx2, &owner, ib2)
         .unwrap();
     stx2.apply();
+    block2.commit().expect("commit unshield block");
     let bal_after_unshield = state
         .view()
         .world
@@ -1021,20 +1059,12 @@ fn shield_burns_and_unshield_mints() {
         0,
     ));
     let mut stx3 = block3.transaction();
-    let repeat_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
-    let repeat_vk = repeat_fixture
-        .vk_box("halo2/ipa")
-        .expect("fixture verifying key");
     let repeat = iroha_data_model::isi::zk::Unshield::new(
         asset_def_id.clone(),
         owner.clone(),
         1u128,
         vec![nullifier],
-        iroha_data_model::proof::ProofAttachment::new_inline(
-            "halo2/ipa".into(),
-            repeat_fixture.proof_box("halo2/ipa"),
-            repeat_vk,
-        ),
+        native_ipa_attachment(),
         None,
     );
     let res = stx3
@@ -1110,8 +1140,8 @@ fn zk_roots_are_bounded_in_world_state() {
         kaigi_usage_vk: None,
         max_proof_size_bytes: defaults::confidential::MAX_PROOF_SIZE_BYTES,
         max_nullifiers_per_tx: defaults::confidential::MAX_NULLIFIERS_PER_TX,
-        max_commitments_per_tx: defaults::confidential::MAX_COMMITMENTS_PER_TX,
-        max_confidential_ops_per_block: defaults::confidential::MAX_CONFIDENTIAL_OPS_PER_BLOCK,
+        max_commitments_per_tx: 32,
+        max_confidential_ops_per_block: 32,
         verify_timeout: defaults::confidential::VERIFY_TIMEOUT,
         max_anchor_age_blocks: defaults::confidential::MAX_ANCHOR_AGE_BLOCKS,
         max_proof_bytes_block: defaults::confidential::MAX_PROOF_BYTES_BLOCK,
@@ -1144,7 +1174,7 @@ fn zk_roots_are_bounded_in_world_state() {
     // Setup domain/account/asset and mint
     let domain_id: DomainId = "zkd".parse().unwrap();
     let asset_def_id: AssetDefinitionId = "zcoin#zkd".parse().unwrap();
-    let owner: AccountId = "alice@zkd".parse().unwrap();
+    let (owner, _owner_key) = gen_account_in("zkd");
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new(owner.clone())).into(),
@@ -1188,6 +1218,7 @@ fn zk_roots_are_bounded_in_world_state() {
             .unwrap();
     }
     stx.apply();
+    block.commit().expect("commit shield block");
 
     // Assert bounded roots in world state
     let view = state.view();
@@ -1288,7 +1319,7 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
 
     let domain_id: DomainId = "zkd".parse().unwrap();
     let asset_def_id: AssetDefinitionId = "zcoin#zkd".parse().unwrap();
-    let owner: AccountId = "alice@zkd".parse().unwrap();
+    let (owner, _owner_key) = gen_account_in("zkd");
 
     // Block 1: bootstrap domain/account/asset and register policy.
     {
@@ -1319,6 +1350,7 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
                 .unwrap();
         }
         stx.apply();
+        block.commit().expect("commit setup block");
     }
 
     // Subsequent blocks append a single shield to advance frontiers.
@@ -1349,6 +1381,7 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
             .execute_instruction(&mut stx, &owner, shield)
             .unwrap();
         stx.apply();
+        block.commit().expect("commit shield block");
     }
 
     let view = state.view();

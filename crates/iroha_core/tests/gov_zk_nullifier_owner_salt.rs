@@ -9,7 +9,7 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
-    state::{State, StateReadOnly, WorldReadOnly},
+    state::{State, WorldReadOnly},
 };
 use iroha_data_model::{
     asset::{Asset, AssetDefinition},
@@ -38,8 +38,8 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
     };
     // Generate accounts and build a minimal world with governance assets
     let (alice_id, _alice_kp) = iroha_test_samples::gen_account_in("wonderland");
-    let escrow_id: AccountId = "escrow@wonderland".parse().unwrap();
-    let receiver_id: AccountId = "treasury@wonderland".parse().unwrap();
+    let (escrow_id, _escrow_kp) = iroha_test_samples::gen_account_in("wonderland");
+    let (receiver_id, _receiver_kp) = iroha_test_samples::gen_account_in("wonderland");
 
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -88,6 +88,7 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
     cfg.bond_escrow_account = escrow_id.clone();
     cfg.slash_receiver_account = receiver_id.clone();
     cfg.min_bond_amount = 1;
+    cfg.conviction_step_blocks = 1;
     cfg.slash_double_vote_bps = 2_500;
     state.set_gov(cfg);
 
@@ -147,9 +148,8 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
         stx.apply();
     }
     // Discover the referendum id (rid) created by proposal
-    let view = state.view();
-    let rid = view
-        .world()
+    let rid = sblock
+        .world
         .governance_referenda()
         .iter()
         .next()
@@ -269,6 +269,14 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
         (
             "owner",
             norito::json::to_value(&alice_id.to_string()).expect("serialize owner"),
+        ),
+        (
+            "amount",
+            norito::json::to_value(&100u64).expect("serialize amount"),
+        ),
+        (
+            "duration_blocks",
+            norito::json::to_value(&50u64).expect("serialize duration"),
         ),
         (
             "root_hint",

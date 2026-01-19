@@ -7,12 +7,13 @@ use std::sync::Arc;
 
 use iroha_core::{
     kura::Kura, query::store::LiveQueryStore, smartcontracts::ivm::host::CoreHost, state::State,
-    zk::test_utils::halo2_fixture_envelope,
 };
-use iroha_data_model::{isi::BuiltInInstruction, prelude::*};
+use iroha_data_model::prelude::*;
 use iroha_test_samples::ALICE_ID;
-use ivm::{IVM, PointerType, encoding, instruction, syscalls as ivm_sys};
+use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
 use nonzero_ext::nonzero;
+
+const VM_GAS_LIMIT: u64 = 10_000_000;
 
 fn with_core_host<R>(vm: &mut IVM, f: impl FnOnce(&mut CoreHost) -> R) -> R {
     CoreHost::with_host(vm, f)
@@ -27,6 +28,15 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let h: [u8; 32] = iroha_crypto::Hash::new(payload).into();
     v.extend_from_slice(&h);
     v
+}
+
+fn small_proof_attachment() -> iroha_data_model::proof::ProofAttachment {
+    let proof = iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![0xAB; 32]);
+    iroha_data_model::proof::ProofAttachment::new_ref(
+        "halo2/ipa".into(),
+        proof,
+        iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "fixture"),
+    )
 }
 
 fn store_tlv(vm: &mut IVM, cursor: &mut u64, tlv: &[u8]) -> u64 {
@@ -56,7 +66,7 @@ fn unshield_without_verify_is_rejected() {
 
     // Authority and host
     let authority: AccountId = ALICE_ID.clone();
-    let mut vm = IVM::new(0);
+    let mut vm = IVM::new(VM_GAS_LIMIT);
     let mut host = CoreHost::with_accounts(authority.clone(), Arc::new(vec![authority.clone()]));
     // Set any halo2 config (not used directly in this test but ensures host is configured)
     host.set_halo2_config(&iroha_config::parameters::actual::Halo2 {
@@ -72,23 +82,16 @@ fn unshield_without_verify_is_rejected() {
 
     // Build a Norito-encoded Unshield instruction and pass via the vendor syscall bridge.
     let asset: AssetDefinitionId = "rose#wonderland".parse().unwrap();
-    let unshield_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
-    let unshield_vk = unshield_fixture
-        .vk_box("halo2/ipa")
-        .expect("fixture verifying key");
     let unshield = iroha_data_model::isi::zk::Unshield {
         asset,
         to: authority.clone(),
         public_amount: 1u128,
         inputs: vec![[0u8; 32]],
-        proof: iroha_data_model::proof::ProofAttachment::new_inline(
-            "halo2/ipa".into(),
-            unshield_fixture.proof_box("halo2/ipa"),
-            unshield_vk,
-        ),
+        proof: small_proof_attachment(),
         root_hint: None,
     };
-    let bytes = unshield.encode_as_instruction_box();
+    let bytes = norito::to_bytes(&iroha_data_model::isi::InstructionBox::from(unshield))
+        .expect("encode Unshield InstructionBox to Norito");
     let tlv = make_tlv(PointerType::NoritoBytes as u16, &bytes);
     let mut cursor = 0;
     let ptr = store_tlv(&mut vm, &mut cursor, &tlv);
@@ -100,12 +103,7 @@ fn unshield_without_verify_is_rejected() {
     let sys = u8::try_from(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION).unwrap();
     code.extend_from_slice(&encoding::wide::encode_sys(scall, sys).to_le_bytes());
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-    let mut prog = Vec::new();
-    prog.extend_from_slice(b"IVM\0");
-    prog.extend_from_slice(&[1, 0, 0, 4]);
-    prog.extend_from_slice(&0u64.to_le_bytes());
-    prog.push(0);
-    prog.push(0);
+    let mut prog = ProgramMetadata::default().encode();
     prog.extend_from_slice(&code);
     vm.load_program(&prog).unwrap();
 
@@ -144,7 +142,7 @@ fn zktransfer_without_verify_is_rejected() {
     let mut stx = block.transaction();
 
     let authority: AccountId = ALICE_ID.clone();
-    let mut vm = IVM::new(0);
+    let mut vm = IVM::new(VM_GAS_LIMIT);
     let mut host = CoreHost::with_accounts(authority.clone(), Arc::new(vec![authority.clone()]));
     host.set_halo2_config(&iroha_config::parameters::actual::Halo2 {
         enabled: true,
@@ -159,22 +157,15 @@ fn zktransfer_without_verify_is_rejected() {
 
     // Build ZkTransfer instruction
     let asset: AssetDefinitionId = "gold#wonderland".parse().unwrap();
-    let transfer_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
-    let transfer_vk = transfer_fixture
-        .vk_box("halo2/ipa")
-        .expect("fixture verifying key");
     let zkt = iroha_data_model::isi::zk::ZkTransfer {
         asset,
         inputs: vec![[1u8; 32]],
         outputs: vec![[2u8; 32]],
-        proof: iroha_data_model::proof::ProofAttachment::new_inline(
-            "halo2/ipa".into(),
-            transfer_fixture.proof_box("halo2/ipa"),
-            transfer_vk,
-        ),
+        proof: small_proof_attachment(),
         root_hint: None,
     };
-    let bytes = zkt.encode_as_instruction_box();
+    let bytes = norito::to_bytes(&iroha_data_model::isi::InstructionBox::from(zkt))
+        .expect("encode ZkTransfer InstructionBox to Norito");
     let tlv = make_tlv(PointerType::NoritoBytes as u16, &bytes);
     let mut cursor = 0;
     let ptr = store_tlv(&mut vm, &mut cursor, &tlv);
@@ -186,12 +177,7 @@ fn zktransfer_without_verify_is_rejected() {
     let sys = u8::try_from(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION).unwrap();
     code.extend_from_slice(&encoding::wide::encode_sys(scall, sys).to_le_bytes());
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-    let mut prog = Vec::new();
-    prog.extend_from_slice(b"IVM\0");
-    prog.extend_from_slice(&[1, 0, 0, 4]);
-    prog.extend_from_slice(&0u64.to_le_bytes());
-    prog.push(0);
-    prog.push(0);
+    let mut prog = ProgramMetadata::default().encode();
     prog.extend_from_slice(&code);
     vm.load_program(&prog).unwrap();
 
@@ -226,7 +212,7 @@ fn submit_ballot_without_verify_is_rejected() {
     let mut stx = block.transaction();
 
     let authority: AccountId = ALICE_ID.clone();
-    let mut vm = IVM::new(0);
+    let mut vm = IVM::new(VM_GAS_LIMIT);
     let mut host = CoreHost::with_accounts(authority.clone(), Arc::new(vec![authority.clone()]));
     host.set_halo2_config(&iroha_config::parameters::actual::Halo2 {
         enabled: true,
@@ -240,21 +226,14 @@ fn submit_ballot_without_verify_is_rejected() {
     vm.set_host(host);
 
     // Build SubmitBallot instruction
-    let ballot_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
-    let ballot_vk = ballot_fixture
-        .vk_box("halo2/ipa")
-        .expect("fixture verifying key");
     let sb = iroha_data_model::isi::zk::SubmitBallot {
         election_id: "election1".to_string(),
         ciphertext: vec![0u8; 32],
-        ballot_proof: iroha_data_model::proof::ProofAttachment::new_inline(
-            "halo2/ipa".into(),
-            ballot_fixture.proof_box("halo2/ipa"),
-            ballot_vk,
-        ),
+        ballot_proof: small_proof_attachment(),
         nullifier: [1u8; 32],
     };
-    let bytes = sb.encode_as_instruction_box();
+    let bytes = norito::to_bytes(&iroha_data_model::isi::InstructionBox::from(sb))
+        .expect("encode SubmitBallot InstructionBox to Norito");
     let tlv = make_tlv(PointerType::NoritoBytes as u16, &bytes);
     let mut cursor = 0;
     let ptr = store_tlv(&mut vm, &mut cursor, &tlv);
@@ -266,12 +245,7 @@ fn submit_ballot_without_verify_is_rejected() {
     let sys = u8::try_from(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION).unwrap();
     code.extend_from_slice(&encoding::wide::encode_sys(scall, sys).to_le_bytes());
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-    let mut prog = Vec::new();
-    prog.extend_from_slice(b"IVM\0");
-    prog.extend_from_slice(&[1, 0, 0, 4]);
-    prog.extend_from_slice(&0u64.to_le_bytes());
-    prog.push(0);
-    prog.push(0);
+    let mut prog = ProgramMetadata::default().encode();
     prog.extend_from_slice(&code);
     vm.load_program(&prog).unwrap();
 
@@ -306,7 +280,7 @@ fn finalize_election_without_verify_is_rejected() {
     let mut stx = block.transaction();
 
     let authority: AccountId = ALICE_ID.clone();
-    let mut vm = IVM::new(0);
+    let mut vm = IVM::new(VM_GAS_LIMIT);
     let mut host = CoreHost::with_accounts(authority.clone(), Arc::new(vec![authority.clone()]));
     host.set_halo2_config(&iroha_config::parameters::actual::Halo2 {
         enabled: true,
@@ -320,20 +294,13 @@ fn finalize_election_without_verify_is_rejected() {
     vm.set_host(host);
 
     // Build FinalizeElection instruction
-    let tally_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
-    let tally_vk = tally_fixture
-        .vk_box("halo2/ipa")
-        .expect("fixture verifying key");
     let fin = iroha_data_model::isi::zk::FinalizeElection {
         election_id: "election1".to_string(),
         tally: vec![1, 0, 0],
-        tally_proof: iroha_data_model::proof::ProofAttachment::new_inline(
-            "halo2/ipa".into(),
-            tally_fixture.proof_box("halo2/ipa"),
-            tally_vk,
-        ),
+        tally_proof: small_proof_attachment(),
     };
-    let bytes = fin.encode_as_instruction_box();
+    let bytes = norito::to_bytes(&iroha_data_model::isi::InstructionBox::from(fin))
+        .expect("encode FinalizeElection InstructionBox to Norito");
     let tlv = make_tlv(PointerType::NoritoBytes as u16, &bytes);
     let mut cursor = 0;
     let ptr = store_tlv(&mut vm, &mut cursor, &tlv);
@@ -350,12 +317,7 @@ fn finalize_election_without_verify_is_rejected() {
         .to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-    let mut prog = Vec::new();
-    prog.extend_from_slice(b"IVM\0");
-    prog.extend_from_slice(&[1, 0, 0, 4]);
-    prog.extend_from_slice(&0u64.to_le_bytes());
-    prog.push(0);
-    prog.push(0);
+    let mut prog = ProgramMetadata::default().encode();
     prog.extend_from_slice(&code);
     vm.load_program(&prog).unwrap();
 
