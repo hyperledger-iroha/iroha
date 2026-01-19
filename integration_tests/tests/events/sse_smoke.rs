@@ -56,144 +56,132 @@ fn wait_for_sse_ready(rx: &Receiver<String>) -> Result<()> {
 }
 
 #[test]
-fn sse_emits_execute_trigger_event() -> Result<()> {
-    let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
-        NetworkBuilder::new().with_min_peers(4),
-        stringify!(sse_emits_execute_trigger_event),
-    )?
-    else {
-        return Ok(());
-    };
-    let peer = network.peer();
-    let client = peer.client();
-
-    let rx = spawn_sse_reader(peer.api_address());
-    wait_for_sse_ready(&rx)?;
-
-    // Register a simple by-call trigger and execute it. The action mints an asset which,
-    // in turn, should emit a `Data` event captured by the SSE listener.
-    let trigger_id: TriggerId = "sse_smoke_trigger".parse()?;
-    let asset_id = AssetId::new("rose#wonderland".parse()?, ALICE_ID.clone());
-    let register = Register::trigger(Trigger::new(
-        trigger_id.clone(),
-        Action::new(
-            vec![InstructionBox::from(Mint::asset_numeric(1_u32, asset_id))],
-            Repeats::Indefinitely,
-            ALICE_ID.clone(),
-            ExecuteTriggerEventFilter::new()
-                .for_trigger(trigger_id.clone())
-                .under_authority(ALICE_ID.clone()),
-        ),
-    ));
-    if sandbox::handle_result(
-        client.submit_blocking(register),
-        stringify!(sse_emits_execute_trigger_event),
-    )?
-    .is_none()
-    {
-        return Ok(());
-    }
-    if sandbox::handle_result(
-        client.submit_blocking(ExecuteTrigger::new(trigger_id)),
-        stringify!(sse_emits_execute_trigger_event),
-    )?
-    .is_none()
-    {
-        return Ok(());
-    }
-
-    // Expect ExecuteTrigger + Data events over SSE.
-    let result: Result<()> = (|| {
-        let exec_evt = wait_for_sse(&rx, SSE_TIMEOUT, |val| {
-            summary_contains(val, "ExecuteTriggerEvent")
-        })?;
-        assert_eq!(exec_evt["category"].as_str(), Some("Other"));
-        let alice = &*ALICE_ID;
-        let data_evt = wait_for_sse(&rx, SSE_TIMEOUT, |val| {
-            val["category"].as_str() == Some("Data")
-                && summary_contains(val, "Asset(Added")
-                && summary_contains(val, &format!("rose##{alice}"))
-        })?;
-        assert_eq!(data_evt["category"].as_str(), Some("Data"));
-        Ok(())
-    })();
-
-    if sandbox::handle_result(result, stringify!(sse_emits_execute_trigger_event))?.is_none() {
-        return Ok(());
-    }
-
-    Ok(())
-}
-
-#[test]
-fn sse_captures_time_trigger_and_metadata_events() -> Result<()> {
+fn sse_smoke_scenarios() -> Result<()> {
     use iroha::data_model::events::time::{ExecutionTime, TimeEventFilter};
 
     let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
         NetworkBuilder::new().with_min_peers(4),
-        stringify!(sse_captures_time_trigger_and_metadata_events),
+        stringify!(sse_smoke_scenarios),
     )?
     else {
         return Ok(());
     };
     let peer = network.peer();
     let client = peer.client();
-    let rx = spawn_sse_reader(peer.api_address());
-    wait_for_sse_ready(&rx)?;
 
-    // Time trigger that sets ALICE's metadata when it fires at pre-commit.
-    let key: Name = "sse_tick".parse()?;
-    let time_trigger = Trigger::new(
-        "sse_time_trigger".parse()?,
-        Action::new(
-            vec![InstructionBox::from(SetKeyValue::account(
+    // Scenario 1: Execute trigger event + data event.
+    {
+        let rx = spawn_sse_reader(peer.api_address());
+        wait_for_sse_ready(&rx)?;
+
+        let trigger_id: TriggerId = "sse_smoke_trigger_exec".parse()?;
+        let asset_id = AssetId::new("rose#wonderland".parse()?, ALICE_ID.clone());
+        let register = Register::trigger(Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                vec![InstructionBox::from(Mint::asset_numeric(1_u32, asset_id))],
+                Repeats::Indefinitely,
                 ALICE_ID.clone(),
-                key.clone(),
-                Json::from(norito::json!("tick")),
-            ))],
-            Repeats::Exactly(1),
-            ALICE_ID.clone(),
-            TimeEventFilter::new(ExecutionTime::PreCommit),
-        ),
-    );
-    if sandbox::handle_result(
-        client.submit_blocking(Register::trigger(time_trigger)),
-        stringify!(sse_captures_time_trigger_and_metadata_events),
-    )?
-    .is_none()
-    {
-        return Ok(());
+                ExecuteTriggerEventFilter::new()
+                    .for_trigger(trigger_id.clone())
+                    .under_authority(ALICE_ID.clone()),
+            ),
+        ));
+        if sandbox::handle_result(
+            client.submit_blocking(register),
+            stringify!(sse_emits_execute_trigger_event),
+        )?
+        .is_none()
+        {
+            return Ok(());
+        }
+        if sandbox::handle_result(
+            client.submit_blocking(ExecuteTrigger::new(trigger_id)),
+            stringify!(sse_emits_execute_trigger_event),
+        )?
+        .is_none()
+        {
+            return Ok(());
+        }
+
+        let result: Result<()> = (|| {
+            let exec_evt = wait_for_sse(&rx, SSE_TIMEOUT, |val| {
+                summary_contains(val, "ExecuteTriggerEvent")
+            })?;
+            assert_eq!(exec_evt["category"].as_str(), Some("Other"));
+            let alice = &*ALICE_ID;
+            let data_evt = wait_for_sse(&rx, SSE_TIMEOUT, |val| {
+                val["category"].as_str() == Some("Data")
+                    && summary_contains(val, "Asset(Added")
+                    && summary_contains(val, &format!("rose##{alice}"))
+            })?;
+            assert_eq!(data_evt["category"].as_str(), Some("Data"));
+            Ok(())
+        })();
+
+        if sandbox::handle_result(result, stringify!(sse_emits_execute_trigger_event))?.is_none() {
+            return Ok(());
+        }
     }
 
-    // Kick a block so the pre-commit trigger fires.
-    if sandbox::handle_result(
-        client.submit_blocking(Log::new(Level::INFO, "trigger tick".to_string())),
-        stringify!(sse_captures_time_trigger_and_metadata_events),
-    )?
-    .is_none()
+    // Scenario 2: Time trigger + metadata event.
     {
-        return Ok(());
-    }
+        let rx = spawn_sse_reader(peer.api_address());
+        wait_for_sse_ready(&rx)?;
 
-    let result: Result<()> = (|| {
-        let time_evt = wait_for_sse(&rx, SSE_TIMEOUT, |val| summary_contains(val, "TimeEvent"))?;
-        assert_eq!(time_evt["category"].as_str(), Some("Other"));
-        let meta_evt = wait_for_sse(&rx, SSE_TIMEOUT, |val| {
-            val["category"].as_str() == Some("Data")
-                && summary_contains(val, "MetadataInserted")
-                && summary_contains(val, key.as_ref())
-        })?;
-        assert_eq!(meta_evt["category"].as_str(), Some("Data"));
-        Ok(())
-    })();
+        let key: Name = "sse_tick".parse()?;
+        let time_trigger = Trigger::new(
+            "sse_time_trigger_event".parse()?,
+            Action::new(
+                vec![InstructionBox::from(SetKeyValue::account(
+                    ALICE_ID.clone(),
+                    key.clone(),
+                    Json::from(norito::json!("tick")),
+                ))],
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                TimeEventFilter::new(ExecutionTime::PreCommit),
+            ),
+        );
+        if sandbox::handle_result(
+            client.submit_blocking(Register::trigger(time_trigger)),
+            stringify!(sse_captures_time_trigger_and_metadata_events),
+        )?
+        .is_none()
+        {
+            return Ok(());
+        }
 
-    if sandbox::handle_result(
-        result,
-        stringify!(sse_captures_time_trigger_and_metadata_events),
-    )?
-    .is_none()
-    {
-        return Ok(());
+        if sandbox::handle_result(
+            client.submit_blocking(Log::new(Level::INFO, "trigger tick".to_string())),
+            stringify!(sse_captures_time_trigger_and_metadata_events),
+        )?
+        .is_none()
+        {
+            return Ok(());
+        }
+
+        let result: Result<()> = (|| {
+            let time_evt =
+                wait_for_sse(&rx, SSE_TIMEOUT, |val| summary_contains(val, "TimeEvent"))?;
+            assert_eq!(time_evt["category"].as_str(), Some("Other"));
+            let meta_evt = wait_for_sse(&rx, SSE_TIMEOUT, |val| {
+                val["category"].as_str() == Some("Data")
+                    && summary_contains(val, "MetadataInserted")
+                    && summary_contains(val, key.as_ref())
+            })?;
+            assert_eq!(meta_evt["category"].as_str(), Some("Data"));
+            Ok(())
+        })();
+
+        if sandbox::handle_result(
+            result,
+            stringify!(sse_captures_time_trigger_and_metadata_events),
+        )?
+        .is_none()
+        {
+            return Ok(());
+        }
     }
 
     Ok(())

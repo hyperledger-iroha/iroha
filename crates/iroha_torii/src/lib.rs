@@ -15196,6 +15196,10 @@ impl IntoResponse for Error {
                 let envelope = Self::queue_error_envelope(source.as_ref(), backpressure);
                 let mut response = (status, utils::NoritoBody(envelope)).into_response();
                 let headers = response.headers_mut();
+                let (reject_code, _detail) = queue_rejection_metadata(source.as_ref());
+                if let Ok(header) = HeaderValue::from_str(reject_code) {
+                    headers.insert(HeaderName::from_static("x-iroha-reject-code"), header);
+                }
 
                 if let Ok(depth) = HeaderValue::from_str(&backpressure.queued().to_string()) {
                     headers.insert("X-Iroha-Queue-Depth", depth);
@@ -17929,6 +17933,29 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(
             headers.get("Retry-After").map(|v| v.to_str().unwrap()),
             Some("1")
+        );
+    }
+
+    #[test]
+    fn push_into_queue_error_sets_reject_code_header() {
+        use nonzero_ext::nonzero;
+
+        let err = super::Error::PushIntoQueue {
+            source: Box::new(queue::Error::InBlockchain),
+            backpressure: queue::BackpressureState::Healthy {
+                queued: 0,
+                capacity: nonzero!(1_usize),
+            },
+        };
+
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|v| v.to_str().ok()),
+            Some("PRTRY:ALREADY_COMMITTED")
         );
     }
 

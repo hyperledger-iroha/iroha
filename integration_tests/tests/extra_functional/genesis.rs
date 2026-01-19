@@ -26,7 +26,7 @@ async fn multiple_genesis_4_peers_2_genesis() -> eyre::Result<()> {
 async fn multiple_genesis_peers(n_peers: usize, n_genesis_peers: usize) -> eyre::Result<()> {
     if let Some(probe) = sandbox::start_network_async_or_skip(
         NetworkBuilder::new()
-            .with_default_pipeline_time()
+            .with_pipeline_time(std::time::Duration::from_secs(2))
             .with_peers(n_peers),
         stringify!(multiple_genesis_peers),
     )
@@ -39,7 +39,7 @@ async fn multiple_genesis_peers(n_peers: usize, n_genesis_peers: usize) -> eyre:
 
     let guard = sandbox::serial_guard();
     let network = NetworkBuilder::new()
-        .with_default_pipeline_time()
+        .with_pipeline_time(std::time::Duration::from_secs(2))
         .with_peers(n_peers)
         .build();
     let network = sandbox::SerializedNetwork::new(network, guard);

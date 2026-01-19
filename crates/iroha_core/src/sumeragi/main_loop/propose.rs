@@ -1313,6 +1313,147 @@ impl Actor {
             .saturating_mul(self.config.proposal_queue_scan_multiplier.get())
     }
 
+    fn maybe_rebroadcast_cached_proposal(
+        &mut self,
+        height: u64,
+        view: u64,
+        highest_qc: crate::sumeragi::consensus::QcHeaderRef,
+        pending_queue_len: usize,
+        now: Instant,
+    ) {
+        let Some(proposal) = self
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(height, view)
+            .cloned()
+        else {
+            return;
+        };
+
+        let (pending_block, block_hash) = {
+            let Some(pending) = self.pending.pending_blocks.values().find(|pending| {
+                !pending.aborted
+                    && pending.height == height
+                    && pending.view == view
+                    && pending.payload_hash == proposal.payload_hash
+            }) else {
+                trace!(
+                    height,
+                    view,
+                    payload = %proposal.payload_hash,
+                    "skipping cached proposal rebroadcast: pending block not found"
+                );
+                return;
+            };
+            (pending.block.clone(), pending.block.hash())
+        };
+
+        let proposal_roster = self
+            .roster_from_commit_qc_history_roll_forward(height, Some(highest_qc.subject_block_hash))
+            .unwrap_or_else(|| self.effective_commit_topology());
+        if proposal_roster.is_empty() {
+            trace!(
+                height,
+                view, "skipping cached proposal rebroadcast: empty commit topology"
+            );
+            return;
+        }
+        let mut topology = super::network_topology::Topology::new(proposal_roster);
+        let leader_index = match self.leader_index_for(&mut topology, height, view) {
+            Ok(idx) => idx,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    height, view, "failed to compute leader index for cached proposal rebroadcast"
+                );
+                return;
+            }
+        };
+
+        let Some(local_pos) = topology.position(self.common_config.peer.id().public_key()) else {
+            trace!(
+                height,
+                view, "skipping cached proposal rebroadcast: local peer not in validator set"
+            );
+            return;
+        };
+        if local_pos != leader_index {
+            trace!(
+                height,
+                view,
+                local_idx = local_pos,
+                leader_index,
+                "skipping cached proposal rebroadcast: local peer is not leader"
+            );
+            return;
+        }
+
+        let cooldown = self.payload_rebroadcast_cooldown();
+        if self.relay_backpressure_active(now, cooldown) {
+            trace!(
+                height,
+                view, "skipping cached proposal rebroadcast due to relay backpressure"
+            );
+            return;
+        }
+        if !self
+            .proposal_rebroadcast_log
+            .allow(block_hash, now, cooldown)
+        {
+            trace!(
+                height,
+                view,
+                block = %block_hash,
+                cooldown_ms = cooldown.as_millis(),
+                "skipping cached proposal rebroadcast due to cooldown"
+            );
+            return;
+        }
+
+        let local_peer_id = self.common_config.peer.id().clone();
+        let proposal_msg = BlockMessage::Proposal(proposal);
+        for peer in topology.iter() {
+            if peer == &local_peer_id {
+                continue;
+            }
+            self.schedule_background(BackgroundRequest::Post {
+                peer: peer.clone(),
+                msg: proposal_msg.clone(),
+            });
+        }
+
+        let block_created = super::message::BlockCreated {
+            block: pending_block,
+        };
+        let block_msg = BlockMessage::BlockCreated(block_created);
+        for peer in topology.iter() {
+            if peer == &local_peer_id {
+                continue;
+            }
+            self.schedule_background(BackgroundRequest::Post {
+                peer: peer.clone(),
+                msg: block_msg.clone(),
+            });
+        }
+
+        if pending_queue_len > 0 {
+            iroha_logger::info!(
+                height,
+                view,
+                block = %block_hash,
+                "rebroadcasting cached proposal"
+            );
+        } else {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                "rebroadcasting cached proposal"
+            );
+        }
+    }
+
     pub(super) fn on_pacemaker_backpressure_deferral(
         &mut self,
         now: Instant,
@@ -1725,6 +1866,15 @@ impl Actor {
             .get_proposal(height, view_idx)
             .is_some()
         {
+            // Rebroadcast cached proposals when the leader is still responsible for the slot so
+            // peers that missed the initial messages can recover without forcing a view change.
+            self.maybe_rebroadcast_cached_proposal(
+                height,
+                view_idx,
+                highest_qc,
+                pending_queue_len,
+                now,
+            );
             if pending_queue_len > 0 {
                 iroha_logger::info!(
                     height,

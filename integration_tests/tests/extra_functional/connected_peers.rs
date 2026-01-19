@@ -43,7 +43,7 @@ async fn connected_peers_with_f_1_0_1() -> Result<()> {
 async fn register_new_peer() -> Result<()> {
     let Some(network) = sandbox::start_network_async_or_skip(
         NetworkBuilder::new()
-            .with_default_pipeline_time()
+            .with_pipeline_time(std::time::Duration::from_secs(2))
             .with_peers(4),
         stringify!(register_new_peer),
     )
@@ -113,7 +113,7 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
     let mut builder = NetworkBuilder::new()
         .with_peers(n_peers)
         .with_data_availability_enabled(true)
-        .with_default_pipeline_time();
+        .with_pipeline_time(std::time::Duration::from_secs(2));
     if n_peers > 4 {
         const COLLECTORS_K: u16 = 3;
         const REDUNDANT_SEND_R: u8 = 2;
@@ -133,8 +133,6 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
             .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
                 SumeragiParameter::RedundantSendR(REDUNDANT_SEND_R),
             )));
-    } else {
-        builder = builder.with_default_pipeline_time();
     }
     let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
         return Ok(());

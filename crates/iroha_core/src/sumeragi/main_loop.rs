@@ -2487,12 +2487,12 @@ fn block_sync_quorum_available(
         return true;
     }
 
-    if !missing_block_requested {
+    if block_signers == 0 {
         return false;
     }
 
-    if block_signers == 0 {
-        return false;
+    if missing_block_requested {
+        return block_height <= local_height.saturating_add(1);
     }
 
     block_height <= local_height.saturating_add(1)
@@ -3372,6 +3372,7 @@ impl Actor {
         }
         let view = self.state.view();
         let tip_height = view.height();
+        let tip_height_u64 = u64::try_from(tip_height).unwrap_or(u64::MAX);
         let tip_hash = view.latest_block_hash();
         drop(view);
         let missing_payload = self
@@ -3391,6 +3392,8 @@ impl Actor {
         let pending_payload = self.subsystems.da_rbc.rbc.pending.keys().any(|key| {
             self.rbc_rebroadcast_active_with_tip(*key, tip_height, tip_hash)
                 && !self.block_payload_available_locally(key.0)
+                || (!self.block_payload_available_locally(key.0)
+                    && key.1 == tip_height_u64.saturating_add(1))
         });
         if pending_payload {
             return true;
@@ -3642,6 +3645,7 @@ pub(super) struct Actor {
     last_qc_rebuild: Instant,
     relay_backpressure: RelayBackpressure,
     new_view_rebroadcast_log: NewViewRebroadcastThrottle,
+    proposal_rebroadcast_log: PayloadRebroadcastThrottle,
     payload_rebroadcast_log: PayloadRebroadcastThrottle,
     block_sync_rebroadcast_log: PayloadRebroadcastThrottle,
     block_sync_fetch_log: PayloadRebroadcastThrottle,
@@ -7117,6 +7121,7 @@ impl Actor {
             last_qc_rebuild: initial_qc_rebuild,
             relay_backpressure: RelayBackpressure::default(),
             new_view_rebroadcast_log: NewViewRebroadcastThrottle::default(),
+            proposal_rebroadcast_log: PayloadRebroadcastThrottle::default(),
             payload_rebroadcast_log: PayloadRebroadcastThrottle::default(),
             block_sync_rebroadcast_log: PayloadRebroadcastThrottle::default(),
             block_sync_fetch_log: PayloadRebroadcastThrottle::default(),

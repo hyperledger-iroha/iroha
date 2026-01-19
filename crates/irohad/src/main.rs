@@ -2007,6 +2007,7 @@ fn sumeragi_block_message_requires_blocking(
             | BlockMessage::Proposal(_)
             | BlockMessage::QcVote(_)
             | BlockMessage::Qc(_)
+            | BlockMessage::RbcInit(_)
             | BlockMessage::RbcReady(_)
             | BlockMessage::RbcDeliver(_)
     )
@@ -2022,7 +2023,7 @@ mod network_relay_tests {
         sumeragi::{
             consensus::{
                 ConsensusBlockHeader, Evidence, EvidenceKind, EvidencePayload, ExecWitness,
-                ExecWitnessMsg, Phase, Proposal, QcHeaderRef,
+                ExecWitnessMsg, Phase, Proposal, QcHeaderRef, RbcInit,
             },
             message::{BlockMessage, BlockSyncUpdate, ConsensusParamsAdvert, ControlFlow},
         },
@@ -2084,6 +2085,26 @@ mod network_relay_tests {
             iroha_core::sumeragi::message::BlockCreated::from(&signed),
         );
         assert!(sumeragi_block_message_requires_blocking(&created));
+
+        let init = BlockMessage::RbcInit(RbcInit {
+            block_hash: signed.hash(),
+            height: signed.header().height().get(),
+            view: signed.header().view_change_index(),
+            epoch: 0,
+            roster: vec![PeerId::new(KeyPair::random().public_key().clone())],
+            roster_hash: Hash::prehashed([0x11; 32]),
+            total_chunks: 1,
+            chunk_digests: vec![[0x22; 32]],
+            payload_hash: Hash::prehashed([0x33; 32]),
+            chunk_root: Hash::prehashed([0x44; 32]),
+            block_header: signed.header().clone(),
+            leader_signature: signed
+                .signatures()
+                .next()
+                .expect("signed block has signature")
+                .clone(),
+        });
+        assert!(sumeragi_block_message_requires_blocking(&init));
 
         let advert = ConsensusParamsAdvert {
             collectors_k: 1,
