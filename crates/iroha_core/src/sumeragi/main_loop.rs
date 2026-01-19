@@ -7582,6 +7582,7 @@ impl Actor {
             proposal_seen,
             self.commit_quorum_timeout(),
             self.subsystems.propose.pacemaker.propose_interval,
+            self.runtime_da_enabled(),
         );
         if timeout == Duration::ZERO {
             return None;
@@ -10277,6 +10278,7 @@ impl Actor {
             proposal_seen,
             self.commit_quorum_timeout(),
             self.subsystems.propose.pacemaker.propose_interval,
+            self.runtime_da_enabled(),
         );
         age >= timeout
     }
@@ -10327,6 +10329,7 @@ impl Actor {
             proposal_seen,
             self.commit_quorum_timeout(),
             self.subsystems.propose.pacemaker.propose_interval,
+            self.runtime_da_enabled(),
         );
         if !idle_round_timed_out(true, age, timeout) {
             if rbc_backlog {
@@ -10636,9 +10639,14 @@ fn idle_view_timeout(
     proposal_seen: bool,
     commit_timeout: Duration,
     propose_interval: Duration,
+    da_enabled: bool,
 ) -> Duration {
     if proposal_seen {
         return commit_timeout;
+    }
+    if da_enabled {
+        // DA payload propagation can lag; give the full commit window before rotating.
+        return commit_timeout.max(Duration::from_millis(1));
     }
     // No proposal observed: rotate sooner to recover from a missing leader, but cap
     // the timeout so we don't exceed the normal commit window.
@@ -11385,6 +11393,18 @@ impl RbcSession {
     ) -> Self {
         Self::new(total_chunks, payload_hash, expected_chunk_root, None, epoch)
             .expect("test configuration should respect RBC chunk cap")
+    }
+
+    /// Seed the block header and leader signature for test-only RBC sessions.
+    #[cfg(test)]
+    pub(crate) fn test_set_block_header_and_signature(&mut self, block: &SignedBlock) {
+        let signature = block
+            .signatures()
+            .next()
+            .cloned()
+            .expect("test block must include a leader signature");
+        self.block_header = Some(block.header());
+        self.leader_signature = Some(signature);
     }
 
     pub(crate) fn total_chunks(&self) -> u32 {

@@ -7108,6 +7108,53 @@ async fn handler_debug_axt_cache(
     json_ok(norito::json::Value::Object(payload))
 }
 
+#[cfg(feature = "telemetry")]
+async fn handler_debug_witness(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+) -> Result<AxResponse, Error> {
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(&headers, None, "v1/debug/witness", app.api_token_enforced());
+    if !app.rate_limiter.allow(&key).await {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    if !app.telemetry.allows_developer_outputs() {
+        return Ok(telemetry_unavailable_response(
+            "/v1/debug/witness",
+            &app.telemetry,
+        ));
+    }
+
+    let witness = iroha_core::sumeragi::witness::snapshot_exec_witness();
+    let format =
+        crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)).map_err(|_| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(
+                "Not Acceptable".to_string(),
+            ))
+        })?;
+
+    match format {
+        ResponseFormat::Json => json_ok(witness),
+        ResponseFormat::Norito => Ok(utils::NoritoBody(witness).into_response()),
+    }
+}
+
 async fn handler_sumeragi_evidence(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -11687,6 +11734,7 @@ impl Torii {
                 .route("/v1/sumeragi/pacemaker", get(handler_pacemaker_status))
                 .route("/v1/sumeragi/phases", get(handler_sumeragi_phases))
                 .route("/v1/debug/axt/cache", get(handler_debug_axt_cache))
+                .route("/v1/debug/witness", get(handler_debug_witness))
                 .route(uri::STATUS, get(handler_status_root))
                 .route(uri::METRICS, get(handler_metrics))
                 .route_layer(operator_layer);
@@ -11728,6 +11776,7 @@ impl Torii {
                     "/v1/debug/axt/cache",
                     get(routing::telemetry_not_implemented),
                 )
+                .route("/v1/debug/witness", get(routing::telemetry_not_implemented))
                 .route(
                     "/v1/assets/{definition_id}/holders",
                     get(handler_asset_holders),
@@ -15613,6 +15662,32 @@ pub(crate) mod tests_runtime_handlers {
             norito::json::from_slice(&bytes).expect("decode json");
         assert_eq!(hash.policy, "V1");
         assert_eq!(hash.abi_hash_hex.len(), 64);
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[tokio::test]
+    async fn debug_witness_returns_json_body() {
+        let app = mk_app_state_for_tests();
+        let headers = HeaderMap::new();
+        let accept = Some(crate::utils::extractors::ExtractAccept(
+            HeaderValue::from_static("application/json"),
+        ));
+
+        let resp = super::handler_debug_witness(State(app), headers, accept)
+            .await
+            .expect("debug witness response");
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let content_type = resp
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .expect("content type header");
+        assert_eq!(content_type, "application/json");
+
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        let _parsed: norito::json::Value = norito::json::from_slice(&bytes).expect("valid json");
     }
 
     #[tokio::test]
