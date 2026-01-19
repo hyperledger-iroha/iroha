@@ -105,9 +105,9 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 # collectors_k = 1
 # collectors_redundant_send_r = 1
 # msg_channel_cap_votes = 8192          # vote channel capacity
-# msg_channel_cap_block_payload = 128   # block payload capacity
-# msg_channel_cap_rbc_chunks = 1024     # RBC chunk capacity
-# rbc_chunk_fanout = null               # RBC chunk fanout cap (null = auto quorum)
+# msg_channel_cap_block_payload = 128   # block payload capacity (proposal backpressure if saturated)
+# msg_channel_cap_rbc_chunks = 1024     # RBC chunk capacity (proposal backpressure if saturated)
+# rbc_chunk_fanout = null               # RBC chunk fanout cap (null = full roster minus local)
 # rbc_payload_chunks_per_tick = 64      # max RBC chunks broadcast per tick
 # rbc_pending_session_limit = 256       # max pending RBC sessions before INIT
 # msg_channel_cap_blocks = 256          # block message capacity (block sync updates, params, etc.)

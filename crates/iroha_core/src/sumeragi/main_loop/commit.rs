@@ -1106,6 +1106,20 @@ impl Actor {
                         );
                         pending.block = failed_block;
                         self.pending.pending_blocks.insert(block_hash, pending);
+                    } else if self.rbc_availability_unresolved_for_reschedule(
+                        (block_hash, pending_height, pending_view),
+                        &topology,
+                    ) {
+                        debug!(
+                            height = pending_height,
+                            view = pending_view,
+                            block = ?block_hash,
+                            pending_age_ms = pending_age.as_millis(),
+                            quorum_timeout_ms = quorum_timeout.as_millis(),
+                            "deferring quorum reschedule while RBC availability is unresolved"
+                        );
+                        pending.block = failed_block;
+                        self.pending.pending_blocks.insert(block_hash, pending);
                     } else if pending.reschedule_due(now, reschedule_backoff) {
                         reschedule_quorum = Some((
                             pending,

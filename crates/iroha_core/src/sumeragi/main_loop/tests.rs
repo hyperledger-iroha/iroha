@@ -774,7 +774,7 @@ async fn apply_mode_flip_defers_while_commit_pipeline_active() {
     actor.pending_mode_flip = Some(ConsensusMode::Npos);
 
     let height = 2u64;
-    let view = 0u64;
+    let view = actor.phase_tracker.current_view(height).unwrap_or(0);
     let parent = actor.state.view().latest_block_hash();
     let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, parent);
     let block_hash = block.hash();
@@ -15395,6 +15395,82 @@ async fn handle_rbc_init_caches_vote_roster() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn handle_rbc_init_ignores_result_merkle_root_mismatch() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da_enabled = true;
+    consensus_cfg.epoch_length_blocks = 2;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let height = 5u64;
+    let view = 0u64;
+    let epoch = actor.epoch_for_height(height);
+    let roster = actor.effective_commit_topology();
+    let (base_header, leader_signature) =
+        rbc_header_and_signature(actor, &roster, height, view, &harness.key_pairs);
+    let block_hash = base_header.hash();
+    let key = (block_hash, height, view);
+
+    let mut header_with_results = base_header;
+    header_with_results.result_merkle_root = Some(HashOf::from_untyped_unchecked(Hash::prehashed(
+        [0xAB; Hash::LENGTH],
+    )));
+
+    let digests = vec![[0x55; 32]];
+    let chunk_root = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(digests.clone())
+        .root()
+        .map(Hash::from)
+        .expect("chunk root");
+    let payload_hash = Hash::prehashed([0x44; Hash::LENGTH]);
+
+    let mut session = RbcSession::new(
+        u32::try_from(digests.len()).expect("chunk count fits u32"),
+        Some(payload_hash),
+        Some(chunk_root),
+        Some(digests.clone()),
+        epoch,
+    )
+    .expect("session");
+    session.block_header = Some(header_with_results);
+    session.leader_signature = Some(leader_signature.clone());
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    let init = crate::sumeragi::consensus::RbcInit {
+        block_hash,
+        height,
+        view,
+        epoch,
+        roster: roster.clone(),
+        roster_hash: roster_hash(&roster),
+        total_chunks: u32::try_from(digests.len()).expect("chunk count fits u32"),
+        chunk_digests: digests,
+        payload_hash,
+        chunk_root,
+        block_header: base_header,
+        leader_signature,
+    };
+
+    actor.handle_rbc_init(init, None).expect("init handled");
+    let session = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session retained");
+    assert!(
+        session
+            .block_header
+            .is_some_and(|header| header.result_merkle_root.is_some()),
+        "result merkle root should be preserved"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn handle_rbc_init_rejects_roster_hash_mismatch() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -17398,6 +17474,128 @@ async fn seed_rbc_session_uses_epoch_for_height() {
     let expected_epoch = harness.actor.epoch_for_height(height);
     assert_eq!(expected_epoch, 1, "epoch length should yield epoch 1");
     assert_eq!(session.epoch, expected_epoch);
+    assert_eq!(
+        session.block_header,
+        Some(block.header()),
+        "seeded session should capture the block header"
+    );
+    let expected_sig = block
+        .signatures()
+        .find(|signature| signature.index() == 0)
+        .expect("leader signature should exist");
+    assert_eq!(
+        session.leader_signature.as_ref(),
+        Some(expected_sig),
+        "seeded session should capture leader signature"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn ensure_rbc_session_from_pending_block_seeds_session() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.rbc_chunk_max_bytes = 1024 * 1024;
+    let mut harness = test_actor_harness_with_config(1, consensus_cfg, None).await;
+    let height = harness
+        .actor
+        .state
+        .view()
+        .height()
+        .saturating_add(1)
+        .try_into()
+        .unwrap_or(u64::MAX);
+    let view = 0u64;
+    let parent = harness.actor.state.view().latest_block_hash();
+    let block = sample_block(height, view, parent);
+    let block_hash = block.hash();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let session_key = Actor::session_key(&block_hash, height, view);
+    assert_eq!(session_key.1, height, "session key height should match");
+    assert_eq!(session_key.2, view, "session key view should match");
+    let pending = PendingBlock::new(block.clone(), payload_hash, height, view);
+    harness
+        .actor
+        .pending
+        .pending_blocks
+        .insert(block_hash, pending);
+    assert!(
+        harness
+            .actor
+            .pending
+            .pending_blocks
+            .contains_key(&block_hash),
+        "pending block should be inserted before seeding"
+    );
+    let pending = harness
+        .actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending block exists");
+    assert_eq!(pending.height, height, "pending height should match");
+    assert_eq!(pending.view, view, "pending view should match");
+    assert!(
+        matches!(
+            pending.validation_status,
+            super::pending_block::ValidationStatus::Pending
+        ),
+        "pending block should be marked as pending"
+    );
+    let pending_payload_bytes = super::proposals::block_payload_bytes(&pending.block);
+    assert_eq!(
+        pending_payload_bytes, payload_bytes,
+        "pending payload bytes should match block payload bytes"
+    );
+    assert_eq!(
+        pending.block.hash(),
+        session_key.0,
+        "pending block hash should match session key"
+    );
+    Actor::build_rbc_session_from_payload(
+        &payload_bytes,
+        payload_hash,
+        harness.actor.config.rbc_chunk_max_bytes,
+        harness.actor.epoch_for_height(height),
+    )
+    .expect("rbc session should build for pending block payload");
+
+    let seeded = harness
+        .actor
+        .ensure_rbc_session_from_pending_block(session_key)
+        .expect("seed from pending");
+    assert!(seeded, "pending block should seed the RBC session");
+
+    assert!(
+        harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .contains_key(&session_key),
+        "pending block should seed the RBC session"
+    );
+    assert!(
+        !harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .pending
+            .contains_key(&session_key),
+        "pending block seed should not create a pending stash"
+    );
+    let session = harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&session_key)
+        .expect("session");
+    assert_eq!(session.payload_hash(), Some(payload_hash));
 
     harness.shutdown.send();
 }
@@ -23407,6 +23605,71 @@ async fn retry_missing_block_requests_triggers_view_change_after_dwell() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn retry_missing_block_requests_defers_view_change_when_rbc_pending() {
+    let mut harness = test_actor_harness(4).await;
+    let _guard = super::status::view_change_proof_test_guard();
+    super::status::reset_view_change_cause_counters_for_tests();
+    let actor = &mut harness.actor;
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0;
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor.phase_tracker.on_view_change(height, view, now);
+
+    let mut block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xBB; Hash::LENGTH]));
+    if actor.block_payload_available_locally(block_hash) {
+        block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xBC; Hash::LENGTH]));
+    }
+
+    let key = Actor::session_key(&block_hash, height, view);
+    let session = RbcSession::test_new(
+        1,
+        Some(Hash::prehashed([0x11; 32])),
+        Some(Hash::prehashed([0x22; 32])),
+        actor.epoch_for_height(height),
+    );
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    let retry_window = Duration::from_millis(10);
+    let dwell_start = now - retry_window - Duration::from_millis(1);
+    actor.pending.missing_block_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height,
+            view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window,
+            view_change_window: Some(retry_window),
+            first_seen: dwell_start,
+            last_requested: dwell_start,
+            view_change_triggered_view: None,
+            attempts: 0,
+        },
+    );
+
+    assert!(
+        actor.retry_missing_block_requests(now),
+        "retry should attempt fetch or deferred view change"
+    );
+    let stats = actor
+        .pending
+        .missing_block_requests
+        .get(&block_hash)
+        .expect("request entry retained");
+    assert!(
+        stats.view_change_triggered_view.is_none(),
+        "view change should be deferred while RBC availability is unresolved"
+    );
+    let snapshot = super::status::snapshot().view_change_causes;
+    assert_eq!(snapshot.missing_payload_total, 0);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn retry_missing_block_requests_uses_active_roster_when_commit_topology_empty() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -26087,6 +26350,7 @@ fn pacemaker_defers_under_backpressure() {
         active_pending: false,
         rbc_backlog: false,
         relay_backpressure: false,
+        consensus_queue_backpressure: false,
     };
     let (log_initial, log_fire, should_attempt) =
         Actor::evaluate_pacemaker(&mut pacemaker, &mut tracker, backpressure, start);
@@ -26521,16 +26785,73 @@ async fn force_view_change_if_idle_skips_when_rbc_backlog() {
         .phase_tracker
         .on_view_change(height, current_view, start);
     assert!(
-        actor.force_view_change_if_idle(now),
-        "idle view change should trigger after timeout even with RBC backlog"
+        !actor.force_view_change_if_idle(now),
+        "idle view change should not trigger after timeout while RBC backlog is unresolved"
     );
     let snapshot = super::status::snapshot().view_change_causes;
-    assert_eq!(snapshot.missing_qc_total, 1);
-    assert_eq!(
-        snapshot.last_cause.as_deref(),
-        Some(super::ViewChangeCause::MissingQc.as_str())
-    );
+    assert_eq!(snapshot.missing_qc_total, 0);
+    assert!(snapshot.last_cause.is_none());
 
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn force_view_change_if_idle_skips_when_consensus_queue_backpressure() {
+    use std::borrow::Cow;
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    super::status::reset_view_change_cause_counters_for_tests();
+    super::status::reset_worker_loop_snapshot_for_tests();
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_height = actor.state.view().height() as u64;
+    let highest_qc = sample_qc_ref(committed_height, 0);
+    actor.highest_qc = Some(highest_qc);
+    let height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    let current_view = 0u64;
+    let now = Instant::now();
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    let start = now
+        .checked_sub(timeout + Duration::from_millis(1))
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, start);
+
+    actor.config.msg_channel_cap_block_payload = 1;
+    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::BlockPayload);
+
+    assert!(
+        !actor.force_view_change_if_idle(now),
+        "idle view change should not trigger while consensus queues are saturated"
+    );
+    assert_eq!(actor.phase_tracker.current_view(height), Some(current_view));
+
+    let snapshot = super::status::snapshot().view_change_causes;
+    assert_eq!(snapshot.missing_qc_total, 0);
+    assert!(snapshot.last_cause.is_none());
+
+    super::status::reset_worker_loop_snapshot_for_tests();
     super::status::reset_view_change_cause_counters_for_tests();
     harness.shutdown.send();
 }
@@ -36508,7 +36829,7 @@ fn validate_qc_against_votes_rejects_bitmap_longer_than_roster() {
 }
 
 #[test]
-fn qc_extends_locked_if_present_allows_missing_lock_locally() {
+fn qc_extends_locked_if_present_blocks_missing_lock_locally() {
     let locked = sample_qc_ref(5, 1);
     let highest = sample_qc_ref(6, 2);
     let extends = super::qc_extends_locked_if_present(
@@ -36518,9 +36839,67 @@ fn qc_extends_locked_if_present_allows_missing_lock_locally() {
         |_hash| false, // locked block not known locally
     );
     assert!(
-        extends,
-        "missing lock locally should not block extension checks"
+        !extends,
+        "missing lock locally should block extension checks"
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn drop_missing_lock_if_unknown_requests_payload_and_retains_lock() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let locked_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAD; Hash::LENGTH]));
+    assert!(
+        !actor.block_known_locally(locked_hash),
+        "test lock should be missing locally"
+    );
+    let lock = QcHeaderRef {
+        height: 5,
+        view: 0,
+        epoch: 0,
+        subject_block_hash: locked_hash,
+        phase: Phase::Commit,
+    };
+    actor.locked_qc = Some(lock);
+    super::status::set_locked_qc(lock.height, lock.view, Some(locked_hash));
+
+    let roster = actor.effective_commit_topology();
+    let qc = Qc {
+        phase: Phase::Commit,
+        subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0xAE; Hash::LENGTH],
+        )),
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: lock.height.saturating_add(1),
+        view: 0,
+        epoch: 0,
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&roster),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: roster,
+        aggregate: QcAggregate {
+            signers_bitmap: Vec::new(),
+            bls_aggregate_signature: Vec::new(),
+        },
+    };
+
+    actor.drop_missing_lock_if_unknown(&qc);
+
+    let locked_after = actor.locked_qc.expect("locked qc retained");
+    assert_eq!(locked_after.subject_block_hash, locked_hash);
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .contains_key(&locked_hash),
+        "missing locked payload should trigger fetch request"
+    );
+
+    harness.shutdown.send();
 }
 
 #[test]
@@ -42860,6 +43239,47 @@ async fn reschedule_defers_missing_local_data_until_availability_timeout() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn reschedule_defers_quorum_timeout_while_rbc_incomplete() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let view = actor.state.view();
+    let height = view.height() as u64 + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let block = sample_block(height, 0, parent);
+    let block_hash = block.hash();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let view_idx = block.header().view_change_index();
+    let quorum_timeout = actor.quorum_timeout(true);
+
+    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    pending.inserted_at = Instant::now() - quorum_timeout - Duration::from_millis(1);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    let key = (block_hash, height, view_idx);
+    let session = RbcSession::test_new(1, Some(payload_hash), None, actor.epoch_for_height(height));
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    assert!(
+        !actor.reschedule_stale_pending_blocks(),
+        "incomplete RBC sessions should defer quorum reschedule"
+    );
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert!(
+        pending_after.last_quorum_reschedule.is_none(),
+        "pending should not be quorum-rescheduled while RBC is incomplete"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn reschedule_stale_pending_blocks_skips_empty_roster() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
@@ -45849,6 +46269,52 @@ fn rbc_message_committed_flags_stale_inputs() {
 }
 
 #[tokio::test]
+async fn rbc_message_stale_ignores_uncommitted_kura_blocks() {
+    let harness = test_actor_harness(4).await;
+    let committed_height = u64::try_from(harness.actor.state.view().height()).unwrap_or(0);
+
+    let block = block_with_da_commitment(ManifestDigest::new([0x22; 32]));
+    let block_height = block.header().height().get();
+    assert!(
+        block_height > committed_height,
+        "test block must exceed committed height"
+    );
+
+    let block_hash = block.hash();
+    harness
+        .actor
+        .kura
+        .store_block(Arc::new(block))
+        .expect("store block");
+
+    assert!(
+        !harness.actor.rbc_message_stale(&block_hash, block_height),
+        "RBC messages must not treat uncommitted Kura blocks as committed"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test]
+async fn rbc_message_stale_allows_missing_payload_for_committed_height_with_da() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.da_enabled = true;
+    let harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 2).await;
+
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x55; 32]));
+    assert!(
+        !harness.actor.block_payload_available_locally(block_hash),
+        "test block must be missing locally"
+    );
+    assert!(
+        !harness.actor.rbc_message_stale(&block_hash, 2),
+        "DA-enabled nodes should accept RBC messages for missing payloads even at committed height"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test]
 async fn rbc_stale_view_accepts_when_da_enabled() {
     let mut harness = test_actor_harness(4).await;
     let now = Instant::now();
@@ -45971,6 +46437,72 @@ async fn rbc_backlog_counts_pending_stash_for_next_height() {
     assert!(
         harness.actor.has_unresolved_rbc_backlog(),
         "pending RBC stash for next height should gate view changes"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rbc_backlog_counts_pending_stash_for_tip_height() {
+    let mut harness = test_actor_harness(4).await;
+    let tip_height = u64::try_from(harness.actor.state.view().height()).unwrap_or(u64::MAX);
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x47; 32]));
+    let key: SessionKey = (block_hash, tip_height, 0);
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .pending
+        .insert(key, PendingRbcMessages::new(Instant::now()));
+
+    assert!(
+        !harness.actor.block_payload_available_locally(block_hash),
+        "pending RBC stash should not report a local payload"
+    );
+    assert!(
+        harness.actor.has_unresolved_rbc_backlog(),
+        "pending RBC stash for tip height should gate view changes"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rbc_backlog_counts_active_session_without_ready_quorum() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let view = actor.state.view();
+    let tip_height = view.height() as u64;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let height = tip_height.saturating_add(1);
+    let block = sample_block(height, 0, parent);
+    let payload_hash = Hash::prehashed([0x77; 32]);
+    let pending = PendingBlock::new(block.clone(), payload_hash, height, 0);
+    actor.pending.pending_blocks.insert(block.hash(), pending);
+
+    let key = Actor::session_key(&block.hash(), height, 0);
+    let mut session = RbcSession::test_new(
+        1,
+        Some(Hash::prehashed([0x11; 32])),
+        Some(Hash::prehashed([0x22; 32])),
+        0,
+    );
+    session.test_note_chunk(0, vec![0xAB], 0);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    let roster = actor.effective_commit_topology();
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
+
+    assert!(
+        actor.block_payload_available_locally(block.hash()),
+        "pending block should report local payload availability"
+    );
+    assert!(
+        actor.has_unresolved_rbc_backlog(),
+        "active RBC session without READY quorum should gate view changes"
     );
 
     harness.shutdown.send();
@@ -46947,6 +47479,7 @@ fn pacemaker_respects_refreshed_backpressure_state() {
         active_pending: false,
         rbc_backlog: false,
         relay_backpressure: false,
+        consensus_queue_backpressure: false,
     };
     let (log_first, log_fire, attempt) =
         Actor::evaluate_pacemaker(&mut pacemaker, &mut tracker, backpressure, start);
@@ -46976,6 +47509,7 @@ fn evaluate_pacemaker_continues_under_saturation() {
         active_pending: false,
         rbc_backlog: false,
         relay_backpressure: false,
+        consensus_queue_backpressure: false,
     };
     let now = Instant::now();
     let mut pacemaker = super::Pacemaker::with_interval(Duration::from_millis(5), now);
@@ -47007,6 +47541,7 @@ fn evaluate_pacemaker_defers_and_recovers_after_backoff() {
         active_pending: false,
         rbc_backlog: false,
         relay_backpressure: false,
+        consensus_queue_backpressure: false,
     };
     let start = Instant::now();
     let mut pacemaker = super::Pacemaker::with_interval(Duration::from_millis(5), start);
@@ -47043,6 +47578,7 @@ fn evaluate_pacemaker_defers_and_recovers_after_backoff() {
         active_pending: false,
         rbc_backlog: false,
         relay_backpressure: false,
+        consensus_queue_backpressure: false,
     };
     let (log_recovered, log_fire_recovered, attempt_recovered) = Actor::evaluate_pacemaker(
         &mut pacemaker,
@@ -47070,6 +47606,7 @@ fn evaluate_pacemaker_fires_after_deadline_even_when_saturated() {
         active_pending: false,
         rbc_backlog: false,
         relay_backpressure: false,
+        consensus_queue_backpressure: false,
     };
     let start = Instant::now();
     let mut pacemaker = super::Pacemaker::with_interval(Duration::from_millis(5), start);
@@ -47111,6 +47648,7 @@ fn evaluate_pacemaker_defers_for_non_queue_backpressure() {
         active_pending: false,
         rbc_backlog: true,
         relay_backpressure: false,
+        consensus_queue_backpressure: false,
     };
     let (log_first, log_fire, attempt) =
         Actor::evaluate_pacemaker(&mut pacemaker, &mut tracker, backpressure, start);
@@ -47150,6 +47688,7 @@ fn evaluate_pacemaker_fires_without_backpressure() {
         active_pending: false,
         rbc_backlog: false,
         relay_backpressure: false,
+        consensus_queue_backpressure: false,
     };
     let start = Instant::now();
     let mut pacemaker = super::Pacemaker::with_interval(Duration::from_millis(5), start);
@@ -47308,6 +47847,7 @@ fn kickstart_pacemaker_after_commit_triggers_only_when_allowed() {
         active_pending: false,
         rbc_backlog: false,
         relay_backpressure: false,
+        consensus_queue_backpressure: false,
     };
     let calls = Arc::new(AtomicUsize::new(0));
     let calls_clone = Arc::clone(&calls);
@@ -47332,6 +47872,7 @@ fn kickstart_pacemaker_after_commit_triggers_only_when_allowed() {
         active_pending: false,
         rbc_backlog: true,
         relay_backpressure: false,
+        consensus_queue_backpressure: false,
     };
     let calls = Arc::new(AtomicUsize::new(0));
     let calls_clone = Arc::clone(&calls);
