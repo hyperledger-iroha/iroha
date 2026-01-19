@@ -19,7 +19,7 @@ use iroha_data_model::{
     permission,
     prelude::*,
     smart_contract::manifest::{
-        ContractManifest, EntrypointDescriptor, EntryPointKind, TriggerCallback, TriggerDescriptor,
+        ContractManifest, EntryPointKind, EntrypointDescriptor, TriggerCallback, TriggerDescriptor,
     },
     trigger::action::Repeats,
 };
@@ -57,10 +57,10 @@ fn setup_state() -> (State, AccountId, KeyPair) {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn activate_registers_manifest_triggers_and_deactivate_removes() {
     let (state, authority, kp) = setup_state();
-    let header =
-        iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
 
@@ -88,10 +88,7 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
 
     let trigger_id: TriggerId = "wake".parse().expect("trigger id");
     let mut descriptor_metadata = Metadata::default();
-    descriptor_metadata.insert(
-        "tag".parse::<Name>().expect("tag key"),
-        Json::from("alpha"),
-    );
+    descriptor_metadata.insert("tag".parse::<Name>().expect("tag key"), Json::from("alpha"));
     let trigger = TriggerDescriptor {
         id: trigger_id.clone(),
         repeats: Repeats::Indefinitely,
@@ -150,7 +147,10 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
     let key_code: Name = "contract_code_hash".parse().expect("code hash key");
     let key_trigger: Name = "contract_trigger_id".parse().expect("trigger id key");
     assert_eq!(metadata.get(&key_namespace), Some(&Json::from("apps")));
-    assert_eq!(metadata.get(&key_contract), Some(&Json::from("demo.contract")));
+    assert_eq!(
+        metadata.get(&key_contract),
+        Some(&Json::from("demo.contract"))
+    );
     assert_eq!(metadata.get(&key_entrypoint), Some(&Json::from("run")));
     let code_hash_json = Json::from(code_hash.to_string().as_str());
     assert_eq!(metadata.get(&key_code), Some(&code_hash_json));

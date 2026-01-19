@@ -238,7 +238,12 @@ fn run_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
         "seed asset definition"
     );
     assert!(
-        wsv.mint(&caller, caller.clone(), asset_id.clone(), Numeric::from(20_u64)),
+        wsv.mint(
+            &caller,
+            caller.clone(),
+            asset_id.clone(),
+            Numeric::from(20_u64)
+        ),
         "seed caller balance"
     );
 
@@ -254,7 +259,11 @@ fn run_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
         let total = caller_balance
             .checked_add(recipient_balance)
             .expect("sum caller + recipient");
-        assert_eq!(total, Numeric::from(20_u64), "transfer preserves total balance");
+        assert_eq!(
+            total,
+            Numeric::from(20_u64),
+            "transfer preserves total balance"
+        );
     });
 }
 
@@ -291,7 +300,12 @@ fn run_call_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
         "register asset definition"
     );
     assert!(
-        wsv.mint(&caller, alice.clone(), asset_id.clone(), Numeric::from(15_u64)),
+        wsv.mint(
+            &caller,
+            alice.clone(),
+            asset_id.clone(),
+            Numeric::from(15_u64)
+        ),
         "seed alice balance"
     );
 
@@ -310,7 +324,11 @@ fn run_call_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
             let total = alice_balance
                 .checked_add(bob_balance)
                 .expect("sum alice + bob");
-            assert_eq!(total, Numeric::from(15_u64), "transfer preserves total supply");
+            assert_eq!(
+                total,
+                Numeric::from(15_u64),
+                "transfer preserves total supply"
+            );
         },
     );
 }

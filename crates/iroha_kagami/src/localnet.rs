@@ -549,6 +549,7 @@ pub fn generate_localnet<T: Write>(opts: &LocalnetOptions, writer: &mut BufWrite
     generate_localnet_with_line(opts, writer)
 }
 
+#[allow(clippy::too_many_lines)]
 fn validate_localnet_options(opts: &LocalnetOptions) -> Result<ResolvedHosts> {
     if let Some(block_ms) = opts.block_time_ms
         && block_ms == 0
@@ -719,21 +720,21 @@ fn generate_localnet_with_line<T: Write>(
         nexus_enabled.then(|| localnet_dataspace_fault_tolerance(opts.peers));
     let block_time_override = opts
         .block_time_ms
-        .or(perf_spec.map(|spec| spec.block_time_ms));
+        .or_else(|| perf_spec.map(|spec| spec.block_time_ms));
     let commit_time_override = opts
         .commit_time_ms
-        .or(perf_spec.map(|spec| spec.commit_time_ms));
+        .or_else(|| perf_spec.map(|spec| spec.commit_time_ms));
     let (block_time_ms, commit_time_ms) =
         resolve_localnet_pipeline_times(block_time_override, commit_time_override);
     let redundant_send_r = resolve_localnet_redundant_send_r(
         opts.redundant_send_r
-            .or(perf_spec.map(|spec| spec.redundant_send_r)),
+            .or_else(|| perf_spec.map(|spec| spec.redundant_send_r)),
         da_rbc_enabled,
     );
     let collectors_k = perf_spec.map(|spec| spec.collectors_k);
-    let block_max_transactions = perf_spec
-        .map(|spec| spec.block_max_transactions)
-        .unwrap_or(LOCALNET_BLOCK_MAX_TRANSACTIONS);
+    let block_max_transactions = perf_spec.map_or(LOCALNET_BLOCK_MAX_TRANSACTIONS, |spec| {
+        spec.block_max_transactions
+    });
     let requested_stake_amount = perf_spec.map(|spec| spec.stake_amount);
     let commit_inflight_timeout_ms =
         localnet_commit_inflight_timeout_ms(block_time_ms, commit_time_ms);
@@ -1509,11 +1510,11 @@ fn localnet_npos_stake_amount(parameters: &Parameters, requested: Option<u64>) -
         .custom()
         .get(&SumeragiNposParameters::parameter_id())
         .and_then(SumeragiNposParameters::from_custom_parameter)
-        .map(|params| params.min_self_bond)
-        .unwrap_or(requested);
+        .map_or(requested, |params| params.min_self_bond);
     requested.max(min_self_bond).max(1)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_parameter_overrides(
     genesis: RawGenesisTransaction,
     block_time_ms: Option<u64>,
@@ -1599,7 +1600,7 @@ fn apply_localnet_crypto_overrides(
         .filter_map(|algo| {
             iroha_data_model::account::curve::CurveId::try_from_algorithm(*algo).ok()
         })
-        .map(|curve| curve.as_u8())
+        .map(iroha_data_model::account::curve::CurveId::as_u8)
         .collect();
     crypto.allowed_curve_ids.sort_unstable();
     crypto.allowed_curve_ids.dedup();
@@ -1988,21 +1989,21 @@ mod tests {
         let perf_spec = opts.perf_profile.map(LocalnetPerfProfile::spec);
         let redundant_send_r = resolve_localnet_redundant_send_r(
             opts.redundant_send_r
-                .or(perf_spec.map(|spec| spec.redundant_send_r)),
+                .or_else(|| perf_spec.map(|spec| spec.redundant_send_r)),
             da_rbc_enabled,
         );
         let block_time_override = opts
             .block_time_ms
-            .or(perf_spec.map(|spec| spec.block_time_ms));
+            .or_else(|| perf_spec.map(|spec| spec.block_time_ms));
         let commit_time_override = opts
             .commit_time_ms
-            .or(perf_spec.map(|spec| spec.commit_time_ms));
+            .or_else(|| perf_spec.map(|spec| spec.commit_time_ms));
         let (block_time_ms, commit_time_ms) =
             resolve_localnet_pipeline_times(block_time_override, commit_time_override);
         let collectors_k = perf_spec.map(|spec| spec.collectors_k);
-        let block_max_transactions = perf_spec
-            .map(|spec| spec.block_max_transactions)
-            .unwrap_or(LOCALNET_BLOCK_MAX_TRANSACTIONS);
+        let block_max_transactions = perf_spec.map_or(LOCALNET_BLOCK_MAX_TRANSACTIONS, |spec| {
+            spec.block_max_transactions
+        });
         let requested_stake_amount = perf_spec.map(|spec| spec.stake_amount);
         let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
         let mut genesis = generate_raw_genesis(
@@ -2346,6 +2347,7 @@ mod tests {
         assert_eq!(telemetry_profile, LOCALNET_TELEMETRY_PROFILE);
     }
 
+    #[allow(clippy::too_many_lines)]
     #[test]
     fn generated_configs_set_localnet_channel_caps() {
         let temp = tempfile::tempdir().expect("make temp dir");
@@ -2988,8 +2990,10 @@ mod tests {
     #[test]
     fn localnet_npos_stake_amount_respects_min_self_bond() {
         let mut params = Parameters::default();
-        let mut npos = SumeragiNposParameters::default();
-        npos.min_self_bond = LOCALNET_STAKE_AMOUNT + 1;
+        let npos = SumeragiNposParameters {
+            min_self_bond: LOCALNET_STAKE_AMOUNT + 1,
+            ..Default::default()
+        };
         params.set_parameter(Parameter::Custom(npos.into_custom_parameter()));
 
         let stake_amount = localnet_npos_stake_amount(&params, Some(LOCALNET_STAKE_AMOUNT));

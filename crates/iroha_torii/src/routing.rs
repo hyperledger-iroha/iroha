@@ -5684,10 +5684,7 @@ pub async fn handle_get_contract_code(
 
 #[cfg(feature = "app_api")]
 #[derive(
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    Default,
+    Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default,
 )]
 pub struct ContractStateQuery {
     /// Exact state key path (Name).
@@ -5744,9 +5741,8 @@ pub async fn handle_get_contract_state(
     }
 
     fn parse_name(value: &str, label: &str) -> Result<Name> {
-        Name::from_str(value).map_err(|err| {
-            conversion_error(format!("invalid {label} name `{value}`: {err}"))
-        })
+        Name::from_str(value)
+            .map_err(|err| conversion_error(format!("invalid {label} name `{value}`: {err}")))
     }
 
     let mut mode_count = 0u8;
@@ -22262,13 +22258,15 @@ mod status_tests {
         let hash = Hash::prehashed([0x11; Hash::LENGTH]);
         let hash_typed = HashOf::from_untyped_unchecked(hash);
         let hash_str = format!("{hash_typed}");
-        let mut entry = status::PendingRbcEntrySnapshot::default();
-        entry.block_hash = hash_typed;
-        entry.height = 9;
-        entry.view = 1;
-        entry.ready = 2;
-        entry.deliver = 1;
-        entry.age_ms = 42;
+        let entry = status::PendingRbcEntrySnapshot {
+            block_hash: hash_typed,
+            height: 9,
+            view: 1,
+            ready: 2,
+            deliver: 1,
+            age_ms: 42,
+            ..Default::default()
+        };
 
         let pending_rbc = status::PendingRbcSnapshot {
             sessions: 1,
@@ -22864,7 +22862,6 @@ pub async fn handle_v1_sumeragi_status(
                         age_ms: entry.age_ms,
                     })
                     .collect(),
-                ..Default::default()
             },
             tx_queue_depth: snap.tx_queue_depth,
             tx_queue_capacity: snap.tx_queue_capacity,

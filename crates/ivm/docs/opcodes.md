@@ -159,8 +159,8 @@ Notes
 | 0x97 | `MSG_PARSE` | Parse raw ISO 20022 data |
 | 0x98 | `MSG_SERIALIZE` | Serialize ISO 20022 message |
 | 0x99 | `MSG_VALIDATE` | Validate ISO 20022 message (required-field, numeric, IBAN with country-length + mod-97 enforcement, and BIC checks; pacs.008 requires debtor/creditor accounts and agent BICs; camt.052/053/054 enforce account identifiers, currencies, and balanced entries; pacs.002/pain.002 demand original group identifiers and status codes; pacs.004 ensures original instruction linkage plus returned amount; pacs.007, pacs.028/029, and camt.056 require original references for recall/status flows) |
-| 0x9A | `MSG_SIGN` | Sign ISO 20022 message (Ed25519 or ML‑DSA) |
-| 0x9B | `MSG_VERIFY_SIG` | Verify ISO 20022 message signature (Ed25519 or ML‑DSA) |
+| 0x9A | `MSG_SIGN` | Sign ISO 20022 message (Ed25519, secp256k1, or ML-DSA) |
+| 0x9B | `MSG_VERIFY_SIG` | Verify ISO 20022 message signature (Ed25519, secp256k1, or ML-DSA) |
 | 0x9C | `MSG_SEND` | Validate, serialize, and dispatch ISO 20022 message through channel |
 | 0x9D | `ENCODE_STR` | Encode primitive or binary value to string (numeric amount, Base64) |
 | 0x9E | `DECODE_STR` | Decode string into typed or binary value (supports Base64) |

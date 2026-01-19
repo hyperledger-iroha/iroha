@@ -249,7 +249,7 @@ impl TransactionGossiper {
             last_drop_at: None,
             network,
             queue,
-            state: Arc::clone(&state),
+            state,
             tx_frame_cap,
             dataspace_cfg,
             public_seed,
@@ -280,13 +280,14 @@ impl TransactionGossiper {
 
     fn deferred_index(&self) -> usize {
         let len = u64::from(self.gossip_resend_ticks.get());
+        let len_usize = usize::try_from(len).expect("gossip_resend_ticks fits usize");
         debug_assert!(len > 0, "gossip_resend_ticks must be non-zero");
         debug_assert_eq!(
             self.gossip_deferred.len(),
-            len as usize,
+            len_usize,
             "gossip_deferred must match gossip_resend_ticks"
         );
-        (self.gossip_tick % len) as usize
+        usize::try_from(self.gossip_tick % len).expect("gossip_resend_ticks fits usize")
     }
 
     fn backpressure_cooldown(&self) -> Duration {
@@ -330,6 +331,7 @@ impl TransactionGossiper {
         self.gossip_tick = self.gossip_tick.wrapping_add(1);
     }
 
+    #[allow(clippy::too_many_lines)]
     fn gossip_transactions(&mut self) {
         let now = Instant::now();
         if self.gossip_backpressure_active(now) {
@@ -2371,6 +2373,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    #[allow(clippy::too_many_lines)]
     async fn gossip_accepts_restricted_route_match() {
         struct FixedRouter {
             lane: LaneId,

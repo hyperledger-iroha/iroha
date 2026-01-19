@@ -342,6 +342,7 @@ impl<'a> PenaltyApplier<'a> {
         map.get(peer.public_key()).cloned()
     }
 
+    #[allow(clippy::unused_self)]
     fn locate_validator_in_roster_cached(
         &self,
         signer: ValidatorIndex,

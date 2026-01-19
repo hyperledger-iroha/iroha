@@ -37,6 +37,7 @@ impl BackpressureGate {
         self.current
     }
 
+    #[cfg(test)]
     pub(super) fn should_defer(&mut self) -> bool {
         self.refresh();
         self.current.is_saturated()

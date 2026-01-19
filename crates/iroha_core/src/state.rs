@@ -4930,6 +4930,7 @@ pub trait StakeSnapshot {
 }
 
 impl StakeSnapshot for StateView<'_> {
+    #[allow(clippy::too_many_lines)]
     fn epoch_validator_peer_ids(&self, epoch: u64) -> Option<Vec<PeerId>> {
         let present_peers: std::collections::BTreeSet<PeerId> =
             self.world.peers().iter().cloned().collect();
@@ -13421,6 +13422,7 @@ impl State {
         self.merge_ledger.reconfigure_cache(sanitized);
     }
 
+    #[allow(clippy::too_many_lines)]
     fn enforce_nexus_storage_budget(&self) {
         let nexus = self.nexus.read();
         if !nexus.enabled {
@@ -15852,7 +15854,7 @@ mod fastpq_tx_set_hash_tests {
             .validate_and_record_transactions(&mut state_block)
             .unpack(|_| {});
 
-        let mut entry_hashes = vec![tx1.hash_as_entrypoint(), tx2.hash_as_entrypoint()];
+        let mut entry_hashes = [tx1.hash_as_entrypoint(), tx2.hash_as_entrypoint()];
         entry_hashes.sort_unstable();
         let expected = crate::fastpq::tx_set_hash_from_ordered_hashes(entry_hashes.iter().copied());
         assert_eq!(state_block.fastpq_tx_set_hash, Some(expected));
@@ -15960,7 +15962,7 @@ mod fastpq_tx_set_hash_tests {
             id: role_id.clone(),
             permissions: BTreeSet::from([perm]),
         };
-        let entries = vec![(role_id.clone(), role.clone())];
+        let entries = [(role_id.clone(), role.clone())];
         let expected =
             crate::fastpq::permission_table_root(entries.iter().map(|(id, role)| (id, role)));
 
@@ -20467,9 +20469,14 @@ mod tests {
             max_cold_bytes: iroha_config::base::util::Bytes(0),
         });
 
-        let mut nexus = iroha_config::parameters::actual::Nexus::default();
-        nexus.enabled = true;
-        nexus.storage.max_disk_usage_bytes = iroha_config::base::util::Bytes(120);
+        let nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            storage: iroha_config::parameters::actual::NexusStorage {
+                max_disk_usage_bytes: iroha_config::base::util::Bytes(120),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         state.set_nexus(nexus).expect("apply nexus config");
 
         state.enforce_nexus_storage_budget();

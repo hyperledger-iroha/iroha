@@ -1664,7 +1664,7 @@ impl TransactionResult {
 mod norito_rpc_fixture_tests {
     use super::*;
     use crate::account::address::{AccountAddress, AccountAddressFormat, ChainDiscriminantGuard};
-    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+    use base64::engine::general_purpose::STANDARD as BASE64;
     use iroha_crypto::Hash;
     use norito::{
         core::DecodeFromSlice,
@@ -1740,10 +1740,10 @@ mod norito_rpc_fixture_tests {
         let manifest: Value =
             json::from_str(&raw).unwrap_or_else(|err| panic!("manifest JSON: {err}"));
         let manifest_obj = require_object(&manifest, "manifest");
-        let fixtures = manifest_obj
-            .get("fixtures")
-            .map(|value| require_array(value, "manifest.fixtures"))
-            .unwrap_or_else(|| panic!("manifest missing fixtures array"));
+        let fixtures = manifest_obj.get("fixtures").map_or_else(
+            || panic!("manifest missing fixtures array"),
+            |value| require_array(value, "manifest.fixtures"),
+        );
 
         for fixture in fixtures {
             let entry = require_object(fixture, "fixture");
@@ -1797,16 +1797,16 @@ mod norito_rpc_fixture_tests {
                 authority,
                 "{name}: authority mismatch"
             );
+            let creation_ms = u64::try_from(signed_tx.creation_time().as_millis())
+                .expect("creation_time_ms fits u64");
             assert_eq!(
-                signed_tx.creation_time().as_millis() as u64,
-                creation_time_ms,
+                creation_ms, creation_time_ms,
                 "{name}: creation_time_ms mismatch"
             );
-            assert_eq!(
-                signed_tx.time_to_live().map(|ttl| ttl.as_millis() as u64),
-                time_to_live_ms,
-                "{name}: time_to_live_ms mismatch"
-            );
+            let ttl_ms = signed_tx
+                .time_to_live()
+                .map(|ttl| u64::try_from(ttl.as_millis()).expect("time_to_live_ms fits u64"));
+            assert_eq!(ttl_ms, time_to_live_ms, "{name}: time_to_live_ms mismatch");
             assert_eq!(
                 signed_tx.nonce().map(NonZeroU32::get).map(u64::from),
                 nonce,

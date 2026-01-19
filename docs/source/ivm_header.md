@@ -61,7 +61,7 @@ The following table is generated from the implementation and lists canonical `ab
 <!-- BEGIN GENERATED ABI HASHES -->
 | Policy | abi_hash (hex) |
 |---|---|
-| ABI v1 | 377f7125a0f20d40f65ed5e3a179bc5e04d68a385570b54d67d961861e8d9f83 |
+| ABI v1 | ba1786031c3d0cdbd607debdae1cc611a0807bf9cf49ed349a0632855724969f |
 <!-- END GENERATED ABI HASHES -->
 
 - Minor updates may add instructions behind `feature_bits` and reserved opcode space; major updates may change encodings or remove/repurpose only together with a protocol upgrade.

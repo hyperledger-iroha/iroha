@@ -1,5 +1,7 @@
 //! Persistence helpers for DA replay cursors, receipts, and spool artifacts.
 
+#![allow(clippy::redundant_pub_crate)]
+
 use std::{
     collections::{BTreeMap, HashMap},
     fs,

@@ -9,6 +9,7 @@
 use std::{
     any::Any,
     collections::{BTreeMap, HashSet},
+    io::Cursor,
     num::NonZeroU16,
 };
 
@@ -23,6 +24,8 @@ use iroha_primitives::{
     numeric::{Numeric, NumericSpec},
 };
 use norito::{NoritoSerialize, decode_from_bytes};
+use sha2::{Digest as Sha2Digest, Sha256};
+use sha3_hash::{Digest as Sha3Digest, Sha3_256};
 
 use crate::{
     axt::{self, AssetHandle, ProofBlob, RemoteSpendIntent, TouchManifest},
@@ -507,7 +510,8 @@ impl DefaultHost {
                 type_id: tlv.type_id as u16,
             });
         }
-        let numeric = decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
+        let mut cursor = Cursor::new(tlv.payload);
+        let numeric = Numeric::decode(&mut cursor).map_err(|_| VMError::DecodeError)?;
         Self::ensure_unsigned_scale0(numeric)
     }
 
@@ -1422,6 +1426,28 @@ impl IVMHost for DefaultHost {
                 let digest = Sm3Digest::hash(tlv.payload);
                 let bytes = digest.as_bytes();
                 let addr = DefaultHost::alloc_blob_tlv(vm, bytes)?;
+                vm.set_register(10, addr);
+                Ok(0)
+            }
+            crate::syscalls::SYSCALL_SHA256_HASH => {
+                let ptr = vm.register(10);
+                let tlv = vm.memory.validate_tlv(ptr)?;
+                if tlv.type_id != PointerType::Blob {
+                    return Err(VMError::NoritoInvalid);
+                }
+                let digest = <Sha256 as Sha2Digest>::digest(tlv.payload);
+                let addr = DefaultHost::alloc_blob_tlv(vm, digest.as_slice())?;
+                vm.set_register(10, addr);
+                Ok(0)
+            }
+            crate::syscalls::SYSCALL_SHA3_HASH => {
+                let ptr = vm.register(10);
+                let tlv = vm.memory.validate_tlv(ptr)?;
+                if tlv.type_id != PointerType::Blob {
+                    return Err(VMError::NoritoInvalid);
+                }
+                let digest = <Sha3_256 as Sha3Digest>::digest(tlv.payload);
+                let addr = DefaultHost::alloc_blob_tlv(vm, digest.as_slice())?;
                 vm.set_register(10, addr);
                 Ok(0)
             }

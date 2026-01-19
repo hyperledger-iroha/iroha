@@ -314,6 +314,7 @@ impl SoranetProvisionQueue {
         Self { sender }
     }
 
+    #[allow(clippy::result_large_err)]
     fn enqueue(
         &self,
         job: SoranetProvisionJob,
@@ -525,8 +526,10 @@ fn handle_provisioned_state_update(
 ) -> Result<(), StreamingProcessError> {
     match result {
         Ok(()) => Ok(()),
-        Err(StreamingProcessError::MissingStreamTicket { .. })
-        | Err(StreamingProcessError::UnknownPrivacyRoute { .. }) => {
+        Err(
+            StreamingProcessError::MissingStreamTicket { .. }
+            | StreamingProcessError::UnknownPrivacyRoute { .. },
+        ) => {
             warn!(
                 ?stream_id,
                 ?route_id,
@@ -539,6 +542,7 @@ fn handle_provisioned_state_update(
 }
 
 #[cfg(feature = "telemetry")]
+#[allow(clippy::needless_pass_by_value)]
 fn soranet_provision_worker(
     state: Arc<StreamingState>,
     receiver: mpsc::Receiver<SoranetProvisionJob>,
@@ -581,6 +585,7 @@ fn soranet_provision_worker(
 }
 
 #[cfg(not(feature = "telemetry"))]
+#[allow(clippy::needless_pass_by_value)]
 fn soranet_provision_worker(
     state: Arc<StreamingState>,
     receiver: mpsc::Receiver<SoranetProvisionJob>,
@@ -1242,7 +1247,7 @@ impl fmt::Debug for StreamingHandle {
         debug.field("sync_policy", &self.sync_policy);
         #[cfg(feature = "telemetry")]
         debug.field("telemetry", &self.telemetry.as_ref().map(|_| "configured"));
-        debug.finish()
+        debug.finish_non_exhaustive()
     }
 }
 
@@ -2051,13 +2056,12 @@ impl StreamingHandle {
             let expiry = pending.expiry;
             if let Some(transport) = transport.as_ref() {
                 if pending.prepared.update.soranet.is_some() {
-                    let provisioner = match queue.as_ref() {
-                        Some(existing) => Arc::clone(existing),
-                        None => {
-                            let created = self.ensure_soranet_provision_queue()?;
-                            queue = Some(Arc::clone(&created));
-                            created
-                        }
+                    let provisioner = if let Some(existing) = queue.as_ref() {
+                        Arc::clone(existing)
+                    } else {
+                        let created = self.ensure_soranet_provision_queue()?;
+                        queue = Some(Arc::clone(&created));
+                        created
                     };
                     if let Err(err) = provisioner.enqueue(SoranetProvisionJob {
                         transport: Arc::clone(transport),
@@ -2084,13 +2088,11 @@ impl StreamingHandle {
                     }
                 }
             }
-            if let Err(err) = handle_provisioned_state_update(
+            handle_provisioned_state_update(
                 self.mark_privacy_route_provisioned(&stream_id, &route_id, expiry),
                 stream_id,
                 route_id,
-            ) {
-                return Err(err);
-            }
+            )?;
         }
         Ok(())
     }
@@ -2117,7 +2119,7 @@ impl StreamingHandle {
         )?;
         let mut updates = Vec::with_capacity(pending_updates.len());
         for pending in pending_updates {
-            if let Err(err) = handle_provisioned_state_update(
+            handle_provisioned_state_update(
                 self.mark_privacy_route_provisioned(
                     &pending.prepared.update.stream_id,
                     &pending.prepared.update.route_id,
@@ -2125,9 +2127,7 @@ impl StreamingHandle {
                 ),
                 pending.prepared.update.stream_id,
                 pending.prepared.update.route_id,
-            ) {
-                return Err(err);
-            }
+            )?;
             updates.push(pending.prepared);
         }
 
@@ -5289,7 +5289,7 @@ mod tests {
         let (transport, release_tx) = BlockingSoranetTransport::new();
         handle.set_soranet_transport(Some(Arc::new(transport)));
 
-        let routes = vec![
+        let routes = [
             soranet_privacy_route(0xC7, 18),
             soranet_privacy_route(0xC8, 18),
             soranet_privacy_route(0xC9, 18),
@@ -5308,10 +5308,7 @@ mod tests {
             base_ready.ticket().clone(),
             bindings,
         );
-        let streaming_routes = routes
-            .iter()
-            .map(|route| streaming_route_from_privacy(route))
-            .collect();
+        let streaming_routes = routes.iter().map(streaming_route_from_privacy).collect();
         handle
             .register_stream_ticket(&ready, streaming_routes)
             .expect("register stream ticket");

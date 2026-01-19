@@ -174,19 +174,6 @@ pub fn default() -> InstructionRegistry {
     with_stable_ids(registry)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn default_registry_registers_public_lane_validator() {
-        let registry = default();
-        assert!(registry.contains(std::any::type_name::<
-            crate::isi::staking::RegisterPublicLaneValidator,
-        >()));
-    }
-}
-
 /// Apply every [`Registrar`] from the provided iterator to build an [`InstructionRegistry`].
 fn apply_registrars(registrars: impl IntoIterator<Item = Registrar>) -> InstructionRegistry {
     registrars
@@ -258,4 +245,17 @@ fn with_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistry {
         runtime_upgrade::CancelRuntimeUpgrade::WIRE_ID,
     );
     registry
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_registry_registers_public_lane_validator() {
+        let registry = default();
+        assert!(registry.contains(std::any::type_name::<
+            crate::isi::staking::RegisterPublicLaneValidator,
+        >()));
+    }
 }

@@ -1,4 +1,4 @@
-//! Bounded-latency localnet smoke and throughput tests for permissioned and NPoS Sumeragi.
+//! Bounded-latency localnet smoke and throughput tests for permissioned and `NPoS` Sumeragi.
 
 use std::{
     cmp::Ordering,
@@ -60,7 +60,7 @@ const THROUGHPUT_SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
 const THROUGHPUT_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(10);
 const THROUGHPUT_METRICS_TIMEOUT: Duration = Duration::from_secs(5);
 const THROUGHPUT_PAYLOAD_BYTES: usize = 512;
-const THROUGHPUT_RNG_SEED: u64 = 0x_4952_4f48_41;
+const THROUGHPUT_RNG_SEED: u64 = 0x0049_524f_4841;
 const THROUGHPUT_SLO_P95_MS: u64 = 1_500;
 const THROUGHPUT_SLO_P99_MS: u64 = 2_000;
 const THROUGHPUT_SLO_VIEW_CHANGE_RATE_MAX: f64 = 0.1;
@@ -110,6 +110,7 @@ fn env_or_default_f64(key: &str, default: f64) -> f64 {
         .unwrap_or(default)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn submit_logs(
     start_idx: u64,
     tx_count: u64,
@@ -573,6 +574,7 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "long-running 7-peer localnet throughput regression (10k tps target)"]
 #[allow(clippy::too_many_lines)]
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
     init_instruction_registry();
     let _guard = LOCALNET_SMOKE_GUARD
@@ -1095,7 +1097,7 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
                                 sample
                                     .statuses
                                     .iter()
-                                    .map(|status| status_snapshot_value(status))
+                                    .map(status_snapshot_value)
                                     .collect(),
                             ),
                         );
@@ -1105,7 +1107,7 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
                                 sample
                                     .sumeragi
                                     .iter()
-                                    .map(|status| sumeragi_snapshot_value(status))
+                                    .map(sumeragi_snapshot_value)
                                     .collect(),
                             ),
                         );
@@ -1143,9 +1145,7 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             );
             summary.insert(
                 "config_fingerprint".to_string(),
-                config_fingerprint
-                    .map(Value::String)
-                    .unwrap_or(Value::Null),
+                config_fingerprint.map_or(Value::Null, Value::String),
             );
 
             let mut recipe = Map::new();
@@ -1249,12 +1249,14 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
                     map.insert("mnemonic".to_string(), Value::String(peer.mnemonic().to_string()));
                     let stdout = peer
                         .latest_stdout_log_path()
-                        .map(|path| Value::String(path.to_string_lossy().to_string()))
-                        .unwrap_or(Value::Null);
+                        .map_or(Value::Null, |path| {
+                            Value::String(path.to_string_lossy().to_string())
+                        });
                     let stderr = peer
                         .latest_stderr_log_path()
-                        .map(|path| Value::String(path.to_string_lossy().to_string()))
-                        .unwrap_or(Value::Null);
+                        .map_or(Value::Null, |path| {
+                            Value::String(path.to_string_lossy().to_string())
+                        });
                     map.insert("stdout_log".to_string(), stdout);
                     map.insert("stderr_log".to_string(), stderr);
                     Value::Object(map)
@@ -1301,6 +1303,7 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "long-running 7-peer localnet throughput regression (10k tps target, NPoS)"]
 #[allow(clippy::too_many_lines)]
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 async fn npos_localnet_throughput_10k_tps() -> Result<()> {
     init_instruction_registry();
     let _guard = LOCALNET_SMOKE_GUARD
@@ -1816,7 +1819,7 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
                                 sample
                                     .statuses
                                     .iter()
-                                    .map(|status| status_snapshot_value(status))
+                                    .map(status_snapshot_value)
                                     .collect(),
                             ),
                         );
@@ -1826,7 +1829,7 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
                                 sample
                                     .sumeragi
                                     .iter()
-                                    .map(|status| sumeragi_snapshot_value(status))
+                                    .map(sumeragi_snapshot_value)
                                     .collect(),
                             ),
                         );
@@ -1864,9 +1867,7 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
             );
             summary.insert(
                 "config_fingerprint".to_string(),
-                config_fingerprint
-                    .map(Value::String)
-                    .unwrap_or(Value::Null),
+                config_fingerprint.map_or(Value::Null, Value::String),
             );
 
             let mut recipe = Map::new();
@@ -1970,12 +1971,14 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
                     map.insert("mnemonic".to_string(), Value::String(peer.mnemonic().to_string()));
                     let stdout = peer
                         .latest_stdout_log_path()
-                        .map(|path| Value::String(path.to_string_lossy().to_string()))
-                        .unwrap_or(Value::Null);
+                        .map_or(Value::Null, |path| {
+                            Value::String(path.to_string_lossy().to_string())
+                        });
                     let stderr = peer
                         .latest_stderr_log_path()
-                        .map(|path| Value::String(path.to_string_lossy().to_string()))
-                        .unwrap_or(Value::Null);
+                        .map_or(Value::Null, |path| {
+                            Value::String(path.to_string_lossy().to_string())
+                        });
                     map.insert("stdout_log".to_string(), stdout);
                     map.insert("stderr_log".to_string(), stderr);
                     Value::Object(map)
@@ -2066,8 +2069,8 @@ async fn collect_sumeragi_statuses(
     try_join_all(network.peers().iter().map(|peer| async move {
         let client = peer.client();
         let handle = task::spawn_blocking(move || client.get_sumeragi_status_wire());
-        match tokio::time::timeout(status_timeout, handle).await {
-            Ok(joined) => joined
+        if let Ok(joined) = tokio::time::timeout(status_timeout, handle).await {
+            joined
                 .map_err(|err| {
                     eyre!(
                         "sumeragi status join failed for peer {}: {err:?}",
@@ -2083,21 +2086,20 @@ async fn collect_sumeragi_statuses(
                     );
                     err
                 })
-                .wrap_err_with(|| format!("sumeragi status request failed for peer {}", peer.mnemonic())),
-            Err(_) => {
-                eprintln!(
-                    "sumeragi status request timed out for peer {} after {:?} (best_effort={:?}, stdout={:?})",
-                    peer.mnemonic(),
-                    status_timeout,
-                    peer.best_effort_block_height(),
-                    peer.latest_stdout_log_path()
-                );
-                Err(eyre!(
-                    "sumeragi status request timed out after {:?} for peer {}",
-                    status_timeout,
-                    peer.mnemonic()
-                ))
-            }
+                .wrap_err_with(|| format!("sumeragi status request failed for peer {}", peer.mnemonic()))
+        } else {
+            eprintln!(
+                "sumeragi status request timed out for peer {} after {:?} (best_effort={:?}, stdout={:?})",
+                peer.mnemonic(),
+                status_timeout,
+                peer.best_effort_block_height(),
+                peer.latest_stdout_log_path()
+            );
+            Err(eyre!(
+                "sumeragi status request timed out after {:?} for peer {}",
+                status_timeout,
+                peer.mnemonic()
+            ))
         }
     }))
     .await
@@ -2333,7 +2335,7 @@ fn aggregate_histograms_sums_counts() {
     };
     let merged = aggregate_histograms([&h1, &h2]);
     assert_eq!(merged.count, 5);
-    assert_eq!(merged.sum, 9.0);
+    assert!((merged.sum - 9.0).abs() < f64::EPSILON);
     assert_eq!(merged.buckets.len(), 2);
 }
 
@@ -2566,8 +2568,8 @@ impl SumeragiStatusSnapshot {
 
 fn status_snapshot_value(snapshot: &StatusSnapshot) -> Value {
     let mut map = Map::new();
-    let opt_u64 = |value: Option<u64>| value.map(Value::from).unwrap_or(Value::Null);
-    let opt_bool = |value: Option<bool>| value.map(Value::from).unwrap_or(Value::Null);
+    let opt_u64 = |value: Option<u64>| value.map_or(Value::Null, Value::from);
+    let opt_bool = |value: Option<bool>| value.map_or(Value::Null, Value::from);
 
     map.insert("blocks".to_string(), Value::from(snapshot.blocks));
     map.insert("queue_size".to_string(), Value::from(snapshot.queue_size));
@@ -2660,6 +2662,7 @@ struct HistogramSnapshot {
 }
 
 impl HistogramSnapshot {
+    #[allow(clippy::float_cmp)]
     fn saturating_sub(&self, baseline: &Self) -> Self {
         let buckets = self
             .buckets
@@ -2682,6 +2685,7 @@ impl HistogramSnapshot {
         }
     }
 
+    #[allow(clippy::cast_precision_loss)]
     fn quantile(&self, quantile: f64) -> Option<f64> {
         if !(0.0..=1.0).contains(&quantile) || self.count == 0 {
             return None;
@@ -2701,7 +2705,7 @@ impl HistogramSnapshot {
                     return Some(le);
                 }
                 let ratio = (target - prev_count as f64) / bucket_count as f64;
-                return Some(prev_le + (le - prev_le) * ratio);
+                return Some((le - prev_le).mul_add(ratio, prev_le));
             }
             prev_count = count;
             prev_le = le;
@@ -2717,6 +2721,7 @@ struct PeerMetricsSnapshot {
     commit_time_hist: HistogramSnapshot,
 }
 
+#[allow(clippy::float_cmp, single_use_lifetimes)]
 fn aggregate_histograms<'a>(
     histograms: impl IntoIterator<Item = &'a HistogramSnapshot>,
 ) -> HistogramSnapshot {
@@ -2742,6 +2747,11 @@ fn aggregate_histograms<'a>(
     }
 }
 
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::float_cmp
+)]
 fn parse_prom_histogram(payload: &str, metric: &str) -> HistogramSnapshot {
     let mut buckets: Vec<(f64, u64)> = Vec::new();
     let mut sum = 0.0;
@@ -2765,21 +2775,17 @@ fn parse_prom_histogram(payload: &str, metric: &str) -> HistogramSnapshot {
             None => continue,
         };
         if name.starts_with(&bucket_prefix) {
-            let le = if let Some(pos) = name.find("le=\"") {
+            let le = name.find("le=\"").and_then(|pos| {
                 let rest = &name[pos + 4..];
-                if let Some(end) = rest.find('"') {
+                rest.find('"').and_then(|end| {
                     let value = &rest[..end];
                     if value == "+Inf" {
                         Some(f64::INFINITY)
                     } else {
                         value.parse::<f64>().ok()
                     }
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+                })
+            });
             let le = match le {
                 Some(value) => value,
                 None => continue,
@@ -2845,6 +2851,7 @@ fn throughput_payload(index: u64, payload_bytes: usize, seed: u64) -> String {
     payload
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn commit_time_quantiles(
     warmup: &[PeerMetricsSnapshot],
     steady: &[PeerMetricsSnapshot],
@@ -2860,6 +2867,7 @@ fn commit_time_quantiles(
     (p95, p99, delta.count)
 }
 
+#[allow(clippy::cast_precision_loss)]
 fn rate_summary(start: &[u64], end: &[u64], elapsed: Duration) -> (f64, f64) {
     let count = start.len().min(end.len());
     let secs = elapsed.as_secs_f64();
@@ -2911,7 +2919,11 @@ fn collect_config_paths(root: &Path, output: &mut Vec<PathBuf>) {
         let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
             continue;
         };
-        if name.contains("config") && name.ends_with(".toml") {
+        if name.contains("config")
+            && path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("toml"))
+        {
             output.push(path);
         }
     }

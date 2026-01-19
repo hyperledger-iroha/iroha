@@ -206,6 +206,7 @@ ArgList = Expr { "," Expr } ;
 
 Built-in calls recognized by the semantic layer (arity and types enforced):
 - ZK/crypto: `poseidon2(a, b)`, `poseidon6(a,b,c,d,e,f)`, `pubkgen(s)`, `valcom(v, r)`, `assert_eq(x, y)`.
+- Vector helpers: `setvl(n)` (compile-time int `0..=255`).
 - Iroha syscalls: `mint_asset(acc, asset, amount)`, `burn_asset(acc, asset, amount)`, `transfer_asset(from, to, asset, amount)`, `register_asset(name, symbol, quantity, mintable)`, `create_new_asset(name, symbol, quantity, account, mintable)`, `nft_mint_asset(id, owner)`, `nft_transfer_asset(from, id, to)`, `nft_set_metadata(id, json)`, `nft_burn_asset(id)`.
 - Trigger syscalls: `create_trigger(json)`, `register_trigger(json)` (alias), `remove_trigger(name)`/`unregister_trigger(name)`, `set_trigger_enabled(name, enabled)`.
  - Iroha helpers (samples/dev): `create_nfts_for_all_users()`, `set_execution_depth(value)`, `set_account_detail(account, key, value)`.
@@ -224,6 +225,7 @@ User‑defined function calls are compiled: arguments move into `ARG_REGS`, call
 Notes on helpers:
 - `create_nfts_for_all_users()` creates one NFT per known account using a host-provided snapshot (used by tests).
 - `set_execution_depth(value)` sets SmartContract execution depth parameter (host development helper).
+- `setvl(n)` emits a `SETVL` opcode with an 8-bit immediate; `n` must be a compile-time int in `0..=255` (0 maps to 1 in the VM).
 - `set_account_detail(account, key, value)` uses a pointer-ABI. Prefer passing typed values using `account_id(..)`, `name(..)`, and `json(..)`. The `authority()` builtin supplies the current account id without relying on numeric sentinels. NFT syscalls use typed pointers: pass a `nft_id("name$domain")` and an `account_id("...")`.
 
 ## Safety Model (in progress)

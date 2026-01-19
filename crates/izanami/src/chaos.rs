@@ -1198,11 +1198,11 @@ mod tests {
             return Err(eyre!("expected nexus lane_catalog in config layer"));
         };
         let missing_metadata = lane_catalog.iter().any(|entry| {
-            !entry
+            entry
                 .as_table()
                 .and_then(|table| table.get("metadata"))
                 .and_then(toml::Value::as_table)
-                .is_some()
+                .is_none()
         });
         assert!(
             !missing_metadata,

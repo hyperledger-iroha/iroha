@@ -572,14 +572,14 @@ fn coerce_numeric_expr(expr: &mut TypedExpr, expected: &Type) -> Result<(), Sema
     if expected == actual {
         return Ok(());
     }
-    if is_wide_numeric_type(&expected) && matches!(actual, Type::Int) {
-        if let Some(value) = literal_i64(expr)
-            && value < 0
-        {
-            return Err(SemanticError {
-                message: "numeric alias literals must be unsigned (scale=0)".into(),
-            });
-        }
+    if is_wide_numeric_type(&expected)
+        && matches!(actual, Type::Int)
+        && let Some(value) = literal_i64(expr)
+        && value < 0
+    {
+        return Err(SemanticError {
+            message: "numeric alias literals must be unsigned (scale=0)".into(),
+        });
     }
     let expected_kind = numeric_kind(&expected);
     let actual_kind = numeric_kind(&actual);
@@ -1839,8 +1839,9 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     };
                     if kind != NumericKind::Int {
                         return Err(SemanticError {
-                            message: "unary '-' is only supported for int; numeric aliases are unsigned"
-                                .into(),
+                            message:
+                                "unary '-' is only supported for int; numeric aliases are unsigned"
+                                    .into(),
                         });
                     }
                     Ok(TypedExpr {
@@ -2871,6 +2872,38 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         ty: Type::Bytes,
                     })
                 }
+                "sha256_hash" => {
+                    if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
+                        return Err(SemanticError {
+                            message:
+                                "sha256_hash expects (Blob|bytes) argument pointing to INPUT TLV"
+                                    .into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Bytes,
+                    })
+                }
+                "sha3_hash" => {
+                    if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
+                        return Err(SemanticError {
+                            message:
+                                "sha3_hash expects (Blob|bytes) argument pointing to INPUT TLV"
+                                    .into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Bytes,
+                    })
+                }
                 "sm2_verify" => {
                     if arg_typed.len() != 3 && arg_typed.len() != 4 {
                         return Err(SemanticError {
@@ -2900,9 +2933,8 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                 "verify_signature" => {
                     if arg_typed.len() != 4 {
                         return Err(SemanticError {
-                            message:
-                                "verify_signature expects (Blob, Blob, Blob, int) arguments"
-                                    .into(),
+                            message: "verify_signature expects (Blob, Blob, Blob, int) arguments"
+                                .into(),
                         });
                     }
                     if arg_typed[..3].iter().any(|t| !is_blob_like(&t.ty)) {
@@ -3321,6 +3353,21 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
                         return Err(SemanticError {
                             message: "set_execution_depth expects one int arg".into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Unit,
+                    })
+                }
+                // Host helper: set logical vector length (SETVL immediate)
+                "setvl" => {
+                    if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
+                        return Err(SemanticError {
+                            message: "setvl expects one int arg".into(),
                         });
                     }
                     Ok(TypedExpr {
@@ -5292,6 +5339,12 @@ mod tests {
     fn info_accepts_int() {
         let program = parse("fn f() { info(42); }").expect("parse info");
         analyze(&program).expect("info should accept int");
+    }
+
+    #[test]
+    fn setvl_accepts_int() {
+        let program = parse("fn f() { setvl(8); }").expect("parse setvl");
+        analyze(&program).expect("setvl should accept int");
     }
 
     #[test]

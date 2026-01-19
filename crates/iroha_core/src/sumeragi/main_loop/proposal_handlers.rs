@@ -819,7 +819,7 @@ impl Actor {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
     pub(super) fn handle_block_created(
         &mut self,
         msg: super::message::BlockCreated,

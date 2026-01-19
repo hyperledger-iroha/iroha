@@ -14,6 +14,10 @@ seiyaku MetaDemo {
   }
 
   // Contract initializer (run on deploy by the runtime)
-  hajimari() { let a = 1; }
+  hajimari() {
+    // Emit vector/zk opcodes so the meta flags are exercised.
+    setvl(8);
+    assert(true);
+    let a = 1;
+  }
 }
-

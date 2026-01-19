@@ -189,6 +189,7 @@ fn append_npos_bootstrap(
 }
 
 impl<T: Write> RunArgs<T> for Args {
+    #[allow(clippy::too_many_lines)]
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         tui::status("Signing genesis manifest");
         let build_line = build_line_from_env();
@@ -282,7 +283,7 @@ impl<T: Write> RunArgs<T> for Args {
         if let Some(topology) = topology_override.as_ref() {
             // Put topology into a dedicated transaction so it remains separate
             // from other genesis instructions.
-            let entries = build_topology_entries(&topology, &self.peer_pops)?;
+            let entries = build_topology_entries(topology, &self.peer_pops)?;
             builder = builder.next_transaction().set_topology(entries);
         }
         if let Some(mode) = next_consensus_mode {

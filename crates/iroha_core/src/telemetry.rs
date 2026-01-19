@@ -4751,14 +4751,14 @@ impl StreamingTelemetry {
         }
     }
 
-    /// Record a SoraNet provisioning failure.
+    /// Record a `SoraNet` provisioning failure.
     pub fn inc_soranet_provision_failure(&self) {
         if self.is_enabled() {
             self.metrics.streaming_soranet_provision_fail_total.inc();
         }
     }
 
-    /// Record a SoraNet provisioning queue drop with the provided reason.
+    /// Record a `SoraNet` provisioning queue drop with the provided reason.
     pub fn inc_soranet_provision_queue_drop(&self, reason: &'static str) {
         if self.is_enabled() {
             self.metrics
