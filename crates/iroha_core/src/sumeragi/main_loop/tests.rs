@@ -2008,6 +2008,7 @@ async fn actor_next_tick_deadline_tracks_aborted_retention() {
         false,
         actor.commit_quorum_timeout(),
         actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
     );
     let idle_due = now + idle_timeout;
     let deadline = actor
@@ -2033,6 +2034,7 @@ async fn actor_next_tick_deadline_tracks_idle_view_timeout() {
         false,
         actor.commit_quorum_timeout(),
         actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
     );
     let age = timeout / 2;
     actor
@@ -25641,14 +25643,28 @@ fn active_round_height_falls_back_to_committed_and_state_height() {
 fn idle_view_timeout_caps_no_proposal_grace() {
     let commit = Duration::from_millis(1_000);
     let propose = Duration::from_millis(750);
-    assert_eq!(super::idle_view_timeout(false, commit, propose), commit);
-    assert_eq!(super::idle_view_timeout(true, commit, propose), commit);
+    assert_eq!(
+        super::idle_view_timeout(false, commit, propose, false),
+        commit
+    );
+    assert_eq!(
+        super::idle_view_timeout(true, commit, propose, false),
+        commit
+    );
+    assert_eq!(
+        super::idle_view_timeout(false, commit, propose, true),
+        commit
+    );
 
     let commit = Duration::from_millis(5_000);
     let propose = Duration::from_millis(1_000);
     assert_eq!(
-        super::idle_view_timeout(false, commit, propose),
+        super::idle_view_timeout(false, commit, propose, false),
         propose.saturating_mul(4)
+    );
+    assert_eq!(
+        super::idle_view_timeout(false, commit, propose, true),
+        commit
     );
 }
 
@@ -25733,6 +25749,7 @@ async fn force_view_change_if_idle_records_missing_qc_and_advances_view() {
         false,
         actor.commit_quorum_timeout(),
         actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
     );
     let start = now
         .checked_sub(timeout + Duration::from_millis(1))
@@ -25793,6 +25810,7 @@ async fn force_view_change_if_idle_ignores_aborted_pending() {
         false,
         actor.commit_quorum_timeout(),
         actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
     );
     let start = now
         .checked_sub(timeout + Duration::from_millis(1))
@@ -25849,6 +25867,7 @@ async fn force_view_change_if_idle_skips_when_commit_inflight() {
         false,
         actor.commit_quorum_timeout(),
         actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
     );
     let start = now
         .checked_sub(timeout + Duration::from_millis(1))
@@ -25918,6 +25937,7 @@ async fn force_view_change_if_idle_skips_when_no_work() {
         false,
         actor.commit_quorum_timeout(),
         actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
     );
     let start = now
         .checked_sub(timeout + Duration::from_millis(1))
@@ -25971,6 +25991,7 @@ async fn force_view_change_if_idle_skips_when_rbc_backlog() {
         false,
         actor.commit_quorum_timeout(),
         actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
     );
     let start = now
         .checked_sub(timeout + Duration::from_millis(1))
@@ -26248,6 +26269,7 @@ async fn should_override_backpressure_after_idle_timeout_without_proposal() {
         false,
         actor.commit_quorum_timeout(),
         actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
     );
 
     actor
