@@ -5684,10 +5684,7 @@ pub async fn handle_get_contract_code(
 
 #[cfg(feature = "app_api")]
 #[derive(
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    Default,
+    Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default,
 )]
 pub struct ContractStateQuery {
     /// Exact state key path (Name).
@@ -5744,9 +5741,8 @@ pub async fn handle_get_contract_state(
     }
 
     fn parse_name(value: &str, label: &str) -> Result<Name> {
-        Name::from_str(value).map_err(|err| {
-            conversion_error(format!("invalid {label} name `{value}`: {err}"))
-        })
+        Name::from_str(value)
+            .map_err(|err| conversion_error(format!("invalid {label} name `{value}`: {err}")))
     }
 
     let mut mode_count = 0u8;

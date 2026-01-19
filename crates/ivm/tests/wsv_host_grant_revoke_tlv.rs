@@ -35,8 +35,10 @@ fn grant_revoke_permission_with_tlv() {
             .unwrap();
     let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
 
-    let wsv =
-        MockWorldStateView::with_balances(&[((alice.clone(), asset.clone()), Numeric::from(50_u64))]);
+    let wsv = MockWorldStateView::with_balances(&[(
+        (alice.clone(), asset.clone()),
+        Numeric::from(50_u64),
+    )]);
     let host = WsvHost::new(wsv, bob.clone(), HashMap::new(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);

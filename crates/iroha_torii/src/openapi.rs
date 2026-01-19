@@ -2667,10 +2667,7 @@ fn contracts_paths() -> Map {
             "#/components/schemas/JsonValue",
             vec![
                 string_query_param("path", "Exact state key path (Name)."),
-                string_query_param(
-                    "paths",
-                    "Comma-separated list of state key paths (Names).",
-                ),
+                string_query_param("paths", "Comma-separated list of state key paths (Names)."),
                 string_query_param("prefix", "Prefix for state key paths (Name)."),
                 bool_query_param(
                     "include_value",

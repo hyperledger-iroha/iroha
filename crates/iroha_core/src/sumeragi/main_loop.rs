@@ -11383,6 +11383,18 @@ impl RbcSession {
             .expect("test configuration should respect RBC chunk cap")
     }
 
+    /// Seed the block header and leader signature for test-only RBC sessions.
+    #[cfg(test)]
+    pub(crate) fn test_set_block_header_and_signature(&mut self, block: &SignedBlock) {
+        let signature = block
+            .signatures()
+            .next()
+            .cloned()
+            .expect("test block must include a leader signature");
+        self.block_header = Some(block.header());
+        self.leader_signature = Some(signature);
+    }
+
     pub(crate) fn total_chunks(&self) -> u32 {
         self.total_chunks
     }

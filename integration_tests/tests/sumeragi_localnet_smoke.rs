@@ -131,6 +131,11 @@ async fn submit_logs(
             .map(|idx| {
                 let client = client.clone();
                 async move {
+                    if let Ok(delay) = std::env::var("IROHA_THROUGHPUT_DELAY_MS") {
+                        if let Ok(ms) = delay.parse::<u64>() {
+                            tokio::time::sleep(Duration::from_millis(ms)).await;
+                        }
+                    }
                     let payload = throughput_payload(idx, payload_bytes, rng_seed);
                     let handle = task::spawn_blocking(move || {
                         client

@@ -36,8 +36,7 @@ fn native_ipa_envelope_bytes() -> Vec<u8> {
     static BYTES: LazyLock<Vec<u8>> = LazyLock::new(|| {
         use iroha_zkp_halo2::{
             OpenVerifyEnvelope, Params, Polynomial, PrimeField64, Transcript,
-            backend::pallas::PallasBackend,
-            norito_helpers as nh,
+            backend::pallas::PallasBackend, norito_helpers as nh,
         };
 
         let params = Params::new(4).expect("params");

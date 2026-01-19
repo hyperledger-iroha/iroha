@@ -45,12 +45,7 @@ fn make_transfer_batch_tlv(
     let batch_entries = entries
         .iter()
         .map(|(from, to, asset, amount)| {
-            TransferAssetBatchEntry::new(
-                from.clone(),
-                to.clone(),
-                asset.clone(),
-                amount.clone(),
-            )
+            TransferAssetBatchEntry::new(from.clone(), to.clone(), asset.clone(), amount.clone())
         })
         .collect();
     let batch = TransferAssetBatch::new(batch_entries);
@@ -74,8 +69,7 @@ fn balance_syscall_with_tlv_pointers() {
     let bob: AccountId = format!("{pk2}@domain").parse().unwrap();
     let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
 
-    let wsv =
-        MockWorldStateView::with_balances(&[((alice.clone(), asset.clone()), num(50))]);
+    let wsv = MockWorldStateView::with_balances(&[((alice.clone(), asset.clone()), num(50))]);
     let host = WsvHost::new(wsv, bob.clone(), HashMap::new(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
@@ -96,8 +90,7 @@ fn balance_syscall_with_tlv_pointers() {
     assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
 
     // Grant and retry
-    let mut wsv2 =
-        MockWorldStateView::with_balances(&[((alice.clone(), asset.clone()), num(50))]);
+    let mut wsv2 = MockWorldStateView::with_balances(&[((alice.clone(), asset.clone()), num(50))]);
     wsv2.grant_permission(&bob, PermissionToken::ReadAccountAssets(alice.clone()));
     let host = WsvHost::new(wsv2, bob, HashMap::new(), HashMap::new());
     vm.set_host(host);
@@ -204,8 +197,7 @@ fn mint_syscall_with_tlv_pointers() {
     vm.load_program(&prog).unwrap();
     assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
 
-    let mut wsv2 =
-        MockWorldStateView::with_balances(&[((bob.clone(), asset.clone()), num(0))]);
+    let mut wsv2 = MockWorldStateView::with_balances(&[((bob.clone(), asset.clone()), num(0))]);
     wsv2.grant_permission(&bob, PermissionToken::MintAsset(asset.clone()));
     let host = WsvHost::new(wsv2, bob, HashMap::new(), HashMap::new());
     vm.set_host(host);

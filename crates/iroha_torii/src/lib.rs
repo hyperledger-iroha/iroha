@@ -7128,12 +7128,7 @@ async fn handler_debug_witness(
             )));
         }
     }
-    let key = rate_limit_key(
-        &headers,
-        None,
-        "v1/debug/witness",
-        app.api_token_enforced(),
-    );
+    let key = rate_limit_key(&headers, None, "v1/debug/witness", app.api_token_enforced());
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -7147,14 +7142,16 @@ async fn handler_debug_witness(
     }
 
     let witness = iroha_core::sumeragi::witness::snapshot_exec_witness();
-    let format = crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0))
-        .map_err(|_| Error::Query(iroha_data_model::ValidationFail::InternalError("Not Acceptable".to_string())))?;
+    let format =
+        crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)).map_err(|_| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(
+                "Not Acceptable".to_string(),
+            ))
+        })?;
 
     match format {
         ResponseFormat::Json => json_ok(witness),
-        ResponseFormat::Norito => {
-             Ok(utils::NoritoBody(witness).into_response())
-        }
+        ResponseFormat::Norito => Ok(utils::NoritoBody(witness).into_response()),
     }
 }
 
@@ -11779,10 +11776,7 @@ impl Torii {
                     "/v1/debug/axt/cache",
                     get(routing::telemetry_not_implemented),
                 )
-                .route(
-                    "/v1/debug/witness",
-                    get(routing::telemetry_not_implemented),
-                )
+                .route("/v1/debug/witness", get(routing::telemetry_not_implemented))
                 .route(
                     "/v1/assets/{definition_id}/holders",
                     get(handler_asset_holders),
@@ -15693,8 +15687,7 @@ pub(crate) mod tests_runtime_handlers {
         let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .expect("response body");
-        let _parsed: norito::json::Value =
-            norito::json::from_slice(&bytes).expect("valid json");
+        let _parsed: norito::json::Value = norito::json::from_slice(&bytes).expect("valid json");
     }
 
     #[tokio::test]
