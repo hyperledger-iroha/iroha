@@ -373,7 +373,7 @@ fn randomness_network_builder() -> NetworkBuilder {
                 .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["sumeragi", "collectors_k"], 1_i64)
                 .write(["sumeragi", "collectors_redundant_send_r"], 1_i64)
-                .write(["sumeragi", "da_enabled"], false)
+                .write(["sumeragi", "da_enabled"], true)
                 .write(["sumeragi", "pacemaker_backoff_multiplier"], 1_i64)
                 .write(["sumeragi", "pacemaker_rtt_floor_multiplier"], 1_i64)
                 .write(["sumeragi", "pacemaker_max_backoff_ms"], 1_000_i64);
@@ -385,7 +385,7 @@ fn randomness_network_builder() -> NetworkBuilder {
             SumeragiParameter::RedundantSendR(1),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(false),
+            SumeragiParameter::DaEnabled(true),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Custom(
             params.into_custom_parameter(),

@@ -105,7 +105,7 @@ blobs to exhaust resources or smuggle invalid metadata.
 - Rate limiting and authentication at the Torii ingest endpoint.
 - Chunk size bounds and deterministic encoding enforced by SoraFS chunker.
 - Admission pipeline only persists manifests after integrity checksum matches.
-- Deterministic replay cache (`ReplayCache`) tracks `(lane, epoch, sequence)` windows, persists high-water marks on disk, and rejects duplicates/stale replays; property and fuzz harnesses cover divergent fingerprints and out-of-order submissions.【crates/iroha_core/src/da/replay_cache.rs:1】【fuzz/da_replay_cache.rs:1】【crates/iroha_torii/src/da.rs:1】
+- Deterministic replay cache (`ReplayCache`) tracks `(lane, epoch, sequence)` windows, persists high-water marks on disk, and rejects duplicates/stale replays; property and fuzz harnesses cover divergent fingerprints and out-of-order submissions.【crates/iroha_core/src/da/replay_cache.rs:1】【fuzz/da_replay_cache.rs:1】【crates/iroha_torii/src/da/ingest.rs:1】
 
 **Residual gaps**
 - Torii ingest must thread the replay cache into admission and persist sequence cursors across restarts.
@@ -208,7 +208,7 @@ whitelists malicious providers, or suppresses alerts.
 
 - The DA replay cache and cursor persistence landed in DA-2. See the
   implementation in `crates/iroha_core/src/da/replay_cache.rs` (cache logic) and
-  the Torii integration in `crates/iroha_torii/src/da.rs`, which threads the
+  the Torii integration in `crates/iroha_torii/src/da/ingest.rs`, which threads the
   fingerprint checks through `/v1/da/ingest`.
 - PDP/PoTR streaming simulations are exercised via the proof-stream harness in
   `crates/sorafs_car/tests/sorafs_cli.rs`, covering PoR/PDP/PoTR request flows

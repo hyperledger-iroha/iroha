@@ -518,6 +518,7 @@ static RBC_STORE_PRESSURE_LOG_LEVEL: AtomicU8 = AtomicU8::new(0);
 static RBC_STORE_PRESSURE_LOG_LAST_SECS: AtomicU64 = AtomicU64::new(0);
 const RBC_STORE_PRESSURE_LOG_INTERVAL_SECS: u64 = 60;
 static RBC_STORE_BACKPRESSURE_DEFERRALS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static RBC_STORE_PERSIST_DROPS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static RBC_STORE_EVICTIONS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static RBC_DELIVER_DEFER_READY_TOTAL: AtomicU64 = AtomicU64::new(0);
 static RBC_DELIVER_DEFER_CHUNKS_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -3140,6 +3141,8 @@ pub struct StatusSnapshot {
     pub rbc_store_pressure_level: u8,
     /// Total number of times proposal assembly was deferred due to RBC store pressure.
     pub rbc_store_backpressure_deferrals_total: u64,
+    /// Total number of RBC persist requests dropped due to full async queues.
+    pub rbc_store_persist_drops_total: u64,
     /// Total number of RBC sessions evicted due to TTL or capacity enforcement.
     pub rbc_store_evictions_total: u64,
     /// RBC abort counters and last occurrence.
@@ -3919,6 +3922,7 @@ pub fn snapshot() -> StatusSnapshot {
         rbc_store_pressure_level: RBC_STORE_PRESSURE_LEVEL.load(Ordering::Relaxed),
         rbc_store_backpressure_deferrals_total: RBC_STORE_BACKPRESSURE_DEFERRALS_TOTAL
             .load(Ordering::Relaxed),
+        rbc_store_persist_drops_total: RBC_STORE_PERSIST_DROPS_TOTAL.load(Ordering::Relaxed),
         rbc_store_evictions_total: RBC_STORE_EVICTIONS_TOTAL.load(Ordering::Relaxed),
         rbc_abort: rbc_abort_snapshot(),
         rbc_mismatch: rbc_mismatch_snapshot(),
@@ -5437,6 +5441,11 @@ pub fn inc_rbc_store_backpressure_deferrals() {
     RBC_STORE_BACKPRESSURE_DEFERRALS_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
+/// Increment the counter tracking persist requests dropped due to a full async queue.
+pub fn inc_rbc_store_persist_drops() {
+    RBC_STORE_PERSIST_DROPS_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
 /// Record the number of RBC sessions evicted while enforcing store limits.
 pub fn inc_rbc_store_evictions(count: u64) {
     if count == 0 {
@@ -6265,6 +6274,7 @@ pub(crate) fn reset_rbc_store_evictions_for_tests() {
     RBC_STORE_BYTES.store(0, Ordering::Relaxed);
     RBC_STORE_PRESSURE_LEVEL.store(0, Ordering::Relaxed);
     RBC_STORE_BACKPRESSURE_DEFERRALS_TOTAL.store(0, Ordering::Relaxed);
+    RBC_STORE_PERSIST_DROPS_TOTAL.store(0, Ordering::Relaxed);
     RBC_STORE_EVICTIONS_TOTAL.store(0, Ordering::Relaxed);
     if let Some(slot) = RBC_STORE_RECENT_EVICTIONS.get() {
         slot.lock()
@@ -7496,6 +7506,7 @@ mod tests {
         super::set_rbc_store_pressure(0, 0, 0);
         super::set_rbc_store_pressure(3, 4_096, 1);
         super::inc_rbc_store_backpressure_deferrals();
+        super::inc_rbc_store_persist_drops();
         let key_a = (
             HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
                 [0xA1; UntypedHash::LENGTH],
@@ -7516,6 +7527,7 @@ mod tests {
         assert_eq!(snapshot.rbc_store_bytes, 4_096);
         assert_eq!(snapshot.rbc_store_pressure_level, 1);
         assert_eq!(snapshot.rbc_store_backpressure_deferrals_total, 1);
+        assert_eq!(snapshot.rbc_store_persist_drops_total, 1);
         assert_eq!(snapshot.rbc_store_evictions_total, 2);
         assert_eq!(snapshot.rbc_store_recent_evictions.len(), 2);
         let latest = &snapshot.rbc_store_recent_evictions[0];

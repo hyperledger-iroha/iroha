@@ -13,7 +13,10 @@ use iroha_data_model::{
     nexus::{AxtPolicyEntry, AxtPolicySnapshot, DataSpaceId},
     prelude::Name,
 };
-use iroha_primitives::json::Json;
+use iroha_primitives::{
+    json::Json,
+    numeric::{Numeric, NumericSpec},
+};
 use norito::{
     codec::{Decode as NoritoDecode, Encode as NoritoEncode},
     decode_from_bytes, json as njson,
@@ -604,7 +607,7 @@ impl CoreHost {
         Self::expect_tlv(vm, 10, PointerType::AccountId)?;
         Self::expect_tlv(vm, 11, PointerType::AccountId)?;
         Self::expect_tlv(vm, 12, PointerType::AssetDefinitionId)?;
-        let _ = vm.register(13);
+        Self::expect_tlv(vm, 13, PointerType::NoritoBytes)?;
         self.fastpq_batch_has_entries = true;
         Ok(0)
     }
@@ -882,6 +885,23 @@ impl CoreHost {
             .map_err(|_| VMError::NoritoInvalid)?;
         pointer_abi::validate_tlv_bytes(envelope)
     }
+
+    fn alloc_norito_bytes_tlv(vm: &mut IVM, payload: &[u8]) -> Result<u64, VMError> {
+        let mut out = Vec::with_capacity(7 + payload.len() + IrohaHash::LENGTH);
+        out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
+        out.push(1);
+        let len = u32::try_from(payload.len()).map_err(|_| VMError::NoritoInvalid)?;
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(payload);
+        let h: [u8; 32] = IrohaHash::new(payload).into();
+        out.extend_from_slice(&h);
+        vm.alloc_input_tlv(&out)
+    }
+
+    fn decode_numeric(&self, vm: &IVM, ptr: u64) -> Result<Numeric, VMError> {
+        let tlv = self.decode_tlv(vm, ptr, PointerType::NoritoBytes)?;
+        decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)
+    }
 }
 
 // Provide a Default impl to satisfy clippy::new_without_default without changing API.
@@ -1073,6 +1093,117 @@ impl IVMHost for CoreHost {
                 out.extend_from_slice(&h);
                 let p = vm.alloc_input_tlv(&out)?;
                 vm.set_register(10, p);
+                Ok(0)
+            }
+            syscalls::SYSCALL_NUMERIC_FROM_INT => {
+                let val = vm.register(10) as i64;
+                let payload = Numeric::new(val, 0).encode();
+                let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
+                vm.set_register(10, p);
+                Ok(0)
+            }
+            syscalls::SYSCALL_NUMERIC_TO_INT => {
+                let ptr = vm.register(10);
+                if ptr == 0 {
+                    return Err(VMError::NoritoInvalid);
+                }
+                let numeric = self.decode_numeric(vm, ptr)?;
+                let trimmed = numeric.trim_trailing_zeros();
+                if trimmed.scale() != 0 {
+                    return Err(VMError::AssertionFailed);
+                }
+                let value = trimmed
+                    .try_mantissa_i128()
+                    .ok_or(VMError::AssertionFailed)?;
+                if value < i64::MIN as i128 || value > i64::MAX as i128 {
+                    return Err(VMError::AssertionFailed);
+                }
+                vm.set_register(10, (value as i64) as u64);
+                Ok(0)
+            }
+            syscalls::SYSCALL_NUMERIC_ADD => {
+                let lhs = self.decode_numeric(vm, vm.register(10))?;
+                let rhs = self.decode_numeric(vm, vm.register(11))?;
+                let out = lhs.checked_add(rhs).ok_or(VMError::AssertionFailed)?;
+                let payload = out.encode();
+                let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
+                vm.set_register(10, p);
+                Ok(0)
+            }
+            syscalls::SYSCALL_NUMERIC_SUB => {
+                let lhs = self.decode_numeric(vm, vm.register(10))?;
+                let rhs = self.decode_numeric(vm, vm.register(11))?;
+                let out = lhs.checked_sub(rhs).ok_or(VMError::AssertionFailed)?;
+                let payload = out.encode();
+                let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
+                vm.set_register(10, p);
+                Ok(0)
+            }
+            syscalls::SYSCALL_NUMERIC_MUL => {
+                let lhs = self.decode_numeric(vm, vm.register(10))?;
+                let rhs = self.decode_numeric(vm, vm.register(11))?;
+                let out = lhs
+                    .checked_mul(rhs, NumericSpec::unconstrained())
+                    .ok_or(VMError::AssertionFailed)?;
+                let payload = out.encode();
+                let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
+                vm.set_register(10, p);
+                Ok(0)
+            }
+            syscalls::SYSCALL_NUMERIC_DIV => {
+                let lhs = self.decode_numeric(vm, vm.register(10))?;
+                let rhs = self.decode_numeric(vm, vm.register(11))?;
+                let out = lhs
+                    .checked_div(rhs, NumericSpec::unconstrained())
+                    .ok_or(VMError::AssertionFailed)?;
+                let payload = out.encode();
+                let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
+                vm.set_register(10, p);
+                Ok(0)
+            }
+            syscalls::SYSCALL_NUMERIC_REM => {
+                let lhs = self.decode_numeric(vm, vm.register(10))?;
+                let rhs = self.decode_numeric(vm, vm.register(11))?;
+                let out = lhs
+                    .checked_rem(rhs, NumericSpec::unconstrained())
+                    .ok_or(VMError::AssertionFailed)?;
+                let payload = out.encode();
+                let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
+                vm.set_register(10, p);
+                Ok(0)
+            }
+            syscalls::SYSCALL_NUMERIC_NEG => {
+                let val = self.decode_numeric(vm, vm.register(10))?;
+                let out = Numeric::try_new(val.mantissa().neg(), val.scale())
+                    .map_err(|_| VMError::AssertionFailed)?;
+                let payload = out.encode();
+                let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
+                vm.set_register(10, p);
+                Ok(0)
+            }
+            syscalls::SYSCALL_NUMERIC_EQ
+            | syscalls::SYSCALL_NUMERIC_NE
+            | syscalls::SYSCALL_NUMERIC_LT
+            | syscalls::SYSCALL_NUMERIC_LE
+            | syscalls::SYSCALL_NUMERIC_GT
+            | syscalls::SYSCALL_NUMERIC_GE => {
+                let lhs = self.decode_numeric(vm, vm.register(10))?;
+                let rhs = self.decode_numeric(vm, vm.register(11))?;
+                let cmp = lhs.cmp(&rhs);
+                let result = match number {
+                    syscalls::SYSCALL_NUMERIC_EQ => cmp == core::cmp::Ordering::Equal,
+                    syscalls::SYSCALL_NUMERIC_NE => cmp != core::cmp::Ordering::Equal,
+                    syscalls::SYSCALL_NUMERIC_LT => cmp == core::cmp::Ordering::Less,
+                    syscalls::SYSCALL_NUMERIC_LE => {
+                        cmp == core::cmp::Ordering::Less || cmp == core::cmp::Ordering::Equal
+                    }
+                    syscalls::SYSCALL_NUMERIC_GT => cmp == core::cmp::Ordering::Greater,
+                    syscalls::SYSCALL_NUMERIC_GE => {
+                        cmp == core::cmp::Ordering::Greater || cmp == core::cmp::Ordering::Equal
+                    }
+                    _ => false,
+                };
+                vm.set_register(10, if result { 1 } else { 0 });
                 Ok(0)
             }
             syscalls::SYSCALL_BUILD_PATH_KEY_NORITO => {
@@ -1590,11 +1721,12 @@ impl IVMHost for CoreHost {
                 if self.fastpq_batch_active {
                     self.push_fastpq_batch_entry(vm)
                 } else {
-                    // r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=amount:u64
+                    // r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId,
+                    // r13=&NoritoBytes(Numeric)
                     Self::expect_tlv(vm, 10, PointerType::AccountId)?;
                     Self::expect_tlv(vm, 11, PointerType::AccountId)?;
                     Self::expect_tlv(vm, 12, PointerType::AssetDefinitionId)?;
-                    let _amount = vm.register(13);
+                    Self::expect_tlv(vm, 13, PointerType::NoritoBytes)?;
                     Ok(0)
                 }
             }

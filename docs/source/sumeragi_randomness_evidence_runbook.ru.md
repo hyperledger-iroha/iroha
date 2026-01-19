@@ -17,6 +17,9 @@ translation_last_reviewed: 2026-01-01
 раз, когда вы разворачиваете новую сборку валидатора или фиксируете readiness
 артефакты для governance.
 
+
+Note: For the v1 release, VRF penalties jail offenders after the activation lag, and consensus slashing is delayed by `sumeragi.npos.reconfig.slashing_delay_blocks` (default 259200 blocks, ~3 days at 1s) so governance can cancel with `CancelConsensusEvidencePenalty` before it applies.
+
 ## Область и предпосылки
 
 - `iroha_cli` настроен для целевого кластера (см. `docs/source/cli.md`).

@@ -1038,6 +1038,7 @@ mod tests_overlay_manifest {
             features_bitmap: None,
             access_set_hints: None,
             entrypoints: None,
+            kotoba: None,
             provenance: None,
         }
         .signed(&kp);
@@ -1252,6 +1253,7 @@ mod tests {
                 features_bitmap: None,
                 access_set_hints: None,
                 entrypoints: None,
+                kotoba: None,
                 provenance: None,
             }
             .signed(&kp),
@@ -1595,6 +1597,7 @@ mod tests {
                 features_bitmap: None,
                 access_set_hints: None,
                 entrypoints: None,
+                kotoba: None,
                 provenance: None,
             }
             .signed(&kp),
@@ -1721,6 +1724,7 @@ mod tests {
                 features_bitmap: None,
                 access_set_hints: None,
                 entrypoints: None,
+                kotoba: None,
                 provenance: None,
             }
             .signed(&kp),
@@ -1768,6 +1772,7 @@ mod tests {
                 features_bitmap: None,
                 access_set_hints: None,
                 entrypoints: None,
+                kotoba: None,
                 provenance: None,
             }
             .signed(&kp),
@@ -1910,6 +1915,7 @@ mod tests {
             features_bitmap: None,
             access_set_hints: None,
             entrypoints: None,
+            kotoba: None,
             provenance: None,
         };
         world.contract_manifests.insert(code_hash, manifest.clone());

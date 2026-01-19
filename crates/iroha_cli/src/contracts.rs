@@ -166,6 +166,7 @@ impl Run for DeployActivateArgs {
             features_bitmap: None,
             access_set_hints: None,
             entrypoints: None,
+            kotoba: None,
             provenance: None,
         }
         .signed(&keypair);
@@ -273,6 +274,7 @@ impl Run for BuildManifestArgs {
             features_bitmap: None,
             access_set_hints: None,
             entrypoints: None,
+            kotoba: None,
             provenance: None,
         };
         if let Some(hex_key) = self.sign_with {

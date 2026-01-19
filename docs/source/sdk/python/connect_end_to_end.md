@@ -286,7 +286,7 @@ print("RTT buckets:", status.rtt.buckets)
 
 # Sumeragi admin surfaces (new in PY6-P5)
 qc = client.get_sumeragi_qc()
-print("Highest commit certificate height:", qc.highest_qc.height, "view", qc.highest_qc.view)
+print("Highest QC height:", qc.highest_qc.height, "view", qc.highest_qc.view)
 
 collectors = client.get_sumeragi_collectors()
 for slot in collectors.collectors:

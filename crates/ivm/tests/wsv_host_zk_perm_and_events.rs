@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use iroha_crypto::Hash;
+use iroha_primitives::numeric::Numeric;
 use iroha_data_model::proof::VerifyingKeyId;
 use ivm::{
     IVM, IVMHost, Memory, PointerType,
@@ -96,7 +97,7 @@ fn zk_register_shield_permissions_and_events() {
     assert!(wsv.register_asset_definition(&alice, ad.clone(), ivm::mock_wsv::Mintable::Infinitely));
     // Mint to alice using direct WSV primitive for setup
     wsv.grant_permission(&alice, PermissionToken::MintAsset(ad.clone()));
-    assert!(wsv.mint(&alice, alice.clone(), ad.clone(), 10));
+    assert!(wsv.mint(&alice, alice.clone(), ad.clone(), Numeric::from(10_u64)));
 
     // Grant ZK-related permissions
     wsv.grant_permission(&alice, PermissionToken::RegisterZkAsset(ad.clone()));

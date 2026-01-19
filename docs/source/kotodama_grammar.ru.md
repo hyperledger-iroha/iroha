@@ -123,6 +123,33 @@ seiyaku Name {
 - Durable state‑карты сейчас поддерживают только ключи типов `int` и pointer‑ABI; другие типы ключей отклоняются при компиляции.
 - Поля durable‑состояния должны быть `int`, `bool`, `Json`, `Blob`/`bytes` или pointer‑ABI типы (включая структуры/кортежи из этих полей); `string` для durable‑состояния не поддерживается.
 
+## Декларации триггеров
+
+Декларации триггеров добавляют метаданные расписания в манифесты точек входа и автоматически
+регистрируются при активации экземпляра контракта (удаляются при деактивации). Они парсятся
+внутри блока `seiyaku`.
+
+Синтаксис
+```
+register_trigger wake {
+  call run;
+  on time pre_commit;
+  repeats 2;
+  metadata { tag: "alpha"; count: 1; enabled: true; }
+}
+```
+
+Примечания
+- `call` должен ссылаться на публичную `kotoage fn` в том же контракте; опциональный
+  `namespace::entrypoint` записывается в манифест, но кросс‑контрактные callbacks пока
+  отклоняются (только локальные callbacks).
+- Поддерживаемые фильтры: `time pre_commit` и `time schedule(start_ms, period_ms?)`, плюс
+  `execute trigger <name>` для триггеров по вызову. Фильтры data/pipeline пока не поддерживаются.
+- Значения metadata должны быть JSON‑литералами (`string`, `number`, `bool`, `null`) или
+  `json!(...)`.
+- Ключи metadata, добавляемые рантаймом: `contract_namespace`, `contract_id`,
+  `contract_entrypoint`, `contract_code_hash`, `contract_trigger_id`.
+
 ## Функции и параметры
 
 Синтаксис
@@ -207,9 +234,9 @@ seiyaku Name {
   - Поддерживается sugar методов: `s.name()`, `s.json()`, `b.blob()`, `b.norito_bytes()`.
 
 Builtins хоста/syscall (мапятся на SCALL; точные номера в ivm.md)
-- `mint_asset(AccountId*, AssetDefinitionId*, int)`
-- `burn_asset(AccountId*, AssetDefinitionId*, int)`
-- `transfer_asset(AccountId*, AccountId*, AssetDefinitionId*, int)`
+- `mint_asset(AccountId*, AssetDefinitionId*, numeric)`
+- `burn_asset(AccountId*, AssetDefinitionId*, numeric)`
+- `transfer_asset(AccountId*, AccountId*, AssetDefinitionId*, numeric)`
 - `set_account_detail(AccountId*, Name*, Json*)`
 - `nft_mint_asset(NftId*, AccountId*)`
 - `nft_transfer_asset(AccountId*, NftId*, AccountId*)`

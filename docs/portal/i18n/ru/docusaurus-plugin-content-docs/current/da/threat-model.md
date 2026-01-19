@@ -114,7 +114,7 @@ oversized blobs для истощения ресурсов или подмены
   сохраняет high-water marks на диске и отвергает duplicates/stale replays; property
   и fuzz harnesses покрывают divergent fingerprints и out-of-order submissions.
   [crates/iroha_core/src/da/replay_cache.rs:1]
-  [fuzz/da_replay_cache.rs:1] [crates/iroha_torii/src/da.rs:1]
+  [fuzz/da_replay_cache.rs:1] [crates/iroha_torii/src/da/ingest.rs:1]
 
 **Оставшиеся пробелы**
 - Torii ingest должен встроить replay cache в admission и сохранять sequence
@@ -226,7 +226,7 @@ whitelist-ит malicious providers или подавляет alerts.
 
 - Replay cache и persistence cursors landed в DA-2. Реализация в
   `crates/iroha_core/src/da/replay_cache.rs` (cache logic) и интеграция Torii в
-  `crates/iroha_torii/src/da.rs`, где fingerprint checks проходят через `/v1/da/ingest`.
+  `crates/iroha_torii/src/da/ingest.rs`, где fingerprint checks проходят через `/v1/da/ingest`.
 - PDP/PoTR streaming simulations упражняются через proof-stream harness в
   `crates/sorafs_car/tests/sorafs_cli.rs`, покрывая PoR/PDP/PoTR request flows и
   failure scenarios из модели угроз.

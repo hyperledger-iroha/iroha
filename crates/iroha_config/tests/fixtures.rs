@@ -1000,6 +1000,7 @@ fn minimal_config_snapshot() {
                 rbc_chunk_fanout: None,
                 rbc_pending_max_chunks: 128,
                 rbc_pending_max_bytes: 8388608,
+                rbc_pending_session_limit: 256,
                 rbc_pending_ttl: 30s,
                 rbc_session_ttl: 120s,
                 rbc_rebroadcast_sessions_per_tick: 8,
@@ -1056,6 +1057,7 @@ fn minimal_config_snapshot() {
                     reconfig: SumeragiNposReconfig {
                         evidence_horizon_blocks: 7200,
                         activation_lag_blocks: 1,
+                        slashing_delay_blocks: 259_200,
                     },
                 },
                 use_stake_snapshot_roster: false,

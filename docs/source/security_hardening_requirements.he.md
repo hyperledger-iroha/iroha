@@ -27,7 +27,7 @@ translator: manual
 **תצפיתיות**
 - `sumeragi_membership_mismatch_total{peer,height,view}`.
 - אופציונלי: `sumeragi_membership_mismatch_active`.
-- `/v1/sumeragi/status` יכלול מצב mismatch, מוני drop, hashes של Highest/Locked commit certificate ו-`pacemaker_backpressure_deferrals_total`.
+- `/v1/sumeragi/status` יכלול מצב mismatch, מוני drop, hashes של Highest/Locked QC ו-`pacemaker_backpressure_deferrals_total`.
 
 **מצב:** הוטמעו המדדים `sumeragi_membership_view_hash`, ‏`sumeragi_membership_height`, ‏`sumeragi_membership_view`, ‏`sumeragi_membership_epoch` יחד עם האובייקט `/v1/sumeragi/status.membership`, כך שניתן לקבל את ה-hash הדטרמיניסטי של הרוסטר וההקשר `(height, view, epoch)` לכל צומת.
 

@@ -457,6 +457,12 @@ impl From<crate::isi::staking::SlashPublicLaneValidator> for InstructionBox {
     }
 }
 
+impl From<crate::isi::staking::CancelConsensusEvidencePenalty> for InstructionBox {
+    fn from(i: crate::isi::staking::CancelConsensusEvidencePenalty) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 impl From<crate::isi::staking::RecordPublicLaneRewards> for InstructionBox {
     fn from(i: crate::isi::staking::RecordPublicLaneRewards) -> Self {
         InstructionBox(Box::new(i))

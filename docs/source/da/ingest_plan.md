@@ -217,7 +217,7 @@ hashing, chunking, and verifying optional manifests.
   `regenerate_da_ingest_fixtures` refreshes the fixtures, while
   `manifest_fixtures_cover_all_blob_classes` fails as soon as a new `BlobClass` variant is added
   without updating the Norito/JSON bundle. This keeps Torii, SDKs, and docs honest whenever DA-2
-  accepts a new blob surface.【fixtures/da/ingest/README.md:1】【crates/iroha_torii/src/da.rs:4577】
+  accepts a new blob surface.【fixtures/da/ingest/README.md:1】【crates/iroha_torii/src/da/tests.rs:2902】
 
 ## CLI & SDK Tooling (DA-8)
 
@@ -322,21 +322,21 @@ All previously blocked ingest TODOs have been implemented and verified:
 
 - **Compression hints** — Torii accepts caller-provided labels (`identity`, `gzip`, `deflate`,
   `zstd`) and normalises payloads before validation so the canonical manifest hash matches the
-  decompressed bytes.【crates/iroha_torii/src/da.rs:220】【crates/iroha_data_model/src/da/types.rs:161】
+  decompressed bytes.【crates/iroha_torii/src/da/ingest.rs:220】【crates/iroha_data_model/src/da/types.rs:161】
 - **Governance-only metadata encryption** — Torii now encrypts governance metadata with the
   configured ChaCha20-Poly1305 key, rejects mismatched labels, and surfaces two explicit
   configuration knobs (`torii.da_ingest.governance_metadata_key_hex`,
-  `torii.da_ingest.governance_metadata_key_label`) to keep rotation deterministic.【crates/iroha_torii/src/da.rs:707】【crates/iroha_config/src/parameters/actual.rs:1662】
+  `torii.da_ingest.governance_metadata_key_label`) to keep rotation deterministic.【crates/iroha_torii/src/da/ingest.rs:707】【crates/iroha_config/src/parameters/actual.rs:1662】
 - **Large payload streaming** — multi-part ingestion is live. Clients stream deterministic
   `DaIngestChunk` envelopes keyed by `client_blob_id`, Torii validates each slice, stages them
   under `manifest_store_dir`, and atomically rebuilds the manifest once the `is_last` flag lands,
-  eliminating the RAM spikes seen with single-call uploads.【crates/iroha_torii/src/da.rs:392】
+  eliminating the RAM spikes seen with single-call uploads.【crates/iroha_torii/src/da/ingest.rs:392】
 - **Manifest versioning** — `DaManifestV1` carries an explicit `version` field and Torii refuses
   unknown versions, guaranteeing deterministic upgrades when new manifest layouts ship.【crates/iroha_data_model/src/da/types.rs:308】
 - **PDP/PoTR hooks** — PDP commitments derive directly from the chunk store and are persisted
   beside manifests so DA-5 schedulers can launch sampling challenges from canonical data; the
   `Sora-PDP-Commitment` header now ships with both `/v1/da/ingest` and `/v1/da/manifests/{ticket}`
-  responses so SDKs immediately learn the signed commitment that future probes will reference.【crates/sorafs_car/src/lib.rs:360】【crates/sorafs_manifest/src/pdp.rs:1】【crates/iroha_torii/src/da.rs:476】
+  responses so SDKs immediately learn the signed commitment that future probes will reference.【crates/sorafs_car/src/lib.rs:360】【crates/sorafs_manifest/src/pdp.rs:1】【crates/iroha_torii/src/da/ingest.rs:476】
 - **Shard cursor journal** — lane metadata may specify `da_shard_id` (defaulting to `lane_id`), and
   Sumeragi now persists the highest `(epoch, sequence)` per `(shard_id, lane_id)` into
   `da-shard-cursors.norito` alongside the DA spool so restarts drop resharded/unknown lanes and keep
@@ -365,11 +365,11 @@ All previously blocked ingest TODOs have been implemented and verified:
   deterministically chunks the canonical bytes, rebuilds `DaManifestV1`, and drops the encoded payload
   into `config.da_ingest.manifest_store_dir` for SoraFS orchestration before issuing the receipt; the
   handler also attaches a `Sora-PDP-Commitment` header so clients can capture the encoded commitment
-  immediately.【crates/iroha_torii/src/da.rs:220】
+  immediately.【crates/iroha_torii/src/da/ingest.rs:220】
 - After persisting the canonical `DaCommitmentRecord`, Torii now emits a
   `da-commitment-schedule-<lane>-<epoch>-<sequence>-<ticket>.norito` file beside the manifest spool.
   Each entry bundles the record with the raw Norito `PdpCommitment` bytes so DA-3 bundle builders and
-  DA-5 schedulers ingest identical inputs without re-reading manifests or chunk stores.【crates/iroha_torii/src/da.rs:1814】
+  DA-5 schedulers ingest identical inputs without re-reading manifests or chunk stores.【crates/iroha_torii/src/da/ingest.rs:1814】
 - SDK helpers expose the PDP header bytes without forcing every client to reimplement Norito parsing:
   `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}` cover Rust, the Python `ToriiClient`
   now exports `decode_pdp_commitment_header`, and `IrohaSwift` ships matching helpers so mobile
@@ -424,7 +424,7 @@ unchanged.
 - `types.rs` provides shared aliases (`BlobDigest`, `RetentionPolicy`,
   `ErasureProfile`, etc.) and encodes the default policy values documented below.【crates/iroha_data_model/src/da/types.rs:240】
 - Manifest spool files land in `config.da_ingest.manifest_store_dir`, ready for the SoraFS orchestration
-  watcher to pull into storage admission.【crates/iroha_torii/src/da.rs:220】
+  watcher to pull into storage admission.【crates/iroha_torii/src/da/ingest.rs:220】
 - Sumeragi enforces manifest availability when sealing or validating DA bundles:
   blocks fail validation if the spool is missing the manifest or the hash differs
   from the commitment.【crates/iroha_core/src/sumeragi/main_loop.rs:5335】【crates/iroha_core/src/sumeragi/main_loop.rs:14506】

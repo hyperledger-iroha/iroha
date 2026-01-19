@@ -198,6 +198,13 @@ Records the payout for an epoch. Fields:
 - `reward_asset`: asset distributed (default `xor#nexus`).
 - `total_reward`: minted/transferred total.
 - `shares`: vector of `PublicLaneRewardShare` entries.
+
+### 2.7 `CancelConsensusEvidencePenalty`
+
+Cancels consensus slashing before the delayed penalty applies.
+
+- `evidence`: the Norito-encoded `Evidence` payload that was recorded in `consensus_evidence`.
+- The record is marked `penalty_cancelled` and `penalty_cancelled_at_height`, preventing slashing when `slashing_delay_blocks` elapses.
 - `metadata`: references to payout transactions, root hashes, or dashboards.
 
 This ISI is idempotent per `(lane_id, epoch)` and underpins nightly accounting.

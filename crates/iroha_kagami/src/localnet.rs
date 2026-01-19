@@ -1490,6 +1490,9 @@ fn apply_localnet_npos_overrides(
     npos.timeout_commit_ms = commit_time_ms;
     npos.timeout_da_ms = base_ms;
     npos.timeout_aggregator_ms = aggregator_ms;
+    // Override seat band and bond to prevent validator drops on small localnets.
+    npos.seat_band_pct = 100;
+    npos.min_self_bond = 1;
     if let Some(redundant_send_r) = redundant_send_r {
         npos.redundant_send_r = redundant_send_r;
     }

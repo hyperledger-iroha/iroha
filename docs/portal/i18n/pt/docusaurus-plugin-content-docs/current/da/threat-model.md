@@ -121,7 +121,7 @@ superdimensionados para exaurir recursos ou inserir metadata invalida.
   sequence)`, persiste high-water marks em disco, e rejeita duplicados/replays
   obsoletos; harnesses de propriedade e fuzz cobrem fingerprints divergentes e
   envios fora de ordem. [crates/iroha_core/src/da/replay_cache.rs:1]
-  [fuzz/da_replay_cache.rs:1] [crates/iroha_torii/src/da.rs:1]
+  [fuzz/da_replay_cache.rs:1] [crates/iroha_torii/src/da/ingest.rs:1]
 
 **Lacunas residuais**
 - Torii ingest deve encadear o replay cache na admissao e persistir cursores de
@@ -246,7 +246,7 @@ whitelist de providers maliciosos, ou suprime alertas.
 
 - O replay cache e a persistencia de cursores aterrissaram em DA-2. Veja a
   implementacao em `crates/iroha_core/src/da/replay_cache.rs` (logica do cache)
-  e a integracao Torii em `crates/iroha_torii/src/da.rs`, que encadeia checks de
+  e a integracao Torii em `crates/iroha_torii/src/da/ingest.rs`, que encadeia checks de
   fingerprint via `/v1/da/ingest`.
 - As simulacoes de streaming PDP/PoTR sao exercitadas via o harness proof-stream
   em `crates/sorafs_car/tests/sorafs_cli.rs`, cobrindo fluxos de requisicao

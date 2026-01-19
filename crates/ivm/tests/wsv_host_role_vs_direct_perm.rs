@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 
 use iroha_crypto::Hash;
+use iroha_primitives::numeric::Numeric;
 use ivm::{
     IVM, Memory, PointerType,
     mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
+use norito::to_bytes;
 
 mod common;
 use common::assemble_syscalls;
@@ -19,6 +21,16 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let h: [u8; 32] = Hash::new(payload).into();
     out.extend_from_slice(&h);
     out
+}
+
+fn make_numeric_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
+    let buf = to_bytes(&amount.into()).expect("encode numeric into Norito");
+    make_tlv(PointerType::NoritoBytes as u16, &buf)
+}
+
+fn alloc_numeric(vm: &mut IVM, amount: u64) -> u64 {
+    let tlv = make_numeric_tlv(amount);
+    vm.alloc_input_tlv(&tlv).expect("alloc numeric tlv")
 }
 
 #[test]
@@ -110,7 +122,8 @@ fn role_vs_direct_permission_for_mint() {
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + tlv_bob.len() as u64 + 8);
-    vm.set_register(12, 3);
+    let mint_amount = alloc_numeric(&mut vm, 3);
+    vm.set_register(12, mint_amount);
     let prog_mint = assemble_syscalls(&[syscalls::SYSCALL_MINT_ASSET as u8]);
     vm.load_program(&prog_mint).unwrap();
     vm.run().expect("mint via role");
@@ -134,7 +147,8 @@ fn role_vs_direct_permission_for_mint() {
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + tlv_bob.len() as u64 + 8);
-    vm.set_register(12, 1);
+    let denied_amount = alloc_numeric(&mut vm, 1);
+    vm.set_register(12, denied_amount);
     vm.load_program(&prog_mint).unwrap();
     assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
 
@@ -161,7 +175,8 @@ fn role_vs_direct_permission_for_mint() {
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + tlv_bob.len() as u64 + 8);
-    vm.set_register(12, 2);
+    let direct_amount = alloc_numeric(&mut vm, 2);
+    vm.set_register(12, direct_amount);
     vm.load_program(&prog_mint).unwrap();
     vm.run().expect("mint via direct perm");
 
@@ -184,7 +199,8 @@ fn role_vs_direct_permission_for_mint() {
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + tlv_bob.len() as u64 + 8);
-    vm.set_register(12, 1);
+    let denied_amount_again = alloc_numeric(&mut vm, 1);
+    vm.set_register(12, denied_amount_again);
     vm.load_program(&prog_mint).unwrap();
     assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
 }

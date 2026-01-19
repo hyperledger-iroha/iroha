@@ -62,15 +62,11 @@ impl Actor {
             ConsensusMode::Permissioned => super::consensus::PERMISSIONED_TAG,
             ConsensusMode::Npos => super::consensus::NPOS_TAG,
         };
-        let prf_seed = if matches!(consensus_mode, ConsensusMode::Npos) {
-            Some(super::npos_seed_for_height_from_world(
-                &world,
-                &self.chain_id,
-                height,
-            ))
-        } else {
-            None
-        };
+        let prf_seed = Some(super::prf_seed_for_height_from_world(
+            &world,
+            &self.chain_id,
+            height,
+        ));
         drop(world);
         (consensus_mode, mode_tag, prf_seed)
     }
@@ -488,7 +484,10 @@ impl Actor {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn observe_new_view_highest_qc(&mut self, highest: crate::sumeragi::consensus::QcHeaderRef) {
+    pub(super) fn observe_new_view_highest_qc(
+        &mut self,
+        highest: crate::sumeragi::consensus::QcHeaderRef,
+    ) {
         let should_update = self.highest_qc.is_none_or(|current| {
             let incoming = (highest.height, highest.view);
             let existing = (current.height, current.view);
@@ -505,26 +504,100 @@ impl Actor {
         if self.block_known_locally(highest.subject_block_hash) {
             return;
         }
-        let (consensus_mode, _, _) = self.consensus_context_for_height(highest.height);
-        let roster = self.roster_for_vote_with_mode(
+        let (consensus_mode, mode_tag, _) = self.consensus_context_for_height(highest.height);
+        let mut roster = self.roster_for_vote_with_mode(
             highest.subject_block_hash,
             highest.height,
             highest.view,
             consensus_mode,
         );
+        let mut signers = BTreeSet::new();
+        let mut roster_source = "commit topology";
+        if roster.is_empty() {
+            let expected_epoch = self.epoch_for_height(highest.height);
+            if let Some(record) = super::status::precommit_signers_for(highest.subject_block_hash) {
+                if record.height == highest.height
+                    && record.view == highest.view
+                    && record.epoch == expected_epoch
+                    && record.mode_tag.as_str() == mode_tag
+                    && !record.validator_set.is_empty()
+                {
+                    let candidate = super::roster::canonicalize_roster_for_mode(
+                        record.validator_set.clone(),
+                        consensus_mode,
+                    );
+                    let mut candidate_signers = record.signers.clone();
+                    if candidate != record.validator_set {
+                        candidate_signers.clear();
+                    }
+                    let signers_in_range = candidate_signers.iter().all(|idx| {
+                        usize::try_from(*idx)
+                            .ok()
+                            .is_some_and(|idx| idx < candidate.len())
+                    });
+                    if !signers_in_range {
+                        candidate_signers.clear();
+                    }
+                    if !candidate.is_empty() {
+                        roster = candidate;
+                        signers = candidate_signers;
+                        roster_source = "precommit signer history";
+                    }
+                }
+            }
+        }
+        if roster.is_empty() {
+            let expected_epoch = self.epoch_for_height(highest.height);
+            if let Some(cert) = super::status::commit_qc_history().into_iter().find(|cert| {
+                cert.phase == crate::sumeragi::consensus::Phase::Commit
+                    && cert.subject_block_hash == highest.subject_block_hash
+                    && cert.height == highest.height
+                    && cert.view == highest.view
+                    && cert.epoch == expected_epoch
+                    && cert.mode_tag == mode_tag
+                    && !cert.validator_set.is_empty()
+            }) {
+                roster = super::roster::canonicalize_roster_for_mode(
+                    cert.validator_set.clone(),
+                    consensus_mode,
+                );
+                roster_source = "commit QC history";
+            }
+        }
+        if roster.is_empty() {
+            if let Some(cert) = super::status::commit_qc_history().into_iter().find(|cert| {
+                cert.phase == crate::sumeragi::consensus::Phase::Commit
+                    && cert.mode_tag == mode_tag
+                    && !cert.validator_set.is_empty()
+            }) {
+                roster = super::roster::canonicalize_roster_for_mode(
+                    cert.validator_set.clone(),
+                    consensus_mode,
+                );
+                roster_source = "latest commit QC history";
+            }
+        }
         if roster.is_empty() {
             debug!(
                 height = highest.height,
                 view = highest.view,
                 block = %highest.subject_block_hash,
-                "skipping NEW_VIEW highest QC fetch: empty commit topology"
+                "skipping NEW_VIEW highest QC fetch: no roster available"
             );
             return;
+        }
+        if roster_source != "commit topology" {
+            debug!(
+                height = highest.height,
+                view = highest.view,
+                block = %highest.subject_block_hash,
+                roster_source,
+                "using fallback roster for NEW_VIEW highest QC fetch"
+            );
         }
         let topology = super::network_topology::Topology::new(roster);
         let retry_window = self.quorum_timeout(self.runtime_da_enabled());
         let now = Instant::now();
-        let signers = BTreeSet::new();
         let decision = plan_missing_block_fetch(
             &mut self.pending.missing_block_requests,
             highest.subject_block_hash,
@@ -867,11 +940,7 @@ impl Actor {
                 record_drop(super::status::VoteValidationDropReason::HighestQcMismatch);
                 return false;
             }
-            let expected_height = if highest.phase == Phase::Commit {
-                highest.height.saturating_add(1)
-            } else {
-                highest.height
-            };
+            let expected_height = highest.height.saturating_add(1);
             if vote.height != expected_height {
                 warn!(
                     height = vote.height,

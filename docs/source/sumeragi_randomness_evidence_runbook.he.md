@@ -20,6 +20,9 @@ translation_last_reviewed: 2026-01-01
 {doc}`sumeragi_chaos_performance_runbook` בכל פעם שמרימים גרסת ולידטור חדשה
 או אוספים artifacts של readiness עבור governance.
 
+
+Note: For the v1 release, VRF penalties jail offenders after the activation lag, and consensus slashing is delayed by `sumeragi.npos.reconfig.slashing_delay_blocks` (default 259200 blocks, ~3 days at 1s) so governance can cancel with `CancelConsensusEvidencePenalty` before it applies.
+
 ## היקף ודרישות מקדימות
 
 - `iroha_cli` מוגדר לקלאסטר היעד (ראו `docs/source/cli.md`).

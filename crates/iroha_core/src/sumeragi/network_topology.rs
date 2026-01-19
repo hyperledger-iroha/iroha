@@ -160,6 +160,27 @@ impl Topology {
         self.0.rotate_left(r);
     }
 
+    /// Deterministically shuffle the topology for a given `height` using the PRF seed.
+    ///
+    /// Callers should canonicalize the roster before shuffling to keep the
+    /// permutation deterministic across nodes.
+    pub fn shuffle_prf(&mut self, seed: [u8; 32], height: u64) {
+        let n = self.0.len();
+        if n <= 1 {
+            return;
+        }
+        let mut slots: Vec<usize> = (0..n).collect();
+        let mut shuffled = Vec::with_capacity(n);
+        let mut ctr: u64 = 0;
+        while !slots.is_empty() {
+            let pos = Self::shuffle_prf_slot(seed, height, ctr, slots.len());
+            let pick = slots.swap_remove(pos);
+            shuffled.push(self.0[pick].clone());
+            ctr = ctr.saturating_add(1);
+        }
+        self.0 = shuffled;
+    }
+
     /// PRF-based leader index for (height, view).
     pub fn leader_index_prf(&self, seed: [u8; 32], height: u64, view: u64) -> usize {
         use iroha_crypto::blake2::{Blake2b512, Digest as _};
@@ -222,6 +243,23 @@ impl Topology {
         iroha_crypto::blake2::digest::Update::update(&mut hasher, &seed);
         iroha_crypto::blake2::digest::Update::update(&mut hasher, &height.to_be_bytes());
         iroha_crypto::blake2::digest::Update::update(&mut hasher, &view.to_be_bytes());
+        iroha_crypto::blake2::digest::Update::update(&mut hasher, &ctr.to_be_bytes());
+        let digest = iroha_crypto::blake2::Digest::finalize(hasher);
+        let mut idx_bytes = [0u8; 8];
+        idx_bytes.copy_from_slice(&digest[..8]);
+        let r = u64::from_be_bytes(idx_bytes);
+        let modulus = u128::try_from(modulus).expect("candidate length fits u128");
+        (u128::from(r) % modulus) as usize
+    }
+
+    fn shuffle_prf_slot(seed: [u8; 32], height: u64, ctr: u64, modulus: usize) -> usize {
+        use iroha_crypto::blake2::{Blake2b512, Digest as _};
+
+        debug_assert!(modulus > 0);
+
+        let mut hasher = Blake2b512::new();
+        iroha_crypto::blake2::digest::Update::update(&mut hasher, &seed);
+        iroha_crypto::blake2::digest::Update::update(&mut hasher, &height.to_be_bytes());
         iroha_crypto::blake2::digest::Update::update(&mut hasher, &ctr.to_be_bytes());
         let digest = iroha_crypto::blake2::Digest::finalize(hasher);
         let mut idx_bytes = [0u8; 8];
@@ -338,25 +376,22 @@ impl Topology {
         self.0[..rotate_at].rotate_left(1);
     }
 
-    /// Rotate topology after a block has been committed, keyed to the previous block hash.
+    /// Update topology after a block has been committed.
     ///
-    /// Peer ordering is canonicalized (sorted by `PeerId`) before rotation to keep
-    /// topology deterministic across nodes and restarts.
+    /// Peer ordering is canonicalized (sorted by `PeerId`) to keep topology
+    /// deterministic across nodes and restarts. Leader rotation is now derived
+    /// from PRF-based ordering at selection time, so the previous block hash is
+    /// no longer used here.
     pub fn block_committed(
         &mut self,
         new_peers: impl IntoIterator<Item = PeerId>,
-        prev_block_hash: HashOf<BlockHeader>,
+        _prev_block_hash: HashOf<BlockHeader>,
     ) {
         // Canonicalize ordering to keep topology deterministic across nodes and restarts.
         let mut peers: Vec<PeerId> = new_peers.into_iter().collect();
         peers.sort();
         peers.dedup();
         self.0 = peers;
-        let rotate_at = self.min_votes_for_commit();
-        let k = rotation_offset_for_prev_hash(&prev_block_hash, rotate_at);
-        if k > 0 {
-            self.0[..rotate_at].rotate_left(k);
-        }
         self.1 = 0;
     }
 
@@ -376,9 +411,7 @@ pub fn commit_quorum_from_len(len: usize) -> usize {
     if len <= 3 {
         return len;
     }
-    ((len.saturating_sub(1)) / 3)
-        .saturating_mul(2)
-        .saturating_add(1)
+    len.saturating_mul(2).saturating_add(2) / 3
 }
 
 #[cfg(test)]
@@ -436,7 +469,7 @@ mod prf_collectors_tests {
     }
 }
 
-/// Deterministic rotation keyed to the previous block hash.
+/// Legacy rotation keyed to the previous block hash.
 ///
 /// This helper produces a `Topology` whose Set A (first `min_votes_for_commit()` peers)
 /// is rotated left by `hash(prev_block_hash) mod min_votes_for_commit` positions. The
@@ -450,7 +483,7 @@ mod prf_collectors_tests {
 /// Invariants
 /// - Deterministic across nodes and hardware.
 /// - Independent of any observed QC signer set for the same height.
-/// - Matches the rotation described in `docs/source/sumeragi.md`.
+/// - Legacy behavior; permissioned mode now uses PRF-based ordering.
 ///
 /// Example
 /// ```ignore
@@ -514,6 +547,21 @@ pub fn audit_roles_for_prev_block_hash(
             (pid, role)
         })
         .collect()
+}
+
+/// Deterministic PRF-based shuffle for permissioned ordering at a given height.
+pub fn shuffled_for_prf_seed(
+    peers: impl IntoIterator<Item = PeerId>,
+    seed: [u8; 32],
+    height: u64,
+) -> Topology {
+    // Canonicalize ordering to keep topology deterministic across nodes and restarts.
+    let mut peers: Vec<PeerId> = peers.into_iter().collect();
+    peers.sort();
+    peers.dedup();
+    let mut topology = Topology::new(peers);
+    topology.shuffle_prf(seed, height);
+    topology
 }
 
 impl<'topology> NonEmptyTopology<'topology> {
@@ -1283,9 +1331,8 @@ mod tests {
     }
 
     #[test]
-    fn collectors_k3_follow_block_committed_rotation_of_set_a() {
-        // After a commit, Set A rotates by hash(prev_block_hash) mod min_votes.
-        // Use a seed that yields a rotation offset of 2 to verify hash-keyed rotation.
+    fn collectors_k3_follow_block_committed_canonical_order() {
+        // After a commit, ordering is canonicalized; no prev-hash rotation is applied.
         let peers = test_peers(7);
         let mut topo = Topology::new(peers.clone());
         let idxs_before = topo.collector_indices_k(3);
@@ -1299,8 +1346,7 @@ mod tests {
         topo.block_committed(peers.clone(), prev_hash);
         let idxs_after = topo.collector_indices_k(3);
         let cs_after: Vec<_> = idxs_after.iter().map(|&i| topo.0[i].clone()).collect();
-        let expect_after = vec![peers[1].clone(), peers[5].clone(), peers[6].clone()];
-        assert_eq!(cs_after, expect_after);
+        assert_eq!(cs_after, cs_before);
     }
 
     #[test]
@@ -1360,8 +1406,8 @@ mod tests {
     }
 
     #[test]
-    fn collectors_k2_follow_block_committed_rotation_of_set_a_n4() {
-        // N=4 -> min_votes=3 -> Set A rotates by hash(prev_block_hash) mod 3.
+    fn collectors_k2_follow_block_committed_canonical_order_n4() {
+        // N=4 -> min_votes=3 -> canonicalized ordering only.
         let peers = test_peers(4);
         let mut topo = Topology::new(peers.clone());
         let idxs_before = topo.collector_indices_k(2);
@@ -1371,8 +1417,7 @@ mod tests {
         topo.block_committed(peers.clone(), prev_hash);
         let idxs_after = topo.collector_indices_k(2);
         let cs_after: Vec<_> = idxs_after.iter().map(|&i| topo.0[i].clone()).collect();
-        // After rotation of Set A, index 2 now holds original peer 1; index 3 unchanged.
-        assert_eq!(cs_after, vec![peers[1].clone(), peers[3].clone()]);
+        assert_eq!(cs_after, cs_before);
     }
 
     #[test]
@@ -1398,8 +1443,8 @@ mod tests {
     }
 
     #[test]
-    fn collectors_k3_follow_block_committed_rotation_of_set_a_n5() {
-        // N=5 -> min_votes=3 -> Set A rotates by hash(prev_block_hash) mod 3.
+    fn collectors_k3_follow_block_committed_canonical_order_n5() {
+        // N=5 -> min_votes=3 -> canonicalized ordering only.
         let peers = test_peers(5);
         let mut topo = Topology::new(peers.clone());
         let idxs_before = topo.collector_indices_k(3);
@@ -1412,11 +1457,7 @@ mod tests {
         topo.block_committed(peers.clone(), prev_hash);
         let idxs_after = topo.collector_indices_k(3);
         let cs_after: Vec<_> = idxs_after.iter().map(|&i| topo.0[i].clone()).collect();
-        // After rotation of Set A, index 2 now holds original 1; others unchanged.
-        assert_eq!(
-            cs_after,
-            vec![peers[1].clone(), peers[3].clone(), peers[4].clone()]
-        );
+        assert_eq!(cs_after, cs_before);
     }
 
     #[test]
@@ -1531,6 +1572,37 @@ mod tests {
 
         let a = rotated_for_prev_block_hash(sorted, prev_hash);
         let b = rotated_for_prev_block_hash(reversed, prev_hash);
+
+        assert_eq!(a.0, b.0);
+    }
+
+    #[test]
+    fn prf_shuffle_is_deterministic_across_nodes() {
+        let keys = (0..5).map(|_| KeyPair::random()).collect::<Vec<_>>();
+        let peers = keys.iter().map(|k| PeerId::new(k.public_key().clone()));
+        let seed = [0x22; 32];
+        let a = shuffled_for_prf_seed(peers.clone(), seed, 42);
+        let b = shuffled_for_prf_seed(peers, seed, 42);
+        assert_eq!(a.0, b.0);
+    }
+
+    #[test]
+    fn prf_shuffle_is_deterministic_regardless_of_input_order() {
+        let keys = (0..5).map(|_| KeyPair::random()).collect::<Vec<_>>();
+        let peers: Vec<PeerId> = keys
+            .iter()
+            .map(|k| PeerId::new(k.public_key().clone()))
+            .collect();
+        let seed = [0x33; 32];
+
+        let mut sorted = peers.clone();
+        sorted.sort();
+
+        let mut reversed = sorted.clone();
+        reversed.reverse();
+
+        let a = shuffled_for_prf_seed(sorted, seed, 9);
+        let b = shuffled_for_prf_seed(reversed, seed, 9);
 
         assert_eq!(a.0, b.0);
     }

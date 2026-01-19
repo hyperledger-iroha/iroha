@@ -2659,6 +2659,33 @@ fn contracts_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/contracts/state".to_owned(),
+        Value::Object(json_get_operation(
+            "Contracts",
+            "Read smart contract state.",
+            "Read smart contract state by exact path, path list, or prefix.",
+            "#/components/schemas/JsonValue",
+            vec![
+                string_query_param("path", "Exact state key path (Name)."),
+                string_query_param(
+                    "paths",
+                    "Comma-separated list of state key paths (Names).",
+                ),
+                string_query_param("prefix", "Prefix for state key paths (Name)."),
+                bool_query_param(
+                    "include_value",
+                    "Include base64-encoded values (default true).",
+                ),
+                integer_query_param("offset", "Prefix query offset (default 0).", Some("uint64")),
+                integer_query_param(
+                    "limit",
+                    "Prefix query limit (default 1000, max 10_000).",
+                    Some("uint64"),
+                ),
+            ],
+        )),
+    );
+    paths.insert(
         "/v1/contracts/instances/{ns}".to_owned(),
         Value::Object(json_get_operation(
             "Contracts",

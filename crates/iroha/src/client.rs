@@ -3914,6 +3914,8 @@ mod evidence_http_tests {
             recorded_at_view: 5,
             recorded_at_ms: 123_456,
             penalty_applied: false,
+            penalty_cancelled: false,
+            penalty_cancelled_at_height: None,
             penalty_applied_at_height: None,
         }
     }
@@ -10340,6 +10342,7 @@ mod tests {
                 bytes: 0,
                 pressure_level: 0,
                 backpressure_deferrals_total: 0,
+                persist_drops_total: 0,
                 evictions_total: 0,
                 recent_evictions: Vec::new(),
             },
@@ -12208,6 +12211,7 @@ mod tests {
                 bytes: 0,
                 pressure_level: 0,
                 backpressure_deferrals_total: 0,
+                persist_drops_total: 0,
                 evictions_total: 0,
                 recent_evictions: Vec::new(),
             },
@@ -12499,6 +12503,7 @@ mod tests {
                 bytes: 0,
                 pressure_level: 0,
                 backpressure_deferrals_total: 0,
+                persist_drops_total: 0,
                 evictions_total: 0,
                 recent_evictions: Vec::new(),
             },

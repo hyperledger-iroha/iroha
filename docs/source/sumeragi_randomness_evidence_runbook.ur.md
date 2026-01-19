@@ -21,6 +21,9 @@ slashing evidence کیلئے اپ ڈیٹڈ operator procedures درکار تھی
 جب بھی آپ نیا validator build stage کریں یا governance کیلئے readiness artefacts
 جمع کریں۔
 
+
+Note: For the v1 release, VRF penalties jail offenders after the activation lag, and consensus slashing is delayed by `sumeragi.npos.reconfig.slashing_delay_blocks` (default 259200 blocks, ~3 days at 1s) so governance can cancel with `CancelConsensusEvidencePenalty` before it applies.
+
 ## دائرہ کار اور ضروریات
 
 - `iroha_cli` ہدف کلسٹر کیلئے configured ہو (دیکھیں `docs/source/cli.md`).

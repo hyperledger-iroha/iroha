@@ -22,9 +22,9 @@ Legend: ✅ Implemented, 🟨 Parsed, 💤 Planned
 | Initializer `hajimari`/`始まり`             |  ✅    | compiled as function; runtime may call on deploy |
 | Public function `kotoage fn`/`言挙げ fn`     |  ✅    | compiled as function; “public” enforced by runtime |
 | Upgrade hook `kaizen`/`改善` + `permission` |  🟨    | parsed; governance/dispatch enforced by runtime |
-| `kotoba {…}` translations                    |  🟨    | accepted; ignored by codegen |
+| `kotoba {…}` translations                    |  🟩    | parsed; emitted in manifest |
 | Access hints `#[access(read=..., write=...)]`|  ✅    | collected into manifest/entrypoint hints |
-| Trigger declarations `register_trigger {…}`  |  ✅    | time/execute trigger DSL; metadata recorded in entrypoint manifests |
+| Trigger declarations `register_trigger {…}`  |  ✅    | time/execute trigger DSL; metadata recorded in entrypoint manifests and auto-registered on activation |
 | `state Type name;`                           |  ✅    | host-backed durable overlays (Norito TLV persistence + checkpoint/restore rollback) |
 | `struct Name { … }`                          |  ✅    | lowered to tuple layout; field access compiled |
 | `let name[: Type] = expr;`                   |  ✅    | optional type annotation |
@@ -53,7 +53,7 @@ See examples under `crates/ivm/docs/examples`.
 
 ## Lexical Elements [Implemented]
 - Identifiers: ASCII letters, digits, underscore; must not start with a digit.
-- Numbers: signed 64-bit decimal integers (no hex/float yet).
+- Numbers: decimal/hex/binary integers with `_` separators; decimal fractions (e.g., `1.25`) are accepted for numeric aliases (no exponent).
 - Strings: double-quoted with escapes (`\\n`, `\\r`, `\\t`, `\\0`, `\\xNN`, `\\u{...}`, `\\"`, `\\\\`).
 - Raw strings: `r"..."` or `r#"..."#` (no escapes, multiline allowed).
 - Byte strings: `b"..."` with escapes, or raw `br"..."` / `rb"..."`; yield `bytes` literals.
@@ -65,6 +65,7 @@ See examples under `crates/ivm/docs/examples`.
 Notes:
 - Boolean literals `true`/`false` are recognized and type‑checked as `bool`. [Implemented]
 - `++` is only usable in `for` headers as increment sugar. [Implemented]
+- Decimal fractions (e.g., `1.25`) are parsed as numeric literals and require a numeric alias type (`fixed_u128`/`Amount`/`Balance`).
 
 ## Program Structure
 
@@ -120,7 +121,7 @@ MetadataEntry = (Ident | String) ":" Literal ;               // JSON literal (st
 FunctionSignature = Ident "(" [ ParamList ] ")" ;                  // see Parameters
 ```
 
-Contract‑level forms and `kotoage fn` are parsed. Contract metadata declared via `meta {}` influences IVM header fields (ABI version, vector length, max cycles) and mode bits (ZK/VECTOR). Trigger declarations attach metadata to entrypoint manifests and are expected to be registered by the deployment pipeline rather than emitted as bytecode. Free functions are fully compiled end‑to‑end today. See Gap Analysis for details.
+Contract-level forms and `kotoage fn` are parsed. Contract metadata declared via `meta {}` influences IVM header fields (ABI version, vector length, max cycles) and mode bits (ZK/VECTOR). Trigger declarations attach metadata to entrypoint manifests and are auto-registered when a contract instance is activated (removed on deactivation); cross-contract callbacks are currently rejected. Free functions are fully compiled end-to-end today. See Gap Analysis for details.
 
 ### Parameters & Returns [Parsed/Enforced]
 ```
@@ -135,7 +136,7 @@ ReturnTy   = "->" Type ;
 - If a function declares a non-`unit` return type, all control‑flow paths must return a value. [Enforced]
 - If a function omits a return type, `return expr;` is rejected — declaring an explicit return type is required to return a value. [Enforced]
 - Parameter typing:
-  - Recognized primitives: `int`/`i64`/`number`, `bool`, `string`, and numeric aliases (`fixed_u128`, `Amount`, `Balance`) are enforced in expressions. Numeric aliases are distinct types with 64‑bit int semantics; arithmetic preserves the alias and mixing alias types requires converting through an `int` binding.
+  - Recognized primitives: `int`/`i64`/`number`, `bool`, `string`, and numeric aliases (`fixed_u128`, `Amount`, `Balance`) are enforced in expressions. Numeric aliases are distinct `Numeric`-backed scalars (mantissa+scale); Kotodama supports signed, fractional literals, arithmetic preserves the alias, and mixing alias types requires converting through an `int` binding. Conversions to/from `int` are checked at runtime (integral, range-limited).
   - Unknown identifiers (e.g., `AccountId`, `Asset`) are treated as opaque handle types; they cannot be used in arithmetic but can be compared for equality. [Enforced]
 
 ## Blocks and Statements [Implemented]
@@ -261,7 +262,7 @@ seiyaku MyDex {
 ```
 
 ## Notes on the Compiler/IR
-- Source is type-checked into a small set of types (int, bool, string, unit, plus numeric aliases `fixed_u128`/`Amount`/`Balance` that behave as distinct 64-bit scalars) and lowered to a simple three-address-code IR with basic blocks.
+- Source is type-checked into a small set of types (int, bool, string, unit, plus numeric aliases `fixed_u128`/`Amount`/`Balance` that behave as distinct `Numeric` scalars) and lowered to a simple three-address-code IR with basic blocks.
 - Code generation currently covers arithmetic (incl. `%`), control-flow (`if`/`while`/`for` with `break`/`continue`), structs/tuples, and the host-backed durable state/syscall surface. Remaining gaps are tracked in `status.md`.
 
 See also: docs/kotodama_gap_analysis.md for an up-to-date gap analysis and roadmap items.

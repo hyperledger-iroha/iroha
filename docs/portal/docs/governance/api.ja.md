@@ -286,7 +286,7 @@ CastZkBallot 検証パス
 
 ### Slashing と Jailing のフロー
 
-コンセンサスはバリデータがプロトコル違反した際に Norito エンコードされた `Evidence` を発行します。各payloadはメモリ内の `EvidenceStore` に入り、未見ならWSVバックの `consensus_evidence` に具体化されます。`sumeragi.npos.reconfig.evidence_horizon_blocks` (デフォルト `7200` ブロック) より古い記録はアーカイブを有限に保つため拒否されますが、その拒否は運用者向けにログ化されます。
+コンセンサスはバリデータがプロトコル違反した際に Norito エンコードされた `Evidence` を発行します。各payloadはメモリ内の `EvidenceStore` に入り、未見ならWSVバックの `consensus_evidence` に具体化されます。`sumeragi.npos.reconfig.evidence_horizon_blocks` (デフォルト `7200` ブロック) より古い記録はアーカイブを有限に保つため拒否されますが、その拒否は運用者向けにログ化されます。 Evidence within the horizon also respects `sumeragi.npos.reconfig.activation_lag_blocks` (default `1`) and the slashing delay `sumeragi.npos.reconfig.slashing_delay_blocks` (default `259200`); governance can cancel penalties with `CancelConsensusEvidencePenalty` before slashing applies.
 
 認識される違反は `EvidenceKind` と1対1で対応し、識別子はデータモデルによって安定的に強制されます:
 
@@ -329,6 +329,7 @@ for (expected, kind) in offences.iter().enumerate() {
 
 - `SumeragiParameter::NextMode` と `SumeragiParameter::ModeActivationHeight` は**同じブロック**でコミットされる必要があります。`mode_activation_height` は更新ブロックより厳密に大きく、最低1ブロックの遅延を提供します。
 - `sumeragi.npos.reconfig.activation_lag_blocks` (デフォルト `1`) はゼロラグの引き継ぎを防ぐ設定ガードです:
+- `sumeragi.npos.reconfig.slashing_delay_blocks` (default `259200`) delays consensus slashing so governance can cancel penalties before they apply.
 
 ```rust
 use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_BLOCKS;

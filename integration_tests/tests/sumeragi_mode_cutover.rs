@@ -56,7 +56,7 @@ fn cutover_builder(peers: usize, npos_params: SumeragiNposParameters) -> Network
                 .write(["sumeragi", "consensus_mode"], "permissioned")
                 .write(["sumeragi", "collectors_k"], 1_i64)
                 .write(["sumeragi", "collectors_redundant_send_r"], 1_i64)
-                .write(["sumeragi", "da_enabled"], false)
+                .write(["sumeragi", "da_enabled"], true)
                 .write(
                     ["sumeragi", "epoch_length_blocks"],
                     i64::try_from(EPOCH_LENGTH_BLOCKS)
@@ -70,7 +70,7 @@ fn cutover_builder(peers: usize, npos_params: SumeragiNposParameters) -> Network
             SumeragiParameter::RedundantSendR(1),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(false),
+            SumeragiParameter::DaEnabled(true),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Custom(
             npos_params.into_custom_parameter(),
@@ -176,6 +176,7 @@ fn consensus_params_for_mode(
             finality_margin_blocks: payload.finality_margin_blocks,
             evidence_horizon_blocks: payload.evidence_horizon_blocks,
             activation_lag_blocks: payload.activation_lag_blocks,
+            slashing_delay_blocks: payload.slashing_delay_blocks,
         })
     } else {
         None
@@ -434,7 +435,7 @@ async fn manifest_fingerprint_mismatch_blocks_startup() -> Result<()> {
     let manifest_builder = GenesisBuilder::new_without_executor(chain_id(), PathBuf::from("."))
         .append_parameter(Parameter::Sumeragi(SumeragiParameter::CollectorsK(1)))
         .append_parameter(Parameter::Sumeragi(SumeragiParameter::RedundantSendR(1)))
-        .append_parameter(Parameter::Sumeragi(SumeragiParameter::DaEnabled(false)))
+        .append_parameter(Parameter::Sumeragi(SumeragiParameter::DaEnabled(true)))
         .append_parameter(Parameter::Custom(npos_params.into_custom_parameter()))
         .append_parameter(Parameter::Sumeragi(SumeragiParameter::NextMode(
             SumeragiConsensusMode::Npos,

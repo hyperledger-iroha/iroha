@@ -20,14 +20,14 @@ translator: manual
 |-------|------|--------|---------|
 | תמיכת Multi-collector K/r ו-First-commit-certificate-wins | ◉ | בחירת אספן דטרמיניסטית, פאן-אאוט עודף ופרמטרים on-chain. | status.md:255; status.md:314 |
 | Bacמת זמן בפייסמייקר (backoff, RTT floor, jitter) | ◉ | טיימרים ניתנים לקונפיגורציה עם טווח jitter, טלמטריה ותיעוד. | status.md:251 |
-| NEW_VIEW gating ומעקב Highest commit certificate | ◉ | זרימת השליטה מעבירה NEW_VIEW/Evidence והמעקב אחר Highest commit certificate מונוטוני. | status.md:210 |
+| NEW_VIEW gating ומעקב Highest QC | ◉ | זרימת השליטה מעבירה NEW_VIEW/Evidence והמעקב אחר Highest QC מונוטוני. | status.md:210 |
 | availability evidence gating | ○ | קיומי וגם availability evidence זמינות מגבילים קומיט כשה-DA נדרש. | status.md:190 |
 | שערי RBC (DA + Reliable Broadcast) | ◉ | הקומיט מחכה ל-`DELIVER` של RBC בצירוף availability evidence. | status.md:283-284 |
 | קישור שורשי מצב ב-Commit QC | ◉ | Commit QC כולל parent/post state roots; אין שער execution QC נפרד. | status.md:latest |
 | הפצת Evidence ונקודות קצה לאודיט | ◉ | `ControlFlow::Evidence`, API ב-Torii ובדיקות שליליות. | status.md:176; status.md:760-761 |
 | טלמטריית RBC (מדדי מוכנות/מסירה) | ◉ | `/v1/sumeragi/rbc*` והיסטוגרמות למפעילים. | status.md:283-284; status.md:772 |
 | פרסום פרמטרי קונצנזוס ואימות טופולוגיה | ◉ | נודים מפרסמים `(collectors_k, redundant_send_r)` ומוודאים זהות. | status.md:255 |
-| רוטציה לפי האש הבלוק הקודם | ◉ | הפונקציה `rotated_for_prev_block_hash` דטרמיניסטית ונבחנת. | status.md:259 |
+| רוטציה מבוססת PRF ב‑permissioned | ◉ | בחירת לידר/קולקטורים ב‑permissioned משתמשת ב‑PRF seed יחד עם height/view על רוסטר קנוני; רוטציה לפי האש בלוק קודם נשארת כעזר legacy. | status.md:latest |
 
 ## פייפליין, Kura ומצב
 

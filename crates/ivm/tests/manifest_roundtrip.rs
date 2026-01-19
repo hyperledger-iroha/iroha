@@ -13,6 +13,7 @@ fn contract_manifest_roundtrip_norito() {
             write_keys: vec!["asset:rose#wonderland".to_string()],
         }),
         entrypoints: None,
+        kotoba: None,
         provenance: None,
     };
 

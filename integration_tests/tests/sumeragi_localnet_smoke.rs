@@ -4,6 +4,7 @@ use std::{
     cmp::Ordering,
     fs,
     path::{Path, PathBuf},
+    str::FromStr,
     sync::OnceLock,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -16,6 +17,8 @@ use iroha::data_model::{
     Level,
     block::consensus::SumeragiStatusWire,
     isi::{InstructionBox, Log, SetParameter},
+    metadata::Metadata,
+    name::Name,
     parameter::{BlockParameter, Parameter, SumeragiParameter, system::SumeragiNposParameters},
 };
 use iroha_test_network::{Network, NetworkBuilder, init_instruction_registry};
@@ -211,17 +214,15 @@ async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
         let max_extra_view_changes = u64::try_from(fault_tolerance.saturating_add(2))
             .unwrap_or(u64::MAX);
 
-        let submit_peer = network
-            .peers()
-            .first()
-            .cloned()
-            .ok_or_else(|| eyre!("network must have at least one peer"))?;
-        let client = submit_peer.client();
-        client
-            .submit::<InstructionBox>(
-                Log::new(Level::INFO, "localnet bounded block".to_string()).into(),
-            )
-            .wrap_err("failed to submit log instruction")?;
+        ensure!(!network.peers().is_empty(), "network must have at least one peer");
+        for peer in network.peers() {
+            let message = format!("localnet bounded block {}", peer.mnemonic());
+            peer.client()
+                .submit::<InstructionBox>(Log::new(Level::INFO, message).into())
+                .wrap_err_with(|| {
+                    format!("failed to submit log instruction to {}", peer.mnemonic())
+                })?;
+        }
 
         let target_height = baseline_height.saturating_add(1);
         let start = Instant::now();
@@ -338,24 +339,42 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
 
         let target_blocks = 100_u64;
         let target_height = baseline_height.saturating_add(target_blocks);
-        let submit_peer = network
-            .peers()
-            .first()
-            .cloned()
-            .ok_or_else(|| eyre!("network must have at least one peer"))?;
-        let client = submit_peer.client();
+        let peers = network.peers();
+        ensure!(!peers.is_empty(), "network must have at least one peer");
+        let peer_count = peers.len();
+        let sequence_key = Name::from_str("tx_sequence").expect("tx_sequence metadata key");
+        let timeout = scale_duration(network.pipeline_time(), target_blocks.saturating_mul(3))
+            .saturating_add(Duration::from_secs(30));
+        let per_block_timeout =
+            scale_duration(network.pipeline_time(), 3).saturating_add(Duration::from_secs(2));
+        let start = Instant::now();
+        let mut next_height = baseline_height;
         for idx in 0..target_blocks {
-            client
-                .submit::<InstructionBox>(
-                    Log::new(Level::INFO, format!("localnet block {idx}")).into(),
+            let peer = &peers[usize::try_from(idx).unwrap_or(0) % peer_count];
+            let message = format!("localnet block {idx} via {}", peer.mnemonic());
+            let mut metadata = Metadata::default();
+            metadata.insert(sequence_key.clone(), idx.saturating_add(1));
+            peer.client()
+                .submit_with_metadata::<InstructionBox>(
+                    Log::new(Level::INFO, message).into(),
+                    metadata,
                 )
-                .wrap_err_with(|| format!("failed to submit log instruction {idx}"))?;
+                .wrap_err_with(|| {
+                    format!(
+                        "failed to submit log instruction {idx} to {}",
+                        peer.mnemonic()
+                    )
+                })?;
+            next_height = next_height.saturating_add(1);
+            let remaining = timeout.saturating_sub(start.elapsed());
+            let block_timeout = if remaining < per_block_timeout {
+                remaining
+            } else {
+                per_block_timeout
+            };
+            wait_for_converged_height(&network, next_height, block_timeout).await?;
         }
 
-        let timeout = scale_duration(network.pipeline_time(), target_blocks)
-            .saturating_add(Duration::from_secs(30));
-        let start = Instant::now();
-        wait_for_converged_height(&network, target_height, timeout).await?;
         let elapsed = start.elapsed();
         ensure!(
             elapsed <= timeout,

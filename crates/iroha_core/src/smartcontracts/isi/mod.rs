@@ -127,6 +127,7 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::staking::SchedulePublicLaneUnbond>,
     dispatch_instruction::<iroha_data_model::isi::staking::FinalizePublicLaneUnbond>,
     dispatch_instruction::<iroha_data_model::isi::staking::SlashPublicLaneValidator>,
+    dispatch_instruction::<iroha_data_model::isi::staking::CancelConsensusEvidencePenalty>,
     dispatch_instruction::<iroha_data_model::isi::staking::RecordPublicLaneRewards>,
     dispatch_instruction::<iroha_data_model::isi::settlement::SettlementInstructionBox>,
     dispatch_instruction::<iroha_data_model::isi::settlement::DvpIsi>,
@@ -521,6 +522,7 @@ mod tests {
             features_bitmap: None,
             access_set_hints: None,
             entrypoints: None,
+            kotoba: None,
             provenance: None,
         }
         .signed(&ALICE_KEYPAIR);
@@ -585,6 +587,7 @@ mod tests {
             features_bitmap: None,
             access_set_hints: None,
             entrypoints: None,
+            kotoba: None,
             provenance: None,
         };
 
@@ -629,6 +632,7 @@ mod tests {
             features_bitmap: None,
             access_set_hints: None,
             entrypoints: None,
+            kotoba: None,
             provenance: None,
         }
         .signed(&KeyPair::random());

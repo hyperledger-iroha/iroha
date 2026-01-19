@@ -16,9 +16,9 @@ translator: manual
 [`sumeragi_npos_task_breakdown.md`](sumeragi_npos_task_breakdown.md).
 
 ### סקירה
-- **תפקידים ורוטציה** – הטופולוגיה המסודרת מחלקת את העמיתים לתפקידים `Leader`, ‏`ValidatingPeer`, ‏`ProxyTail`, ‏`SetBValidator`. לאחר כל קומיט הקבוצה הראשונה (`min_votes_for_commit()`) זזה שמאלה לפי `hash(prev_block_hash) mod min_votes_for_commit()`; שינויי View מסובבים את כל הטופולוגיה כדי לקדם את הלידר. הפונקציה `rotated_for_prev_block_hash(prev_hash)` ב-`network_topology.rs` מספקת רוטציה דטרמיניסטית קלה לביקורת על בסיס האש הבלוק הקודם.
-- **מצב K-Collectors** – לכל גובה הטופולוגיה בוחרת דטרמיניסטית K אספנים כקטע רציף שמתחיל ב-`proxy_tail_index()` (כולל) ללא עטיפה; הלידר לעולם אינו נבחר. כאשר K=1 מתקבלת שוב תצורת הפרוקסי-טייל ההיסטורית.
-- **First-commit-certificate-wins** – כל אספן ייעודי (כולל Proxy Tail) שמרכיב commit certificate תקף ל-Precommit מפרסם אותו. עמיתים מאמצים את ה-commit certificate התקף הראשון עבור `(height,hash)` ומתעלמים מאיחורים; הקומיט מבוסס מעתה כולו על commit certificates אלו.
+- **תפקידים ורוטציה** – הטופולוגיה המסודרת מחלקת את העמיתים לתפקידים `Leader`, ‏`ValidatingPeer`, ‏`ProxyTail`, ‏`SetBValidator`. לפני בחירת לידר הרוסטר ממוין לפי PeerId כדי לשמור דטרמיניזם בין העמיתים. במצב permissioned הרוסטר משורשר דטרמיניסטית לכל גובה באמצעות PRF(seed, height) המבוסס על מצב PRF/VRF של התקופה, ושינויי View מסובבים את הטופולוגיה המשורשרת כדי לקדם את הלידר; רוטציה לפי האש הבלוק הקודם אינה בשימוש לבחירת לידר. ב‑NPoS הרוסטר הפעיל ממוין לפני בחירת לידר ב‑PRF כך שאינדקסי החותמים נשארים עקביים. `rotated_for_prev_block_hash(prev_hash)` נשאר כעזר legacy דטרמיניסטי.
+- **מצב K-Collectors** – לכל גובה/View נבחרים דטרמיניסטית K אספנים באמצעות PRF מתוך הרוסטר הממויין, ללא הלידר. כאשר אין PRF seed יש fallback לקטע רציף שמתחיל ב-`proxy_tail_index()` (כולל) ללא עטיפה; K=1 בוחר אספן יחיד לפי PRF ומתכנס לפרוקסי‑טייל כאשר PRF אינו זמין.
+- **First-commit-certificate-wins** – כל אספן ייעודי שנבחר ב‑PRF (ללא הלידר) שמרכיב commit certificate תקף ל-Precommit מפרסם אותו. עמיתים מאמצים את ה-commit certificate התקף הראשון עבור `(height,hash)` ומתעלמים מאיחורים; הקומיט מבוסס מעתה כולו על commit certificates אלו.
 
 ### תפקידי נוד (קונפיגורציה)
 - `validator` (ברירת מחדל): משתתף בקונצנזוס לפי התפקיד בטופולוגיה הנוכחית.
@@ -34,10 +34,10 @@ translator: manual
 - **ולידטורים**: מאמתים, מפיקים Availability votes ושולחים Prevote/Precommit לאספנים המיועדים. בטיימאאוט לוקאלי ב-View 0 ניתן לפנות עד `r` אספנים נוספים.
 - **אספנים**: מרכזים הצבעות ומפרסמים Availability/Prevote/Precommit commit certificate. ה-commit certificate התקף הראשון עבור `(height,hash)` מנצח; איחורים נדחים.
 - **עמיתים מתבוננים**: אינם מצביעים ב-View 0. ב-Views מאוחרים עשויים להצביע; כאשר גוף הבלוק ו-commit certificate תואם זמינים – מבצעים קומיט דטרמיניסטי.
-- **מקבלים**: בודקים commit certificate, מעדכנים מעקב Highest/Locked commit certificate ומנסים קומיט כאשר ה-commit certificate והבלוק תואמים.
+- **מקבלים**: בודקים commit certificate, מעדכנים מעקב Highest/Locked QC ומנסים קומיט כאשר ה-commit certificate והבלוק תואמים.
 
 ### כלל הקומיט (פייפליין של שני commit certificate)
-- כל ולידטור עוקב אחר `highest_qc` (ה-commit certificate האחרון שנצפה, לרוב לגובה הילד) ואחר `locked_qc` (שומר הבטיחות הנוכחי). הצעה נבנית רק אם `highest_qc` מרחיב את `locked_qc`; אחרת היא מושלכת גם אם קיים רוב NEW_VIEW.
+- כל ולידטור עוקב אחר `highest_qc` (תעודת Prepare או Commit; לרוב לגובה הילד) ואחר `locked_qc` (שומר הבטיחות הנוכחי). הצעה נבנית רק אם `highest_qc` מרחיב את `locked_qc` והבלוק של `highest_qc` קיים מקומית; אם הבלוק חסר ההצעה נדחית ונשלחת בקשת missing‑block עם fallback לרוסטר מהיסטוריית QC.
 - בלוק בגובה `h` מצטבר כאשר מתקבל commit certificate לגובה `h+1` שהורה שלו תואם ל-commit certificate הנעול בגובה `h`. התנאי הדו-עומקי שומר על הפייפליין ומונע משרשרת מתנגשת להשיג קומיט.
 - כך אין צורך בהודעת סופיות נוספת: כאשר commit certificate הילד מגיע הבלוק האב בטוח, וכל נוד המחזיק את הבלוק ושני ה-commit certificate מסמן קומיט. מי שפספס את ה-commit certificate הראשון משלים דרך Gossip/RBC ומגיע לאותה החלטה.
 - מכיוון שרק שני גבהים פתוחים בו-זמנית, אספנים, RBC וטלמטריה יכולים לצנר עבודה ללא סכנת קומיטים מתפצלים. האינווריאנטים מיושמים ב-`sumeragi::main_loop`: ‏`ensure_locked_qc_allows` מגן על הרכבת הצעות, בלוקים ממתינים נשמרים בזיכרון והקומיט משחרר `locked_qc` רק לאחר תצפית ב-commit certificate ילד תואם.
@@ -52,13 +52,13 @@ translator: manual
 
 ### עקרונות טופולוגיה
 - טופולוגיה נוצרת עם ולידטורים בעלי PoP ב-BLS רק כאשר מפת ה‑PoP מכסה את כל הרוסטר; מפת PoP חלקית נדחית בזמן פריסת הקונפיג, והבסיס ה‑BLS משמש רק כגיבוי בטיחותי. הפונקציות `leader_index()` ו-`proxy_tail_index()` אינן משתמשות בשאריות ומחזירות `TopologySegment` דטרמיניסטי לביקורת.
-- `Topology::collectors_for(height)` מחזירה `CollectingPeerSet` נקי וקבוע לכל גובה. כאשר K=1 מתקבל Proxy Tail יחיד – תואם למסלול ההיסטורי.
+- `deterministic_collectors(topology, mode, k, seed, height, view)` מחזירה סט אספנים דטרמיניסטי לפי `(height, view)` ו‑PRF seed. כאשר אין PRF seed יש fallback למקטע רציף מ‑`proxy_tail_index()`; K=1 שומר את מסלול ה‑Proxy Tail ההיסטורי.
 - `Topology::role_at(index)` מספק את תפקיד העמית, ו-`is_validator(idx)` מאשר חברות לגובה הנוכחי.
 
 ### ממשק API
 - `iroha_cli sumeragi status --summary` / `GET /v1/sumeragi/status/summary` מציגים טופולוגיה, חלוקת תפקידים, מצב commit certificate, שימוש ב-RBC ואינפורמציה על האפוק (`epoch_len`,‏ `epoch_commit`,‏ `epoch_reveal`).
 - `iroha_cli sumeragi params --summary` / `GET /v1/sumeragi/params` מחזירים את פרמטרי הקונצנזוס: ‏`collectors_k`,‏ `collectors_redundant_send_r`, טיימרים, מוד.
-- `iroha_cli sumeragi status` / `GET /v1/sumeragi/status` מספקים רשומת Norito מלאה עם היסטוריית תפקידים, View עכשווי, Locked/Highest commit certificate ובלוקים ממתינים.
+- `iroha_cli sumeragi status` / `GET /v1/sumeragi/status` מספקים רשומת Norito מלאה עם היסטוריית תפקידים, View עכשווי, Locked/Highest QC ובלוקים ממתינים.
 
 ### עיקרי המימוש
 - `sumeragi::main_loop` הוא הלולאה המרכזית שמנהלת עדכוני commit certificate, טיפוס הצעות וקומיט.
@@ -89,7 +89,7 @@ translator: manual
 - מעבר אופרטיבי: לברר את הגובה, לשדר בקשת שינוי, לעקוב אחר התחייבות ולוודא שהמצב החדש מופעל בגובה שנקבע.
 
 ### דפוסי הפעלה למודים
-- מסלול Permissioned: סינגל-צינור עם פרוקסי-טייל יחיד, Viewchange קלאסי וקומיט מבוסס `BlockCommitted`.
+- מסלול Permissioned: סינגל-צינור עם בחירת אספנים מבוססת PRF, Viewchange קלאסי וקומיט על בסיס commit certificate.
 
 ### CLI / API צ'יטשיט
 - `iroha_cli sumeragi params --summary` – בדיקת טיימרים ופרמטרים.
@@ -114,7 +114,7 @@ translator: manual
 - ניתן לבנות טופולוגיה מחדש מתוך `SumeragiParameters` וסט העמיתים הקיים כדי לשחזר תצוגות.
 
 ### בחירת אספנים
-- `collectors_for(height)` מחזיר `CollectingPeerSet` לפי גובה.
+- `deterministic_collectors` מחזיר את קבוצת האספנים לפי `(height, view)` ו‑PRF seed.
 - `collectors.extend_for_redundancy(r)` מוסיף שליחות עודפות כאשר `r` > 0.
 - התוצאה נצרבת בטלמטריה ועוזרת לאבחון אספנים תקועים.
 
@@ -122,8 +122,8 @@ translator: manual
 - `Pacemaker` אחראי על איסוף Viewchange והתקנות view חדש.
 - `Epoch` מסמן שינויי ממשל או טופולוגיה; `FetchedTopology` מחזיר את הסנאפשוט המתאים.
 
-### Highest / Locked commit certificate
-- `HighestQc` ו-`LockedQc` מנוהלים באמצעות מבנים ברורים. `update_highest_qc` מקבל רק commit certificate מתקדם יותר. `ensure_locked_qc_allows` מוודא שהצעה מרחיבה נעילה או נושאת commit certificate גבוה יותר.
+### Highest / Locked QC
+- `HighestQc` ו-`LockedQc` מנוהלים באמצעות מבנים ברורים. `update_highest_qc` מקבל רק QC מתקדם יותר (Prepare/Commit). `ensure_locked_qc_allows` מוודא שהצעה מרחיבה נעילה או נושאת QC גבוה יותר.
 
 ### RBC
 - סשני RBC מזוהים באמצעות `RbcSessionId` ומכילים מטא-נתונים על גובה, hash, ומספר חלקים. הם מפיצים את גוף הבלוק ומספקים זמינות נתונים.
@@ -180,7 +180,7 @@ translator: manual
 2. נתחו `/v1/sumeragi/telemetry` כדי לאתר אינדקס ללא `votes_ingested`. אם רק אספן יחיד נפגע, ניתן להגדיל זמנית את `collectors_redundant_send_r`.
 3. בדקו `sumeragi_bg_post_queue_depth` ו-`p2p_*_throttled_total` לזיהוי עומסי תורים או מגבלות רשת.
 4. בעיות FASTPQ/prover: עיינו ב-`/v1/torii/zk/prover/reports` ובלוגים כדי לאתר כשלים בפרוברים.
-5. כאשר שני האספנים אינם מגיבים, יש לבדוק backlog של RBC, `sumeragi_rbc_store_evictions_total` ו-`rbc_store.recent_evictions` כדי לזהות עומס דיסק או TTL. בנוסף, `iroha_cli sumeragi status --summary` כולל את המונים `lane_governance_sealed_total` / `lane_governance_sealed_aliases`, כך שניתן לאתר מסילות שעדיין חסומות בלי לפענח את כל ה-JSON. בתהליכי שחרור ו-CI מומלץ להריץ גם `iroha_cli nexus lane-report --only-missing --fail-on-sealed` כדי לעצור אוטומטית כאשר יש מסילות שלא שוחררו.
+5. כאשר שני האספנים אינם מגיבים, יש לבדוק backlog של RBC, `sumeragi_rbc_store_evictions_total`, `sumeragi_rbc_persist_drops_total` ו-`rbc_store.recent_evictions` כדי לזהות עומס דיסק או TTL. בנוסף, `iroha_cli sumeragi status --summary` כולל את המונים `lane_governance_sealed_total` / `lane_governance_sealed_aliases`, כך שניתן לאתר מסילות שעדיין חסומות בלי לפענח את כל ה-JSON. בתהליכי שחרור ו-CI מומלץ להריץ גם `iroha_cli nexus lane-report --only-missing --fail-on-sealed` כדי לעצור אוטומטית כאשר יש מסילות שלא שוחררו.
 6. לאחר התאוששות, תעדו את האירוע והשיבו פרמטרים לערכי הבסיס.
 
 ### צינור האקראיות (VRF)
@@ -205,7 +205,7 @@ translator: manual
 #### CLI ותפעול
 - `iroha_cli sumeragi vrf-epoch --epoch <n>` מציג seed, השתתפות, קנסות ו-offsetים (`--summary` לשורה אחת).
 - `iroha_cli sumeragi telemetry --summary` מסכם `reveals_total`, ‏`late_reveals_total`, ‏`committed_no_reveal`. הסרת `--summary` תחזיר JSON מלא.
-- `iroha_cli sumeragi params --summary` מאפשר לוודא ערכים כגון `evidence_horizon_blocks`,‏ `activation_lag_blocks`.
+- `iroha_cli sumeragi params --summary` מאפשר לוודא ערכים כגון `evidence_horizon_blocks`,‏ `activation_lag_blocks`, `slashing_delay_blocks`.
 - לשליחות ידניות:
 
   ```bash

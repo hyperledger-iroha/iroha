@@ -25,11 +25,11 @@ Consenso (Sumeragi)
     - `curl -Ns http://127.0.0.1:8080/v1/sumeragi/new_view/sse`
 - Métricas: los gauges `sumeragi_new_view_receipts_by_hv{height,view}` reflejan los conteos.
 - GET `/v1/sumeragi/status`
-  - Instantánea del índice de líder, Highest/Locked commit certificates (`highest_qc`/`locked_qc`, alturas, vistas, hashes de sujeto), contadores de colectores/VRF, aplazamientos del pacemaker, profundidad de la cola de transacciones y salud del almacén RBC (`rbc_store.{sessions,bytes,pressure_level,evictions_total,recent_evictions[...]}`).
+  - Instantánea del índice de líder, Highest/Locked QCs (`highest_qc`/`locked_qc`, alturas, vistas, hashes de sujeto), contadores de colectores/VRF, aplazamientos del pacemaker, profundidad de la cola de transacciones y salud del almacén RBC (`rbc_store.{sessions,bytes,pressure_level,persist_drops_total,evictions_total,recent_evictions[...]}`).
 - GET `/v1/sumeragi/status/sse`
   - Flujo SSE (≈1 s) del mismo payload que `/v1/sumeragi/status` para paneles en vivo.
 - GET `/v1/sumeragi/qc`
-  - Instantánea de highest/locked commit certificates; incluye `subject_block_hash` para el highest commit certificate cuando se conoce.
+  - Instantánea de highest/locked QCs; incluye `subject_block_hash` para el highest QC cuando se conoce.
 - GET `/v1/sumeragi/pacemaker`
   - Temporizadores/configuración del pacemaker: `{ backoff_ms, rtt_floor_ms, jitter_ms, backoff_multiplier, rtt_floor_multiplier, max_backoff_ms, jitter_frac_permille }`.
 - GET `/v1/sumeragi/leader`

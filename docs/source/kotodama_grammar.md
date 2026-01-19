@@ -59,6 +59,7 @@ Literals
 
 Scalar types
 - `int`: 64-bit two’s-complement; arithmetic wraps modulo 2^64 for add/sub/mul; division has defined signed/unsigned variants in IVM; the compiler chooses the appropriate op for semantics.
+- `fixed_u128`, `Amount`, `Balance`: numeric aliases backed by Norito `Numeric` (signed decimal with up to 512-bit mantissa and scale). Kotodama treats these aliases as non-negative quantities; arithmetic is checked, preserves the alias, and traps on overflow or division by zero. Values created from `int` use scale 0; conversions to/from `int` are range-checked at runtime (non-negative, integral, fits in i64).
 - `bool`: logical truth value; lowered to `0`/`1`.
 - `string`: immutable UTF‑8 string; represented as Norito TLV when passed to syscalls; in-VM operations use byte slices and length.
 - `bytes`: raw Norito payload; aliases the pointer-ABI `Blob` type for hashing/crypto/proof inputs and durable overlays.
@@ -83,7 +84,7 @@ Top-level items
 
 Visibility
 - `kotoage fn` denotes a public entrypoint; visibility affects dispatcher permissions, not codegen.
-- Optional access hints: `#[access(read=..., write=...)]` can precede `fn`/`kotoage fn` to supply manifest read/write keys.
+- Optional access hints: `#[access(read=..., write=...)]` can precede `fn`/`kotoage fn` to supply manifest read/write keys. The compiler also emits advisory hints automatically; opaque host calls fall back to conservative wildcard keys (`*`) and surface a diagnostic so schedulers can opt into a dynamic prepass for finer-grained keys.
 
 ## Contract Container and Metadata
 
@@ -114,10 +115,24 @@ Semantics
 - Durable state maps currently support `int` and pointer-ABI key types only; other key types are rejected at compile time.
 - Durable state fields must be `int`, `bool`, `Json`, `Blob`/`bytes`, or pointer-ABI types (including structs/tuples composed of these fields); `string` is not supported for durable state.
 
+### Kotoba localization
+Syntax
+```
+kotoba {
+  "E_UNBOUNDED_ITERATION": { en: "Loop over map lacks a bound." }
+}
+```
+
+Semantics
+- `kotoba` entries attach translation tables to the contract manifest (`kotoba` field).
+- Message IDs and language tags accept identifiers or string literals; entries must be non-empty.
+- Duplicate `msg_id` + language tag pairs are rejected at compile time.
+
 ## Trigger Declarations
 
-Trigger declarations attach scheduling metadata to entrypoint manifests so deployment tooling can
-register triggers without emitting bytecode. They are parsed inside a `seiyaku` block.
+Trigger declarations attach scheduling metadata to entrypoint manifests and are auto-registered
+when a contract instance is activated (removed on deactivation). They are parsed inside a
+`seiyaku` block.
 
 Syntax
 ```
@@ -131,10 +146,13 @@ register_trigger wake {
 
 Notes
 - `call` must reference a public `kotoage fn` entrypoint in the same contract; an optional
-  `namespace::entrypoint` is recorded in the manifest for future cross-contract wiring.
+  `namespace::entrypoint` is recorded in the manifest but cross-contract callbacks are rejected
+  by the runtime for now (local callbacks only).
 - Supported filters: `time pre_commit` and `time schedule(start_ms, period_ms?)`, plus
   `execute trigger <name>` for by-call triggers. Data/pipeline filters are not yet supported.
 - Metadata values must be JSON literals (`string`, `number`, `bool`, `null`) or `json!(...)`.
+- Runtime-injected trigger metadata keys: `contract_namespace`, `contract_id`,
+  `contract_entrypoint`, `contract_code_hash`, `contract_trigger_id`.
 
 ## Functions and Parameters
 
@@ -152,7 +170,7 @@ Parameters and returns
 
 - Variable bindings: `let x = expr;`, `let mut x = expr;` (mutability is a compile-time check; runtime mutation is allowed for locals only).
 - Assignment: `x = expr;` and compound forms `x += 1;` etc. Targets must be variables or map indices; tuple/struct fields are immutable.
-- Numeric aliases (`fixed_u128`, `Amount`, `Balance`) are distinct types with 64-bit int semantics; arithmetic preserves the alias and mixing aliases requires converting through an `int` binding.
+- Numeric aliases (`fixed_u128`, `Amount`, `Balance`) are distinct `Numeric`-backed types; arithmetic preserves the alias and mixing aliases requires converting through an `int` binding. Conversions to/from `int` are checked at runtime (non-negative, integral, range-limited).
 - Control: `if (cond) { ... } else { ... }`, `while (cond) { ... }`, C-style `for (init; cond; step) { ... }`.
   - `for` initializers and steps must be simple `let name = expr` or expression statements; complex destructuring is rejected (`E0005`, `E0006`).
   - `for` scoping: bindings from the init clause are visible in the loop and after it; bindings created in the body or step do not escape the loop.
@@ -222,9 +240,9 @@ Implementation status
   - Method sugar is supported: `s.name()`, `s.json()`, `b.blob()`, `b.norito_bytes()`.
 
 Host/syscall builtins (map to SCALL; exact numbers in ivm.md)
-- `mint_asset(AccountId*, AssetDefinitionId*, int)`
-- `burn_asset(AccountId*, AssetDefinitionId*, int)`
-- `transfer_asset(AccountId*, AccountId*, AssetDefinitionId*, int)`
+- `mint_asset(AccountId*, AssetDefinitionId*, numeric)`
+- `burn_asset(AccountId*, AssetDefinitionId*, numeric)`
+- `transfer_asset(AccountId*, AccountId*, AssetDefinitionId*, numeric)`
 - `set_account_detail(AccountId*, Name*, Json*)`
 - `execute_instruction(Blob[NoritoBytes])`
 - `execute_query(Blob[NoritoBytes]) -> Blob`

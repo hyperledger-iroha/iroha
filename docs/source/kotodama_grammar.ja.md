@@ -116,6 +116,32 @@ seiyaku Name {
 - `meta { ... }` は出力される IVM ヘッダーの既定値を上書きします。`abi_version`、`vector_length`（0 は未設定）、`max_cycles`（0 はコンパイラ既定値）、`features` はヘッダのフィーチャビット（ZK トレース、ベクトル告知など）を切り替えます。未サポートのフィーチャは警告付きで無視されます。`meta {}` を省略した場合、コンパイラは `abi_version = 1` を出力し、その他の項目はオプションの既定値を用います。
 - `state` はランタイムが保持する耐久変数を宣言します。ABI は Norito エンコードでオンチェーン保存され、順序とフィールド名を保つ必要があります。関数からのミューテーションはホストシステムコールを通じて ISI を生成し、VM コードが直接 WSV を変更することはできません。
 
+## トリガー宣言
+
+トリガー宣言はエントリーポイントマニフェストにスケジューリング用のメタデータを付与し、
+コントラクトインスタンスの有効化時に自動登録（無効化時に削除）されます。`seiyaku`
+ブロック内で解析されます。
+
+### 構文
+```
+register_trigger wake {
+  call run;
+  on time pre_commit;
+  repeats 2;
+  metadata { tag: "alpha"; count: 1; enabled: true; }
+}
+```
+
+### 注記
+- `call` は同一コントラクト内の公開 `kotoage fn` を参照する必要があります。
+  `namespace::entrypoint` はマニフェストに記録されますが、クロスコントラクトの
+  コールバックは現時点では拒否されます（ローカルのみ）。
+- 対応フィルタ: `time pre_commit` と `time schedule(start_ms, period_ms?)`、および
+  `execute trigger <name>`（by-call）。data/pipeline フィルタは未対応です。
+- metadata 値は JSON リテラル（`string`, `number`, `bool`, `null`）または `json!(...)`。
+- ランタイムが注入する metadata キー: `contract_namespace`, `contract_id`,
+  `contract_entrypoint`, `contract_code_hash`, `contract_trigger_id`。
+
 ## 関数とパラメータ
 
 ### 構文
@@ -191,9 +217,9 @@ seiyaku Name {
   - メソッドシュガーをサポート: `s.name()`, `s.json()`, `b.blob()`, `b.norito_bytes()`。
 
 ### ホスト／システムコール系ビルトイン（SCALL へマッピング。番号は `ivm.md` 参照）
-- `mint_asset(AccountId*, AssetDefinitionId*, int)`
-- `burn_asset(AccountId*, AssetDefinitionId*, int)`
-- `transfer_asset(AccountId*, AccountId*, AssetDefinitionId*, int)`
+- `mint_asset(AccountId*, AssetDefinitionId*, numeric)`
+- `burn_asset(AccountId*, AssetDefinitionId*, numeric)`
+- `transfer_asset(AccountId*, AccountId*, AssetDefinitionId*, numeric)`
 - `set_account_detail(AccountId*, Name*, Json*)`
 - `nft_mint_asset(NftId*, AccountId*)`
 - `nft_transfer_asset(AccountId*, NftId*, AccountId*)`

@@ -1,5 +1,7 @@
 use iroha_crypto::Hash;
+use iroha_primitives::numeric::Numeric;
 use ivm::{CoreHost, IVM, Memory, PointerType, encoding, instruction::wide, syscalls};
+use norito::to_bytes;
 
 fn assemble(code: &[u8]) -> Vec<u8> {
     let meta = ivm::ProgramMetadata {
@@ -32,6 +34,11 @@ fn make_tlv(type_id: u16, version: u8, payload: &[u8]) -> Vec<u8> {
     let h: [u8; 32] = Hash::new(payload).into();
     out.extend_from_slice(&h);
     out
+}
+
+fn make_numeric_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
+    let buf = to_bytes(&amount.into()).expect("encode numeric into Norito");
+    make_tlv(PointerType::NoritoBytes as u16, 1, &buf)
 }
 
 #[test]
@@ -121,7 +128,12 @@ fn transfer_asset_validates_tlvs() {
         12,
         Memory::INPUT_START + from.len() as u64 + to.len() as u64 + 16,
     );
-    vm.set_register(13, 42);
+    let amount = make_numeric_tlv(42_u64);
+    let amount_offset = from.len() as u64 + to.len() as u64 + asset.len() as u64 + 24;
+    vm.memory
+        .preload_input(amount_offset, &amount)
+        .expect("preload input");
+    vm.set_register(13, Memory::INPUT_START + amount_offset);
     let prog = encode_prog_syscall(syscalls::SYSCALL_TRANSFER_ASSET);
     vm.load_program(&prog).unwrap();
     vm.run().expect("transfer_asset tlvs should validate");
@@ -148,7 +160,12 @@ fn transfer_asset_rejects_wrong_asset_type() {
         12,
         Memory::INPUT_START + from.len() as u64 + to.len() as u64 + 16,
     );
-    vm.set_register(13, 1);
+    let amount = make_numeric_tlv(1_u64);
+    let amount_offset = from.len() as u64 + to.len() as u64 + wrong.len() as u64 + 24;
+    vm.memory
+        .preload_input(amount_offset, &amount)
+        .expect("preload input");
+    vm.set_register(13, Memory::INPUT_START + amount_offset);
     let prog = encode_prog_syscall(syscalls::SYSCALL_TRANSFER_ASSET);
     vm.load_program(&prog).unwrap();
     let err = vm.run().unwrap_err();

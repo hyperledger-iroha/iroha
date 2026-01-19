@@ -25,11 +25,11 @@ translator: manual
   - 例: `curl -Ns http://127.0.0.1:8080/v1/sumeragi/new_view/sse`
 - メトリクス: `sumeragi_new_view_receipts_by_hv{height,view}` ゲージが同じカウントを公開。
 - `GET /v1/sumeragi/status`
-  - リーダーインデックス、Highest/Locked commit certificates（`highest_qc`/`locked_qc` の高さ・ビュー・サブジェクトハッシュ）、コレクタ／VRF カウンター、ペースメーカーの猶予、トランザクションキュー深さ、RBC ストア状態（`rbc_store.{sessions,bytes,pressure_level,evictions_total,recent_evictions[...]}`）を取得。
+  - リーダーインデックス、Highest/Locked QCs（`highest_qc`/`locked_qc` の高さ・ビュー・サブジェクトハッシュ）、コレクタ／VRF カウンター、ペースメーカーの猶予、トランザクションキュー深さ、RBC ストア状態（`rbc_store.{sessions,bytes,pressure_level,persist_drops_total,evictions_total,recent_evictions[...]}`）を取得。
 - `GET /v1/sumeragi/status/sse`
   - `/v1/sumeragi/status` と同じペイロードの SSE（約 1 秒間隔）。
 - `GET /v1/sumeragi/qc`
-  - highest/locked commit certificates のスナップショット。highest commit certificate のブロックハッシュが判明していれば `subject_block_hash` を含む。
+  - highest/locked QCs のスナップショット。highest QC のブロックハッシュが判明していれば `subject_block_hash` を含む。
 - `GET /v1/sumeragi/pacemaker`
   - ペースメーカーのタイマー／設定値 `{ backoff_ms, rtt_floor_ms, jitter_ms, backoff_multiplier, rtt_floor_multiplier, max_backoff_ms, jitter_frac_permille }`。
 - `GET /v1/sumeragi/leader`

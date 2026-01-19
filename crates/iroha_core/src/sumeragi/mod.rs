@@ -411,7 +411,7 @@ pub(crate) fn resolve_npos_election_params(
     )
 }
 
-/// Resolve `NPoS` activation lag for penalties from on-chain parameters or config.
+/// Resolve `NPoS` activation lag for VRF penalties from on-chain parameters or config.
 pub(crate) fn resolve_npos_activation_lag_blocks(
     view: &StateView<'_>,
     fallback: &SumeragiNpos,
@@ -420,6 +420,18 @@ pub(crate) fn resolve_npos_activation_lag_blocks(
         .sumeragi_npos_parameters()
         .map_or(fallback.reconfig.activation_lag_blocks, |params| {
             params.activation_lag_blocks()
+        })
+}
+
+/// Resolve `NPoS` slashing delay (blocks) for evidence penalties from on-chain parameters or config.
+pub(crate) fn resolve_npos_slashing_delay_blocks(
+    view: &StateView<'_>,
+    fallback: &SumeragiNpos,
+) -> u64 {
+    view.world
+        .sumeragi_npos_parameters()
+        .map_or(fallback.reconfig.slashing_delay_blocks, |params| {
+            params.slashing_delay_blocks()
         })
 }
 
@@ -478,6 +490,11 @@ pub fn npos_seed_for_height(view: &StateView<'_>, height: u64) -> [u8; 32] {
     npos_seed_for_height_from_world(&view.world, view.chain_id(), height)
 }
 
+/// Resolve the PRF seed for the epoch containing `height`.
+pub fn prf_seed_for_height(view: &StateView<'_>, height: u64) -> [u8; 32] {
+    prf_seed_for_height_from_world(&view.world, view.chain_id(), height)
+}
+
 /// Resolve the `NPoS` PRF seed for the epoch containing `height` from any world snapshot.
 pub(crate) fn npos_seed_for_height_from_world(
     world: &impl WorldReadOnly,
@@ -499,6 +516,15 @@ pub(crate) fn npos_seed_for_height_from_world(
         return params.epoch_seed();
     }
     latest_epoch_seed_from_world(world, chain_id)
+}
+
+/// Resolve the PRF seed for the epoch containing `height` from any world snapshot.
+pub(crate) fn prf_seed_for_height_from_world(
+    world: &impl WorldReadOnly,
+    chain_id: &ChainId,
+    height: u64,
+) -> [u8; 32] {
+    npos_seed_for_height_from_world(world, chain_id, height)
 }
 
 #[cfg(test)]
@@ -1511,6 +1537,31 @@ mod tests {
         assert_eq!(
             resolve_npos_activation_lag_blocks(&view, &fallback),
             fallback.reconfig.activation_lag_blocks
+        );
+    }
+
+    #[test]
+    fn resolve_npos_slashing_delay_blocks_prefers_on_chain() {
+        let mut fallback = SumeragiNpos::default();
+        fallback.reconfig.slashing_delay_blocks = 42;
+
+        let state = state_with_npos_params(SumeragiNposParameters {
+            slashing_delay_blocks: 7,
+            ..SumeragiNposParameters::default()
+        });
+        let view = state.view();
+        assert_eq!(resolve_npos_slashing_delay_blocks(&view, &fallback), 7);
+        drop(view);
+
+        let state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let view = state.view();
+        assert_eq!(
+            resolve_npos_slashing_delay_blocks(&view, &fallback),
+            fallback.reconfig.slashing_delay_blocks
         );
     }
 

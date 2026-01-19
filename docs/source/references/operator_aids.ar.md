@@ -27,11 +27,11 @@ translation_last_reviewed: 2026-01-01
     - `curl -Ns http://127.0.0.1:8080/v1/sumeragi/new_view/sse`
 - المقاييس: عدادات `sumeragi_new_view_receipts_by_hv{height,view}` تعكس الأعداد.
 - GET `/v1/sumeragi/status`
-  - لقطة لمؤشر القائد، Highest/Locked commit certificates (`highest_qc`/`locked_qc` مع الارتفاعات والمشاهدات وتجزئات الموضوع)، عدادات المجمّعين/VRF، تأجيلات pacemaker، عمق طابور المعاملات، وصحة مخزن RBC (`rbc_store.{sessions,bytes,pressure_level,evictions_total,recent_evictions[...]}`).
+  - لقطة لمؤشر القائد، Highest/Locked QCs (`highest_qc`/`locked_qc` مع الارتفاعات والمشاهدات وتجزئات الموضوع)، عدادات المجمّعين/VRF، تأجيلات pacemaker، عمق طابور المعاملات، وصحة مخزن RBC (`rbc_store.{sessions,bytes,pressure_level,persist_drops_total,evictions_total,recent_evictions[...]}`).
 - GET `/v1/sumeragi/status/sse`
   - تدفق SSE (≈1 ث) لنفس الحمولة مثل `/v1/sumeragi/status` للمتابعة الحية.
 - GET `/v1/sumeragi/qc`
-  - لقطة لـ highest/locked commit certificates؛ تتضمن `subject_block_hash` لـ highest commit certificate عند توفره.
+  - لقطة لـ highest/locked QCs؛ تتضمن `subject_block_hash` لـ highest QC عند توفره.
 - GET `/v1/sumeragi/pacemaker`
   - مؤقتات/إعدادات pacemaker: `{ backoff_ms, rtt_floor_ms, jitter_ms, backoff_multiplier, rtt_floor_multiplier, max_backoff_ms, jitter_frac_permille }`.
 - GET `/v1/sumeragi/leader`
