@@ -274,16 +274,17 @@ fn submit_tx_or_skip(
     context: &str,
 ) -> Result<Option<()>> {
     let mut last_err = None;
+    let mut accepted = false;
     for _ in 0..clients.len() {
         let client = clients.next();
-        match client.submit_transaction_blocking(tx) {
-            Ok(_) => return Ok(Some(())),
+        match client.submit_transaction(tx) {
+            Ok(_) => {
+                accepted = true;
+            }
             Err(err) => {
-                if is_tx_confirmation_timeout(&err) {
-                    eprintln!(
-                        "warning: {context} confirmation timed out; continuing with state checks"
-                    );
-                    return Ok(Some(()));
+                if is_duplicate_tx_error(&err) {
+                    accepted = true;
+                    continue;
                 }
                 if is_transient_client_error(&err) {
                     last_err = Some(err);
@@ -293,10 +294,14 @@ fn submit_tx_or_skip(
             }
         }
     }
-    sandbox::handle_result::<()>(
-        Err(last_err.unwrap_or_else(|| eyre!("all peers unreachable"))),
-        context,
-    )
+    if accepted {
+        Ok(Some(()))
+    } else {
+        sandbox::handle_result::<()>(
+            Err(last_err.unwrap_or_else(|| eyre!("all peers unreachable"))),
+            context,
+        )
+    }
 }
 
 fn submit_or_tolerate_timeout(
@@ -305,30 +310,10 @@ fn submit_or_tolerate_timeout(
     context: &str,
 ) -> Result<Option<()>> {
     let instruction = instruction.into();
-    let mut last_err = None;
-    for _ in 0..clients.len() {
-        let client = clients.next();
-        match client.submit_blocking(instruction.clone()) {
-            Ok(_) => return Ok(Some(())),
-            Err(err) => {
-                if is_tx_confirmation_timeout(&err) {
-                    eprintln!(
-                        "warning: {context} confirmation timed out; continuing with state checks"
-                    );
-                    return Ok(Some(()));
-                }
-                if is_transient_client_error(&err) {
-                    last_err = Some(err);
-                    continue;
-                }
-                return sandbox::handle_result::<()>(Err(err), context);
-            }
-        }
-    }
-    sandbox::handle_result::<()>(
-        Err(last_err.unwrap_or_else(|| eyre!("all peers unreachable"))),
-        context,
-    )
+    let tx = clients
+        .current()
+        .build_transaction([instruction.clone()], Metadata::default());
+    submit_tx_or_skip(clients, &tx, context)
 }
 
 fn is_tx_confirmation_timeout(err: &Report) -> bool {
@@ -337,6 +322,21 @@ fn is_tx_confirmation_timeout(err: &Report) -> bool {
         "transaction queued for too long",
         "Connection dropped without `Committed/Applied` or `Rejected` event",
         "fallback status check failed",
+    ];
+    err.chain().any(|cause| {
+        let text = cause.to_string();
+        NEEDLES.iter().any(|needle| text.contains(needle))
+    })
+}
+
+fn is_duplicate_tx_error(err: &Report) -> bool {
+    const NEEDLES: [&str; 6] = [
+        "PRTRY:ALREADY_COMMITTED",
+        "PRTRY:ALREADY_ENQUEUED",
+        "already_committed",
+        "already_enqueued",
+        "transaction already committed",
+        "transaction already present in the queue",
     ];
     err.chain().any(|cause| {
         let text = cause.to_string();
@@ -1311,6 +1311,22 @@ mod helper_tests {
     fn tx_confirmation_timeout_includes_fallback_status() {
         let err = eyre!("transaction confirmation timed out; fallback status check failed");
         assert!(is_tx_confirmation_timeout(&err));
+    }
+
+    #[test]
+    fn tx_confirmation_timeout_includes_queue_stall() {
+        let err = eyre!("transaction queued for too long");
+        assert!(is_tx_confirmation_timeout(&err));
+    }
+
+    #[test]
+    fn duplicate_tx_error_detects_queue_conflicts() {
+        let committed = eyre!("Unexpected transaction response; status: 409 Conflict; reject code: PRTRY:ALREADY_COMMITTED; response body: transaction already committed to the blockchain");
+        assert!(is_duplicate_tx_error(&committed));
+        let enqueued = eyre!("Unexpected transaction response; status: 409 Conflict; reject code: PRTRY:ALREADY_ENQUEUED; response body: transaction already present in the queue");
+        assert!(is_duplicate_tx_error(&enqueued));
+        let other = eyre!("Unexpected transaction response; status: 400 Bad Request; response body: invalid transaction");
+        assert!(!is_duplicate_tx_error(&other));
     }
 
     #[test]

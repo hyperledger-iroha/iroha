@@ -37,6 +37,7 @@ use iroha_data_model::{
         types::StorageTicketId,
     },
     events::{EventBox, pipeline::PipelineEventBox},
+    isi::register::RegisterPeerWithPop,
     merge::{MergeCommitteeSignature, MergeQuorumCertificate},
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
     peer::PeerId,
@@ -3640,6 +3641,7 @@ pub(super) struct Actor {
     tick_timing: TickTimingMonitor,
     last_qc_rebuild: Instant,
     relay_backpressure: RelayBackpressure,
+    new_view_rebroadcast_log: NewViewRebroadcastThrottle,
     payload_rebroadcast_log: PayloadRebroadcastThrottle,
     block_sync_rebroadcast_log: PayloadRebroadcastThrottle,
     block_sync_fetch_log: PayloadRebroadcastThrottle,
@@ -4453,6 +4455,9 @@ fn selection_from_roster_artifacts(
     roster_cache: &RosterValidationCache,
 ) -> Option<BlockSyncRosterSelection> {
     let expected_epoch = roster_cache.expected_epoch(block_height, consensus_mode);
+    let allow_genesis_stub = matches!(source, BlockSyncRosterSource::CommitRosterJournal)
+        && block_height == 1
+        && block_view.is_none_or(|view| view == 0);
     let mut cert_inputs: Option<RosterValidationInputs> = None;
     let mut checkpoint_inputs: Option<RosterValidationInputs> = None;
     let validated_cert = commit_qc.and_then(|cert| {
@@ -4468,6 +4473,7 @@ fn selection_from_roster_artifacts(
             expected_epoch,
             chain_id,
             mode_tag,
+            allow_genesis_stub,
             inputs,
         ) {
             Ok(roster) => Some((roster, cert)),
@@ -4523,6 +4529,7 @@ fn selection_from_roster_artifacts(
             mode_tag,
             epoch,
             checkpoint_roots,
+            allow_genesis_stub,
             inputs,
         ) {
             Ok(roster) => Some((roster, chk)),
@@ -4881,6 +4888,7 @@ fn validate_commit_qc_roster(
     expected_epoch: u64,
     chain_id: &ChainId,
     mode_tag: &str,
+    allow_genesis_stub: bool,
     inputs: &RosterValidationInputs,
 ) -> Result<Vec<PeerId>, RosterValidationError> {
     if cert.subject_block_hash != block_hash {
@@ -4932,8 +4940,16 @@ fn validate_commit_qc_roster(
             actual: cert.aggregate.signers_bitmap.len(),
         });
     }
-    if cert.aggregate.bls_aggregate_signature.is_empty() {
+    let genesis_stub = allow_genesis_stub
+        && block_height == 1
+        && cert.view == 0
+        && cert.aggregate.bls_aggregate_signature.is_empty()
+        && cert.aggregate.signers_bitmap.iter().all(|byte| *byte == 0);
+    if cert.aggregate.bls_aggregate_signature.is_empty() && !genesis_stub {
         return Err(RosterValidationError::AggregateSignatureMissing);
+    }
+    if genesis_stub {
+        return Ok(cert.validator_set.clone());
     }
     let mut signer_indices = BTreeSet::new();
     let mut signer_peers = BTreeSet::new();
@@ -5029,6 +5045,7 @@ fn validate_checkpoint_roster(
     mode_tag: &str,
     epoch: u64,
     roots: Option<(Hash, Hash)>,
+    allow_genesis_stub: bool,
     inputs: &RosterValidationInputs,
 ) -> Result<Vec<PeerId>, RosterValidationError> {
     if checkpoint.block_hash != block_hash {
@@ -5076,8 +5093,16 @@ fn validate_checkpoint_roster(
             actual: checkpoint.signers_bitmap.len(),
         });
     }
-    if checkpoint.bls_aggregate_signature.is_empty() {
+    let genesis_stub = allow_genesis_stub
+        && block_height == 1
+        && checkpoint.view == 0
+        && checkpoint.bls_aggregate_signature.is_empty()
+        && checkpoint.signers_bitmap.iter().all(|byte| *byte == 0);
+    if checkpoint.bls_aggregate_signature.is_empty() && !genesis_stub {
         return Err(RosterValidationError::AggregateSignatureMissing);
+    }
+    if genesis_stub {
+        return Ok(checkpoint.validator_set.clone());
     }
     let mut signer_indices = BTreeSet::new();
     let mut signer_peers = BTreeSet::new();
@@ -5994,6 +6019,24 @@ impl Actor {
         Some(block.hash())
     }
 
+    fn genesis_roster_from_genesis_block(&self) -> Vec<PeerId> {
+        let Some(genesis) = self.genesis_network.genesis.as_ref() else {
+            return Vec::new();
+        };
+        let mut roster = Vec::new();
+        for tx in genesis.0.external_transactions() {
+            let Executable::Instructions(isi) = tx.instructions() else {
+                continue;
+            };
+            for instruction in isi {
+                if let Some(register) = instruction.as_any().downcast_ref::<RegisterPeerWithPop>() {
+                    roster.push(register.peer.clone());
+                }
+            }
+        }
+        roster
+    }
+
     fn qc_header_matches_genesis(&self, qc: &crate::sumeragi::consensus::QcHeaderRef) -> bool {
         if qc.phase != crate::sumeragi::consensus::Phase::Commit {
             return false;
@@ -6057,6 +6100,87 @@ impl Actor {
             return false;
         }
         qc.aggregate.bls_aggregate_signature.is_empty()
+    }
+
+    fn ensure_genesis_commit_roster(&mut self) {
+        const GENESIS_HEIGHT: u64 = 1;
+        let Some(genesis_hash) = self.genesis_block_hash() else {
+            return;
+        };
+        if self
+            .state
+            .commit_roster_snapshot_for_block(GENESIS_HEIGHT, genesis_hash)
+            .is_some()
+        {
+            return;
+        }
+        let (consensus_mode, mode_tag, _) = self.consensus_context_for_height(GENESIS_HEIGHT);
+        let mut roster = self.genesis_roster_from_genesis_block();
+        if roster.is_empty() {
+            let view = self.state.view();
+            roster = derive_active_topology_for_mode(
+                &view,
+                self.common_config.trusted_peers.value(),
+                self.common_config.peer.id(),
+                consensus_mode,
+            );
+        }
+        roster = roster::canonicalize_roster_for_mode(roster, consensus_mode);
+        if roster.is_empty() {
+            warn!(
+                height = GENESIS_HEIGHT,
+                block = %genesis_hash,
+                "skipping genesis commit roster seed: empty roster"
+            );
+            return;
+        }
+        let bitmap_len = roster.len().div_ceil(8);
+        let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
+        let epoch = self.epoch_for_height(GENESIS_HEIGHT);
+        let qc = crate::sumeragi::consensus::Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: genesis_hash,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height: GENESIS_HEIGHT,
+            view: 0,
+            epoch,
+            mode_tag: mode_tag.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster.clone(),
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: vec![0; bitmap_len],
+                bls_aggregate_signature: Vec::new(),
+            },
+        };
+        let checkpoint = ValidatorSetCheckpoint::new(
+            qc.height,
+            qc.view,
+            qc.subject_block_hash,
+            qc.parent_state_root,
+            qc.post_state_root,
+            qc.validator_set.clone(),
+            qc.aggregate.signers_bitmap.clone(),
+            qc.aggregate.bls_aggregate_signature.clone(),
+            qc.validator_set_hash_version,
+            None,
+        );
+        let stake_snapshot = match consensus_mode {
+            ConsensusMode::Permissioned => None,
+            ConsensusMode::Npos => {
+                CommitStakeSnapshot::from_roster(self.state.view().world(), &roster)
+            }
+        };
+        self.state
+            .record_commit_roster(&qc, &checkpoint, stake_snapshot);
+        info!(
+            height = GENESIS_HEIGHT,
+            block = %genesis_hash,
+            roster_len = roster.len(),
+            "seeded genesis commit roster from genesis block"
+        );
     }
 
     fn latest_committed_qc(&self) -> Option<crate::sumeragi::consensus::QcHeaderRef> {
@@ -6992,6 +7116,7 @@ impl Actor {
             tick_timing: TickTimingMonitor::new(now),
             last_qc_rebuild: initial_qc_rebuild,
             relay_backpressure: RelayBackpressure::default(),
+            new_view_rebroadcast_log: NewViewRebroadcastThrottle::default(),
             payload_rebroadcast_log: PayloadRebroadcastThrottle::default(),
             block_sync_rebroadcast_log: PayloadRebroadcastThrottle::default(),
             block_sync_fetch_log: PayloadRebroadcastThrottle::default(),
@@ -7006,6 +7131,7 @@ impl Actor {
             }
         }
         actor.refresh_commit_topology_state(&actor.effective_commit_topology());
+        actor.ensure_genesis_commit_roster();
         if let Some(committed_qc) = actor.latest_committed_qc() {
             actor.highest_qc = Some(committed_qc);
             actor.locked_qc = Some(committed_qc);
@@ -11011,6 +11137,41 @@ impl PayloadRebroadcastThrottle {
         if cooldown > Duration::ZERO {
             // Retain only entries that have seen activity within a reasonable window so the
             // throttle map does not grow without bound in long-running nodes.
+            let expiry_window = cooldown.saturating_mul(8);
+            self.last_sent
+                .retain(|_, recorded| now.saturating_duration_since(*recorded) <= expiry_window);
+        }
+        true
+    }
+
+    fn clear(&mut self) {
+        self.last_sent.clear();
+    }
+}
+
+#[derive(Debug, Default)]
+struct NewViewRebroadcastThrottle {
+    last_sent: BTreeMap<(HashOf<BlockHeader>, u64, u64), Instant>,
+}
+
+impl NewViewRebroadcastThrottle {
+    fn allow(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        now: Instant,
+        cooldown: Duration,
+    ) -> bool {
+        let key = (block_hash, height, view);
+        if let Some(previous) = self.last_sent.get(&key) {
+            if cooldown > Duration::ZERO && now.saturating_duration_since(*previous) < cooldown {
+                return false;
+            }
+        }
+        self.last_sent.insert(key, now);
+
+        if cooldown > Duration::ZERO {
             let expiry_window = cooldown.saturating_mul(8);
             self.last_sent
                 .retain(|_, recorded| now.saturating_duration_since(*recorded) <= expiry_window);

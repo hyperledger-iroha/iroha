@@ -1337,6 +1337,55 @@ impl Actor {
         );
     }
 
+    fn maybe_rebroadcast_new_view_votes(&mut self, height: u64, now: Instant) {
+        if self.is_observer() {
+            return;
+        }
+        let target = self
+            .subsystems
+            .propose
+            .new_view_tracker
+            .entries
+            .iter()
+            .rev()
+            .find(|((entry_height, _), _)| *entry_height == height)
+            .map(|(key, entry)| (*key, entry.highest_qc.subject_block_hash));
+        let Some(((target_height, target_view), block_hash)) = target else {
+            return;
+        };
+        let cooldown = self.rebroadcast_cooldown();
+        if !self.new_view_rebroadcast_log.allow(
+            block_hash,
+            target_height,
+            target_view,
+            now,
+            cooldown,
+        ) {
+            trace!(
+                height = target_height,
+                view = target_view,
+                block = ?block_hash,
+                cooldown_ms = cooldown.as_millis(),
+                "skipping NEW_VIEW vote rebroadcast due to cooldown"
+            );
+            return;
+        }
+        let rebroadcasted = self.rebroadcast_block_votes(
+            crate::sumeragi::consensus::Phase::NewView,
+            block_hash,
+            target_height,
+            target_view,
+        );
+        if rebroadcasted == 0 {
+            debug!(
+                height = target_height,
+                view = target_view,
+                block = ?block_hash,
+                "no NEW_VIEW votes available for rebroadcast"
+            );
+        }
+    }
+
     #[allow(clippy::too_many_lines)]
     pub(super) fn on_pacemaker_propose_ready(&mut self, now: Instant) -> bool {
         trace!(?now, "pacemaker evaluating NEW_VIEW gating");
@@ -1625,6 +1674,7 @@ impl Actor {
                     "deferring proposal: awaiting NEW_VIEW quorum"
                 );
             }
+            self.maybe_rebroadcast_new_view_votes(tracked_height, now);
             return false;
         };
 

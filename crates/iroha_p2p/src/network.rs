@@ -1740,8 +1740,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         let trust_gossip_config = trust_gossip;
         let trust_gossip = trust_gossip_config && soranet_handshake.trust_gossip;
         let soranet_runtime = runtime_from_handshake(soranet_handshake)?;
-        let connect_startup_delay_until =
-            tokio::time::Instant::now() + connect_startup_delay;
+        let connect_startup_delay_until = tokio::time::Instant::now() + connect_startup_delay;
         // Bind TCP listener with improved diagnostics that include the configured address.
         let listen_addr_repr = format!("{listen_addr:?}");
         let public_addr_repr = format!("{public_address:?}");
@@ -4929,8 +4928,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                     0
                 };
                 let when = now + base + Duration::from_millis(jitter_ms);
-                let when =
-                    apply_connect_startup_delay(when, self.connect_startup_delay_until);
+                let when = apply_connect_startup_delay(when, self.connect_startup_delay_until);
                 self.pending_connects
                     .push((when, Peer::new(addr, peer_id.clone())));
             }

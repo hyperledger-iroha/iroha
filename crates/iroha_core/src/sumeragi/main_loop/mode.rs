@@ -205,6 +205,7 @@ impl Actor {
         self.subsystems.da_rbc.da.da_pin_bundles.clear();
         self.subsystems.da_rbc.da.sealed_commitments.clear();
         self.subsystems.da_rbc.da.sealed_pin_intents.clear();
+        self.new_view_rebroadcast_log.clear();
         self.payload_rebroadcast_log.clear();
         self.block_sync_rebroadcast_log.clear();
         self.block_sync_fetch_log.clear();
