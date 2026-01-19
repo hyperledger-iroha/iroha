@@ -23,6 +23,7 @@ def send_tx():
         IROHA_BIN,
         "--config", CLIENT_CONFIG,
         "transaction", "ping",
+        "--msg", "ping",
         "--count", "1",
         "--no-wait"
     ]
