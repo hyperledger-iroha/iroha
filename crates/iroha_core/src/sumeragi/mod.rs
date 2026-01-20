@@ -533,7 +533,11 @@ mod tests {
     use std::{
         collections::{BTreeMap, BTreeSet},
         num::NonZeroU64,
-        sync::{Arc, Mutex, mpsc},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+            mpsc,
+        },
         time::Duration,
     };
 
@@ -3803,6 +3807,36 @@ mod tests {
         }
     }
 
+    struct RefreshingActor {
+        refresh_count: Arc<AtomicUsize>,
+    }
+
+    impl WorkerActor for RefreshingActor {
+        fn on_block_message(&mut self, _msg: InboundBlockMessage) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_consensus_control(&mut self, _msg: ControlFlow) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_lane_relay(&mut self, _message: LaneRelayMessage) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_background_request(&mut self, _request: BackgroundRequest) -> Result<()> {
+            Ok(())
+        }
+
+        fn refresh_worker_loop_config(&mut self, _cfg: &mut WorkerLoopConfig) {
+            self.refresh_count.fetch_add(1, Ordering::Relaxed);
+        }
+
+        fn tick(&mut self) -> bool {
+            false
+        }
+    }
+
     #[derive(Default)]
     struct CommitPollingActor {
         poll_calls: usize,
@@ -5488,6 +5522,77 @@ mod tests {
         assert!(actor.events.is_empty());
         assert_eq!(actor.tick_calls, 0);
     }
+
+    #[test]
+    fn run_worker_loop_refreshes_config_each_iteration() {
+        let (_vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_lane_tx, lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (wake_tx, wake_rx) = mpsc::sync_channel::<()>(WORKER_WAKE_CHANNEL_CAP);
+        let refresh_count = Arc::new(AtomicUsize::new(0));
+        let mut actor = RefreshingActor {
+            refresh_count: Arc::clone(&refresh_count),
+        };
+        let config = WorkerLoopConfig {
+            time_budget: Duration::from_secs(1),
+            vote_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_max_messages: 16,
+            vote_rx_drain_max_messages: 16,
+            block_rx_drain_budget: Duration::from_secs(1),
+            block_rx_drain_max_messages: 16,
+            rbc_chunk_rx_drain_budget: Duration::from_secs(1),
+            rbc_chunk_rx_drain_max_messages: 16,
+            consensus_rx_drain_max_messages: 16,
+            lane_relay_rx_drain_max_messages: 16,
+            background_rx_drain_max_messages: 16,
+            tick_min_gap: Duration::from_millis(1),
+            tick_max_gap: Duration::from_secs(1),
+            block_rx_starve_max: Duration::from_secs(1),
+            non_vote_starve_max: Duration::from_secs(1),
+        };
+        let now = Instant::now();
+        let state = WorkerLoopState {
+            last_tick: now,
+            last_served: [now; PRIORITY_TIER_COUNT],
+            mailbox: WorkerMailboxState::new(),
+        };
+        let shutdown_signal = ShutdownSignal::new();
+        let shutdown_worker = shutdown_signal.clone();
+
+        let join = std::thread::spawn(move || {
+            run_worker_loop(
+                &mut actor,
+                config,
+                state,
+                vote_rx,
+                block_payload_rx,
+                rbc_chunk_rx,
+                block_rx,
+                consensus_rx,
+                lane_rx,
+                background_rx,
+                wake_rx,
+                shutdown_worker,
+            );
+        });
+
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        while refresh_count.load(Ordering::Relaxed) == 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        shutdown_signal.send();
+        let _ = wake_tx.send(());
+        join.join().expect("worker loop thread");
+
+        assert!(refresh_count.load(Ordering::Relaxed) > 0);
+    }
 }
 
 /// QC-based consensus message types and helpers (single-chain).
@@ -7120,6 +7225,7 @@ trait WorkerActor {
     fn on_consensus_control(&mut self, msg: ControlFlow) -> Result<()>;
     fn on_lane_relay(&mut self, message: LaneRelayMessage) -> Result<()>;
     fn on_background_request(&mut self, request: BackgroundRequest) -> Result<()>;
+    fn refresh_worker_loop_config(&mut self, _cfg: &mut WorkerLoopConfig) {}
     fn poll_commit_results(&mut self) -> bool {
         false
     }
@@ -7158,6 +7264,10 @@ impl WorkerActor for crate::sumeragi::main_loop::Actor {
 
     fn poll_rbc_persist_results(&mut self) -> bool {
         crate::sumeragi::main_loop::Actor::poll_rbc_persist_results_inner(self)
+    }
+
+    fn refresh_worker_loop_config(&mut self, cfg: &mut WorkerLoopConfig) {
+        crate::sumeragi::main_loop::Actor::refresh_worker_loop_config(self, cfg)
     }
 
     fn should_tick(&self) -> bool {
@@ -7432,7 +7542,9 @@ struct WorkerIterationStats {
     consensus_handled: usize,
     lane_relays_handled: usize,
     background_handled: usize,
+    pre_tick_drain_ms: u64,
     tick_elapsed_ms: u64,
+    post_tick_drain_ms: u64,
     queue_depths: status::WorkerQueueDepthSnapshot,
     last_envelope: Option<(PriorityTier, u64)>,
     budget_exceeded: bool,
@@ -7587,7 +7699,9 @@ fn run_worker_iteration<A: WorkerActor>(
         consensus_handled: 0,
         lane_relays_handled: 0,
         background_handled: 0,
+        pre_tick_drain_ms: 0,
         tick_elapsed_ms: 0,
+        post_tick_drain_ms: 0,
         queue_depths: status::WorkerQueueDepthSnapshot::default(),
         last_envelope: None,
         budget_exceeded: false,
@@ -7616,6 +7730,7 @@ fn run_worker_iteration<A: WorkerActor>(
         background_rx,
     );
     mailbox.fill_slots(&budgets);
+    let drain_start = Instant::now();
     drain_mailbox(
         actor,
         cfg,
@@ -7625,6 +7740,7 @@ fn run_worker_iteration<A: WorkerActor>(
         &mut stats,
         last_served,
     );
+    stats.pre_tick_drain_ms = u64::try_from(drain_start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
     if stats.precommit_votes_handled > 0 {
         iroha_logger::debug!(
@@ -7677,6 +7793,7 @@ fn run_worker_iteration<A: WorkerActor>(
 
     if !stats.budget_exceeded && iter_start.elapsed() < cfg.time_budget {
         mailbox.fill_slots(&budgets);
+        let drain_start = Instant::now();
         drain_mailbox(
             actor,
             cfg,
@@ -7686,6 +7803,8 @@ fn run_worker_iteration<A: WorkerActor>(
             &mut stats,
             last_served,
         );
+        stats.post_tick_drain_ms =
+            u64::try_from(drain_start.elapsed().as_millis()).unwrap_or(u64::MAX);
     }
 
     let post_tick_depths = status::worker_queue_depth_snapshot();
@@ -7767,7 +7886,7 @@ fn select_next_tier(
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 fn run_worker_loop<A: WorkerActor>(
     actor: &mut A,
-    cfg: WorkerLoopConfig,
+    mut cfg: WorkerLoopConfig,
     mut loop_state: WorkerLoopState,
     vote_rx: mpsc::Receiver<InboundBlockMessage>,
     block_payload_rx: mpsc::Receiver<InboundBlockMessage>,
@@ -7793,6 +7912,7 @@ fn run_worker_loop<A: WorkerActor>(
             break;
         }
 
+        actor.refresh_worker_loop_config(&mut cfg);
         let iter_start = Instant::now();
         let stats = run_worker_iteration(
             actor,
@@ -7856,7 +7976,9 @@ fn run_worker_loop<A: WorkerActor>(
                 consensus_handled = stats.consensus_handled,
                 lane_relays_handled = stats.lane_relays_handled,
                 background_handled = stats.background_handled,
+                pre_tick_drain_ms = stats.pre_tick_drain_ms,
                 tick_elapsed_ms = stats.tick_elapsed_ms,
+                post_tick_drain_ms = stats.post_tick_drain_ms,
                 vote_rx_depth = stats.queue_depths.vote_rx,
                 block_payload_rx_depth = stats.queue_depths.block_payload_rx,
                 rbc_chunk_rx_depth = stats.queue_depths.rbc_chunk_rx,
@@ -7891,7 +8013,9 @@ mod worker_iteration_warn_tests {
             consensus_handled: 0,
             lane_relays_handled: 0,
             background_handled: 0,
+            pre_tick_drain_ms: 0,
             tick_elapsed_ms: 0,
+            post_tick_drain_ms: 0,
             queue_depths: status::WorkerQueueDepthSnapshot::default(),
             last_envelope: None,
             budget_exceeded: false,

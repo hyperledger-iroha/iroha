@@ -75,10 +75,13 @@ pub(super) struct PendingBlock {
     pub(super) last_quorum_reschedule: Option<Instant>,
     pub(super) last_precommit_rebroadcast: Option<Instant>,
     last_block_sync_update: Option<BlockSyncUpdateState>,
+    /// Timestamp of the latest availability/vote progress for quorum timeout gating.
+    last_progress: Instant,
 }
 
 impl PendingBlock {
     pub(super) fn new(block: SignedBlock, payload_hash: Hash, height: u64, view: u64) -> Self {
+        let now = Instant::now();
         Self {
             block,
             payload_hash,
@@ -89,7 +92,7 @@ impl PendingBlock {
             tx_batch: None,
             last_gate: None,
             last_gate_satisfied: None,
-            inserted_at: Instant::now(),
+            inserted_at: now,
             precommit_vote_sent: false,
             commit_qc_seen: false,
             commit_qc_epoch: None,
@@ -102,6 +105,7 @@ impl PendingBlock {
             last_quorum_reschedule: None,
             last_precommit_rebroadcast: None,
             last_block_sync_update: None,
+            last_progress: now,
         }
     }
 
@@ -138,6 +142,7 @@ impl PendingBlock {
         self.view = view;
         if !replacing_same_subject {
             self.inserted_at = Instant::now();
+            self.last_progress = self.inserted_at;
             self.precommit_vote_sent = false;
             self.commit_qc_seen = false;
             self.commit_qc_epoch = None;
@@ -168,6 +173,7 @@ impl PendingBlock {
         self.view = view;
         self.aborted = false;
         self.inserted_at = Instant::now();
+        self.last_progress = self.inserted_at;
         self.validation_status = ValidationStatus::Pending;
         self.precommit_vote_sent = false;
         self.commit_qc_seen = false;
@@ -229,6 +235,7 @@ impl PendingBlock {
     pub(super) fn mark_aborted(&mut self) {
         self.aborted = true;
         self.inserted_at = Instant::now();
+        self.last_progress = self.inserted_at;
         self.reset_kura_retry();
         self.last_gate = None;
         self.last_gate_satisfied = None;
@@ -322,6 +329,14 @@ impl PendingBlock {
         self.inserted_at.elapsed()
     }
 
+    pub(super) fn progress_age(&self, now: Instant) -> Duration {
+        now.saturating_duration_since(self.last_progress)
+    }
+
+    pub(super) fn touch_progress(&mut self, now: Instant) {
+        self.last_progress = now;
+    }
+
     pub(super) fn precommit_rebroadcast_due(&self, now: Instant, cooldown: Duration) -> bool {
         self.last_precommit_rebroadcast
             .is_none_or(|last| now.saturating_duration_since(last) >= cooldown)
@@ -403,7 +418,10 @@ mod tests {
     use super::*;
     use iroha_crypto::{KeyPair, SignatureOf};
     use iroha_data_model::block::{BlockHeader, BlockSignature, SignedBlock};
-    use std::num::NonZeroU64;
+    use std::{
+        num::NonZeroU64,
+        time::{Duration, Instant},
+    };
 
     fn sample_block(height: u64) -> SignedBlock {
         let header = BlockHeader {
@@ -467,5 +485,18 @@ mod tests {
         assert!(pending.should_broadcast_block_sync_update(0, 2, false));
         assert!(pending.should_broadcast_block_sync_update(0, 2, true));
         assert!(pending.should_broadcast_block_sync_update(1, 2, true));
+    }
+
+    #[test]
+    fn pending_block_progress_age_resets_on_touch() {
+        let mut pending =
+            PendingBlock::new(sample_block(1), Hash::prehashed([0x11; Hash::LENGTH]), 1, 0);
+        std::thread::sleep(Duration::from_millis(1));
+        let now = Instant::now();
+        let age_before = pending.progress_age(now);
+        pending.touch_progress(now);
+        let age_after = pending.progress_age(now);
+        assert!(age_before >= age_after);
+        assert_eq!(age_after, Duration::ZERO);
     }
 }

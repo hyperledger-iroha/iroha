@@ -2424,6 +2424,20 @@ impl Actor {
             return Ok(());
         }
 
+        if derived_roster.is_empty() {
+            let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+            let committed_epoch = self.epoch_for_height(committed_height);
+            debug!(
+                height = init.height,
+                view = init.view,
+                block = %init.block_hash,
+                roster_len = init.roster.len(),
+                committed_height,
+                committed_epoch,
+                session_epoch = expected_epoch,
+                "using init roster for RBC session; derived roster unavailable"
+            );
+        }
         let (roster, roster_source) = if derived_roster.is_empty() {
             (init.roster.clone(), RbcRosterSource::Init)
         } else {
@@ -2633,7 +2647,7 @@ impl Actor {
         }
         let key = Self::session_key(&chunk.block_hash, chunk.height, chunk.view);
         let mut chunk_digest_mismatch = false;
-        let (ready_sent_before, became_complete) = if let Some(session) =
+        let (ready_sent_before, became_complete, accepted_chunk) = if let Some(session) =
             self.subsystems.da_rbc.rbc.sessions.get_mut(&key)
         {
             let ready_sent_before = session.sent_ready;
@@ -2643,9 +2657,14 @@ impl Actor {
             if matches!(outcome, super::ChunkIngestOutcome::DigestMismatch) {
                 chunk_digest_mismatch = true;
             }
+            let accepted_chunk = matches!(outcome, super::ChunkIngestOutcome::Accepted);
             let is_complete =
                 session.total_chunks() != 0 && session.received_chunks() == session.total_chunks();
-            (ready_sent_before, !was_complete && is_complete)
+            (
+                ready_sent_before,
+                !was_complete && is_complete,
+                accepted_chunk,
+            )
         } else {
             let (max_chunks, max_bytes) = self.pending_rbc_caps();
             let Some(pending) = self.pending_rbc_slot(key) else {
@@ -2751,6 +2770,9 @@ impl Actor {
             self.publish_rbc_backlog_snapshot();
             return Ok(());
         };
+        if accepted_chunk {
+            self.touch_pending_progress(chunk.block_hash, chunk.height, chunk.view, Instant::now());
+        }
         if chunk_digest_mismatch {
             let log_outcome = sender.as_ref().map(|peer| {
                 self.record_rbc_mismatch(
@@ -3072,6 +3094,21 @@ impl Actor {
             }
         }
         if topology_peers.is_empty() {
+            let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+            let committed_epoch = self.epoch_for_height(committed_height);
+            let session_epoch = self.epoch_for_height(key.1);
+            let payload_known = self.block_known_locally(key.0);
+            debug!(
+                height = key.1,
+                view = key.2,
+                block = %key.0,
+                roster_source = ?roster_source,
+                committed_height,
+                committed_epoch,
+                session_epoch,
+                payload_known,
+                "deferring RBC READY: commit roster unavailable"
+            );
             stash_ready(
                 self,
                 key,
@@ -3105,6 +3142,15 @@ impl Actor {
                 );
                 return Ok(());
             }
+            debug!(
+                height = ready.height,
+                view = ready.view,
+                sender = ready.sender,
+                roster_source = ?roster_source,
+                expected = ?roster_hash,
+                observed = ?ready.roster_hash,
+                "deferring RBC READY: roster hash mismatch on derived roster"
+            );
             stash_ready(
                 self,
                 key,
@@ -3116,6 +3162,15 @@ impl Actor {
         }
         let allow_unverified = self.allow_unverified_rbc_roster(key);
         if !roster_source.is_authoritative() && !allow_unverified {
+            debug!(
+                height = ready.height,
+                view = ready.view,
+                sender = ready.sender,
+                roster_source = ?roster_source,
+                roster_len = topology_peers.len(),
+                allow_unverified,
+                "deferring RBC READY: roster not authoritative"
+            );
             stash_ready(
                 self,
                 key,
@@ -3345,6 +3400,9 @@ impl Actor {
             .get(&key)
             .is_some_and(|session| session.delivered);
         let deliver_emitted = !delivered_before && delivered_after;
+        if recorded_ready {
+            self.touch_pending_progress(ready.block_hash, ready.height, ready.view, Instant::now());
+        }
         let telemetry_ref = self.telemetry_handle();
         self.publish_rbc_backlog_snapshot();
         if recorded_ready {
@@ -3404,7 +3462,24 @@ impl Actor {
             }
         }
         if should_process_commit_after_ready(recorded_ready, clear_pending, deliver_emitted) {
-            self.process_commit_candidates();
+            let queue_depths = super::status::worker_queue_depth_snapshot();
+            let consensus_queue_backlog = queue_depths.vote_rx > 0
+                || queue_depths.block_payload_rx > 0
+                || queue_depths.rbc_chunk_rx > 0
+                || queue_depths.block_rx > 0;
+            if consensus_queue_backlog {
+                debug!(
+                    height = key.1,
+                    view = key.2,
+                    vote_rx_depth = queue_depths.vote_rx,
+                    block_payload_rx_depth = queue_depths.block_payload_rx,
+                    rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                    block_rx_depth = queue_depths.block_rx,
+                    "deferring commit pipeline after RBC READY due to consensus queue backlog"
+                );
+            } else {
+                self.process_commit_candidates();
+            }
         }
         Ok(())
     }
@@ -4204,13 +4279,13 @@ impl Actor {
         if roster_updated && self.subsystems.da_rbc.rbc.pending.contains_key(&key) {
             self.flush_pending_rbc(key)?;
         }
-        let telemetry_ref = self.telemetry_handle();
         self.publish_rbc_backlog_snapshot();
         if ignored {
             return Ok(());
         }
+        self.touch_pending_progress(deliver.block_hash, deliver.height, deliver.view, now);
         if first_deliver {
-            if let Some(telemetry) = telemetry_ref {
+            if let Some(telemetry) = self.telemetry_handle() {
                 telemetry.inc_rbc_deliver_broadcasts();
                 if let Some(bytes) = delivered_bytes {
                     telemetry.add_rbc_payload_bytes_delivered(bytes);

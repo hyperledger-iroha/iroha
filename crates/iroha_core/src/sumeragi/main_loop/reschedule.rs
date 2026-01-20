@@ -46,7 +46,7 @@ impl Actor {
         }
 
         let reschedule_start = Instant::now();
-        let active_roster = self.effective_commit_topology();
+        let mut active_roster: Option<Vec<PeerId>> = None;
         let local_peer_id = self.common_config.peer.id().clone();
         let da_enabled = self.runtime_da_enabled();
         let quorum_timeout = self.quorum_timeout(da_enabled);
@@ -59,6 +59,7 @@ impl Actor {
             .saturating_add(2)
             .max(4);
         let aborted_retention = quorum_reschedule_cooldown.saturating_mul(retention_factor);
+        let queue_depths = super::status::worker_queue_depth_snapshot();
         let now = Instant::now();
         let relay_backpressure = self.relay_backpressure_active(now, self.rebroadcast_cooldown());
         let (tip_height, tip_hash) = {
@@ -122,11 +123,17 @@ impl Actor {
             ) {
                 continue;
             }
+            let pending_age = pending.age();
+            if pending_age < quorum_timeout {
+                continue;
+            }
             let (consensus_mode, _, _) = self.consensus_context_for_height(pending.height);
             let mut commit_roster =
                 self.roster_for_vote_with_mode(*hash, pending.height, pending.view, consensus_mode);
             if commit_roster.is_empty() {
-                commit_roster.clone_from(&active_roster);
+                let fallback =
+                    active_roster.get_or_insert_with(|| self.effective_commit_topology());
+                commit_roster.clone_from(fallback);
             }
             if commit_roster.is_empty() {
                 debug!(
@@ -140,7 +147,6 @@ impl Actor {
             let commit_topology = super::network_topology::Topology::new(commit_roster.clone());
             let min_votes_for_commit = commit_topology.min_votes_for_commit();
 
-            let pending_age = pending.age();
             let key = (*hash, pending.height, pending.view);
             let expected_epoch = self.epoch_for_height(pending.height);
             let qc_precommit = cached_qc_for(
@@ -184,6 +190,18 @@ impl Actor {
                 };
             if missing_quorum_stale(pending_age, quorum_timeout, quorum_reached) {
                 let rbc_key = (*hash, pending.height, pending.view);
+                if queue_depths.vote_rx > 0 {
+                    debug!(
+                        height = pending.height,
+                        view = pending.view,
+                        block = %hash,
+                        pending_age_ms = pending_age.as_millis(),
+                        quorum_timeout_ms = quorum_timeout.as_millis(),
+                        vote_rx_depth = queue_depths.vote_rx,
+                        "deferring quorum reschedule while vote queue is backlogged"
+                    );
+                    continue;
+                }
                 if self.rbc_availability_unresolved_for_reschedule(rbc_key, &commit_topology) {
                     debug!(
                         height = pending.height,
@@ -348,6 +366,7 @@ impl Actor {
                         }
                     }
                 }
+                let queue_depths = super::status::worker_queue_depth_snapshot();
                 warn!(
                     block = %key.0,
                     height = key.1,
@@ -357,6 +376,13 @@ impl Actor {
                     vote_count,
                     requeued,
                     failures,
+                    vote_rx_depth = queue_depths.vote_rx,
+                    block_payload_rx_depth = queue_depths.block_payload_rx,
+                    rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                    block_rx_depth = queue_depths.block_rx,
+                    consensus_rx_depth = queue_depths.consensus_rx,
+                    lane_relay_rx_depth = queue_depths.lane_relay_rx,
+                    background_rx_depth = queue_depths.background_rx,
                     "prevote quorum stalled; rebroadcasting and rotating view"
                 );
                 self.trigger_view_change_with_cause(
@@ -507,6 +533,7 @@ impl Actor {
             self.pending.pending_blocks.insert(block_hash, pending);
         }
 
+        let queue_depths = super::status::worker_queue_depth_snapshot();
         warn!(
             ?block_hash,
             height,
@@ -517,6 +544,13 @@ impl Actor {
             min_votes = min_votes_for_commit,
             requeued,
             failures,
+            vote_rx_depth = queue_depths.vote_rx,
+            block_payload_rx_depth = queue_depths.block_payload_rx,
+            rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+            block_rx_depth = queue_depths.block_rx,
+            consensus_rx_depth = queue_depths.consensus_rx,
+            lane_relay_rx_depth = queue_depths.lane_relay_rx,
+            background_rx_depth = queue_depths.background_rx,
             rebroadcasted_votes = rebroadcast.votes,
             rebroadcasted_block = rebroadcast.block,
             rebroadcasted_block_sync = rebroadcast.block_sync,
