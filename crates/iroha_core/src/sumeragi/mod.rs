@@ -29,6 +29,7 @@ use iroha_data_model::{
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, spawn_os_thread_as_future};
 use iroha_genesis::GenesisBlock;
 use mv::storage::StorageReadOnly;
+use norito::codec::Encode as _;
 
 use crate::{
     kura::BlockCount,
@@ -2346,6 +2347,197 @@ mod tests {
     }
 
     #[test]
+    fn incoming_block_message_drops_duplicate_block_sync_update() {
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, _block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (vote_tx, _vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>> = Arc::new(Mutex::new(
+            DedupCache::new(VOTE_DEDUP_CACHE_CAP, VOTE_DEDUP_CACHE_TTL),
+        ));
+        let block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>> =
+            Arc::new(Mutex::new(BlockPayloadDedupCache::new(
+                BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
+                BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
+            )));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        let header = BlockHeader {
+            height: NonZeroU64::new(1).expect("non-zero"),
+            prev_block_hash: None,
+            merkle_root: None,
+            result_merkle_root: None,
+            da_proof_policies_hash: None,
+            da_commitments_hash: None,
+            da_pin_intents_hash: None,
+            creation_time_ms: 0,
+            view_change_index: 0,
+            confidential_features: None,
+        };
+        let key_pair = KeyPair::random();
+        let (_, private_key) = key_pair.into_parts();
+        let signature = SignatureOf::from_hash(&private_key, header.hash());
+        let block_signature = BlockSignature::new(0, signature);
+        let block = SignedBlock::presigned_with_da(block_signature, header, Vec::new(), None);
+        let update = message::BlockSyncUpdate::from(&block);
+
+        handle.incoming_block_message(BlockMessage::BlockSyncUpdate(update.clone()));
+        handle.incoming_block_message(BlockMessage::BlockSyncUpdate(update));
+
+        let received: Vec<_> = block_payload_rx.try_iter().collect();
+        assert_eq!(received.len(), 1);
+        assert!(matches!(
+            received.first(),
+            Some(InboundBlockMessage {
+                message: BlockMessage::BlockSyncUpdate(_),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn incoming_block_message_accepts_block_sync_update_with_new_evidence() {
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, _block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (vote_tx, _vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>> = Arc::new(Mutex::new(
+            DedupCache::new(VOTE_DEDUP_CACHE_CAP, VOTE_DEDUP_CACHE_TTL),
+        ));
+        let block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>> =
+            Arc::new(Mutex::new(BlockPayloadDedupCache::new(
+                BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
+                BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
+            )));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        let header = BlockHeader {
+            height: NonZeroU64::new(1).expect("non-zero"),
+            prev_block_hash: None,
+            merkle_root: None,
+            result_merkle_root: None,
+            da_proof_policies_hash: None,
+            da_commitments_hash: None,
+            da_pin_intents_hash: None,
+            creation_time_ms: 0,
+            view_change_index: 0,
+            confidential_features: None,
+        };
+        let key_pair = KeyPair::random();
+        let (_, private_key) = key_pair.into_parts();
+        let signature = SignatureOf::from_hash(&private_key, header.hash());
+        let block_signature = BlockSignature::new(0, signature);
+        let block = SignedBlock::presigned_with_da(block_signature, header, Vec::new(), None);
+        let block_hash = block.hash();
+        let update = message::BlockSyncUpdate::from(&block);
+        let mut update_with_votes = message::BlockSyncUpdate::from(&block);
+        update_with_votes.commit_votes.push(Vote {
+            phase: Phase::Commit,
+            block_hash,
+            parent_state_root: Hash::prehashed([0xAA; 32]),
+            post_state_root: Hash::prehashed([0xBB; 32]),
+            height: 1,
+            view: 0,
+            epoch: 0,
+            highest_qc: None,
+            signer: 0,
+            bls_sig: vec![1, 2, 3],
+        });
+
+        handle.incoming_block_message(BlockMessage::BlockSyncUpdate(update));
+        handle.incoming_block_message(BlockMessage::BlockSyncUpdate(update_with_votes));
+
+        let received: Vec<_> = block_payload_rx.try_iter().collect();
+        assert_eq!(received.len(), 2);
+        assert!(received.iter().all(|msg| matches!(
+            msg,
+            InboundBlockMessage {
+                message: BlockMessage::BlockSyncUpdate(_),
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn incoming_block_message_drops_duplicate_rbc_chunk() {
+        let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, _block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (vote_tx, _vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>> = Arc::new(Mutex::new(
+            DedupCache::new(VOTE_DEDUP_CACHE_CAP, VOTE_DEDUP_CACHE_TTL),
+        ));
+        let block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>> =
+            Arc::new(Mutex::new(BlockPayloadDedupCache::new(
+                BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
+                BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
+            )));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([9u8; 32]));
+        let chunk = crate::sumeragi::consensus::RbcChunk {
+            block_hash,
+            height: 1,
+            view: 0,
+            epoch: 0,
+            idx: 0,
+            bytes: vec![1, 2, 3],
+        };
+
+        handle.incoming_block_message(BlockMessage::RbcChunk(chunk.clone()));
+        handle.incoming_block_message(BlockMessage::RbcChunk(chunk));
+
+        let received: Vec<_> = rbc_chunk_rx.try_iter().collect();
+        assert_eq!(received.len(), 1);
+        assert!(matches!(
+            received.first(),
+            Some(InboundBlockMessage {
+                message: BlockMessage::RbcChunk(_),
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn incoming_block_message_routes_block_sync_update_via_block_payload_queue() {
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (block_tx, _block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -2515,7 +2707,27 @@ mod tests {
         let block_signature = BlockSignature::new(0, signature);
         let block = SignedBlock::presigned_with_da(block_signature, header, Vec::new(), None);
         let update = message::BlockSyncUpdate::from(&block);
-        let update_overflow = message::BlockSyncUpdate::from(&block);
+        let overflow_header = BlockHeader {
+            height: NonZeroU64::new(2).expect("non-zero"),
+            prev_block_hash: None,
+            merkle_root: None,
+            result_merkle_root: None,
+            da_proof_policies_hash: None,
+            da_commitments_hash: None,
+            da_pin_intents_hash: None,
+            creation_time_ms: 0,
+            view_change_index: 0,
+            confidential_features: None,
+        };
+        let overflow_signature = SignatureOf::from_hash(&private_key, overflow_header.hash());
+        let overflow_block_signature = BlockSignature::new(0, overflow_signature);
+        let overflow_block = SignedBlock::presigned_with_da(
+            overflow_block_signature,
+            overflow_header,
+            Vec::new(),
+            None,
+        );
+        let update_overflow = message::BlockSyncUpdate::from(&overflow_block);
 
         block_payload_tx_fill
             .send(inbound(BlockMessage::BlockSyncUpdate(update)))
@@ -2605,7 +2817,27 @@ mod tests {
         let block_signature = BlockSignature::new(0, signature);
         let block = SignedBlock::presigned_with_da(block_signature, header, Vec::new(), None);
         let update = message::BlockSyncUpdate::from(&block);
-        let update_overflow = message::BlockSyncUpdate::from(&block);
+        let overflow_header = BlockHeader {
+            height: NonZeroU64::new(2).expect("non-zero"),
+            prev_block_hash: None,
+            merkle_root: None,
+            result_merkle_root: None,
+            da_proof_policies_hash: None,
+            da_commitments_hash: None,
+            da_pin_intents_hash: None,
+            creation_time_ms: 0,
+            view_change_index: 0,
+            confidential_features: None,
+        };
+        let overflow_signature = SignatureOf::from_hash(&private_key, overflow_header.hash());
+        let overflow_block_signature = BlockSignature::new(0, overflow_signature);
+        let overflow_block = SignedBlock::presigned_with_da(
+            overflow_block_signature,
+            overflow_header,
+            Vec::new(),
+            None,
+        );
+        let update_overflow = message::BlockSyncUpdate::from(&overflow_block);
 
         block_payload_tx_fill
             .send(inbound(BlockMessage::BlockSyncUpdate(update)))
@@ -5447,19 +5679,62 @@ enum BlockPayloadDedupKey {
         sender: crate::sumeragi::consensus::ValidatorIndex,
         signature_hash: CryptoHash,
     },
+    BlockSyncUpdate {
+        height: u64,
+        view: u64,
+        block_hash: HashOf<BlockHeader>,
+        evidence_hash: CryptoHash,
+    },
+    RbcChunk {
+        height: u64,
+        view: u64,
+        epoch: u64,
+        block_hash: HashOf<BlockHeader>,
+        idx: u32,
+        bytes_hash: CryptoHash,
+    },
 }
 
 const VOTE_DEDUP_CACHE_CAP: usize = 8192;
 const VOTE_DEDUP_CACHE_TTL: Duration = Duration::from_secs(60);
-const BLOCK_PAYLOAD_DEDUP_CACHE_CAP: usize = 2048;
+const BLOCK_PAYLOAD_DEDUP_CACHE_CAP: usize = 8192;
 const BLOCK_PAYLOAD_DEDUP_CACHE_TTL: Duration = Duration::from_secs(120);
-const BLOCK_PAYLOAD_DEDUP_KIND_COUNT: usize = 4;
+const BLOCK_PAYLOAD_DEDUP_KIND_COUNT: usize = 6;
 const BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND: usize =
     if BLOCK_PAYLOAD_DEDUP_CACHE_CAP / BLOCK_PAYLOAD_DEDUP_KIND_COUNT == 0 {
         1
     } else {
         BLOCK_PAYLOAD_DEDUP_CACHE_CAP / BLOCK_PAYLOAD_DEDUP_KIND_COUNT
     };
+
+fn block_sync_update_evidence_hash(update: &message::BlockSyncUpdate) -> CryptoHash {
+    let commit_votes_hash = CryptoHash::new(&update.commit_votes.encode());
+    let commit_qc_hash = update
+        .commit_qc
+        .as_ref()
+        .map(|qc| CryptoHash::new(&qc.encode()));
+    let checkpoint_hash = update
+        .validator_checkpoint
+        .as_ref()
+        .map(|checkpoint| CryptoHash::new(&checkpoint.encode()));
+    let stake_snapshot_hash = update
+        .stake_snapshot
+        .as_ref()
+        .map(|snapshot| CryptoHash::new(&snapshot.encode()));
+    let mut buf = Vec::new();
+    buf.extend_from_slice(commit_votes_hash.as_ref());
+    push_optional_hash(&mut buf, commit_qc_hash);
+    push_optional_hash(&mut buf, checkpoint_hash);
+    push_optional_hash(&mut buf, stake_snapshot_hash);
+    CryptoHash::new(&buf)
+}
+
+fn push_optional_hash(buf: &mut Vec<u8>, hash: Option<CryptoHash>) {
+    buf.push(hash.is_some() as u8);
+    if let Some(hash) = hash {
+        buf.extend_from_slice(hash.as_ref());
+    }
+}
 
 #[derive(Debug)]
 struct DedupEntry {
@@ -5601,6 +5876,8 @@ struct BlockPayloadDedupCache {
     proposal: DedupCache<BlockPayloadDedupKey>,
     rbc_ready: DedupCache<BlockPayloadDedupKey>,
     rbc_deliver: DedupCache<BlockPayloadDedupKey>,
+    block_sync_update: DedupCache<BlockPayloadDedupKey>,
+    rbc_chunk: DedupCache<BlockPayloadDedupKey>,
 }
 
 impl BlockPayloadDedupCache {
@@ -5610,6 +5887,8 @@ impl BlockPayloadDedupCache {
             proposal: DedupCache::new(cap_per_kind, ttl),
             rbc_ready: DedupCache::new(cap_per_kind, ttl),
             rbc_deliver: DedupCache::new(cap_per_kind, ttl),
+            block_sync_update: DedupCache::new(cap_per_kind, ttl),
+            rbc_chunk: DedupCache::new(cap_per_kind, ttl),
         }
     }
 
@@ -5619,6 +5898,8 @@ impl BlockPayloadDedupCache {
             BlockPayloadDedupKey::Proposal { .. } => self.proposal.insert(key, now),
             BlockPayloadDedupKey::RbcReady { .. } => self.rbc_ready.insert(key, now),
             BlockPayloadDedupKey::RbcDeliver { .. } => self.rbc_deliver.insert(key, now),
+            BlockPayloadDedupKey::BlockSyncUpdate { .. } => self.block_sync_update.insert(key, now),
+            BlockPayloadDedupKey::RbcChunk { .. } => self.rbc_chunk.insert(key, now),
         }
     }
 
@@ -5629,6 +5910,8 @@ impl BlockPayloadDedupCache {
             BlockPayloadDedupKey::Proposal { .. } => self.proposal.contains(key),
             BlockPayloadDedupKey::RbcReady { .. } => self.rbc_ready.contains(key),
             BlockPayloadDedupKey::RbcDeliver { .. } => self.rbc_deliver.contains(key),
+            BlockPayloadDedupKey::BlockSyncUpdate { .. } => self.block_sync_update.contains(key),
+            BlockPayloadDedupKey::RbcChunk { .. } => self.rbc_chunk.contains(key),
         }
     }
 
@@ -5638,6 +5921,8 @@ impl BlockPayloadDedupCache {
         self.proposal.clear();
         self.rbc_ready.clear();
         self.rbc_deliver.clear();
+        self.block_sync_update.clear();
+        self.rbc_chunk.clear();
     }
 
     #[cfg(test)]
@@ -5646,6 +5931,8 @@ impl BlockPayloadDedupCache {
             + self.proposal.len()
             + self.rbc_ready.len()
             + self.rbc_deliver.len()
+            + self.block_sync_update.len()
+            + self.rbc_chunk.len()
     }
 
     #[cfg(test)]
@@ -5655,6 +5942,8 @@ impl BlockPayloadDedupCache {
             BlockPayloadDedupKey::Proposal { .. } => self.proposal.len(),
             BlockPayloadDedupKey::RbcReady { .. } => self.rbc_ready.len(),
             BlockPayloadDedupKey::RbcDeliver { .. } => self.rbc_deliver.len(),
+            BlockPayloadDedupKey::BlockSyncUpdate { .. } => self.block_sync_update.len(),
+            BlockPayloadDedupKey::RbcChunk { .. } => self.rbc_chunk.len(),
         }
     }
 }
@@ -5764,6 +6053,10 @@ impl SumeragiHandle {
             BlockPayloadDedupKey::Proposal { .. } => status::DedupEvictionKind::Proposal,
             BlockPayloadDedupKey::RbcReady { .. } => status::DedupEvictionKind::RbcReady,
             BlockPayloadDedupKey::RbcDeliver { .. } => status::DedupEvictionKind::RbcDeliver,
+            BlockPayloadDedupKey::BlockSyncUpdate { .. } => {
+                status::DedupEvictionKind::BlockSyncUpdate
+            }
+            BlockPayloadDedupKey::RbcChunk { .. } => status::DedupEvictionKind::RbcChunk,
         };
         let mut guard = self
             .block_payload_dedup
@@ -6117,6 +6410,26 @@ impl SumeragiHandle {
                 )
             }
             BlockMessage::BlockSyncUpdate(update) => {
+                let header = update.block.header();
+                let height = header.height().get();
+                let view = header.view_change_index();
+                let block_hash = update.block.hash();
+                let evidence_hash = block_sync_update_evidence_hash(&update);
+                let duplicate = !self.dedup_block_payload(BlockPayloadDedupKey::BlockSyncUpdate {
+                    height,
+                    view,
+                    block_hash,
+                    evidence_hash,
+                });
+                if duplicate {
+                    iroha_logger::debug!(
+                        height,
+                        view,
+                        block = %block_hash,
+                        "dropping duplicate BlockSyncUpdate from network"
+                    );
+                    return false;
+                }
                 // Block sync updates carry commit/QC evidence; prioritize with payload traffic.
                 enqueue_blocking(
                     &self.block_payload,
@@ -6131,12 +6444,39 @@ impl SumeragiHandle {
                 "RbcChunk",
                 status::WorkerQueueKind::RbcChunks,
             ),
-            BlockMessage::RbcChunk(chunk) => enqueue_blocking(
-                &self.rbc_chunks,
-                InboundBlockMessage::new(BlockMessage::RbcChunk(chunk), sender),
-                "RbcChunk",
-                status::WorkerQueueKind::RbcChunks,
-            ),
+            BlockMessage::RbcChunk(chunk) => {
+                let height = chunk.height;
+                let view = chunk.view;
+                let epoch = chunk.epoch;
+                let block_hash = chunk.block_hash;
+                let idx = chunk.idx;
+                let bytes_hash = CryptoHash::new(&chunk.bytes);
+                let duplicate = !self.dedup_block_payload(BlockPayloadDedupKey::RbcChunk {
+                    height,
+                    view,
+                    epoch,
+                    block_hash,
+                    idx,
+                    bytes_hash,
+                });
+                if duplicate {
+                    iroha_logger::debug!(
+                        height,
+                        view,
+                        epoch,
+                        idx,
+                        block = %block_hash,
+                        "dropping duplicate RBC chunk from network"
+                    );
+                    return false;
+                }
+                enqueue_blocking(
+                    &self.rbc_chunks,
+                    InboundBlockMessage::new(BlockMessage::RbcChunk(chunk), sender),
+                    "RbcChunk",
+                    status::WorkerQueueKind::RbcChunks,
+                )
+            }
             BlockMessage::FetchPendingBlock(request) => enqueue_blocking(
                 &self.block_payload,
                 InboundBlockMessage::new(BlockMessage::FetchPendingBlock(request), sender),

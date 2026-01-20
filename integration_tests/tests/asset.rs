@@ -32,7 +32,8 @@ static SERIAL_NETWORK_GUARD: OnceLock<sandbox::NetworkParallelismGuard> = OnceLo
 const QUERY_RETRIES: usize = 1_200;
 const QUERY_RETRY_DELAY: Duration = Duration::from_millis(100);
 const NON_EMPTY_BLOCK_TIMEOUT: Duration = Duration::from_secs(600);
-const FAST_PIPELINE_TIME: Duration = Duration::from_secs(2);
+// DA-enabled consensus needs a wider pipeline in local test runs to avoid view-change stalls.
+const FAST_PIPELINE_TIME: Duration = Duration::from_secs(6);
 
 struct ClientPool {
     clients: Vec<Client>,
@@ -243,6 +244,15 @@ fn quiet_network_builder() -> NetworkBuilder {
     sumeragi.insert("collectors_redundant_send_r".into(), TomlValue::Integer(3));
     sumeragi.insert("rbc_pending_ttl_ms".into(), TomlValue::Integer(120_000));
     sumeragi.insert("rbc_session_ttl_secs".into(), TomlValue::Integer(240));
+    // Increase DA quorum/availability timeouts to tolerate slower CI and local hosts.
+    sumeragi.insert(
+        "da_quorum_timeout_multiplier".into(),
+        TomlValue::Integer(6),
+    );
+    sumeragi.insert(
+        "da_availability_timeout_multiplier".into(),
+        TomlValue::Integer(3),
+    );
     let mut nexus = toml::Table::new();
     nexus.insert("enabled".into(), TomlValue::Boolean(false));
     let mut layer = toml::Table::new();

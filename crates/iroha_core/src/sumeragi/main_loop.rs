@@ -3312,11 +3312,12 @@ impl Actor {
         })
     }
 
-    fn rbc_rebroadcast_active_with_tip(
+    fn rbc_rebroadcast_active_with_tip_and_session(
         &self,
         key: super::rbc_store::SessionKey,
         tip_height: usize,
         tip_hash: Option<HashOf<BlockHeader>>,
+        session: Option<&RbcSession>,
     ) -> bool {
         if let Some(pending) = self.pending.pending_blocks.get(&key.0) {
             if !pending.aborted
@@ -3355,7 +3356,38 @@ impl Actor {
         {
             return true;
         }
-        false
+        let session = if let Some(session) = session {
+            Some(session)
+        } else {
+            self.subsystems.da_rbc.rbc.sessions.get(&key)
+        };
+        let Some(session) = session else {
+            return false;
+        };
+        if session.is_invalid() {
+            return false;
+        }
+        let Some(block_header) = session.block_header.as_ref() else {
+            return false;
+        };
+        if block_header.hash() != key.0 || block_header.view_change_index() != key.2 {
+            return false;
+        }
+        pending_extends_tip(
+            block_header.height().get(),
+            block_header.prev_block_hash(),
+            tip_height,
+            tip_hash,
+        )
+    }
+
+    fn rbc_rebroadcast_active_with_tip(
+        &self,
+        key: super::rbc_store::SessionKey,
+        tip_height: usize,
+        tip_hash: Option<HashOf<BlockHeader>>,
+    ) -> bool {
+        self.rbc_rebroadcast_active_with_tip_and_session(key, tip_height, tip_hash, None)
     }
 
     fn rbc_rebroadcast_active(&self, key: super::rbc_store::SessionKey) -> bool {
@@ -3382,10 +3414,15 @@ impl Actor {
             .sessions
             .iter()
             .any(|(key, session)| {
-                if !self.rbc_rebroadcast_active_with_tip(*key, tip_height, tip_hash) {
+                if !self.rbc_rebroadcast_active_with_tip_and_session(
+                    *key,
+                    tip_height,
+                    tip_hash,
+                    Some(session),
+                ) {
                     return false;
                 }
-                if session.is_invalid() || session.delivered {
+                if session.is_invalid() {
                     return false;
                 }
                 let missing_chunks = session.total_chunks() != 0
@@ -10179,7 +10216,6 @@ impl Actor {
         let Some(mut session) = self.subsystems.da_rbc.rbc.sessions.remove(&key) else {
             return Ok(());
         };
-
         if session.delivered || session.is_invalid() {
             self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);

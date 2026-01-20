@@ -345,6 +345,10 @@ static DEDUP_RBC_READY_EVICT_CAPACITY_TOTAL: AtomicU64 = AtomicU64::new(0);
 static DEDUP_RBC_READY_EVICT_EXPIRED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static DEDUP_RBC_DELIVER_EVICT_CAPACITY_TOTAL: AtomicU64 = AtomicU64::new(0);
 static DEDUP_RBC_DELIVER_EVICT_EXPIRED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static DEDUP_BLOCK_SYNC_UPDATE_EVICT_CAPACITY_TOTAL: AtomicU64 = AtomicU64::new(0);
+static DEDUP_BLOCK_SYNC_UPDATE_EVICT_EXPIRED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static DEDUP_RBC_CHUNK_EVICT_CAPACITY_TOTAL: AtomicU64 = AtomicU64::new(0);
+static DEDUP_RBC_CHUNK_EVICT_EXPIRED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BG_POST_DROP_POST_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BG_POST_DROP_BROADCAST_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCK_CREATED_DROPPED_BY_LOCK_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -3005,6 +3009,10 @@ pub struct DedupEvictionSnapshot {
     pub proposal_capacity_total: u64,
     /// Proposal dedup evictions due to TTL expiry.
     pub proposal_expired_total: u64,
+    /// Block sync update dedup evictions due to capacity.
+    pub block_sync_update_capacity_total: u64,
+    /// Block sync update dedup evictions due to TTL expiry.
+    pub block_sync_update_expired_total: u64,
     /// RBC READY dedup evictions due to capacity.
     pub rbc_ready_capacity_total: u64,
     /// RBC READY dedup evictions due to TTL expiry.
@@ -3013,6 +3021,10 @@ pub struct DedupEvictionSnapshot {
     pub rbc_deliver_capacity_total: u64,
     /// RBC DELIVER dedup evictions due to TTL expiry.
     pub rbc_deliver_expired_total: u64,
+    /// RBC chunk dedup evictions due to capacity.
+    pub rbc_chunk_capacity_total: u64,
+    /// RBC chunk dedup evictions due to TTL expiry.
+    pub rbc_chunk_expired_total: u64,
 }
 
 /// Compact snapshot of consensus status for operator APIs.
@@ -3683,10 +3695,16 @@ fn dedup_evictions_snapshot() -> DedupEvictionSnapshot {
             .load(Ordering::Relaxed),
         proposal_capacity_total: DEDUP_PROPOSAL_EVICT_CAPACITY_TOTAL.load(Ordering::Relaxed),
         proposal_expired_total: DEDUP_PROPOSAL_EVICT_EXPIRED_TOTAL.load(Ordering::Relaxed),
+        block_sync_update_capacity_total: DEDUP_BLOCK_SYNC_UPDATE_EVICT_CAPACITY_TOTAL
+            .load(Ordering::Relaxed),
+        block_sync_update_expired_total: DEDUP_BLOCK_SYNC_UPDATE_EVICT_EXPIRED_TOTAL
+            .load(Ordering::Relaxed),
         rbc_ready_capacity_total: DEDUP_RBC_READY_EVICT_CAPACITY_TOTAL.load(Ordering::Relaxed),
         rbc_ready_expired_total: DEDUP_RBC_READY_EVICT_EXPIRED_TOTAL.load(Ordering::Relaxed),
         rbc_deliver_capacity_total: DEDUP_RBC_DELIVER_EVICT_CAPACITY_TOTAL.load(Ordering::Relaxed),
         rbc_deliver_expired_total: DEDUP_RBC_DELIVER_EVICT_EXPIRED_TOTAL.load(Ordering::Relaxed),
+        rbc_chunk_capacity_total: DEDUP_RBC_CHUNK_EVICT_CAPACITY_TOTAL.load(Ordering::Relaxed),
+        rbc_chunk_expired_total: DEDUP_RBC_CHUNK_EVICT_EXPIRED_TOTAL.load(Ordering::Relaxed),
     }
 }
 
@@ -4047,10 +4065,14 @@ pub(crate) enum DedupEvictionKind {
     BlockCreated,
     /// Proposal payload cache evictions.
     Proposal,
+    /// Block sync update payload cache evictions.
+    BlockSyncUpdate,
     /// RBC READY payload cache evictions.
     RbcReady,
     /// RBC DELIVER payload cache evictions.
     RbcDeliver,
+    /// RBC chunk payload cache evictions.
+    RbcChunk,
 }
 
 /// Record dedup evictions for the given cache kind.
@@ -4085,6 +4107,14 @@ pub(crate) fn record_dedup_evictions(kind: DedupEvictionKind, capacity: usize, e
                 DEDUP_PROPOSAL_EVICT_EXPIRED_TOTAL.fetch_add(expired, Ordering::Relaxed);
             }
         }
+        DedupEvictionKind::BlockSyncUpdate => {
+            if capacity > 0 {
+                DEDUP_BLOCK_SYNC_UPDATE_EVICT_CAPACITY_TOTAL.fetch_add(capacity, Ordering::Relaxed);
+            }
+            if expired > 0 {
+                DEDUP_BLOCK_SYNC_UPDATE_EVICT_EXPIRED_TOTAL.fetch_add(expired, Ordering::Relaxed);
+            }
+        }
         DedupEvictionKind::RbcReady => {
             if capacity > 0 {
                 DEDUP_RBC_READY_EVICT_CAPACITY_TOTAL.fetch_add(capacity, Ordering::Relaxed);
@@ -4099,6 +4129,14 @@ pub(crate) fn record_dedup_evictions(kind: DedupEvictionKind, capacity: usize, e
             }
             if expired > 0 {
                 DEDUP_RBC_DELIVER_EVICT_EXPIRED_TOTAL.fetch_add(expired, Ordering::Relaxed);
+            }
+        }
+        DedupEvictionKind::RbcChunk => {
+            if capacity > 0 {
+                DEDUP_RBC_CHUNK_EVICT_CAPACITY_TOTAL.fetch_add(capacity, Ordering::Relaxed);
+            }
+            if expired > 0 {
+                DEDUP_RBC_CHUNK_EVICT_EXPIRED_TOTAL.fetch_add(expired, Ordering::Relaxed);
             }
         }
     }
@@ -6318,10 +6356,14 @@ pub(crate) fn reset_dedup_evictions_for_tests() {
     DEDUP_BLOCK_CREATED_EVICT_EXPIRED_TOTAL.store(0, Ordering::Relaxed);
     DEDUP_PROPOSAL_EVICT_CAPACITY_TOTAL.store(0, Ordering::Relaxed);
     DEDUP_PROPOSAL_EVICT_EXPIRED_TOTAL.store(0, Ordering::Relaxed);
+    DEDUP_BLOCK_SYNC_UPDATE_EVICT_CAPACITY_TOTAL.store(0, Ordering::Relaxed);
+    DEDUP_BLOCK_SYNC_UPDATE_EVICT_EXPIRED_TOTAL.store(0, Ordering::Relaxed);
     DEDUP_RBC_READY_EVICT_CAPACITY_TOTAL.store(0, Ordering::Relaxed);
     DEDUP_RBC_READY_EVICT_EXPIRED_TOTAL.store(0, Ordering::Relaxed);
     DEDUP_RBC_DELIVER_EVICT_CAPACITY_TOTAL.store(0, Ordering::Relaxed);
     DEDUP_RBC_DELIVER_EVICT_EXPIRED_TOTAL.store(0, Ordering::Relaxed);
+    DEDUP_RBC_CHUNK_EVICT_CAPACITY_TOTAL.store(0, Ordering::Relaxed);
+    DEDUP_RBC_CHUNK_EVICT_EXPIRED_TOTAL.store(0, Ordering::Relaxed);
 }
 
 /// Simple struct for phase-latencies snapshot.
