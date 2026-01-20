@@ -459,9 +459,7 @@ impl Run for ProposalGetArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha::data_model::prelude::AccountId;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
-    use std::str::FromStr;
 
     #[test]
     fn parse_referendum_mode_detects_plain() {
@@ -498,10 +496,7 @@ mod tests {
 
     #[test]
     fn annotate_vote_plain_populates_summary() {
-        const SIGNATORY: &str =
-            "ed25519:ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C";
-        let owner_input = format!("{SIGNATORY}@wonderland");
-        let owner = AccountId::from_str(&owner_input).expect("valid account id");
+        let owner = ALICE_ID.clone();
         let owner_str = owner.to_string();
         let ballot = CastPlainBallot {
             referendum_id: "ref-plain".to_string(),
@@ -700,10 +695,7 @@ mod tests {
 
     #[test]
     fn public_inputs_reject_noncanonical_owner() {
-        const SIGNATORY: &str =
-            "ed25519:ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C";
-        let owner_input = format!("{SIGNATORY}@wonderland");
-        let owner = AccountId::from_str(&owner_input).expect("valid account id");
+        let owner = ALICE_ID.clone();
         let address_hex = owner.to_canonical_hex().expect("canonical hex");
         let noncanonical = format!("{address_hex}@{}", owner.domain());
         let mut map = json::Map::new();

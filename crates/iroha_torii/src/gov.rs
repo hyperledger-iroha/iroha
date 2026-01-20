@@ -2975,7 +2975,6 @@ mod tests {
             queue,
             state,
             MaybeTelemetry::disabled(),
-            false,
             NoritoJson(dto),
         )
         .await
@@ -3016,7 +3015,6 @@ mod tests {
             queue,
             state,
             MaybeTelemetry::disabled(),
-            false,
             NoritoJson(dto),
         )
         .await
@@ -3064,7 +3062,6 @@ mod tests {
             queue,
             state,
             MaybeTelemetry::disabled(),
-            false,
             NoritoJson(dto),
         )
         .await
@@ -3093,7 +3090,6 @@ mod tests {
             queue,
             state,
             MaybeTelemetry::disabled(),
-            false,
             NoritoJson(dto),
         )
         .await
@@ -3124,7 +3120,6 @@ mod tests {
             state,
             NoritoJson(parsed),
             MaybeTelemetry::for_tests(),
-            true,
         )
         .await
         .expect("handler ok");
@@ -3157,7 +3152,6 @@ mod tests {
             state,
             NoritoJson(parsed),
             MaybeTelemetry::for_tests(),
-            true,
         )
         .await
         .unwrap_err();
@@ -3186,7 +3180,6 @@ mod tests {
             state,
             NoritoJson(parsed),
             MaybeTelemetry::for_tests(),
-            false,
         )
         .await
         .expect("raw public key literals should be accepted");
@@ -3213,7 +3206,6 @@ mod tests {
             queue,
             state,
             MaybeTelemetry::disabled(),
-            false,
             NoritoJson(dto),
         )
         .await
@@ -3242,7 +3234,6 @@ mod tests {
             queue,
             state,
             MaybeTelemetry::disabled(),
-            false,
             NoritoJson(dto),
         )
         .await
@@ -3279,7 +3270,6 @@ mod tests {
             queue,
             state,
             MaybeTelemetry::disabled(),
-            false,
             NoritoJson(dto),
         )
         .await
@@ -3319,7 +3309,6 @@ mod tests {
             queue,
             state,
             MaybeTelemetry::disabled(),
-            false,
             NoritoJson(dto),
         )
         .await
@@ -3356,7 +3345,6 @@ mod tests {
             queue,
             state,
             MaybeTelemetry::disabled(),
-            false,
             NoritoJson(dto),
         )
         .await
@@ -3492,7 +3480,6 @@ mod tests {
             queue,
             state,
             MaybeTelemetry::disabled(),
-            false,
             NoritoJson(dto),
         )
         .await
@@ -3533,7 +3520,6 @@ mod tests {
             harness.queue.clone(),
             harness.state.clone(),
             MaybeTelemetry::disabled(),
-            false,
             NoritoJson(propose),
         )
         .await
@@ -3589,7 +3575,6 @@ mod tests {
             harness.state.clone(),
             NoritoJson(ballot),
             MaybeTelemetry::disabled(),
-            false,
         )
         .await
         .expect("ballot ok");
@@ -3625,7 +3610,6 @@ mod tests {
             harness.queue.clone(),
             harness.state.clone(),
             MaybeTelemetry::disabled(),
-            false,
             NoritoJson(finalize),
         )
         .await
@@ -3664,7 +3648,6 @@ mod tests {
             harness.queue.clone(),
             harness.state.clone(),
             MaybeTelemetry::disabled(),
-            false,
             NoritoJson(enact),
         )
         .await
@@ -3725,7 +3708,6 @@ mod tests {
             harness.queue.clone(),
             harness.state.clone(),
             MaybeTelemetry::disabled(),
-            false,
             NoritoJson(propose),
         )
         .await
@@ -3878,7 +3860,6 @@ mod tests {
             queue,
             state,
             MaybeTelemetry::disabled(),
-            false,
             crate::NoritoJsonWithBytes { value: dto, raw },
         )
         .await
@@ -3918,7 +3899,6 @@ mod tests {
             queue,
             state,
             MaybeTelemetry::disabled(),
-            false,
             crate::NoritoJsonWithBytes { value: dto, raw },
         )
         .await
@@ -3970,7 +3950,6 @@ mod tests {
             queue,
             state,
             MaybeTelemetry::disabled(),
-            false,
             crate::NoritoJsonWithBytes { value: dto, raw },
         )
         .await
@@ -4011,7 +3990,6 @@ mod tests {
             queue,
             state,
             MaybeTelemetry::disabled(),
-            false,
             crate::NoritoJsonWithBytes { value: dto, raw },
         )
         .await
@@ -4147,7 +4125,6 @@ mod tests {
             queue,
             state,
             MaybeTelemetry::disabled(),
-            false,
             crate::NoritoJsonWithBytes { value: dto, raw },
         )
         .await
@@ -4208,7 +4185,6 @@ mod tests {
             queue,
             state,
             MaybeTelemetry::disabled(),
-            false,
             crate::NoritoJsonWithBytes { value: dto, raw },
         )
         .await
@@ -4253,7 +4229,6 @@ mod tests {
             queue,
             state,
             MaybeTelemetry::disabled(),
-            false,
             crate::NoritoJsonWithBytes { value: dto, raw },
         )
         .await

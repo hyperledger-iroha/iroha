@@ -95,10 +95,11 @@ below so wallet/explorer UIs can surface them inline without spelunking the code
 |-------------------|-------|
 | `ｲ ﾛ ﾊ ﾆ ﾎ ﾍ ﾄ ﾁ ﾘ ﾇ ﾙ ｦ ﾜ ｶ ﾖ ﾀ ﾚ ｿ ﾂ ﾈ ﾅ ﾗ ﾑ ｳ ヰ ﾉ ｵ ｸ ﾔ ﾏ ｹ ﾌ ｺ ｴ ﾃ ｱ ｻ ｷ ﾕ ﾒ ﾐ ｼ ヱ ﾋ ﾓ ｾ ｽ` | 47 |
 
-The compressed alphabet accepts both half-width and full-width kana; render the half-width glyphs
-in UI copy while allowing screen readers to expand the descriptive text (see Accessibility guidance
-below). When exposing printable cheat-sheets or QR legends, include both tables so operators can
-validate telemetry exports offline.
+The compressed alphabet accepts both half-width and full-width kana, and the `snx1` sentinel
+may also be typed in full-width form (`ｓｎｘ１`). Render the half-width glyphs in UI copy while
+allowing screen readers to expand the descriptive text (see Accessibility guidance below). When
+exposing printable cheat-sheets or QR legends, include both tables so operators can validate
+telemetry exports offline.
 
 ## Torii API address_format contract
 

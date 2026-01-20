@@ -485,7 +485,7 @@ fn parse_address_input(
             .wrap_err("failed to parse account component")?;
         parsed
             .address
-            .ensure_domain_matches(&domain)
+            .to_account_id(&domain)
             .wrap_err("address domain selector does not match provided domain")?;
         Ok(ParsedAddressInput {
             parsed,

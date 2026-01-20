@@ -15666,7 +15666,7 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[cfg(feature = "app_api")]
-    struct AccountResolverGuard {
+    pub(crate) struct AccountResolverGuard {
         _lock: MutexGuard<'static, ()>,
     }
 
@@ -15681,7 +15681,7 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[cfg(feature = "app_api")]
-    fn guard_account_resolvers(app: &SharedAppState) -> AccountResolverGuard {
+    pub(crate) fn guard_account_resolvers(app: &SharedAppState) -> AccountResolverGuard {
         static RESOLVER_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
         let lock = RESOLVER_GUARD
             .lock()
@@ -18864,6 +18864,7 @@ mod tests {
     use std::{
         collections::HashSet,
         num::{NonZeroU64, NonZeroUsize},
+        str::FromStr,
         sync::Arc,
     };
 
@@ -18874,13 +18875,18 @@ mod tests {
     use futures::executor;
     use http_body_util::BodyExt as _;
     use iroha_config::parameters::actual;
-    use iroha_crypto::{KeyPair, SignatureOf};
+    use iroha_crypto::{Hash, KeyPair, SignatureOf};
     use iroha_data_model::{
-        ChainId, ValidationFail,
-        account::AccountId,
+        ChainId, Registrable, ValidationFail,
+        account::{Account, AccountId, OpaqueAccountId},
+        account::rekey::AccountLabel,
         block::{BlockHeader, BlockSignature, SignedBlock},
-        domain::DomainId,
-        nexus::{AxtPolicySnapshot, AxtRejectContext, AxtRejectReason, DataSpaceId, LaneId},
+        domain::{Domain, DomainId},
+        name::Name,
+        nexus::{
+            AxtPolicySnapshot, AxtRejectContext, AxtRejectReason, DataSpaceId, LaneId,
+            UniversalAccountId,
+        },
         permission::Permission,
         proof::{ProofId, ProofRecord, ProofStatus},
         transaction::signed::{TransactionBuilder, TransactionResultInner},
@@ -18899,7 +18905,8 @@ mod tests {
     use crate::{
         limits,
         tests_runtime_handlers::{
-            mk_app_state_for_tests, mk_app_state_for_tests_with_iso_bridge,
+            guard_account_resolvers, mk_app_state_for_tests, mk_app_state_for_tests_with_iso_bridge,
+            mk_app_state_for_tests_with_world,
             mk_app_state_for_tests_with_options, negotiated,
         },
     };

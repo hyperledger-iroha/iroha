@@ -1476,7 +1476,7 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let (tx, context) = runtime
-            .build_pacs008_transaction(&msg, &chain_id, &telemetry, true)
+            .build_pacs008_transaction(&msg, &chain_id, &telemetry)
             .expect("build");
         assert_eq!(context.ledger_id.as_deref(), Some(chain_id.as_str()));
         let (_expected_account, canonical_account, _) = sample_account_bundle();
@@ -1554,7 +1554,7 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let err = runtime
-            .build_pacs008_transaction(&msg, &chain_id, &telemetry, true)
+            .build_pacs008_transaction(&msg, &chain_id, &telemetry)
             .expect_err("unknown BIC must fail");
         match err {
             MsgError::InvalidIdentifier { ref field, kind } => {
@@ -1578,7 +1578,7 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let err = runtime
-            .build_pacs008_transaction(&msg, &chain_id, &telemetry, true)
+            .build_pacs008_transaction(&msg, &chain_id, &telemetry)
             .expect_err("unmapped IBAN must fail");
         match err {
             MsgError::InvalidIdentifier { ref field, kind } => {
@@ -1602,7 +1602,7 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let err = runtime
-            .build_pacs008_transaction(&msg, &chain_id, &telemetry, true)
+            .build_pacs008_transaction(&msg, &chain_id, &telemetry)
             .expect_err("unbound currency must fail");
         match err {
             MsgError::InvalidIdentifier { ref field, kind } => {
@@ -1626,7 +1626,7 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let (tx, context) = runtime
-            .build_pacs009_transaction(&msg, &chain_id, &telemetry, true)
+            .build_pacs009_transaction(&msg, &chain_id, &telemetry)
             .expect("build");
         assert_eq!(context.ledger_id.as_deref(), Some(chain_id.as_str()));
         let (_expected_account, canonical_account, _) = sample_account_bundle();
@@ -1662,7 +1662,7 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let err = runtime
-            .build_pacs009_transaction(&msg, &chain_id, &telemetry, true)
+            .build_pacs009_transaction(&msg, &chain_id, &telemetry)
             .expect_err("non-SECU purpose must fail");
         match err {
             MsgError::InvalidValue { field, kind } => {
@@ -1686,7 +1686,7 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let err = runtime
-            .build_pacs009_transaction(&msg, &chain_id, &telemetry, true)
+            .build_pacs009_transaction(&msg, &chain_id, &telemetry)
             .expect_err("unmapped IBAN must fail");
         match err {
             MsgError::InvalidIdentifier { ref field, kind } => {
@@ -1710,7 +1710,7 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let err = runtime
-            .build_pacs009_transaction(&msg, &chain_id, &telemetry, true)
+            .build_pacs009_transaction(&msg, &chain_id, &telemetry)
             .expect_err("unbound currency must fail");
         match err {
             MsgError::InvalidIdentifier { ref field, kind } => {
@@ -1747,7 +1747,7 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let err = runtime
-            .build_pacs009_transaction(&msg, &chain_id, &telemetry, true)
+            .build_pacs009_transaction(&msg, &chain_id, &telemetry)
             .expect_err("unknown BIC must fail");
         match err {
             MsgError::InvalidIdentifier { ref field, kind } => {

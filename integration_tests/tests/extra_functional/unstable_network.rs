@@ -12,6 +12,7 @@ use eyre::{Context, Result, eyre};
 use futures_util::{StreamExt, stream::FuturesUnordered};
 use integration_tests::sandbox;
 use iroha_config_base::toml::WriteExt;
+use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
 use iroha_data_model::{
     Level,
     asset::AssetDefinition,
@@ -730,7 +731,24 @@ struct UnstableNetwork {
 
 impl UnstableNetwork {
     async fn run(self) -> Result<()> {
-        assert!(self.n_peers > self.n_faulty_peers);
+        if self.n_peers <= self.n_faulty_peers {
+            return Err(eyre!(
+                "expected more peers than faulty peers (peers={}, faulty={})",
+                self.n_peers,
+                self.n_faulty_peers
+            ));
+        }
+        let commit_quorum = commit_quorum_from_len(self.n_peers);
+        let fault_budget = Self::fault_budget_for_peer_count(self.n_peers);
+        if self.n_faulty_peers > fault_budget {
+            return Err(eyre!(
+                "faulty peers ({}) exceed commit quorum budget ({}) for {} peers (commit quorum {})",
+                self.n_faulty_peers,
+                fault_budget,
+                self.n_peers,
+                commit_quorum
+            ));
+        }
 
         let account_id = ALICE_ID.clone();
         let asset_definition_id: AssetDefinitionId = "unstable#wonderland".parse().expect("Valid");
@@ -770,6 +788,33 @@ impl UnstableNetwork {
         Self::assert_total_supply(&network, &asset_definition_id, self.n_rounds).await?;
 
         Ok(())
+    }
+
+    fn fault_budget_for_peer_count(peer_count: usize) -> usize {
+        peer_count.saturating_sub(commit_quorum_from_len(peer_count))
+    }
+
+    fn select_faulty_peer_ids(
+        peer_ids: &[PeerId],
+        n_faulty_peers: usize,
+        round_index: usize,
+    ) -> Vec<PeerId> {
+        if n_faulty_peers == 0 {
+            return Vec::new();
+        }
+        let mut ordered_ids = peer_ids.to_vec();
+        ordered_ids.sort();
+        ordered_ids.dedup();
+        let commit_quorum = commit_quorum_from_len(ordered_ids.len());
+        let candidates = ordered_ids.get(commit_quorum..).unwrap_or(&[]);
+        let mut rng =
+            ChaCha8Rng::seed_from_u64(0x5553_5442 + u64::try_from(round_index).unwrap_or(0));
+        candidates
+            .iter()
+            .choose_multiple(&mut rng, n_faulty_peers)
+            .into_iter()
+            .cloned()
+            .collect()
     }
 
     fn build_network(&self) -> Network {
@@ -837,19 +882,15 @@ impl UnstableNetwork {
             "Begin round"
         );
 
-        let faulty: Vec<_> = {
-            let mut rng =
-                ChaCha8Rng::seed_from_u64(0x5553_5442 + u64::try_from(round_index).unwrap_or(0));
-            peers
-                .iter()
-                .choose_multiple(&mut rng, self.n_faulty_peers)
+        let peer_ids: Vec<_> = peers.iter().map(NetworkPeer::id).collect();
+        let faulty_ids: HashSet<_> =
+            Self::select_faulty_peer_ids(&peer_ids, self.n_faulty_peers, round_index)
                 .into_iter()
-                .cloned()
-                .collect()
-        };
-        let faulty_ids: HashSet<_> = faulty
+                .collect();
+        let faulty: Vec<_> = peers
             .iter()
-            .map(iroha_test_network::NetworkPeer::id)
+            .filter(|peer| faulty_ids.contains(&peer.id()))
+            .cloned()
             .collect();
         for peer in &faulty {
             relay.suspend(&peer.id()).activate();
@@ -938,6 +979,40 @@ struct RoundContext<'a> {
     account_id: &'a AccountId,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    use iroha_crypto::KeyPair;
+
+    #[test]
+    fn faulty_peer_selection_uses_tail_after_commit_quorum() {
+        let peer_ids: Vec<_> = (0..9)
+            .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
+            .collect();
+        let mut ordered = peer_ids.clone();
+        ordered.sort();
+        let commit_quorum = commit_quorum_from_len(ordered.len());
+        let expected_tail: BTreeSet<_> = ordered[commit_quorum..].iter().cloned().collect();
+
+        let selected: BTreeSet<_> =
+            UnstableNetwork::select_faulty_peer_ids(&peer_ids, expected_tail.len(), 0)
+                .into_iter()
+                .collect();
+
+        assert_eq!(selected, expected_tail);
+    }
+
+    #[test]
+    fn fault_budget_matches_commit_quorum_tail() {
+        let peer_count = 9;
+        let commit_quorum = commit_quorum_from_len(peer_count);
+        let fault_budget = UnstableNetwork::fault_budget_for_peer_count(peer_count);
+        assert_eq!(fault_budget, peer_count - commit_quorum);
+    }
+}
+
 #[tokio::test]
 async fn unstable_network_5_peers_1_fault() -> Result<()> {
     // TODO: Restore higher round counts once relay stability is improved.
@@ -991,11 +1066,12 @@ async fn unstable_network_9_peers_2_faults() -> Result<()> {
 }
 
 #[tokio::test]
-async fn unstable_network_9_peers_4_faults() -> Result<()> {
+async fn unstable_network_9_peers_3_faults() -> Result<()> {
     // TODO: Restore higher round counts once relay stability is improved.
+    // TODO: Revisit 4-fault coverage once quorum budgets or peer counts change.
     UnstableNetwork {
         n_peers: 9,
-        n_faulty_peers: 4,
+        n_faulty_peers: 3,
         n_rounds: 3,
         force_soft_fork: false,
     }

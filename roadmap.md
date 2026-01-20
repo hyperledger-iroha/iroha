@@ -328,7 +328,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [ ] Alerts: define SLA breach, repair backlog, GC stall, and retention-blocked eviction alert thresholds in docs/runbooks and emit corresponding telemetry labels.
  - [ ] Dashboards: add operator panels for repair SLA misses, repair queue depth by provider, GC frees per hour, and retention-blocked evictions.
  - [ ] Tests: unit + integration coverage for persistence reload, worker claim/lease, repair completion/failure requeue, and GC expiry/retention invariants (include restart recovery and SLA deadline checks).
- - [ ] Tests: add Torii API contract tests for worker endpoints and CLI regression tests for repair/GC commands.
+ - [x] Tests: add Torii API contract tests for worker endpoints and CLI regression tests for repair/GC commands.
  - [ ] Tests: add governance flow tests for escalation→slash proposal acceptance/rejection and signed-evidence verification.
  - [ ] Docs/runbooks: update SoraFS operator guides with decentralized repair persistence, worker controls, GC policy/config/telemetry, and “no admin after launch” invariants.
  - [ ] Docs/runbooks: include provider worker key rotation + evidence signing guidance and governance dispute timelines.

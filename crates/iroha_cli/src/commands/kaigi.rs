@@ -13,7 +13,12 @@ use iroha::data_model::{
     },
 };
 use iroha_crypto::Hash;
-use std::{fs, path::PathBuf, time::{SystemTime, UNIX_EPOCH}};
+use std::{
+    fs,
+    path::PathBuf,
+    str::FromStr,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
