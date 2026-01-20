@@ -15,7 +15,7 @@ use tokio::task::spawn_blocking;
 // Integration submissions occasionally need more time to commit under DA-enabled consensus;
 // give the network a bounded window before failing. Keep bounded to avoid long hangs when
 // Torii is unreachable, but allow env overrides for slower hosts.
-const STATUS_RETRY_DELAY: Duration = Duration::from_millis(300);
+const STATUS_RETRY_DELAY: Duration = Duration::from_millis(100);
 const STATUS_RETRY_DEFAULT: Duration = Duration::from_secs(120);
 
 /// Poll `/status` with a bounded retry budget to tolerate startup jitter.

@@ -35,11 +35,11 @@ use iroha_data_model::{
 };
 use iroha_logger::prelude::*;
 pub use iroha_telemetry::metrics::{Status, TxGossipSnapshot, Uptime};
-use iroha_torii_shared::uri as torii_uri;
+use iroha_torii_shared::{ErrorEnvelope, uri as torii_uri};
 use iroha_version::{DecodeAll, codec::EncodeVersioned};
 use norito::{
     decode_from_bytes,
-    derive::{JsonDeserialize, JsonSerialize},
+    derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize},
     json::{Map as JsonMap, Value as JsonValue},
     to_bytes,
 };
@@ -1441,6 +1441,23 @@ impl SumeragiEvidenceListFilter<'_> {
         }
         out
     }
+}
+
+#[derive(Debug, NoritoDeserialize, NoritoSerialize)]
+struct QueueErrorSnapshot {
+    state: String,
+    queued: u64,
+    capacity: u64,
+    saturated: bool,
+}
+
+#[derive(Debug, NoritoDeserialize, NoritoSerialize)]
+struct QueueErrorEnvelope {
+    code: String,
+    message: String,
+    queue: QueueErrorSnapshot,
+    #[norito(default)]
+    retry_after_seconds: Option<u64>,
 }
 
 /// Phantom struct that handles Transaction API HTTP response
@@ -4505,6 +4522,26 @@ mod evidence_http_tests {
 /// Private structure to incapsulate error reporting for HTTP response.
 pub(crate) struct ResponseReport(pub(crate) eyre::Report);
 
+fn decode_norito_error_body(response: &Response<Vec<u8>>) -> Option<String> {
+    let is_norito = response
+        .headers()
+        .get(http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map_or(true, |ct| ct.starts_with(APPLICATION_NORITO));
+    if !is_norito {
+        return None;
+    }
+
+    let body = response.body();
+    if let Ok(envelope) = decode_from_bytes::<ErrorEnvelope>(body) {
+        return Some(format!("{}: {}", envelope.code(), envelope.message()));
+    }
+    if let Ok(envelope) = decode_from_bytes::<QueueErrorEnvelope>(body) {
+        return Some(format!("{}: {}", envelope.code, envelope.message));
+    }
+    None
+}
+
 impl ResponseReport {
     /// Constructs report with provided message
     ///
@@ -4521,19 +4558,23 @@ impl ResponseReport {
             .and_then(|value| value.to_str().ok())
             .filter(|value| !value.is_empty())
             .map_or_else(String::new, |code| format!("; reject code: {code}"));
-        let body = std::str::from_utf8(response.body());
         let msg = msg.as_ref();
 
-        body.map_err(|_| {
-            Self(eyre!(
-                "{msg}; status: {status}{reject_suffix}; body isn't a valid utf-8 string"
-            ))
-        })
-        .map(|body| {
-            Self(eyre!(
+        if let Ok(body) = std::str::from_utf8(response.body()) {
+            return Ok(Self(eyre!(
                 "{msg}; status: {status}{reject_suffix}; response body: {body}"
-            ))
-        })
+            )));
+        }
+
+        if let Some(body) = decode_norito_error_body(response) {
+            return Ok(Self(eyre!(
+                "{msg}; status: {status}{reject_suffix}; response body: {body}"
+            )));
+        }
+
+        Err(Self(eyre!(
+            "{msg}; status: {status}{reject_suffix}; body isn't a valid utf-8 string"
+        )))
     }
 }
 
@@ -14036,5 +14077,23 @@ mod response_report {
             .body(vec![0xff])
             .unwrap();
         assert!(ResponseReport::with_msg("test", &response).is_err());
+    }
+
+    #[test]
+    fn with_msg_decodes_norito_error_envelope() {
+        let envelope = ErrorEnvelope::new("queue_error", "transaction already committed");
+        let body = to_bytes(&envelope).expect("encode error envelope");
+        let response = Response::builder()
+            .status(StatusCode::CONFLICT)
+            .header(http::header::CONTENT_TYPE, APPLICATION_NORITO)
+            .body(body)
+            .unwrap();
+        let report = match ResponseReport::with_msg("Unexpected transaction response", &response) {
+            Ok(report) => report,
+            Err(err) => panic!("expected norito decode, got error: {}", err.0),
+        };
+        let text = report.0.to_string();
+        assert!(text.contains("queue_error"));
+        assert!(text.contains("transaction already committed"));
     }
 }

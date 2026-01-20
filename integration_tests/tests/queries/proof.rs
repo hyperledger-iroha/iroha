@@ -39,53 +39,33 @@ fn debug_ok_attachment() -> ProofAttachment {
 }
 
 #[test]
-fn find_proof_records_lists_after_verify() -> Result<()> {
+fn proof_query_scenarios() -> Result<()> {
+    use iroha::data_model::query::proof::prelude::FindProofRecordsByBackend;
+
     let Some((network, rt)) = sandbox::start_network_blocking_or_skip(
         NetworkBuilder::new(),
-        stringify!(find_proof_records_lists_after_verify),
+        stringify!(proof_query_scenarios),
     )?
     else {
         return Ok(());
     };
     let client = network.client();
 
-    let result: Result<()> = (|| {
-        // Submit a VerifyProof with inline VK and accepted backend
+    // find_proof_records_lists_after_verify
+    {
         let attachment = halo2_attachment();
         client.submit_blocking(iroha::data_model::isi::zk::VerifyProof::new(attachment))?;
         rt.block_on(async { network.ensure_blocks(1).await })?;
 
-        // Query all proof records; expect at least one
         let recs = client.query(FindProofRecords).execute_all()?;
         assert!(
             !recs.is_empty(),
             "expected at least one proof record after VerifyProof"
         );
-        Ok(())
-    })();
-    if sandbox::handle_result(result, stringify!(find_proof_records_lists_after_verify))?.is_none()
-    {
-        return Ok(());
     }
 
-    Ok(())
-}
-
-#[test]
-fn find_proof_records_by_backend_filters() -> Result<()> {
-    use iroha::data_model::query::proof::prelude::FindProofRecordsByBackend;
-
-    let Some((network, rt)) = sandbox::start_network_blocking_or_skip(
-        NetworkBuilder::new(),
-        stringify!(find_proof_records_by_backend_filters),
-    )?
-    else {
-        return Ok(());
-    };
-    let client = network.client();
-
-    let result: Result<()> = (|| {
-        // Submit two proofs for different backends
+    // find_proof_records_by_backend_filters
+    {
         let att1 = halo2_attachment();
         let att2 = iroha::data_model::proof::ProofAttachment::new_inline(
             "groth16/bn254".into(),
@@ -96,7 +76,6 @@ fn find_proof_records_by_backend_filters() -> Result<()> {
         client.submit_all_blocking([iroha::data_model::isi::zk::VerifyProof::new(att2)])?;
         rt.block_on(async { network.ensure_blocks(1).await })?;
 
-        // Query by backend
         let halo2 = client
             .query(FindProofRecordsByBackend::new("halo2/ipa".into()))
             .execute_all()?;
@@ -112,29 +91,10 @@ fn find_proof_records_by_backend_filters() -> Result<()> {
             !groth.is_empty(),
             "expected at least one groth16/bn254 proof record"
         );
-        Ok(())
-    })();
-    if sandbox::handle_result(result, stringify!(find_proof_records_by_backend_filters))?.is_none()
-    {
-        return Ok(());
     }
 
-    Ok(())
-}
-
-#[test]
-fn find_proof_records_by_status_filters() -> Result<()> {
-    let Some((network, rt)) = sandbox::start_network_blocking_or_skip(
-        NetworkBuilder::new(),
-        stringify!(find_proof_records_by_status_filters),
-    )?
-    else {
-        return Ok(());
-    };
-    let client = network.client();
-
-    let result: Result<()> = (|| {
-        // Submit one verified and one rejected proof
+    // find_proof_records_by_status_filters
+    {
         let att_ok = debug_ok_attachment();
         let att_bad = iroha::data_model::proof::ProofAttachment::new_inline(
             "debug/reject".into(),
@@ -158,11 +118,6 @@ fn find_proof_records_by_status_filters() -> Result<()> {
             !rejected.is_empty(),
             "expected at least one rejected proof record"
         );
-        Ok(())
-    })();
-
-    if sandbox::handle_result(result, stringify!(find_proof_records_by_status_filters))?.is_none() {
-        return Ok(());
     }
 
     Ok(())

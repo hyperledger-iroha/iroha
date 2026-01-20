@@ -14,21 +14,11 @@ use tokio::{
     time::{sleep, timeout},
 };
 
-#[tokio::test]
-async fn trigger_completion_success_should_produce_event() -> Result<()> {
-    let Some(network) = sandbox::start_network_async_or_skip(
-        NetworkBuilder::new().with_min_peers(4),
-        stringify!(trigger_completion_success_should_produce_event),
-    )
-    .await?
-    else {
-        return Ok(());
-    };
-
+async fn trigger_completion_success_should_produce_event_scenario(network: &Network) -> Result<()> {
     let asset_definition_id = "rose#wonderland".parse()?;
     let account_id = ALICE_ID.clone();
     let asset_id = AssetId::new(asset_definition_id, account_id);
-    let trigger_id = "mint_rose".parse::<TriggerId>()?;
+    let trigger_id = "mint_rose_event".parse::<TriggerId>()?;
 
     let instruction = Mint::asset_numeric(1u32, asset_id.clone());
     let register_trigger = Register::trigger(Trigger::new(
@@ -93,20 +83,10 @@ async fn trigger_completion_success_should_produce_event() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
 #[allow(clippy::too_many_lines)]
-async fn trigger_completion_failure_reports_error() -> Result<()> {
-    let Some(network) = sandbox::start_network_async_or_skip(
-        NetworkBuilder::new().with_min_peers(4),
-        stringify!(trigger_completion_failure_reports_error),
-    )
-    .await?
-    else {
-        return Ok(());
-    };
-
+async fn trigger_completion_failure_reports_error_scenario(network: &Network) -> Result<()> {
     let account_id = ALICE_ID.clone();
-    let trigger_id = "fail_box".parse::<TriggerId>()?;
+    let trigger_id = "fail_box_event".parse::<TriggerId>()?;
 
     let fail_isi = Unregister::domain("dummy".parse().unwrap());
     let register_trigger = Register::trigger(Trigger::new(
@@ -216,6 +196,23 @@ async fn trigger_completion_failure_reports_error() -> Result<()> {
     } else {
         return Err(err);
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn trigger_completion_event_scenarios() -> Result<()> {
+    let Some(network) = sandbox::start_network_async_or_skip(
+        NetworkBuilder::new().with_min_peers(4),
+        stringify!(trigger_completion_event_scenarios),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+
+    trigger_completion_success_should_produce_event_scenario(&network).await?;
+    trigger_completion_failure_reports_error_scenario(&network).await?;
 
     Ok(())
 }

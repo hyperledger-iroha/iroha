@@ -87,8 +87,8 @@ where
         return true;
     };
     if !locked_present(locked.subject_block_hash) {
-        // If the locked block is missing locally, defer the safety check to avoid stalling.
-        return true;
+        // Missing locked payload must block extension checks to preserve safety.
+        return false;
     }
     qc_extends_locked_with_lookup(locked, highest, parent_lookup)
 }

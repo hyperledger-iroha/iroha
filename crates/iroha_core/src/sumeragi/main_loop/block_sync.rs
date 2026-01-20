@@ -109,7 +109,7 @@ impl Actor {
         let block_height = block.header().height().get();
         let block_view = block.header().view_change_index();
         let parent_hash = block.header().prev_block_hash();
-        let requested_missing_block = self
+        let mut requested_missing_block = self
             .pending
             .missing_block_requests
             .contains_key(&block_hash);
@@ -232,13 +232,15 @@ impl Actor {
             };
             let prf_seed = Some(super::prf_seed_for_height(&view, block_height));
             let local_height = u64::try_from(view.height()).unwrap_or(u64::MAX);
-            (
-                consensus_mode,
-                mode_tag,
-                prf_seed,
-                local_height,
-            )
+            (consensus_mode, mode_tag, prf_seed, local_height)
         };
+        if self.runtime_da_enabled()
+            && !requested_missing_block
+            && !self.block_payload_available_locally(block_hash)
+            && block_height <= local_height.saturating_add(1)
+        {
+            requested_missing_block = true;
+        }
         let expected_epoch = self.epoch_for_height(block_height);
         let has_commit_votes = !commit_votes.is_empty();
         let mut commit_votes = Some(commit_votes);
@@ -796,6 +798,7 @@ impl Actor {
                     expected_epoch,
                     &self.common_config.chain,
                     mode_tag,
+                    false,
                     &inputs,
                 )
                 .is_ok()

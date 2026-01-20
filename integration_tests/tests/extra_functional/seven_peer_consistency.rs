@@ -33,7 +33,7 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
     // Given: a 7-peer network and a simple state change
     let builder = NetworkBuilder::new()
         .with_peers(7)
-        .with_default_pipeline_time()
+        .with_pipeline_time(std::time::Duration::from_secs(2))
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)

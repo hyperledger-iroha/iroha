@@ -29,9 +29,11 @@ use toml::Value as TomlValue;
 
 static GENESIS_STATUS: OnceLock<std::result::Result<(), ()>> = OnceLock::new();
 static SERIAL_NETWORK_GUARD: OnceLock<sandbox::NetworkParallelismGuard> = OnceLock::new();
-const QUERY_RETRIES: usize = 240;
-const QUERY_RETRY_DELAY: Duration = Duration::from_millis(500);
+const QUERY_RETRIES: usize = 1_200;
+const QUERY_RETRY_DELAY: Duration = Duration::from_millis(100);
 const NON_EMPTY_BLOCK_TIMEOUT: Duration = Duration::from_secs(600);
+// DA-enabled consensus needs a wider pipeline in local test runs to avoid view-change stalls.
+const FAST_PIPELINE_TIME: Duration = Duration::from_secs(6);
 
 struct ClientPool {
     clients: Vec<Client>,
@@ -242,6 +244,15 @@ fn quiet_network_builder() -> NetworkBuilder {
     sumeragi.insert("collectors_redundant_send_r".into(), TomlValue::Integer(3));
     sumeragi.insert("rbc_pending_ttl_ms".into(), TomlValue::Integer(120_000));
     sumeragi.insert("rbc_session_ttl_secs".into(), TomlValue::Integer(240));
+    // Increase DA quorum/availability timeouts to tolerate slower CI and local hosts.
+    sumeragi.insert(
+        "da_quorum_timeout_multiplier".into(),
+        TomlValue::Integer(6),
+    );
+    sumeragi.insert(
+        "da_availability_timeout_multiplier".into(),
+        TomlValue::Integer(3),
+    );
     let mut nexus = toml::Table::new();
     nexus.insert("enabled".into(), TomlValue::Boolean(false));
     let mut layer = toml::Table::new();
@@ -249,7 +260,7 @@ fn quiet_network_builder() -> NetworkBuilder {
     layer.insert("nexus".into(), TomlValue::Table(nexus));
     NetworkBuilder::new()
         .with_peers(4)
-        .with_default_pipeline_time()
+        .with_pipeline_time(FAST_PIPELINE_TIME)
         // Make DA/RBC traffic more tolerant of dropped packets during local runs.
         .with_config_table(layer)
         // Keep on-chain parameters aligned with the overrides we pass via config layers so
@@ -274,16 +285,17 @@ fn submit_tx_or_skip(
     context: &str,
 ) -> Result<Option<()>> {
     let mut last_err = None;
+    let mut accepted = false;
     for _ in 0..clients.len() {
         let client = clients.next();
-        match client.submit_transaction_blocking(tx) {
-            Ok(_) => return Ok(Some(())),
+        match client.submit_transaction(tx) {
+            Ok(_) => {
+                accepted = true;
+            }
             Err(err) => {
-                if is_tx_confirmation_timeout(&err) {
-                    eprintln!(
-                        "warning: {context} confirmation timed out; continuing with state checks"
-                    );
-                    return Ok(Some(()));
+                if is_duplicate_tx_error(&err) {
+                    accepted = true;
+                    continue;
                 }
                 if is_transient_client_error(&err) {
                     last_err = Some(err);
@@ -293,10 +305,14 @@ fn submit_tx_or_skip(
             }
         }
     }
-    sandbox::handle_result::<()>(
-        Err(last_err.unwrap_or_else(|| eyre!("all peers unreachable"))),
-        context,
-    )
+    if accepted {
+        Ok(Some(()))
+    } else {
+        sandbox::handle_result::<()>(
+            Err(last_err.unwrap_or_else(|| eyre!("all peers unreachable"))),
+            context,
+        )
+    }
 }
 
 fn submit_or_tolerate_timeout(
@@ -305,30 +321,29 @@ fn submit_or_tolerate_timeout(
     context: &str,
 ) -> Result<Option<()>> {
     let instruction = instruction.into();
-    let mut last_err = None;
-    for _ in 0..clients.len() {
-        let client = clients.next();
-        match client.submit_blocking(instruction.clone()) {
-            Ok(_) => return Ok(Some(())),
-            Err(err) => {
-                if is_tx_confirmation_timeout(&err) {
-                    eprintln!(
-                        "warning: {context} confirmation timed out; continuing with state checks"
-                    );
-                    return Ok(Some(()));
-                }
-                if is_transient_client_error(&err) {
-                    last_err = Some(err);
-                    continue;
-                }
-                return sandbox::handle_result::<()>(Err(err), context);
-            }
-        }
-    }
-    sandbox::handle_result::<()>(
-        Err(last_err.unwrap_or_else(|| eyre!("all peers unreachable"))),
+    let tx = clients
+        .current()
+        .build_transaction([instruction.clone()], Metadata::default());
+    submit_tx_or_skip(clients, &tx, context)
+}
+
+fn sync_after_optional(
+    network: &Network,
+    rt: &tokio::runtime::Runtime,
+    clients: &mut ClientPool,
+    last_non_empty_height: &mut u64,
+    context: &str,
+) -> Result<Option<()>> {
+    match status_or_skip(
+        sync_after_submission(network, rt, clients.next(), *last_non_empty_height, context),
         context,
-    )
+    )? {
+        Some(status) => {
+            *last_non_empty_height = status.blocks_non_empty;
+            Ok(Some(()))
+        }
+        None => Ok(None),
+    }
 }
 
 fn is_tx_confirmation_timeout(err: &Report) -> bool {
@@ -337,6 +352,21 @@ fn is_tx_confirmation_timeout(err: &Report) -> bool {
         "transaction queued for too long",
         "Connection dropped without `Committed/Applied` or `Rejected` event",
         "fallback status check failed",
+    ];
+    err.chain().any(|cause| {
+        let text = cause.to_string();
+        NEEDLES.iter().any(|needle| text.contains(needle))
+    })
+}
+
+fn is_duplicate_tx_error(err: &Report) -> bool {
+    const NEEDLES: [&str; 6] = [
+        "PRTRY:ALREADY_COMMITTED",
+        "PRTRY:ALREADY_ENQUEUED",
+        "already_committed",
+        "already_enqueued",
+        "transaction already committed",
+        "transaction already present in the queue",
     ];
     err.chain().any(|cause| {
         let text = cause.to_string();
@@ -425,170 +455,17 @@ fn start_test_network_with_builder(
 #[test]
 // This test is also covered at the UI level in the iroha_cli tests
 // in test_mint_assets.py
-fn client_add_asset_quantity_to_existing_asset_should_increase_asset_amount() -> Result<()> {
-    // Given
-    let account_id = ALICE_ID.clone();
-    let asset_definition_id = "xor#wonderland".parse::<AssetDefinitionId>()?;
-    let create_asset =
-        Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()));
-
-    let builder = quiet_network_builder();
-
-    let Some((network, rt)) = start_test_network_with_builder(builder) else {
-        return Ok(());
-    };
-    let mut clients = ClientPool::new(&network);
-    let mut last_non_empty_height = match status_or_skip(
-        get_status_with_retry_or_storage(&network, clients.next(), "initial status"),
-        "initial status",
-    )? {
-        Some(status) => status.blocks_non_empty,
-        None => return Ok(()),
-    };
-
-    if submit_or_tolerate_timeout(&mut clients, create_asset, "register asset definition")?
-        .is_none()
-    {
-        return Ok(());
-    }
-    last_non_empty_height = match status_or_skip(
-        sync_after_submission(
-            &network,
-            &rt,
-            clients.next(),
-            last_non_empty_height,
-            "register asset definition",
-        ),
-        "register asset definition",
-    )? {
-        Some(status) => status.blocks_non_empty,
-        None => return Ok(()),
-    };
-    wait_for_asset_definition_owner(
-        &mut clients,
-        &asset_definition_id,
-        &account_id,
-        "asset definition not found after registration",
-        "unexpected asset definition owner after registration",
-        "asset definition registration",
-    )?;
-
-    let metadata = iroha::data_model::metadata::Metadata::default();
-    //When
-    let quantity = numeric!(200);
-    let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
-    let mint = Mint::asset_numeric(quantity.clone(), asset_id.clone());
-    let instructions: [InstructionBox; 1] = [mint.into()];
-    let tx = clients.current().build_transaction(instructions, metadata);
-    if submit_tx_or_skip(&mut clients, &tx, "mint asset")?.is_none() {
-        return Ok(());
-    }
-    if status_or_skip(
-        sync_after_submission(
-            &network,
-            &rt,
-            clients.next(),
-            last_non_empty_height,
-            "mint asset",
-        ),
-        "mint asset",
-    )?
-    .is_none()
-    {
-        return Ok(());
-    }
-
-    wait_for_asset_value(&mut clients, &asset_id, &quantity, "mint asset")?;
-    Ok(())
-}
-
-#[test]
-fn client_add_big_asset_quantity_to_existing_asset_should_increase_asset_amount() -> Result<()> {
-    // Given
-    let account_id = ALICE_ID.clone();
-    let asset_definition_id = "xor#wonderland".parse::<AssetDefinitionId>()?;
-    let create_asset =
-        Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()));
-
-    let builder = quiet_network_builder();
-
-    let Some((network, rt)) = start_test_network_with_builder(builder) else {
-        return Ok(());
-    };
-    let mut clients = ClientPool::new(&network);
-    let mut last_non_empty_height = match status_or_skip(
-        get_status_with_retry_or_storage(&network, clients.next(), "initial status"),
-        "initial status",
-    )? {
-        Some(status) => status.blocks_non_empty,
-        None => return Ok(()),
-    };
-
-    if submit_or_tolerate_timeout(&mut clients, create_asset, "register asset definition")?
-        .is_none()
-    {
-        return Ok(());
-    }
-    last_non_empty_height = match status_or_skip(
-        sync_after_submission(
-            &network,
-            &rt,
-            clients.next(),
-            last_non_empty_height,
-            "register asset definition",
-        ),
-        "register asset definition",
-    )? {
-        Some(status) => status.blocks_non_empty,
-        None => return Ok(()),
-    };
-    wait_for_asset_definition_owner(
-        &mut clients,
-        &asset_definition_id,
-        &account_id,
-        "asset definition not found after registration",
-        "unexpected asset definition owner after registration",
-        "asset definition registration",
-    )?;
-
-    let metadata = iroha::data_model::metadata::Metadata::default();
-    // When
-    let quantity = Numeric::new(2_u128.pow(65), 0);
-    let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
-    let mint = Mint::asset_numeric(quantity.clone(), asset_id.clone());
-    let instructions: [InstructionBox; 1] = [mint.into()];
-    let tx = clients.current().build_transaction(instructions, metadata);
-    if submit_tx_or_skip(&mut clients, &tx, "mint large asset")?.is_none() {
-        return Ok(());
-    }
-    if status_or_skip(
-        sync_after_submission(
-            &network,
-            &rt,
-            clients.next(),
-            last_non_empty_height,
-            "mint large asset",
-        ),
-        "mint large asset",
-    )?
-    .is_none()
-    {
-        return Ok(());
-    }
-
-    wait_for_asset_value(&mut clients, &asset_id, &quantity, "mint large asset")?;
-    Ok(())
-}
-
-#[test]
 #[allow(clippy::too_many_lines)]
-fn client_add_asset_with_decimal_should_increase_asset_amount() -> Result<()> {
+fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
     // Given
     let account_id = ALICE_ID.clone();
     let asset_definition_id = "xor#wonderland".parse::<AssetDefinitionId>()?;
-    let asset_definition =
-        AssetDefinition::new(asset_definition_id.clone(), NumericSpec::fractional(3));
-    let create_asset = Register::asset_definition(asset_definition);
+    let big_asset_definition_id = "xorbig#wonderland".parse::<AssetDefinitionId>()?;
+    let decimal_definition_id = "xorfrac#wonderland".parse::<AssetDefinitionId>()?;
+    let asset_definition = AssetDefinition::numeric(asset_definition_id.clone());
+    let big_asset_definition = AssetDefinition::numeric(big_asset_definition_id.clone());
+    let decimal_definition =
+        AssetDefinition::new(decimal_definition_id.clone(), NumericSpec::fractional(3));
 
     let builder = quiet_network_builder();
 
@@ -606,10 +483,18 @@ fn client_add_asset_with_decimal_should_increase_asset_amount() -> Result<()> {
         None => return Ok(()),
     };
 
-    if submit_or_skip(&mut clients, create_asset, "register asset definition")
+    let register_instructions: [InstructionBox; 3] = [
+        Register::asset_definition(asset_definition).into(),
+        Register::asset_definition(big_asset_definition).into(),
+        Register::asset_definition(decimal_definition).into(),
+    ];
+    let register_tx = clients
+        .current()
+        .build_transaction(register_instructions, Metadata::default());
+    if submit_tx_or_skip(&mut clients, &register_tx, "register asset definitions")
         .map_err(|err| {
             err.wrap_err(format!(
-                "register asset definition; torii={torii}, env_dir={}",
+                "register asset definitions; torii={torii}, env_dir={}",
                 env_dir.display()
             ))
         })?
@@ -617,42 +502,99 @@ fn client_add_asset_with_decimal_should_increase_asset_amount() -> Result<()> {
     {
         return Ok(());
     }
-    last_non_empty_height = match status_or_skip(
-        sync_after_submission(
-            &network,
-            &rt,
-            clients.next(),
-            last_non_empty_height,
-            "register asset definition",
-        ),
-        "register asset definition",
-    )? {
-        Some(status) => status.blocks_non_empty,
-        None => return Ok(()),
-    };
-    wait_for_asset_definition_owner(
+    if sync_after_optional(
+        &network,
+        &rt,
         &mut clients,
+        &mut last_non_empty_height,
+        "register asset definitions",
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
+    for asset_definition_id in [
         &asset_definition_id,
-        &account_id,
-        "asset definition not found after registration",
-        "unexpected asset definition owner after registration",
-        "asset definition registration",
-    )
-    .map_err(|err| {
-        err.wrap_err(format!(
-            "asset definition registration wait; torii={torii}, env_dir={}",
-            env_dir.display()
-        ))
-    })?;
+        &big_asset_definition_id,
+        &decimal_definition_id,
+    ] {
+        wait_for_asset_definition_owner(
+            &mut clients,
+            asset_definition_id,
+            &account_id,
+            "asset definition not found after registration",
+            "unexpected asset definition owner after registration",
+            "asset definition registration",
+        )
+        .map_err(|err| {
+            err.wrap_err(format!(
+                "asset definition registration wait; torii={torii}, env_dir={}",
+                env_dir.display()
+            ))
+        })?;
+    }
 
-    let metadata = iroha::data_model::metadata::Metadata::default();
-
-    //When
-    let quantity = numeric!(123.456);
+    // When: mint integer asset quantity
+    let quantity = numeric!(200);
     let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
     let mint = Mint::asset_numeric(quantity.clone(), asset_id.clone());
     let instructions: [InstructionBox; 1] = [mint.into()];
-    let tx = clients.current().build_transaction(instructions, metadata);
+    let tx = clients
+        .current()
+        .build_transaction(instructions, Metadata::default());
+    if submit_tx_or_skip(&mut clients, &tx, "mint asset")?.is_none() {
+        return Ok(());
+    }
+    if sync_after_optional(
+        &network,
+        &rt,
+        &mut clients,
+        &mut last_non_empty_height,
+        "mint asset",
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
+    wait_for_asset_value(&mut clients, &asset_id, &quantity, "mint asset")?;
+
+    // And: mint large integer asset quantity
+    let big_quantity = Numeric::new(2_u128.pow(65), 0);
+    let big_asset_id = AssetId::new(big_asset_definition_id.clone(), account_id.clone());
+    let mint = Mint::asset_numeric(big_quantity.clone(), big_asset_id.clone());
+    let instructions: [InstructionBox; 1] = [mint.into()];
+    let tx = clients
+        .current()
+        .build_transaction(instructions, Metadata::default());
+    if submit_tx_or_skip(&mut clients, &tx, "mint large asset")?.is_none() {
+        return Ok(());
+    }
+    if sync_after_optional(
+        &network,
+        &rt,
+        &mut clients,
+        &mut last_non_empty_height,
+        "mint large asset",
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
+    wait_for_asset_value(
+        &mut clients,
+        &big_asset_id,
+        &big_quantity,
+        "mint large asset",
+    )?;
+
+    // And: mint decimal asset quantity
+    let decimal_quantity = numeric!(123.456);
+    let decimal_asset_id = AssetId::new(decimal_definition_id.clone(), account_id.clone());
+    let mint = Mint::asset_numeric(decimal_quantity.clone(), decimal_asset_id.clone());
+    let instructions: [InstructionBox; 1] = [mint.into()];
+    let tx = clients
+        .current()
+        .build_transaction(instructions, Metadata::default());
     if submit_tx_or_skip(&mut clients, &tx, "mint decimal asset")
         .map_err(|err| {
             err.wrap_err(format!(
@@ -664,27 +606,29 @@ fn client_add_asset_with_decimal_should_increase_asset_amount() -> Result<()> {
     {
         return Ok(());
     }
-    last_non_empty_height = match status_or_skip(
-        sync_after_submission(
-            &network,
-            &rt,
-            clients.next(),
-            last_non_empty_height,
-            "mint decimal asset",
-        ),
+    if sync_after_optional(
+        &network,
+        &rt,
+        &mut clients,
+        &mut last_non_empty_height,
         "mint decimal asset",
-    )? {
-        Some(status) => status.blocks_non_empty,
-        None => return Ok(()),
-    };
-
-    wait_for_asset_value(&mut clients, &asset_id, &quantity, "mint decimal asset")?;
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
+    wait_for_asset_value(
+        &mut clients,
+        &decimal_asset_id,
+        &decimal_quantity,
+        "mint decimal asset",
+    )?;
 
     // Add some fractional part
     let quantity2 = numeric!(0.55);
-    let mint = Mint::asset_numeric(quantity2.clone(), asset_id.clone());
+    let mint = Mint::asset_numeric(quantity2.clone(), decimal_asset_id.clone());
     // and check that it is added without errors
-    let sum = quantity
+    let sum = decimal_quantity
         .checked_add(quantity2)
         .ok_or_else(|| eyre::eyre!("overflow"))?;
     if submit_or_skip(&mut clients, mint, "mint fractional asset")
@@ -698,22 +642,23 @@ fn client_add_asset_with_decimal_should_increase_asset_amount() -> Result<()> {
     {
         return Ok(());
     }
-    if status_or_skip(
-        sync_after_submission(
-            &network,
-            &rt,
-            clients.next(),
-            last_non_empty_height,
-            "mint fractional asset",
-        ),
+    if sync_after_optional(
+        &network,
+        &rt,
+        &mut clients,
+        &mut last_non_empty_height,
         "mint fractional asset",
     )?
     .is_none()
     {
         return Ok(());
     }
-
-    wait_for_asset_value(&mut clients, &asset_id, &sum, "mint fractional asset")?;
+    wait_for_asset_value(
+        &mut clients,
+        &decimal_asset_id,
+        &sum,
+        "mint fractional asset",
+    )?;
 
     Ok(())
 }
@@ -1314,10 +1259,38 @@ mod helper_tests {
     }
 
     #[test]
+    fn tx_confirmation_timeout_includes_queue_stall() {
+        let err = eyre!("transaction queued for too long");
+        assert!(is_tx_confirmation_timeout(&err));
+    }
+
+    #[test]
+    fn duplicate_tx_error_detects_queue_conflicts() {
+        let committed = eyre!(
+            "Unexpected transaction response; status: 409 Conflict; reject code: PRTRY:ALREADY_COMMITTED; response body: transaction already committed to the blockchain"
+        );
+        assert!(is_duplicate_tx_error(&committed));
+        let enqueued = eyre!(
+            "Unexpected transaction response; status: 409 Conflict; reject code: PRTRY:ALREADY_ENQUEUED; response body: transaction already present in the queue"
+        );
+        assert!(is_duplicate_tx_error(&enqueued));
+        let other = eyre!(
+            "Unexpected transaction response; status: 400 Bad Request; response body: invalid transaction"
+        );
+        assert!(!is_duplicate_tx_error(&other));
+    }
+
+    #[test]
     fn transient_client_error_detects_request_failures() {
         let err = eyre!("Failed to send http POST request to http://127.0.0.1:1/query");
         assert!(is_transient_client_error(&err));
         let non_transient = eyre!("Transaction rejected");
         assert!(!is_transient_client_error(&non_transient));
+    }
+
+    #[test]
+    fn quiet_network_builder_uses_fast_pipeline_time() {
+        let network = quiet_network_builder().build();
+        assert_eq!(network.pipeline_time(), FAST_PIPELINE_TIME);
     }
 }

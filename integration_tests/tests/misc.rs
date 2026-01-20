@@ -48,25 +48,12 @@ async fn check(client: &client::Client, min_blocks_non_empty: u64) -> Result<()>
 }
 
 #[tokio::test]
-async fn ensure_blocks_observes_genesis_progress() -> Result<()> {
-    let Some(network) = start_network_async_or_skip(
-        NetworkBuilder::new(),
-        stringify!(ensure_blocks_observes_genesis_progress),
-    )
-    .await?
-    else {
-        return Ok(());
-    };
+async fn misc_status_endpoints_smoke() -> Result<()> {
+    use norito::codec::DecodeAll;
 
-    network.ensure_blocks(1).await?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn json_and_norito_statuses_equality() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
-        NetworkBuilder::new(),
-        stringify!(json_and_norito_statuses_equality),
+        NetworkBuilder::new().with_pipeline_time(std::time::Duration::from_secs(2)),
+        stringify!(misc_status_endpoints_smoke),
     )
     .await?
     else {
@@ -74,8 +61,11 @@ async fn json_and_norito_statuses_equality() -> Result<()> {
     };
     let client = network.client();
 
-    check(&client, 1).await?;
+    // ensure_blocks_observes_genesis_progress
+    network.ensure_blocks(1).await?;
 
+    // json_and_norito_statuses_equality
+    check(&client, 1).await?;
     {
         let client = client.clone();
         spawn_blocking(move || {
@@ -85,48 +75,23 @@ async fn json_and_norito_statuses_equality() -> Result<()> {
     .await??;
     if sandbox::handle_result(
         network.ensure_blocks(2).await,
-        stringify!(json_and_norito_statuses_equality),
+        stringify!(misc_status_endpoints_smoke),
     )?
     .is_none()
     {
         return Ok(());
     }
-
     check(&client, 2).await?;
 
-    Ok(())
-}
-
-#[tokio::test]
-async fn get_server_version() -> eyre::Result<()> {
-    let Some(network) =
-        start_network_async_or_skip(NetworkBuilder::new(), stringify!(get_server_version)).await?
-    else {
-        return Ok(());
-    };
-    let client = network.client();
+    // get_server_version
     let response =
         tokio::task::spawn_blocking(move || client.get_server_version().unwrap()).await?;
     let version: u64 = response
         .parse()
         .expect("server API version should be a positive integer");
     assert!(version >= 1);
-    Ok(())
-}
 
-#[tokio::test]
-async fn status_with_norito_accept_header() -> eyre::Result<()> {
-    use norito::codec::DecodeAll;
-
-    let Some(network) = start_network_async_or_skip(
-        NetworkBuilder::new(),
-        stringify!(status_with_norito_accept_header),
-    )
-    .await?
-    else {
-        return Ok(());
-    };
-
+    // status_with_norito_accept_header
     let http = reqwest::Client::new();
     let url = network.client().torii_url.join("/status").unwrap();
     let resp = http
@@ -137,5 +102,6 @@ async fn status_with_norito_accept_header() -> eyre::Result<()> {
     assert!(resp.status().is_success());
     let bytes = resp.bytes().await?;
     let _: Status = DecodeAll::decode_all(&mut bytes.as_ref())?;
+
     Ok(())
 }

@@ -23,45 +23,13 @@ use tokio::{
     time::{sleep, timeout},
 };
 
-#[tokio::test]
-async fn transaction_with_ok_instruction_should_be_committed() -> Result<()> {
-    let register = Register::domain(Domain::new("looking_glass".parse()?));
-    Box::pin(test_with_instruction_and_status(
-        stringify!(transaction_with_ok_instruction_should_be_committed),
-        [register],
-        &TransactionStatus::Approved,
-    ))
-    .await
-}
-
-#[tokio::test]
-async fn transaction_with_fail_instruction_should_be_rejected() -> Result<()> {
-    let unknown_domain_id = "dummy".parse::<DomainId>()?;
-    let fail_isi = Unregister::domain(unknown_domain_id.clone());
-
-    Box::pin(test_with_instruction_and_status(
-        stringify!(transaction_with_fail_instruction_should_be_rejected),
-        [fail_isi],
-        &TransactionStatus::Rejected(Box::new(TransactionRejectionReason::Validation(
-            ValidationFail::InstructionFailed(InstructionExecutionError::Find(FindError::Domain(
-                unknown_domain_id,
-            ))),
-        ))),
-    ))
-    .await
-}
-
 async fn test_with_instruction_and_status(
     context: &'static str,
+    network: &Network,
     exec: impl Into<Executable> + Send,
     should_be: &TransactionStatus,
 ) -> Result<()> {
     // Given
-    let Some(network) =
-        sandbox::start_network_async_or_skip(NetworkBuilder::new(), context).await?
-    else {
-        return Ok(());
-    };
     let client = network.client();
 
     // When
@@ -110,18 +78,8 @@ async fn test_with_instruction_and_status(
     Ok(())
 }
 
-#[tokio::test]
 #[allow(clippy::too_many_lines)]
-async fn applied_block_must_be_available_in_kura() -> Result<()> {
-    // Given a running validator network
-    let Some(network) = sandbox::start_network_async_or_skip(
-        NetworkBuilder::new().with_min_peers(4),
-        stringify!(applied_block_must_be_available_in_kura),
-    )
-    .await?
-    else {
-        return Ok(());
-    };
+async fn applied_block_must_be_available_in_kura_scenario(network: &Network) -> Result<()> {
     let client = network.client();
 
     // When: submit a simple transaction to ensure a new non-genesis block is committed
@@ -264,6 +222,46 @@ async fn applied_block_must_be_available_in_kura() -> Result<()> {
     let mut block_buf = vec![0u8; usize::try_from(length).expect("block length fits in usize")];
     data_file.read_exact(&mut block_buf)?;
     assert!(!block_buf.is_empty(), "last block data must be non-empty");
+
+    Ok(())
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn pipeline_event_scenarios() -> Result<()> {
+    let Some(network) = sandbox::start_network_async_or_skip(
+        NetworkBuilder::new().with_min_peers(4),
+        stringify!(pipeline_event_scenarios),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+
+    let register = Register::domain(Domain::new("looking_glass".parse()?));
+    test_with_instruction_and_status(
+        stringify!(transaction_with_ok_instruction_should_be_committed),
+        &network,
+        [register],
+        &TransactionStatus::Approved,
+    )
+    .await?;
+
+    let unknown_domain_id = "dummy".parse::<DomainId>()?;
+    let fail_isi = Unregister::domain(unknown_domain_id.clone());
+    test_with_instruction_and_status(
+        stringify!(transaction_with_fail_instruction_should_be_rejected),
+        &network,
+        [fail_isi],
+        &TransactionStatus::Rejected(Box::new(TransactionRejectionReason::Validation(
+            ValidationFail::InstructionFailed(InstructionExecutionError::Find(FindError::Domain(
+                unknown_domain_id,
+            ))),
+        ))),
+    )
+    .await?;
+
+    applied_block_must_be_available_in_kura_scenario(&network).await?;
 
     Ok(())
 }
