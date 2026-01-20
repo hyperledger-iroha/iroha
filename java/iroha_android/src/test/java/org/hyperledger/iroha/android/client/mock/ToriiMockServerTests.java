@@ -4,6 +4,7 @@ import java.net.HttpURLConnection;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -41,15 +42,19 @@ public final class ToriiMockServerTests {
     }
     try (ToriiMockServer server = maybeServer.get()) {
       final URI submitUri = server.baseUri().resolve("/v1/pipeline/transactions");
-      server.enqueueSubmitResponse(ToriiMockServer.MockResponse.json(202, "{\"accepted\":true}"));
+      server.enqueueSubmitResponse(
+          ToriiMockServer.MockResponse.bytes(
+              202,
+              new byte[] {0x01},
+              Map.of("Content-Type", "application/x-norito")));
 
       final HttpResponseData response =
           sendRequest(
               submitUri,
               "POST",
-              "{\"payload\":\"deadbeef\"}",
+              new byte[] {0x01, 0x02, 0x03},
               Map.of(
-                  "Content-Type", "application/json",
+                  "Content-Type", "application/x-norito",
                   "X-Test", "harness"));
       assert response.statusCode() == 202 : "Mock server must honour queued response";
 
@@ -58,7 +63,8 @@ public final class ToriiMockServerTests {
       final var submission = submissions.get(0);
       assert "/v1/pipeline/transactions".equals(submission.path())
           : "Submission path should match Torii endpoint";
-      assert submission.bodyUtf8().contains("deadbeef") : "Submission body should be captured";
+      assert Arrays.equals(submission.body(), new byte[] {0x01, 0x02, 0x03})
+          : "Submission body should be captured";
     }
   }
 
@@ -146,7 +152,7 @@ public final class ToriiMockServerTests {
   private static HttpResponseData sendRequest(
       final URI uri,
       final String method,
-      final String body,
+      final byte[] body,
       final Map<String, String> headers)
       throws Exception {
     final HttpURLConnection connection = (HttpURLConnection) uri.toURL().openConnection();
@@ -158,7 +164,7 @@ public final class ToriiMockServerTests {
     if (body != null) {
       connection.setDoOutput(true);
       try (var output = connection.getOutputStream()) {
-        output.write(body.getBytes(StandardCharsets.UTF_8));
+        output.write(body);
       }
     }
     final int status = connection.getResponseCode();

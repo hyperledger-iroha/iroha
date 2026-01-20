@@ -13623,7 +13623,6 @@ pub struct SorafsRepair {
     #[config(default = "defaults::sorafs::repair::ENABLED")]
     pub enabled: bool,
     /// Optional directory for durable repair state.
-    #[config(default = "defaults::sorafs::repair::state_dir")]
     pub state_dir: Option<PathBuf>,
     /// Claim TTL for repair tickets (seconds).
     #[config(default = "defaults::sorafs::repair::CLAIM_TTL_SECS")]
@@ -13687,7 +13686,6 @@ pub struct SorafsGc {
     #[config(default = "defaults::sorafs::gc::ENABLED")]
     pub enabled: bool,
     /// Optional directory for durable GC state.
-    #[config(default = "defaults::sorafs::gc::state_dir")]
     pub state_dir: Option<PathBuf>,
     /// GC cadence (seconds).
     #[config(default = "defaults::sorafs::gc::INTERVAL_SECS")]

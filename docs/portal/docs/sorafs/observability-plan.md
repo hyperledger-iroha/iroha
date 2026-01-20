@@ -80,6 +80,21 @@ whenever PoR/PoTR enforcement escalates.
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Gauge | `provider` | Provider capacity/uptime success data surfaced in the capacity dashboard. |
 | `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Gauge | `provider`, `manifest` | Backlog depth plus the cumulative failure counters exported whenever `/v1/sorafs/por/ingestion/{manifest}` is polled, feeding the “PoR Stalls” panel/alert. |
 
+### Retention & GC
+
+| Metric | Type | Labels | Notes |
+|--------|------|--------|-------|
+| `sorafs_gc_runs_total` | Counter | `result` | OTEL counter for GC sweeps, emitted by the embedded node. |
+| `sorafs_gc_evictions_total` | Counter | `reason` | OTEL counter for evicted manifests grouped by reason. |
+| `sorafs_gc_bytes_freed_total` | Counter | `reason` | OTEL counter for bytes freed grouped by reason. |
+| `sorafs_gc_blocked_total` | Counter | `reason` | OTEL counter for evictions blocked by active repairs or policy. |
+| `torii_sorafs_gc_runs_total` | Counter | `result` | Prometheus counter for GC sweeps (success/error). |
+| `torii_sorafs_gc_evictions_total` | Counter | `reason` | Prometheus counter for evicted manifests grouped by reason. |
+| `torii_sorafs_gc_bytes_freed_total` | Counter | `reason` | Prometheus counter for bytes freed grouped by reason. |
+| `torii_sorafs_gc_blocked_total` | Counter | `reason` | Prometheus counter for blocked evictions grouped by reason. |
+| `torii_sorafs_gc_expired_manifests` | Gauge | — | Current count of expired manifests observed by GC sweeps. |
+| `torii_sorafs_gc_oldest_expired_age_seconds` | Gauge | — | Age in seconds of the oldest expired manifest (after retention grace). |
+
 ### Proof of Timely Retrieval (PoTR) & chunk SLA
 
 | Metric | Type | Labels | Producer | Notes |
@@ -101,11 +116,13 @@ whenever PoR/PoTR enforcement escalates.
 1. **Gateway Observability** (`dashboards/grafana/sorafs_gateway_observability.json`) — tracks trustless availability, TTFB P95, refusal breakdown, and PoR/PoTR failures via the OTEL metrics.
 2. **Orchestrator Health** (`dashboards/grafana/sorafs_fetch_observability.json`) — covers multi-source load, retries, provider failures, and stall bursts.
 3. **SoraNet Privacy Metrics** (`dashboards/grafana/soranet_privacy_metrics.json`) — charts anonymised relay buckets, suppression windows, and collector health via `soranet_privacy_last_poll_unixtime`, `soranet_privacy_collector_enabled`, and `soranet_privacy_poll_errors_total{provider}`.
+4. **Capacity Health** (`dashboards/grafana/sorafs_capacity_health.json`) — tracks provider headroom plus GC sweeps, evictions, bytes freed, blocked reasons, and expired-manifest age.
 
 Alert bundles:
 
 - `dashboards/alerts/sorafs_gateway_rules.yml` — gateway availability, TTFB, proof failure spikes.
 - `dashboards/alerts/sorafs_fetch_rules.yml` — orchestrator failures/retries/stalls; validated via `scripts/telemetry/test_sorafs_fetch_alerts.sh`, `dashboards/alerts/tests/sorafs_fetch_rules.test.yml`, `dashboards/alerts/tests/soranet_privacy_rules.test.yml`, and `dashboards/alerts/tests/soranet_policy_rules.test.yml`.
+- `dashboards/alerts/sorafs_capacity_rules.yml` — capacity pressure plus GC stall/blocked/error alerts for retention sweeps.
 - `dashboards/alerts/soranet_privacy_rules.yml` — privacy downgrade spikes, suppression alarms, collector-idle detection, and disabled-collector alerts (`soranet_privacy_last_poll_unixtime`, `soranet_privacy_collector_enabled`).
 - `dashboards/alerts/soranet_policy_rules.yml` — anonymity brownout alarms wired to `sorafs_orchestrator_brownouts_total`.
 - `dashboards/alerts/taikai_viewer_rules.yml` — Taikai viewer drift/ingest/CEK lag alarms plus the new SoraFS proof-health penalty/cooldown alerts powered by `torii_sorafs_proof_health_*`.

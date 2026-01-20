@@ -9,7 +9,7 @@ title: امتثال عنوان الحساب
 description: ملخص سير عمل fixture ADDR-2 وكيف تبقى فرق SDK متزامنة.
 ---
 
-الحزمة القياسية ADDR-2 (`fixtures/account/address_vectors.json`) تلتقط fixtures IH58 و compressed (half/full width) و multisignature و negative. تعتمد كل واجهة SDK + Torii على نفس JSON حتى نرصد اي انحراف في codec قبل وصوله الى الانتاج. تعكس هذه الصفحة المذكرة الداخلية للحالة (`docs/source/account_address_status.md` في جذر المستودع) حتى يتمكن قراء البوابة من الرجوع الى سير العمل دون التنقيب في الـ mono-repo.
+الحزمة القياسية ADDR-2 (`fixtures/account/address_vectors.json`) تلتقط fixtures IH58 و compressed (`snx1`, second-best; half/full width) و multisignature و negative. تعتمد كل واجهة SDK + Torii على نفس JSON حتى نرصد اي انحراف في codec قبل وصوله الى الانتاج. تعكس هذه الصفحة المذكرة الداخلية للحالة (`docs/source/account_address_status.md` في جذر المستودع) حتى يتمكن قراء البوابة من الرجوع الى سير العمل دون التنقيب في الـ mono-repo.
 
 ## اعادة توليد او التحقق من الحزمة
 

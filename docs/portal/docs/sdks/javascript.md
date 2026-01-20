@@ -223,7 +223,7 @@ Explorer telemetry provides typed helpers for the `/v1/explorer/metrics` and
 `/v1/explorer/accounts/{account_id}/qr` endpoints so dashboards can replay the
 same snapshots that power the portal. `getExplorerMetrics()` normalises the
 payload and returns `null` when the route is disabled. Pair it with
-`getExplorerAccountQr()` whenever you need IH58/compressed literals plus inline
+`getExplorerAccountQr()` whenever you need IH58 (preferred)/snx1 (second-best) literals plus inline
 SVG for share buttons.
 
 ```ts
@@ -249,9 +249,10 @@ console.log(
 ```
 
 Passing `addressFormat: "compressed"` mirrors Explorer’s default compressed
-selectors; omit the override for IH58 output or request `ih58_qr` when you need
-the QR-safe variant. The helper always returns the canonical identifier, the
-selected literal, and metadata (network prefix, QR version/modules, error
+selectors; omit the override for the preferred IH58 output or request `ih58_qr`
+when you need the QR-safe variant. The compressed literal is the second-best
+Sora-only option for UX. The helper always returns the canonical identifier,
+the selected literal, and metadata (network prefix, QR version/modules, error
 correction tier, and inline SVG), so CI/CD can publish the same payloads that
 the Explorer surfaces without calling bespoke converters.
 

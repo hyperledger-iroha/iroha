@@ -11988,6 +11988,10 @@ pub struct Torii {
     #[cfg(feature = "app_api")]
     por_runtime: Option<Arc<sorafs::PorCoordinatorRuntime>>,
     #[cfg(feature = "app_api")]
+    repair_runtime: Option<Arc<sorafs::RepairWorkerRuntime>>,
+    #[cfg(feature = "app_api")]
+    gc_runtime: Option<Arc<sorafs::GcSweeperRuntime>>,
+    #[cfg(feature = "app_api")]
     sorafs_alias_cache: sorafs::AliasCachePolicy,
     #[cfg(feature = "app_api")]
     sorafs_alias_enforcement: sorafs::AliasCacheEnforcement,
@@ -13812,6 +13816,10 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let (por_coordinator, por_runtime) = build_por_components(&config, &sorafs_node);
         #[cfg(feature = "app_api")]
+        let repair_runtime = build_repair_runtime(&sorafs_node);
+        #[cfg(feature = "app_api")]
+        let gc_runtime = build_gc_runtime(&sorafs_node);
+        #[cfg(feature = "app_api")]
         let uaid_onboarding = config
             .onboarding
             .as_ref()
@@ -13909,6 +13917,10 @@ impl Torii {
             por_coordinator,
             #[cfg(feature = "app_api")]
             por_runtime,
+            #[cfg(feature = "app_api")]
+            repair_runtime,
+            #[cfg(feature = "app_api")]
+            gc_runtime,
             #[cfg(feature = "app_api")]
             sorafs_alias_cache,
             #[cfg(feature = "app_api")]
@@ -14435,6 +14447,16 @@ impl Torii {
 
         #[cfg(feature = "app_api")]
         if let Some(runtime) = &self.por_runtime {
+            runtime.clone().spawn(shutdown_signal.clone());
+        }
+
+        #[cfg(feature = "app_api")]
+        if let Some(runtime) = &self.repair_runtime {
+            runtime.clone().spawn(shutdown_signal.clone());
+        }
+
+        #[cfg(feature = "app_api")]
+        if let Some(runtime) = &self.gc_runtime {
             runtime.clone().spawn(shutdown_signal.clone());
         }
 
@@ -15267,6 +15289,60 @@ fn build_por_components(
     );
 
     (coordinator, Some(runtime))
+}
+
+#[cfg(feature = "app_api")]
+fn build_repair_runtime(
+    sorafs_node: &sorafs_node::NodeHandle,
+) -> Option<Arc<sorafs::RepairWorkerRuntime>> {
+    let config = sorafs_node.repair_config();
+    if !config.enabled() {
+        return None;
+    }
+    if !sorafs_node.is_enabled() {
+        iroha_logger::warn!(
+            "repair runtime disabled: SoraFS storage is not enabled for this node"
+        );
+        return None;
+    }
+
+    let runtime = Arc::new(sorafs::RepairWorkerRuntime::new(
+        sorafs_node.clone(),
+        config,
+    ));
+
+    iroha_logger::info!(
+        heartbeat_interval_secs = config.heartbeat_interval_secs(),
+        workers = config.worker_concurrency(),
+        "SoraFS repair runtime initialised"
+    );
+
+    Some(runtime)
+}
+
+#[cfg(feature = "app_api")]
+fn build_gc_runtime(
+    sorafs_node: &sorafs_node::NodeHandle,
+) -> Option<Arc<sorafs::GcSweeperRuntime>> {
+    let config = sorafs_node.gc_config();
+    if !config.enabled() {
+        return None;
+    }
+    if !sorafs_node.is_enabled() {
+        iroha_logger::warn!("GC runtime disabled: SoraFS storage is not enabled for this node");
+        return None;
+    }
+
+    let runtime = Arc::new(sorafs::GcSweeperRuntime::new(sorafs_node.clone(), config));
+
+    iroha_logger::info!(
+        interval_secs = config.interval_secs(),
+        max_deletions = config.max_deletions_per_run(),
+        retention_grace_secs = config.retention_grace_secs(),
+        "SoraFS GC runtime initialised"
+    );
+
+    Some(runtime)
 }
 
 #[cfg(feature = "app_api")]

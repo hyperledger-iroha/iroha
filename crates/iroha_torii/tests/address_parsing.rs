@@ -1,4 +1,4 @@
-//! Ensure Torii account endpoints accept IH58/compressed path segments.
+//! Ensure Torii account endpoints accept IH58 (preferred)/snx1 (second-best) path segments.
 #![cfg(all(feature = "app_api", feature = "telemetry"))]
 
 use std::sync::Arc;

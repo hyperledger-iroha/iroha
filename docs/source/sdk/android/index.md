@@ -99,8 +99,8 @@ transport exposes typed helpers in `org.hyperledger.iroha.android.nexus`:
 - `HttpClientTransport.getUaidBindings(String uaid)` hits
   `/v1/space-directory/uaids/{uaid}` when only the account bindings are needed.
   Supply a `UaidBindingsQuery` when you need to override the
-  `address_format` (for example, `AddressFormatOption.COMPRESSED` to receive
-  `snx1…@domain` literals).
+  `address_format` (IH58 is preferred; use `AddressFormatOption.COMPRESSED`
+  only for the second-best `snx1…@domain` literals).
 - `HttpClientTransport.getUaidManifests(String uaid, UaidManifestQuery query)`
   fetches `/v1/space-directory/uaids/{uaid}/manifests`; the query builder lets
   you filter by dataspace, status (`active`, `inactive`, `all`), paging offsets,

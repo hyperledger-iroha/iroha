@@ -164,7 +164,11 @@ fn assert_event_statuses(events: &[RepairTaskEventV1], expected: &[RepairTaskSta
     assert_eq!(statuses, expected);
 }
 
-async fn post_json(app: &Router, uri: &str, body: Vec<u8>) -> Vec<u8> {
+async fn post_json_with_status(
+    app: &Router,
+    uri: &str,
+    body: Vec<u8>,
+) -> (StatusCode, Vec<u8>) {
     let resp = app
         .clone()
         .oneshot(
@@ -177,13 +181,20 @@ async fn post_json(app: &Router, uri: &str, body: Vec<u8>) -> Vec<u8> {
         )
         .await
         .expect("post request");
-    assert_eq!(resp.status(), StatusCode::OK);
-    resp.into_body()
+    let status = resp.status();
+    let body = resp.into_body()
         .collect()
         .await
         .expect("collect response body")
         .to_bytes()
-        .to_vec()
+        .to_vec();
+    (status, body)
+}
+
+async fn post_json(app: &Router, uri: &str, body: Vec<u8>) -> Vec<u8> {
+    let (status, body) = post_json_with_status(app, uri, body).await;
+    assert_eq!(status, StatusCode::OK);
+    body
 }
 
 async fn get_json(app: &Router, uri: &str) -> Vec<u8> {
@@ -465,4 +476,79 @@ async fn sorafs_repair_worker_endpoints_drive_state() {
             RepairTaskStatusV1::Failed,
         ],
     );
+}
+
+#[tokio::test]
+async fn sorafs_repair_worker_rejects_invalid_signature() {
+    let provider_id = [0x42; 32];
+    let report = repair_report("REP-200", [0x21; 32], provider_id, 1_701_100_000);
+
+    let worker_key = KeyPair::random();
+    let bogus_key = KeyPair::random();
+    let domain = DomainId::from_str("sora").expect("domain id");
+    let worker_id = AccountId::new(domain, worker_key.public_key().clone());
+    let worker_id_str = worker_id.to_string();
+
+    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+    cfg.torii.sorafs_repair.enabled = true;
+    let (kiso, _child) = KisoHandle::start(cfg.clone());
+    let kura = Kura::blank_kura_for_testing();
+    let query = LiveQueryStore::start_test();
+    let state = Arc::new(State::new_for_testing(
+        World::default(),
+        kura.clone(),
+        query,
+    ));
+    seed_worker_permission(&state, &worker_id, provider_id);
+
+    let queue_cfg = iroha_config::parameters::actual::Queue::default();
+    let events_sender: EventsSender = tokio::sync::broadcast::channel(1).0;
+    let queue = Arc::new(Queue::from_config(queue_cfg, events_sender.clone()));
+    let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
+    let _ = peers_tx;
+    let torii = Torii::new_with_handle(
+        ChainId::from("test-chain"),
+        kiso,
+        cfg.torii.clone(),
+        queue,
+        events_sender,
+        LiveQueryStore::start_test(),
+        kura,
+        state,
+        cfg.common.key_pair.clone(),
+        OnlinePeersProvider::new(peers_rx),
+        None,
+        MaybeTelemetry::disabled(),
+    );
+    let app = torii.api_router_for_tests();
+
+    let record = post_report(&app, &report).await;
+    assert!(matches!(record.state, RepairTaskStateV1::Queued(_)));
+
+    let manifest_hex = hex::encode(report.evidence.manifest_digest);
+    let claimed_at = report.submitted_at_unix + 10;
+    let claim_key = "claim-200";
+    let bad_sig = sign_worker_action(
+        &bogus_key,
+        &worker_id,
+        &report.ticket_id,
+        report.evidence.manifest_digest,
+        provider_id,
+        claim_key,
+        RepairWorkerActionV1::Claim {
+            claimed_at_unix: claimed_at,
+        },
+    );
+    let claim_req = json_object(vec![
+        json_entry("ticket_id", report.ticket_id.clone()),
+        json_entry("manifest_digest_hex", manifest_hex),
+        json_entry("worker_id", worker_id_str),
+        json_entry("claimed_at_unix", claimed_at),
+        json_entry("idempotency_key", claim_key),
+        json_entry("signature", bad_sig),
+    ]);
+    let body = json::to_vec(&claim_req).expect("encode request");
+    let (status, _body) =
+        post_json_with_status(&app, "/v1/sorafs/audit/repair/claim", body).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
 }

@@ -241,7 +241,7 @@ Enum RegistryEventKind {
 Gateways נרשמים ל-`RegistryEventV1` ומסנכרנים DNS/SoraFS דרך:
 
 1. שליפת `NameRecordV1` האחרון שמוזכר ברצף האירועים.
-2. יצירה מחדש של resolver templates (כתובות IH58/compressed, text records).
+2. יצירה מחדש של resolver templates (כתובות IH58 מועדפות + compressed (`snx1`) כאופציה שנייה, text records).
 3. Pin לנתוני zone מעודכנים באמצעות זרימת SoraDNS המתוארת ב-[`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
 ערבויות מסירת אירועים:

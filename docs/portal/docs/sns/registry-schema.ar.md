@@ -241,7 +241,7 @@ Enum RegistryEventKind {
 تشترك البوابات في `RegistryEventV1` وتزامن DNS/SoraFS عبر:
 
 1. جلب اخر `NameRecordV1` المشار اليه في تسلسل الاحداث.
-2. اعادة توليد resolver templates (عناوين IH58/compressed, text records).
+2. اعادة توليد resolver templates (عناوين IH58 المفضلة + compressed (`snx1`) كخيار ثانٍ، text records).
 3. تثبيت بيانات المنطقة عبر تدفق SoraDNS الموضح في [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
 ضمانات تسليم الاحداث:

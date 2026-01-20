@@ -432,6 +432,132 @@
         "overrides": []
       },
       "description": "Ratio of reserve top-up transfers to the projected top-up shortfall. Equals 1 when the reserve digest is fully funded or no top-up is required."
+    },
+    {
+      "type": "timeseries",
+      "title": "GC Runs / 5m",
+      "id": 16,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "sum by (result) (increase(torii_sorafs_gc_runs_total[5m]))",
+          "legendFormat": "{{result}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Count of GC sweeps completed in the last 5 minutes."
+    },
+    {
+      "type": "timeseries",
+      "title": "GC Evictions / 5m",
+      "id": 17,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "sum by (reason) (increase(torii_sorafs_gc_evictions_total[5m]))",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Evictions performed by GC in the last 5 minutes, grouped by reason."
+    },
+    {
+      "type": "timeseries",
+      "title": "GC Bytes Freed / 5m",
+      "id": 18,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "sum by (reason) (increase(torii_sorafs_gc_bytes_freed_total[5m]))",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Total bytes freed by GC in the last 5 minutes, grouped by reason."
+    },
+    {
+      "type": "timeseries",
+      "title": "GC Blocked / 5m",
+      "id": 19,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "sum by (reason) (increase(torii_sorafs_gc_blocked_total[5m]))",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Retention evictions blocked by GC in the last 5 minutes."
+    },
+    {
+      "type": "timeseries",
+      "title": "Expired Manifests",
+      "id": 20,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "torii_sorafs_gc_expired_manifests",
+          "legendFormat": "expired",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Number of manifests currently past retention expiry."
+    },
+    {
+      "type": "timeseries",
+      "title": "Oldest Expired Age (hours)",
+      "id": 21,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "torii_sorafs_gc_oldest_expired_age_seconds / 3600",
+          "legendFormat": "age_hours",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "h",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Age in hours of the oldest expired manifest observed by GC."
     }
   ]
 }

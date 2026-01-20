@@ -22,7 +22,7 @@ public enum TransactionInputError: Error, LocalizedError, Equatable {
         case let .emptyAccountId(field):
             return "Account id for \(field) must not be empty."
         case let .malformedAccountId(field, value):
-            return "Account id for \(field) must be IH58/compressed/0x, uaid:/opaque:, or '<alias|public_key>@<domain>' with no whitespace or reserved characters (#, $) in the components (received '\(value)')."
+            return "Account id for \(field) must be IH58 (preferred)/snx1 (second-best)/0x, uaid:/opaque:, or '<alias|public_key>@<domain>' with no whitespace or reserved characters (#, $) in the components (received '\(value)')."
         case .emptyAssetDefinitionId:
             return "Asset definition id must not be empty."
         case let .malformedAssetDefinitionId(value):

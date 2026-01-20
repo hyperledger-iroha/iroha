@@ -83,10 +83,48 @@ pub struct PorIngestionProviderStatus {
     /// Consecutive failure streak length.
     pub consecutive_failures: u64,
 }
+
+/// Summary of an eviction action performed during GC.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GcEviction {
+    /// Manifest identifier evicted by the sweep.
+    pub manifest_id: String,
+    /// Manifest digest evicted.
+    pub manifest_digest: [u8; 32],
+    /// Retention epoch recorded on the manifest.
+    pub retention_epoch: u64,
+    /// Bytes freed by the eviction.
+    pub freed_bytes: u64,
+    /// Reason label associated with the eviction.
+    pub reason: String,
+}
+
+/// Summary of a manifest skipped during a GC sweep.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GcSkip {
+    /// Manifest identifier that was skipped.
+    pub manifest_id: String,
+    /// Reason label describing why the manifest was skipped.
+    pub reason: String,
+}
+
+/// Summary of a GC sweep execution.
+#[derive(Debug, Clone, Default)]
+pub struct GcSweepReport {
+    /// Evictions performed during the sweep.
+    pub evictions: Vec<GcEviction>,
+    /// Manifests skipped during the sweep.
+    pub skipped: Vec<GcSkip>,
+    /// Total bytes freed by evictions.
+    pub freed_bytes: u64,
+    /// Number of errors encountered during the sweep.
+    pub errors: u32,
+}
 use std::{
     collections::HashMap,
     io::Read,
     sync::{Arc, RwLock},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use capacity::{
@@ -94,6 +132,7 @@ use capacity::{
     ReplicationRelease,
 };
 use config::{GcConfig, RepairConfig, StorageConfig};
+use iroha_crypto::Hash;
 use iroha_data_model::{
     da::ingest::DaStripeLayout,
     sorafs::{
@@ -101,9 +140,12 @@ use iroha_data_model::{
         deal::{ClientId, DealId, DealProposal, DealRecord, DealUsageReport},
     },
 };
-use iroha_telemetry::metrics::global_sorafs_node_otel;
+use iroha_telemetry::metrics::{global_or_default, global_sorafs_gc_otel, global_sorafs_node_otel};
 use norito::codec::Encode;
-pub use repair::{RepairManager, RepairSchedulerError, RepairTaskFilters, RepairTaskSnapshot};
+pub use repair::{
+    RepairManager, RepairSchedulerError, RepairTaskFilters, RepairTaskSnapshot,
+    RepairWatchdogReport, RepairWorkerReport,
+};
 use sorafs_car::{CarBuildPlan, PorProof};
 use sorafs_manifest::{
     ManifestV1,
@@ -112,7 +154,12 @@ use sorafs_manifest::{
     por::{AuditOutcomeV1, AuditVerdictV1, PorChallengeV1, PorProofV1},
     potr::{PotrReceiptV1, PotrReceiptValidationError},
     proof_stream::ProofStreamTier,
-    repair::{RepairReportV1, RepairSlashProposalV1, RepairTaskRecordV1, RepairTicketId},
+    repair::{
+        GC_AUDIT_EVENT_VERSION_V1, GC_AUDIT_PAYLOAD_VERSION_V1, GcAuditEventV1, GcAuditPayloadV1,
+        REPAIR_AUDIT_EVENT_VERSION_V1, RepairAuditEventV1, RepairReportV1, RepairSlashProposalV1,
+        RepairTaskEventV1, RepairTaskRecordV1, RepairTaskStateV1, RepairTicketId,
+        SorafsAuditHeaderV1,
+    },
 };
 use thiserror::Error;
 
@@ -125,12 +172,74 @@ use crate::{
     telemetry::{TelemetryAccumulator, TelemetryError},
 };
 
+/// Stage for a repair slash proposal within the governance pipeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepairSlashStage {
+    /// Proposal drafted by the scheduler for review.
+    Drafted,
+    /// Proposal submitted by an auditor for governance action.
+    Submitted,
+}
+
+impl RepairSlashStage {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Drafted => "drafted",
+            Self::Submitted => "submitted",
+        }
+    }
+}
+
+fn repair_idempotency_key(
+    action: &str,
+    worker_id: &str,
+    ticket_id: &RepairTicketId,
+    now_unix: u64,
+) -> String {
+    let raw = format!("{action}:{worker_id}:{ticket_id}:{now_unix}");
+    let digest_hex = blake3::hash(raw.as_bytes()).to_hex().to_string();
+    format!("{action}-{digest_hex}")
+}
+
+fn unix_now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+fn repair_task_terminal(task: &RepairTaskRecordV1) -> bool {
+    matches!(
+        task.state,
+        RepairTaskStateV1::Completed(_) | RepairTaskStateV1::Escalated(_)
+    )
+}
+
 /// Interface for emitting settlement artefacts to the governance DAG.
 pub trait GovernancePublisher: Send + Sync + std::fmt::Debug {
     /// Persist the supplied settlement NORITO payload to the governance pipeline.
     fn publish_deal_settlement(
         &self,
         settlement: &DealSettlementV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError>;
+    /// Persist a repair audit event to the governance pipeline.
+    fn publish_repair_audit_event(
+        &self,
+        event: &sorafs_manifest::repair::RepairAuditEventV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError>;
+    /// Persist a repair slash proposal to the governance pipeline.
+    fn publish_repair_slash_proposal(
+        &self,
+        proposal: &RepairSlashProposalV1,
+        encoded: &[u8],
+        stage: RepairSlashStage,
+    ) -> Result<(), GovernancePublishError>;
+    /// Persist a GC audit event to the governance pipeline.
+    fn publish_gc_audit_event(
+        &self,
+        event: &sorafs_manifest::repair::GcAuditEventV1,
         encoded: &[u8],
     ) -> Result<(), GovernancePublishError>;
 }
@@ -209,6 +318,8 @@ impl NodeHandle {
         repair_config: RepairConfig,
         gc_config: GcConfig,
     ) -> Self {
+        let repair_config = repair_config.with_default_state_dir(config.data_dir());
+        let gc_config = gc_config.with_default_state_dir(config.data_dir());
         let scheduler_config = StorageSchedulerConfig::from_storage_config(&config);
         let schedulers = StorageSchedulersRuntime::new(scheduler_config);
         let capacity_limit = config.max_capacity_bytes().0;
@@ -345,6 +456,13 @@ impl NodeHandle {
         }
     }
 
+    fn governance_publisher(&self) -> Option<Arc<dyn GovernancePublisher>> {
+        self.governance_publisher
+            .read()
+            .ok()
+            .and_then(|guard| guard.clone())
+    }
+
     /// Finalise a deal settlement for the supplied epoch.
     pub fn settle_deal(
         &self,
@@ -352,11 +470,7 @@ impl NodeHandle {
         settlement_epoch: u64,
     ) -> Result<DealSettlementOutcome, DealEngineError> {
         let outcome = self.deal_engine.settle(deal_id, settlement_epoch)?;
-        let publisher = self
-            .governance_publisher
-            .read()
-            .ok()
-            .and_then(|guard| guard.clone());
+        let publisher = self.governance_publisher();
         let provider_hex = hex::encode(outcome.record.provider_id.as_bytes());
         if let Some(publisher) = publisher {
             let encoded = outcome.governance.encode();
@@ -379,6 +493,102 @@ impl NodeHandle {
         Ok(outcome)
     }
 
+    fn publish_repair_audit_event(&self, event: RepairTaskEventV1) {
+        let Some(publisher) = self.governance_publisher() else {
+            return;
+        };
+        let payload_bytes = event.encode();
+        let payload_digest = Hash::new(payload_bytes);
+        let header = SorafsAuditHeaderV1 {
+            sequence: self.repair.next_audit_sequence(),
+            occurred_at_unix: event.occurred_at_unix,
+            signer: event
+                .actor
+                .clone()
+                .unwrap_or_else(|| "sorafs-repair".to_string()),
+            payload_digest: *payload_digest.as_ref(),
+        };
+        let audit_event = RepairAuditEventV1 {
+            version: REPAIR_AUDIT_EVENT_VERSION_V1,
+            header,
+            payload: event,
+        };
+        let encoded = audit_event.encode();
+        if let Err(err) = publisher.publish_repair_audit_event(&audit_event, &encoded) {
+            iroha_logger::error!(
+                %err,
+                ticket = %audit_event.payload.ticket_id,
+                status = ?audit_event.payload.status,
+                "failed to publish repair audit event to governance DAG"
+            );
+        }
+    }
+
+    fn publish_gc_audit_event(&self, payload: GcAuditPayloadV1) {
+        let Some(publisher) = self.governance_publisher() else {
+            return;
+        };
+        let payload_bytes = payload.encode();
+        let payload_digest = Hash::new(payload_bytes);
+        let header = SorafsAuditHeaderV1 {
+            sequence: self.repair.next_audit_sequence(),
+            occurred_at_unix: payload.evicted_at_unix,
+            signer: "sorafs-gc".to_string(),
+            payload_digest: *payload_digest.as_ref(),
+        };
+        let audit_event = GcAuditEventV1 {
+            version: GC_AUDIT_EVENT_VERSION_V1,
+            header,
+            payload,
+        };
+        let encoded = audit_event.encode();
+        if let Err(err) = publisher.publish_gc_audit_event(&audit_event, &encoded) {
+            iroha_logger::error!(
+                %err,
+                "failed to publish GC audit event to governance DAG"
+            );
+        }
+    }
+
+    fn publish_repair_slash_proposal(
+        &self,
+        proposal: &RepairSlashProposalV1,
+        stage: RepairSlashStage,
+    ) {
+        let Some(publisher) = self.governance_publisher() else {
+            return;
+        };
+        let encoded = proposal.encode();
+        if let Err(err) = publisher.publish_repair_slash_proposal(proposal, &encoded, stage) {
+            iroha_logger::error!(
+                %err,
+                ticket = %proposal.ticket_id,
+                stage = stage.as_str(),
+                "failed to publish repair slash proposal to governance DAG"
+            );
+        }
+    }
+
+    fn publish_repair_update(
+        &self,
+        update: &repair::RepairTaskUpdate,
+        slash_stage: Option<RepairSlashStage>,
+    ) {
+        if let Some(event) = update.event.clone() {
+            self.publish_repair_audit_event(event);
+        }
+        if let Some(proposal) = update.slash_proposal.as_ref() {
+            if let Some(stage) = slash_stage {
+                self.publish_repair_slash_proposal(proposal, stage);
+            } else {
+                iroha_logger::warn!(
+                    ticket = %proposal.ticket_id,
+                    "repair slash proposal missing publish stage"
+                );
+            }
+        }
+    }
+
     /// Capture a snapshot of the deal ledger.
     #[must_use]
     pub fn deal_snapshot(&self, deal_id: DealId) -> Option<DealSnapshot> {
@@ -396,7 +606,9 @@ impl NodeHandle {
         &self,
         report: &RepairReportV1,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
-        self.repair.enqueue_report(report.clone())
+        let update = self.repair.enqueue_report_with_event(report.clone())?;
+        self.publish_repair_update(&update, None);
+        Ok(update.record)
     }
 
     /// Fetch repair tasks with optional filters applied.
@@ -443,7 +655,11 @@ impl NodeHandle {
         &self,
         proposal: &RepairSlashProposalV1,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
-        self.repair.submit_slash_proposal(proposal.clone())
+        let update = self
+            .repair
+            .submit_slash_proposal_with_event(proposal.clone())?;
+        self.publish_repair_update(&update, Some(RepairSlashStage::Submitted));
+        Ok(update.record)
     }
 
     /// Mark the specified repair ticket as in progress.
@@ -453,8 +669,11 @@ impl NodeHandle {
         started_at_unix: u64,
         repair_agent: Option<String>,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
-        self.repair
-            .mark_in_progress(ticket_id, started_at_unix, repair_agent)
+        let update = self
+            .repair
+            .mark_in_progress_with_event(ticket_id, started_at_unix, repair_agent)?;
+        self.publish_repair_update(&update, None);
+        Ok(update.record)
     }
 
     /// Mark the specified repair ticket as completed.
@@ -464,8 +683,11 @@ impl NodeHandle {
         completed_at_unix: u64,
         resolution_notes: Option<String>,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
-        self.repair
-            .mark_completed(ticket_id, completed_at_unix, resolution_notes)
+        let update = self
+            .repair
+            .mark_completed_with_event(ticket_id, completed_at_unix, resolution_notes)?;
+        self.publish_repair_update(&update, None);
+        Ok(update.record)
     }
 
     /// Mark the specified repair ticket as failed.
@@ -475,7 +697,11 @@ impl NodeHandle {
         failed_at_unix: u64,
         reason: String,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
-        self.repair.mark_failed(ticket_id, failed_at_unix, reason)
+        let update = self
+            .repair
+            .mark_failed_with_event(ticket_id, failed_at_unix, reason)?;
+        self.publish_repair_update(&update, Some(RepairSlashStage::Drafted));
+        Ok(update.record)
     }
 
     /// Claim a repair ticket for a worker.
@@ -486,8 +712,14 @@ impl NodeHandle {
         claimed_at_unix: u64,
         idempotency_key: &str,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
-        self.repair
-            .claim_ticket(ticket_id, worker_id, claimed_at_unix, idempotency_key)
+        let update = self.repair.claim_ticket_with_event(
+            ticket_id,
+            worker_id,
+            claimed_at_unix,
+            idempotency_key,
+        )?;
+        self.publish_repair_update(&update, None);
+        Ok(update.record)
     }
 
     /// Record a heartbeat for an active repair lease.
@@ -511,13 +743,15 @@ impl NodeHandle {
         resolution_notes: Option<String>,
         idempotency_key: &str,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
-        self.repair.complete_ticket(
+        let update = self.repair.complete_ticket_with_event(
             ticket_id,
             worker_id,
             completed_at_unix,
             resolution_notes,
             idempotency_key,
-        )
+        )?;
+        self.publish_repair_update(&update, None);
+        Ok(update.record)
     }
 
     /// Mark a claimed repair ticket as failed.
@@ -529,13 +763,333 @@ impl NodeHandle {
         reason: String,
         idempotency_key: &str,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
-        self.repair.fail_ticket(
+        let update = self.repair.fail_ticket_with_event(
             ticket_id,
             worker_id,
             failed_at_unix,
             reason,
             idempotency_key,
-        )
+        )?;
+        self.publish_repair_update(&update, Some(RepairSlashStage::Drafted));
+        Ok(update.record)
+    }
+
+    /// Run a repair watchdog sweep to requeue leases and escalate SLA breaches.
+    pub fn run_repair_watchdog_once(
+        &self,
+        now_unix: u64,
+    ) -> Result<RepairWatchdogReport, RepairSchedulerError> {
+        if !self.repair_config.enabled() || now_unix == 0 {
+            return Ok(RepairWatchdogReport::default());
+        }
+        let report = self.repair.run_watchdog(now_unix)?;
+        for event in &report.events {
+            self.publish_repair_audit_event(event.clone());
+        }
+        for proposal in &report.escalated {
+            self.publish_repair_slash_proposal(proposal, RepairSlashStage::Drafted);
+        }
+        Ok(report)
+    }
+
+    /// Run a single repair worker tick for the supplied worker identifier.
+    pub fn run_repair_worker_once(&self, worker_id: &str, now_unix: u64) -> RepairWorkerReport {
+        let mut report = RepairWorkerReport::default();
+        if !self.repair_config.enabled() || now_unix == 0 {
+            return report;
+        }
+        let Some(storage) = self.storage.as_ref() else {
+            report.record_error();
+            iroha_logger::warn!("repair worker skipped: storage backend disabled");
+            return report;
+        };
+
+        let candidates = self.repair.claimable_tasks(now_unix);
+        if candidates.is_empty() {
+            report.record_skipped();
+            return report;
+        }
+
+        for task in candidates {
+            let ticket_id = task.ticket_id.clone();
+            let claim_key = repair_idempotency_key("claim", worker_id, &ticket_id, now_unix);
+            let update = match self.repair.claim_ticket_with_event(
+                &ticket_id,
+                worker_id,
+                now_unix,
+                &claim_key,
+            ) {
+                Ok(update) => update,
+                Err(RepairSchedulerError::LeaseHeld { .. })
+                | Err(RepairSchedulerError::BackoffActive { .. })
+                | Err(RepairSchedulerError::StoreConflict { .. }) => {
+                    report.record_skipped();
+                    continue;
+                }
+                Err(err) => {
+                    report.record_error();
+                    iroha_logger::warn!(
+                        %err,
+                        ticket = %ticket_id,
+                        "repair worker claim failed"
+                    );
+                    continue;
+                }
+            };
+            report.record_claim();
+            self.publish_repair_update(&update, None);
+
+            let manifest = storage.manifest_by_digest(&task.manifest_digest);
+            let (update, stage) = match manifest {
+                Some(manifest) => {
+                    let (total, missing) = self.schedulers.with_pin(|| {
+                        let total = manifest.chunk_count();
+                        let missing = (0..total)
+                            .filter(|idx| {
+                                manifest
+                                    .chunk(*idx)
+                                    .map(|chunk| !chunk.path.exists())
+                                    .unwrap_or(true)
+                            })
+                            .count();
+                        (total, missing)
+                    });
+                    // TODO: integrate the orchestrator repair pipeline to rehydrate missing chunks.
+                    if missing == 0 {
+                        let complete_key =
+                            repair_idempotency_key("complete", worker_id, &ticket_id, now_unix);
+                        let update = self
+                            .repair
+                            .complete_ticket_with_event(
+                                &ticket_id,
+                                worker_id,
+                                now_unix,
+                                Some("verified local chunks".into()),
+                                &complete_key,
+                            )
+                            .map_err(|err| {
+                                iroha_logger::warn!(
+                                    %err,
+                                    ticket = %ticket_id,
+                                    "repair completion failed"
+                                );
+                                err
+                            });
+                        match update {
+                            Ok(update) => (update, None),
+                            Err(_) => {
+                                report.record_error();
+                                break;
+                            }
+                        }
+                    } else {
+                        let reason = format!("missing {missing} of {total} chunks");
+                        let fail_key =
+                            repair_idempotency_key("fail", worker_id, &ticket_id, now_unix);
+                        let update = self
+                            .repair
+                            .fail_ticket_with_event(
+                                &ticket_id,
+                                worker_id,
+                                now_unix,
+                                reason,
+                                &fail_key,
+                            )
+                            .map_err(|err| {
+                                iroha_logger::warn!(
+                                    %err,
+                                    ticket = %ticket_id,
+                                    "repair failure update rejected"
+                                );
+                                err
+                            });
+                        match update {
+                            Ok(update) => (update, Some(RepairSlashStage::Drafted)),
+                            Err(_) => {
+                                report.record_error();
+                                break;
+                            }
+                        }
+                    }
+                }
+                None => {
+                    let fail_key = repair_idempotency_key("fail", worker_id, &ticket_id, now_unix);
+                    let update = self
+                        .repair
+                        .fail_ticket_with_event(
+                            &ticket_id,
+                            worker_id,
+                            now_unix,
+                            "manifest missing from local storage".into(),
+                            &fail_key,
+                        )
+                        .map_err(|err| {
+                            iroha_logger::warn!(
+                                %err,
+                                ticket = %ticket_id,
+                                "repair failure update rejected"
+                            );
+                            err
+                        });
+                    match update {
+                        Ok(update) => (update, Some(RepairSlashStage::Drafted)),
+                        Err(_) => {
+                            report.record_error();
+                            break;
+                        }
+                    }
+                }
+            };
+
+            report.record_state(&update.record.state);
+            self.publish_repair_update(&update, stage);
+            break;
+        }
+
+        report
+    }
+
+    /// Run a GC sweep against expired manifests.
+    pub fn run_gc_once(&self, now_unix: u64) -> GcSweepReport {
+        const REASON_RETENTION_EXPIRED: &str = "retention_expired";
+        const REASON_RETENTION_EXPIRED_NO_PROVIDER: &str = "retention_expired_provider_missing";
+        const REASON_REPAIR_ACTIVE: &str = "repair_active";
+        const REASON_LIMIT_REACHED: &str = "limit_reached";
+        const RESULT_SUCCESS: &str = "success";
+        const RESULT_ERROR: &str = "error";
+
+        let mut report = GcSweepReport::default();
+        if !self.gc_config.enabled() || now_unix == 0 {
+            return report;
+        }
+        let Some(storage) = self.storage.as_ref() else {
+            report.errors = report.errors.saturating_add(1);
+            iroha_logger::warn!("GC sweep skipped: storage backend disabled");
+            global_or_default().inc_sorafs_gc_runs(RESULT_ERROR);
+            global_sorafs_gc_otel().record_run(RESULT_ERROR);
+            return report;
+        };
+
+        let grace_secs = self.gc_config.retention_grace_secs();
+        let max_deletions = self.gc_config.max_deletions_per_run() as usize;
+        if max_deletions == 0 {
+            global_or_default().inc_sorafs_gc_runs(RESULT_SUCCESS);
+            global_sorafs_gc_otel().record_run(RESULT_SUCCESS);
+            return report;
+        }
+
+        let usage = self.capacity_usage();
+        let provider_id = usage.provider_id.unwrap_or([0_u8; 32]);
+        let provider_known = usage.provider_id.is_some();
+
+        let mut expired = Vec::new();
+        let mut expired_count = 0u64;
+        let mut oldest_expired_age = None;
+
+        for manifest in storage.manifests() {
+            let retention_epoch = manifest.retention_epoch();
+            if retention_epoch == 0 {
+                continue;
+            }
+            let expires_at = retention_epoch.saturating_add(grace_secs);
+            if now_unix < expires_at {
+                continue;
+            }
+            expired_count = expired_count.saturating_add(1);
+            let age_secs = now_unix.saturating_sub(expires_at);
+            oldest_expired_age = Some(oldest_expired_age.map_or(age_secs, |prev| prev.max(age_secs)));
+            expired.push(manifest);
+        }
+
+        expired.sort_by(|left, right| {
+            left.retention_epoch()
+                .cmp(&right.retention_epoch())
+                .then(left.manifest_id().cmp(right.manifest_id()))
+        });
+
+        let mut evicted_count = 0usize;
+
+        for manifest in expired {
+            if evicted_count >= max_deletions {
+                report.skipped.push(GcSkip {
+                    manifest_id: manifest.manifest_id().to_owned(),
+                    reason: REASON_LIMIT_REACHED.to_string(),
+                });
+                break;
+            }
+
+            let digest = *manifest.manifest_digest();
+            let tasks = self.repair.tasks_for_manifest(&digest);
+            if tasks.iter().any(|task| !repair_task_terminal(task)) {
+                report.skipped.push(GcSkip {
+                    manifest_id: manifest.manifest_id().to_owned(),
+                    reason: REASON_REPAIR_ACTIVE.to_string(),
+                });
+                global_or_default().inc_sorafs_gc_blocked(REASON_REPAIR_ACTIVE);
+                global_sorafs_gc_otel().record_blocked(REASON_REPAIR_ACTIVE);
+                continue;
+            }
+
+            let freed_bytes = match storage.evict_manifest(manifest.manifest_id()) {
+                Ok(bytes) => bytes,
+                Err(err) => {
+                    report.errors = report.errors.saturating_add(1);
+                    iroha_logger::warn!(
+                        %err,
+                        manifest_id = %manifest.manifest_id(),
+                        "GC eviction failed"
+                    );
+                    continue;
+                }
+            };
+
+            evicted_count += 1;
+            report.freed_bytes = report.freed_bytes.saturating_add(freed_bytes);
+            let reason = if provider_known {
+                REASON_RETENTION_EXPIRED
+            } else {
+                REASON_RETENTION_EXPIRED_NO_PROVIDER
+            };
+            report.evictions.push(GcEviction {
+                manifest_id: manifest.manifest_id().to_owned(),
+                manifest_digest: digest,
+                retention_epoch: manifest.retention_epoch(),
+                freed_bytes,
+                reason: reason.to_string(),
+            });
+
+            let payload = GcAuditPayloadV1 {
+                version: GC_AUDIT_PAYLOAD_VERSION_V1,
+                manifest_digest: digest,
+                provider_id,
+                evicted_at_unix: now_unix,
+                freed_bytes,
+                reason: reason.to_string(),
+            };
+            self.publish_gc_audit_event(payload);
+            global_or_default().inc_sorafs_gc_evictions(reason);
+            global_or_default().add_sorafs_gc_freed_bytes(reason, freed_bytes);
+            global_sorafs_gc_otel().record_eviction(reason, freed_bytes);
+        }
+
+        global_or_default().set_sorafs_gc_expired_snapshot(
+            expired_count,
+            oldest_expired_age.unwrap_or(0),
+        );
+
+        let result = if report.errors == 0 {
+            RESULT_SUCCESS
+        } else {
+            RESULT_ERROR
+        };
+        global_or_default().inc_sorafs_gc_runs(result);
+        global_sorafs_gc_otel().record_run(result);
+        self.schedulers.update_storage_bytes(
+            storage.total_bytes(),
+            self.config.max_capacity_bytes().0,
+        );
+
+        report
     }
 
     /// Whether the storage worker is currently enabled.
@@ -678,11 +1232,20 @@ impl NodeHandle {
             .provider_id
             .ok_or(PorChallengePlannerError::ProviderUnavailable)?;
         let sample_policy = por::PorSamplePolicy::from_metadata(provider_id, &usage.metadata)?;
+        let grace_secs = self.gc_config.retention_grace_secs();
+        let issued_at = randomness.issued_at_unix;
 
         let manifests = storage.manifests();
         let mut challenges = Vec::with_capacity(manifests.len());
 
         for manifest in manifests {
+            let retention_epoch = manifest.retention_epoch();
+            if retention_epoch != 0 {
+                let expires_at = retention_epoch.saturating_add(grace_secs);
+                if issued_at >= expires_at {
+                    continue;
+                }
+            }
             let digest = *manifest.manifest_digest();
             let vrf = vrf_records.get(&digest);
             let planned = build_por_challenge_for_manifest(
@@ -760,6 +1323,36 @@ impl NodeHandle {
                     self.config.max_capacity_bytes().0,
                 );
                 Ok(manifest_id)
+            }
+            Err(StorageError::CapacityExceeded { .. })
+                if self.gc_config.enabled() && self.gc_config.pre_admission_sweep() =>
+            {
+                let gc_report = self.run_gc_once(unix_now_secs());
+                if gc_report.errors > 0 {
+                    iroha_logger::warn!(
+                        errors = gc_report.errors,
+                        "GC pre-admission sweep reported errors"
+                    );
+                }
+                let retry = self.schedulers.with_pin(|| {
+                    storage.ingest_manifest_with_layout(
+                        manifest,
+                        plan,
+                        reader,
+                        stripe_layout,
+                        chunk_roles,
+                    )
+                });
+                match retry {
+                    Ok(manifest_id) => {
+                        self.schedulers.update_storage_bytes(
+                            storage.total_bytes(),
+                            self.config.max_capacity_bytes().0,
+                        );
+                        Ok(manifest_id)
+                    }
+                    Err(err) => Err(NodeStorageError::from(err)),
+                }
             }
             Err(err) => Err(NodeStorageError::from(err)),
         }
@@ -1175,10 +1768,11 @@ mod tests {
         deal::{DealSettlementStatusV1, DealSettlementV1},
         repair::{
             CompletedRepairStateV1, EscalatedRepairStateV1, FailedRepairStateV1,
+            GC_AUDIT_EVENT_VERSION_V1, GC_AUDIT_PAYLOAD_VERSION_V1, GcAuditEventV1,
             InProgressRepairStateV1, QueuedRepairStateV1, REPAIR_EVIDENCE_VERSION_V1,
-            REPAIR_REPORT_VERSION_V1, REPAIR_SLASH_PROPOSAL_VERSION_V1, RepairCauseV1,
-            RepairEvidenceV1, RepairReportV1, RepairSlashProposalV1, RepairTaskStateV1,
-            RepairTicketId,
+            REPAIR_REPORT_VERSION_V1, REPAIR_SLASH_PROPOSAL_VERSION_V1, RepairAuditEventV1,
+            RepairCauseV1, RepairEvidenceV1, RepairReportV1, RepairSlashProposalV1,
+            RepairTaskStateV1, RepairTaskStatusV1, RepairTicketId,
         },
     };
     use tempfile::TempDir;
@@ -1973,6 +2567,441 @@ mod tests {
     }
 
     #[test]
+    fn node_handle_watchdog_publishes_audit_and_slash() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let repair_actual = iroha_config::parameters::actual::SorafsRepair {
+            enabled: true,
+            default_slash_penalty_nano: 8_000,
+            ..Default::default()
+        };
+        let handle =
+            NodeHandle::new_with_policies(cfg, RepairConfig::from(&repair_actual), GcConfig::default());
+
+        let publisher = Arc::new(RecordingPublisher::default());
+        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
+        handle.set_governance_publisher(trait_publisher);
+
+        let report = RepairReportV1 {
+            version: REPAIR_REPORT_VERSION_V1,
+            ticket_id: RepairTicketId("REP-460".into()),
+            auditor_account: "auditor#sora".into(),
+            submitted_at_unix: 1_700_500_000,
+            evidence: RepairEvidenceV1 {
+                version: REPAIR_EVIDENCE_VERSION_V1,
+                manifest_digest: [0x44; 32],
+                provider_id: [0x77; 32],
+                por_history_id: None,
+                cause: RepairCauseV1::Manual {
+                    reason: "manual".into(),
+                },
+                evidence_json: None,
+                notes: None,
+            },
+            notes: None,
+        };
+        handle
+            .enqueue_repair_report(&report)
+            .expect("queue repair report");
+        let _ = publisher.take();
+
+        let now_unix = report.submitted_at_unix + 86_400;
+        let outcome = handle
+            .run_repair_watchdog_once(now_unix)
+            .expect("watchdog run");
+        assert_eq!(outcome.escalated.len(), 1);
+
+        let payloads = publisher.take();
+        let mut audits = Vec::new();
+        let mut slashes = Vec::new();
+        for payload in payloads {
+            if let Ok(event) = norito::decode_from_bytes::<RepairAuditEventV1>(&payload) {
+                audits.push(event);
+                continue;
+            }
+            if let Ok(proposal) = norito::decode_from_bytes::<RepairSlashProposalV1>(&payload) {
+                slashes.push(proposal);
+            }
+        }
+
+        assert!(audits.iter().any(|event| {
+            event.payload.ticket_id == report.ticket_id
+                && event.payload.status == RepairTaskStatusV1::Escalated
+        }));
+        assert!(slashes.iter().any(|proposal| proposal.ticket_id == report.ticket_id));
+    }
+
+    #[test]
+    fn node_handle_repair_worker_completes_and_escalates() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let repair_actual = iroha_config::parameters::actual::SorafsRepair {
+            enabled: true,
+            max_attempts: 1,
+            default_slash_penalty_nano: 9_000,
+            ..Default::default()
+        };
+        let handle =
+            NodeHandle::new_with_policies(cfg, RepairConfig::from(&repair_actual), GcConfig::default());
+
+        let publisher = Arc::new(RecordingPublisher::default());
+        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
+        handle.set_governance_publisher(trait_publisher);
+
+        let payload = b"repair-worker-fixture";
+        let plan = CarBuildPlan::single_file(payload).expect("plan");
+        let manifest = ManifestBuilder::new()
+            .root_cid(vec![0xEA; 16])
+            .dag_codec(DagCodecId(0x71))
+            .chunking_from_profile(
+                sorafs_chunker::ChunkProfile::DEFAULT,
+                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
+            )
+            .content_length(plan.content_length)
+            .car_digest(blake3::hash(payload).into())
+            .car_size(plan.content_length)
+            .pin_policy(PinPolicy::default())
+            .build()
+            .expect("manifest");
+
+        let mut reader = payload.as_slice();
+        handle
+            .ingest_manifest(&manifest, &plan, &mut reader)
+            .expect("ingest manifest");
+        let manifest_digest: [u8; 32] = manifest.digest().expect("digest").into();
+        let mut missing_digest = manifest_digest;
+        missing_digest[0] ^= 0xFF;
+
+        let report_complete = RepairReportV1 {
+            version: REPAIR_REPORT_VERSION_V1,
+            ticket_id: RepairTicketId("REP-470".into()),
+            auditor_account: "auditor#sora".into(),
+            submitted_at_unix: 1_700_600_000,
+            evidence: RepairEvidenceV1 {
+                version: REPAIR_EVIDENCE_VERSION_V1,
+                manifest_digest,
+                provider_id: [0x01; 32],
+                por_history_id: None,
+                cause: RepairCauseV1::Manual {
+                    reason: "manual".into(),
+                },
+                evidence_json: None,
+                notes: None,
+            },
+            notes: None,
+        };
+        let report_missing = RepairReportV1 {
+            version: REPAIR_REPORT_VERSION_V1,
+            ticket_id: RepairTicketId("REP-471".into()),
+            auditor_account: "auditor#sora".into(),
+            submitted_at_unix: 1_700_600_100,
+            evidence: RepairEvidenceV1 {
+                version: REPAIR_EVIDENCE_VERSION_V1,
+                manifest_digest: missing_digest,
+                provider_id: [0x02; 32],
+                por_history_id: None,
+                cause: RepairCauseV1::Manual {
+                    reason: "manual".into(),
+                },
+                evidence_json: None,
+                notes: None,
+            },
+            notes: None,
+        };
+
+        handle
+            .enqueue_repair_report(&report_complete)
+            .expect("enqueue repair report");
+        handle
+            .enqueue_repair_report(&report_missing)
+            .expect("enqueue repair report");
+        let _ = publisher.take();
+
+        let now_unix = report_complete.submitted_at_unix + 120;
+        let report = handle.run_repair_worker_once("worker-1", now_unix);
+        assert_eq!(report.claimed, 1);
+        let report = handle.run_repair_worker_once("worker-2", now_unix + 60);
+        assert_eq!(report.claimed, 1);
+
+        let completed = handle
+            .repair_task_record(&report_complete.ticket_id)
+            .expect("completed task");
+        assert!(matches!(
+            completed.state,
+            RepairTaskStateV1::Completed(CompletedRepairStateV1 { .. })
+        ));
+        let escalated = handle
+            .repair_task_record(&report_missing.ticket_id)
+            .expect("escalated task");
+        assert!(matches!(
+            escalated.state,
+            RepairTaskStateV1::Escalated(EscalatedRepairStateV1 { .. })
+        ));
+
+        let payloads = publisher.take();
+        let mut audits = Vec::new();
+        let mut slashes = Vec::new();
+        for payload in payloads {
+            if let Ok(event) = norito::decode_from_bytes::<RepairAuditEventV1>(&payload) {
+                audits.push(event);
+                continue;
+            }
+            if let Ok(proposal) = norito::decode_from_bytes::<RepairSlashProposalV1>(&payload) {
+                slashes.push(proposal);
+            }
+        }
+
+        assert!(audits.iter().any(|event| {
+            event.payload.ticket_id == report_complete.ticket_id
+                && event.payload.status == RepairTaskStatusV1::Completed
+        }));
+        assert!(audits.iter().any(|event| {
+            event.payload.ticket_id == report_missing.ticket_id
+                && event.payload.status == RepairTaskStatusV1::Escalated
+        }));
+        assert!(slashes.iter().any(|proposal| proposal.ticket_id == report_missing.ticket_id));
+    }
+
+    #[test]
+    fn node_handle_gc_evicts_expired_manifest_and_publishes_audit() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let gc_actual = iroha_config::parameters::actual::SorafsGc {
+            enabled: true,
+            retention_grace_secs: 0,
+            max_deletions_per_run: 10,
+            ..Default::default()
+        };
+        let handle = NodeHandle::new_with_policies(
+            cfg,
+            RepairConfig::default(),
+            GcConfig::from(&gc_actual),
+        );
+
+        let publisher = Arc::new(RecordingPublisher::default());
+        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
+        handle.set_governance_publisher(trait_publisher);
+
+        let declaration = CapacityDeclarationV1 {
+            version: CAPACITY_DECLARATION_VERSION_V1,
+            provider_id: [0xAB; 32],
+            stake: sorafs_manifest::provider_advert::StakePointer {
+                pool_id: [0xAA; 32],
+                stake_amount: 1,
+            },
+            committed_capacity_gib: 100,
+            chunker_commitments: vec![ChunkerCommitmentV1 {
+                profile_id: "sorafs.sf1@1.0.0".into(),
+                profile_aliases: None,
+                committed_gib: 100,
+                capability_refs: Vec::new(),
+            }],
+            lane_commitments: vec![LaneCommitmentV1 {
+                lane_id: "default".into(),
+                max_gib: 100,
+            }],
+            pricing: None,
+            valid_from: 1,
+            valid_until: 2,
+            metadata: vec![],
+        };
+        let payload = to_bytes(&declaration).expect("encode declaration");
+        let record = CapacityDeclarationRecord::new(
+            ProviderId::new(declaration.provider_id),
+            payload,
+            declaration.committed_capacity_gib,
+            1,
+            1,
+            2,
+            Metadata::default(),
+        );
+        handle
+            .record_capacity_declaration(&record)
+            .expect("record declaration");
+
+        let payload = b"gc-expired-payload";
+        let plan = CarBuildPlan::single_file(payload).expect("plan");
+        let retention_epoch = 1_700_000_000;
+        let now_unix = retention_epoch + 10;
+        let mut policy = PinPolicy::default();
+        policy.retention_epoch = retention_epoch;
+        let manifest = ManifestBuilder::new()
+            .root_cid(vec![0x11; 8])
+            .dag_codec(DagCodecId(0x71))
+            .chunking_from_profile(
+                sorafs_chunker::ChunkProfile::DEFAULT,
+                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
+            )
+            .content_length(plan.content_length)
+            .car_digest(blake3::hash(payload).into())
+            .car_size(plan.content_length)
+            .pin_policy(policy)
+            .build()
+            .expect("manifest");
+
+        let mut reader = payload.as_slice();
+        let manifest_id = handle
+            .ingest_manifest(&manifest, &plan, &mut reader)
+            .expect("ingest manifest");
+        let manifest_digest: [u8; 32] = manifest.digest().expect("digest").into();
+
+        let report = handle.run_gc_once(now_unix);
+        assert_eq!(report.evictions.len(), 1);
+        assert_eq!(report.freed_bytes, plan.content_length);
+        assert!(handle.manifest_metadata(&manifest_id).is_err());
+
+        let payloads = publisher.take();
+        let mut gc_events = Vec::new();
+        for payload in payloads {
+            if let Ok(event) = norito::decode_from_bytes::<GcAuditEventV1>(&payload) {
+                gc_events.push(event);
+            }
+        }
+        assert_eq!(gc_events.len(), 1);
+        let event = &gc_events[0];
+        assert_eq!(event.version, GC_AUDIT_EVENT_VERSION_V1);
+        assert_eq!(event.payload.version, GC_AUDIT_PAYLOAD_VERSION_V1);
+        assert_eq!(event.payload.manifest_digest, manifest_digest);
+        assert_eq!(event.payload.provider_id, declaration.provider_id);
+        assert_eq!(event.payload.freed_bytes, plan.content_length);
+    }
+
+    #[test]
+    fn node_handle_gc_skips_manifest_with_active_repair_task() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let repair_actual = iroha_config::parameters::actual::SorafsRepair {
+            enabled: true,
+            ..Default::default()
+        };
+        let gc_actual = iroha_config::parameters::actual::SorafsGc {
+            enabled: true,
+            retention_grace_secs: 0,
+            max_deletions_per_run: 10,
+            ..Default::default()
+        };
+        let handle = NodeHandle::new_with_policies(
+            cfg,
+            RepairConfig::from(&repair_actual),
+            GcConfig::from(&gc_actual),
+        );
+
+        let payload = b"gc-repair-blocked";
+        let plan = CarBuildPlan::single_file(payload).expect("plan");
+        let retention_epoch = 1_700_000_000;
+        let now_unix = retention_epoch + 10;
+        let mut policy = PinPolicy::default();
+        policy.retention_epoch = retention_epoch;
+        let manifest = ManifestBuilder::new()
+            .root_cid(vec![0x22; 8])
+            .dag_codec(DagCodecId(0x71))
+            .chunking_from_profile(
+                sorafs_chunker::ChunkProfile::DEFAULT,
+                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
+            )
+            .content_length(plan.content_length)
+            .car_digest(blake3::hash(payload).into())
+            .car_size(plan.content_length)
+            .pin_policy(policy)
+            .build()
+            .expect("manifest");
+
+        let mut reader = payload.as_slice();
+        let manifest_id = handle
+            .ingest_manifest(&manifest, &plan, &mut reader)
+            .expect("ingest manifest");
+        let manifest_digest: [u8; 32] = manifest.digest().expect("digest").into();
+
+        let report = RepairReportV1 {
+            version: REPAIR_REPORT_VERSION_V1,
+            ticket_id: RepairTicketId("REP-GC-001".into()),
+            auditor_account: "auditor#sora".into(),
+            submitted_at_unix: retention_epoch,
+            evidence: RepairEvidenceV1 {
+                version: REPAIR_EVIDENCE_VERSION_V1,
+                manifest_digest,
+                provider_id: [0x44; 32],
+                por_history_id: None,
+                cause: RepairCauseV1::Manual {
+                    reason: "missing shard".into(),
+                },
+                evidence_json: None,
+                notes: None,
+            },
+            notes: None,
+        };
+        handle
+            .enqueue_repair_report(&report)
+            .expect("enqueue report");
+
+        let report = handle.run_gc_once(now_unix);
+        assert!(report.evictions.is_empty());
+        assert!(report.skipped.iter().any(|skip| skip.reason == "repair_active"));
+        assert!(handle.manifest_metadata(&manifest_id).is_ok());
+    }
+
+    #[test]
+    fn pre_admission_sweep_allows_ingest() {
+        let (mut cfg, _dir) = storage_config_with_temp_dir();
+        cfg = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(cfg.data_dir().clone())
+            .max_capacity_bytes(iroha_config::base::util::Bytes(32))
+            .build();
+
+        let gc_actual = iroha_config::parameters::actual::SorafsGc {
+            enabled: true,
+            pre_admission_sweep: true,
+            retention_grace_secs: 0,
+            max_deletions_per_run: 1,
+            ..Default::default()
+        };
+        let handle =
+            NodeHandle::new_with_policies(cfg, RepairConfig::default(), GcConfig::from(&gc_actual));
+
+        let expired_payload = vec![0xAA; 16];
+        let expired_plan = CarBuildPlan::single_file(&expired_payload).expect("plan");
+        let mut expired_policy = PinPolicy::default();
+        expired_policy.retention_epoch = unix_now_secs().saturating_sub(10);
+        let expired_manifest = ManifestBuilder::new()
+            .root_cid(vec![0x33; 8])
+            .dag_codec(DagCodecId(0x71))
+            .chunking_from_profile(
+                sorafs_chunker::ChunkProfile::DEFAULT,
+                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
+            )
+            .content_length(expired_plan.content_length)
+            .car_digest(blake3::hash(&expired_payload).into())
+            .car_size(expired_plan.content_length)
+            .pin_policy(expired_policy)
+            .build()
+            .expect("manifest");
+        let mut expired_reader = expired_payload.as_slice();
+        let expired_id = handle
+            .ingest_manifest(&expired_manifest, &expired_plan, &mut expired_reader)
+            .expect("ingest expired");
+
+        let new_payload = vec![0xBB; 24];
+        let new_plan = CarBuildPlan::single_file(&new_payload).expect("plan");
+        let new_manifest = ManifestBuilder::new()
+            .root_cid(vec![0x44; 8])
+            .dag_codec(DagCodecId(0x71))
+            .chunking_from_profile(
+                sorafs_chunker::ChunkProfile::DEFAULT,
+                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
+            )
+            .content_length(new_plan.content_length)
+            .car_digest(blake3::hash(&new_payload).into())
+            .car_size(new_plan.content_length)
+            .pin_policy(PinPolicy::default())
+            .build()
+            .expect("manifest");
+        let mut new_reader = new_payload.as_slice();
+        let new_id = handle
+            .ingest_manifest(&new_manifest, &new_plan, &mut new_reader)
+            .expect("ingest new");
+
+        assert!(handle.manifest_metadata(&expired_id).is_err());
+        assert!(handle.manifest_metadata(&new_id).is_ok());
+    }
+
+    #[test]
     fn node_handle_reflects_config() {
         let (cfg, _dir) = storage_config_with_temp_dir();
         let handle = NodeHandle::new(cfg.clone());
@@ -2472,6 +3501,113 @@ mod tests {
     }
 
     #[test]
+    fn node_handle_plan_por_challenges_skips_expired_manifest() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let gc_actual = iroha_config::parameters::actual::SorafsGc {
+            retention_grace_secs: 0,
+            ..Default::default()
+        };
+        let handle =
+            NodeHandle::new_with_policies(cfg, RepairConfig::default(), GcConfig::from(&gc_actual));
+
+        let declaration = CapacityDeclarationV1 {
+            version: CAPACITY_DECLARATION_VERSION_V1,
+            provider_id: [0x22; 32],
+            stake: sorafs_manifest::provider_advert::StakePointer {
+                pool_id: [0xAA; 32],
+                stake_amount: 1,
+            },
+            committed_capacity_gib: 128,
+            chunker_commitments: vec![ChunkerCommitmentV1 {
+                profile_id: "sorafs.sf1@1.0.0".into(),
+                profile_aliases: None,
+                committed_gib: 128,
+                capability_refs: Vec::new(),
+            }],
+            lane_commitments: vec![LaneCommitmentV1 {
+                lane_id: "default".into(),
+                max_gib: 128,
+            }],
+            pricing: None,
+            valid_from: 1,
+            valid_until: 2,
+            metadata: vec![],
+        };
+        let payload = to_bytes(&declaration).expect("encode declaration");
+        let record = CapacityDeclarationRecord::new(
+            ProviderId::new(declaration.provider_id),
+            payload,
+            declaration.committed_capacity_gib,
+            1,
+            1,
+            2,
+            Metadata::default(),
+        );
+        handle
+            .record_capacity_declaration(&record)
+            .expect("record declaration");
+
+        let now_unix = 1_700_000_000;
+        let expired_manifest = build_manifest_with_retention(
+            vec![0x01; 8],
+            now_unix - 10,
+            b"expired-por-manifest",
+            &handle,
+        );
+        let active_manifest = build_manifest_with_retention(
+            vec![0x02; 8],
+            now_unix + 86_400,
+            b"active-por-manifest",
+            &handle,
+        );
+
+        let randomness = PorRandomness {
+            epoch_id: 7,
+            issued_at_unix: now_unix,
+            response_window_secs: 900,
+            drand_round: 777,
+            drand_randomness: [0x55; 32],
+            drand_signature: vec![0x66; 96],
+        };
+
+        let plans = handle
+            .plan_por_challenges(randomness, &HashMap::new())
+            .expect("plan por");
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].challenge.manifest_digest, active_manifest);
+        assert_ne!(plans[0].challenge.manifest_digest, expired_manifest);
+    }
+
+    fn build_manifest_with_retention(
+        cid: Vec<u8>,
+        retention_epoch: u64,
+        payload: &[u8],
+        handle: &NodeHandle,
+    ) -> [u8; 32] {
+        let plan = CarBuildPlan::single_file(payload).expect("plan");
+        let mut policy = PinPolicy::default();
+        policy.retention_epoch = retention_epoch;
+        let manifest = ManifestBuilder::new()
+            .root_cid(cid)
+            .dag_codec(DagCodecId(0x71))
+            .chunking_from_profile(
+                sorafs_chunker::ChunkProfile::DEFAULT,
+                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
+            )
+            .content_length(plan.content_length)
+            .car_digest(blake3::hash(payload).into())
+            .car_size(plan.content_length)
+            .pin_policy(policy)
+            .build()
+            .expect("manifest");
+        let mut reader = payload;
+        handle
+            .ingest_manifest(&manifest, &plan, &mut reader)
+            .expect("ingest");
+        manifest.digest().expect("digest").into()
+    }
+
+    #[test]
     fn node_handle_storage_methods_error_when_disabled() {
         let cfg = StorageConfig::builder().enabled(false).build();
         let handle = NodeHandle::new(cfg);
@@ -2521,6 +3657,37 @@ mod tests {
             guard.push(encoded.to_vec());
             Ok(())
         }
+
+        fn publish_repair_audit_event(
+            &self,
+            _event: &RepairAuditEventV1,
+            encoded: &[u8],
+        ) -> Result<(), GovernancePublishError> {
+            let mut guard = self.payloads.lock().expect("publisher lock poisoned");
+            guard.push(encoded.to_vec());
+            Ok(())
+        }
+
+        fn publish_repair_slash_proposal(
+            &self,
+            _proposal: &RepairSlashProposalV1,
+            encoded: &[u8],
+            _stage: RepairSlashStage,
+        ) -> Result<(), GovernancePublishError> {
+            let mut guard = self.payloads.lock().expect("publisher lock poisoned");
+            guard.push(encoded.to_vec());
+            Ok(())
+        }
+
+        fn publish_gc_audit_event(
+            &self,
+            _event: &GcAuditEventV1,
+            encoded: &[u8],
+        ) -> Result<(), GovernancePublishError> {
+            let mut guard = self.payloads.lock().expect("publisher lock poisoned");
+            guard.push(encoded.to_vec());
+            Ok(())
+        }
     }
 
     #[derive(Debug, Default)]
@@ -2538,6 +3705,37 @@ mod tests {
         fn publish_deal_settlement(
             &self,
             _settlement: &DealSettlementV1,
+            _encoded: &[u8],
+        ) -> Result<(), GovernancePublishError> {
+            let mut guard = self.attempts.lock().expect("publisher lock poisoned");
+            *guard += 1;
+            Err(GovernancePublishError::other("simulated publish failure"))
+        }
+
+        fn publish_repair_audit_event(
+            &self,
+            _event: &RepairAuditEventV1,
+            _encoded: &[u8],
+        ) -> Result<(), GovernancePublishError> {
+            let mut guard = self.attempts.lock().expect("publisher lock poisoned");
+            *guard += 1;
+            Err(GovernancePublishError::other("simulated publish failure"))
+        }
+
+        fn publish_repair_slash_proposal(
+            &self,
+            _proposal: &RepairSlashProposalV1,
+            _encoded: &[u8],
+            _stage: RepairSlashStage,
+        ) -> Result<(), GovernancePublishError> {
+            let mut guard = self.attempts.lock().expect("publisher lock poisoned");
+            *guard += 1;
+            Err(GovernancePublishError::other("simulated publish failure"))
+        }
+
+        fn publish_gc_audit_event(
+            &self,
+            _event: &GcAuditEventV1,
             _encoded: &[u8],
         ) -> Result<(), GovernancePublishError> {
             let mut guard = self.attempts.lock().expect("publisher lock poisoned");

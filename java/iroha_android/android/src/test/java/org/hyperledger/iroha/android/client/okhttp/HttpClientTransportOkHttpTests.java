@@ -1,14 +1,12 @@
 package org.hyperledger.iroha.android.client.okhttp;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.Base64;
-import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import okhttp3.OkHttpClient;
@@ -18,10 +16,10 @@ import okhttp3.mockwebserver.RecordedRequest;
 import org.hyperledger.iroha.android.client.ClientConfig;
 import org.hyperledger.iroha.android.client.ClientObserver;
 import org.hyperledger.iroha.android.client.ClientResponse;
-import org.hyperledger.iroha.android.client.JsonParser;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
+import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 import org.hyperledger.iroha.android.tx.SignedTransactionHasher;
 import org.junit.Test;
@@ -86,18 +84,10 @@ public final class HttpClientTransportOkHttpTests {
       assertNotNull(recorded);
       assertEquals("/v1/pipeline/transactions", recorded.getPath());
       assertEquals("POST", recorded.getMethod());
-      assertEquals("application/json", recorded.getHeader("Content-Type"));
-      assertEquals("application/json", recorded.getHeader("Accept"));
+      assertEquals("application/x-norito", recorded.getHeader("Content-Type"));
+      assertEquals("application/x-norito, application/json", recorded.getHeader("Accept"));
       assertEquals("ok", recorded.getHeader("X-Test"));
-
-      final Object parsed = JsonParser.parse(recorded.getBody().readUtf8());
-      assertTrue(parsed instanceof Map);
-      @SuppressWarnings("unchecked")
-      final Map<String, Object> map = (Map<String, Object>) parsed;
-      assertEquals(Base64.getEncoder().encodeToString(encodedPayload), map.get("payload"));
-      assertEquals(Base64.getEncoder().encodeToString(signature), map.get("signature"));
-      assertEquals(Base64.getEncoder().encodeToString(publicKey), map.get("public_key"));
-      assertEquals(tx.schemaName(), map.get("schema"));
+      assertArrayEquals(SignedTransactionEncoder.encodeVersioned(tx), recorded.getBody().readByteArray());
     }
   }
 

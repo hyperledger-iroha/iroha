@@ -25539,7 +25539,7 @@ pub struct OfflineAllowanceListParams {
     pub sort: Option<String>,
     /// Optional response address format (`ih58` or `compressed`).
     pub address_format: Option<String>,
-    /// Filter allowances by controller account literal (IH58/compressed/public-key supported).
+    /// Filter allowances by controller account literal (IH58 (preferred)/snx1 (second-best)/public-key supported).
     pub controller_id: Option<String>,
     /// Require allowances whose certificate expiry is <= this timestamp.
     pub certificate_expires_before_ms: Option<u64>,
@@ -25588,11 +25588,11 @@ pub struct OfflineTransferListParams {
     pub sort: Option<String>,
     /// Optional response address format (`ih58` or `compressed`).
     pub address_format: Option<String>,
-    /// Filter transfers by originating controller (IH58/compressed/public-key literals accepted).
+    /// Filter transfers by originating controller (IH58 (preferred)/snx1 (second-best)/public-key literals accepted).
     pub controller_id: Option<String>,
-    /// Filter transfers by receiver account literal (IH58/compressed/public-key literals accepted).
+    /// Filter transfers by receiver account literal (IH58 (preferred)/snx1 (second-best)/public-key literals accepted).
     pub receiver_id: Option<String>,
-    /// Filter transfers by deposit account literal (IH58/compressed/public-key literals accepted).
+    /// Filter transfers by deposit account literal (IH58 (preferred)/snx1 (second-best)/public-key literals accepted).
     pub deposit_account_id: Option<String>,
     /// Match a specific certificate identifier (hex, case-insensitive).
     pub certificate_id_hex: Option<String>,

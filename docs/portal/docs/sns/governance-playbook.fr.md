@@ -66,7 +66,7 @@ dashboards et voies d'escalade.
 | Charte + addenda KPI | `docs/source/sns/governance_addenda/` | Chartes signees avec controle de version, covenants KPI et decisions de gouvernance referencees par les votes CLI. |
 | Schema du registre | [`registry-schema.md`](./registry-schema.md) | Structures Norito canoniques (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`). |
 | Contrat du registrar | [`registrar-api.md`](./registrar-api.md) | Payloads REST/gRPC, metriques `sns_registrar_status_total` et attentes des hooks de gouvernance. |
-| Guide UX d'adresses | [`address-display-guidelines.md`](./address-display-guidelines.md) | Rendus IH58/compresses canoniques reproduits par les wallets/explorers. |
+| Guide UX d'adresses | [`address-display-guidelines.md`](./address-display-guidelines.md) | Rendus canoniques IH58 (prefere) et compresses (second choix) reproduits par les wallets/explorers. |
 | Docs SoraDNS / GAR | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | Derivation deterministe des hosts, workflow du tailer de transparence et regles d'alerte. |
 | Memos reglementaires | `docs/source/sns/regulatory/` | Notes d'accueil par juridiction (ex. EU DSA), acknowledgements steward, annexes de modele. |
 | Journal de drill | `ops/drill-log.md` | Journal des rehearsals chaos et IR requis avant sorties de phase. |

@@ -5531,29 +5531,48 @@ test("submitIsoPacs009AndWait rejects when submission omits message_id", async (
   assert.deepEqual(calls.map((call) => call.url), [`${BASE_URL}/v1/iso20022/pacs009`]);
 });
 
-test("submitTransaction posts norito payload and returns JSON when present", async () => {
+test("submitTransaction posts norito payload and decodes receipt response", async () => {
   const payload = new Uint8Array([0xde, 0xad]);
+  const receiptJson = JSON.stringify({
+    payload: {
+      tx_hash: "aa".repeat(32),
+      submitted_at_ms: 1,
+      submitted_at_height: 2,
+      signer: "ed0120" + "bb".repeat(32),
+    },
+    signature: "ed25519:" + "cc".repeat(64),
+  });
   const fetchImpl = async (url, init) => {
     assert.equal(url, `${BASE_URL}/v1/pipeline/transactions`);
     assert.equal(init.method, "POST");
     assert.equal(init.headers["Content-Type"], "application/x-norito");
+    assert.equal(init.headers.Accept, "application/x-norito, application/json");
     assert.ok(Buffer.isBuffer(init.body));
     assert.deepEqual([...init.body.values()], [0xde, 0xad]);
     return createResponse({
       status: 202,
-      jsonData: {
-        kind: "Transaction",
-        content: { status: { kind: "Queued" } },
-      },
-      headers: { "content-type": "application/json" },
+      arrayData: new Uint8Array([0x01, 0x02, 0x03]),
+      headers: { "content-type": "application/x-norito" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.submitTransaction(payload);
-  assert.deepEqual(result, {
-    kind: "Transaction",
-    content: { status: { kind: "Queued" } },
-  });
+  const originalBinding = globalThis.__IROHA_NATIVE_BINDING__;
+  globalThis.__IROHA_NATIVE_BINDING__ = {
+    decodeTransactionReceiptJson: (buffer) => {
+      assert.ok(Buffer.isBuffer(buffer));
+      return receiptJson;
+    },
+  };
+  try {
+    const result = await client.submitTransaction(payload);
+    assert.deepEqual(result, JSON.parse(receiptJson));
+  } finally {
+    if (originalBinding === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = originalBinding;
+    }
+  }
 });
 
 test("submitTransaction retries transient failures via pipeline profile", async () => {
@@ -11273,7 +11292,7 @@ test("listAccountPermissions validates entry names", async () => {
   );
 });
 
-test("listAccountPermissions normalizes IH58 and compressed account ids", async () => {
+test("listAccountPermissions normalizes IH58 and compressed (`snx1`) account ids", async () => {
   const forms = sampleAccountForms();
   for (const literal of [forms.ih58, forms.compressed]) {
     let requestedPath = null;

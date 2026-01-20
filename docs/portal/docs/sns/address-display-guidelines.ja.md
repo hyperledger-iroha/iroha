@@ -22,7 +22,7 @@ import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
 あるAndroidの小売ウォレットサンプルは、必要なUXパターンを示します:
 
 - **二つのコピー先。** 明示的なコピー按钮を二つ用意します: IH58
-  (既定) とSora専用の圧縮形式(`snx1...`)。IH58は常に外部共有に安全で、
+  (推奨) とSora専用の圧縮形式(`snx1...`、次善)。IH58は常に外部共有に安全で、
   QRのペイロードになります。圧縮形式はSora対応アプリ内でしか動かない
   ため、インライン警告を必ず付けます。AndroidサンプルはMaterialの
   両ボタンとツールチップを

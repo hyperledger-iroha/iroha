@@ -4,8 +4,8 @@ Wallets, explorers, and SDK samples must treat account addresses as immutable
 payloads. The Android retail wallet sample in
 `examples/android/retail-wallet` now demonstrates the required UX pattern:
 
-- **Dual copy targets.** Ship two explicit copy buttons—IH58 (default) and the
-  compressed Sora-only form (`snx1…`). IH58 is always safe to share externally
+- **Dual copy targets.** Ship two explicit copy buttons—IH58 (preferred) and the
+  compressed Sora-only form (`snx1…`, second-best). IH58 is always safe to share externally
   and powers the QR payload. The compressed variant must include an inline
   warning because it only works inside Sora-aware apps. The Android retail wallet
   sample wires both Material buttons and their tooltips in
@@ -42,7 +42,7 @@ tooltips, and warnings stay aligned across platforms:
 
 ## SDK helpers
 
-Each SDK now exposes a convenience helper that returns the IH58 and compressed forms alongside
+Each SDK now exposes a convenience helper that returns the IH58 (preferred) and compressed (`snx1`, second-best) forms alongside
 the warning string so UI layers can stay consistent:
 
 - JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)` (`javascript/iroha_js/src/address.js`)
@@ -54,7 +54,7 @@ the warning string so UI layers can stay consistent:
 - Java/Kotlin: `AccountAddress.displayFormats(int networkPrefix = 753)` (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountAddress.java`)
 
 Use these helpers instead of reimplementing the encode logic in UI layers.
-Every helper returns a `domainSummary` payload alongside the IH58 + compressed
+Every helper returns a `domainSummary` payload alongside the IH58 (preferred) + compressed (`snx1`, second-best)
 strings. The summary exposes `kind` (`default`, `local12`, `global`, `unknown`)
 and an optional `warning` message that mirrors the Local-12 cutover guidance in
 this document. Use the warning string to show inline banners when Local-12
@@ -115,7 +115,7 @@ transaction participants, account summaries, telemetry DTOs) using the
 underlying identifiers. Unknown values (for example `address_format=base64`)
 return `HTTP 400` so misconfigured SDKs fail fast.
 
-Requests always accept IH58 and compressed selectors, and production clusters
+Requests always accept IH58 (preferred) and compressed (`snx1`, second-best) selectors, and production clusters
 rejected unless the operator explicitly toggles dev-only overrides. Canonical
 IH58 strings remain the wire format for manifests, telemetry, and QR payloads,
 so only opt into `address_format=compressed` when rendering UX where the Sora
@@ -126,17 +126,17 @@ Offline reporting endpoints reuse the same contract. `/v1/offline/allowances{,/q
 `/v1/offline/settlements{,/query}`, `/v1/offline/receipts{,/query}`, and
 `/v1/offline/summaries{,/query}` now
 canonicalize `controller_id`, `receiver_id`, and `deposit_account_id` filter literals, so GET and
-POST filters happily accept IH58 and compressed selectors (including `in`/`nin`
+POST filters happily accept IH58 (preferred) and compressed (`snx1`, second-best) selectors (including `in`/`nin`
 arrays) without forcing operators to hand-normalize values ahead of time.
 When the selector targets the implicit default domain, clients may omit
-`@<domain>` entirely; Torii canonicalizes those IH58/compressed inputs to
+`@<domain>` entirely; Torii canonicalizes those preferred IH58 / second-best compressed (`snx1`) inputs to
 `IH58@<default-domain>` and emits the canonical string in responses + telemetry.
 Domainless literals for non-default domains still fail with
 `ERR_DEFAULT_DOMAIN_IMPLICIT_ONLY` so dashboards can detect misconfigurations.
 
 ## Accessibility + implicit domain metadata
 
-- **Copy mode controls.** When rendering the IH58/compressed/QR toggle, mark each button with
+- **Copy mode controls.** When rendering the IH58 (preferred)/compressed (`snx1`, second-best)/QR toggle, mark each button with
   `aria-pressed` and an explicit `aria-label` (for example, “Copy canonical IH58 account address”
   vs “Copy compressed Sora address—works only inside Sora-aware apps”). Include a visually-hidden
   `(safe to share)` or `(Sora-only)` suffix so screen readers convey the warnings present in the UI.
@@ -157,7 +157,7 @@ Domainless literals for non-default domains still fail with
   alert bundle `dashboards/alerts/address_ingest_rules.yml` expect those labels so operators can
   attach a 30-day zero-usage export to the ADDR-7 readiness review.
 - **Reduced-motion + keyboard flows.** Respect `prefers-reduced-motion` when animating QR refreshes,
-  and ensure keyboard users can tab through IH58/compressed/QR controls without losing the focus
+  and ensure keyboard users can tab through IH58 (preferred)/compressed (`snx1`, second-best)/QR controls without losing the focus
   ring. Tooltips should be paired with aria hints so that high-contrast and screen-reader users get
   the same warnings as pointer users.
 
@@ -275,11 +275,11 @@ through the migration:
    counterparties that Local selectors will be rejected once the cutover completes.
 5. For bulk data sets, run `iroha address audit --input addresses.txt --network-prefix 753`. The command
    reads newline-separated literals (comments starting with `#` are ignored, and `--input -` or no flag uses STDIN),
-   emits a JSON report with canonical/IH58/compressed summaries for every entry, and counts both parse errors
+   emits a JSON report with canonical/preferred IH58/second-best compressed (`snx1`) summaries for every entry, and counts both parse errors
    automation with `--fail-on-warning` once operators are ready to block Local selectors in CI.
 6. When you need a newline-to-newline rewrite, use
    The helper skips non-Local rows by default, converts every remaining entry into the requested encoding
-   (IH58/compressed/hex/JSON), and preserves the original domain when `--append-domain` is set. Pair it with
+   (IH58 preferred/compressed (`snx1`) second-best/hex/JSON), and preserves the original domain when `--append-domain` is set. Pair it with
    `--allow-errors` to keep scanning even when a dump contains malformed literals.
 7. CI/lint automation can run `ci/check_address_normalize.sh`, which extracts the Local selectors from
    `fixtures/account/address_vectors.json`, converts them via `iroha address normalize`, and replays

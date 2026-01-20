@@ -39,7 +39,7 @@ pub struct RegisterArgs {
     /// Lane id to register against
     #[arg(long)]
     pub lane_id: u32,
-    /// Validator account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
+    /// Validator account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
     #[arg(long, value_name = "ACCOUNT_ID")]
     pub validator: String,
     /// Optional staking account (defaults to validator)
@@ -79,7 +79,7 @@ pub struct ActivateArgs {
     /// Lane id containing the pending validator
     #[arg(long)]
     pub lane_id: u32,
-    /// Validator account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
+    /// Validator account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
     #[arg(long, value_name = "ACCOUNT_ID")]
     pub validator: String,
 }
@@ -98,7 +98,7 @@ pub struct ExitArgs {
     /// Lane id containing the validator
     #[arg(long)]
     pub lane_id: u32,
-    /// Validator account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
+    /// Validator account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
     #[arg(long, value_name = "ACCOUNT_ID")]
     pub validator: String,
     /// Release timestamp in milliseconds (must not precede current block timestamp)

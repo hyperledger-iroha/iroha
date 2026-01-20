@@ -1,4 +1,4 @@
-//! Account address tooling (IH58/compressed/canonical conversions).
+//! Account address tooling (IH58 (preferred)/snx1 (second-best)/canonical conversions).
 
 use super::*;
 use clap::ValueEnum;
@@ -19,7 +19,7 @@ use std::{
 /// Default IH58 prefix for Sora Nexus (see `address_prefix_registry.json`).
 const DEFAULT_IH58_PREFIX: u16 = 753;
 const LOCAL_SELECTOR_WARNING: &str = "local-domain selector detected: register the domain \
-with the Nexus registry and refresh IH58/compressed copies before Local selectors are blocked. \
+with the Nexus registry and refresh IH58 (preferred)/snx1 (second-best) copies before Local selectors are blocked. \
 Refer to docs/source/sns/address_display_guidelines.md for the cutover schedule.";
 
 #[derive(clap::Subcommand, Debug)]

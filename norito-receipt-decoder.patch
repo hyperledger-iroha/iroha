@@ -1,0 +1,254 @@
+diff --git a/IrohaSwift/Sources/IrohaSwift/NativeBridge.swift b/IrohaSwift/Sources/IrohaSwift/NativeBridge.swift
+index 1e5044869..7d562e35e 100644
+--- a/IrohaSwift/Sources/IrohaSwift/NativeBridge.swift
++++ b/IrohaSwift/Sources/IrohaSwift/NativeBridge.swift
+@@ -975,6 +975,11 @@ public final class NoritoNativeBridge: @unchecked Sendable {
+         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+         UnsafeMutablePointer<UInt>?
+     ) -> Int32
++    private typealias DecodeReceiptFn = @convention(c) (
++        UnsafePointer<UInt8>?, UInt,
++        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
++        UnsafeMutablePointer<UInt>?
++    ) -> Int32
+ 
+     private typealias FreeFn = @convention(c) (UnsafeMutablePointer<UInt8>?) -> Void
+     private typealias SetChainDiscriminantFn = @convention(c) (UInt16) -> UInt16
+@@ -1498,6 +1503,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
+     private var encodeGovernancePersistCouncilFn: EncodeGovernancePersistCouncilFn? = nil
+     private var encodeGovernancePersistCouncilWithAlgFn: EncodeGovernancePersistCouncilWithAlgFn? = nil
+     private var decodeSignedFn: DecodeSignedFn? = nil
++    private var decodeReceiptFn: DecodeReceiptFn? = nil
+     private var freeFn: FreeFn? = nil
+     private var setChainDiscriminantFn: SetChainDiscriminantFn? = nil
+     private var setAccelerationConfigFn: SetAccelerationConfigFn? = nil
+@@ -1904,6 +1910,11 @@ public final class NoritoNativeBridge: @unchecked Sendable {
+             } else {
+                 self.decodeSignedFn = nil
+             }
++            if let decodeReceiptSymbol = dlsym(handle, "connect_norito_decode_transaction_receipt_json") {
++                self.decodeReceiptFn = unsafeBitCast(decodeReceiptSymbol, to: DecodeReceiptFn.self)
++            } else {
++                self.decodeReceiptFn = nil
++            }
+             if let publicKeyFromPrivateSymbol = dlsym(handle, "connect_norito_public_key_from_private") {
+                 self.publicKeyFromPrivateFn = unsafeBitCast(publicKeyFromPrivateSymbol, to: PublicKeyFromPrivateFn.self)
+             } else {
+@@ -4762,6 +4773,30 @@ public final class NoritoNativeBridge: @unchecked Sendable {
+         #endif
+     }
+ 
++    func decodeTransactionReceipt(_ data: Data) -> String? {
++        #if canImport(Darwin)
++        guard let decodeReceiptFn, let freeFn else { return nil }
++
++        var jsonPtr: UnsafeMutablePointer<UInt8>? = nil
++        var jsonLen: UInt = 0
++
++        let status = data.withUnsafeBytes { buffer -> Int32 in
++            decodeReceiptFn(buffer.bindMemory(to: UInt8.self).baseAddress, UInt(data.count), &jsonPtr, &jsonLen)
++        }
++
++        guard status == 0, let jsonPtr else {
++            if let jsonPtr { freeFn(jsonPtr) }
++            return nil
++        }
++
++        let jsonData = Data(bytes: jsonPtr, count: Int(jsonLen))
++        freeFn(jsonPtr)
++        return String(data: jsonData, encoding: .utf8)
++        #else
++        return nil
++        #endif
++    }
++
+     var canUseConnectCrypto: Bool {
+         #if canImport(Darwin)
+         return connectGenerateKeypairFn != nil
+diff --git a/IrohaSwift/Sources/IrohaSwift/ToriiClient.swift b/IrohaSwift/Sources/IrohaSwift/ToriiClient.swift
+index c1380ad1a..c64cb2fc9 100644
+--- a/IrohaSwift/Sources/IrohaSwift/ToriiClient.swift
++++ b/IrohaSwift/Sources/IrohaSwift/ToriiClient.swift
+@@ -6245,8 +6245,25 @@ public struct ToriiGovernanceUnlockStatsResponse: Decodable, Sendable {
+ }
+ 
+ public struct ToriiSubmitTransactionResponse: Decodable, Sendable {
+-    public let hash: String?
+-    public let accepted: Bool?
++    public struct Payload: Decodable, Sendable {
++        public let txHash: String
++        public let submittedAtMs: UInt64
++        public let submittedAtHeight: UInt64
++        public let signer: String
++
++        private enum CodingKeys: String, CodingKey {
++            case txHash = "tx_hash"
++            case submittedAtMs = "submitted_at_ms"
++            case submittedAtHeight = "submitted_at_height"
++            case signer
++        }
++    }
++
++    public let payload: Payload
++    public let signature: String
++
++    /// Convenience accessor for transaction hash.
++    public var hash: String { payload.txHash }
+ }
+ 
+ public struct ToriiPipelineTransactionStatus: Decodable, Sendable {
+@@ -8790,7 +8807,11 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable
+         let (responseData, response) = try await send(request)
+         try ensureStatus(response, in: 200..<300)
+         guard !responseData.isEmpty else { return nil }
+-        return try decodeJSON(ToriiSubmitTransactionResponse.self, from: responseData)
++        guard let jsonString = NoritoNativeBridge.shared.decodeTransactionReceipt(responseData),
++              let jsonData = jsonString.data(using: .utf8) else {
++            return nil
++        }
++        return try decodeJSON(ToriiSubmitTransactionResponse.self, from: jsonData)
+     }
+ 
+     public func getTransactionStatus(hashHex: String,
+@@ -8798,7 +8819,8 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable
+         let paths = pipelineEndpoints(for: mode)
+         let request = try makeRequest(
+             path: paths.status,
+-            queryItems: [URLQueryItem(name: "hash", value: hashHex)]
++            queryItems: [URLQueryItem(name: "hash", value: hashHex)],
++            headers: ["Accept": "application/json"]
+         )
+         let (data, response) = try await send(request)
+         if response.statusCode == 404 { return nil }
+diff --git a/IrohaSwift/Sources/IrohaSwift/TxBuilder.swift b/IrohaSwift/Sources/IrohaSwift/TxBuilder.swift
+index 3a4b443c2..fdbecb807 100644
+--- a/IrohaSwift/Sources/IrohaSwift/TxBuilder.swift
++++ b/IrohaSwift/Sources/IrohaSwift/TxBuilder.swift
+@@ -1151,10 +1151,9 @@ public final class IrohaSDK: @unchecked Sendable {
+     public func submit(envelope: SignedTransactionEnvelope, completion: @Sendable @escaping (Error?) -> Void) -> Task<Void, Never> {
+         return Task {
+             do {
+-                let response = try await submitTransactionWithRetry(envelope: envelope,
+-                                                                    options: pipelineSubmitOptions,
+-                                                                    mode: pipelineEndpointMode)
+-                try Self.ensureSubmissionAccepted(response: response)
++                _ = try await submitTransactionWithRetry(envelope: envelope,
++                                                         options: pipelineSubmitOptions,
++                                                         mode: pipelineEndpointMode)
+                 guard !Task.isCancelled else { return }
+                 completion(nil)
+             } catch {
+@@ -1166,10 +1165,9 @@ public final class IrohaSDK: @unchecked Sendable {
+ 
+     @available(iOS 15.0, macOS 12.0, *)
+     public func submit(envelope: SignedTransactionEnvelope) async throws {
+-        let response = try await submitTransactionWithRetry(envelope: envelope,
+-                                                            options: pipelineSubmitOptions,
+-                                                            mode: pipelineEndpointMode)
+-        try Self.ensureSubmissionAccepted(response: response)
++        _ = try await submitTransactionWithRetry(envelope: envelope,
++                                                 options: pipelineSubmitOptions,
++                                                 mode: pipelineEndpointMode)
+     }
+ 
+     @available(iOS 15.0, macOS 12.0, *)
+@@ -1718,11 +1716,10 @@ public final class IrohaSDK: @unchecked Sendable {
+         for index in pending.indices {
+             let record = pending[index]
+             do {
+-                let response = try await submitTransactionWithRetry(envelope: record.envelope,
+-                                                                    options: pipelineSubmitOptions,
+-                                                                    mode: mode,
+-                                                                    skipQueueFlush: true)
+-                try Self.ensureSubmissionAccepted(response: response)
++                _ = try await submitTransactionWithRetry(envelope: record.envelope,
++                                                         options: pipelineSubmitOptions,
++                                                         mode: mode,
++                                                         skipQueueFlush: true)
+             } catch {
+                 try requeueRecords(pending[index...])
+                 throw error
+@@ -2156,13 +2153,6 @@ extension IrohaSDK {
+     static func restUnavailableError() -> IrohaSDKError {
+         .restClientUnavailable
+     }
+-
+-    static func ensureSubmissionAccepted(response: ToriiSubmitTransactionResponse?) throws {
+-        if let accepted = response?.accepted, accepted == false {
+-            throw IrohaSDKError.toriiRejected
+-        }
+-    }
+-
+ }
+ 
+ @available(iOS 15.0, macOS 12.0, *)
+diff --git a/crates/connect_norito_bridge/include/connect_norito_bridge.h b/crates/connect_norito_bridge/include/connect_norito_bridge.h
+index fd571be68..cb01b0753 100644
+--- a/crates/connect_norito_bridge/include/connect_norito_bridge.h
++++ b/crates/connect_norito_bridge/include/connect_norito_bridge.h
+@@ -908,6 +908,10 @@ int32_t connect_norito_decode_signed_transaction_json(
+     const uint8_t* signed_bytes, unsigned long signed_len,
+     uint8_t** out_json_ptr, unsigned long* out_json_len);
+ 
++int32_t connect_norito_decode_transaction_receipt_json(
++    const uint8_t* receipt_bytes, unsigned long receipt_len,
++    uint8_t** out_json_ptr, unsigned long* out_json_len);
++
+ // ---------------- Acceleration configuration ----------------
+ typedef struct {
+     uint8_t enable_simd;
+diff --git a/crates/connect_norito_bridge/src/lib.rs b/crates/connect_norito_bridge/src/lib.rs
+index bd819092d..30f9352bf 100644
+--- a/crates/connect_norito_bridge/src/lib.rs
++++ b/crates/connect_norito_bridge/src/lib.rs
+@@ -65,7 +65,10 @@ use iroha_data_model::{
+     },
+     proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId},
+     smart_contract::manifest::ContractManifest,
+-    transaction::{Executable, SignedTransaction, signed::TransactionBuilder},
++    transaction::{
++        Executable, SignedTransaction, TransactionSubmissionReceipt,
++        signed::TransactionBuilder,
++    },
+ };
+ use iroha_executor_data_model::isi::multisig::{MultisigRegister, MultisigSpec};
+ use iroha_primitives::{json::Json, numeric::Numeric};
+@@ -8904,6 +8907,38 @@ pub unsafe extern "C" fn connect_norito_decode_signed_transaction_json(
+     }
+ }
+ 
++/// Decode a Norito-encoded `TransactionSubmissionReceipt` into JSON.
++///
++/// # Safety
++/// All pointer arguments must be valid and non-null.
++#[unsafe(no_mangle)]
++pub unsafe extern "C" fn connect_norito_decode_transaction_receipt_json(
++    receipt_ptr: *const c_uchar,
++    receipt_len: c_ulong,
++    out_json_ptr: *mut *mut c_uchar,
++    out_json_len: *mut c_ulong,
++) -> c_int {
++    unsafe {
++        if receipt_ptr.is_null() || out_json_ptr.is_null() || out_json_len.is_null() {
++            return -1;
++        }
++        let bytes = slice::from_raw_parts(receipt_ptr, receipt_len as usize);
++        let receipt: TransactionSubmissionReceipt =
++            match norito::decode_from_bytes(bytes) {
++                Ok(v) => v,
++                Err(_) => return -2,
++            };
++        let json_bytes = match norito::json::to_vec(&receipt) {
++            Ok(vec) => vec,
++            Err(_) => return -3,
++        };
++        if let Err(code) = write_bytes(out_json_ptr, out_json_len, &json_bytes) {
++            return code;
++        }
++        0
++    }
++}
++
+ #[repr(C)]
+ #[derive(Clone, Copy, Debug, Default)]
+ pub struct connect_norito_acceleration_config {

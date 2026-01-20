@@ -5,7 +5,7 @@ private final class StubPipelineClient: ToriiTransactionSubmitting {
     var submitted: [Data] = []
     var submittedModes: [PipelineEndpointMode] = []
     var observedIdempotencyKeys: [String?] = []
-    var result: Swift.Result<ToriiSubmitTransactionResponse?, Error> = .success(ToriiSubmitTransactionResponse(hash: "abc", accepted: true))
+    var result: Swift.Result<ToriiSubmitTransactionResponse?, Error> = .success(makeSubmitReceipt())
     var queuedResults: [Swift.Result<ToriiSubmitTransactionResponse?, Error>] = []
 
     func submitTransaction(data: Data,
@@ -22,6 +22,13 @@ private final class StubPipelineClient: ToriiTransactionSubmitting {
             throw error
         }
     }
+}
+
+private func makeSubmitReceipt() -> ToriiSubmitTransactionResponse {
+    ToriiSubmitTransactionResponse(
+        payload: .init(txHash: "abc", submittedAtMs: 1, submittedAtHeight: 2, signer: "signer"),
+        signature: "deadbeef"
+    )
 }
 
 private struct StubTransportError: Error {}
@@ -141,8 +148,13 @@ private final class PipelineURLProtocol: URLProtocol {
 
     private static var defaultSubmitBody: Data {
         let body: [String: Any] = [
-            "hash": "abc",
-            "accepted": true
+            "payload": [
+                "tx_hash": "abc",
+                "submitted_at_ms": 1,
+                "submitted_at_height": 2,
+                "signer": "signer"
+            ],
+            "signature": "deadbeef"
         ]
         return (try? JSONSerialization.data(withJSONObject: body)) ?? Data()
     }
@@ -1277,7 +1289,7 @@ final class TxBuilderTests: XCTestCase {
         let stub = StubPipelineClient()
         stub.queuedResults = [
             .failure(ToriiClientError.transport(StubTransportError())),
-            .success(ToriiSubmitTransactionResponse(hash: "abc", accepted: true)),
+            .success(makeSubmitReceipt()),
         ]
         let sdk = IrohaSDK(toriiClient: stub,
                            baseURL: URL(string: "https://example.test")!,
