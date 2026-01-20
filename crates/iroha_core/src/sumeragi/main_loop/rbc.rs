@@ -1337,11 +1337,6 @@ impl Actor {
                     error = %err,
                     "failed to seed RBC session from BlockCreated payload"
                 );
-                #[cfg(test)]
-                eprintln!(
-                    "seed_rbc_session_from_block failed: height={} view={} err={}",
-                    key.1, key.2, err
-                );
                 return Ok(());
             }
         };
@@ -1379,33 +1374,18 @@ impl Actor {
         }
 
         self.subsystems.da_rbc.rbc.sessions.insert(key, session);
-        #[cfg(test)]
-        eprintln!(
-            "seed_rbc_session_from_block: inserted session? {}",
-            self.subsystems.da_rbc.rbc.sessions.contains_key(&key)
-        );
         if roster.is_empty() {
             self.ensure_rbc_session_roster(key);
         } else {
             self.record_rbc_session_roster(key, roster, RbcRosterSource::Derived);
         }
         self.flush_pending_rbc(key)?;
-        #[cfg(test)]
-        eprintln!(
-            "seed_rbc_session_from_block: after flush session? {}",
-            self.subsystems.da_rbc.rbc.sessions.contains_key(&key)
-        );
         if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
             self.update_rbc_status_entry(key, &session, false);
             self.persist_rbc_session(key, &session);
         }
         self.publish_rbc_backlog_snapshot();
         self.maybe_emit_rbc_ready(key)?;
-        #[cfg(test)]
-        eprintln!(
-            "seed_rbc_session_from_block: after ready session? {}",
-            self.subsystems.da_rbc.rbc.sessions.contains_key(&key)
-        );
         Ok(())
     }
 
@@ -1418,24 +1398,15 @@ impl Actor {
         }
         let (block, payload_hash) = {
             let Some(pending) = self.pending.pending_blocks.get(&key.0) else {
-                #[cfg(test)]
-                eprintln!("ensure_rbc_session_from_pending_block: missing pending for key {key:?}");
                 return Ok(false);
             };
             if pending.height != key.1 || pending.view != key.2 {
-                #[cfg(test)]
-                eprintln!(
-                    "ensure_rbc_session_from_pending_block: pending mismatch key={key:?} pending_height={} pending_view={}",
-                    pending.height, pending.view
-                );
                 return Ok(false);
             }
             if matches!(
                 pending.validation_status,
                 super::pending_block::ValidationStatus::Invalid
             ) {
-                #[cfg(test)]
-                eprintln!("ensure_rbc_session_from_pending_block: pending invalid for key {key:?}");
                 return Ok(false);
             }
             (pending.block.clone(), pending.payload_hash)

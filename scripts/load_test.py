@@ -20,7 +20,23 @@ def get_status():
         return None
 
 def send_ping():
-    subprocess.run([BINARY, "--config", CONFIG, "transaction", "ping", "--count", "1", "--no-wait"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    msg = f"load-{int(time.time() * 1000)}"
+    subprocess.run(
+        [
+            BINARY,
+            "--config",
+            CONFIG,
+            "transaction",
+            "ping",
+            "--msg",
+            msg,
+            "--count",
+            "1",
+            "--no-wait",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 print("Waiting for network...")
 ready = False

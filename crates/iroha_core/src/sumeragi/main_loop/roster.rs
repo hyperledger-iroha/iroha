@@ -25,13 +25,10 @@ pub(super) fn canonicalize_roster(roster: Vec<PeerId>) -> Vec<PeerId> {
 
 pub(super) fn canonicalize_roster_for_mode(
     roster: Vec<PeerId>,
-    consensus_mode: ConsensusMode,
+    _consensus_mode: ConsensusMode,
 ) -> Vec<PeerId> {
-    if matches!(consensus_mode, ConsensusMode::Npos) {
-        canonicalize_roster(roster)
-    } else {
-        roster
-    }
+    // Canonicalize for all modes to keep roster hashes stable across peers.
+    canonicalize_roster(roster)
 }
 
 #[allow(dead_code)]
@@ -463,6 +460,27 @@ mod tests {
 
         let roster = vec![first.clone(), second.clone(), first.clone()];
         let canonical = canonicalize_roster(roster);
+
+        let mut expected = vec![first, second];
+        expected.sort();
+        assert_eq!(canonical, expected);
+    }
+
+    #[test]
+    fn canonicalize_roster_for_permissioned_sorts() {
+        let first = PeerId::new(
+            KeyPair::from_seed(b"roster-a".to_vec(), Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let second = PeerId::new(
+            KeyPair::from_seed(b"roster-b".to_vec(), Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+
+        let roster = vec![second.clone(), first.clone()];
+        let canonical = canonicalize_roster_for_mode(roster, ConsensusMode::Permissioned);
 
         let mut expected = vec![first, second];
         expected.sort();

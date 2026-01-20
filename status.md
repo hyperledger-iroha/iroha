@@ -1,8 +1,13 @@
 # Status
 
-Last update: 2026-01-19
+Last update: 2026-01-20
 
 - Sumeragi pacemaker: idle view changes now pause when consensus block-payload/RBC-chunk queues are saturated to avoid churn under payload backlog; added `force_view_change_if_idle_skips_when_consensus_queue_backpressure`.
+- Consensus ingress: dedup BlockSyncUpdate + RBC chunk payloads (and record evictions) to reduce block-payload/RBC-chunk queue saturation; bump block-payload/RBC dedup cache cap to 8192; added `incoming_block_message_drops_duplicate_block_sync_update` + `incoming_block_message_drops_duplicate_rbc_chunk`.
+- Tests: `cargo test -p iroha_core incoming_block_message_drops_duplicate_block_sync_update -- --nocapture` (ok; initial build waited on Cargo lock).
+- Tests: `cargo test -p iroha_core incoming_block_message_accepts_block_sync_update_with_new_evidence -- --nocapture` (ok; initial build waited on Cargo lock).
+- Tests: `cargo test -p iroha_core incoming_block_message_drops_duplicate_rbc_chunk -- --nocapture` (ok; initial build waited on Cargo lock).
+- NPoS localnet (22080/17537): generated `/tmp/iroha-npos-local-22080`, ran 100×1Hz pings (no-wait) — consensus stalled at commit/QC height 2; worker loop stuck in `drain_rbc_chunks` with block-payload/RBC-chunk backlogs.
 - Tests: `cargo test -p iroha_core force_view_change_if_idle_skips_when_consensus_queue_backpressure -- --nocapture` (timed out waiting for Cargo build dir lock).
 - Sumeragi pacemaker: defer proposal assembly while block-payload/RBC-chunk queues are saturated; added `consensus_queue_backpressure_trips_on_payload_or_rbc_queue` + `proposal_backpressure_defers_on_consensus_queue_backpressure`. Docs updated (`docs/source/sumeragi.md`, `docs/source/references/configuration.md`, `docs/source/references/peer.template.toml`).
 - Tests: `cargo test -p iroha_core consensus_queue_backpressure -- --nocapture` (ok).
@@ -15,6 +20,7 @@ Last update: 2026-01-19
 - Tests: `cargo test -p iroha_core pacemaker_rebroadcasts_cached_proposal_when_leader -- --nocapture` (ok).
 - Tests: `cargo test --workspace` failed during compile (missing `connect_startup_delay` in `iroha_p2p` integration test Network configs).
 - Integration tests (asset): submit helpers now broadcast signed transactions across peers and tolerate duplicate-enqueue responses to avoid queued timeouts; added duplicate-error detection coverage. Tests not re-run yet.
+- Integration tests (asset): widened local test consensus timing (pipeline time 6s, DA quorum/availability timeout multipliers 6/3) to reduce view-change stalls; re-run pending. `CARGO_TARGET_DIR=target/codex-test cargo test -p integration_tests --test asset fail_if_dont_satisfy_spec -- --nocapture` timed out after 15m with the test still running.
 - Integration tests: NetworkBuilder::new now defaults to a 1s pipeline time for faster test networks; `with_default_pipeline_time` keeps Sumeragi defaults. Tests not run yet.
 - Torii/client: queue rejections now include `x-iroha-reject-code`; client ResponseReport decodes Norito error envelopes to surface codes/messages. Tests: `cargo test -p iroha --lib response_report::with_msg_decodes_norito_error_envelope`, `cargo test -p iroha_torii --lib push_into_queue_error_sets_reject_code_header` (ok).
 - Integration tests: consolidated asset mint quantity cases into one network, tightened polling delays, and moved most integration tests to a 2s pipeline time for faster runs (unstable_network and NPoS performance timing left unchanged). Tests not run yet.

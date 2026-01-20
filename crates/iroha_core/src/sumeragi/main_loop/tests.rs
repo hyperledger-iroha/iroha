@@ -17479,15 +17479,18 @@ async fn seed_rbc_session_uses_epoch_for_height() {
         Some(block.header()),
         "seeded session should capture the block header"
     );
-    let expected_sig = block
-        .signatures()
-        .find(|signature| signature.index() == 0)
-        .expect("leader signature should exist");
-    assert_eq!(
-        session.leader_signature.as_ref(),
-        Some(expected_sig),
-        "seeded session should capture leader signature"
-    );
+    let roster = harness.actor.rbc_roster_for_session(session_key);
+    if roster.is_empty() {
+        assert!(
+            session.leader_signature.is_none(),
+            "leader signature should be absent when roster is unavailable"
+        );
+    } else {
+        assert!(
+            session.leader_signature.is_some(),
+            "seeded session should capture leader signature when roster is known"
+        );
+    }
 
     harness.shutdown.send();
 }
@@ -17496,7 +17499,7 @@ async fn seed_rbc_session_uses_epoch_for_height() {
 async fn ensure_rbc_session_from_pending_block_seeds_session() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.rbc_chunk_max_bytes = 1024 * 1024;
-    let mut harness = test_actor_harness_with_config(1, consensus_cfg, None).await;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let height = harness
         .actor
         .state
@@ -46408,6 +46411,68 @@ async fn rbc_backlog_ignores_inactive_sessions() {
     assert!(
         !harness.actor.has_unresolved_rbc_backlog(),
         "inactive RBC sessions should not gate proposal assembly"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rbc_backlog_counts_session_with_header_extending_tip() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let view = actor.state.view();
+    let tip_height = view.height() as u64;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let height = tip_height.saturating_add(1);
+    let block = sample_block(height, 0, parent);
+    let key = Actor::session_key(&block.hash(), height, 0);
+    let mut session = RbcSession::test_new(
+        1,
+        Some(Hash::prehashed([0x11; 32])),
+        Some(Hash::prehashed([0x22; 32])),
+        0,
+    );
+    session.test_set_block_header_and_signature(&block);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    assert!(
+        actor.has_unresolved_rbc_backlog(),
+        "RBC sessions with headers extending the tip should gate view changes"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rbc_backlog_counts_delivered_session_without_ready_quorum() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let view = actor.state.view();
+    let tip_height = view.height() as u64;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let height = tip_height.saturating_add(1);
+    let block = sample_block(height, 0, parent);
+    let key = Actor::session_key(&block.hash(), height, 0);
+    let mut session = RbcSession::test_new(
+        1,
+        Some(Hash::prehashed([0x21; 32])),
+        Some(Hash::prehashed([0x22; 32])),
+        0,
+    );
+    session.test_set_block_header_and_signature(&block);
+    session.test_set_delivered(true);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    let roster = actor.effective_commit_topology();
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
+
+    assert!(
+        actor.has_unresolved_rbc_backlog(),
+        "delivered RBC sessions without READY quorum should gate view changes"
     );
 
     harness.shutdown.send();

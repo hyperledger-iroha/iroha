@@ -1847,6 +1847,14 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             snap.dedup_evictions.proposal_expired_total,
         ),
         json_entry(
+            "block_sync_update_capacity_total",
+            snap.dedup_evictions.block_sync_update_capacity_total,
+        ),
+        json_entry(
+            "block_sync_update_expired_total",
+            snap.dedup_evictions.block_sync_update_expired_total,
+        ),
+        json_entry(
             "rbc_ready_capacity_total",
             snap.dedup_evictions.rbc_ready_capacity_total,
         ),
@@ -1861,6 +1869,14 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry(
             "rbc_deliver_expired_total",
             snap.dedup_evictions.rbc_deliver_expired_total,
+        ),
+        json_entry(
+            "rbc_chunk_capacity_total",
+            snap.dedup_evictions.rbc_chunk_capacity_total,
+        ),
+        json_entry(
+            "rbc_chunk_expired_total",
+            snap.dedup_evictions.rbc_chunk_expired_total,
         ),
     ]);
     let consensus_message_handling_entries = Value::Array(
