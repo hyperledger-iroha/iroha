@@ -29,9 +29,9 @@ use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 use sha2::{Digest, Sha256};
 
 use super::{
-    Actor, DataspaceAllocation, InvalidSigKind, InvalidSigOutcome, LaneAllocation,
-    MissingBlockFetchDecision, PipelinePhase, RBC_MAX_TOTAL_CHUNKS, RbcRosterSource, RbcSession,
-    RbcSessionError,
+    Actor, BlockPayloadDedupKey, DataspaceAllocation, InvalidSigKind, InvalidSigOutcome,
+    LaneAllocation, MissingBlockFetchDecision, PipelinePhase, RBC_MAX_TOTAL_CHUNKS,
+    RbcRosterSource, RbcSession, RbcSessionError,
     pending_rbc::{
         PendingChunkOutcome, PendingRbcDropReason, PendingRbcMessages, rbc_deliver_stash_bytes,
         rbc_ready_stash_bytes,
@@ -41,7 +41,7 @@ use super::{
 use crate::{
     queue::{Queue, RoutingDecision},
     sumeragi::{
-        BackgroundRequest,
+        BackgroundRequest, CryptoHash,
         consensus::{
             RbcChunk, RbcDeliver, RbcInit, RbcReady, rbc_deliver_preimage, rbc_ready_preimage,
         },
@@ -770,6 +770,58 @@ pub(super) struct RbcPlanInputs<'a> {
 }
 
 impl Actor {
+    fn release_block_payload_dedup(&self, key: &BlockPayloadDedupKey) {
+        let mut guard = self
+            .block_payload_dedup
+            .lock()
+            .expect("block payload dedup cache poisoned");
+        guard.remove(key);
+    }
+
+    pub(super) fn release_pending_rbc_dedup(&self, pending: &PendingRbcMessages) {
+        if pending.chunks.is_empty() && pending.ready.is_empty() && pending.deliver.is_empty() {
+            return;
+        }
+        let mut guard = self
+            .block_payload_dedup
+            .lock()
+            .expect("block payload dedup cache poisoned");
+        for entry in &pending.ready {
+            let signature_hash = CryptoHash::new(&entry.signature);
+            let key = BlockPayloadDedupKey::RbcReady {
+                height: entry.height,
+                view: entry.view,
+                block_hash: entry.block_hash,
+                sender: entry.sender,
+                signature_hash,
+            };
+            guard.remove(&key);
+        }
+        for entry in &pending.deliver {
+            let signature_hash = CryptoHash::new(&entry.signature);
+            let key = BlockPayloadDedupKey::RbcDeliver {
+                height: entry.height,
+                view: entry.view,
+                block_hash: entry.block_hash,
+                sender: entry.sender,
+                signature_hash,
+            };
+            guard.remove(&key);
+        }
+        for entry in &pending.chunks {
+            let bytes_hash = CryptoHash::new(&entry.chunk.bytes);
+            let key = BlockPayloadDedupKey::RbcChunk {
+                height: entry.chunk.height,
+                view: entry.chunk.view,
+                epoch: entry.chunk.epoch,
+                block_hash: entry.chunk.block_hash,
+                idx: entry.chunk.idx,
+                bytes_hash,
+            };
+            guard.remove(&key);
+        }
+    }
+
     #[allow(clippy::too_many_lines)]
     pub(super) fn prepare_rbc_plan(&self, inputs: RbcPlanInputs<'_>) -> Result<Option<RbcPlan>> {
         let RbcPlanInputs {
@@ -2667,6 +2719,14 @@ impl Actor {
             )
         } else {
             let (max_chunks, max_bytes) = self.pending_rbc_caps();
+            let chunk_dedup_key = BlockPayloadDedupKey::RbcChunk {
+                height: chunk.height,
+                view: chunk.view,
+                epoch: chunk.epoch,
+                block_hash: chunk.block_hash,
+                idx: chunk.idx,
+                bytes_hash: CryptoHash::new(&chunk.bytes),
+            };
             let Some(pending) = self.pending_rbc_slot(key) else {
                 let dropped_bytes = u64::try_from(chunk.bytes.len()).unwrap_or(u64::MAX);
                 Self::record_pending_drop_counts(
@@ -2691,6 +2751,7 @@ impl Actor {
                     PendingRbcDropReason::SessionLimit,
                     "rbc_chunk_stash_limit",
                 );
+                self.release_block_payload_dedup(&chunk_dedup_key);
                 return Ok(());
             };
             let outcome =
@@ -2765,6 +2826,7 @@ impl Actor {
                         PendingRbcDropReason::Cap,
                         "rbc_chunk_stash_cap",
                     );
+                    self.release_block_payload_dedup(&chunk_dedup_key);
                 }
             }
             self.publish_rbc_backlog_snapshot();
@@ -2907,6 +2969,13 @@ impl Actor {
                 // Session reconstructed from pending block; continue to process READY normally.
             } else {
                 let max_bytes = self.pending_rbc_caps().1;
+                let ready_dedup_key = BlockPayloadDedupKey::RbcReady {
+                    height: ready.height,
+                    view: ready.view,
+                    block_hash: ready.block_hash,
+                    sender: ready.sender,
+                    signature_hash: CryptoHash::new(&ready.signature),
+                };
                 let ready_bytes = rbc_ready_stash_bytes(&ready);
                 let (accepted, dropped_bytes, pending_chunks, pending_bytes) = {
                     let Some(pending) = self.pending_rbc_slot(key) else {
@@ -2935,6 +3004,7 @@ impl Actor {
                             PendingRbcDropReason::SessionLimit,
                             "rbc_ready_stash_limit",
                         );
+                        self.release_block_payload_dedup(&ready_dedup_key);
                         return Ok(());
                     };
                     let (accepted, dropped_bytes) =
@@ -2986,6 +3056,7 @@ impl Actor {
                         PendingRbcDropReason::Cap,
                         "rbc_ready_stash_cap",
                     );
+                    self.release_block_payload_dedup(&ready_dedup_key);
                 }
                 self.publish_rbc_backlog_snapshot();
                 return Ok(());
@@ -3005,6 +3076,13 @@ impl Actor {
             let ready_sender = ready.sender;
             let ready_view = ready.view;
             let max_bytes = actor.pending_rbc_caps().1;
+            let ready_dedup_key = BlockPayloadDedupKey::RbcReady {
+                height: ready.height,
+                view: ready.view,
+                block_hash: ready.block_hash,
+                sender: ready.sender,
+                signature_hash: CryptoHash::new(&ready.signature),
+            };
             let ready_bytes = rbc_ready_stash_bytes(&ready);
             let (accepted, dropped_bytes, pending_chunks, pending_bytes) = {
                 let Some(pending) = actor.pending_rbc_slot(key) else {
@@ -3034,6 +3112,7 @@ impl Actor {
                         PendingRbcDropReason::SessionLimit,
                         "rbc_ready_stash_limit",
                     );
+                    actor.release_block_payload_dedup(&ready_dedup_key);
                     return Ok(());
                 };
                 let (accepted, dropped_bytes) =
@@ -3081,6 +3160,7 @@ impl Actor {
                     PendingRbcDropReason::Cap,
                     "rbc_ready_stash_cap",
                 );
+                actor.release_block_payload_dedup(&ready_dedup_key);
             }
             actor.publish_rbc_backlog_snapshot();
             Ok(())
@@ -3186,6 +3266,9 @@ impl Actor {
         let signature_topology =
             super::topology_for_view(&topology, ready.height, ready.view, mode_tag, prf_seed);
         let local_idx = self.local_validator_index_for_topology(&signature_topology);
+        let ready_peer = usize::try_from(ready.sender)
+            .ok()
+            .and_then(|idx| signature_topology.as_ref().get(idx));
         if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {
             if let Some(existing) = session
                 .ready_signatures
@@ -3225,6 +3308,7 @@ impl Actor {
                     height = ready.height,
                     view = ready.view,
                     sender = ready.sender,
+                    peer = ?ready_peer,
                     topology_len = signature_topology.as_ref().len(),
                     "dropping RBC READY with invalid signature"
                 );
@@ -3233,6 +3317,7 @@ impl Actor {
                     height = ready.height,
                     view = ready.view,
                     sender = ready.sender,
+                    peer = ?ready_peer,
                     topology_len = signature_topology.as_ref().len(),
                     "suppressing repeated invalid RBC READY signature log"
                 );
@@ -3246,9 +3331,6 @@ impl Actor {
         }
         let mut inferred_chunk_root: Option<Hash> = None;
         if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {
-            let ready_peer = usize::try_from(ready.sender)
-                .ok()
-                .and_then(|idx| signature_topology.as_ref().get(idx));
             match session.expected_chunk_root {
                 Some(expected) => {
                     if expected != ready.chunk_root {
@@ -3672,6 +3754,13 @@ impl Actor {
                 // Session reconstructed from pending block; continue to process DELIVER normally.
             } else {
                 let max_bytes = self.pending_rbc_caps().1;
+                let deliver_dedup_key = BlockPayloadDedupKey::RbcDeliver {
+                    height: deliver.height,
+                    view: deliver.view,
+                    block_hash: deliver.block_hash,
+                    sender: deliver.sender,
+                    signature_hash: CryptoHash::new(&deliver.signature),
+                };
                 let deliver_bytes = rbc_deliver_stash_bytes(&deliver);
                 let (accepted, dropped_bytes, pending_chunks, pending_bytes) = {
                     let Some(pending) = self.pending_rbc_slot(key) else {
@@ -3698,6 +3787,7 @@ impl Actor {
                             PendingRbcDropReason::SessionLimit,
                             "rbc_deliver_stash_limit",
                         );
+                        self.release_block_payload_dedup(&deliver_dedup_key);
                         return Ok(());
                     };
                     let (accepted, dropped_bytes) =
@@ -3746,6 +3836,7 @@ impl Actor {
                         PendingRbcDropReason::Cap,
                         "rbc_deliver_stash_cap",
                     );
+                    self.release_block_payload_dedup(&deliver_dedup_key);
                 }
                 self.publish_rbc_backlog_snapshot();
                 return Ok(());
@@ -3778,6 +3869,13 @@ impl Actor {
                 }
             };
             let max_bytes = actor.pending_rbc_caps().1;
+            let deliver_dedup_key = BlockPayloadDedupKey::RbcDeliver {
+                height: deliver.height,
+                view: deliver.view,
+                block_hash: deliver.block_hash,
+                sender: deliver.sender,
+                signature_hash: CryptoHash::new(&deliver.signature),
+            };
             let deliver_bytes = rbc_deliver_stash_bytes(&deliver);
             let (accepted, dropped_bytes, pending_chunks, pending_bytes) = {
                 let Some(pending) = actor.pending_rbc_slot(key) else {
@@ -3805,6 +3903,7 @@ impl Actor {
                         PendingRbcDropReason::SessionLimit,
                         "rbc_deliver_stash_limit",
                     );
+                    actor.release_block_payload_dedup(&deliver_dedup_key);
                     return Ok(());
                 };
                 let (accepted, dropped_bytes) =
@@ -3854,6 +3953,7 @@ impl Actor {
                     PendingRbcDropReason::Cap,
                     "rbc_deliver_stash_cap",
                 );
+                actor.release_block_payload_dedup(&deliver_dedup_key);
             }
             actor.publish_rbc_backlog_snapshot();
             Ok(())
@@ -3927,6 +4027,9 @@ impl Actor {
         let (_, mode_tag, prf_seed) = self.consensus_context_for_height(deliver.height);
         let signature_topology =
             super::topology_for_view(&topology, deliver.height, deliver.view, mode_tag, prf_seed);
+        let deliver_peer = usize::try_from(deliver.sender)
+            .ok()
+            .and_then(|idx| signature_topology.as_ref().get(idx));
         if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {
             if session.delivered
                 && session.deliver_sender == Some(deliver.sender)
@@ -3961,6 +4064,7 @@ impl Actor {
                     height = deliver.height,
                     view = deliver.view,
                     sender = deliver.sender,
+                    peer = ?deliver_peer,
                     "dropping RBC DELIVER with invalid signature"
                 );
             } else {
@@ -3968,6 +4072,7 @@ impl Actor {
                     height = deliver.height,
                     view = deliver.view,
                     sender = deliver.sender,
+                    peer = ?deliver_peer,
                     "suppressing repeated invalid RBC DELIVER signature log"
                 );
             }
@@ -3987,6 +4092,7 @@ impl Actor {
                             height = deliver.height,
                             view = deliver.view,
                             sender = deliver.sender,
+                            peer = ?deliver_peer,
                             ?expected,
                             observed = ?deliver.chunk_root,
                             "dropping RBC DELIVER with mismatched chunk root"
@@ -4006,6 +4112,7 @@ impl Actor {
                                 height = deliver.height,
                                 view = deliver.view,
                                 sender = deliver.sender,
+                                peer = ?deliver_peer,
                                 ?computed,
                                 observed = ?deliver.chunk_root,
                                 "dropping RBC DELIVER with mismatched computed chunk root"
@@ -4180,8 +4287,59 @@ impl Actor {
                     defer_kind,
                 );
             }
+            if matches!(
+                defer_kind,
+                Some(super::status::ConsensusMessageReason::ReadyQuorumMissing)
+            ) {
+                if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {
+                    let ready_senders: BTreeSet<_> = session
+                        .ready_signatures
+                        .iter()
+                        .map(|entry| entry.sender)
+                        .collect();
+                    let mut missing_ready_total = 0usize;
+                    let mut missing_ready = Vec::new();
+                    let mut missing_ready_peers = Vec::new();
+                    for (idx, peer) in signature_topology.as_ref().iter().enumerate() {
+                        let idx = match super::ValidatorIndex::try_from(idx) {
+                            Ok(idx) => idx,
+                            Err(_) => continue,
+                        };
+                        if ready_senders.contains(&idx) {
+                            continue;
+                        }
+                        missing_ready_total = missing_ready_total.saturating_add(1);
+                        if missing_ready.len() < super::READY_MISSING_LOG_LIMIT {
+                            missing_ready.push(idx);
+                            missing_ready_peers.push(peer.clone());
+                        }
+                    }
+                    iroha_logger::info!(
+                        height = key.1,
+                        view = key.2,
+                        block = %key.0,
+                        sender = deliver.sender,
+                        peer = ?deliver_peer,
+                        roster_source = ?roster_source,
+                        ready = ready_senders.len(),
+                        required = deliver_quorum,
+                        missing_ready_total,
+                        missing_ready = ?missing_ready,
+                        missing_ready_peers = ?missing_ready_peers,
+                        senders = ?ready_senders.iter().copied().collect::<Vec<_>>(),
+                        "deferring RBC DELIVER: READY quorum not yet satisfied"
+                    );
+                }
+            }
             let sender = deliver.sender;
             let max_bytes = self.pending_rbc_caps().1;
+            let deliver_dedup_key = BlockPayloadDedupKey::RbcDeliver {
+                height: deliver.height,
+                view: deliver.view,
+                block_hash: deliver.block_hash,
+                sender: deliver.sender,
+                signature_hash: CryptoHash::new(&deliver.signature),
+            };
             let deliver_bytes = rbc_deliver_stash_bytes(&deliver);
             let (accepted, dropped_bytes, pending_chunks, pending_bytes) = {
                 let Some(pending) = self.pending_rbc_slot(key) else {
@@ -4210,6 +4368,7 @@ impl Actor {
                         PendingRbcDropReason::SessionLimit,
                         "rbc_deliver_defer_limit",
                     );
+                    self.release_block_payload_dedup(&deliver_dedup_key);
                     return Ok(());
                 };
                 let (accepted, dropped_bytes) =
@@ -4255,6 +4414,7 @@ impl Actor {
                     PendingRbcDropReason::Cap,
                     "rbc_deliver_defer_cap",
                 );
+                self.release_block_payload_dedup(&deliver_dedup_key);
             }
             self.publish_rbc_backlog_snapshot();
             return Ok(());
