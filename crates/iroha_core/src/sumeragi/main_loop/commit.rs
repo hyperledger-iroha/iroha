@@ -1081,7 +1081,8 @@ impl Actor {
                     .signatures()
                     .map(|sig| u32::try_from(sig.index()).unwrap_or_default())
                     .collect();
-                let pending_age = pending.age();
+                let now = Instant::now();
+                let pending_age = pending.progress_age(now);
                 let vote_count = sig_indices.len();
                 let quorum_timeout = self.quorum_timeout(da_enabled);
                 let availability_timeout = self.availability_timeout(quorum_timeout, da_enabled);
@@ -1094,7 +1095,6 @@ impl Actor {
                     && missing_quorum_stale(pending_age, quorum_timeout, quorum_reached)
                 {
                     let reschedule_backoff = quorum_timeout.max(QUORUM_RESCHEDULE_COOLDOWN);
-                    let now = Instant::now();
                     if missing_local_data && pending_age < availability_timeout {
                         debug!(
                             height = pending_height,
@@ -1120,17 +1120,32 @@ impl Actor {
                         );
                         pending.block = failed_block;
                         self.pending.pending_blocks.insert(block_hash, pending);
-                    } else if pending.reschedule_due(now, reschedule_backoff) {
-                        reschedule_quorum = Some((
-                            pending,
-                            pending_age,
-                            min_votes_for_commit,
-                            vote_count,
-                            quorum_timeout,
-                        ));
                     } else {
-                        pending.block = failed_block;
-                        self.pending.pending_blocks.insert(block_hash, pending);
+                        let queue_depths = super::status::worker_queue_depth_snapshot();
+                        if queue_depths.vote_rx > 0 {
+                            debug!(
+                                height = pending_height,
+                                view = pending_view,
+                                block = ?block_hash,
+                                pending_age_ms = pending_age.as_millis(),
+                                quorum_timeout_ms = quorum_timeout.as_millis(),
+                                vote_rx_depth = queue_depths.vote_rx,
+                                "deferring quorum reschedule while vote queue is backlogged"
+                            );
+                            pending.block = failed_block;
+                            self.pending.pending_blocks.insert(block_hash, pending);
+                        } else if pending.reschedule_due(now, reschedule_backoff) {
+                            reschedule_quorum = Some((
+                                pending,
+                                pending_age,
+                                min_votes_for_commit,
+                                vote_count,
+                                quorum_timeout,
+                            ));
+                        } else {
+                            pending.block = failed_block;
+                            self.pending.pending_blocks.insert(block_hash, pending);
+                        }
                     }
                 } else {
                     if matches!(
@@ -1369,6 +1384,21 @@ impl Actor {
                 });
 
             self.prune_descendants_not_on_tip(pending_height, block_hash);
+            let obsolete_missing: Vec<_> = self
+                .pending
+                .missing_block_requests
+                .iter()
+                .filter(|(_, stats)| stats.height <= pending_height)
+                .map(|(hash, _)| *hash)
+                .collect();
+            for hash in obsolete_missing {
+                let reason = if hash == block_hash {
+                    MissingBlockClearReason::PayloadAvailable
+                } else {
+                    MissingBlockClearReason::Obsolete
+                };
+                self.clear_missing_block_request(&hash, reason);
+            }
 
             // Drop stale pending blocks and cached proposals/QCs at or below the committed height
             // to avoid resurrecting divergent chains in later views.
@@ -1824,13 +1854,27 @@ impl Actor {
         let _ = self.abort_inflight_commit_if_timed_out(now);
         if matches!(trigger, CommitPipelineTrigger::Event) {
             let _ = self.reschedule_stale_pending_blocks();
+            let queue_depths = super::status::worker_queue_depth_snapshot();
+            let consensus_queue_backlog = queue_depths.vote_rx > 0
+                || queue_depths.block_payload_rx > 0
+                || queue_depths.rbc_chunk_rx > 0
+                || queue_depths.block_rx > 0;
+            if consensus_queue_backlog {
+                debug!(
+                    vote_rx_depth = queue_depths.vote_rx,
+                    block_payload_rx_depth = queue_depths.block_payload_rx,
+                    rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                    block_rx_depth = queue_depths.block_rx,
+                    "skipping commit pipeline on event due to consensus queue backlog"
+                );
+                return;
+            }
         }
         // Commit certificates remain authoritative, but the QC pipeline is required to
         // keep NEW_VIEW liveness (precommit QCs) and backfill telemetry.
         let enable_qc_pipeline = true;
         let da_enabled = self.runtime_da_enabled();
         let rebroadcast_cooldown = self.rebroadcast_cooldown();
-        let active_commit_topology = self.effective_commit_topology();
         let local_peer_id = self.common_config.peer.id().clone();
 
         if self.active_pending_blocks_len() == 0 {
@@ -1865,6 +1909,7 @@ impl Actor {
         let should_rebuild_qcs = now.saturating_duration_since(self.last_qc_rebuild) >= cooldown;
         if enable_qc_pipeline && should_rebuild_qcs {
             self.last_qc_rebuild = now;
+            let active_commit_topology = self.effective_commit_topology();
             self.rebuild_qcs_from_cached_votes(&active_commit_topology);
         }
 
@@ -3930,6 +3975,7 @@ impl Actor {
             .copied()
             .collect();
         for key in deferral_keys {
+            self.subsystems.da_rbc.rbc.ready_deferral.remove(&key);
             self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
         }
         self.subsystems

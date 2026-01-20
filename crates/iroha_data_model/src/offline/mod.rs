@@ -519,26 +519,26 @@ impl OfflineToOnlineTransfer {
     }
 }
 
-    impl OfflineSpendReceipt {
-        /// Receiver recorded for this receipt.
-        pub fn to(&self) -> &AccountId {
-            &self.to
-        }
+impl OfflineSpendReceipt {
+    /// Receiver recorded for this receipt.
+    pub fn to(&self) -> &AccountId {
+        &self.to
+    }
 
-        /// Amount credited by this receipt.
-        pub fn amount(&self) -> &Numeric {
-            &self.amount
-        }
+    /// Amount credited by this receipt.
+    pub fn amount(&self) -> &Numeric {
+        &self.amount
+    }
 
-        /// Invoice identifier recorded for this receipt.
-        pub fn invoice_id(&self) -> &str {
-            &self.invoice_id
-        }
+    /// Invoice identifier recorded for this receipt.
+    pub fn invoice_id(&self) -> &str {
+        &self.invoice_id
+    }
 
-        /// Asset identifier being transferred.
-        pub fn asset(&self) -> &AssetId {
-            &self.asset
-        }
+    /// Asset identifier being transferred.
+    pub fn asset(&self) -> &AssetId {
+        &self.asset
+    }
 
     /// Canonical payload signed by the sender's spend key.
     ///

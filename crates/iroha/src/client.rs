@@ -3385,7 +3385,10 @@ mod evidence_http_tests {
         assert_eq!(store.len(), 1);
         let snapshot = &store[0];
         assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.as_str(), "http://mock.local/v1/accounts/resolve");
+        assert_eq!(
+            snapshot.url.as_str(),
+            "http://mock.local/v1/accounts/resolve"
+        );
         let body = String::from_utf8(snapshot.body.clone()).expect("utf8 body");
         assert_eq!(body, format!("{{\"literal\":\"{literal}\"}}"));
         let has_content_type = snapshot.headers.iter().any(|(name, value)| {

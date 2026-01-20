@@ -2,6 +2,12 @@
 
 Last update: 2026-01-20
 
+- Sumeragi worker loop now refreshes drain budgets and tick gaps each iteration from current on-chain timing to avoid stale startup timeouts; added `run_worker_loop_refreshes_config_each_iteration`.
+- Tests: `cargo test -p iroha_core run_worker_loop_refreshes_config_each_iteration` (ok).
+- Sumeragi quorum timeout now uses pending-block progress age (touched by RBC chunk/READY/DELIVER + votes) so healthy consensus activity does not trigger view changes; pending blocks track progress timestamps and tests/docs updated.
+- Tests: `cargo test -p iroha_core pending_block_progress_age_resets_on_touch -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_core touch_pending_progress_updates_pending_age -- --nocapture` (ok).
+- Localnet: re-run NPoS 1 Hz / 100-block stall check with status polling after the progress-age change (pending).
 - SoraFS repair API: added Torii contract tests for worker endpoints (report/claim/heartbeat/complete/fail) and status snapshots.
 - SoraFS CLI: added help smoke coverage for `iroha sorafs repair` and `iroha sorafs gc`.
 - SoraFS incentives state: embed domain hints so IH58 account IDs roundtrip, and install a domain-selector resolver while parsing JSON snapshots and CLI tests.

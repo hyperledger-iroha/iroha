@@ -18878,8 +18878,8 @@ mod tests {
     use iroha_crypto::{Hash, KeyPair, SignatureOf};
     use iroha_data_model::{
         ChainId, Registrable, ValidationFail,
-        account::{Account, AccountId, OpaqueAccountId},
         account::rekey::AccountLabel,
+        account::{Account, AccountId, OpaqueAccountId},
         block::{BlockHeader, BlockSignature, SignedBlock},
         domain::{Domain, DomainId},
         name::Name,
@@ -18905,9 +18905,9 @@ mod tests {
     use crate::{
         limits,
         tests_runtime_handlers::{
-            guard_account_resolvers, mk_app_state_for_tests, mk_app_state_for_tests_with_iso_bridge,
-            mk_app_state_for_tests_with_world,
-            mk_app_state_for_tests_with_options, negotiated,
+            guard_account_resolvers, mk_app_state_for_tests,
+            mk_app_state_for_tests_with_iso_bridge, mk_app_state_for_tests_with_options,
+            mk_app_state_for_tests_with_world, negotiated,
         },
     };
 
@@ -19288,10 +19288,7 @@ mod tests {
         let domain: DomainId = "wonderland".parse().expect("domain");
         let key_pair = KeyPair::random();
         let account_id = AccountId::new(domain.clone(), key_pair.public_key().clone());
-        let label = AccountLabel::new(
-            domain.clone(),
-            Name::from_str("alice").expect("label"),
-        );
+        let label = AccountLabel::new(domain.clone(), Name::from_str("alice").expect("label"));
         let uaid = UniversalAccountId::from_hash(
             Hash::from_str("00112233445566778899aabbccddeeff00112233445566778899aabbccddeef1")
                 .expect("uaid hash"),

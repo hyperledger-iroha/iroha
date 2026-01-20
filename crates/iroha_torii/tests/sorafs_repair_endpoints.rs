@@ -262,7 +262,11 @@ async fn sorafs_repair_worker_endpoints_drive_state() {
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(World::default(), kura.clone(), query));
+    let state = Arc::new(State::new_for_testing(
+        World::default(),
+        kura.clone(),
+        query,
+    ));
     seed_worker_permission(&state, &worker_id, provider_id);
 
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
@@ -432,10 +436,7 @@ async fn sorafs_repair_worker_endpoints_drive_state() {
         json_entry("signature", fail_sig),
     ]);
     let fail_record = post_fail(&app, fail_req).await;
-    assert!(matches!(
-        fail_record.state,
-        RepairTaskStateV1::Failed(_)
-    ));
+    assert!(matches!(fail_record.state, RepairTaskStateV1::Failed(_)));
 
     let snapshots_a = fetch_status(&app, &manifest_a_hex).await;
     assert_eq!(snapshots_a.len(), 1);

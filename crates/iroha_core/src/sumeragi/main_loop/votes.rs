@@ -140,6 +140,7 @@ impl Actor {
         if !self.validate_and_record_vote(&vote, &signature_topology, &evidence_context, mode_tag) {
             return;
         }
+        self.touch_pending_progress(vote.block_hash, vote.height, vote.view, Instant::now());
         if !matches!(vote.phase, Phase::NewView) {
             // NEW_VIEW votes reference the highest QC block hash; caching would poison rosters for
             // subsequent PREPARE/COMMIT votes on that block.
@@ -502,7 +503,11 @@ impl Actor {
             super::status::set_highest_qc(highest.height, highest.view);
             super::status::set_highest_qc_hash(highest.subject_block_hash);
         }
-        if self.block_known_locally(highest.subject_block_hash) {
+        if self.block_payload_available_for_progress(highest.subject_block_hash) {
+            self.clear_missing_block_request(
+                &highest.subject_block_hash,
+                MissingBlockClearReason::PayloadAvailable,
+            );
             return;
         }
         let (consensus_mode, mode_tag, _) = self.consensus_context_for_height(highest.height);

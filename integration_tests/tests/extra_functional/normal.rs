@@ -63,9 +63,8 @@ fn transactions_should_be_applied() -> Result<()> {
         wait_for_height(target_height, "after set_parameter")?;
 
         let domain_id = "and".parse::<DomainId>()?;
-        let account_id =
-            "ed01201F803CB23B1AAFB958368DF2F67CB78A2D1DFB47FFFC3133718F165F54DFF677"
-                .parse::<AccountId>()?;
+        let account_id = "ed01201F803CB23B1AAFB958368DF2F67CB78A2D1DFB47FFFC3133718F165F54DFF677"
+            .parse::<AccountId>()?;
         let asset_definition_id = "MAY#and".parse::<AssetDefinitionId>()?;
         let asset_id =
             "MAY##ed01201F803CB23B1AAFB958368DF2F67CB78A2D1DFB47FFFC3133718F165F54DFF677"
