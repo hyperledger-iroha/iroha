@@ -218,7 +218,6 @@ Local-12 collisions دکھائیں تو Torii Local-8 gate کو mainnet پر har
 گا، پھر Local-12 کو اس وقت جب global domains میں matching registry entries ہوں۔
 اس freeze کے لئے CLI output کو operator-facing نوٹس سمجھیں - وہی warning string
 SDK tooltips اور automation میں استعمال ہوتی ہے تاکہ roadmap exit criteria سے
-parity برقرار رہے۔ Torii اب default طور پر `torii.strict_addresses=true` رکھتا
 ہے؛ regressions diagnose کرتے وقت صرف dev/test clusters میں اسے `false` کریں۔
 `torii_address_domain_total{domain_kind}` کو Grafana (`dashboards/grafana/address_ingest.json`)
 میں mirror کرتے رہیں تاکہ ADDR-7 evidence pack یہ ثابت کر سکے کہ
@@ -227,7 +226,6 @@ selectors کو disable کرے۔ Alertmanager pack
 
 - `AddressLocal8Resurgence` اس وقت page کرتا ہے جب کوئی context نیا Local-8
   increment رپورٹ کرے۔ strict-mode rollouts روکیں، dashboard میں offending SDK
-  تلاش کریں، اور ضرورت ہو تو وقتی طور پر `torii.strict_addresses=false` سیٹ
   کریں جب تک signal صفر نہ ہو جائے، پھر default (`true`) بحال کریں۔
 - `AddressLocal12Collision` تب فائر ہوتا ہے جب دو Local-12 labels ایک ہی digest
   پر hash ہوں۔ manifest promotions روکیں، Local -> Global toolkit چلا کر digest

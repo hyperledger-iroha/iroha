@@ -91,7 +91,6 @@ TRYIT_PROXY_PUBLIC_URL="http://localhost:8787" npm run start
 | `npm run tryit-proxy` "digest mismatch" کے ساتھ ختم ہو۔ | Torii کا OpenAPI بنڈل اپ اسٹریم تبدیل ہو گیا ہے۔ | `npm run sync-openapi -- --latest` (یا `--version=<tag>`) چلائیں اور دوبارہ کوشش کریں۔ |
 | ویجیٹس `401` یا `403` لوٹائیں۔ | ٹوکن موجود نہیں، ختم ہو چکا ہے، یا اسکوپس ناکافی ہیں۔ | OAuth ڈیوائس فلو استعمال کریں یا sandbox میں درست bearer ٹوکن پیسٹ کریں۔ اسٹیٹک ٹوکنز کے لئے `DOCS_TRYIT_ALLOW_DEFAULT_BEARER=1` ایکسپورٹ کرنا ہوگا۔ |
 | پراکسی سے `429 Too Many Requests` ملے۔ | فی IP ریٹ لِمٹ تجاوز ہو گئی ہے۔ | قابل اعتماد ماحول کے لئے `TRYIT_PROXY_RATE_LIMIT`/`TRYIT_PROXY_RATE_WINDOW_MS` بڑھائیں یا ٹیسٹ اسکرپٹس کو محدود کریں۔ ریٹ لِمٹ کی تمام مستردیاں `tryit_proxy_rate_limited_total` بڑھاتی ہیں۔ |
-| Torii لاگز میں `ERR_STRICT_ADDRESS_REQUIRED` کے ساتھ `502/504` ایررز ہوں۔ | Norito IH58/کمپریسڈ پارسنگ سپورٹ کے بغیر درخواستیں فارورڈ ہوئیں۔ | تصدیق کریں کہ ہدف Torii بلڈ میں ADDR-5 تبدیلیاں شامل ہیں (دیکھیں `crates/iroha_torii/tests/address_parsing.rs`) اور آپ درست ماحول کی طرف اشارہ کر رہے ہیں۔ |
 
 ## مشاہدہ پذیری
 

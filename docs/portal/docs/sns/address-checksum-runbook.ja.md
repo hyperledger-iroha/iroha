@@ -72,7 +72,6 @@ Local-8/Local-12 の衝突に特化した事象の場合は、`AddressLocal8Resu
 |----------|------|
 | fixture のドリフト | `fixtures/account/address_vectors.json` を再生成し、`cargo xtask address-vectors --verify` を再実行し、SDK バンドルを更新して `address_fixture.prom` の snapshot をチケットに添付する。 |
 | SDK/クライアント回帰 | 正規 fixture と `iroha address inspect` の出力を添えて issue を作成し、SDK パリティ CI（例: `ci/check_address_normalize.sh`）でリリースをゲートする。 |
-| manifest の破損 | `address_manifest_ops.md` に従って manifest を再構築し、`cargo xtask address-manifest verify` を再実行し、テレメトリが落ち着くまで `torii.strict_addresses=true` を維持する。 |
 | 悪意ある送信 | rate-limit またはブロックを適用し、セレクタの tombstone が必要なら Governance にエスカレーションする。 |
 
 緩和後、PromQL のクエリを再実行し、`ERR_CHECKSUM_MISMATCH` が `/tests/*` を除いて 30 分以上ゼロで維持されることを確認してからインシデントを解除する。

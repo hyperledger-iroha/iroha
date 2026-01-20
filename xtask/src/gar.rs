@@ -497,7 +497,7 @@ mod tests {
                 .parse()
                 .unwrap();
         let other_operator: AccountId =
-            "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C@wonderland"
+            "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
                 .parse()
                 .unwrap();
 

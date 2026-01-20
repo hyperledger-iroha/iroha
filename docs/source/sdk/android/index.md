@@ -139,7 +139,7 @@ transport.getUaidManifests(uaid, query).join()
 ```
 
 Errors bubble up through the returned `CompletableFuture` with the same taxonomy
-as Torii (`ERR_STRICT_ADDRESS_REQUIRED`, malformed UAIDs, etc.), so reuse the
+as Torii (invalid account literals, malformed UAIDs, etc.), so reuse the
 helpers before submitting values to ledger instructions. For the full JSON
 schema, see [`docs/source/torii/portfolio_api.md`](../../torii/portfolio_api.md).
 

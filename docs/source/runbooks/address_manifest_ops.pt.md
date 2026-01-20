@@ -156,7 +156,6 @@ Campos de cabeçalho de `manifest.json`:
 4. **Validar o bundle.** Reexecute os passos de verificação acima no manifesto
    de rascunho antes de pedir assinaturas.
 5. **Publicar e monitorar.** Após assinatura da governança, siga §3 e mantenha o
-   flag `strict_addresses` do Torii (`torii.strict_addresses` na config) no valor
    padrão `true` nos clusters de produção quando as métricas confirmarem zero
    uso de Local‑8. Só altere o flag para `false` em clusters dev/test quando
    precisar de tempo extra de soak.
@@ -178,7 +177,6 @@ Campos de cabeçalho de `manifest.json`:
 - Alertas (ver `dashboards/alerts/address_ingest_rules.yml`):
   - `AddressLocal8Resurgence` — pagina quando qualquer contexto reporta novo
     incremento de Local‑8. Trate como bloqueador de release, pause rollouts de
-    modo estrito e ajuste temporariamente `torii.strict_addresses=false`
     (substituindo o padrão) até remediar o cliente. Restaure o flag para `true`
     quando a telemetria estiver limpa.
   - `AddressLocal12Collision` — dispara no momento em que dois rótulos Local‑12
@@ -192,7 +190,6 @@ Campos de cabeçalho de `manifest.json`:
 - Logs: mantenha linhas de log `manifest_refresh` do Torii e o número do ticket
   de governança em `notes.md`.
 - Rollback: republique o bundle anterior (mesmos arquivos, ticket incrementado
-  indicando o rollback) e ajuste temporariamente `torii.strict_addresses = false`
   apenas no ambiente afetado até resolver o problema; depois retorne a `true`.
 
 ## 6. Referências

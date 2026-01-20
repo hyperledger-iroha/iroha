@@ -211,7 +211,6 @@ payload bit: │version  │ class  │  norm  │ext │
 כאשר לדומיינים גלובליים יש רשומות registry תואמות. ראו בפלט ה-CLI את ההודעה
 למפעילים על הקפאה זו - אותה מחרוזת אזהרה משמשת ב-tooltips של SDK ובאוטומציה
 כדי לשמור על התאמה לקריטריוני היציאה של מפת הדרכים. Torii משתמש כעת כברירת
-מחדל ב-`torii.strict_addresses=true`; החליפו ל-`false` רק ב-clusters dev/test
 כאשר מאבחנים רגרסיות. המשיכו לשקף `torii_address_domain_total{domain_kind}` ב-
 Grafana (`dashboards/grafana/address_ingest.json`) כדי שחבילת הראיות ADDR-7
 תוכל להוכיח ש-`domain_kind="local12"` נשאר אפס בחלון הנדרש של 30 יום לפני ש-
@@ -220,7 +219,6 @@ mainnet מבטל את הסלקטורים הישנים. חבילת Alertmanager
 
 - `AddressLocal8Resurgence` מתריעה כאשר הקשר מדווח על עליה חדשה של Local-8.
   עצרו rollouts של מצב strict, מצאו את פני השטח של ה-SDK בלוח המחוונים, ואם
-  צריך, הגדירו זמנית `torii.strict_addresses=false` עד שהאות חוזר לאפס - ואז
   שחזרו את ברירת המחדל (`true`).
 - `AddressLocal12Collision` פועלת כאשר שני תוויות Local-12 מתגלגלות לאותו digest.
   עצרו קידומי manifest, הריצו את ערכת Local -> Global כדי לבקר את מיפוי ה-digests,

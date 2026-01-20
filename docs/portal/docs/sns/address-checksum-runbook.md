@@ -87,7 +87,6 @@ If the incident is specifically about Local-8/Local-12 collisions, follow the
 |----------|---------|
 | Fixture drift | Regenerate `fixtures/account/address_vectors.json`, rerun `cargo xtask address-vectors --verify`, update SDK bundles, and attach `address_fixture.prom` snapshots to the ticket. |
 | SDK/client regression | File issues referencing the canonical fixture + `iroha address inspect` output, and gate releases behind the SDK parity CI (e.g., `ci/check_address_normalize.sh`). |
-| Manifest corruption | Rebuild the manifest following `address_manifest_ops.md`, re-run `cargo xtask address-manifest verify`, and keep `torii.strict_addresses=true` until telemetry clears. |
 | Malicious submissions | Rate-limit or block offending principals, escalate to Governance if tombstoning selectors is required. |
 
 Once mitigations land, rerun the PromQL query above to confirm

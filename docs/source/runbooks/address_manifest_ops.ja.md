@@ -147,8 +147,6 @@ address-manifest-<REVISION>/
    の両方を追加し、後者には Nexus 識別子を含めます。
 
 4. **バンドル検証。** 署名前にドラフトに対して検証手順を再実行します。
-5. **公開と監視。** 署名後は §3 に従い、Torii の `strict_addresses`
-   フラグ（`torii.strict_addresses`）を本番クラスタではデフォルトの
    `true` に維持します。Local‑8 の利用が 0 と確認できるまで `false` に
    しないでください。dev/test でのみ soak が必要な場合に一時的に `false`
    を許可します。
@@ -169,7 +167,6 @@ address-manifest-<REVISION>/
 - アラート（`dashboards/alerts/address_ingest_rules.yml`）:
   - `AddressLocal8Resurgence` — どのコンテキストでも Local‑8 が増えたら
     ページング。リリースブロッカーとして扱い、strict‑mode ロールアウトを
-    停止し、原因クライアントを修正するまで `torii.strict_addresses=false`
     を一時的に設定します。テレメトリがクリーンになったら `true` に戻します。
   - `AddressLocal12Collision` — 2 つの Local‑12 ラベルが同一 digest に
     なると即発火。マニフェスト昇格を停止し、`scripts/address_local_toolkit.sh`
@@ -180,7 +177,6 @@ address-manifest-<REVISION>/
 - ログ: Torii の `manifest_refresh` ログとガバナンスチケット番号を `notes.md`
   に残してください。
 - ロールバック: 直前のバンドルを再発行（同じファイル＋rollback チケット）し、
-  影響環境のみ `torii.strict_addresses = false` に戻して復旧を行い、解決後は `true` に戻します。
 
 ## 6. 参考
 

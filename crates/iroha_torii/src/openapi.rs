@@ -3246,6 +3246,17 @@ fn account_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/accounts/resolve".to_owned(),
+        Value::Object(json_post_operation(
+            "Accounts",
+            "Resolve account literals.",
+            "Resolve account literals into canonical IH58 identifiers.",
+            "#/components/schemas/AccountResolveRequest",
+            "#/components/schemas/AccountResolveResponse",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
         "/v1/accounts/onboard".to_owned(),
         Value::Object(json_post_operation(
             "Accounts",
@@ -4123,7 +4134,7 @@ fn sorafs_paths() -> Map {
         Value::Object(json_get_operation(
             "SoraFS",
             "List repair status.",
-            "List SoraFS repair status across manifests.",
+            "List SoraFS repair status across manifests (each entry includes Norito base64 record + ordered event log).",
             "#/components/schemas/JsonValue",
             repair_status_query_params.clone(),
         )),
@@ -4133,7 +4144,7 @@ fn sorafs_paths() -> Map {
         Value::Object(json_get_operation(
             "SoraFS",
             "Fetch repair status.",
-            "Fetch repair status for a manifest.",
+            "Fetch repair status for a manifest (each entry includes Norito base64 record + ordered event log).",
             "#/components/schemas/JsonValue",
             vec![
                 string_path_param("manifest_hex", "Manifest hash (hex)."),
@@ -7282,6 +7293,47 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "AccountResolveRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["literal"],
+            "additionalProperties": false,
+            "properties": {
+                "literal": {
+                    "type": "string",
+                    "description": "Account literal to resolve."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountResolveResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["account_id", "domain", "source"],
+            "additionalProperties": false,
+            "properties": {
+                "account_id": {
+                    "type": "string",
+                    "description": "Canonical IH58 account identifier."
+                },
+                "domain": {
+                    "type": "string",
+                    "description": "Resolved domain label."
+                },
+                "source": {
+                    "type": "string",
+                    "description": "Resolution source (encoded, alias, public_key, uaid, opaque)."
+                },
+                "format": {
+                    "type": "string",
+                    "enum": ["ih58", "compressed", "canonical_hex"],
+                    "description": "Address format when source is encoded."
+                }
+            }
+        }),
+    );
+    schemas.insert(
         "OfflineAllowanceItem".to_owned(),
         norito::json!({
             "type": "object",
@@ -9763,6 +9815,7 @@ mod tests {
         assert!(paths.contains_key("/v1/gov/proposals/deploy-contract"));
         assert!(paths.contains_key("/v1/runtime/abi/active"));
         assert!(paths.contains_key("/v1/accounts"));
+        assert!(paths.contains_key("/v1/accounts/resolve"));
         assert!(paths.contains_key("/v1/assets/definitions"));
         assert!(paths.contains_key("/v1/explorer/accounts"));
         assert!(paths.contains_key("/v1/sorafs/providers"));

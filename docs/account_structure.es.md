@@ -528,11 +528,9 @@ reconstruirse la traza de auditoría offline.
    firmas.
 4. **Verificar y publicar.** Siga la checklist del runbook (hashes, Sigstore,
    monotonía de `sequence`) antes de replicar el bundle en SoraFS. Torii usa
-   ahora `torii.strict_addresses = true` por defecto, de modo que los clústeres
    de producción aplican inmediatamente literales IH58/comprimidos canónicos
    tras aterrizar el bundle.
 5. **Monitorizar y, si es necesario, revertir.** Mantenga los paneles Local‑8
    en cero durante 30 días; si aparecen regresiones, vuelva a publicar el
    bundle de manifiesto previo y, solo en entornos no productivos, establezca
-   temporalmente `torii.strict_addresses=false` hasta estabilizar la
    telemetría.

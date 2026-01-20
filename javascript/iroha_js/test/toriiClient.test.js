@@ -17099,8 +17099,8 @@ test("methods surface HTTP errors with body", async () => {
 
 test("http errors expose structured fields", async () => {
   const payload = {
-    code: "ERR_STRICT_ADDRESS_REQUIRED",
-    message: "strict address required",
+    code: "ERR_ACCOUNT_LITERAL_FORMAT",
+    message: "invalid account literal",
   };
   const fetchImpl = async () =>
     createResponse({

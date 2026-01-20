@@ -149,8 +149,6 @@ address-manifest-<REVISION>/
 
 4. **تحقق من الحزمة.** أعد تشغيل خطوات التحقق أعلاه على البيان المبدئي قبل
    طلب التوقيعات.
-5. **النشر والمراقبة.** بعد التوقيع، اتبع §3 واحتفِظ بعلم Torii `strict_addresses`
-   (`torii.strict_addresses` في الإعدادات) على القيمة الافتراضية `true` في بيئات الإنتاج
    بعد التأكد من أن استخدام Local‑8 أصبح صفراً. لا تغيّره إلى `false` إلا في بيئات dev/test
    عندما تحتاج فترة soak إضافية.
 
@@ -170,7 +168,6 @@ address-manifest-<REVISION>/
   وتأكيد ثبات العدادات.
 - التنبيهات (انظر `dashboards/alerts/address_ingest_rules.yml`):
   - `AddressLocal8Resurgence` — يرسل إنذاراً عند أي زيادة جديدة في Local‑8. تعامل معها
-    كمانع إصدار، أوقف rollouts للوضع الصارم، واضبط مؤقتاً `torii.strict_addresses=false`
     (تجاوزاً للقيمة الافتراضية) حتى تُعالج العميل. أعد العلم إلى `true` عندما تصبح
     التليمترية نظيفة.
   - `AddressLocal12Collision` — يطلق لحظة تصادم labelين Local‑12 في نفس digest. أوقف
@@ -182,7 +179,6 @@ address-manifest-<REVISION>/
     إعادة تفعيل الوضع الصارم.
 - السجلات: احتفظ بخطوط `manifest_refresh` من Torii ورقم تذكرة الحوكمة في `notes.md`.
 - الرجوع: أعد نشر الحزمة السابقة (نفس الملفات مع تذكرة تشير للرجوع) واضبط مؤقتاً
-  `torii.strict_addresses = false` فقط في البيئة المتأثرة حتى حل المشكلة، ثم أعده إلى `true`.
 
 ## 6. المراجع
 

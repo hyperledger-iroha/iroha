@@ -151,7 +151,6 @@ address-manifest-<REVISION>/
 4. **بنڈل کی توثیق۔** دستخط سے پہلے ڈرافٹ مینی فیسٹ پر اوپر والے ویریفیکیشن
    مراحل دوبارہ چلائیں۔
 5. **اشاعت اور مانیٹرنگ۔** گورننس کے دستخط کے بعد §3 کے مطابق عمل کریں اور Torii
-   `strict_addresses` فلیگ (`torii.strict_addresses`) کو پروڈکشن میں ڈیفالٹ `true`
    پر رکھیں جب metrics بتائیں کہ Local‑8 استعمال صفر ہے۔ صرف dev/test میں، اضافی
    soak کے لیے `false` کریں۔
 
@@ -170,7 +169,6 @@ address-manifest-<REVISION>/
   JSON + CLI آؤٹ پٹ rollout ٹکٹ میں شامل کریں تاکہ گورننس کوریج ونڈو دیکھ سکے۔
 - Alerts (`dashboards/alerts/address_ingest_rules.yml`):
   - `AddressLocal8Resurgence` — Local‑8 میں کوئی بھی نیا اضافہ پیج کرتا ہے۔ اسے
-    ریلیز بلاکر سمجھیں، strict‑mode rollout روکیں، اور `torii.strict_addresses=false`
     عارضی طور پر سیٹ کریں جب تک کلائنٹ ٹھیک نہ ہو۔ صفائی کے بعد `true` کریں۔
   - `AddressLocal12Collision` — دو Local‑12 لیبلز ایک ہی digest میں ٹکرا جائیں تو
     فوراً فائر۔ مینی فیسٹ promotion روکیں، `scripts/address_local_toolkit.sh` چلائیں،
@@ -180,7 +178,6 @@ address-manifest-<REVISION>/
     کو context/reason کے حساب سے دیکھیں اور SDK ٹیم سے مل کر strict‑mode دوبارہ آن کریں۔
 - لاگز: Torii `manifest_refresh` لاگز اور گورننس ٹکٹ نمبر `notes.md` میں محفوظ کریں۔
 - رول بیک: پچھلا بنڈل دوبارہ شائع کریں (وہی فائلیں، rollback کا ٹکٹ)، اور
-  `torii.strict_addresses = false` صرف متاثرہ ماحول میں عارضی طور پر رکھیں؛ مسئلہ حل ہو
   جائے تو `true` پر واپس لائیں۔
 
 ## 6. حوالہ جات

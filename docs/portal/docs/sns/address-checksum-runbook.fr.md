@@ -72,7 +72,6 @@ Si l'incident concerne specifiquement les collisions Local-8/Local-12, suivez pl
 |----------|---------|
 | Derive de fixture | Regenerer `fixtures/account/address_vectors.json`, relancer `cargo xtask address-vectors --verify`, mettre a jour les bundles SDK, et joindre des snapshots `address_fixture.prom` au ticket. |
 | Regression SDK/client | Ouvrir des issues avec le fixture canonique + la sortie de `iroha address inspect`, et bloquer les releases via la CI de parite SDK (ex.: `ci/check_address_normalize.sh`). |
-| Corruption de manifest | Reconstruire le manifest via `address_manifest_ops.md`, relancer `cargo xtask address-manifest verify`, et garder `torii.strict_addresses=true` jusqu'a ce que la telemetrie redevienne saine. |
 | Soumissions malveillantes | Appliquer du rate-limit ou bloquer les principals fautifs, escalader a Governance si un tombstone de selecteurs est requis. |
 
 Une fois les mitigations appliquees, relancer la requete PromQL ci-dessus pour confirmer que `ERR_CHECKSUM_MISMATCH` reste a zero (hors `/tests/*`) pendant au moins 30 minutes avant de degrader l'incident.

@@ -478,13 +478,18 @@ fn parse_address_input(
         if domain_literal.is_empty() {
             eyre::bail!("domain literal missing after '@'");
         }
-        let parsed_account =
-            AccountId::parse(trimmed).wrap_err("failed to parse account identifier")?;
+        let domain: DomainId = domain_literal
+            .parse()
+            .wrap_err("failed to parse domain literal")?;
         let parsed = parse_account_address(address_literal, expect_prefix)
             .wrap_err("failed to parse account component")?;
+        parsed
+            .address
+            .ensure_domain_matches(&domain)
+            .wrap_err("address domain selector does not match provided domain")?;
         Ok(ParsedAddressInput {
             parsed,
-            domain: Some(parsed_account.account_id().domain().clone()),
+            domain: Some(domain),
         })
     } else {
         let parsed = parse_account_address(trimmed, expect_prefix)

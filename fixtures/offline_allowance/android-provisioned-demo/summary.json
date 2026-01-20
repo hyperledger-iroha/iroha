@@ -1,8 +1,8 @@
 {
   "label": "android-provisioned-demo",
   "certificate_id_hex": "A4F82BC9C4E94B375069C008686A10E68FAB0832D150DE2E12F8C1951C90E873",
-  "controller": "34mSYnDgbaJM58rbLoif4Tkp7G8SqQ5XH3c7btPpdLLiXrvtptbDi71W6jGmCDP5NxTDbMbwx@wonderland",
-  "allowance_asset": "xor##34mSYn6ySFTASoiVzNGuyBkedDdk9bMBSmL5kvESY7kyn5zXEex5aBJ1DDsuEDRpw3VmMMgdU@sora",
+  "controller": "34mSYnDgbaJM58rbLoif4Tkp7G8SqQ5XH3c7btPpdLLiXrvtptbDi71W6jGmCDP5NxTDbMbwx",
+  "allowance_asset": "xor##34mSYn6ySFTASoiVzNGuyBkedDdk9bMBSmL5kvESY7kyn5zXEex5aBJ1DDsuEDRpw3VmMMgdU",
   "allowance_amount": "200.00",
   "commitment_hex": "AEF4251F9DC7EC63D06871FC064EFC0354208EB00C660EE7BAE73C5B17BECC6A",
   "blinding_hex": "6666666666666666666666666666666666666666666666666666666666666666",

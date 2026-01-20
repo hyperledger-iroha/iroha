@@ -293,7 +293,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [ ] Repair persistence: add Postgres-backed storage for repair tickets + PoR failure history, load on startup, and make state transitions atomic while preserving SLA deadlines.【crates/sorafs_node/src/repair.rs】【crates/sorafs_node/src/lib.rs】
  - [ ] Repair store abstraction: define a `RepairStore` interface (in-memory + Postgres) with compare-and-set updates, stable Norito payload storage, and deterministic task listing for status queries.
  - [ ] DB schema/migrations: add explicit tables/indexes for tickets, evidence, state transitions, and PoR history; document schema + retention rules in a new ops note.
- - [ ] Repair event log: persist `RepairTaskEventV1` transitions for auditability, surface deterministic event ordering in status responses, and cap history size via retention policy.【crates/sorafs_manifest/src/repair.rs】
+ - [x] Repair event log: persist `RepairTaskEventV1` transitions for auditability, surface deterministic event ordering in status responses, and cap history size via retention policy.【crates/sorafs_manifest/src/repair.rs】
  - [x] Config: add `sorafs.repair` + `sorafs.gc` settings (enabled flags, DB DSN/pool, claim/heartbeat TTLs, max attempts, worker concurrency/backoff, GC cadence/batch limits, retention grace) in `iroha_config` defaults/user/actual and thread into the node wiring (no env-only toggles).【crates/iroha_config/src/parameters/{defaults,actual,user}.rs】【crates/sorafs_node/src/config.rs】
  - [x] Config keys: enumerate and document explicit settings for `sorafs.repair.*` (db pool, claim TTL, heartbeat interval, max attempts, concurrency, backoff) and `sorafs.gc.*` (interval, grace window, max deletions, pre-admission sweep) with deterministic defaults.
  - [x] Defaults/samples: update default config templates with the new `sorafs.repair`/`sorafs.gc` sections and sane first-release values.
@@ -310,10 +310,10 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [ ] Audit trail: publish repair/GC events (ticket state transitions, evictions, bytes freed) to the governance DAG with canonical Norito payloads for decentralized auditability.
  - [x] Signed evidence: require repair worker submissions to include signed evidence bundles (manifest digest, provider id, action summary, timestamps) so governance can verify provenance.
  - [x] Audit payload schema: define canonical Norito payloads for repair/GC audit events (include signer, digest, and deterministic ordering) and lock with roundtrip tests.
- - [ ] Repair leases: add lease TTL + heartbeat/reclaim logic so stuck repairs requeue safely, with per-ticket attempt caps and SLA breach escalation.
- - [ ] SLA enforcement: add a scheduler watchdog that escalates overdue tickets, emits `RepairSlashProposalV1` drafts, and records breach events for governance review (no admin escalation path).
+- [x] Repair leases: add lease TTL + heartbeat/reclaim logic so stuck repairs requeue safely, with per-ticket attempt caps and SLA breach escalation.
+- [x] SLA enforcement: add a scheduler watchdog that escalates overdue tickets, emits `RepairSlashProposalV1` drafts, and records breach events for governance review (no admin escalation path).
  - [ ] Worker scheduling: integrate repair execution with the existing storage scheduler (pin/fetch/PoR budgets) so repair traffic respects operator limits and does not starve normal pin traffic.
- - [ ] Repair prioritisation: sort by SLA deadline, failure severity, and provider impact; keep ordering deterministic to avoid oscillations under load.
+- [x] Repair prioritisation: sort by SLA deadline, failure severity, and provider impact; keep ordering deterministic to avoid oscillations under load.
  - [ ] Determinism: document and enforce deterministic ordering for repair queue selection and GC eviction (tie-breakers by ticket id/manifest id) to keep peer outputs identical.
  - [ ] Reconciliation: add cross-node consistency checks for repair/GC state (ticket status, retention indexes, freed bytes) with periodic comparison reports and divergence telemetry.
  - [ ] GC/retention: add a deal/manifest expiry index plus a TTL sweeper that evicts expired manifests/chunks, frees capacity, and keeps PoR/repair references coherent; include grace windows, max deletions per tick, and a governance/auditable trigger path (no admin override).【crates/sorafs_node/src/store.rs】
@@ -1269,12 +1269,12 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Tests: add profile-specific fixtures covering DA/RBC flags, VRF seed handling, roster/PoP completeness, and `kagami verify` negative/positive paths; mirror through Mochi profile wiring.
  - [x] Developer QoL: ship sample config/genesis bundles for each profile (`defaults/kagami/iroha3-{dev,testus,nexus}/`) with a `kagami verify` transcript and a `docker-compose` snippet for smoke runs; add `cargo xtask kagami-profiles --profile <...>` to regenerate them.【xtask/src/kagami_profiles.rs】【defaults/kagami/iroha3-dev】【defaults/kagami/iroha3-testus】【defaults/kagami/iroha3-nexus】
 
-27. **ACCOUNT-IDENTITY-REFACTOR — Canonical account IDs + alias/UAID unification** (Core/Data Model/Torii/SDK, Line: Shared, Owner: Core Protocol WG, Priority: High, Status: 🈺 In Progress, target TBD)
- - [ ] Canonicalize AccountId to IH58-only wire/display format (no `@domain`), and define a resolver spec for accepted inputs (`alias@domain`, `public_key@domain`, `uaid:<hex>`, katakana address, etc.); treat this as a first-release breaking change.
+27. **ACCOUNT-IDENTITY-REFACTOR — Canonical account IDs + alias/UAID unification** (Core/Data Model/Torii/SDK, Line: Shared, Owner: Core Protocol WG, Priority: High, Status: 🈴 Completed, target TBD)
+- [x] Canonicalize AccountId to IH58-only wire/display format (no `@domain`), and define a resolver spec for accepted inputs (`alias@domain`, `public_key@domain`, `uaid:<hex>`, katakana address, etc.); treat this as a first-release breaking change.
  - [x] Add WSV index: `uaid -> account` (1:1 enforced).
- - [ ] Add WSV indices: `alias@domain -> account`, `domain_selector -> domain`, and `opaque_id -> uaid` for PII-safe tokens; block raw email/phone values from on-chain storage.
+- [x] Add WSV indices: `alias@domain -> account`, `domain_selector -> domain`, and `opaque_id -> uaid` for PII-safe tokens; block raw email/phone values from on-chain storage.
  - [x] Enforce UAID uniqueness at admission/onboarding, and replace UAID scans/portfolio aggregation with direct lookup; errors on duplicates are invariant violations.
- - [ ] Refactor Torii routing/address parsing to canonicalize all account inputs without config gating (remove `strict_addresses` and ISO-only alias resolver assumptions).
- - [ ] Update SDKs/CLI/bridges to accept the new input forms and always render IH58; refresh docs/examples for Sora Nexus account addressing.
+- [x] Refactor Torii routing/address parsing to canonicalize all account inputs without config gating (remove `strict_addresses` and ISO-only alias resolver assumptions).
+- [x] Update SDKs/CLI/bridges to accept the new input forms and always render IH58; refresh docs/examples for Sora Nexus account addressing.
  - [x] Tests: unit coverage for UAID uniqueness and index behavior.
- - [ ] Tests: unit + integration coverage for alias collisions, domain-selector reverse index determinism, and input canonicalization.
+- [x] Tests: unit + integration coverage for alias collisions, domain-selector reverse index determinism, and input canonicalization.

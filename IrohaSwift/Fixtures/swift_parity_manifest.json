@@ -1,7 +1,7 @@
 {
   "fixtures": [
     {
-      "authority": "B5qiWdbSdEWjajvbR8b2z3Lca1LWGTiw8JxHVkAooMfDnBgLRdeHEF5FJdRyDA747z9uuCj@wonderland",
+      "authority": "B5qiWdbSdEWjajvbR8b2z3Lca1LWGTiw8JxHVkAooMfDnBgLRdeHEF5FJdRyDA747z9uuCj",
       "chain": "00000042",
       "encoded_file": "swift_transfer_asset_basic.norito",
       "encoded_len": 3467,
@@ -15,7 +15,7 @@
       "time_to_live_ms": 3500
     },
     {
-      "authority": "B5qiWdbSdEWjajvbR8b2z3Lca1LWGTiw8JxHVkAooMfDnBgLRdeHEF5FJdRyDA747z9uuCj@wonderland",
+      "authority": "B5qiWdbSdEWjajvbR8b2z3Lca1LWGTiw8JxHVkAooMfDnBgLRdeHEF5FJdRyDA747z9uuCj",
       "chain": "00000043",
       "encoded_file": "swift_mint_asset_basic.norito",
       "encoded_len": 2581,
@@ -29,7 +29,7 @@
       "time_to_live_ms": 2000
     },
     {
-      "authority": "B5qiWdbSdEWjajvbR8b2z3Lca1LWGTiw8JxHVkAooMfDnBgLRdeHEF5FJdRyDA747z9uuCj@wonderland",
+      "authority": "B5qiWdbSdEWjajvbR8b2z3Lca1LWGTiw8JxHVkAooMfDnBgLRdeHEF5FJdRyDA747z9uuCj",
       "chain": "00000044",
       "encoded_file": "swift_burn_asset_basic.norito",
       "encoded_len": 2581,

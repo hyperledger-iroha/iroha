@@ -28,11 +28,11 @@ fn tlv_envelope<T: NoritoEncode>(type_id: PointerType, val: &T) -> Vec<u8> {
 fn apply_queued_isis_from_corehost_transfer_asset() {
     // Build a minimal IVM program that performs SCALL TRANSFER_ASSET and HALT
     let from: AccountId =
-        "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonder"
+        "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
             .parse()
             .unwrap();
     let to: AccountId =
-        "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonder"
+        "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"
             .parse()
             .unwrap();
     let asset_def: AssetDefinitionId = "coin#wonder".parse().unwrap();

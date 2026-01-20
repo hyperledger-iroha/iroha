@@ -77,7 +77,6 @@ Torii، SDKs، اور والٹ/ایکسپلورر کلائنٹس پر `ERR_CHECK
 |------|---------|
 | فکسچر ڈرفٹ | `fixtures/account/address_vectors.json` ری جنریٹ کریں، `cargo xtask address-vectors --verify` دوبارہ چلائیں، SDK بنڈلز اپ ڈیٹ کریں، اور `address_fixture.prom` ٹکٹ میں شامل کریں۔ |
 | SDK/کلائنٹ ریگریشن | canonical فکسچر اور `iroha address inspect` آؤٹ پٹ کے ساتھ ایشوز فائل کریں اور ریلیزز کو `ci/check_address_normalize.sh` جیسی parity CI کے پیچھے گیٹ کریں۔ |
-| Manifest کرپشن | `address_manifest_ops.md` کے مطابق دوبارہ بنائیں، `cargo xtask address-manifest verify` چلائیں، اور `torii.strict_addresses=true` رکھیں جب تک ٹیلی میٹری صاف نہ ہو۔ |
 | بدنیتی سبمشنز | مسئلہ پیدا کرنے والے principals کو ریٹ لمٹ/بلاک کریں، اور selector tombstone کی ضرورت ہو تو گورننس کو escalate کریں۔ |
 
 اصلاحات کے بعد PromQL دوبارہ چلائیں تاکہ `ERR_CHECKSUM_MISMATCH`

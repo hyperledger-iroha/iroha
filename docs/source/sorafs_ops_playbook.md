@@ -142,6 +142,37 @@ incident retrospectives.
 - Schedule a capacity drill focusing on provider saturation failure.
 - Update replication SLA documentation in `docs/source/sorafs_node_client_protocol.md`.
 
+### Retention / GC Inspection (Read-only)
+
+**Detection**
+
+- Alerts: `SoraFSCapacityPressure` or sustained `torii_sorafs_storage_bytes_used` > 90%.
+- Dashboard: `dashboards/grafana/sorafs_capacity_health.json`.
+
+**Immediate actions**
+
+1. Run a local retention snapshot:
+   ```bash
+   iroha sorafs gc inspect --data-dir /var/lib/sorafs
+   ```
+2. Capture an expired-only view for triage:
+   ```bash
+   iroha sorafs gc dry-run --data-dir /var/lib/sorafs
+   ```
+3. Attach the JSON outputs to the incident ticket for auditability.
+
+**Triage**
+
+- Confirm which manifests report `retention_epoch=0` (no expiry) vs. those with deadlines.
+- If `dry-run` reports expired manifests but capacity remains pinned, verify no
+  active repairs or retention policy overrides block eviction.
+
+**Remediation options**
+
+- The GC CLI is read-only. Do not delete manifests or chunks manually in production.
+- Escalate to governance for retention policy adjustments or capacity expansion
+  when expired data accumulates without automated eviction.
+
 ## Chaos Drill Cadence
 
 - **Quarterly**: Combined gateway outage + orchestrator retry storm simulation.

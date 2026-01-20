@@ -1,12 +1,12 @@
 //! Repair scheduler supporting SoraFS auditor workflows.
 //!
-//! The scheduler maintains an in-memory queue of repair tickets reported by
-//! auditors, tracks proof-of-retrievability failures, and emits metrics so
-//! operators can monitor SLA adherence. It is intentionally lightweight: the
-//! canonical durability layer (Postgres) will be introduced once Torii wiring
-//! and governance integration mature.
+//! The scheduler persists repair tickets via a repair store abstraction, tracks
+//! proof-of-retrievability failures, and emits metrics so operators can monitor
+//! SLA adherence. The in-memory store remains the default until the Postgres
+//! backend is wired into the node configuration.
 
 use std::{
+    cmp::Reverse,
     collections::{HashMap, VecDeque},
     sync::{
         Arc, RwLock,
@@ -16,14 +16,15 @@ use std::{
 
 use blake3::hash;
 use hex;
-use iroha_logger::debug;
+use iroha_logger::{debug, error, warn};
 use iroha_telemetry::metrics::{global_or_default, global_sorafs_repair_otel};
 use sorafs_manifest::{
     por::AuditVerdictV1,
     repair::{
         CompletedRepairStateV1, EscalatedRepairStateV1, FailedRepairStateV1,
-        InProgressRepairStateV1, QueuedRepairStateV1, REPAIR_TASK_VERSION_V1, RepairEvidenceV1,
-        RepairReportV1, RepairSlashProposalV1, RepairTaskRecordV1, RepairTaskStateV1,
+        InProgressRepairStateV1, QueuedRepairStateV1, REPAIR_TASK_EVENT_VERSION_V1,
+        REPAIR_TASK_VERSION_V1, RepairCauseV1, RepairEvidenceV1, RepairReportV1,
+        RepairSlashProposalV1, RepairTaskEventV1, RepairTaskRecordV1, RepairTaskStateV1,
         RepairTaskStatusV1, RepairTicketId, RepairValidationError,
     },
 };
@@ -36,14 +37,158 @@ const MAX_IDEMPOTENCY_KEY_BYTES: usize = 256;
 const MAX_WORKER_ID_BYTES: usize = 256;
 const MAX_REPAIR_NOTES_BYTES: usize = 256;
 const DEFAULT_IDEMPOTENCY_CACHE_SIZE: usize = 64;
+const MAX_REPAIR_STORE_RETRIES: usize = 3;
+const DEFAULT_REPAIR_EVENT_HISTORY_LIMIT: usize = 64;
+
+/// Result of inserting a repair task into storage.
+#[derive(Debug, Clone)]
+enum RepairStoreInsertResult {
+    Inserted(RepairTaskInternal),
+    Existing(RepairTaskInternal),
+}
+
+/// Errors returned by the repair storage backend.
+#[derive(Debug, Error)]
+pub enum RepairStoreError {
+    /// Ticket already exists.
+    #[error("repair ticket `{ticket_id}` already exists")]
+    Duplicate {
+        /// Repair ticket identifier.
+        ticket_id: String,
+    },
+    /// Ticket not found.
+    #[error("repair ticket `{ticket_id}` not found")]
+    NotFound {
+        /// Repair ticket identifier.
+        ticket_id: String,
+    },
+    /// Ticket was modified concurrently.
+    #[error("repair ticket `{ticket_id}` modified concurrently")]
+    Conflict {
+        /// Repair ticket identifier.
+        ticket_id: String,
+    },
+    /// Store rejected the update.
+    #[error("repair store error: {0}")]
+    Other(String),
+}
+
+/// Storage backend for repair tickets and PoR history.
+trait RepairStore: std::fmt::Debug + Send + Sync {
+    fn next_por_history_id(&self) -> u64;
+    fn record_por_history(&self, entry: PorHistoryEntry) -> Result<(), RepairStoreError>;
+    fn por_history_entry(
+        &self,
+        por_history_id: u64,
+    ) -> Result<Option<PorHistoryEntry>, RepairStoreError>;
+    fn insert_task(&self, task: RepairTaskInternal) -> Result<RepairStoreInsertResult, RepairStoreError>;
+    fn task(
+        &self,
+        ticket_id: &RepairTicketId,
+    ) -> Result<Option<RepairTaskInternal>, RepairStoreError>;
+    fn compare_and_set_task(
+        &self,
+        ticket_id: &RepairTicketId,
+        expected_revision: u64,
+        task: RepairTaskInternal,
+    ) -> Result<(), RepairStoreError>;
+    fn list_tasks(&self) -> Result<Vec<RepairTaskInternal>, RepairStoreError>;
+}
+
+#[derive(Debug)]
+struct InMemoryRepairStore {
+    tasks: RwLock<HashMap<String, RepairTaskInternal>>,
+    por_history: RwLock<HashMap<u64, PorHistoryEntry>>,
+    next_history_id: AtomicU64,
+}
+
+impl InMemoryRepairStore {
+    fn new() -> Self {
+        Self {
+            tasks: RwLock::new(HashMap::new()),
+            por_history: RwLock::new(HashMap::new()),
+            next_history_id: AtomicU64::new(1),
+        }
+    }
+}
+
+impl RepairStore for InMemoryRepairStore {
+    fn next_por_history_id(&self) -> u64 {
+        self.next_history_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    fn record_por_history(&self, entry: PorHistoryEntry) -> Result<(), RepairStoreError> {
+        let mut guard = self.por_history.write().expect("por_history poisoned");
+        if guard.contains_key(&entry.id) {
+            return Err(RepairStoreError::Other(format!(
+                "por history id {} already stored",
+                entry.id
+            )));
+        }
+        guard.insert(entry.id, entry);
+        Ok(())
+    }
+
+    fn por_history_entry(
+        &self,
+        por_history_id: u64,
+    ) -> Result<Option<PorHistoryEntry>, RepairStoreError> {
+        let guard = self.por_history.read().expect("por_history poisoned");
+        Ok(guard.get(&por_history_id).cloned())
+    }
+
+    fn insert_task(&self, task: RepairTaskInternal) -> Result<RepairStoreInsertResult, RepairStoreError> {
+        let mut guard = self.tasks.write().expect("repair tasks lock poisoned");
+        let key = task.report.ticket_id.0.clone();
+        if let Some(existing) = guard.get(&key) {
+            return Ok(RepairStoreInsertResult::Existing(existing.clone()));
+        }
+        guard.insert(key, task.clone());
+        Ok(RepairStoreInsertResult::Inserted(task))
+    }
+
+    fn task(
+        &self,
+        ticket_id: &RepairTicketId,
+    ) -> Result<Option<RepairTaskInternal>, RepairStoreError> {
+        let guard = self.tasks.read().expect("repair tasks lock poisoned");
+        Ok(guard.get(&ticket_id.0).cloned())
+    }
+
+    fn compare_and_set_task(
+        &self,
+        ticket_id: &RepairTicketId,
+        expected_revision: u64,
+        task: RepairTaskInternal,
+    ) -> Result<(), RepairStoreError> {
+        let mut guard = self.tasks.write().expect("repair tasks lock poisoned");
+        let existing =
+            guard
+                .get(&ticket_id.0)
+                .ok_or_else(|| RepairStoreError::NotFound {
+                    ticket_id: ticket_id.to_string(),
+                })?;
+        if existing.revision != expected_revision {
+            return Err(RepairStoreError::Conflict {
+                ticket_id: ticket_id.to_string(),
+            });
+        }
+        guard.insert(ticket_id.0.clone(), task);
+        Ok(())
+    }
+
+    fn list_tasks(&self) -> Result<Vec<RepairTaskInternal>, RepairStoreError> {
+        let guard = self.tasks.read().expect("repair tasks lock poisoned");
+        Ok(guard.values().cloned().collect())
+    }
+}
 
 /// Manages repair tickets and PoR failure history.
 #[derive(Debug, Clone)]
 pub struct RepairManager {
-    tasks: Arc<RwLock<HashMap<String, RepairTaskInternal>>>,
-    por_history: Arc<RwLock<HashMap<u64, PorHistoryEntry>>>,
-    next_history_id: Arc<AtomicU64>,
+    store: Arc<dyn RepairStore>,
     default_sla_secs: u64,
+    event_history_limit: usize,
     config: RepairConfig,
 }
 
@@ -56,6 +201,24 @@ pub struct RepairTaskFilters {
     pub provider_id: Option<[u8; 32]>,
     /// Optional task status to filter by.
     pub status: Option<RepairTaskStatusV1>,
+}
+
+/// Snapshot of a repair task with its event history.
+#[derive(Debug, Clone)]
+pub struct RepairTaskSnapshot {
+    /// Current task record.
+    pub record: RepairTaskRecordV1,
+    /// Event log ordered by occurrence.
+    pub events: Vec<RepairTaskEventV1>,
+}
+
+/// Summary of actions taken by the repair watchdog.
+#[derive(Debug, Clone, Default)]
+pub struct RepairWatchdogReport {
+    /// Draft slash proposals emitted for escalations.
+    pub escalated: Vec<RepairSlashProposalV1>,
+    /// Tickets re-queued by the watchdog.
+    pub requeued: Vec<RepairTicketId>,
 }
 
 impl RepairTaskFilters {
@@ -88,6 +251,15 @@ impl RepairTaskFilters {
     }
 }
 
+fn build_repair_store(config: &RepairConfig) -> Arc<dyn RepairStore> {
+    if config.db_dsn().is_some() {
+        warn!("repair store database configured but Postgres backend is not wired yet");
+        // TODO: replace with Postgres repair store once the persistence layer is available.
+    }
+    // TODO: thread event history retention limit via RepairConfig once config supports it.
+    Arc::new(InMemoryRepairStore::new())
+}
+
 impl RepairManager {
     /// Construct a new repair manager with the default SLA window.
     #[must_use]
@@ -98,11 +270,11 @@ impl RepairManager {
     /// Construct a new repair manager using the provided configuration.
     #[must_use]
     pub fn new_with_config(config: RepairConfig) -> Self {
+        let store = build_repair_store(&config);
         Self {
-            tasks: Arc::new(RwLock::new(HashMap::new())),
-            por_history: Arc::new(RwLock::new(HashMap::new())),
-            next_history_id: Arc::new(AtomicU64::new(1)),
+            store,
             default_sla_secs: DEFAULT_REPAIR_SLA_SECS,
+            event_history_limit: DEFAULT_REPAIR_EVENT_HISTORY_LIMIT,
             config,
         }
     }
@@ -116,8 +288,9 @@ impl RepairManager {
         if failed_samples == 0 {
             return None;
         }
+        let history_id = self.store.next_por_history_id();
         let entry = PorHistoryEntry {
-            id: self.next_history_id.fetch_add(1, Ordering::Relaxed),
+            id: history_id,
             manifest_digest: verdict.manifest_digest,
             provider_id: verdict.provider_id,
             challenge_id: verdict.challenge_id,
@@ -132,9 +305,11 @@ impl RepairManager {
             history_id = entry.id,
             "registered PoR failure for repair history"
         );
-        let mut history = self.por_history.write().expect("por_history poisoned");
-        let history_id = entry.id;
-        history.insert(history_id, entry);
+        if let Err(err) = self.store.record_por_history(entry) {
+            error!(?err, history_id, "failed to persist PoR repair history");
+            // TODO: propagate store errors once durable repair persistence is available.
+            return None;
+        }
         Some(history_id)
     }
 
@@ -150,34 +325,54 @@ impl RepairManager {
             self.ensure_por_history_match(por_id, &report.evidence)?;
         }
 
-        let mut guard = self.tasks.write().expect("repair tasks lock poisoned");
-        let key = report.ticket_id.0.clone();
-        if let Some(existing) = guard.get(&key) {
-            if existing.report.evidence != report.evidence {
-                return Err(RepairSchedulerError::DuplicateTicket {
-                    ticket_id: report.ticket_id.to_string(),
-                });
-            }
-            return Ok(existing.to_record());
-        }
-
+        let report_evidence = report.evidence.clone();
+        let ticket_id = report.ticket_id.to_string();
+        let mut report_bytes = Vec::new();
+        norito::core::NoritoSerialize::serialize(&report, &mut report_bytes)
+            .expect("serialize repair report");
         let sla_deadline = report.submitted_at_unix.checked_add(self.default_sla_secs);
         let state = RepairTaskStateV1::Queued(QueuedRepairStateV1 {
             queued_at_unix: report.submitted_at_unix,
             sla_deadline_unix: sla_deadline,
         });
-        let internal = RepairTaskInternal {
+        let mut internal = RepairTaskInternal {
             report,
+            report_bytes,
             state,
             sla_deadline_unix: sla_deadline,
             scheduler_notes: None,
             slash_proposal_digest: None,
+            slash_proposal_bytes: None,
             lease: None,
             idempotency: RepairTaskIdempotency::new(DEFAULT_IDEMPOTENCY_CACHE_SIZE),
+            attempts: 0,
+            next_attempt_after_unix: None,
+            revision: 0,
+            events: Vec::new(),
         };
-        let record = internal.to_record();
-        guard.insert(key, internal);
-        drop(guard);
+        internal.push_event(
+            RepairTaskStatusV1::Queued,
+            internal.report.submitted_at_unix,
+            Some(internal.report.auditor_account.clone()),
+            internal
+                .report
+                .notes
+                .clone()
+                .or_else(|| internal.report.evidence.notes.clone()),
+            self.event_history_limit,
+        );
+        let insert = self.store.insert_task(internal)?;
+        let record = match insert {
+            RepairStoreInsertResult::Inserted(inserted) => inserted.to_record(),
+            RepairStoreInsertResult::Existing(existing) => {
+                if existing.report.evidence != report_evidence {
+                    return Err(RepairSchedulerError::DuplicateTicket {
+                        ticket_id,
+                    });
+                }
+                return Ok(existing.to_record());
+            }
+        };
 
         global_sorafs_repair_otel().record_task_transition("queued");
         global_or_default().inc_sorafs_repair_tasks("queued");
@@ -192,53 +387,57 @@ impl RepairManager {
         proposal
             .validate()
             .map_err(RepairSchedulerError::InvalidSlashProposal)?;
+        let task = self.update_task_with_retry(&proposal.ticket_id, |task| {
+            if task.report.evidence.manifest_digest != proposal.manifest_digest {
+                return Err(RepairSchedulerError::ManifestMismatch {
+                    ticket_id: proposal.ticket_id.to_string(),
+                });
+            }
+            if task.report.evidence.provider_id != proposal.provider_id {
+                return Err(RepairSchedulerError::ProviderMismatch {
+                    ticket_id: proposal.ticket_id.to_string(),
+                });
+            }
 
-        let mut guard = self.tasks.write().expect("repair tasks lock poisoned");
-        let key = proposal.ticket_id.0.clone();
-        let task = guard
-            .get_mut(&key)
-            .ok_or_else(|| RepairSchedulerError::UnknownTicket {
-                ticket_id: proposal.ticket_id.to_string(),
-            })?;
+            let queued_at = queued_at_unix(&task.state);
+            ensure_transition_allowed(&task.state, "escalated", &proposal.ticket_id)?;
+            if proposal.submitted_at_unix <= queued_at {
+                return Err(RepairSchedulerError::InvalidTimestamp {
+                    ticket_id: proposal.ticket_id.to_string(),
+                });
+            }
 
-        if task.report.evidence.manifest_digest != proposal.manifest_digest {
-            return Err(RepairSchedulerError::ManifestMismatch {
-                ticket_id: proposal.ticket_id.to_string(),
+            let mut digest = [0u8; 32];
+            let mut buf = Vec::new();
+            norito::core::NoritoSerialize::serialize(&proposal, &mut buf)
+                .expect("serialize slash proposal");
+            digest.copy_from_slice(hash(&buf).as_bytes());
+
+            task.state = RepairTaskStateV1::Escalated(EscalatedRepairStateV1 {
+                queued_at_unix: queued_at,
+                escalated_at_unix: proposal.submitted_at_unix,
+                reason: proposal.rationale.clone(),
             });
-        }
-        if task.report.evidence.provider_id != proposal.provider_id {
-            return Err(RepairSchedulerError::ProviderMismatch {
-                ticket_id: proposal.ticket_id.to_string(),
-            });
-        }
+            task.slash_proposal_digest = Some(digest);
+            task.slash_proposal_bytes = Some(buf);
+            task.next_attempt_after_unix = None;
+            task.push_event(
+                RepairTaskStatusV1::Escalated,
+                proposal.submitted_at_unix,
+                Some(proposal.auditor_account.clone()),
+                Some(proposal.rationale.clone()),
+                self.event_history_limit,
+            );
+            Ok(())
+        })?;
 
         let queued_at = queued_at_unix(&task.state);
-        ensure_transition_allowed(&task.state, "escalated", &proposal.ticket_id)?;
-        if proposal.submitted_at_unix <= queued_at {
-            return Err(RepairSchedulerError::InvalidTimestamp {
-                ticket_id: proposal.ticket_id.to_string(),
-            });
-        }
-
-        let mut digest = [0u8; 32];
-        let mut buf = Vec::new();
-        norito::core::NoritoSerialize::serialize(&proposal, &mut buf)
-            .expect("serialize slash proposal");
-        digest.copy_from_slice(hash(&buf).as_bytes());
-
-        task.state = RepairTaskStateV1::Escalated(EscalatedRepairStateV1 {
-            queued_at_unix: queued_at,
-            escalated_at_unix: proposal.submitted_at_unix,
-            reason: proposal.rationale.clone(),
-        });
-        task.slash_proposal_digest = Some(digest);
         global_sorafs_repair_otel().record_task_transition("escalated");
         self.observe_latency(queued_at, proposal.submitted_at_unix, "escalated");
         global_sorafs_repair_otel().record_slash_proposal("submitted");
         global_or_default().inc_sorafs_repair_tasks("escalated");
         global_or_default().inc_sorafs_slash_proposals("submitted");
-        let record = task.to_record();
-        Ok(record)
+        Ok(task.to_record())
     }
 
     /// Fetch all repair tasks associated with `manifest_digest`.
@@ -250,21 +449,313 @@ impl RepairManager {
     /// List repair tasks with optional filters applied.
     #[must_use]
     pub fn list_tasks(&self, filters: RepairTaskFilters) -> Vec<RepairTaskRecordV1> {
-        let guard = self.tasks.read().expect("repair tasks lock poisoned");
-        let mut records: Vec<RepairTaskRecordV1> = guard
-            .values()
-            .map(RepairTaskInternal::to_record)
+        let tasks = match self.store.list_tasks() {
+            Ok(tasks) => tasks,
+            Err(err) => {
+                error!(?err, "failed to load repair tasks");
+                return Vec::new();
+            }
+        };
+        let mut records: Vec<RepairTaskRecordV1> = tasks
+            .into_iter()
+            .map(|task| task.to_record())
             .filter(|record| filters.matches(record))
             .collect();
         sort_repair_task_records(&mut records);
         records
     }
 
+    /// List repair task snapshots with optional filters applied.
+    #[must_use]
+    pub fn list_task_snapshots(&self, filters: RepairTaskFilters) -> Vec<RepairTaskSnapshot> {
+        let tasks = match self.store.list_tasks() {
+            Ok(tasks) => tasks,
+            Err(err) => {
+                error!(?err, "failed to load repair tasks");
+                return Vec::new();
+            }
+        };
+        let mut snapshots: Vec<RepairTaskSnapshot> = tasks
+            .into_iter()
+            .map(|task| task.to_snapshot())
+            .filter(|snapshot| filters.matches(&snapshot.record))
+            .collect();
+        sort_repair_task_snapshots(&mut snapshots);
+        snapshots
+    }
+
+    /// List claimable repair tasks ordered by priority.
+    #[must_use]
+    pub fn claimable_tasks(&self, now_unix: u64) -> Vec<RepairTaskRecordV1> {
+        let tasks = match self.store.list_tasks() {
+            Ok(tasks) => tasks,
+            Err(err) => {
+                error!(?err, "failed to load repair tasks");
+                return Vec::new();
+            }
+        };
+        let mut candidates: Vec<RepairTaskInternal> = tasks
+            .into_iter()
+            .filter(|task| matches!(task.state, RepairTaskStateV1::Queued(..)))
+            .filter(|task| {
+                task.next_attempt_after_unix
+                    .map_or(true, |retry_after| now_unix >= retry_after)
+            })
+            .collect();
+
+        let mut provider_backlog: HashMap<[u8; 32], u32> = HashMap::new();
+        for task in &candidates {
+            let entry = provider_backlog
+                .entry(task.report.evidence.provider_id)
+                .or_insert(0);
+            *entry = entry.saturating_add(1);
+        }
+
+        candidates.sort_by(|left, right| {
+            let left_deadline = left.sla_deadline_unix.unwrap_or(u64::MAX);
+            let right_deadline = right.sla_deadline_unix.unwrap_or(u64::MAX);
+            let left_severity = repair_severity_score(&left.report.evidence.cause);
+            let right_severity = repair_severity_score(&right.report.evidence.cause);
+            let left_impact = provider_backlog
+                .get(&left.report.evidence.provider_id)
+                .copied()
+                .unwrap_or(0);
+            let right_impact = provider_backlog
+                .get(&right.report.evidence.provider_id)
+                .copied()
+                .unwrap_or(0);
+
+            left_deadline
+                .cmp(&right_deadline)
+                .then_with(|| Reverse(left_severity.0).cmp(&Reverse(right_severity.0)))
+                .then_with(|| Reverse(left_severity.1).cmp(&Reverse(right_severity.1)))
+                .then_with(|| Reverse(left_impact).cmp(&Reverse(right_impact)))
+                .then_with(|| queued_at_unix(&left.state).cmp(&queued_at_unix(&right.state)))
+                .then_with(|| left.report.evidence.manifest_digest.cmp(&right.report.evidence.manifest_digest))
+                .then_with(|| left.report.ticket_id.0.cmp(&right.report.ticket_id.0))
+        });
+
+        candidates.into_iter().map(|task| task.to_record()).collect()
+    }
+
+    /// Run the repair watchdog to requeue expired leases and escalate SLA breaches.
+    pub fn run_watchdog(
+        &self,
+        now_unix: u64,
+    ) -> Result<RepairWatchdogReport, RepairSchedulerError> {
+        if now_unix == 0 {
+            return Ok(RepairWatchdogReport::default());
+        }
+        let mut report = RepairWatchdogReport::default();
+        let mut tasks = self.store.list_tasks()?;
+        tasks.sort_by(|left, right| left.report.ticket_id.0.cmp(&right.report.ticket_id.0));
+
+        for task in tasks {
+            let ticket_id = task.report.ticket_id.clone();
+            let status = repair_task_status(&task.state);
+            if matches!(
+                status,
+                RepairTaskStatusV1::Completed | RepairTaskStatusV1::Escalated
+            ) {
+                continue;
+            }
+
+            if let Some(deadline) = task.sla_deadline_unix {
+                if now_unix >= deadline {
+                    let mut drafted = None;
+                    let mut escalated = false;
+                    let rationale = format!("SLA deadline {deadline} breached at {now_unix}");
+                    let updated = self.update_task_with_retry(&ticket_id, |task| {
+                        if matches!(
+                            repair_task_status(&task.state),
+                            RepairTaskStatusV1::Completed | RepairTaskStatusV1::Escalated
+                        ) {
+                            return Ok(());
+                        }
+                        let Some(task_deadline) = task.sla_deadline_unix else {
+                            return Ok(());
+                        };
+                        if now_unix < task_deadline {
+                            return Ok(());
+                        }
+                        let proposal =
+                            self.apply_escalation(task, now_unix, rationale.clone(), "scheduler")?;
+                        drafted = Some(proposal);
+                        escalated = true;
+                        Ok(())
+                    })?;
+                    if escalated {
+                        if let Some(proposal) = drafted {
+                            report.escalated.push(proposal);
+                        }
+                        let queued_at = queued_at_unix(&updated.state);
+                        global_sorafs_repair_otel().record_task_transition("escalated");
+                        global_or_default().inc_sorafs_repair_tasks("escalated");
+                        global_sorafs_repair_otel().record_slash_proposal("drafted");
+                        global_or_default().inc_sorafs_slash_proposals("drafted");
+                        self.observe_latency(queued_at, now_unix, "escalated");
+                    }
+                    continue;
+                }
+            }
+
+            if let RepairTaskStateV1::InProgress(..) = &task.state {
+                if let Some(lease) = &task.lease {
+                    if lease.is_expired_at(now_unix) {
+                        let mut requeued = false;
+                        let mut drafted = None;
+                        let reason = "lease expired; requeued".to_string();
+                        let updated = self.update_task_with_retry(&ticket_id, |task| {
+                            let lease = match &task.lease {
+                                Some(lease) => lease,
+                                None => return Ok(()),
+                            };
+                            if !lease.is_expired_at(now_unix) {
+                                return Ok(());
+                            }
+                            task.attempts = task.attempts.saturating_add(1);
+                            let max_attempts = self.config.max_attempts();
+                            if task.attempts >= max_attempts {
+                                let rationale = format!(
+                                    "lease expired; attempts {}/{} exceeded",
+                                    task.attempts, max_attempts
+                                );
+                                let proposal = self.apply_escalation(
+                                    task,
+                                    now_unix,
+                                    rationale,
+                                    "scheduler",
+                                )?;
+                                drafted = Some(proposal);
+                                return Ok(());
+                            }
+                            let queued_at = queued_at_unix(&task.state);
+                            let retry_after = next_attempt_after_unix(
+                                now_unix,
+                                task.attempts,
+                                &self.config,
+                                &task.report.ticket_id,
+                            )?;
+                            task.state = RepairTaskStateV1::Queued(QueuedRepairStateV1 {
+                                queued_at_unix: queued_at,
+                                sla_deadline_unix: task.sla_deadline_unix,
+                            });
+                            task.scheduler_notes = Some(reason.clone());
+                            task.lease = None;
+                            task.next_attempt_after_unix = Some(retry_after);
+                            task.push_event(
+                                RepairTaskStatusV1::Queued,
+                                now_unix,
+                                Some("scheduler".into()),
+                                Some(reason.clone()),
+                                self.event_history_limit,
+                            );
+                            requeued = true;
+                            Ok(())
+                        })?;
+                        if let Some(proposal) = drafted {
+                            report.escalated.push(proposal);
+                            let queued_at = queued_at_unix(&updated.state);
+                            global_sorafs_repair_otel().record_task_transition("escalated");
+                            global_or_default().inc_sorafs_repair_tasks("escalated");
+                            global_sorafs_repair_otel().record_slash_proposal("drafted");
+                            global_or_default().inc_sorafs_slash_proposals("drafted");
+                            self.observe_latency(queued_at, now_unix, "escalated");
+                        } else if requeued {
+                            report.requeued.push(ticket_id.clone());
+                            global_sorafs_repair_otel().record_task_transition("queued");
+                            global_or_default().inc_sorafs_repair_tasks("queued");
+                        }
+                    }
+                }
+            }
+
+            if matches!(task.state, RepairTaskStateV1::Failed(_)) {
+                let mut requeued = false;
+                let mut drafted = None;
+                let updated = self.update_task_with_retry(&ticket_id, |task| {
+                    let failed_state = match &task.state {
+                        RepairTaskStateV1::Failed(state) => state,
+                        _ => return Ok(()),
+                    };
+                    let max_attempts = self.config.max_attempts();
+                    if task.attempts >= max_attempts {
+                        let rationale = format!(
+                            "attempts {}/{} exceeded after failure",
+                            task.attempts, max_attempts
+                        );
+                        let proposal =
+                            self.apply_escalation(task, now_unix, rationale, "scheduler")?;
+                        drafted = Some(proposal);
+                        return Ok(());
+                    }
+                    if let Some(retry_after) = task.next_attempt_after_unix {
+                        if now_unix < retry_after {
+                            return Ok(());
+                        }
+                    }
+                    let queued_at = failed_state.queued_at_unix;
+                    let reason = format!("retry after failure: {}", failed_state.reason);
+                    task.state = RepairTaskStateV1::Queued(QueuedRepairStateV1 {
+                        queued_at_unix: queued_at,
+                        sla_deadline_unix: task.sla_deadline_unix,
+                    });
+                    task.scheduler_notes = Some(reason.clone());
+                    task.lease = None;
+                    task.next_attempt_after_unix = None;
+                    task.push_event(
+                        RepairTaskStatusV1::Queued,
+                        now_unix,
+                        Some("scheduler".into()),
+                        Some(reason),
+                        self.event_history_limit,
+                    );
+                    requeued = true;
+                    Ok(())
+                })?;
+                if let Some(proposal) = drafted {
+                    report.escalated.push(proposal);
+                    let queued_at = queued_at_unix(&updated.state);
+                    global_sorafs_repair_otel().record_task_transition("escalated");
+                    global_or_default().inc_sorafs_repair_tasks("escalated");
+                    global_sorafs_repair_otel().record_slash_proposal("drafted");
+                    global_or_default().inc_sorafs_slash_proposals("drafted");
+                    self.observe_latency(queued_at, now_unix, "escalated");
+                } else if requeued {
+                    report.requeued.push(ticket_id.clone());
+                    global_sorafs_repair_otel().record_task_transition("queued");
+                    global_or_default().inc_sorafs_repair_tasks("queued");
+                }
+            }
+        }
+
+        Ok(report)
+    }
+
     /// Retrieve a repair task record by ticket id.
     #[must_use]
     pub fn task_record(&self, ticket_id: &RepairTicketId) -> Option<RepairTaskRecordV1> {
-        let guard = self.tasks.read().expect("repair tasks lock poisoned");
-        guard.get(&ticket_id.0).map(RepairTaskInternal::to_record)
+        match self.store.task(ticket_id) {
+            Ok(Some(task)) => Some(task.to_record()),
+            Ok(None) => None,
+            Err(err) => {
+                error!(?err, ticket_id = %ticket_id, "failed to load repair ticket");
+                None
+            }
+        }
+    }
+
+    /// Retrieve a repair task snapshot by ticket id.
+    #[must_use]
+    pub fn task_snapshot(&self, ticket_id: &RepairTicketId) -> Option<RepairTaskSnapshot> {
+        match self.store.task(ticket_id) {
+            Ok(Some(task)) => Some(task.to_snapshot()),
+            Ok(None) => None,
+            Err(err) => {
+                error!(?err, ticket_id = %ticket_id, "failed to load repair ticket");
+                None
+            }
+        }
     }
 
     /// Mark a repair ticket as actively being addressed.
@@ -279,35 +770,39 @@ impl RepairManager {
                 ticket_id: ticket_id.to_string(),
             });
         }
-        let mut guard = self.tasks.write().expect("repair tasks lock poisoned");
-        let task =
-            guard
-                .get_mut(&ticket_id.0)
-                .ok_or_else(|| RepairSchedulerError::UnknownTicket {
+        let task = self.update_task_with_retry(ticket_id, |task| {
+            let queued_at = queued_at_unix(&task.state);
+            if started_at_unix <= queued_at {
+                return Err(RepairSchedulerError::InvalidTimestamp {
                     ticket_id: ticket_id.to_string(),
-                })?;
-        let queued_at = queued_at_unix(&task.state);
-        if started_at_unix <= queued_at {
-            return Err(RepairSchedulerError::InvalidTimestamp {
-                ticket_id: ticket_id.to_string(),
+                });
+            }
+            match &task.state {
+                RepairTaskStateV1::Queued(..) => {
+            task.state = RepairTaskStateV1::InProgress(InProgressRepairStateV1 {
+                queued_at_unix: queued_at,
+                started_at_unix,
+                repair_agent: repair_agent.clone(),
             });
-        }
-        match &task.state {
-            RepairTaskStateV1::Queued(..) => {
-                task.state = RepairTaskStateV1::InProgress(InProgressRepairStateV1 {
-                    queued_at_unix: queued_at,
-                    started_at_unix,
-                    repair_agent: repair_agent.clone(),
-                });
-                task.lease = None;
+            task.lease = None;
+            task.next_attempt_after_unix = None;
+            task.push_event(
+                RepairTaskStatusV1::InProgress,
+                started_at_unix,
+                repair_agent.clone(),
+                        None,
+                        self.event_history_limit,
+                    );
+                }
+                _ => {
+                    return Err(RepairSchedulerError::InvalidState {
+                        ticket_id: ticket_id.to_string(),
+                        state: format!("{:?}", task.state),
+                    });
+                }
             }
-            _ => {
-                return Err(RepairSchedulerError::InvalidState {
-                    ticket_id: ticket_id.to_string(),
-                    state: format!("{:?}", task.state),
-                });
-            }
-        }
+            Ok(())
+        })?;
         global_sorafs_repair_otel().record_task_transition("in_progress");
         global_or_default().inc_sorafs_repair_tasks("in_progress");
         Ok(task.to_record())
@@ -325,39 +820,45 @@ impl RepairManager {
                 ticket_id: ticket_id.to_string(),
             });
         }
-        let mut guard = self.tasks.write().expect("repair tasks lock poisoned");
-        let task =
-            guard
-                .get_mut(&ticket_id.0)
-                .ok_or_else(|| RepairSchedulerError::UnknownTicket {
+        let task = self.update_task_with_retry(ticket_id, |task| {
+            let queued_at = queued_at_unix(&task.state);
+            if completed_at_unix <= queued_at {
+                return Err(RepairSchedulerError::InvalidTimestamp {
                     ticket_id: ticket_id.to_string(),
-                })?;
-        let queued_at = queued_at_unix(&task.state);
-        if completed_at_unix <= queued_at {
-            return Err(RepairSchedulerError::InvalidTimestamp {
-                ticket_id: ticket_id.to_string(),
-            });
-        }
-        let started_at = match &task.state {
-            RepairTaskStateV1::Queued(..) => queued_at,
-            RepairTaskStateV1::InProgress(InProgressRepairStateV1 {
-                started_at_unix, ..
-            }) => *started_at_unix,
-            _ => {
-                return Err(RepairSchedulerError::InvalidState {
-                    ticket_id: ticket_id.to_string(),
-                    state: format!("{:?}", task.state),
                 });
             }
-        };
-        task.state = RepairTaskStateV1::Completed(CompletedRepairStateV1 {
-            queued_at_unix: queued_at,
-            started_at_unix: started_at,
-            completed_at_unix,
-            resolution_notes: resolution_notes.clone(),
-        });
-        task.scheduler_notes = resolution_notes;
-        task.lease = None;
+            let started_at = match &task.state {
+                RepairTaskStateV1::Queued(..) => queued_at,
+                RepairTaskStateV1::InProgress(InProgressRepairStateV1 {
+                    started_at_unix, ..
+                }) => *started_at_unix,
+                _ => {
+                    return Err(RepairSchedulerError::InvalidState {
+                        ticket_id: ticket_id.to_string(),
+                        state: format!("{:?}", task.state),
+                    });
+                }
+            };
+            task.state = RepairTaskStateV1::Completed(CompletedRepairStateV1 {
+                queued_at_unix: queued_at,
+                started_at_unix: started_at,
+                completed_at_unix,
+                resolution_notes: resolution_notes.clone(),
+            });
+            task.scheduler_notes = resolution_notes.clone();
+            task.lease = None;
+            task.next_attempt_after_unix = None;
+            task.next_attempt_after_unix = None;
+            task.push_event(
+                RepairTaskStatusV1::Completed,
+                completed_at_unix,
+                None,
+                resolution_notes.clone(),
+                self.event_history_limit,
+            );
+            Ok(())
+        })?;
+        let queued_at = queued_at_unix(&task.state);
         global_sorafs_repair_otel().record_task_transition("completed");
         global_or_default().inc_sorafs_repair_tasks("completed");
         self.observe_latency(queued_at, completed_at_unix, "completed");
@@ -376,29 +877,61 @@ impl RepairManager {
                 ticket_id: ticket_id.to_string(),
             });
         }
-        let mut guard = self.tasks.write().expect("repair tasks lock poisoned");
-        let task =
-            guard
-                .get_mut(&ticket_id.0)
-                .ok_or_else(|| RepairSchedulerError::UnknownTicket {
+        let mut escalated = false;
+        let task = self.update_task_with_retry(ticket_id, |task| {
+            let queued_at = queued_at_unix(&task.state);
+            if failed_at_unix <= queued_at {
+                return Err(RepairSchedulerError::InvalidTimestamp {
                     ticket_id: ticket_id.to_string(),
-                })?;
-        let queued_at = queued_at_unix(&task.state);
-        if failed_at_unix <= queued_at {
-            return Err(RepairSchedulerError::InvalidTimestamp {
-                ticket_id: ticket_id.to_string(),
+                });
+            }
+            task.attempts = task.attempts.saturating_add(1);
+            let max_attempts = self.config.max_attempts();
+            if task.attempts >= max_attempts {
+                let rationale = format!(
+                    "attempts {}/{} exceeded after failure",
+                    task.attempts, max_attempts
+                );
+                let _proposal =
+                    self.apply_escalation(task, failed_at_unix, rationale, "scheduler")?;
+                escalated = true;
+                return Ok(());
+            }
+            let retry_after = next_attempt_after_unix(
+                failed_at_unix,
+                task.attempts,
+                &self.config,
+                ticket_id,
+            )?;
+            task.state = RepairTaskStateV1::Failed(FailedRepairStateV1 {
+                queued_at_unix: queued_at,
+                failed_at_unix,
+                reason: reason.clone(),
             });
+            task.scheduler_notes = Some(reason.clone());
+            task.lease = None;
+            task.next_attempt_after_unix = Some(retry_after);
+            task.push_event(
+                RepairTaskStatusV1::Failed,
+                failed_at_unix,
+                None,
+                Some(reason.clone()),
+                self.event_history_limit,
+            );
+            Ok(())
+        })?;
+        let queued_at = queued_at_unix(&task.state);
+        if escalated {
+            global_sorafs_repair_otel().record_task_transition("escalated");
+            global_or_default().inc_sorafs_repair_tasks("escalated");
+            global_sorafs_repair_otel().record_slash_proposal("drafted");
+            global_or_default().inc_sorafs_slash_proposals("drafted");
+            self.observe_latency(queued_at, failed_at_unix, "escalated");
+        } else {
+            global_sorafs_repair_otel().record_task_transition("failed");
+            global_or_default().inc_sorafs_repair_tasks("failed");
+            self.observe_latency(queued_at, failed_at_unix, "failed");
         }
-        task.state = RepairTaskStateV1::Failed(FailedRepairStateV1 {
-            queued_at_unix: queued_at,
-            failed_at_unix,
-            reason: reason.clone(),
-        });
-        task.scheduler_notes = Some(reason);
-        task.lease = None;
-        global_sorafs_repair_otel().record_task_transition("failed");
-        global_or_default().inc_sorafs_repair_tasks("failed");
-        self.observe_latency(queued_at, failed_at_unix, "failed");
         Ok(task.to_record())
     }
 
@@ -418,78 +951,102 @@ impl RepairManager {
             });
         }
 
-        let mut guard = self.tasks.write().expect("repair tasks lock poisoned");
-        let task =
-            guard
-                .get_mut(&ticket_id.0)
-                .ok_or_else(|| RepairSchedulerError::UnknownTicket {
-                    ticket_id: ticket_id.to_string(),
-                })?;
-        let signature = RepairClaimSignature {
-            worker_id: worker_id.to_string(),
-            claimed_at_unix,
-        };
-        if let Some(record) = task.idempotency.claim.check_existing(
-            idempotency_key,
-            &signature,
-            "claim",
-            ticket_id,
-        )? {
-            return Ok(record);
-        }
+        for _ in 0..=MAX_REPAIR_STORE_RETRIES {
+            let mut task = self.load_task(ticket_id)?;
+            let signature = RepairClaimSignature {
+                worker_id: worker_id.to_string(),
+                claimed_at_unix,
+            };
+            if let Some(record) = task.idempotency.claim.check_existing(
+                idempotency_key,
+                &signature,
+                "claim",
+                ticket_id,
+            )? {
+                return Ok(record);
+            }
 
-        match &task.state {
-            RepairTaskStateV1::Queued(..) | RepairTaskStateV1::InProgress(..) => {}
-            _ => {
-                return Err(RepairSchedulerError::InvalidState {
+            match &task.state {
+                RepairTaskStateV1::Queued(..) | RepairTaskStateV1::InProgress(..) => {}
+                _ => {
+                    return Err(RepairSchedulerError::InvalidState {
+                        ticket_id: ticket_id.to_string(),
+                        state: format!("{:?}", task.state),
+                    });
+                }
+            }
+
+            if let Some(lease) = &task.lease {
+                if !lease.is_expired_at(claimed_at_unix) {
+                    return Err(RepairSchedulerError::LeaseHeld {
+                        ticket_id: ticket_id.to_string(),
+                        worker_id: lease.worker_id.clone(),
+                    });
+                }
+            }
+            if let Some(retry_after) = task.next_attempt_after_unix {
+                if claimed_at_unix < retry_after {
+                    return Err(RepairSchedulerError::BackoffActive {
+                        ticket_id: ticket_id.to_string(),
+                        retry_after_unix: retry_after,
+                    });
+                }
+            }
+
+            let queued_at = queued_at_unix(&task.state);
+            let min_claim_at = match &task.state {
+                RepairTaskStateV1::InProgress(InProgressRepairStateV1 {
+                    started_at_unix, ..
+                }) => *started_at_unix,
+                _ => queued_at,
+            };
+            if claimed_at_unix <= min_claim_at {
+                return Err(RepairSchedulerError::InvalidTimestamp {
                     ticket_id: ticket_id.to_string(),
-                    state: format!("{:?}", task.state),
                 });
             }
-        }
 
-        if let Some(lease) = &task.lease {
-            if !lease.is_expired_at(claimed_at_unix) {
-                return Err(RepairSchedulerError::LeaseHeld {
-                    ticket_id: ticket_id.to_string(),
-                    worker_id: lease.worker_id.clone(),
-                });
-            }
-        }
-
-        let queued_at = queued_at_unix(&task.state);
-        let min_claim_at = match &task.state {
-            RepairTaskStateV1::InProgress(InProgressRepairStateV1 {
-                started_at_unix, ..
-            }) => *started_at_unix,
-            _ => queued_at,
-        };
-        if claimed_at_unix <= min_claim_at {
-            return Err(RepairSchedulerError::InvalidTimestamp {
-                ticket_id: ticket_id.to_string(),
+            let expires_at =
+                checked_add_secs(claimed_at_unix, self.config.claim_ttl_secs(), ticket_id)?;
+            task.state = RepairTaskStateV1::InProgress(InProgressRepairStateV1 {
+                queued_at_unix: queued_at,
+                started_at_unix: claimed_at_unix,
+                repair_agent: Some(worker_id.to_string()),
             });
+            task.lease = Some(RepairTaskLease {
+                worker_id: worker_id.to_string(),
+                last_heartbeat_unix: claimed_at_unix,
+                expires_at_unix: expires_at,
+            });
+            task.next_attempt_after_unix = None;
+            task.push_event(
+                RepairTaskStatusV1::InProgress,
+                claimed_at_unix,
+                Some(worker_id.to_string()),
+                Some("claimed".to_string()),
+                self.event_history_limit,
+            );
+
+            let record = task.to_record();
+            task.idempotency
+                .claim
+                .remember(idempotency_key, signature, record.clone());
+
+            let expected_revision = task.revision;
+            task.revision = task.revision.saturating_add(1);
+            match self.store.compare_and_set_task(ticket_id, expected_revision, task) {
+                Ok(()) => {
+                    global_sorafs_repair_otel().record_task_transition("in_progress");
+                    global_or_default().inc_sorafs_repair_tasks("in_progress");
+                    return Ok(record);
+                }
+                Err(RepairStoreError::Conflict { .. }) => continue,
+                Err(err) => return Err(err.into()),
+            }
         }
-
-        let expires_at =
-            checked_add_secs(claimed_at_unix, self.config.claim_ttl_secs(), ticket_id)?;
-        task.state = RepairTaskStateV1::InProgress(InProgressRepairStateV1 {
-            queued_at_unix: queued_at,
-            started_at_unix: claimed_at_unix,
-            repair_agent: Some(worker_id.to_string()),
-        });
-        task.lease = Some(RepairTaskLease {
-            worker_id: worker_id.to_string(),
-            last_heartbeat_unix: claimed_at_unix,
-            expires_at_unix: expires_at,
-        });
-        global_sorafs_repair_otel().record_task_transition("in_progress");
-        global_or_default().inc_sorafs_repair_tasks("in_progress");
-
-        let record = task.to_record();
-        task.idempotency
-            .claim
-            .remember(idempotency_key, signature, record.clone());
-        Ok(record)
+        Err(RepairSchedulerError::StoreConflict {
+            ticket_id: ticket_id.to_string(),
+        })
     }
 
     /// Record a heartbeat for a claimed repair ticket.
@@ -507,72 +1064,77 @@ impl RepairManager {
                 ticket_id: ticket_id.to_string(),
             });
         }
+        for _ in 0..=MAX_REPAIR_STORE_RETRIES {
+            let mut task = self.load_task(ticket_id)?;
+            let signature = RepairHeartbeatSignature {
+                worker_id: worker_id.to_string(),
+                heartbeat_at_unix,
+            };
+            if let Some(record) = task.idempotency.heartbeat.check_existing(
+                idempotency_key,
+                &signature,
+                "heartbeat",
+                ticket_id,
+            )? {
+                return Ok(record);
+            }
 
-        let mut guard = self.tasks.write().expect("repair tasks lock poisoned");
-        let task =
-            guard
-                .get_mut(&ticket_id.0)
-                .ok_or_else(|| RepairSchedulerError::UnknownTicket {
+            match &task.state {
+                RepairTaskStateV1::InProgress(..) => {}
+                _ => {
+                    return Err(RepairSchedulerError::InvalidState {
+                        ticket_id: ticket_id.to_string(),
+                        state: format!("{:?}", task.state),
+                    });
+                }
+            }
+
+            let lease = task
+                .lease
+                .as_mut()
+                .ok_or_else(|| RepairSchedulerError::LeaseExpired {
                     ticket_id: ticket_id.to_string(),
                 })?;
-        let signature = RepairHeartbeatSignature {
-            worker_id: worker_id.to_string(),
-            heartbeat_at_unix,
-        };
-        if let Some(record) = task.idempotency.heartbeat.check_existing(
-            idempotency_key,
-            &signature,
-            "heartbeat",
-            ticket_id,
-        )? {
-            return Ok(record);
-        }
-
-        match &task.state {
-            RepairTaskStateV1::InProgress(..) => {}
-            _ => {
-                return Err(RepairSchedulerError::InvalidState {
+            if lease.worker_id != worker_id {
+                return Err(RepairSchedulerError::WorkerMismatch {
                     ticket_id: ticket_id.to_string(),
-                    state: format!("{:?}", task.state),
+                    worker_id: worker_id.to_string(),
                 });
             }
-        }
+            if heartbeat_at_unix <= lease.last_heartbeat_unix {
+                return Err(RepairSchedulerError::InvalidTimestamp {
+                    ticket_id: ticket_id.to_string(),
+                });
+            }
+            if lease.is_expired_at(heartbeat_at_unix) {
+                return Err(RepairSchedulerError::LeaseExpired {
+                    ticket_id: ticket_id.to_string(),
+                });
+            }
 
-        let lease = task
-            .lease
-            .as_mut()
-            .ok_or_else(|| RepairSchedulerError::LeaseExpired {
-                ticket_id: ticket_id.to_string(),
-            })?;
-        if lease.worker_id != worker_id {
-            return Err(RepairSchedulerError::WorkerMismatch {
-                ticket_id: ticket_id.to_string(),
-                worker_id: worker_id.to_string(),
-            });
-        }
-        if heartbeat_at_unix <= lease.last_heartbeat_unix {
-            return Err(RepairSchedulerError::InvalidTimestamp {
-                ticket_id: ticket_id.to_string(),
-            });
-        }
-        if lease.is_expired_at(heartbeat_at_unix) {
-            return Err(RepairSchedulerError::LeaseExpired {
-                ticket_id: ticket_id.to_string(),
-            });
-        }
+            lease.last_heartbeat_unix = heartbeat_at_unix;
+            lease.expires_at_unix = checked_add_secs(
+                heartbeat_at_unix,
+                self.config.heartbeat_interval_secs(),
+                ticket_id,
+            )?;
 
-        lease.last_heartbeat_unix = heartbeat_at_unix;
-        lease.expires_at_unix = checked_add_secs(
-            heartbeat_at_unix,
-            self.config.heartbeat_interval_secs(),
-            ticket_id,
-        )?;
+            let record = task.to_record();
+            task.idempotency
+                .heartbeat
+                .remember(idempotency_key, signature, record.clone());
 
-        let record = task.to_record();
-        task.idempotency
-            .heartbeat
-            .remember(idempotency_key, signature, record.clone());
-        Ok(record)
+            let expected_revision = task.revision;
+            task.revision = task.revision.saturating_add(1);
+            match self.store.compare_and_set_task(ticket_id, expected_revision, task) {
+                Ok(()) => return Ok(record),
+                Err(RepairStoreError::Conflict { .. }) => continue,
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Err(RepairSchedulerError::StoreConflict {
+            ticket_id: ticket_id.to_string(),
+        })
     }
 
     /// Mark a claimed repair ticket as successfully resolved.
@@ -597,82 +1159,96 @@ impl RepairManager {
                 ticket_id: ticket_id.to_string(),
             });
         }
+        for _ in 0..=MAX_REPAIR_STORE_RETRIES {
+            let mut task = self.load_task(ticket_id)?;
+            let signature = RepairCompleteSignature {
+                worker_id: worker_id.to_string(),
+                completed_at_unix,
+                resolution_notes: resolution_notes.clone(),
+            };
+            if let Some(record) = task.idempotency.complete.check_existing(
+                idempotency_key,
+                &signature,
+                "complete",
+                ticket_id,
+            )? {
+                return Ok(record);
+            }
 
-        let mut guard = self.tasks.write().expect("repair tasks lock poisoned");
-        let task =
-            guard
-                .get_mut(&ticket_id.0)
-                .ok_or_else(|| RepairSchedulerError::UnknownTicket {
+            let (queued_at, started_at) = match &task.state {
+                RepairTaskStateV1::InProgress(InProgressRepairStateV1 {
+                    queued_at_unix,
+                    started_at_unix,
+                    ..
+                }) => (*queued_at_unix, *started_at_unix),
+                _ => {
+                    return Err(RepairSchedulerError::InvalidState {
+                        ticket_id: ticket_id.to_string(),
+                        state: format!("{:?}", task.state),
+                    });
+                }
+            };
+
+            let lease = task
+                .lease
+                .as_ref()
+                .ok_or_else(|| RepairSchedulerError::LeaseExpired {
                     ticket_id: ticket_id.to_string(),
                 })?;
-        let signature = RepairCompleteSignature {
-            worker_id: worker_id.to_string(),
-            completed_at_unix,
-            resolution_notes: resolution_notes.clone(),
-        };
-        if let Some(record) = task.idempotency.complete.check_existing(
-            idempotency_key,
-            &signature,
-            "complete",
-            ticket_id,
-        )? {
-            return Ok(record);
-        }
-
-        let (queued_at, started_at) = match &task.state {
-            RepairTaskStateV1::InProgress(InProgressRepairStateV1 {
-                queued_at_unix,
-                started_at_unix,
-                ..
-            }) => (*queued_at_unix, *started_at_unix),
-            _ => {
-                return Err(RepairSchedulerError::InvalidState {
+            if lease.worker_id != worker_id {
+                return Err(RepairSchedulerError::WorkerMismatch {
                     ticket_id: ticket_id.to_string(),
-                    state: format!("{:?}", task.state),
+                    worker_id: worker_id.to_string(),
                 });
             }
-        };
+            if completed_at_unix < started_at || completed_at_unix < lease.last_heartbeat_unix {
+                return Err(RepairSchedulerError::InvalidTimestamp {
+                    ticket_id: ticket_id.to_string(),
+                });
+            }
+            if lease.is_expired_at(completed_at_unix) {
+                return Err(RepairSchedulerError::LeaseExpired {
+                    ticket_id: ticket_id.to_string(),
+                });
+            }
 
-        let lease = task
-            .lease
-            .as_ref()
-            .ok_or_else(|| RepairSchedulerError::LeaseExpired {
-                ticket_id: ticket_id.to_string(),
-            })?;
-        if lease.worker_id != worker_id {
-            return Err(RepairSchedulerError::WorkerMismatch {
-                ticket_id: ticket_id.to_string(),
-                worker_id: worker_id.to_string(),
+            task.state = RepairTaskStateV1::Completed(CompletedRepairStateV1 {
+                queued_at_unix: queued_at,
+                started_at_unix: started_at,
+                completed_at_unix,
+                resolution_notes: resolution_notes.clone(),
             });
-        }
-        if completed_at_unix < started_at || completed_at_unix < lease.last_heartbeat_unix {
-            return Err(RepairSchedulerError::InvalidTimestamp {
-                ticket_id: ticket_id.to_string(),
-            });
-        }
-        if lease.is_expired_at(completed_at_unix) {
-            return Err(RepairSchedulerError::LeaseExpired {
-                ticket_id: ticket_id.to_string(),
-            });
-        }
+            task.scheduler_notes = resolution_notes.clone();
+            task.lease = None;
+            task.push_event(
+                RepairTaskStatusV1::Completed,
+                completed_at_unix,
+                Some(worker_id.to_string()),
+                resolution_notes.clone(),
+                self.event_history_limit,
+            );
 
-        task.state = RepairTaskStateV1::Completed(CompletedRepairStateV1 {
-            queued_at_unix: queued_at,
-            started_at_unix: started_at,
-            completed_at_unix,
-            resolution_notes: resolution_notes.clone(),
-        });
-        task.scheduler_notes = resolution_notes;
-        task.lease = None;
-        global_sorafs_repair_otel().record_task_transition("completed");
-        global_or_default().inc_sorafs_repair_tasks("completed");
-        self.observe_latency(queued_at, completed_at_unix, "completed");
+            let record = task.to_record();
+            task.idempotency
+                .complete
+                .remember(idempotency_key, signature, record.clone());
 
-        let record = task.to_record();
-        task.idempotency
-            .complete
-            .remember(idempotency_key, signature, record.clone());
-        Ok(record)
+            let expected_revision = task.revision;
+            task.revision = task.revision.saturating_add(1);
+            match self.store.compare_and_set_task(ticket_id, expected_revision, task) {
+                Ok(()) => {
+                    global_sorafs_repair_otel().record_task_transition("completed");
+                    global_or_default().inc_sorafs_repair_tasks("completed");
+                    self.observe_latency(queued_at, completed_at_unix, "completed");
+                    return Ok(record);
+                }
+                Err(RepairStoreError::Conflict { .. }) => continue,
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Err(RepairSchedulerError::StoreConflict {
+            ticket_id: ticket_id.to_string(),
+        })
     }
 
     /// Mark a claimed repair ticket as failed.
@@ -692,80 +1268,120 @@ impl RepairManager {
                 ticket_id: ticket_id.to_string(),
             });
         }
+        for _ in 0..=MAX_REPAIR_STORE_RETRIES {
+            let mut task = self.load_task(ticket_id)?;
+            let signature = RepairFailSignature {
+                worker_id: worker_id.to_string(),
+                failed_at_unix,
+                reason: reason.clone(),
+            };
+            if let Some(record) =
+                task.idempotency
+                    .fail
+                    .check_existing(idempotency_key, &signature, "fail", ticket_id)?
+            {
+                return Ok(record);
+            }
 
-        let mut guard = self.tasks.write().expect("repair tasks lock poisoned");
-        let task =
-            guard
-                .get_mut(&ticket_id.0)
-                .ok_or_else(|| RepairSchedulerError::UnknownTicket {
+            let (queued_at, started_at) = match &task.state {
+                RepairTaskStateV1::InProgress(InProgressRepairStateV1 {
+                    queued_at_unix,
+                    started_at_unix,
+                    ..
+                }) => (*queued_at_unix, *started_at_unix),
+                _ => {
+                    return Err(RepairSchedulerError::InvalidState {
+                        ticket_id: ticket_id.to_string(),
+                        state: format!("{:?}", task.state),
+                    });
+                }
+            };
+
+            let lease = task
+                .lease
+                .as_ref()
+                .ok_or_else(|| RepairSchedulerError::LeaseExpired {
                     ticket_id: ticket_id.to_string(),
                 })?;
-        let signature = RepairFailSignature {
-            worker_id: worker_id.to_string(),
-            failed_at_unix,
-            reason: reason.clone(),
-        };
-        if let Some(record) =
-            task.idempotency
-                .fail
-                .check_existing(idempotency_key, &signature, "fail", ticket_id)?
-        {
-            return Ok(record);
-        }
-
-        let (queued_at, started_at) = match &task.state {
-            RepairTaskStateV1::InProgress(InProgressRepairStateV1 {
-                queued_at_unix,
-                started_at_unix,
-                ..
-            }) => (*queued_at_unix, *started_at_unix),
-            _ => {
-                return Err(RepairSchedulerError::InvalidState {
+            if lease.worker_id != worker_id {
+                return Err(RepairSchedulerError::WorkerMismatch {
                     ticket_id: ticket_id.to_string(),
-                    state: format!("{:?}", task.state),
+                    worker_id: worker_id.to_string(),
                 });
             }
-        };
+            if failed_at_unix < started_at || failed_at_unix < lease.last_heartbeat_unix {
+                return Err(RepairSchedulerError::InvalidTimestamp {
+                    ticket_id: ticket_id.to_string(),
+                });
+            }
+            if lease.is_expired_at(failed_at_unix) {
+                return Err(RepairSchedulerError::LeaseExpired {
+                    ticket_id: ticket_id.to_string(),
+                });
+            }
 
-        let lease = task
-            .lease
-            .as_ref()
-            .ok_or_else(|| RepairSchedulerError::LeaseExpired {
-                ticket_id: ticket_id.to_string(),
-            })?;
-        if lease.worker_id != worker_id {
-            return Err(RepairSchedulerError::WorkerMismatch {
-                ticket_id: ticket_id.to_string(),
-                worker_id: worker_id.to_string(),
-            });
-        }
-        if failed_at_unix < started_at || failed_at_unix < lease.last_heartbeat_unix {
-            return Err(RepairSchedulerError::InvalidTimestamp {
-                ticket_id: ticket_id.to_string(),
-            });
-        }
-        if lease.is_expired_at(failed_at_unix) {
-            return Err(RepairSchedulerError::LeaseExpired {
-                ticket_id: ticket_id.to_string(),
-            });
-        }
+            task.attempts = task.attempts.saturating_add(1);
+            let max_attempts = self.config.max_attempts();
+            if task.attempts >= max_attempts {
+                let rationale = format!(
+                    "attempts {}/{} exceeded after failure",
+                    task.attempts, max_attempts
+                );
+                let _proposal =
+                    self.apply_escalation(&mut task, failed_at_unix, rationale, "scheduler")?;
+            } else {
+                let retry_after = next_attempt_after_unix(
+                    failed_at_unix,
+                    task.attempts,
+                    &self.config,
+                    ticket_id,
+                )?;
+                task.state = RepairTaskStateV1::Failed(FailedRepairStateV1 {
+                    queued_at_unix: queued_at,
+                    failed_at_unix,
+                    reason: reason.clone(),
+                });
+                task.scheduler_notes = Some(reason.clone());
+                task.lease = None;
+                task.next_attempt_after_unix = Some(retry_after);
+                task.push_event(
+                    RepairTaskStatusV1::Failed,
+                    failed_at_unix,
+                    Some(worker_id.to_string()),
+                    Some(reason.clone()),
+                    self.event_history_limit,
+                );
+            }
 
-        task.state = RepairTaskStateV1::Failed(FailedRepairStateV1 {
-            queued_at_unix: queued_at,
-            failed_at_unix,
-            reason: reason.clone(),
-        });
-        task.scheduler_notes = Some(reason);
-        task.lease = None;
-        global_sorafs_repair_otel().record_task_transition("failed");
-        global_or_default().inc_sorafs_repair_tasks("failed");
-        self.observe_latency(queued_at, failed_at_unix, "failed");
+            let record = task.to_record();
+            task.idempotency
+                .fail
+                .remember(idempotency_key, signature, record.clone());
 
-        let record = task.to_record();
-        task.idempotency
-            .fail
-            .remember(idempotency_key, signature, record.clone());
-        Ok(record)
+            let expected_revision = task.revision;
+            task.revision = task.revision.saturating_add(1);
+            match self.store.compare_and_set_task(ticket_id, expected_revision, task) {
+                Ok(()) => {
+                    if matches!(record.state, RepairTaskStateV1::Escalated(..)) {
+                        global_sorafs_repair_otel().record_task_transition("escalated");
+                        global_or_default().inc_sorafs_repair_tasks("escalated");
+                        global_sorafs_repair_otel().record_slash_proposal("drafted");
+                        global_or_default().inc_sorafs_slash_proposals("drafted");
+                        self.observe_latency(queued_at, failed_at_unix, "escalated");
+                    } else {
+                        global_sorafs_repair_otel().record_task_transition("failed");
+                        global_or_default().inc_sorafs_repair_tasks("failed");
+                        self.observe_latency(queued_at, failed_at_unix, "failed");
+                    }
+                    return Ok(record);
+                }
+                Err(RepairStoreError::Conflict { .. }) => continue,
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Err(RepairSchedulerError::StoreConflict {
+            ticket_id: ticket_id.to_string(),
+        })
     }
 
     fn ensure_por_history_match(
@@ -773,24 +1389,116 @@ impl RepairManager {
         por_history_id: u64,
         evidence: &RepairEvidenceV1,
     ) -> Result<(), RepairSchedulerError> {
-        let guard = self.por_history.read().expect("por history lock poisoned");
-        let entry =
-            guard
-                .get(&por_history_id)
-                .ok_or_else(|| RepairSchedulerError::UnknownPorHistory {
-                    por_history_id,
-                    ticket_id: evidence
-                        .manifest_digest
-                        .iter()
-                        .map(|byte| format!("{byte:02x}"))
-                        .collect::<String>(),
-                })?;
+        let entry = self
+            .store
+            .por_history_entry(por_history_id)?
+            .ok_or_else(|| RepairSchedulerError::UnknownPorHistory {
+                por_history_id,
+                ticket_id: evidence
+                    .manifest_digest
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>(),
+            })?;
         if entry.manifest_digest != evidence.manifest_digest
             || entry.provider_id != evidence.provider_id
         {
             return Err(RepairSchedulerError::PorHistoryMismatch { por_history_id });
         }
         Ok(())
+    }
+
+    fn load_task(
+        &self,
+        ticket_id: &RepairTicketId,
+    ) -> Result<RepairTaskInternal, RepairSchedulerError> {
+        self.store
+            .task(ticket_id)?
+            .ok_or_else(|| RepairSchedulerError::UnknownTicket {
+                ticket_id: ticket_id.to_string(),
+            })
+    }
+
+    fn update_task_with_retry<F>(
+        &self,
+        ticket_id: &RepairTicketId,
+        mut update: F,
+    ) -> Result<RepairTaskInternal, RepairSchedulerError>
+    where
+        F: FnMut(&mut RepairTaskInternal) -> Result<(), RepairSchedulerError>,
+    {
+        for _ in 0..=MAX_REPAIR_STORE_RETRIES {
+            let mut task = self.load_task(ticket_id)?;
+            update(&mut task)?;
+            let expected_revision = task.revision;
+            task.revision = task.revision.saturating_add(1);
+            match self
+                .store
+                .compare_and_set_task(ticket_id, expected_revision, task.clone())
+            {
+                Ok(()) => return Ok(task),
+                Err(RepairStoreError::Conflict { .. }) => continue,
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Err(RepairSchedulerError::StoreConflict {
+            ticket_id: ticket_id.to_string(),
+        })
+    }
+
+    fn apply_escalation(
+        &self,
+        task: &mut RepairTaskInternal,
+        escalated_at_unix: u64,
+        rationale: String,
+        actor: &'static str,
+    ) -> Result<RepairSlashProposalV1, RepairSchedulerError> {
+        ensure_transition_allowed(&task.state, "escalated", &task.report.ticket_id)?;
+        let queued_at = queued_at_unix(&task.state);
+        if escalated_at_unix <= queued_at {
+            return Err(RepairSchedulerError::InvalidTimestamp {
+                ticket_id: task.report.ticket_id.to_string(),
+            });
+        }
+
+        let proposal = RepairSlashProposalV1 {
+            version: sorafs_manifest::repair::REPAIR_SLASH_PROPOSAL_VERSION_V1,
+            ticket_id: task.report.ticket_id.clone(),
+            provider_id: task.report.evidence.provider_id,
+            manifest_digest: task.report.evidence.manifest_digest,
+            auditor_account: task.report.auditor_account.clone(),
+            proposed_penalty_nano: self.config.default_slash_penalty_nano(),
+            submitted_at_unix: escalated_at_unix,
+            rationale: rationale.clone(),
+        };
+        proposal
+            .validate()
+            .map_err(RepairSchedulerError::InvalidSlashProposal)?;
+
+        let mut bytes = Vec::new();
+        norito::core::NoritoSerialize::serialize(&proposal, &mut bytes)
+            .expect("serialize slash proposal");
+        let mut digest = [0u8; 32];
+        digest.copy_from_slice(hash(&bytes).as_bytes());
+
+        task.state = RepairTaskStateV1::Escalated(EscalatedRepairStateV1 {
+            queued_at_unix: queued_at,
+            escalated_at_unix,
+            reason: rationale.clone(),
+        });
+        task.scheduler_notes = Some(rationale.clone());
+        task.slash_proposal_digest = Some(digest);
+        task.slash_proposal_bytes = Some(bytes);
+        task.lease = None;
+        task.next_attempt_after_unix = None;
+        task.push_event(
+            RepairTaskStatusV1::Escalated,
+            escalated_at_unix,
+            Some(actor.to_string()),
+            Some(rationale),
+            self.event_history_limit,
+        );
+        Ok(proposal)
     }
 
     fn observe_latency(&self, queued_at: u64, finished_at: u64, outcome: &'static str) {
@@ -887,13 +1595,24 @@ struct RepairFailSignature {
 
 #[derive(Debug, Clone)]
 struct RepairTaskInternal {
+    /// Monotonic revision used for compare-and-set updates.
+    revision: u64,
+    /// Parsed report payload.
     report: RepairReportV1,
+    /// Norito-encoded bytes of the report for durable storage.
+    report_bytes: Vec<u8>,
     state: RepairTaskStateV1,
     sla_deadline_unix: Option<u64>,
     scheduler_notes: Option<String>,
     slash_proposal_digest: Option<[u8; 32]>,
+    /// Norito-encoded bytes for the slash proposal when present.
+    slash_proposal_bytes: Option<Vec<u8>>,
     lease: Option<RepairTaskLease>,
     idempotency: RepairTaskIdempotency,
+    attempts: u32,
+    next_attempt_after_unix: Option<u64>,
+    /// Event log for auditability.
+    events: Vec<RepairTaskEventV1>,
 }
 
 impl RepairTaskInternal {
@@ -911,9 +1630,50 @@ impl RepairTaskInternal {
             slash_proposal_digest: self.slash_proposal_digest,
         }
     }
+
+    fn to_snapshot(&self) -> RepairTaskSnapshot {
+        RepairTaskSnapshot {
+            record: self.to_record(),
+            events: self.events.clone(),
+        }
+    }
+
+    fn push_event(
+        &mut self,
+        status: RepairTaskStatusV1,
+        occurred_at_unix: u64,
+        actor: Option<String>,
+        message: Option<String>,
+        limit: usize,
+    ) {
+        if limit == 0 {
+            return;
+        }
+        let event = RepairTaskEventV1 {
+            version: REPAIR_TASK_EVENT_VERSION_V1,
+            ticket_id: self.report.ticket_id.clone(),
+            status,
+            occurred_at_unix,
+            actor,
+            message,
+        };
+        if let Err(err) = event.validate() {
+            warn!(
+                ?err,
+                ticket_id = %self.report.ticket_id,
+                "skipping invalid repair task event"
+            );
+            return;
+        }
+        self.events.push(event);
+        if self.events.len() > limit {
+            let excess = self.events.len().saturating_sub(limit);
+            self.events.drain(0..excess);
+        }
+    }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[allow(dead_code)]
 struct PorHistoryEntry {
     id: u64,
@@ -946,6 +1706,39 @@ fn repair_task_status(state: &RepairTaskStateV1) -> RepairTaskStatusV1 {
     }
 }
 
+fn repair_severity_score(cause: &RepairCauseV1) -> (u8, u64) {
+    match cause {
+        RepairCauseV1::PorFailure { failed_samples, .. } => (3, u64::from(*failed_samples)),
+        RepairCauseV1::ReplicaShortfall { missing_chunks } => (2, u64::from(*missing_chunks)),
+        RepairCauseV1::LatencySla {
+            observed_latency_ms,
+            ..
+        } => (1, u64::from(*observed_latency_ms)),
+        RepairCauseV1::Manual { .. } => (0, 0),
+    }
+}
+
+fn backoff_secs(attempts: u32, config: &RepairConfig) -> u64 {
+    if attempts == 0 {
+        return 0;
+    }
+    let base = config.backoff_initial_secs();
+    let max = config.backoff_max_secs();
+    let shift = attempts.saturating_sub(1).min(30);
+    let scaled = base.saturating_mul(1u64 << shift);
+    scaled.min(max)
+}
+
+fn next_attempt_after_unix(
+    failed_at_unix: u64,
+    attempts: u32,
+    config: &RepairConfig,
+    ticket_id: &RepairTicketId,
+) -> Result<u64, RepairSchedulerError> {
+    let delay = backoff_secs(attempts, config);
+    checked_add_secs(failed_at_unix, delay, ticket_id)
+}
+
 fn sort_repair_task_records(records: &mut Vec<RepairTaskRecordV1>) {
     records.sort_by(|left, right| {
         let left_deadline = left.sla_deadline_unix.unwrap_or(u64::MAX);
@@ -958,6 +1751,20 @@ fn sort_repair_task_records(records: &mut Vec<RepairTaskRecordV1>) {
     });
 }
 
+fn sort_repair_task_snapshots(snapshots: &mut Vec<RepairTaskSnapshot>) {
+    snapshots.sort_by(|left, right| {
+        let left_deadline = left.record.sla_deadline_unix.unwrap_or(u64::MAX);
+        let right_deadline = right.record.sla_deadline_unix.unwrap_or(u64::MAX);
+        left_deadline
+            .cmp(&right_deadline)
+            .then_with(|| {
+                queued_at_unix(&left.record.state).cmp(&queued_at_unix(&right.record.state))
+            })
+            .then_with(|| left.record.manifest_digest.cmp(&right.record.manifest_digest))
+            .then_with(|| left.record.ticket_id.0.cmp(&right.record.ticket_id.0))
+    });
+}
+
 fn ensure_transition_allowed(
     state: &RepairTaskStateV1,
     next: &'static str,
@@ -966,6 +1773,7 @@ fn ensure_transition_allowed(
     match (state, next) {
         (RepairTaskStateV1::Queued(..), "escalated") => Ok(()),
         (RepairTaskStateV1::InProgress(..), "escalated") => Ok(()),
+        (RepairTaskStateV1::Failed(..), "escalated") => Ok(()),
         _ => Err(RepairSchedulerError::InvalidState {
             ticket_id: ticket_id.to_string(),
             state: format!("{state:?}"),
@@ -1040,6 +1848,15 @@ pub enum RepairSchedulerError {
         /// Ticket identifier.
         ticket_id: String,
     },
+    /// Repair store conflict while applying updates.
+    #[error("repair store conflict for ticket `{ticket_id}`")]
+    StoreConflict {
+        /// Ticket identifier.
+        ticket_id: String,
+    },
+    /// Underlying repair store error.
+    #[error(transparent)]
+    Store(#[from] RepairStoreError),
     /// Invalid timestamp sequencing supplied by the caller.
     #[error("timestamp monotonicity violated for ticket `{ticket_id}`")]
     InvalidTimestamp {
@@ -1071,6 +1888,14 @@ pub enum RepairSchedulerError {
         ticket_id: String,
         /// Current worker identifier.
         worker_id: String,
+    },
+    /// Ticket is in retry backoff and not yet claimable.
+    #[error("repair ticket `{ticket_id}` retry backoff active until {retry_after_unix}")]
+    BackoffActive {
+        /// Ticket identifier.
+        ticket_id: String,
+        /// Earliest allowed retry timestamp.
+        retry_after_unix: u64,
     },
     /// Lease expired or missing for the ticket.
     #[error("repair ticket `{ticket_id}` lease expired")]
@@ -1189,6 +2014,7 @@ fn checked_add_secs(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_config::parameters::actual;
     use sorafs_manifest::repair::{
         REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, RepairCauseV1,
     };
@@ -1216,6 +2042,34 @@ mod tests {
                 notes: None,
             },
             notes: None,
+        }
+    }
+
+    fn task_internal(report: RepairReportV1) -> RepairTaskInternal {
+        let sla_deadline = report
+            .submitted_at_unix
+            .checked_add(DEFAULT_REPAIR_SLA_SECS);
+        let state = RepairTaskStateV1::Queued(QueuedRepairStateV1 {
+            queued_at_unix: report.submitted_at_unix,
+            sla_deadline_unix: sla_deadline,
+        });
+        let mut report_bytes = Vec::new();
+        norito::core::NoritoSerialize::serialize(&report, &mut report_bytes)
+            .expect("serialize report");
+        RepairTaskInternal {
+            revision: 0,
+            report,
+            report_bytes,
+            state,
+            sla_deadline_unix: sla_deadline,
+            scheduler_notes: None,
+            slash_proposal_digest: None,
+            slash_proposal_bytes: None,
+            lease: None,
+            idempotency: RepairTaskIdempotency::new(DEFAULT_IDEMPOTENCY_CACHE_SIZE),
+            attempts: 0,
+            next_attempt_after_unix: None,
+            events: Vec::new(),
         }
     }
 
@@ -1429,5 +2283,306 @@ mod tests {
             }
             other => panic!("unexpected state {other:?}"),
         }
+    }
+
+    #[test]
+    fn attempt_cap_escalates_failed_ticket() {
+        let mut actual = actual::SorafsRepair::default();
+        actual.max_attempts = 1;
+        actual.default_slash_penalty_nano = 12_345;
+        let manager = RepairManager::new_with_config(RepairConfig::from(&actual));
+        let report = report("REP-454", [0xca; 32], [0xdd; 32], 1_700_000_400);
+        manager
+            .enqueue_report(report.clone())
+            .expect("enqueue report");
+        manager
+            .claim_ticket(
+                &report.ticket_id,
+                "worker-e",
+                report.submitted_at_unix + 5,
+                "claim-5",
+            )
+            .expect("claim ticket");
+
+        let record = manager
+            .fail_ticket(
+                &report.ticket_id,
+                "worker-e",
+                report.submitted_at_unix + 12,
+                "media loss".into(),
+                "fail-2",
+            )
+            .expect("fail ticket");
+        assert!(matches!(record.state, RepairTaskStateV1::Escalated(..)));
+
+        let snapshot = manager
+            .task_snapshot(&report.ticket_id)
+            .expect("snapshot");
+        let statuses: Vec<_> = snapshot.events.iter().map(|event| event.status).collect();
+        assert_eq!(
+            statuses,
+            vec![
+                RepairTaskStatusV1::Queued,
+                RepairTaskStatusV1::InProgress,
+                RepairTaskStatusV1::Escalated
+            ]
+        );
+    }
+
+    #[test]
+    fn watchdog_escalates_sla_breach_with_draft() {
+        let mut actual = actual::SorafsRepair::default();
+        actual.default_slash_penalty_nano = 98_765;
+        let manager = RepairManager::new_with_config(RepairConfig::from(&actual));
+        let report = report("REP-455", [0xee; 32], [0xff; 32], 1_700_000_500);
+        manager
+            .enqueue_report(report.clone())
+            .expect("enqueue report");
+
+        let now = report.submitted_at_unix + DEFAULT_REPAIR_SLA_SECS + 1;
+        let outcome = manager.run_watchdog(now).expect("run watchdog");
+        assert_eq!(outcome.escalated.len(), 1);
+        assert_eq!(outcome.escalated[0].ticket_id, report.ticket_id);
+        assert_eq!(
+            outcome.escalated[0].proposed_penalty_nano,
+            actual.default_slash_penalty_nano
+        );
+
+        let record = manager
+            .task_record(&report.ticket_id)
+            .expect("record");
+        assert!(matches!(record.state, RepairTaskStateV1::Escalated(..)));
+    }
+
+    #[test]
+    fn watchdog_requeues_expired_lease_with_backoff() {
+        let mut actual = actual::SorafsRepair::default();
+        actual.claim_ttl_secs = 10;
+        actual.backoff_initial_secs = 5;
+        actual.backoff_max_secs = 5;
+        let manager = RepairManager::new_with_config(RepairConfig::from(&actual));
+        let report = report("REP-456", [0x01; 32], [0x02; 32], 1_700_000_600);
+        manager
+            .enqueue_report(report.clone())
+            .expect("enqueue report");
+        manager
+            .claim_ticket(
+                &report.ticket_id,
+                "worker-f",
+                report.submitted_at_unix + 10,
+                "claim-6",
+            )
+            .expect("claim ticket");
+
+        let watchdog_at = report.submitted_at_unix + 10 + actual.claim_ttl_secs + 1;
+        let outcome = manager
+            .run_watchdog(watchdog_at)
+            .expect("run watchdog");
+        assert_eq!(outcome.requeued, vec![report.ticket_id.clone()]);
+
+        let backoff_claim = manager.claim_ticket(
+            &report.ticket_id,
+            "worker-f",
+            watchdog_at,
+            "claim-7",
+        );
+        assert!(matches!(
+            backoff_claim,
+            Err(RepairSchedulerError::BackoffActive { .. })
+        ));
+
+        let record = manager
+            .claim_ticket(
+                &report.ticket_id,
+                "worker-f",
+                watchdog_at + actual.backoff_initial_secs + 1,
+                "claim-8",
+            )
+            .expect("claim after backoff");
+        assert!(matches!(
+            record.state,
+            RepairTaskStateV1::InProgress(..)
+        ));
+    }
+
+    #[test]
+    fn watchdog_requeues_failed_tasks_after_backoff() {
+        let mut actual = actual::SorafsRepair::default();
+        actual.backoff_initial_secs = 5;
+        actual.backoff_max_secs = 5;
+        let manager = RepairManager::new_with_config(RepairConfig::from(&actual));
+        let report = report("REP-457", [0x03; 32], [0x04; 32], 1_700_000_700);
+        manager
+            .enqueue_report(report.clone())
+            .expect("enqueue report");
+        manager
+            .claim_ticket(
+                &report.ticket_id,
+                "worker-g",
+                report.submitted_at_unix + 5,
+                "claim-9",
+            )
+            .expect("claim ticket");
+        manager
+            .fail_ticket(
+                &report.ticket_id,
+                "worker-g",
+                report.submitted_at_unix + 12,
+                "disk".into(),
+                "fail-3",
+            )
+            .expect("fail ticket");
+
+        let before_backoff = report.submitted_at_unix + 12 + actual.backoff_initial_secs - 1;
+        let _ = manager.run_watchdog(before_backoff).expect("watchdog");
+        let failed = manager
+            .task_record(&report.ticket_id)
+            .expect("record");
+        assert!(matches!(failed.state, RepairTaskStateV1::Failed(..)));
+
+        let after_backoff = report.submitted_at_unix + 12 + actual.backoff_initial_secs + 1;
+        let outcome = manager
+            .run_watchdog(after_backoff)
+            .expect("watchdog");
+        assert_eq!(outcome.requeued, vec![report.ticket_id.clone()]);
+        let queued = manager
+            .task_record(&report.ticket_id)
+            .expect("record");
+        assert!(matches!(queued.state, RepairTaskStateV1::Queued(..)));
+    }
+
+    #[test]
+    fn claimable_tasks_prioritize_deadline_severity_and_provider_impact() {
+        let manager = RepairManager::new();
+        let provider_a = [0x10; 32];
+        let provider_b = [0x11; 32];
+        let provider_c = [0x12; 32];
+
+        let early = report("REP-500", [0x20; 32], provider_c, 1_000);
+        let mut severe = report("REP-501", [0x21; 32], provider_b, 2_000);
+        severe.evidence.cause = RepairCauseV1::PorFailure {
+            challenge_id: [0xAA; 32],
+            failed_samples: 5,
+            proof_digest: None,
+        };
+        let later_a = report("REP-502", [0x22; 32], provider_a, 2_000);
+        let later_b = report("REP-503", [0x23; 32], provider_a, 2_000);
+
+        manager.enqueue_report(early).expect("enqueue early");
+        manager.enqueue_report(severe).expect("enqueue severe");
+        manager.enqueue_report(later_a).expect("enqueue later a");
+        manager.enqueue_report(later_b).expect("enqueue later b");
+
+        let ordered = manager.claimable_tasks(2_500);
+        let ids: Vec<_> = ordered.iter().map(|task| task.ticket_id.0.as_str()).collect();
+        assert_eq!(ids, vec!["REP-500", "REP-501", "REP-502", "REP-503"]);
+    }
+
+    #[test]
+    fn task_snapshots_include_event_log() {
+        let manager = RepairManager::new();
+        let report = report("REP-460", [0x10; 32], [0x20; 32], 1_700_000_000);
+        manager
+            .enqueue_report(report.clone())
+            .expect("enqueue report");
+        manager
+            .claim_ticket(
+                &report.ticket_id,
+                "worker-e",
+                report.submitted_at_unix + 5,
+                "claim-4",
+            )
+            .expect("claim ticket");
+        manager
+            .complete_ticket(
+                &report.ticket_id,
+                "worker-e",
+                report.submitted_at_unix + 15,
+                Some("ok".into()),
+                "complete-4",
+            )
+            .expect("complete ticket");
+
+        let snapshot = manager
+            .task_snapshot(&report.ticket_id)
+            .expect("snapshot");
+        let statuses: Vec<_> = snapshot.events.iter().map(|event| event.status).collect();
+        assert_eq!(
+            statuses,
+            vec![
+                RepairTaskStatusV1::Queued,
+                RepairTaskStatusV1::InProgress,
+                RepairTaskStatusV1::Completed
+            ]
+        );
+        assert_eq!(snapshot.events[0].actor.as_deref(), Some("auditor#sora"));
+        assert_eq!(snapshot.events[1].actor.as_deref(), Some("worker-e"));
+        assert_eq!(snapshot.events[2].actor.as_deref(), Some("worker-e"));
+    }
+
+    #[test]
+    fn event_log_trims_oldest_entries() {
+        let report = report("REP-700", [0x30; 32], [0x40; 32], 1_700_000_000);
+        let mut task = task_internal(report);
+        task.push_event(
+            RepairTaskStatusV1::Queued,
+            1,
+            None,
+            Some("one".into()),
+            2,
+        );
+        task.push_event(
+            RepairTaskStatusV1::InProgress,
+            2,
+            None,
+            Some("two".into()),
+            2,
+        );
+        task.push_event(
+            RepairTaskStatusV1::Completed,
+            3,
+            None,
+            Some("three".into()),
+            2,
+        );
+
+        assert_eq!(task.events.len(), 2);
+        assert_eq!(task.events[0].occurred_at_unix, 2);
+        assert_eq!(task.events[1].occurred_at_unix, 3);
+    }
+
+    #[test]
+    fn in_memory_store_compare_and_set_updates_task() {
+        let store = InMemoryRepairStore::new();
+        let report = report("REP-900", [0x10; 32], [0x20; 32], 1_700_000_000);
+        let task = task_internal(report.clone());
+        match store.insert_task(task).expect("insert task") {
+            RepairStoreInsertResult::Inserted(_) => {}
+            RepairStoreInsertResult::Existing(_) => panic!("expected insert"),
+        }
+
+        let mut updated = store
+            .task(&report.ticket_id)
+            .expect("load task")
+            .expect("task present");
+        updated.scheduler_notes = Some("updated".into());
+        updated.revision = updated.revision.saturating_add(1);
+        store
+            .compare_and_set_task(&report.ticket_id, 0, updated.clone())
+            .expect("compare and set");
+
+        let fetched = store
+            .task(&report.ticket_id)
+            .expect("load task")
+            .expect("task present");
+        assert_eq!(fetched.scheduler_notes.as_deref(), Some("updated"));
+        assert_eq!(fetched.revision, 1);
+
+        let mut conflict = fetched.clone();
+        conflict.scheduler_notes = Some("conflict".into());
+        let err = store
+            .compare_and_set_task(&report.ticket_id, 0, conflict)
+            .expect_err("expected conflict");
+        assert!(matches!(err, RepairStoreError::Conflict { .. }));
     }
 }

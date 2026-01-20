@@ -7,8 +7,8 @@
 Roadmap link: **ADDR-5c** — “Local → Global Normalisation Toolkit”
 
 This guide packages the operational steps, CLI helpers, and automation hooks
-addresses) to canonical IH58 or compressed forms ahead of the strict-mode
-cutover. Pair it with:
+needed to migrate Local selectors to canonical IH58 or compressed forms ahead
+of the Local-8/Local-12 enforcement gates. Pair it with:
 
 - [Address display guidelines](address_display_guidelines.md) — wallet/explorer UX,
   copy helpers, alert references.
@@ -21,6 +21,7 @@ cutover. Pair it with:
 
 ## 1. Goals
 
+1. Retire Local selectors before Local-8/Local-12 enforcement gates activate.
 2. Provide deterministic conversion helpers (IH58/compressed) so operators can
    refresh manifests, customer lists, and wallet address books.
 3. Capture artefacts (audit report + converted list) suitable for compliance
@@ -92,11 +93,8 @@ already powers SDK heuristics. Each entry contains:
    them from release tickets or readiness reports.
 3. Run `iroha address normalize --fail-on-warning --only-local` during PR
    validation once dashboards show zero legitimate Local usage. This blocks
-   regressions before the flag flips on Torii.
-4. Promote strict-mode gates: Torii now defaults to `torii.strict_addresses=true`;
-   keep it enabled on staging and production once telemetry confirms zero Local
-   submissions for 30 days, and only override it to `false` temporarily if a
-   regression surfaces on non-production clusters.
+   regressions before enforcement gates activate and keeps Local selectors out
+   of new releases.
 
 ## 4. Manual triage workflow
 
@@ -121,10 +119,8 @@ already powers SDK heuristics. Each entry contains:
   - `AddressLocal12Collision` — pages when two Local-12 labels collide; pause manifest promotions until governance approves the fix.
   - `AddressInvalidRatioSlo` — warns when invalid IH58/compressed submissions exceed the 0.1 % budget for ten minutes.
 
-Both alerts reference the address manifest runbook for escalation. Torii now
-defaults to `torii.strict_addresses=true`, so only flip the flag to `false`
-while debugging on dev/test clusters and restore the default once the issue is
-resolved.
+Both alerts reference the address manifest runbook for escalation. Treat any
+non-zero Local selector signal as a release blocker until remediation is shipped.
 
 ## 6. Evidence bundle checklist
 

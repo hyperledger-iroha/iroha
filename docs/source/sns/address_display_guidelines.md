@@ -163,7 +163,7 @@ Domainless literals for non-default domains still fail with
 ## Local → Global migration toolkit
 
 Wallets, explorers, and back-office tools must retire Local selectors ahead of
-the strict-mode cutover. The [Local → Global toolkit](local_to_global_toolkit.md)
+the Local-8/Local-12 enforcement gates. The [Local → Global toolkit](local_to_global_toolkit.md)
 packages the CLI automation (audit + conversion), dashboard references, and
 evidence checklist operators should follow when updating manifests or customer
 records. Integrate the script into CI and attach the generated artefacts to the
@@ -292,22 +292,18 @@ show zero legitimate Local submissions and zero Local-12 collisions for 30 conse
 will flip the Local-8 gate to hard-fail on mainnet, followed by Local-12 once global domains have
 matching registry entries.
 Consider the CLI output the operator-facing notice for this freeze—the same warning string is used
-across SDK tooltips and automation to keep parity with the roadmap exit criteria. Torii now ships
-with `torii.strict_addresses=true` by default; only override it to `false` on dev/test clusters when
-diagnosing regressions. The accompanying
+across SDK tooltips and automation to keep parity with the roadmap exit criteria. The accompanying
 Alertmanager pack (`dashboards/alerts/address_ingest_rules.yml`) surfaces three guardrails:
 
 - `AddressLocal8Resurgence` pages whenever any context reports a fresh Local-8 increment. Treat this
-  as a release blocker—halt strict-mode rollouts, identify the offending SDK surface via the
-  dashboard, and (if necessary) temporarily set `torii.strict_addresses=false` until telemetry
-  returns to zero, then restore the default (`true`).
+  as a release blocker—identify the offending SDK surface via the dashboards, ship a fix, and keep
+  the gate closed until the signal returns to zero.
 - `AddressLocal12Collision` fires when two Local-12 labels hash to the same digest. Pause manifest
   promotions, run the Local → Global toolkit to audit the digest mapping, and coordinate with Nexus
   governance before reissuing the registry entry or re-enabling downstream rollouts.
-- `AddressInvalidRatioSlo` warns when the fleet-wide invalid ratio (excluding Local-8/strict-mode
-  rejections) exceeds the 0.1 % SLO for ten minutes. Investigate `torii_address_invalid_total` by
-  reason/context, coordinate with the responsible SDK team, and only re-enable strict mode after the
-  ratio returns below budget.
+- `AddressInvalidRatioSlo` warns when the fleet-wide invalid ratio exceeds the 0.1 % SLO for ten
+  minutes. Investigate `torii_address_invalid_total` by reason/context and coordinate with the
+  responsible SDK team before declaring the incident resolved.
 
 `torii_address_format_total{endpoint,format}` complements the ingest metrics by counting every
 `address_format=ih58|compressed` request that Torii serves. Dashboard the metric alongside
@@ -318,4 +314,3 @@ fallback to the default IH58 responses.
 ### Release note snippet (wallet & explorer)
 
 Include the following bullet in the wallet/explorer release notes when shipping the cutover:
-

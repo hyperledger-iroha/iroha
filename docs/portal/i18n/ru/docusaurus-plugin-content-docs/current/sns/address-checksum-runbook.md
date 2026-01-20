@@ -69,7 +69,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 |----------|----------|
 | Дрейф fixture | Пересоздайте `fixtures/account/address_vectors.json`, повторно запустите `cargo xtask address-vectors --verify`, обновите SDK bundles и приложите snapshots `address_fixture.prom` к тикету. |
 | Регрессия SDK/клиента | Откройте issues, ссылаясь на канонический fixture + вывод `iroha address inspect`, и заблокируйте релизы через SDK parity CI (например, `ci/check_address_normalize.sh`). |
-| Повреждение manifest | Пересоберите manifest по `address_manifest_ops.md`, повторно запустите `cargo xtask address-manifest verify` и держите `torii.strict_addresses=true`, пока телеметрия не очистится. |
 | Злонамеренные отправки | Примените rate-limit или блокировку offending principals, эскалируйте в Governance при необходимости tombstone селекторов. |
 
 После применения мер снова выполните запрос PromQL и убедитесь, что `ERR_CHECKSUM_MISMATCH` остается на нуле (кроме `/tests/*`) минимум 30 минут перед понижением инцидента.

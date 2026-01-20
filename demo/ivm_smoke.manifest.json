@@ -5,16 +5,16 @@
   "features_bitmap": null,
   "access_set_hints": {
     "read_keys": [
-      "account:34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
-      "account:34mSYnDgbaJM58rbLoif4Tkp7G8X4sSLRQ1VuDM4Xa7fZaxbUxK4ydX8eWfvieLgT3j8iJF4K@wonderland",
-      "asset:xor#sora#34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
-      "asset:xor#sora#34mSYnDgbaJM58rbLoif4Tkp7G8X4sSLRQ1VuDM4Xa7fZaxbUxK4ydX8eWfvieLgT3j8iJF4K@wonderland",
+      "account:34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+      "account:34mSYnDgbaJM58rbLoif4Tkp7G8X4sSLRQ1VuDM4Xa7fZaxbUxK4ydX8eWfvieLgT3j8iJF4K",
+      "asset:xor#sora#34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+      "asset:xor#sora#34mSYnDgbaJM58rbLoif4Tkp7G8X4sSLRQ1VuDM4Xa7fZaxbUxK4ydX8eWfvieLgT3j8iJF4K",
       "asset_def:xor#sora",
       "domain:wonderland"
     ],
     "write_keys": [
-      "asset:xor#sora#34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
-      "asset:xor#sora#34mSYnDgbaJM58rbLoif4Tkp7G8X4sSLRQ1VuDM4Xa7fZaxbUxK4ydX8eWfvieLgT3j8iJF4K@wonderland"
+      "asset:xor#sora#34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+      "asset:xor#sora#34mSYnDgbaJM58rbLoif4Tkp7G8X4sSLRQ1VuDM4Xa7fZaxbUxK4ydX8eWfvieLgT3j8iJF4K"
     ]
   },
   "entrypoints": [
@@ -26,16 +26,16 @@
       },
       "permission": "Admin",
       "read_keys": [
-        "asset:xor#sora#34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
-        "account:34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
+        "asset:xor#sora#34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+        "account:34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
         "domain:wonderland",
         "asset_def:xor#sora",
-        "asset:xor#sora#34mSYnDgbaJM58rbLoif4Tkp7G8X4sSLRQ1VuDM4Xa7fZaxbUxK4ydX8eWfvieLgT3j8iJF4K@wonderland",
-        "account:34mSYnDgbaJM58rbLoif4Tkp7G8X4sSLRQ1VuDM4Xa7fZaxbUxK4ydX8eWfvieLgT3j8iJF4K@wonderland"
+        "asset:xor#sora#34mSYnDgbaJM58rbLoif4Tkp7G8X4sSLRQ1VuDM4Xa7fZaxbUxK4ydX8eWfvieLgT3j8iJF4K",
+        "account:34mSYnDgbaJM58rbLoif4Tkp7G8X4sSLRQ1VuDM4Xa7fZaxbUxK4ydX8eWfvieLgT3j8iJF4K"
       ],
       "write_keys": [
-        "asset:xor#sora#34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
-        "asset:xor#sora#34mSYnDgbaJM58rbLoif4Tkp7G8X4sSLRQ1VuDM4Xa7fZaxbUxK4ydX8eWfvieLgT3j8iJF4K@wonderland"
+        "asset:xor#sora#34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+        "asset:xor#sora#34mSYnDgbaJM58rbLoif4Tkp7G8X4sSLRQ1VuDM4Xa7fZaxbUxK4ydX8eWfvieLgT3j8iJF4K"
       ]
     }
   ],

@@ -282,6 +282,7 @@ pub struct RepairConfig {
     worker_concurrency: usize,
     backoff_initial_secs: u64,
     backoff_max_secs: u64,
+    default_slash_penalty_nano: u128,
 }
 
 impl RepairConfig {
@@ -338,6 +339,12 @@ impl RepairConfig {
     pub fn backoff_max_secs(&self) -> u64 {
         self.backoff_max_secs
     }
+
+    /// Default penalty used for scheduler-generated slash proposals (nano-XOR).
+    #[must_use]
+    pub fn default_slash_penalty_nano(&self) -> u128 {
+        self.default_slash_penalty_nano
+    }
 }
 
 impl Default for RepairConfig {
@@ -364,6 +371,7 @@ impl From<&actual::SorafsRepair> for RepairConfig {
             worker_concurrency: value.worker_concurrency,
             backoff_initial_secs: value.backoff_initial_secs,
             backoff_max_secs: value.backoff_max_secs,
+            default_slash_penalty_nano: value.default_slash_penalty_nano,
         }
     }
 }
@@ -698,6 +706,7 @@ mod tests {
         repair.worker_concurrency = 12;
         repair.backoff_initial_secs = 7;
         repair.backoff_max_secs = 120;
+        repair.default_slash_penalty_nano = 5_000;
 
         let cfg = RepairConfig::from(&repair);
         assert!(cfg.enabled());
@@ -709,6 +718,7 @@ mod tests {
         assert_eq!(cfg.worker_concurrency(), 12);
         assert_eq!(cfg.backoff_initial_secs(), 7);
         assert_eq!(cfg.backoff_max_secs(), 120);
+        assert_eq!(cfg.default_slash_penalty_nano(), 5_000);
 
         let mut gc = actual::SorafsGc::default();
         gc.enabled = true;

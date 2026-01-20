@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Dict, Final, Iterable, Mapping, Optional
 from typing_extensions import TypeAlias
 
 from ._native import load_crypto_extension
+from .address import AccountAddress
 
 _crypto = load_crypto_extension()
 
@@ -15,6 +16,7 @@ ED25519_PRIVATE_KEY_LENGTH: Final[int] = 32
 ED25519_PUBLIC_KEY_LENGTH: Final[int] = 32
 ED25519_SIGNATURE_LENGTH: Final[int] = 64
 _ED25519_MULTIHASH_PREFIX: Final[str] = "ed0120"
+_DEFAULT_IH58_NETWORK_PREFIX: Final[int] = 0x02F1
 
 SM2_PRIVATE_KEY_LENGTH: Final[int] = 32
 SM2_PUBLIC_KEY_LENGTH: Final[int] = 65
@@ -191,10 +193,12 @@ class Ed25519KeyPair:
 
         return load_ed25519_keypair_from_hex(private_key_hex)
 
-    def default_account_id(self, domain: str) -> str:
-        """Return the canonical account id using the multihash public key and `domain`."""
+    def default_account_id(self, domain: str, network_prefix: int = _DEFAULT_IH58_NETWORK_PREFIX) -> str:
+        """Return the canonical IH58 account id using the public key and `domain`."""
 
-        return ed25519_public_key_account_id(self.public_key, domain)
+        return ed25519_public_key_account_id(
+            self.public_key, domain, network_prefix=network_prefix
+        )
 
 
 @dataclass(frozen=True)
@@ -412,13 +416,19 @@ def ed25519_public_key_multihash(public_key: bytes) -> str:
     return f"{_ED25519_MULTIHASH_PREFIX}{public_key.hex().upper()}"
 
 
-def ed25519_public_key_account_id(public_key: bytes, domain: str) -> str:
-    """Return the canonical account id using the public key multihash within `domain`."""
+def ed25519_public_key_account_id(
+    public_key: bytes,
+    domain: str,
+    *,
+    network_prefix: int = _DEFAULT_IH58_NETWORK_PREFIX,
+) -> str:
+    """Return the canonical IH58 account id using the public key within `domain`."""
 
     domain = domain.strip()
     if not domain or "@" in domain:
         raise ValueError("domain must be a non-empty string without '@'")
-    return f"{ed25519_public_key_multihash(public_key)}@{domain}"
+    address = AccountAddress.from_account(domain=domain, public_key=public_key)
+    return address.to_ih58(network_prefix)
 
 
 def _build_confidential_keyset(payload: Mapping[str, bytes]) -> ConfidentialKeyset:

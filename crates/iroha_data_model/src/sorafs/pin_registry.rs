@@ -503,7 +503,7 @@ mod tests {
             chunk_digest,
             PinPolicy::default(),
             AccountId::from_str(
-                "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C@sora",
+                "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C",
             )
             .expect("parse account id"),
             42,
@@ -529,7 +529,7 @@ mod tests {
             order_id: ReplicationOrderId::new([0x44; 32]),
             manifest_digest: ManifestDigest::new([0x55; 32]),
             issued_by: AccountId::from_str(
-                "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C@sora",
+                "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C",
             )
             .expect("parse account id"),
             issued_epoch: 10,

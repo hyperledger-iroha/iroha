@@ -235,8 +235,8 @@ sleep 5
 
 echo "[6/6] Asset flow (transfer, query)"
 ASSET="rose#wonderland"
-SENDER="34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland"
-RECIP="34mSYmj74pAZ6nNwwEsmGKGrHErCPMWtqeBwWhHkT9WcsndXbe2FjCNWFYCn5FiW5fdUcsbQD@garden_of_live_flowers"
+SENDER="34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+RECIP="34mSYmj74pAZ6nNwwEsmGKGrHErCPMWtqeBwWhHkT9WcsndXbe2FjCNWFYCn5FiW5fdUcsbQD"
 
 CLIENT_CONFIG="$BASE/client.toml"
 $IROHA --config "$CLIENT_CONFIG" asset get --id "$ASSET#$SENDER"

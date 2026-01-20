@@ -12,6 +12,10 @@ Last update: 2026-01-20
 - SoraFS repair audit schema: worker signatures now cover manifest digests, repair worker requests carry `manifest_digest_hex`, and canonical repair/GC audit payload structs with Norito roundtrip tests are defined; docs updated.
 - SoraFS repair CLI: added `iroha sorafs repair` list/claim/complete/fail/escalate subcommands plus client helpers for repair status/worker/slash endpoints; repair plan docs updated.
 - SoraFS GC CLI: added `iroha sorafs gc` inspect/dry-run reporting for retention state (read-only).
+- Docs: added GC inspection/dry-run guidance to SoraFS ops playbook, node-ops runbook, and node-client protocol CLI helpers (including portal mirrors).
+- SoraFS repair store: introduced a repair-store abstraction with CAS updates and canonical Norito payload bytes (in-memory backend; Postgres wiring TODO).
+- SoraFS repair events: record ordered RepairTaskEventV1 transitions in the scheduler and surface them in repair status responses.
+- SoraFS repair watchdog: enforce SLA/attempt caps, requeue expired leases with backoff, emit draft slash proposals, and prioritize claimable tasks by SLA/severity/provider backlog.
 - Format: `cargo fmt --all` (warned about nightly-only rustfmt options in stable toolchain).
 - Tests: `cargo test -p iroha_config sorafs_repair_and_gc_parse_clamps_values` (ok).
 - Tests: `cargo test -p sorafs_node repair_and_gc_configs_preserve_fields` (ok).

@@ -2593,7 +2593,7 @@ mod sorafs_tests {
 
     pub(super) fn alice() -> AccountId {
         AccountId::from_str(
-            "ed25519:ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C@sora",
+            "ed25519:ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C@wonderland",
         )
         .expect("valid account id")
     }
@@ -4369,7 +4369,7 @@ mod sorafs_tests {
     fn record_capacity_telemetry_requires_authorised_submitter() {
         let mut state = make_state();
         let bob = AccountId::from_str(
-            "ed25519:ed01208B6BD94034D1145C0B149DB43A07F56977AF58C1871F43B6D54A4D3F33D5B451@sora",
+            "ed25519:ed01208B6BD94034D1145C0B149DB43A07F56977AF58C1871F43B6D54A4D3F33D5B451@wonderland",
         )
         .expect("valid account id");
         seed_sorafs_permissions(&mut state, &bob);
