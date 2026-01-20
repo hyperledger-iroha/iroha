@@ -336,6 +336,14 @@ pub const DEFAULT_BIND_HOST: &str = "0.0.0.0";
 pub const DEFAULT_PUBLIC_HOST: &str = "127.0.0.1";
 /// Default total pipeline time (ms) injected for localnet when not overridden.
 const LOCALNET_PIPELINE_TIME_MS: u64 = 1_000;
+/// Baseline NPoS timeouts for localnet (keep in sync with config defaults).
+const LOCALNET_NPOS_DEFAULT_BLOCK_TIME_MS: u64 = 1_000;
+const LOCALNET_NPOS_TIMEOUT_PROPOSE_MS: u64 = 350;
+const LOCALNET_NPOS_TIMEOUT_PREVOTE_MS: u64 = 450;
+const LOCALNET_NPOS_TIMEOUT_PRECOMMIT_MS: u64 = 550;
+const LOCALNET_NPOS_TIMEOUT_COMMIT_MS: u64 = 750;
+const LOCALNET_NPOS_TIMEOUT_DA_MS: u64 = 650;
+const LOCALNET_NPOS_TIMEOUT_AGG_MS: u64 = 120;
 /// Default redundant send fanout (r) for localnet DA/RBC sessions.
 const LOCALNET_REDUNDANT_SEND_R: u8 = 2;
 /// Default DA commit-quorum timeout multiplier for localnet configs.
@@ -377,7 +385,6 @@ const LOCALNET_TELEMETRY_PROFILE: &str = "operator";
 const LOCALNET_SORA_MIN_PEERS: u16 = 4;
 /// Divisor applied to derive the localnet NPoS aggregator fallback timeout.
 /// Keep this at 1 so aggregators do not time out before quorum on fast pipelines.
-const LOCALNET_NPOS_AGGREGATOR_DIVISOR: u64 = 1;
 /// Default max transactions per block for localnet (targets 10k TPS).
 const LOCALNET_BLOCK_MAX_TRANSACTIONS: u64 = 10_000;
 /// Default stake bonded per localnet validator (raised to meet min_self_bond).
@@ -809,6 +816,20 @@ fn generate_localnet_with_line<T: Write>(
         let kura_dir = out_dir.join("storage").join(format!("peer{idx}"));
         fs::create_dir_all(&kura_dir)
             .wrap_err_with(|| format!("failed to create kura dir {}", kura_dir.display()))?;
+        let tiered_state_dir = kura_dir.join("tiered_state");
+        fs::create_dir_all(&tiered_state_dir).wrap_err_with(|| {
+            format!(
+                "failed to create tiered state dir {}",
+                tiered_state_dir.display()
+            )
+        })?;
+        let da_store_dir = kura_dir.join("da_wsv_snapshots");
+        fs::create_dir_all(&da_store_dir).wrap_err_with(|| {
+            format!(
+                "failed to create DA WSV snapshot dir {}",
+                da_store_dir.display()
+            )
+        })?;
         let rendered = render_peer_config(
             peer,
             &trusted,
@@ -817,6 +838,8 @@ fn generate_localnet_with_line<T: Write>(
             &genesis_signed_path,
             &bls_entries,
             &kura_dir,
+            &tiered_state_dir,
+            &da_store_dir,
             (&hosts.bind, &hosts.public),
             opts.consensus_mode,
             nexus_enabled,
@@ -998,6 +1021,8 @@ fn render_peer_config(
     genesis_signed_path: &Path,
     bls_entries: &[BlsEntry],
     kura_store_dir: &Path,
+    tiered_state_root: &Path,
+    da_store_root: &Path,
     hosts: (&CanonicalHost, &CanonicalHost),
     consensus_mode: SumeragiConsensusMode,
     nexus_enabled: bool,
@@ -1063,6 +1088,19 @@ fn render_peer_config(
         Value::String(LOCALNET_KURA_FSYNC_MODE.to_owned()),
     );
     root.insert("kura".into(), Value::Table(kura));
+
+    let mut tiered_state = Table::new();
+    tiered_state.insert(
+        "cold_store_root".into(),
+        Value::String(tiered_state_root.to_string_lossy().into_owned()),
+    );
+    if da_rbc_enabled {
+        tiered_state.insert(
+            "da_store_root".into(),
+            Value::String(da_store_root.to_string_lossy().into_owned()),
+        );
+    }
+    root.insert("tiered_state".into(), Value::Table(tiered_state));
 
     let consensus_mode_str = match consensus_mode {
         SumeragiConsensusMode::Permissioned => "permissioned",
@@ -1481,10 +1519,13 @@ fn apply_localnet_npos_overrides(
     redundant_send_r: Option<u8>,
     collectors_k: Option<u16>,
 ) {
-    let block_time_ms = parameters.sumeragi.block_time_ms;
+    let block_time_ms = parameters.sumeragi.block_time_ms.max(1);
     let commit_time_ms = parameters.sumeragi.commit_time_ms.max(block_time_ms);
-    let base_ms = commit_time_ms.max(block_time_ms);
-    let aggregator_ms = (base_ms / LOCALNET_NPOS_AGGREGATOR_DIVISOR).max(1);
+    let default_block_ms = LOCALNET_NPOS_DEFAULT_BLOCK_TIME_MS.max(1);
+    let scale_timeout = |base_ms: u64, default_ms: u64| -> u64 {
+        let scaled = (u128::from(base_ms) * u128::from(default_ms)) / u128::from(default_block_ms);
+        u64::try_from(scaled).unwrap_or(u64::MAX).max(1)
+    };
 
     let mut npos = parameters
         .custom()
@@ -1492,12 +1533,12 @@ fn apply_localnet_npos_overrides(
         .and_then(SumeragiNposParameters::from_custom_parameter)
         .unwrap_or_default();
     npos.block_time_ms = block_time_ms;
-    npos.timeout_propose_ms = base_ms;
-    npos.timeout_prevote_ms = base_ms;
-    npos.timeout_precommit_ms = base_ms;
-    npos.timeout_commit_ms = commit_time_ms;
-    npos.timeout_da_ms = base_ms;
-    npos.timeout_aggregator_ms = aggregator_ms;
+    npos.timeout_propose_ms = scale_timeout(block_time_ms, LOCALNET_NPOS_TIMEOUT_PROPOSE_MS);
+    npos.timeout_prevote_ms = scale_timeout(block_time_ms, LOCALNET_NPOS_TIMEOUT_PREVOTE_MS);
+    npos.timeout_precommit_ms = scale_timeout(block_time_ms, LOCALNET_NPOS_TIMEOUT_PRECOMMIT_MS);
+    npos.timeout_commit_ms = scale_timeout(commit_time_ms, LOCALNET_NPOS_TIMEOUT_COMMIT_MS);
+    npos.timeout_da_ms = scale_timeout(block_time_ms, LOCALNET_NPOS_TIMEOUT_DA_MS);
+    npos.timeout_aggregator_ms = scale_timeout(block_time_ms, LOCALNET_NPOS_TIMEOUT_AGG_MS);
     // Override seat band and bond to prevent validator drops on small localnets.
     npos.seat_band_pct = 100;
     npos.min_self_bond = 1;
@@ -1979,7 +2020,7 @@ mod tests {
         },
         transaction::Executable,
     };
-    use norito::{derive::JsonDeserialize, literal};
+    use norito::{derive::JsonDeserialize, json, literal};
 
     use super::*;
 
@@ -2046,6 +2087,30 @@ mod tests {
                     .expect("append localnet NPoS bootstrap");
         }
         apply_localnet_crypto_overrides(genesis, npos_bootstrap)
+    }
+
+    fn genesis_json_from_path(path: &Path) -> json::Value {
+        let contents = fs::read_to_string(path).expect("read genesis");
+        json::from_str(&contents).expect("parse genesis json")
+    }
+
+    fn genesis_parameters(manifest: &json::Value) -> Parameters {
+        let transactions = manifest
+            .get("transactions")
+            .and_then(json::Value::as_array)
+            .expect("genesis transactions");
+        let params_value = transactions
+            .iter()
+            .rev()
+            .find_map(|tx| tx.get("parameters"))
+            .expect("parameters entry");
+        json::from_value(params_value.clone()).expect("parse genesis parameters")
+    }
+
+    fn genesis_consensus_mode(manifest: &json::Value) -> Option<SumeragiConsensusMode> {
+        manifest
+            .get("consensus_mode")
+            .and_then(|value| json::from_value(value.clone()).ok())
     }
 
     #[test]
@@ -2614,10 +2679,8 @@ mod tests {
         assert_eq!(parsed.sumeragi.collectors_redundant_send_r, 2);
 
         let genesis_path = temp.path().join("genesis.json");
-        let genesis_contents = fs::read_to_string(&genesis_path).expect("read genesis");
-        let manifest: iroha_genesis::RawGenesisTransaction =
-            norito::json::from_str(&genesis_contents).expect("parse genesis manifest");
-        let params = manifest.effective_parameters();
+        let manifest = genesis_json_from_path(&genesis_path);
+        let params = genesis_parameters(&manifest);
         assert_eq!(params.sumeragi().block_time_ms(), 1_000);
         assert_eq!(params.sumeragi().commit_time_ms(), 1_000);
         assert_eq!(params.sumeragi().collectors_k(), 3);
@@ -2655,10 +2718,8 @@ mod tests {
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
 
         let genesis_path = temp.path().join("genesis.json");
-        let genesis_contents = fs::read_to_string(&genesis_path).expect("read genesis");
-        let manifest: iroha_genesis::RawGenesisTransaction =
-            norito::json::from_str(&genesis_contents).expect("parse genesis manifest");
-        let params = manifest.effective_parameters();
+        let manifest = genesis_json_from_path(&genesis_path);
+        let params = genesis_parameters(&manifest);
         assert_eq!(params.sumeragi().collectors_k(), 3);
         assert_eq!(params.sumeragi().collectors_redundant_send_r(), 2);
 
@@ -2670,7 +2731,7 @@ mod tests {
         assert_eq!(npos.k_aggregators(), 3);
         assert_eq!(npos.redundant_send_r(), 2);
         assert_eq!(npos.block_time_ms(), 1_000);
-        assert_eq!(npos.timeout_commit_ms(), 1_000);
+        assert_eq!(npos.timeout_commit_ms(), 750);
     }
 
     #[test]
@@ -2857,12 +2918,10 @@ mod tests {
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
 
         let genesis_path = temp.path().join("genesis.json");
-        let genesis_contents = fs::read_to_string(&genesis_path).expect("read genesis");
-        let manifest: iroha_genesis::RawGenesisTransaction =
-            norito::json::from_str(&genesis_contents).expect("parse genesis manifest");
+        let manifest = genesis_json_from_path(&genesis_path);
 
         let (expected_block, expected_commit) = default_localnet_pipeline_times();
-        let params = manifest.effective_parameters();
+        let params = genesis_parameters(&manifest);
         assert_eq!(params.sumeragi().block_time_ms(), expected_block);
         assert_eq!(params.sumeragi().commit_time_ms(), expected_commit);
     }
@@ -3135,10 +3194,17 @@ mod tests {
 
         let genesis_path = temp.path().join("genesis.json");
         let genesis_contents = fs::read_to_string(&genesis_path).expect("read genesis");
-        let manifest: iroha_genesis::RawGenesisTransaction =
-            norito::json::from_str(&genesis_contents).expect("parse genesis manifest");
-
-        let params = manifest.effective_parameters();
+        let manifest: json::Value = json::from_str(&genesis_contents).expect("parse genesis json");
+        let transactions = manifest
+            .get("transactions")
+            .and_then(json::Value::as_array)
+            .expect("genesis transactions");
+        let params_value = transactions
+            .iter()
+            .find_map(|tx| tx.get("parameters"))
+            .expect("parameters entry");
+        let params: Parameters =
+            json::from_value(params_value.clone()).expect("parse genesis parameters");
         assert_eq!(params.sumeragi().block_time_ms(), 1_000);
         assert_eq!(params.sumeragi().commit_time_ms(), 1_000);
     }
@@ -3170,26 +3236,21 @@ mod tests {
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
 
         let genesis_path = temp.path().join("genesis.json");
-        let genesis_contents = fs::read_to_string(&genesis_path).expect("read genesis");
-        let manifest: iroha_genesis::RawGenesisTransaction =
-            norito::json::from_str(&genesis_contents).expect("parse genesis manifest");
+        let manifest = genesis_json_from_path(&genesis_path);
 
-        let params = manifest.effective_parameters();
+        let params = genesis_parameters(&manifest);
         let npos = params
             .custom()
             .get(&SumeragiNposParameters::parameter_id())
             .and_then(SumeragiNposParameters::from_custom_parameter)
             .expect("npos parameters must be present");
         assert_eq!(npos.block_time_ms(), 1_200);
-        assert_eq!(npos.timeout_propose_ms(), 1_600);
-        assert_eq!(npos.timeout_prevote_ms(), 1_600);
-        assert_eq!(npos.timeout_precommit_ms(), 1_600);
-        assert_eq!(npos.timeout_commit_ms(), 1_600);
-        assert_eq!(npos.timeout_da_ms(), 1_600);
-        assert_eq!(
-            npos.timeout_aggregator_ms(),
-            1_600 / LOCALNET_NPOS_AGGREGATOR_DIVISOR
-        );
+        assert_eq!(npos.timeout_propose_ms(), 420);
+        assert_eq!(npos.timeout_prevote_ms(), 540);
+        assert_eq!(npos.timeout_precommit_ms(), 660);
+        assert_eq!(npos.timeout_commit_ms(), 1_200);
+        assert_eq!(npos.timeout_da_ms(), 780);
+        assert_eq!(npos.timeout_aggregator_ms(), 144);
         assert_eq!(npos.redundant_send_r(), 3);
     }
 
@@ -3221,11 +3282,8 @@ mod tests {
             .expect("generate npos localnet files");
 
         let genesis_path = temp.path().join("genesis.json");
-        let genesis_contents = fs::read_to_string(&genesis_path).expect("read genesis");
-        let manifest: iroha_genesis::RawGenesisTransaction =
-            norito::json::from_str(&genesis_contents).expect("parse genesis manifest");
-
-        let params = manifest.effective_parameters();
+        let manifest = genesis_json_from_path(&genesis_path);
+        let params = genesis_parameters(&manifest);
         assert_eq!(
             params.sumeragi().next_mode(),
             Some(SumeragiConsensusMode::Npos),
@@ -3280,16 +3338,13 @@ mod tests {
             .expect("generate staged localnet");
 
         let genesis_path = temp.path().join("genesis.json");
-        let genesis_contents = fs::read_to_string(&genesis_path).expect("read genesis");
-        let manifest: iroha_genesis::RawGenesisTransaction =
-            norito::json::from_str(&genesis_contents).expect("parse genesis manifest");
-
+        let manifest = genesis_json_from_path(&genesis_path);
         assert_eq!(
-            manifest.consensus_mode(),
+            genesis_consensus_mode(&manifest),
             Some(SumeragiConsensusMode::Permissioned),
             "manifest consensus_mode should reflect the current mode"
         );
-        let params = manifest.effective_parameters();
+        let params = genesis_parameters(&manifest);
         assert_eq!(
             params.sumeragi().next_mode(),
             Some(SumeragiConsensusMode::Npos),
@@ -3482,12 +3537,8 @@ mod tests {
                 "localnet redundant send should track DA policy"
             );
 
-            let manifest: iroha_genesis::RawGenesisTransaction = norito::json::from_str(
-                &fs::read_to_string(temp.path().join("genesis.json"))
-                    .expect("read genesis manifest"),
-            )
-            .expect("parse genesis manifest");
-            let params = manifest.effective_parameters();
+            let manifest = genesis_json_from_path(&temp.path().join("genesis.json"));
+            let params = genesis_parameters(&manifest);
             assert_eq!(
                 params.sumeragi().da_enabled(),
                 expected,
@@ -3973,8 +4024,7 @@ mod tests {
     fn account_id_raw_string_parses_as_account_id() {
         let seed_bytes = Some("localnet-gas-parse".as_bytes());
         let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
-        let gas_account_id =
-            localnet_gas_account_id(&genesis_public_key).expect("gas account id");
+        let gas_account_id = localnet_gas_account_id(&genesis_public_key).expect("gas account id");
         let encoded = account_id_raw_string(&gas_account_id);
         let parsed: AccountId = encoded.parse().expect("account id parse");
         assert_eq!(parsed, gas_account_id);
@@ -4066,6 +4116,18 @@ mod tests {
             .and_then(|t| t.get("store_dir"))
             .and_then(toml::Value::as_str)
             .expect("kura store");
+        let tiered_state = parsed
+            .get("tiered_state")
+            .and_then(toml::Value::as_table)
+            .expect("tiered_state table");
+        let tiered_root = tiered_state
+            .get("cold_store_root")
+            .and_then(toml::Value::as_str)
+            .expect("tiered_state cold_store_root");
+        let da_root = tiered_state
+            .get("da_store_root")
+            .and_then(toml::Value::as_str)
+            .expect("tiered_state da_store_root");
         assert!(
             Path::new(genesis_path).is_absolute(),
             "genesis path should be absolute"
@@ -4073,6 +4135,14 @@ mod tests {
         assert!(
             Path::new(kura_path).is_absolute(),
             "kura store path should be absolute"
+        );
+        assert!(
+            Path::new(tiered_root).is_absolute(),
+            "tiered_state cold_store_root should be absolute"
+        );
+        assert!(
+            Path::new(da_root).is_absolute(),
+            "tiered_state da_store_root should be absolute"
         );
     }
 
