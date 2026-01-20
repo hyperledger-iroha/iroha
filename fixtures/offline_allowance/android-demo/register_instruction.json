@@ -2,7 +2,7 @@
   "certificate": {
     "allowance": {
       "amount": "150",
-      "asset": "usd#sora#34mSYnCXkCzHXm31UDHh7SJfGvFJMFkT4FY4YhqjRbneXvpQgL6hAxjt9PQ4n9JBzYwiuLRwF@treasury",
+      "asset": "usd#sora#34mSYnCXkCzHXm31UDHh7SJfGvFJMFkT4FY4YhqjRbneXvpQgL6hAxjt9PQ4n9JBzYwiuLRwF",
       "commitment_hex": "B6BC64AF113FF5CEEB7183C09BBE31EC972A324CAF5AC378B7DFD951BDAAEF62",
       "commitment": [
         182,
@@ -47,7 +47,7 @@
       187,
       102
     ],
-    "controller": "34mSYnDgbaJM58rbLoif4Tkp7G6zNhAfct4B9QLcNFzMSQjFmyWod961RVTGBpe8a2SykUPyZ@wonderland",
+    "controller": "34mSYnDgbaJM58rbLoif4Tkp7G6zNhAfct4B9QLcNFzMSQjFmyWod961RVTGBpe8a2SykUPyZ",
     "expires_at_ms": 2524593600000,
     "issued_at_ms": 1730314876000,
     "metadata": {

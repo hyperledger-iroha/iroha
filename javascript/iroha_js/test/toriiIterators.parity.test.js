@@ -78,8 +78,8 @@ test("iterateAccountAssets paginates with addressFormat and maxItems", async () 
     const offset = Number(parsed.searchParams.get("offset") ?? 0);
     const items =
       offset === 0
-        ? [{ asset_id: "rose#wonderland#alice@wonderland", quantity: "5" }]
-        : [{ asset_id: "daisy#wonderland#alice@wonderland", quantity: "1" }];
+        ? [{ asset_id: "rose#wonderland#34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", quantity: "5" }]
+        : [{ asset_id: "daisy#wonderland#34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", quantity: "1" }];
     callCount += 1;
     return createResponse({
       status: 200,
@@ -89,7 +89,7 @@ test("iterateAccountAssets paginates with addressFormat and maxItems", async () 
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const seen = [];
-  for await (const holding of client.iterateAccountAssets("alice@wonderland", {
+  for await (const holding of client.iterateAccountAssets("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", {
     pageSize: 1,
     maxItems: 2,
     addressFormat: "compressed",
@@ -97,8 +97,8 @@ test("iterateAccountAssets paginates with addressFormat and maxItems", async () 
     seen.push(holding.asset_id);
   }
   assert.deepEqual(seen, [
-    "rose#wonderland#alice@wonderland",
-    "daisy#wonderland#alice@wonderland",
+    "rose#wonderland#34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
+    "daisy#wonderland#34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
   ]);
   assert.equal(callCount, 2);
 });
@@ -115,7 +115,7 @@ test("queryAccountAssets surfaces permission errors with context", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
-    () => client.queryAccountAssets("alice@wonderland", { filter: { Eq: ["quantity", 1] } }),
+    () => client.queryAccountAssets("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", { filter: { Eq: ["quantity", 1] } }),
     (error) => {
       assert(error instanceof ToriiHttpError);
       assert.equal(error.status, 403);

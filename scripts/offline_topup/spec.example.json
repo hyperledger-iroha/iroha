@@ -54,7 +54,7 @@
     {
       "label": "android-hms-demo",
       "controller": "ed01207233BFC89DCBD68C19FDE6CE6158225298EC1131B6A130D1AEB454C1AB5183C0@wonderland",
-      "allowance_asset": "jpy#sora#ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA@treasury",
+      "allowance_asset": "jpy#sora#ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA",
       "amount": "90",
       "issued_at_ms": 1730314876000,
       "expires_at_ms": 1745900000000,

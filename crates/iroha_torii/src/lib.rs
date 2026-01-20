@@ -206,12 +206,12 @@ use iroha_core::{
     queue::{self, Queue},
     state::{
         BlockProofError, State as CoreState, StateReadOnly, StateReadOnlyWithTransactions,
-        TransactionsReadOnly,
+        TransactionsReadOnly, WorldReadOnly,
     },
     sumeragi::rbc_store::SoftwareManifest,
 };
 use iroha_crypto::{
-    ExposedPrivateKey, Hash, HashOf, KeyPair,
+    ExposedPrivateKey, Hash, HashOf, KeyPair, SignatureOf,
     blake2::{Blake2b512, digest::Digest},
 };
 #[cfg(feature = "app_api")]
@@ -224,6 +224,8 @@ use iroha_data_model::events::{
         sorafs::{SorafsDealSettlement, SorafsDealUsage, SorafsGatewayEvent},
     },
 };
+#[cfg(feature = "app_api")]
+use iroha_data_model::sorafs::capacity::ProviderId;
 #[cfg(feature = "app_api")]
 use iroha_data_model::sorafs::deal::DealUsageReport;
 use iroha_data_model::{
@@ -240,11 +242,13 @@ use iroha_data_model::{
     name::Name,
     nft::NftId,
     peer::Peer,
+    permission::Permission,
     transaction::{
         SignedTransaction, TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload,
         signed::TransactionEntrypoint,
     },
 };
+use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_primitives::addr::SocketAddr;
 use iroha_torii_shared::{ErrorEnvelope, uri};
@@ -255,7 +259,10 @@ use norito::json::{self, Value};
 use norito::json::{JsonDeserialize, JsonSerialize};
 #[cfg(feature = "app_api")]
 use sorafs_manifest::provider_advert::CapabilityType;
-use sorafs_manifest::repair::{RepairReportV1, RepairSlashProposalV1};
+use sorafs_manifest::repair::{
+    REPAIR_WORKER_SIGNATURE_VERSION_V1, RepairReportV1, RepairSlashProposalV1, RepairTicketId,
+    RepairWorkerActionV1, RepairWorkerSignaturePayloadV1,
+};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::{
     net::TcpListener,
@@ -457,13 +464,53 @@ fn alias_service_from_iso_config(
     }
 
     if inserted == 0 {
-        iroha_data_model::account::clear_account_alias_resolver();
         None
     } else {
-        let service = Arc::new(service);
-        AliasService::install_account_alias_resolver(&service);
-        Some(service)
+        Some(Arc::new(service))
     }
+}
+
+fn install_account_resolvers(state: &Arc<CoreState>) {
+    use iroha_data_model::{
+        account::{
+            AccountLabel, clear_account_alias_resolver, clear_account_domain_selector_resolver,
+            clear_account_opaque_resolver, clear_account_uaid_resolver, set_account_alias_resolver,
+            set_account_domain_selector_resolver, set_account_opaque_resolver,
+            set_account_uaid_resolver,
+        },
+        name::Name,
+    };
+
+    clear_account_alias_resolver();
+    clear_account_domain_selector_resolver();
+    clear_account_opaque_resolver();
+    clear_account_uaid_resolver();
+
+    let alias_state = Arc::clone(state);
+    set_account_alias_resolver(Arc::new(move |label, domain| {
+        let name = Name::from_str(label).ok()?;
+        let key = AccountLabel::new(domain.clone(), name);
+        let view = alias_state.view();
+        view.world().account_aliases().get(&key).cloned()
+    }));
+
+    let selector_state = Arc::clone(state);
+    set_account_domain_selector_resolver(Arc::new(move |selector| {
+        let view = selector_state.view();
+        view.world().domain_selectors().get(selector).cloned()
+    }));
+
+    let uaid_state = Arc::clone(state);
+    set_account_uaid_resolver(Arc::new(move |uaid| {
+        let view = uaid_state.view();
+        view.world().uaid_accounts().get(uaid).cloned()
+    }));
+
+    let opaque_state = Arc::clone(state);
+    set_account_opaque_resolver(Arc::new(move |opaque| {
+        let view = opaque_state.view();
+        view.world().opaque_uaids().get(opaque).cloned()
+    }));
 }
 
 const ALIAS_METRIC_LANE: &str = "torii";
@@ -634,7 +681,6 @@ struct AppState {
     soranet_privacy_tokens: Arc<HashSet<String>>,
     soranet_privacy_allow_nets: Arc<Vec<limits::IpNet>>,
     soranet_privacy_rate_limiter: limits::RateLimiter,
-    strict_addresses: bool,
     allow_nets: Arc<Vec<limits::IpNet>>,
     preauth_gate: Arc<limits::PreAuthGate>,
     queue: Arc<Queue>,
@@ -2172,7 +2218,6 @@ async fn handler_gov_enact(
         app.queue.clone(),
         app.state.clone(),
         app.telemetry.clone(),
-        app.strict_addresses,
         body,
     )
     .await
@@ -2225,7 +2270,6 @@ async fn handler_gov_propose_deploy(
         app.queue.clone(),
         app.state.clone(),
         app.telemetry.clone(),
-        app.strict_addresses,
         body,
     )
     .await
@@ -2297,7 +2341,6 @@ async fn handler_account_transactions_query(
             AxPath(account_id),
             payload,
             tel.clone(),
-            app.strict_addresses,
         )
         .await;
     }
@@ -2312,7 +2355,6 @@ async fn handler_account_transactions_query(
         AxPath(key_hint),
         payload,
         tel,
-        app.strict_addresses,
     )
     .await
 }
@@ -2336,7 +2378,6 @@ async fn handler_account_assets(
             AxPath(account_id),
             AxQuery(p),
             tel.clone(),
-            app.strict_addresses,
         )
         .await;
     }
@@ -2351,7 +2392,6 @@ async fn handler_account_assets(
         AxPath(key_hint),
         AxQuery(p),
         tel,
-        app.strict_addresses,
     )
     .await
 }
@@ -2371,7 +2411,6 @@ async fn handler_account_permissions(
             AxPath(account_id),
             AxQuery(p),
             tel.clone(),
-            app.strict_addresses,
         )
         .await;
     }
@@ -2385,7 +2424,6 @@ async fn handler_account_permissions(
         AxPath(key_hint),
         AxQuery(p),
         tel,
-        app.strict_addresses,
     )
     .await
 }
@@ -2413,7 +2451,6 @@ async fn handler_account_assets_query(
             AxPath(account_id),
             payload,
             tel.clone(),
-            app.strict_addresses,
         )
         .await;
     }
@@ -2428,7 +2465,6 @@ async fn handler_account_assets_query(
         AxPath(key_hint),
         payload,
         tel,
-        app.strict_addresses,
     )
     .await
 }
@@ -2458,7 +2494,6 @@ async fn handler_account_transactions_get(
             AxPath(account_id),
             norito_params.clone(),
             tel.clone(),
-            app.strict_addresses,
         )
         .await;
     }
@@ -2473,7 +2508,6 @@ async fn handler_account_transactions_get(
         AxPath(key_hint),
         norito_params,
         tel,
-        app.strict_addresses,
     )
     .await
 }
@@ -2610,26 +2644,15 @@ async fn handler_accounts_list(
     AxQuery(p): AxQuery<crate::routing::ListFilterParams>,
 ) -> Result<impl IntoResponse, Error> {
     if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
-        return routing::handle_v1_accounts(
-            app.state.clone(),
-            AxQuery(p),
-            app.telemetry.clone(),
-            app.strict_addresses,
-        )
-        .await;
+        return routing::handle_v1_accounts(app.state.clone(), AxQuery(p), app.telemetry.clone())
+            .await;
     }
 
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/accounts", enforce).await?;
 
-    routing::handle_v1_accounts(
-        app.state.clone(),
-        AxQuery(p),
-        app.telemetry.clone(),
-        app.strict_addresses,
-    )
-    .await
+    routing::handle_v1_accounts(app.state.clone(), AxQuery(p), app.telemetry.clone()).await
 }
 
 #[cfg(feature = "app_api")]
@@ -2646,7 +2669,6 @@ async fn handler_accounts_query(
             app.state.clone(),
             crate::utils::extractors::NoritoJson(env),
             app.telemetry.clone(),
-            app.strict_addresses,
         )
         .await;
     }
@@ -2659,7 +2681,34 @@ async fn handler_accounts_query(
         app.state.clone(),
         crate::utils::extractors::NoritoJson(env),
         app.telemetry.clone(),
-        app.strict_addresses,
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_accounts_resolve(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    crate::utils::extractors::NoritoJson(request): crate::utils::extractors::NoritoJson<
+        crate::routing::AccountResolveRequestDto,
+    >,
+) -> Result<impl IntoResponse, Error> {
+    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        return routing::handle_v1_accounts_resolve(
+            crate::utils::extractors::NoritoJson(request),
+            app.telemetry.clone(),
+        )
+        .await;
+    }
+
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    check_access_enforced(&app, &headers, None, "v1/accounts/resolve", enforce).await?;
+
+    routing::handle_v1_accounts_resolve(
+        crate::utils::extractors::NoritoJson(request),
+        app.telemetry.clone(),
     )
     .await
 }
@@ -2828,7 +2877,6 @@ async fn handler_nexus_public_lane_stake(
             lane_id,
             params,
             app.telemetry.clone(),
-            app.strict_addresses,
         )
         .await;
     }
@@ -2847,7 +2895,6 @@ async fn handler_nexus_public_lane_stake(
         lane_id,
         params,
         app.telemetry.clone(),
-        app.strict_addresses,
     )
     .await
 }
@@ -2869,7 +2916,6 @@ async fn handler_nexus_public_lane_rewards(
             lane_id,
             params,
             app.telemetry.clone(),
-            app.strict_addresses,
         )
         .await;
     }
@@ -2888,7 +2934,6 @@ async fn handler_nexus_public_lane_rewards(
         lane_id,
         params,
         app.telemetry.clone(),
-        app.strict_addresses,
     )
     .await
 }
@@ -3063,7 +3108,6 @@ async fn handler_repo_agreements(
             app.state.clone(),
             AxQuery(p),
             app.telemetry.clone(),
-            app.strict_addresses,
         )
         .await;
     }
@@ -3072,13 +3116,7 @@ async fn handler_repo_agreements(
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/repo/agreements", enforce).await?;
 
-    routing::handle_v1_repo_agreements(
-        app.state.clone(),
-        AxQuery(p),
-        app.telemetry.clone(),
-        app.strict_addresses,
-    )
-    .await
+    routing::handle_v1_repo_agreements(app.state.clone(), AxQuery(p), app.telemetry.clone()).await
 }
 
 #[cfg(feature = "app_api")]
@@ -3095,7 +3133,6 @@ async fn handler_repo_agreements_query(
             app.state.clone(),
             crate::utils::extractors::NoritoJson(env),
             app.telemetry.clone(),
-            app.strict_addresses,
         )
         .await;
     }
@@ -3108,7 +3145,6 @@ async fn handler_repo_agreements_query(
         app.state.clone(),
         crate::utils::extractors::NoritoJson(env),
         app.telemetry.clone(),
-        app.strict_addresses,
     )
     .await
 }
@@ -3125,7 +3161,6 @@ async fn handler_offline_allowances_list(
             app.state.clone(),
             AxQuery(p),
             app.telemetry.clone(),
-            app.strict_addresses,
         )
         .await;
     }
@@ -3134,13 +3169,8 @@ async fn handler_offline_allowances_list(
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/allowances", enforce).await?;
 
-    routing::handle_v1_offline_allowances(
-        app.state.clone(),
-        AxQuery(p),
-        app.telemetry.clone(),
-        app.strict_addresses,
-    )
-    .await
+    routing::handle_v1_offline_allowances(app.state.clone(), AxQuery(p), app.telemetry.clone())
+        .await
 }
 
 #[cfg(feature = "app_api")]
@@ -3157,7 +3187,6 @@ async fn handler_offline_allowances_query(
             app.state.clone(),
             crate::utils::extractors::NoritoJson(env),
             app.telemetry.clone(),
-            app.strict_addresses,
         )
         .await;
     }
@@ -3170,7 +3199,6 @@ async fn handler_offline_allowances_query(
         app.state.clone(),
         crate::utils::extractors::NoritoJson(env),
         app.telemetry.clone(),
-        app.strict_addresses,
     )
     .await
 }
@@ -3189,7 +3217,6 @@ async fn handler_offline_certificates_query(
             app.state.clone(),
             crate::utils::extractors::NoritoJson(env),
             app.telemetry.clone(),
-            app.strict_addresses,
         )
         .await;
     }
@@ -3209,7 +3236,6 @@ async fn handler_offline_certificates_query(
         app.state.clone(),
         crate::utils::extractors::NoritoJson(env),
         app.telemetry.clone(),
-        app.strict_addresses,
     )
     .await
 }
@@ -3538,7 +3564,6 @@ async fn handler_offline_revocations_list(
             app.state.clone(),
             AxQuery(p),
             app.telemetry.clone(),
-            app.strict_addresses,
         )
         .await;
     }
@@ -3547,13 +3572,8 @@ async fn handler_offline_revocations_list(
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/revocations", enforce).await?;
 
-    routing::handle_v1_offline_revocations(
-        app.state.clone(),
-        AxQuery(p),
-        app.telemetry.clone(),
-        app.strict_addresses,
-    )
-    .await
+    routing::handle_v1_offline_revocations(app.state.clone(), AxQuery(p), app.telemetry.clone())
+        .await
 }
 
 #[cfg(feature = "app_api")]
@@ -3570,7 +3590,6 @@ async fn handler_offline_revocations_query(
             app.state.clone(),
             crate::utils::extractors::NoritoJson(env),
             app.telemetry.clone(),
-            app.strict_addresses,
         )
         .await;
     }
@@ -3590,7 +3609,6 @@ async fn handler_offline_revocations_query(
         app.state.clone(),
         crate::utils::extractors::NoritoJson(env),
         app.telemetry.clone(),
-        app.strict_addresses,
     )
     .await
 }
@@ -3607,7 +3625,6 @@ async fn handler_offline_summaries_list(
             app.state.clone(),
             AxQuery(p),
             app.telemetry.clone(),
-            app.strict_addresses,
         )
         .await;
     }
@@ -3616,13 +3633,7 @@ async fn handler_offline_summaries_list(
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/summaries", enforce).await?;
 
-    routing::handle_v1_offline_summaries(
-        app.state.clone(),
-        AxQuery(p),
-        app.telemetry.clone(),
-        app.strict_addresses,
-    )
-    .await
+    routing::handle_v1_offline_summaries(app.state.clone(), AxQuery(p), app.telemetry.clone()).await
 }
 
 #[cfg(feature = "app_api")]
@@ -3639,7 +3650,6 @@ async fn handler_offline_summaries_query(
             app.state.clone(),
             crate::utils::extractors::NoritoJson(env),
             app.telemetry.clone(),
-            app.strict_addresses,
         )
         .await;
     }
@@ -3652,7 +3662,6 @@ async fn handler_offline_summaries_query(
         app.state.clone(),
         crate::utils::extractors::NoritoJson(env),
         app.telemetry.clone(),
-        app.strict_addresses,
     )
     .await
 }
@@ -3669,7 +3678,6 @@ async fn handler_offline_receipts_list(
             app.state.clone(),
             AxQuery(p),
             app.telemetry.clone(),
-            app.strict_addresses,
         )
         .await;
     }
@@ -3678,13 +3686,7 @@ async fn handler_offline_receipts_list(
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/receipts", enforce).await?;
 
-    routing::handle_v1_offline_receipts(
-        app.state.clone(),
-        AxQuery(p),
-        app.telemetry.clone(),
-        app.strict_addresses,
-    )
-    .await
+    routing::handle_v1_offline_receipts(app.state.clone(), AxQuery(p), app.telemetry.clone()).await
 }
 
 #[cfg(feature = "app_api")]
@@ -3701,7 +3703,6 @@ async fn handler_offline_receipts_query(
             app.state.clone(),
             crate::utils::extractors::NoritoJson(env),
             app.telemetry.clone(),
-            app.strict_addresses,
         )
         .await;
     }
@@ -3714,7 +3715,6 @@ async fn handler_offline_receipts_query(
         app.state.clone(),
         crate::utils::extractors::NoritoJson(env),
         app.telemetry.clone(),
-        app.strict_addresses,
     )
     .await
 }
@@ -3731,7 +3731,6 @@ async fn handler_offline_transfers_list(
             app.state.clone(),
             AxQuery(p),
             app.telemetry.clone(),
-            app.strict_addresses,
         )
         .await;
     }
@@ -3740,13 +3739,7 @@ async fn handler_offline_transfers_list(
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, None, "v1/offline/transfers", enforce).await?;
 
-    routing::handle_v1_offline_transfers(
-        app.state.clone(),
-        AxQuery(p),
-        app.telemetry.clone(),
-        app.strict_addresses,
-    )
-    .await
+    routing::handle_v1_offline_transfers(app.state.clone(), AxQuery(p), app.telemetry.clone()).await
 }
 
 #[cfg(feature = "app_api")]
@@ -3763,7 +3756,6 @@ async fn handler_offline_transfer_get(
             bundle_id_hex,
             AxQuery(p),
             app.telemetry.clone(),
-            app.strict_addresses,
         )
         .await;
     }
@@ -3784,7 +3776,6 @@ async fn handler_offline_transfer_get(
         bundle_id_hex,
         AxQuery(p),
         app.telemetry.clone(),
-        app.strict_addresses,
     )
     .await
 }
@@ -3803,7 +3794,6 @@ async fn handler_offline_transfers_query(
             app.state.clone(),
             crate::utils::extractors::NoritoJson(env),
             app.telemetry.clone(),
-            app.strict_addresses,
         )
         .await;
     }
@@ -3816,7 +3806,6 @@ async fn handler_offline_transfers_query(
         app.state.clone(),
         crate::utils::extractors::NoritoJson(env),
         app.telemetry.clone(),
-        app.strict_addresses,
     )
     .await
 }
@@ -3874,7 +3863,6 @@ async fn handler_offline_bundle_proof_status(
             app.state.clone(),
             AxQuery(p),
             app.telemetry.clone(),
-            app.strict_addresses,
         )
         .await;
     }
@@ -3894,7 +3882,6 @@ async fn handler_offline_bundle_proof_status(
         app.state.clone(),
         AxQuery(p),
         app.telemetry.clone(),
-        app.strict_addresses,
     )
     .await
 }
@@ -4032,7 +4019,7 @@ fn parse_account_id_for_endpoint(
     literal: &str,
     endpoint: &'static str,
 ) -> Result<AccountId, Error> {
-    routing::parse_account_path_segment(literal, &app.telemetry, endpoint, app.strict_addresses)
+    routing::parse_account_path_segment(literal, &app.telemetry, endpoint)
         .map(|(account_id, _)| account_id)
 }
 
@@ -4630,7 +4617,6 @@ async fn handler_asset_holders_query(
             AxPath(def_id),
             payload.clone(),
             app.telemetry.clone(),
-            app.strict_addresses,
         )
         .await;
     }
@@ -4643,7 +4629,6 @@ async fn handler_asset_holders_query(
         AxPath(def_id),
         payload,
         app.telemetry.clone(),
-        app.strict_addresses,
     )
     .await
 }
@@ -5210,7 +5195,6 @@ async fn handler_gov_ballot_zk(
         app.queue.clone(),
         app.state.clone(),
         app.telemetry.clone(),
-        app.strict_addresses,
         body,
     )
     .await
@@ -5246,7 +5230,6 @@ async fn handler_gov_ballot_zk_v1(
             app.queue.clone(),
             app.state.clone(),
             app.telemetry.clone(),
-            app.strict_addresses,
             crate::utils::extractors::NoritoJsonWithBytes {
                 value: dto,
                 raw: Bytes::from(raw),
@@ -5301,7 +5284,6 @@ async fn handler_gov_ballot_zk_v1_ballot_proof(
             app.queue.clone(),
             app.state.clone(),
             app.telemetry.clone(),
-            app.strict_addresses,
             crate::utils::extractors::NoritoJsonWithBytes {
                 value: dto,
                 raw: Bytes::from(raw),
@@ -5331,7 +5313,6 @@ async fn handler_gov_ballot_plain(
         app.state.clone(),
         body,
         app.telemetry.clone(),
-        app.strict_addresses,
     )
     .await
 }
@@ -5347,7 +5328,6 @@ async fn handler_gov_finalize(
         app.queue.clone(),
         app.state.clone(),
         app.telemetry.clone(),
-        app.strict_addresses,
         body,
     )
     .await
@@ -6185,7 +6165,6 @@ async fn handler_kaigi_relay_detail(
         AxPath(relay_id),
         AxQuery(params),
         format,
-        app.strict_addresses,
     )
     .await
     .map(axum::response::IntoResponse::into_response)
@@ -6228,7 +6207,6 @@ async fn handler_kaigi_relays_sse(
             relay_literal,
             &app.telemetry,
             CONTEXT_KAIGI_RELAY_EVENTS_QUERY,
-            app.strict_addresses,
         )
         .map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -9205,10 +9183,296 @@ async fn handler_post_sorafs_repair_slash(
 }
 
 #[cfg(feature = "app_api")]
+fn enforce_sorafs_repair_worker_auth(
+    app: &SharedAppState,
+    ticket_id: &RepairTicketId,
+    manifest_digest_hex: &str,
+    worker_id: &str,
+    idempotency_key: &str,
+    action: RepairWorkerActionV1,
+    signature: &SignatureOf<RepairWorkerSignaturePayloadV1>,
+) -> Result<(), Error> {
+    let record = app
+        .sorafs_node
+        .repair_task_record(ticket_id)
+        .ok_or_else(|| conversion_error(format!("unknown repair ticket `{ticket_id}`")))?;
+    let manifest_digest = {
+        let trimmed = manifest_digest_hex.trim_start_matches("0x");
+        let bytes = hex::decode(trimmed).map_err(|err| {
+            conversion_error(format!(
+                "invalid manifest_digest_hex (expected 32 bytes): {err}"
+            ))
+        })?;
+        let len = bytes.len();
+        let digest: [u8; 32] = bytes.try_into().map_err(|_| {
+            conversion_error(format!("manifest_digest_hex must be 32 bytes (got {len})"))
+        })?;
+        digest
+    };
+    if manifest_digest != record.manifest_digest {
+        return Err(conversion_error(
+            "manifest_digest_hex does not match ticket record".to_string(),
+        ));
+    }
+    let payload = RepairWorkerSignaturePayloadV1 {
+        version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
+        ticket_id: ticket_id.clone(),
+        manifest_digest,
+        provider_id: record.provider_id,
+        worker_id: worker_id.to_string(),
+        idempotency_key: idempotency_key.to_string(),
+        action,
+    };
+    payload.validate().map_err(|err| {
+        conversion_error(format!("invalid repair worker signature payload: {err}"))
+    })?;
+
+    let account_id: AccountId = worker_id
+        .parse()
+        .map_err(|err| conversion_error(format!("invalid worker_id `{worker_id}`: {err}")))?;
+    let permission = Permission::from(CanOperateSorafsRepair {
+        provider_id: ProviderId::new(record.provider_id),
+    });
+    let view = app.state.view();
+    let permitted = view
+        .world()
+        .account_permissions()
+        .get(&account_id)
+        .is_some_and(|perms| perms.contains(&permission));
+    if !permitted {
+        return Err(Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted(
+                "repair worker lacks permission".to_string(),
+            ),
+        ));
+    }
+    let Some(signatory) = account_id.try_signatory() else {
+        return Err(Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted(
+                "repair worker must use a signatory account id".to_string(),
+            ),
+        ));
+    };
+    signature.verify(signatory, &payload).map_err(|err| {
+        Error::Query(iroha_data_model::ValidationFail::NotPermitted(format!(
+            "repair worker signature invalid: {err}",
+        )))
+    })?;
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_sorafs_repair_claim(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    NoritoJson(req): NoritoJson<crate::routing::RepairWorkerClaimDto>,
+) -> Result<AxResponse, Error> {
+    let action = RepairWorkerActionV1::Claim {
+        claimed_at_unix: req.claimed_at_unix,
+    };
+    if let Err(err) = enforce_sorafs_repair_worker_auth(
+        &app,
+        &req.ticket_id,
+        &req.manifest_digest_hex,
+        &req.worker_id,
+        &req.idempotency_key,
+        action,
+        &req.signature,
+    ) {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
+        return Err(err);
+    }
+    let key = rate_limit_key(
+        &headers,
+        None,
+        "v1/sorafs/audit/repair/claim",
+        app.api_token_enforced(),
+    );
+    if !app.deploy_rate_limiter.allow(&key).await {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_throttle("sorafs"));
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    match crate::routing::handle_post_sorafs_repair_claim(
+        app.telemetry.clone(),
+        app.sorafs_node.clone(),
+        NoritoJson(req),
+    )
+    .await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_sorafs_repair_heartbeat(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    NoritoJson(req): NoritoJson<crate::routing::RepairWorkerHeartbeatDto>,
+) -> Result<AxResponse, Error> {
+    let action = RepairWorkerActionV1::Heartbeat {
+        heartbeat_at_unix: req.heartbeat_at_unix,
+    };
+    if let Err(err) = enforce_sorafs_repair_worker_auth(
+        &app,
+        &req.ticket_id,
+        &req.manifest_digest_hex,
+        &req.worker_id,
+        &req.idempotency_key,
+        action,
+        &req.signature,
+    ) {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
+        return Err(err);
+    }
+    let key = rate_limit_key(
+        &headers,
+        None,
+        "v1/sorafs/audit/repair/heartbeat",
+        app.api_token_enforced(),
+    );
+    if !app.deploy_rate_limiter.allow(&key).await {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_throttle("sorafs"));
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    match crate::routing::handle_post_sorafs_repair_heartbeat(
+        app.telemetry.clone(),
+        app.sorafs_node.clone(),
+        NoritoJson(req),
+    )
+    .await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_sorafs_repair_complete(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    NoritoJson(req): NoritoJson<crate::routing::RepairWorkerCompleteDto>,
+) -> Result<AxResponse, Error> {
+    let action = RepairWorkerActionV1::Complete {
+        completed_at_unix: req.completed_at_unix,
+        resolution_notes: req.resolution_notes.clone(),
+    };
+    if let Err(err) = enforce_sorafs_repair_worker_auth(
+        &app,
+        &req.ticket_id,
+        &req.manifest_digest_hex,
+        &req.worker_id,
+        &req.idempotency_key,
+        action,
+        &req.signature,
+    ) {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
+        return Err(err);
+    }
+    let key = rate_limit_key(
+        &headers,
+        None,
+        "v1/sorafs/audit/repair/complete",
+        app.api_token_enforced(),
+    );
+    if !app.deploy_rate_limiter.allow(&key).await {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_throttle("sorafs"));
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    match crate::routing::handle_post_sorafs_repair_complete(
+        app.telemetry.clone(),
+        app.sorafs_node.clone(),
+        NoritoJson(req),
+    )
+    .await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_sorafs_repair_fail(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    NoritoJson(req): NoritoJson<crate::routing::RepairWorkerFailDto>,
+) -> Result<AxResponse, Error> {
+    let action = RepairWorkerActionV1::Fail {
+        failed_at_unix: req.failed_at_unix,
+        reason: req.reason.clone(),
+    };
+    if let Err(err) = enforce_sorafs_repair_worker_auth(
+        &app,
+        &req.ticket_id,
+        &req.manifest_digest_hex,
+        &req.worker_id,
+        &req.idempotency_key,
+        action,
+        &req.signature,
+    ) {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
+        return Err(err);
+    }
+    let key = rate_limit_key(
+        &headers,
+        None,
+        "v1/sorafs/audit/repair/fail",
+        app.api_token_enforced(),
+    );
+    if !app.deploy_rate_limiter.allow(&key).await {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_throttle("sorafs"));
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    match crate::routing::handle_post_sorafs_repair_fail(
+        app.telemetry.clone(),
+        app.sorafs_node.clone(),
+        NoritoJson(req),
+    )
+    .await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_get_sorafs_repair_status(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::Path(manifest_hex): axum::extract::Path<String>,
+    AxQuery(query): AxQuery<crate::routing::RepairStatusQueryDto>,
 ) -> Result<AxResponse, Error> {
     let key = rate_limit_key(
         &headers,
@@ -9226,6 +9490,41 @@ async fn handler_get_sorafs_repair_status(
     match crate::routing::handle_get_sorafs_repair_status(
         app.sorafs_node.clone(),
         axum::extract::Path(manifest_hex),
+        AxQuery(query),
+    )
+    .await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_get_sorafs_repair_status_all(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    AxQuery(query): AxQuery<crate::routing::RepairStatusQueryDto>,
+) -> Result<AxResponse, Error> {
+    let key = rate_limit_key(
+        &headers,
+        None,
+        "v1/sorafs/audit/repair/status",
+        app.api_token_enforced(),
+    );
+    if !app.deploy_rate_limiter.allow(&key).await {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_throttle("sorafs"));
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    match crate::routing::handle_get_sorafs_repair_status_all(
+        app.sorafs_node.clone(),
+        AxQuery(query),
     )
     .await
     {
@@ -9279,7 +9578,6 @@ async fn handler_iso_pacs008(
         &parsed,
         Arc::as_ref(&app.chain_id),
         &app.telemetry,
-        app.strict_addresses,
     ) {
         Ok(result) => result,
         Err(err) => {
@@ -9432,7 +9730,6 @@ async fn handler_iso_pacs009(
         &parsed,
         Arc::as_ref(&app.chain_id),
         &app.telemetry,
-        app.strict_addresses,
     ) {
         Ok(result) => result,
         Err(err) => {
@@ -11656,7 +11953,6 @@ pub struct Torii {
     fee_policy: FeePolicy,
     norito_rpc: iroha_config::parameters::actual::NoritoRpcTransport,
     require_api_token: bool,
-    strict_addresses: bool,
     api_tokens_set: std::sync::Arc<std::collections::HashSet<String>>,
     operator_auth: Arc<operator_auth::OperatorAuth>,
     soranet_privacy_ingest: iroha_config::parameters::actual::SoranetPrivacyIngest,
@@ -12292,6 +12588,26 @@ impl Torii {
                     post(handler_post_sorafs_repair_slash),
                 )
                 .route(
+                    "/v1/sorafs/audit/repair/claim",
+                    post(handler_post_sorafs_repair_claim),
+                )
+                .route(
+                    "/v1/sorafs/audit/repair/heartbeat",
+                    post(handler_post_sorafs_repair_heartbeat),
+                )
+                .route(
+                    "/v1/sorafs/audit/repair/complete",
+                    post(handler_post_sorafs_repair_complete),
+                )
+                .route(
+                    "/v1/sorafs/audit/repair/fail",
+                    post(handler_post_sorafs_repair_fail),
+                )
+                .route(
+                    "/v1/sorafs/audit/repair/status",
+                    get(handler_get_sorafs_repair_status_all),
+                )
+                .route(
                     "/v1/sorafs/audit/repair/status/{manifest_hex}",
                     get(handler_get_sorafs_repair_status),
                 );
@@ -12467,6 +12783,7 @@ impl Torii {
                 // Accounts listing
                 .route("/v1/accounts", get(handler_accounts_list))
                 .route("/v1/accounts/query", post(handler_accounts_query))
+                .route("/v1/accounts/resolve", post(handler_accounts_resolve))
                 .route("/v1/accounts/onboard", post(handler_accounts_onboard))
                 .route(
                     "/v1/accounts/{uaid}/portfolio",
@@ -13195,6 +13512,7 @@ impl Torii {
             config.app_api.max_fetch_size.get().into(),
             config.app_api.rate_limit_cost_per_row.get().into(),
         ));
+        install_account_resolvers(&state);
         crate::data_dir::set_base_dir(config.data_dir.clone());
         #[cfg(feature = "push")]
         let (push_bridge, push_rate_limiter) = {
@@ -13438,11 +13756,6 @@ impl Torii {
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
         let peer_geo = telemetry::peers::GeoLookupConfig::from(&config.peer_geo);
 
-        #[cfg(feature = "telemetry")]
-        telemetry.with_metrics(|metrics| {
-            metrics.set_torii_address_strict_mode(config.strict_addresses);
-        });
-
         #[cfg(all(feature = "telemetry", feature = "app_api"))]
         telemetry.with_metrics(|tel| {
             let metadata = sorafs_gateway_fixture_telemetry();
@@ -13461,9 +13774,11 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let sorafs_cache = build_sorafs_cache(&config, sorafs_admission.clone());
         #[cfg(feature = "app_api")]
-        let sorafs_node = sorafs_node::NodeHandle::new(sorafs_node::config::StorageConfig::from(
-            &config.sorafs_storage,
-        ));
+        let sorafs_node = sorafs_node::NodeHandle::new_with_policies(
+            sorafs_node::config::StorageConfig::from(&config.sorafs_storage),
+            sorafs_node::config::RepairConfig::from(&config.sorafs_repair),
+            sorafs_node::config::GcConfig::from(&config.sorafs_gc),
+        );
         #[cfg(feature = "app_api")]
         let sorafs_limits = Arc::new(sorafs::SorafsQuotaEnforcer::from_config(
             &build_sorafs_quota_config(&config.sorafs_quota),
@@ -13560,7 +13875,6 @@ impl Torii {
             fee_policy,
             norito_rpc: config.transport.norito_rpc.clone(),
             require_api_token: config.require_api_token,
-            strict_addresses: config.strict_addresses,
             api_tokens_set: api_tokens_set.clone(),
             operator_auth,
             soranet_privacy_ingest: config.soranet_privacy_ingest.clone(),
@@ -13773,7 +14087,6 @@ impl Torii {
             soranet_privacy_tokens: self.soranet_privacy_tokens.clone(),
             soranet_privacy_allow_nets: self.soranet_privacy_allow_nets.clone(),
             soranet_privacy_rate_limiter: self.soranet_privacy_rate_limiter.clone(),
-            strict_addresses: self.strict_addresses,
             allow_nets: self.allow_nets.clone(),
             preauth_gate: self.preauth_gate.clone(),
             queue: self.queue.clone(),
@@ -15280,7 +15593,7 @@ pub(crate) mod tests_runtime_handlers {
         collections::HashSet,
         net::SocketAddr,
         num::{NonZeroU32, NonZeroU64, NonZeroUsize},
-        sync::Arc,
+        sync::{Arc, LazyLock, Mutex, MutexGuard},
         time::{Duration, Instant},
     };
 
@@ -15310,16 +15623,18 @@ pub(crate) mod tests_runtime_handlers {
         },
         tx::AcceptedTransaction,
     };
-    use iroha_crypto::{Algorithm, KeyPair, Signature, SignatureOf};
+    use iroha_crypto::{Algorithm, Hash, KeyPair, Signature, SignatureOf};
     use iroha_data_model::{
         ChainId, ValidationFail,
-        account::AccountId,
+        account::{Account, AccountId, AccountLabel, OpaqueAccountId},
         block::{BlockSignature, SignedBlock},
         consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
+        domain::{Domain, DomainId},
         events::pipeline::{BlockEvent, BlockStatus, TransactionEvent, TransactionStatus},
         isi::Log,
         level::Level,
-        nexus::{AxtPolicySnapshot, AxtRejectReason, DataSpaceId, LaneId},
+        name::Name,
+        nexus::{AxtPolicySnapshot, AxtRejectReason, DataSpaceId, LaneId, UniversalAccountId},
         peer::{Peer, PeerId},
         soranet::privacy_metrics::{
             SoranetPrivacyEventHandshakeSuccessV1, SoranetPrivacyEventKindV1,
@@ -15350,14 +15665,39 @@ pub(crate) mod tests_runtime_handlers {
         })
     }
 
+    #[cfg(feature = "app_api")]
+    pub(crate) struct AccountResolverGuard {
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    #[cfg(feature = "app_api")]
+    impl Drop for AccountResolverGuard {
+        fn drop(&mut self) {
+            iroha_data_model::account::clear_account_alias_resolver();
+            iroha_data_model::account::clear_account_domain_selector_resolver();
+            iroha_data_model::account::clear_account_opaque_resolver();
+            iroha_data_model::account::clear_account_uaid_resolver();
+        }
+    }
+
+    #[cfg(feature = "app_api")]
+    pub(crate) fn guard_account_resolvers(app: &SharedAppState) -> AccountResolverGuard {
+        static RESOLVER_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+        let lock = RESOLVER_GUARD
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        install_account_resolvers(&app.state);
+        AccountResolverGuard { _lock: lock }
+    }
+
     pub fn mk_app_state_for_tests() -> SharedAppState {
-        mk_app_state_for_tests_with_options(None, None, None, None)
+        mk_app_state_for_tests_with_world_and_options(World::default(), None, None, None, None)
     }
 
     pub fn mk_app_state_for_tests_with_iso_bridge(
         iso: Option<iroha_config::parameters::actual::IsoBridge>,
     ) -> SharedAppState {
-        mk_app_state_for_tests_with_options(iso, None, None, None)
+        mk_app_state_for_tests_with_world_and_options(World::default(), iso, None, None, None)
     }
 
     pub fn mk_app_state_for_tests_with_options(
@@ -15366,10 +15706,29 @@ pub(crate) mod tests_runtime_handlers {
         norito_rpc: Option<iroha_config::parameters::actual::NoritoRpcTransport>,
         push: Option<iroha_config::parameters::actual::Push>,
     ) -> SharedAppState {
+        mk_app_state_for_tests_with_world_and_options(
+            World::default(),
+            iso,
+            deploy_limit,
+            norito_rpc,
+            push,
+        )
+    }
+
+    pub fn mk_app_state_for_tests_with_world(world: World) -> SharedAppState {
+        mk_app_state_for_tests_with_world_and_options(world, None, None, None, None)
+    }
+
+    fn mk_app_state_for_tests_with_world_and_options(
+        world: World,
+        iso: Option<iroha_config::parameters::actual::IsoBridge>,
+        deploy_limit: Option<(u32, u32)>,
+        norito_rpc: Option<iroha_config::parameters::actual::NoritoRpcTransport>,
+        push: Option<iroha_config::parameters::actual::Push>,
+    ) -> SharedAppState {
         // Minimal core state
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let world = iroha_core::state::World::default();
         let state_inner =
             iroha_core::state::State::new_for_testing(world, kura.clone(), query_handle.clone());
         {
@@ -15533,7 +15892,6 @@ pub(crate) mod tests_runtime_handlers {
             soranet_privacy_tokens: Arc::new(soranet_privacy_tokens),
             soranet_privacy_allow_nets: Arc::new(soranet_privacy_allow_nets),
             soranet_privacy_rate_limiter,
-            strict_addresses: true,
             allow_nets: Arc::new(vec![]),
             preauth_gate: Arc::new(limits::PreAuthGate::disabled()),
             queue,
@@ -18506,6 +18864,7 @@ mod tests {
     use std::{
         collections::HashSet,
         num::{NonZeroU64, NonZeroUsize},
+        str::FromStr,
         sync::Arc,
     };
 
@@ -18516,17 +18875,29 @@ mod tests {
     use futures::executor;
     use http_body_util::BodyExt as _;
     use iroha_config::parameters::actual;
-    use iroha_crypto::{KeyPair, SignatureOf};
+    use iroha_crypto::{Hash, KeyPair, SignatureOf};
     use iroha_data_model::{
-        ChainId, ValidationFail,
-        account::AccountId,
+        ChainId, Registrable, ValidationFail,
+        account::rekey::AccountLabel,
+        account::{Account, AccountId, OpaqueAccountId},
         block::{BlockHeader, BlockSignature, SignedBlock},
-        domain::DomainId,
-        nexus::{AxtPolicySnapshot, AxtRejectContext, AxtRejectReason, DataSpaceId, LaneId},
+        domain::{Domain, DomainId},
+        name::Name,
+        nexus::{
+            AxtPolicySnapshot, AxtRejectContext, AxtRejectReason, DataSpaceId, LaneId,
+            UniversalAccountId,
+        },
+        permission::Permission,
         proof::{ProofId, ProofRecord, ProofStatus},
         transaction::signed::{TransactionBuilder, TransactionResultInner},
     };
+    use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
     use nonzero_ext::nonzero;
+    use sorafs_manifest::repair::{
+        REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, REPAIR_WORKER_SIGNATURE_VERSION_V1,
+        RepairCauseV1, RepairEvidenceV1, RepairReportV1, RepairTicketId, RepairWorkerActionV1,
+        RepairWorkerSignaturePayloadV1,
+    };
 
     use super::*;
     #[cfg(feature = "telemetry")]
@@ -18534,8 +18905,9 @@ mod tests {
     use crate::{
         limits,
         tests_runtime_handlers::{
-            mk_app_state_for_tests, mk_app_state_for_tests_with_iso_bridge,
-            mk_app_state_for_tests_with_options, negotiated,
+            guard_account_resolvers, mk_app_state_for_tests,
+            mk_app_state_for_tests_with_iso_bridge, mk_app_state_for_tests_with_options,
+            mk_app_state_for_tests_with_world, negotiated,
         },
     };
 
@@ -18640,6 +19012,66 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "app_api")]
+    fn repair_report(
+        ticket: &str,
+        manifest_digest: [u8; 32],
+        provider_id: [u8; 32],
+        submitted_at_unix: u64,
+    ) -> RepairReportV1 {
+        RepairReportV1 {
+            version: REPAIR_REPORT_VERSION_V1,
+            ticket_id: RepairTicketId(ticket.to_string()),
+            auditor_account: "auditor#sora".into(),
+            submitted_at_unix,
+            evidence: RepairEvidenceV1 {
+                version: REPAIR_EVIDENCE_VERSION_V1,
+                manifest_digest,
+                provider_id,
+                por_history_id: None,
+                cause: RepairCauseV1::Manual {
+                    reason: "test".into(),
+                },
+                evidence_json: None,
+                notes: None,
+            },
+            notes: None,
+        }
+    }
+
+    #[cfg(feature = "app_api")]
+    fn grant_repair_worker_permission(
+        app: &SharedAppState,
+        account_id: &AccountId,
+        provider_id: [u8; 32],
+    ) {
+        let height = next_block_height(app);
+        let header = BlockHeader::new(
+            NonZeroU64::new(height).expect("height>0"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = app.state.block(header);
+        let mut stx = block.transaction();
+        stx.world_mut_for_testing().add_account_permission(
+            account_id,
+            Permission::from(CanOperateSorafsRepair {
+                provider_id: ProviderId::new(provider_id),
+            }),
+        );
+        stx.apply();
+        block.transactions.insert_block(
+            HashSet::new(),
+            NonZeroUsize::new(height as usize).expect("block count should be non-zero"),
+        );
+        block
+            .commit()
+            .expect("commit should persist repair worker permission");
+    }
+
     #[tokio::test]
     async fn alias_resolve_returns_account_from_iso_bridge() {
         let account_id: AccountId = format!("{}@wonderland", KeyPair::random().public_key())
@@ -18670,6 +19102,147 @@ mod tests {
         assert_eq!(dto.account_id, account_id.to_string());
         assert_eq!(dto.source.as_deref(), Some("alias_service"));
         assert_eq!(dto.index, Some(0));
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn sorafs_repair_worker_auth_accepts_signed_worker() {
+        let app = mk_app_state_for_tests();
+        let report = repair_report("REP-900", [0x11; 32], [0x22; 32], 1_701_000_000);
+        app.sorafs_node
+            .enqueue_repair_report(&report)
+            .expect("enqueue report");
+
+        let worker_key = KeyPair::random();
+        let worker_id: AccountId = format!("{}@sora", worker_key.public_key())
+            .parse()
+            .expect("valid worker id");
+        grant_repair_worker_permission(&app, &worker_id, report.evidence.provider_id);
+
+        let claimed_at = report.submitted_at_unix + 10;
+        let idempotency_key = "claim-900";
+        let payload = RepairWorkerSignaturePayloadV1 {
+            version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
+            ticket_id: report.ticket_id.clone(),
+            manifest_digest: report.evidence.manifest_digest,
+            provider_id: report.evidence.provider_id,
+            worker_id: worker_id.to_string(),
+            idempotency_key: idempotency_key.to_string(),
+            action: RepairWorkerActionV1::Claim {
+                claimed_at_unix: claimed_at,
+            },
+        };
+        let signature = SignatureOf::new(worker_key.private_key(), &payload);
+
+        let auth = enforce_sorafs_repair_worker_auth(
+            &app,
+            &report.ticket_id,
+            &hex::encode(report.evidence.manifest_digest),
+            &worker_id.to_string(),
+            idempotency_key,
+            RepairWorkerActionV1::Claim {
+                claimed_at_unix: claimed_at,
+            },
+            &signature,
+        );
+        assert!(auth.is_ok(), "signed worker should be accepted: {auth:?}");
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn sorafs_repair_worker_auth_rejects_missing_permission() {
+        let app = mk_app_state_for_tests();
+        let report = repair_report("REP-901", [0x33; 32], [0x44; 32], 1_701_000_100);
+        app.sorafs_node
+            .enqueue_repair_report(&report)
+            .expect("enqueue report");
+
+        let worker_key = KeyPair::random();
+        let worker_id: AccountId = format!("{}@sora", worker_key.public_key())
+            .parse()
+            .expect("valid worker id");
+
+        let failed_at = report.submitted_at_unix + 20;
+        let idempotency_key = "fail-901";
+        let payload = RepairWorkerSignaturePayloadV1 {
+            version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
+            ticket_id: report.ticket_id.clone(),
+            manifest_digest: report.evidence.manifest_digest,
+            provider_id: report.evidence.provider_id,
+            worker_id: worker_id.to_string(),
+            idempotency_key: idempotency_key.to_string(),
+            action: RepairWorkerActionV1::Fail {
+                failed_at_unix: failed_at,
+                reason: "no-permission".into(),
+            },
+        };
+        let signature = SignatureOf::new(worker_key.private_key(), &payload);
+
+        let auth = enforce_sorafs_repair_worker_auth(
+            &app,
+            &report.ticket_id,
+            &hex::encode(report.evidence.manifest_digest),
+            &worker_id.to_string(),
+            idempotency_key,
+            RepairWorkerActionV1::Fail {
+                failed_at_unix: failed_at,
+                reason: "no-permission".into(),
+            },
+            &signature,
+        );
+        assert!(matches!(
+            auth,
+            Err(Error::Query(ValidationFail::NotPermitted(_)))
+        ));
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn sorafs_repair_worker_auth_rejects_manifest_digest_mismatch() {
+        let app = mk_app_state_for_tests();
+        let report = repair_report("REP-902", [0x55; 32], [0x66; 32], 1_701_000_200);
+        app.sorafs_node
+            .enqueue_repair_report(&report)
+            .expect("enqueue report");
+
+        let worker_key = KeyPair::random();
+        let worker_id: AccountId = format!("{}@sora", worker_key.public_key())
+            .parse()
+            .expect("valid worker id");
+        grant_repair_worker_permission(&app, &worker_id, report.evidence.provider_id);
+
+        let claimed_at = report.submitted_at_unix + 10;
+        let idempotency_key = "claim-902";
+        let payload = RepairWorkerSignaturePayloadV1 {
+            version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
+            ticket_id: report.ticket_id.clone(),
+            manifest_digest: report.evidence.manifest_digest,
+            provider_id: report.evidence.provider_id,
+            worker_id: worker_id.to_string(),
+            idempotency_key: idempotency_key.to_string(),
+            action: RepairWorkerActionV1::Claim {
+                claimed_at_unix: claimed_at,
+            },
+        };
+        let signature = SignatureOf::new(worker_key.private_key(), &payload);
+
+        let auth = enforce_sorafs_repair_worker_auth(
+            &app,
+            &report.ticket_id,
+            &hex::encode([0x77u8; 32]),
+            &worker_id.to_string(),
+            idempotency_key,
+            RepairWorkerActionV1::Claim {
+                claimed_at_unix: claimed_at,
+            },
+            &signature,
+        );
+        assert!(matches!(
+            auth,
+            Err(Error::Query(ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(_)
+            )))
+        ));
     }
 
     #[tokio::test]
@@ -18707,6 +19280,63 @@ mod tests {
         .into_response();
 
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn accounts_resolve_accepts_alias_uaid_and_opaque() {
+        let domain: DomainId = "wonderland".parse().expect("domain");
+        let key_pair = KeyPair::random();
+        let account_id = AccountId::new(domain.clone(), key_pair.public_key().clone());
+        let label = AccountLabel::new(domain.clone(), Name::from_str("alice").expect("label"));
+        let uaid = UniversalAccountId::from_hash(
+            Hash::from_str("00112233445566778899aabbccddeeff00112233445566778899aabbccddeef1")
+                .expect("uaid hash"),
+        );
+        let opaque = OpaqueAccountId::from_hash(
+            Hash::from_str("ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100")
+                .expect("opaque hash"),
+        );
+
+        let account = Account::new(account_id.clone())
+            .with_label(Some(label))
+            .with_uaid(Some(uaid))
+            .with_opaque_ids(vec![opaque])
+            .build(&account_id);
+        let domain_entry = Domain::new(domain.clone()).build(&account_id);
+        let world = World::with_assets([domain_entry], [account], [], [], []);
+        let app = mk_app_state_for_tests_with_world(world);
+        let _guard = guard_account_resolvers(&app);
+
+        let raw_public_literal = format!("{}@{}", key_pair.public_key(), domain);
+        let cases = [
+            (format!("alice@{domain}"), "alias", None),
+            (raw_public_literal, "public_key", None),
+            (uaid.to_string(), "uaid", None),
+            (opaque.to_string(), "opaque", None),
+            (account_id.to_string(), "encoded", Some("ih58")),
+        ];
+
+        for (literal, source, format) in cases {
+            let response = routing::handle_v1_accounts_resolve(
+                NoritoJson(routing::AccountResolveRequestDto { literal }),
+                app.telemetry.clone(),
+            )
+            .await
+            .expect("handler should succeed")
+            .into_response();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = http_body_util::BodyExt::collect(response.into_body())
+                .await
+                .unwrap()
+                .to_bytes();
+            let dto: routing::AccountResolveResponseDto =
+                norito::json::from_slice(&body).expect("json decode");
+            assert_eq!(dto.account_id, account_id.to_string());
+            assert_eq!(dto.domain, domain.to_string());
+            assert_eq!(dto.source, source);
+            assert_eq!(dto.format.as_deref(), format);
+        }
     }
 
     #[tokio::test]

@@ -47,7 +47,6 @@ detecciones Local-8 y cero colisiones Local-12 por >=30 dias.
 
 1. Ejecuta el script en un job dedicado y sube sus salidas.
 2. Bloquea merges cuando `audit.json` reporte selectores Local (`domain.kind = local12`).
-3. Cuando los dashboards muestren cero uso legitimo, deja `torii.strict_addresses`
    en su valor por defecto `true` (solo override a `false` en clusters dev/test al
    diagnosticar regresiones) y agrega
    `iroha address normalize --fail-on-warning --only-local` a CI para que intentos de

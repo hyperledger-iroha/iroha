@@ -9689,11 +9689,11 @@ mod tests {
     fn pointer_abi_transfer_asset_enqueues_isi() {
         // Prepare Norito-encoded inputs in INPUT region
         let from: AccountId =
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonder"
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
                 .parse()
                 .unwrap();
         let to: AccountId =
-            "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonder"
+            "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"
                 .parse()
                 .unwrap();
         let asset_def: AssetDefinitionId = "coin#wonder".parse().unwrap();

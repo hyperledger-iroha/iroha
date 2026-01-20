@@ -815,7 +815,7 @@ impl Execute for ClaimPublicLaneRewards {
             .parse()
             .map_err(|_| {
                 Error::InvariantViolation(
-                    "invalid nexus.fees.fee_sink_account_id; expected `alias@domain`".into(),
+                    "invalid nexus.fees.fee_sink_account_id; expected account identifier".into(),
                 )
             })?;
         let fee_asset: AssetDefinitionId = state_transaction
@@ -1138,7 +1138,7 @@ fn validate_reward_sink(
         .parse()
         .map_err(|_| {
             Error::InvariantViolation(
-                "invalid nexus.fees.fee_sink_account_id; expected `alias@domain`".into(),
+                "invalid nexus.fees.fee_sink_account_id; expected account identifier".into(),
             )
         })?;
     let fee_asset: AssetDefinitionId =
@@ -1529,7 +1529,7 @@ fn stake_context(
     })?;
     let escrow_account: AccountId = staking_cfg.stake_escrow_account_id.parse().map_err(|_| {
         Error::InvariantViolation(
-            "invalid nexus.staking.stake_escrow_account_id; expected `alias@domain`".into(),
+            "invalid nexus.staking.stake_escrow_account_id; expected account identifier".into(),
         )
     })?;
     let slash_sink_account: AccountId = if let Some(account) = slash_sink_override {
@@ -1537,7 +1537,7 @@ fn stake_context(
     } else {
         staking_cfg.slash_sink_account_id.parse().map_err(|_| {
             Error::InvariantViolation(
-                "invalid nexus.staking.slash_sink_account_id; expected `alias@domain`".into(),
+                "invalid nexus.staking.slash_sink_account_id; expected account identifier".into(),
             )
         })?
     };

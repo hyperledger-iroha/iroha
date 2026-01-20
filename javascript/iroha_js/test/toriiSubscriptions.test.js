@@ -1,10 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ToriiClient } from "../src/toriiClient.js";
+import { AccountAddress } from "../src/address.js";
 
 const BASE_URL = "https://localhost:8080";
-const SAMPLE_ACCOUNT_ID =
-  "ED0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245@wonderland";
+const SAMPLE_ACCOUNT_ID = AccountAddress.fromAccount({
+  domain: "wonderland",
+  publicKey: Buffer.from(
+    "EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245",
+    "hex",
+  ),
+}).toIH58();
 
 function createResponse({ status, jsonData = {}, arrayData, textBody, headers }) {
   const resolvedHeaders = headers ?? { "content-type": "application/json" };

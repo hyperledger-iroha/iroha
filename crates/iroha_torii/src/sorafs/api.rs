@@ -8051,7 +8051,7 @@ mod advert_tests {
 
     fn test_account() -> AccountId {
         AccountId::from_str(
-            "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C@sora",
+            "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C",
         )
         .expect("parse account id")
     }

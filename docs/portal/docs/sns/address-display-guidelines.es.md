@@ -241,7 +241,6 @@ cuenten con entradas de registro correspondientes. Considera la salida del CLI
 como el aviso para operadores de este congelamiento: la misma cadena de
 advertencia se usa en tooltips de SDK y automatizacion para mantener paridad con
 los criterios de salida del roadmap. Torii ahora usa por defecto
-`torii.strict_addresses=true`; solo sobrescribelo a `false` en clusters dev/test
 cuando diagnostiques regresiones. Sigue reflejando
 `torii_address_domain_total{domain_kind}` en Grafana
 (`dashboards/grafana/address_ingest.json`) para que el paquete de evidencia
@@ -252,7 +251,6 @@ ventana requerida de 30 dias antes de que mainnet deshabilite los selectores
 - `AddressLocal8Resurgence` pagina cuando un contexto reporta un incremento
   Local-8 fresco. Deten los rollouts de modo estricto, localiza el SDK responsable
   en el dashboard y, si es necesario, configura temporalmente
-  `torii.strict_addresses=false` hasta que la senal vuelva a cero; luego restaura
   el default (`true`).
 - `AddressLocal12Collision` se dispara cuando dos etiquetas Local-12 hacen hash
   al mismo digest. Pausa las promociones de manifest, ejecuta el toolkit

@@ -19,7 +19,7 @@
         {
           "Register": {
             "Account": {
-              "id": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
+              "id": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
               "label": null,
               "metadata": {
                 "key": "value"
@@ -64,7 +64,7 @@
         {
           "Register": {
             "Account": {
-              "id": "34mSYmj74pAZ6nNwwEsmGKGrHErCPMWtqeBwWhHkT9WcsndXbe2FjCNWFYCn5FiW5fdUcsbQD@garden_of_live_flowers",
+              "id": "34mSYmj74pAZ6nNwwEsmGKGrHErCPMWtqeBwWhHkT9WcsndXbe2FjCNWFYCn5FiW5fdUcsbQD",
               "label": null,
               "metadata": {
                 
@@ -184,7 +184,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "rose##34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
+              "destination": "rose##34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
               "object": "13"
             }
           }
@@ -192,7 +192,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "cabbage#garden_of_live_flowers#34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
+              "destination": "cabbage#garden_of_live_flowers#34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
               "object": "44"
             }
           }
@@ -200,16 +200,16 @@
         {
           "Transfer": {
             "AssetDefinition": {
-              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
+              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
               "object": "rose#wonderland",
-              "source": "34mSYmtx2t7jKZDQcTrSU7yorGequhMUV842SfcxYBZgXASYDFrxxbA7Jn8p4Bkx57CsYtcbB@genesis"
+              "source": "34mSYmtx2t7jKZDQcTrSU7yorGequhMUV842SfcxYBZgXASYDFrxxbA7Jn8p4Bkx57CsYtcbB"
             }
           }
         },
         {
           "Grant": {
             "Permission": {
-              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
+              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
               "object": {
                 "name": "CanSetParameters"
               }
@@ -219,7 +219,7 @@
         {
           "Grant": {
             "Permission": {
-              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
+              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
               "object": {
                 "name": "CanRegisterDomain"
               }
@@ -229,7 +229,7 @@
         {
           "Grant": {
             "Permission": {
-              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
+              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
               "object": {
                 "name": "CanRegisterAssetDefinition"
               }
@@ -239,7 +239,7 @@
         {
           "Grant": {
             "Permission": {
-              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
+              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
               "object": {
                 "name": "CanRegisterAccount"
               }

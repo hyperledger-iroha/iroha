@@ -37,7 +37,7 @@ possess the manifest (including hashes) and only need Torii to queue it.【crate
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `authority` | `AccountId` | IH58 `address@domain` string produced by `AccountId::to_string()` (no aliases).【crates/iroha_data_model/src/account.rs:528】 |
+| `authority` | `AccountId` | Canonical IH58 account id (no `@domain`). Torii accepts the full account-literal set (`alias@domain`, `public_key@domain`, `uaid:…`, `opaque:…`, IH58/compressed/0x) and canonicalizes to IH58; use `/v1/accounts/resolve` to preflight. |
 | `private_key` | `ExposedPrivateKey` | Bare multihash hex as emitted by `ExposedPrivateKey::to_string()`; no `ed25519:` prefix is included.【crates/iroha_crypto/src/lib.rs:1994】 |
 | `manifest` | `ContractManifest` | Optional fields; if `code_hash`/`abi_hash` are present they must match node-side validation.【crates/iroha_data_model/src/smart_contract.rs:87】 |
 
@@ -45,7 +45,7 @@ Sample JSON request:
 
 ```json
 {
-  "authority": "3xsmkps1KPBn9dtpE5qHRhHEZCpiAe8d9j6H9A42TV6kc1TpaqdwnSksKgQrsSEHznqvWKBMc1os69BELzkLjsR7EV2gjV14d9JMzo97KEmYoKtxCrFeKFAcy7ffQdboV1uRt@wonderland",
+  "authority": "3xsmkps1KPBn9dtpE5qHRhHEZCpiAe8d9j6H9A42TV6kc1TpaqdwnSksKgQrsSEHznqvWKBMc1os69BELzkLjsR7EV2gjV14d9JMzo97KEmYoKtxCrFeKFAcy7ffQdboV1uRt",
   "private_key": "ED010820F1D2C3B4A596877899AABBCCDDEEFF00112233445566778899AABBCC",
   "manifest": {
     "code_hash": "f4d0bc7a2fa8c98bf5f5d6a638f3b939e1436a8a567164d72d41308c0ea2db9f",
@@ -78,7 +78,7 @@ instructions so the bytecode is stored on-chain.【crates/iroha_torii/src/routin
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `authority` | `AccountId` | Same canonical form as above.【crates/iroha_data_model/src/account.rs:528】 |
+| `authority` | `AccountId` | Same canonical form as above. |
 | `private_key` | `ExposedPrivateKey` | Bare multihash hex string.【crates/iroha_crypto/src/lib.rs:1994】 |
 | `code_b64` | `String` | Base64 representation of the compiled IVM program (`.to`). |
 
@@ -93,7 +93,7 @@ Sample request and response:
 
 ```json
 {
-  "authority": "0x02000001200000000000000000000000000000000000000000000000000000000000000000@wonderland",
+  "authority": "0x02000001200000000000000000000000000000000000000000000000000000000000000000",
   "private_key": "ED010820F1D2C3B4A596877899AABBCCDDEEFF00112233445566778899AABBCC",
   "code_b64": "AAECAwQFBgcICQoLDA0ODw=="
 }
@@ -122,7 +122,7 @@ the bytecode to be present on-chain (e.g., via the deploy endpoint above).【cra
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `authority` | `AccountId` | IH58 `address@domain` string produced by `AccountId::to_string()`.【crates/iroha_data_model/src/account.rs:528】 |
+| `authority` | `AccountId` | Canonical IH58 account id (no `@domain`). |
 | `private_key` | `ExposedPrivateKey` | Bare multihash hex string.【crates/iroha_crypto/src/lib.rs:1994】 |
 | `namespace` | `String` | Governance namespace hosting the instance (e.g., `apps.market`). |
 | `contract_id` | `String` | Logical identifier under the namespace (e.g., `calc.v1`). |
@@ -135,7 +135,7 @@ Sample interaction:
 
 ```json
 {
-  "authority": "3xsmkps1KPBn9dtpE5qHRhHEZCpiAe8d9j6H9A42TV6kc1TpaqdwnSksKgQrsSEHznqvWKBMc1os69BELzkLjsR7EV2gjV14d9JMzo97KEmYoKtxCrFeKFAcy7ffQdboV1uRt@wonderland",
+  "authority": "3xsmkps1KPBn9dtpE5qHRhHEZCpiAe8d9j6H9A42TV6kc1TpaqdwnSksKgQrsSEHznqvWKBMc1os69BELzkLjsR7EV2gjV14d9JMzo97KEmYoKtxCrFeKFAcy7ffQdboV1uRt",
   "private_key": "ED010820F1D2C3B4A596877899AABBCCDDEEFF00112233445566778899AABBCC",
   "namespace": "apps.market",
   "contract_id": "calc.v1",

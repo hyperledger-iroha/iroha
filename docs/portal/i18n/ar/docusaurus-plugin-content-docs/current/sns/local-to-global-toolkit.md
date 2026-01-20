@@ -44,7 +44,6 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 
 1. شغل السكربت في job مخصص وارفع المخرجات.
 2. احظر عمليات الدمج عندما يبلغ `audit.json` عن Local selectors (`domain.kind = local12`).
-3. عندما تظهر dashboards عدم وجود استخدام مشروع، ابق `torii.strict_addresses`
    على القيمة الافتراضية `true` (قم بالتحويل الى `false` فقط على بيئات dev/test عند
    تشخيص التراجعات) واضف
    `iroha address normalize --fail-on-warning --only-local` الى CI حتى تفشل

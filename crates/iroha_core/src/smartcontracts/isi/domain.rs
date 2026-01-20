@@ -12,6 +12,8 @@ use super::super::isi::prelude::*;
 /// - update metadata
 /// - transfer, etc.
 pub mod isi {
+    use std::collections::BTreeSet;
+
     use iroha_crypto::Algorithm;
     use iroha_data_model::{
         IntoKeyValue,
@@ -24,6 +26,7 @@ pub mod isi {
     use iroha_logger::prelude::*;
 
     use super::*;
+    use crate::state::account_label_is_pii;
 
     impl Execute for Register<Account> {
         #[metrics(+"register_account")]
@@ -56,13 +59,114 @@ pub mod isi {
                 }
                 .into());
             }
+            if let Some(uaid) = account.uaid() {
+                if let Some(existing) = state_transaction.world.uaid_accounts.get(uaid) {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!("UAID {uaid} already bound to account {existing}").into(),
+                    ));
+                }
+            } else if !account.opaque_ids().is_empty() {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "Opaque identifiers require a UAID".to_owned().into(),
+                ));
+            }
+
+            if let Some(label) = account.label() {
+                if account_label_is_pii(label) {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "Account label looks like raw PII; use UAID/opaque identifiers instead"
+                            .to_owned()
+                            .into(),
+                    ));
+                }
+                if state_transaction.world.account_aliases.get(label).is_some()
+                    || state_transaction
+                        .world
+                        .account_rekey_records
+                        .get(label)
+                        .is_some()
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "Account label already registered".to_owned().into(),
+                    ));
+                }
+            }
+
+            if account.uaid().is_some() {
+                let mut seen = BTreeSet::new();
+                for opaque in account.opaque_ids() {
+                    if !seen.insert(*opaque) {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            format!(
+                                "Account {account_id} contains duplicate opaque identifier {opaque}"
+                            )
+                            .into(),
+                        ));
+                    }
+                    if let Some(existing) = state_transaction.world.opaque_uaids.get(opaque) {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            format!("Opaque identifier {opaque} already bound to UAID {existing}")
+                                .into(),
+                        ));
+                    }
+                }
+            }
             state_transaction
                 .world
                 .accounts
                 .insert(account_id.clone(), account_value);
 
             if let Some(uaid) = account.uaid() {
+                state_transaction
+                    .world
+                    .uaid_accounts
+                    .insert(*uaid, account_id.clone());
                 state_transaction.rebuild_space_directory_bindings(*uaid);
+            }
+
+            if let Some(label) = account.label() {
+                if state_transaction
+                    .world
+                    .account_aliases
+                    .insert(label.clone(), account_id.clone())
+                    .is_some()
+                {
+                    state_transaction.world.accounts.remove(account_id.clone());
+                    if let Some(uaid) = account.uaid() {
+                        state_transaction.world.uaid_accounts.remove(*uaid);
+                        state_transaction.rebuild_space_directory_bindings(*uaid);
+                    }
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "Account label already registered".to_owned().into(),
+                    ));
+                }
+            }
+
+            if let Some(uaid) = account.uaid() {
+                for opaque in account.opaque_ids() {
+                    if state_transaction
+                        .world
+                        .opaque_uaids
+                        .insert(*opaque, *uaid)
+                        .is_some()
+                    {
+                        state_transaction.world.accounts.remove(account_id.clone());
+                        state_transaction.world.uaid_accounts.remove(*uaid);
+                        if let Some(label) = account.label() {
+                            state_transaction
+                                .world
+                                .account_aliases
+                                .remove(label.clone());
+                        }
+                        for inserted in account.opaque_ids() {
+                            state_transaction.world.opaque_uaids.remove(*inserted);
+                        }
+                        state_transaction.rebuild_space_directory_bindings(*uaid);
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "Opaque identifier already registered".to_owned().into(),
+                        ));
+                    }
+                }
             }
 
             if let Some(record) = AccountRekeyRecord::from_account(&account)
@@ -73,6 +177,19 @@ pub mod isi {
                     .is_some()
             {
                 state_transaction.world.accounts.remove(account_id.clone());
+                if let Some(uaid) = account.uaid() {
+                    state_transaction.world.uaid_accounts.remove(*uaid);
+                    state_transaction.rebuild_space_directory_bindings(*uaid);
+                }
+                if let Some(label) = account.label() {
+                    state_transaction
+                        .world
+                        .account_aliases
+                        .remove(label.clone());
+                }
+                for opaque in account.opaque_ids() {
+                    state_transaction.world.opaque_uaids.remove(*opaque);
+                }
                 return Err(InstructionExecutionError::InvariantViolation(
                     "Account label already registered".to_owned().into(),
                 ));
@@ -154,11 +271,23 @@ pub mod isi {
                 .remove(account_id.clone());
 
             if let Some(label) = account_value.label().cloned() {
-                state_transaction.world.account_rekey_records.remove(label);
+                state_transaction
+                    .world
+                    .account_rekey_records
+                    .remove(label.clone());
+                state_transaction.world.account_aliases.remove(label);
             }
 
             if let Some(uaid) = account_value.uaid().copied() {
+                state_transaction.world.uaid_accounts.remove(uaid);
+                for opaque in account_value.opaque_ids() {
+                    state_transaction.world.opaque_uaids.remove(*opaque);
+                }
                 state_transaction.rebuild_space_directory_bindings(uaid);
+            } else {
+                for opaque in account_value.opaque_ids() {
+                    state_transaction.world.opaque_uaids.remove(*opaque);
+                }
             }
 
             state_transaction
@@ -603,7 +732,7 @@ mod tests {
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
         IntoKeyValue,
-        account::{NewAccount, rekey::AccountLabel},
+        account::{NewAccount, OpaqueAccountId, rekey::AccountLabel},
         asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
         block::BlockHeader,
         events::data::space_directory::{
@@ -695,6 +824,11 @@ mod tests {
             tx.world.account_rekey_records.get(&account_label).is_some(),
             "rekey record should be inserted"
         );
+        assert_eq!(
+            tx.world.account_aliases.get(&account_label),
+            Some(&account_id),
+            "alias index should be inserted"
+        );
 
         // Duplicate label should be rejected.
         let second_keypair = KeyPair::random();
@@ -714,6 +848,148 @@ mod tests {
         assert!(
             tx.world.account_rekey_records.get(&account_label).is_none(),
             "label record must be removed on unregister"
+        );
+        assert!(
+            tx.world.account_aliases.get(&account_label).is_none(),
+            "alias index must be removed on unregister"
+        );
+    }
+
+    #[test]
+    fn register_account_rejects_phone_like_label() {
+        let mut state = test_state();
+        let domain_id: DomainId = "label.world".parse().expect("domain id");
+        let authority = (*ALICE_ID).clone();
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let account_label =
+            AccountLabel::new(domain_id.clone(), "+819398553445".parse::<Name>().unwrap());
+        let keypair = KeyPair::random();
+        let account_id = AccountId::new(domain_id, keypair.public_key().clone());
+        let new_account = Account::new(account_id).with_label(Some(account_label));
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        let err = Register::account(new_account)
+            .execute(&authority, &mut tx)
+            .expect_err("phone-like label should be rejected");
+        assert!(
+            err.to_string().contains("raw PII"),
+            "error should mention raw PII: {err}"
+        );
+    }
+
+    #[test]
+    fn register_account_rejects_opaque_ids_without_uaid() {
+        let mut state = test_state();
+        let domain_id: DomainId = "opaque.world".parse().expect("domain id");
+        let authority = (*ALICE_ID).clone();
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let account_id = AccountId::new(domain_id, KeyPair::random().public_key().clone());
+        let opaque = OpaqueAccountId::from_hash(Hash::new("opaque::missing-uaid"));
+        let new_account = NewAccount {
+            id: account_id,
+            metadata: Metadata::default(),
+            label: None,
+            uaid: None,
+            opaque_ids: vec![opaque],
+        };
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        let err = Register::account(new_account)
+            .execute(&authority, &mut tx)
+            .expect_err("opaque ids without UAID should be rejected");
+        assert!(
+            err.to_string()
+                .contains("Opaque identifiers require a UAID"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn register_account_rejects_duplicate_opaque_ids() {
+        let mut state = test_state();
+        let domain_id: DomainId = "opaque.dupes".parse().expect("domain id");
+        let authority = (*ALICE_ID).clone();
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let account_id = AccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
+        let uaid = UniversalAccountId::from_hash(Hash::new("uaid::opaque-dupes"));
+        let opaque = OpaqueAccountId::from_hash(Hash::new("opaque::dupe"));
+        let new_account = NewAccount {
+            id: account_id,
+            metadata: Metadata::default(),
+            label: None,
+            uaid: Some(uaid),
+            opaque_ids: vec![opaque, opaque],
+        };
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        let err = Register::account(new_account)
+            .execute(&authority, &mut tx)
+            .expect_err("duplicate opaque ids should be rejected");
+        assert!(
+            err.to_string().contains("duplicate opaque identifier"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn register_account_rejects_opaque_id_collisions() {
+        let mut state = test_state();
+        let domain_id: DomainId = "opaque.collide".parse().expect("domain id");
+        let authority = (*ALICE_ID).clone();
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let opaque = OpaqueAccountId::from_hash(Hash::new("opaque::collide"));
+        let first_id = AccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
+        let second_id = AccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
+        let first_uaid = UniversalAccountId::from_hash(Hash::new("uaid::opaque-collide-1"));
+        let second_uaid = UniversalAccountId::from_hash(Hash::new("uaid::opaque-collide-2"));
+
+        let first_account = NewAccount {
+            id: first_id.clone(),
+            metadata: Metadata::default(),
+            label: None,
+            uaid: Some(first_uaid),
+            opaque_ids: vec![opaque],
+        };
+        let second_account = NewAccount {
+            id: second_id.clone(),
+            metadata: Metadata::default(),
+            label: None,
+            uaid: Some(second_uaid),
+            opaque_ids: vec![opaque],
+        };
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Register::account(first_account)
+            .execute(&authority, &mut tx)
+            .expect("register first account");
+
+        let err = Register::account(second_account)
+            .execute(&authority, &mut tx)
+            .expect_err("opaque id collisions should be rejected");
+        assert!(
+            err.to_string().contains("already bound to UAID"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(
+            tx.world.opaque_uaids.get(&opaque),
+            Some(&first_uaid),
+            "opaque id should remain bound to first UAID"
+        );
+        assert!(
+            tx.world.accounts.get(&second_id).is_none(),
+            "colliding account must not be inserted"
         );
     }
 
@@ -856,6 +1132,54 @@ mod tests {
     }
 
     #[test]
+    fn register_account_rejects_duplicate_uaid() {
+        let mut state = test_state();
+        let domain_id: DomainId = "uaid.duplicates".parse().expect("domain id");
+        let authority = (*ALICE_ID).clone();
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::duplicate"));
+        let first_keypair = KeyPair::random();
+        let first_id = AccountId::new(domain_id.clone(), first_keypair.public_key().clone());
+        let first_account = NewAccount::new(first_id.clone()).with_uaid(Some(uaid));
+
+        let second_keypair = KeyPair::random();
+        let second_id = AccountId::new(domain_id.clone(), second_keypair.public_key().clone());
+        let second_account = NewAccount::new(second_id.clone()).with_uaid(Some(uaid));
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Register::account(first_account)
+            .execute(&authority, &mut tx)
+            .expect("register first account");
+
+        let err = Register::account(second_account)
+            .execute(&authority, &mut tx)
+            .expect_err("duplicate UAID must be rejected");
+        let err_string = err.to_string();
+        assert!(
+            err_string.contains("UAID"),
+            "error should reference UAID conflict: {err_string}"
+        );
+        assert_eq!(
+            tx.world.uaid_accounts.get(&uaid),
+            Some(&first_id),
+            "UAID index must retain the first account"
+        );
+        assert!(
+            tx.world.accounts.get(&second_id).is_none(),
+            "duplicate account should not be inserted"
+        );
+
+        tx.apply();
+        block.commit().expect("commit block");
+
+        let view = state.view();
+        assert_eq!(view.world().uaid_accounts().get(&uaid), Some(&first_id));
+    }
+
+    #[test]
     fn unregister_account_removes_space_directory_bindings() {
         let mut state = test_state();
         let domain_id: DomainId = "spaces.cleanup".parse().expect("domain id");
@@ -888,6 +1212,10 @@ mod tests {
         assert!(
             view.world().uaid_dataspaces().get(&uaid).is_none(),
             "bindings should be removed after account deletion"
+        );
+        assert!(
+            view.world().uaid_accounts().get(&uaid).is_none(),
+            "UAID index should be cleared after account deletion"
         );
     }
 

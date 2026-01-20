@@ -1170,7 +1170,7 @@ seiyaku Test {
                 .parse()
                 .unwrap();
         let to: AccountId =
-            "ed0120CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC@wonderland"
+            "ed0120CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
                 .parse()
                 .unwrap();
         let domain: DomainId = "wonderland".parse().unwrap();

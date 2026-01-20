@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -57,7 +58,7 @@ function sampleAccountForms() {
     domain: SAMPLE_ACCOUNT_DOMAIN,
     publicKey,
   });
-  const ih58Literal = `${address.toIH58(SORA_IH58_PREFIX)}@${SAMPLE_ACCOUNT_DOMAIN}`;
+  const ih58Literal = address.toIH58(SORA_IH58_PREFIX);
   const canonical = normalizeAccountId(
     ih58Literal,
     "toriiClient.sampleAccountForms",
@@ -68,17 +69,47 @@ function sampleAccountForms() {
     canonicalBytes.subarray(0, digestStart + 8),
     canonicalBytes.subarray(digestStart + 12),
   ]);
-  const local8 = `0x${truncated.toString("hex")}@${SAMPLE_ACCOUNT_DOMAIN}`;
+  const local8 = `0x${truncated.toString("hex")}`;
   return Object.freeze({
     canonical,
     ih58: ih58Literal,
-    compressed: `${address.toCompressedSora()}@${SAMPLE_ACCOUNT_DOMAIN}`,
+    compressed: address.toCompressedSora(),
     local8,
   });
 }
 
 const SAMPLE_ACCOUNT_FORMS = sampleAccountForms();
 const SAMPLE_ACCOUNT_ID = SAMPLE_ACCOUNT_FORMS.canonical;
+
+function fixtureAccountAddress(alias) {
+  const parts = alias.split("@");
+  const domain = parts[parts.length - 1];
+  const hash = crypto.createHash("sha256").update(`fixture:${alias}`).digest();
+  return AccountAddress.fromAccount({ domain, publicKey: hash });
+}
+
+function fixtureAccountId(alias) {
+  return fixtureAccountAddress(alias).toIH58(SORA_IH58_PREFIX);
+}
+
+function fixtureAccountForms(alias) {
+  const address = fixtureAccountAddress(alias);
+  return {
+    ih58: address.toIH58(SORA_IH58_PREFIX),
+    compressed: address.toCompressedSora(),
+  };
+}
+
+const FIXTURE_ALICE_ID = fixtureAccountId("alice@wonderland");
+const FIXTURE_BOB_ID = fixtureAccountId("bob@wonderland");
+const FIXTURE_CAROL_ID = fixtureAccountId("carol@wonderland");
+const FIXTURE_ALICE_TEST_ID = fixtureAccountId("alice@test");
+const FIXTURE_VALIDATOR_TEST_ID = fixtureAccountId("validator@test");
+const FIXTURE_BOB_NARNIA_ID = fixtureAccountId("bob@narnia");
+const FIXTURE_VAULT_ID = fixtureAccountId("vault@wonderland");
+const FIXTURE_MERCHANT_ID = fixtureAccountId("merchant@wonderland");
+const FIXTURE_ISSUER_ID = fixtureAccountId("issuer@wonderland");
+const FIXTURE_AUTHORITY_ID = fixtureAccountId("authority@wonderland");
 
 function expectValidationErrorFixture(error, key) {
   assert(error instanceof ValidationError);
@@ -102,7 +133,13 @@ const SAMPLE_SNS_GOV_CASE_RESPONSE = Object.freeze({
   resolution_issued_at: null,
   status: "open",
   reporter: { role: "registrar", contact: "ops@example.com", reference_ticket: "SUP-1" },
-  respondents: [{ role: "registrant", account_id: "alice@wonderland", contact: "alice@example.com" }],
+  respondents: [
+    {
+      role: "registrant",
+      account_id: FIXTURE_ALICE_ID,
+      contact: "alice@example.com",
+    },
+  ],
   allegations: [{ code: "A1", summary: "ownership dispute", policy_reference: "policy-1" }],
   evidence: [
     {
@@ -281,14 +318,17 @@ function createPipelineRecoveryPayload(overrides = {}) {
 }
 
 function createOfflineTransferPayload(overrides = {}) {
+  const controller = fixtureAccountForms("alice@wonderland");
+  const receiver = fixtureAccountForms("bob@wonderland");
+  const deposit = fixtureAccountForms("vault@wonderland");
   const baseItem = {
     bundle_id_hex: "ff00",
-    controller_id: "alice@wonderland",
-    controller_display: "snx1alice",
-    receiver_id: "bob@wonderland",
-    receiver_display: "snx1bob",
-    deposit_account_id: "vault@wonderland",
-    deposit_account_display: "snx1vault",
+    controller_id: controller.ih58,
+    controller_display: controller.compressed,
+    receiver_id: receiver.ih58,
+    receiver_display: receiver.compressed,
+    deposit_account_id: deposit.ih58,
+    deposit_account_display: deposit.compressed,
     asset_id: "usd#wonderland",
     receipt_count: 1,
     total_amount: "1",
@@ -892,7 +932,7 @@ test("registerVerifyingKey canonicalizes payload", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await client.registerVerifyingKey({
-    authority: "alice@wonderland",
+    authority: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
     private_key: "ed0120",
     backend: "halo2/ipa",
     name: "vk_main",
@@ -913,7 +953,7 @@ test("registerVerifyingKey canonicalizes payload", async () => {
     "application/json",
   );
   const body = captured.body;
-  assert.equal(body.authority, "alice@wonderland");
+  assert.equal(body.authority, "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx");
   assert.equal(body.private_key, "ed0120");
   assert.equal(body.backend, "halo2/ipa");
   assert.equal(body.name, "vk_main");
@@ -1024,7 +1064,7 @@ test("resolveAliasByIndex posts numeric payload", async () => {
   const fetchImpl = async () => {
     return createResponse({
       status: 200,
-      jsonData: { alias: VALID_IBAN, account_id: "alice@wonderland" },
+      jsonData: { alias: VALID_IBAN, account_id: FIXTURE_ALICE_ID },
       headers: { "content-type": "application/json" },
     });
   };
@@ -1036,7 +1076,7 @@ test("resolveAliasByIndex posts numeric payload", async () => {
   });
   const resolved = await client.resolveAliasByIndex(0);
   assert.equal(body.index, 0);
-  assert.equal(resolved?.account_id, "alice@wonderland");
+  assert.equal(resolved?.account_id, FIXTURE_ALICE_ID);
 });
 
 test("resolveAlias normalizes payload fields", async () => {
@@ -1046,7 +1086,7 @@ test("resolveAlias normalizes payload fields", async () => {
         status: 200,
         jsonData: {
           alias: " GB82WEST12345698765432 ",
-          account_id: "alice@wonderland",
+          account_id: FIXTURE_ALICE_ID,
           index: "5",
           source: "iso_bridge",
         },
@@ -1056,7 +1096,7 @@ test("resolveAlias normalizes payload fields", async () => {
   const resolved = await client.resolveAlias(VALID_IBAN);
   assert.deepEqual(resolved, {
     alias: VALID_IBAN,
-    account_id: "alice@wonderland",
+    account_id: FIXTURE_ALICE_ID,
     index: 5,
     source: "iso_bridge",
   });
@@ -1069,14 +1109,14 @@ test("resolveAlias canonicalizes IBANs returned by Torii", async () => {
         status: 200,
         jsonData: {
           alias: "gb82 west12345698765432",
-          account_id: "alice@wonderland",
+          account_id: FIXTURE_ALICE_ID,
         },
         headers: { "content-type": "application/json" },
       }),
   });
   const resolved = await client.resolveAlias(VALID_IBAN);
   assert.equal(resolved.alias, VALID_IBAN);
-  assert.equal(resolved.account_id, "alice@wonderland");
+  assert.equal(resolved.account_id, FIXTURE_ALICE_ID);
 });
 
 test("resolveAlias normalizes IBAN input before issuing the request", async () => {
@@ -1086,7 +1126,7 @@ test("resolveAlias normalizes IBAN input before issuing the request", async () =
       capturedBody = JSON.parse(init.body);
       return createResponse({
         status: 200,
-        jsonData: { alias: VALID_IBAN, account_id: "alice@wonderland" },
+        jsonData: { alias: VALID_IBAN, account_id: FIXTURE_ALICE_ID },
         headers: { "content-type": "application/json" },
       });
     },
@@ -1114,7 +1154,7 @@ test("resolveAlias rejects malformed payloads", async () => {
         status: 200,
         jsonData: {
           alias: "   ",
-          account_id: "alice@wonderland",
+          account_id: FIXTURE_ALICE_ID,
         },
         headers: { "content-type": "application/json" },
       }),
@@ -1130,7 +1170,7 @@ test("resolveAlias rejects malformed payloads", async () => {
         status: 200,
         jsonData: {
           alias: VALID_IBAN,
-          account_id: "alice@wonderland",
+          account_id: FIXTURE_ALICE_ID,
           source: 42,
         },
         headers: { "content-type": "application/json" },
@@ -1149,7 +1189,7 @@ test("resolveAlias rejects responses with invalid IBAN aliases", async () => {
         status: 200,
         jsonData: {
           alias: "GB00WEST12345698765432",
-          account_id: "alice@wonderland",
+          account_id: FIXTURE_ALICE_ID,
         },
         headers: { "content-type": "application/json" },
       }),
@@ -1635,7 +1675,7 @@ test("registerSorafsPinManifest posts payload and returns JSON", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.registerSorafsPinManifest({
-    authority: "alice@wonderland",
+    authority: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
     privateKey: "ed25519:deadbeef",
     chunker: {
       profileId: 1,
@@ -1654,7 +1694,7 @@ test("registerSorafsPinManifest posts payload and returns JSON", async () => {
   assert.equal(captured?.url, `${BASE_URL}/v1/sorafs/pin/register`);
   assert.equal(captured?.init?.method, "POST");
   const body = JSON.parse(captured?.init?.body ?? "{}");
-  assert.equal(body.authority, "alice@wonderland");
+  assert.equal(body.authority, "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx");
   assert.equal(body.chunker_profile_id, 1);
   assert.equal(body.pin_policy?.storage_class?.type, "Hot");
   assert.equal(body.chunk_digest_sha3_256_hex, chunkHex);
@@ -1675,7 +1715,7 @@ test("registerSorafsPinManifest validates storage class input", async () => {
   await assert.rejects(
     () =>
       client.registerSorafsPinManifest({
-        authority: "alice@wonderland",
+        authority: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
         privateKey: "ed25519:deadbeef",
         chunker: {
           profileId: 1,
@@ -1714,7 +1754,7 @@ test("registerSorafsPinManifestTyped normalizes response payloads", async () => 
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.registerSorafsPinManifestTyped({
-    authority: "alice@wonderland",
+    authority: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
     privateKey: "ed25519:deadbeef",
     chunker: {
       profileId: 1,
@@ -1770,7 +1810,7 @@ test("getSorafsPinManifestTyped normalizes manifest, aliases, and orders", async
     },
     chunk_digest_sha3_256_hex: "2".repeat(64),
     pin_policy: { min_replicas: 3 },
-    submitted_by: "carol@wonderland",
+    submitted_by: "34mSYnDgbaJM58rbLoif4Tkp7G7YZ5g3PsY6LcceZ1Kf1tcQGqPbGs7g4fy6LPy8AjNxDXGrg",
     submitted_epoch: 42,
     status: { state: "approved", epoch: 45 },
     metadata: { note: "demo" },
@@ -1784,7 +1824,7 @@ test("getSorafsPinManifestTyped normalizes manifest, aliases, and orders", async
         effective_at: "2025-01-01T00:00:00Z",
         effective_at_unix: 1_700_000_000,
         targets: { alias: "docs/main", pin_digest_hex: manifestHex },
-        signers: ["carol@wonderland"],
+        signers: ["34mSYnDgbaJM58rbLoif4Tkp7G7YZ5g3PsY6LcceZ1Kf1tcQGqPbGs7g4fy6LPy8AjNxDXGrg"],
       },
     ],
     council_envelope_digest_hex: councilHex,
@@ -1803,7 +1843,7 @@ test("getSorafsPinManifestTyped normalizes manifest, aliases, and orders", async
     namespace: "sora",
     name: "docs",
     manifest_digest_hex: manifestHex,
-    bound_by: "alice@wonderland",
+    bound_by: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
     bound_epoch: 10,
     expiry_epoch: 99,
     proof_b64: Buffer.from("proof").toString("base64"),
@@ -1819,7 +1859,7 @@ test("getSorafsPinManifestTyped normalizes manifest, aliases, and orders", async
   const orderRecord = {
     order_id_hex: "c".repeat(64),
     manifest_digest_hex: manifestHex,
-    issued_by: "bob@wonderland",
+    issued_by: "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i",
     issued_epoch: 50,
     deadline_epoch: 80,
     status: { state: "pending" },
@@ -1877,7 +1917,7 @@ test("getSorafsPinManifestTyped rejects non-integer status timestamps", async ()
     },
     chunk_digest_sha3_256_hex: "2".repeat(64),
     pin_policy: { min_replicas: 3 },
-    submitted_by: "carol@wonderland",
+    submitted_by: "34mSYnDgbaJM58rbLoif4Tkp7G7YZ5g3PsY6LcceZ1Kf1tcQGqPbGs7g4fy6LPy8AjNxDXGrg",
     submitted_epoch: 42,
     status: { state: "approved", epoch: 45 },
     metadata: {},
@@ -1914,7 +1954,7 @@ test("listSorafsAliases normalizes response and applies filters", async () => {
     namespace: "sora",
     name: "docs",
     manifest_digest_hex: manifestHex,
-    bound_by: "alice@wonderland",
+    bound_by: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
     bound_epoch: 10,
     expiry_epoch: 99,
     proof_b64: Buffer.from("proof").toString("base64"),
@@ -1978,7 +2018,7 @@ test("listSorafsPinManifests normalizes manifest payloads and guards filters", a
     },
     chunk_digest_sha3_256_hex: "2".repeat(64),
     pin_policy: { min_replicas: 3 },
-    submitted_by: "carol@wonderland",
+    submitted_by: "34mSYnDgbaJM58rbLoif4Tkp7G7YZ5g3PsY6LcceZ1Kf1tcQGqPbGs7g4fy6LPy8AjNxDXGrg",
     submitted_epoch: 42,
     status: { state: "approved", epoch: 45 },
     metadata: { note: "demo" },
@@ -1992,7 +2032,7 @@ test("listSorafsPinManifests normalizes manifest payloads and guards filters", a
         effective_at: "2025-01-01T00:00:00Z",
         effective_at_unix: 1_700_000_000,
         targets: { alias: "docs/main", pin_digest_hex: manifestHex },
-        signers: ["carol@wonderland"],
+        signers: ["34mSYnDgbaJM58rbLoif4Tkp7G7YZ5g3PsY6LcceZ1Kf1tcQGqPbGs7g4fy6LPy8AjNxDXGrg"],
       },
     ],
     council_envelope_digest_hex: councilHex,
@@ -2060,7 +2100,7 @@ test("listSorafsReplicationOrders normalizes response and validates status filte
   const orderRecord = {
     order_id_hex: orderHex,
     manifest_digest_hex: manifestHex,
-    issued_by: "bob@wonderland",
+    issued_by: "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i",
     issued_epoch: 50,
     deadline_epoch: 80,
     status: { state: "pending" },
@@ -2499,7 +2539,7 @@ test("iterateSorafsAliases paginates alias listings", async () => {
     namespace: "sora",
     name: "docs",
     manifest_digest_hex: "0".repeat(64),
-    bound_by: "alice@wonderland",
+    bound_by: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
     bound_epoch: 10,
     expiry_epoch: 99,
     proof_b64: Buffer.from("proof").toString("base64"),
@@ -2578,7 +2618,7 @@ test("iterateSorafsPinManifests honors maxItems and pagination", async () => {
     },
     chunk_digest_sha3_256_hex: "2".repeat(64),
     pin_policy: { min_replicas: 3 },
-    submitted_by: "carol@wonderland",
+    submitted_by: "34mSYnDgbaJM58rbLoif4Tkp7G7YZ5g3PsY6LcceZ1Kf1tcQGqPbGs7g4fy6LPy8AjNxDXGrg",
     submitted_epoch: 42,
     status: { state: "approved", epoch: 45 },
     metadata: { note: "demo" },
@@ -2655,7 +2695,7 @@ test("iterateSorafsReplicationOrders paginates results", async () => {
   const baseOrder = {
     order_id_hex: "c".repeat(64),
     manifest_digest_hex: "b".repeat(64),
-    issued_by: "bob@wonderland",
+    issued_by: "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i",
     issued_epoch: 50,
     deadline_epoch: 80,
     status: { state: "pending", epoch: null },
@@ -5637,7 +5677,7 @@ test("getTransactionStatusTyped normalises pipeline payload", async () => {
     kind: "Transaction",
     content: {
       hash: hashHex,
-      authority: "alice@wonderland",
+      authority: FIXTURE_ALICE_ID,
       status: { kind: "Committed", content: { receipt: "ok" } },
     },
   };
@@ -5652,7 +5692,7 @@ test("getTransactionStatusTyped normalises pipeline payload", async () => {
   assert.ok(result, "typed payload should be returned");
   assert.equal(result?.kind, "Transaction");
   assert.equal(result?.hashHex, hashHex);
-  assert.equal(result?.authority, "alice@wonderland");
+  assert.equal(result?.authority, FIXTURE_ALICE_ID);
   assert.equal(result?.status?.kind, "Committed");
   assert.deepEqual(result?.status?.content, { receipt: "ok" });
   assert.deepEqual(result?.raw.kind, "Transaction");
@@ -7821,7 +7861,7 @@ test("listRuntimeUpgrades normalizes manifest and status payloads", async () => 
                 end_height: 20,
               },
               status: { ActivatedAt: 12 },
-              proposer: "alice@wonderland",
+              proposer: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
               created_height: 8,
             },
           },
@@ -7839,7 +7879,7 @@ test("listRuntimeUpgrades normalizes manifest and status payloads", async () => 
                 end_height: 40,
               },
               status: { Proposed: null },
-              proposer: "bob@wonderland",
+              proposer: "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i",
               created_height: 25,
             },
           },
@@ -7864,7 +7904,7 @@ test("listRuntimeUpgrades normalizes manifest and status payloads", async () => 
         endHeight: 20,
       },
       status: { kind: "ActivatedAt", activatedHeight: 12 },
-      proposer: "alice@wonderland",
+      proposer: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
       createdHeight: 8,
     },
   });
@@ -8455,10 +8495,10 @@ test("governanceSubmitPlainBallot normalizes amount and direction", async () => 
     },
   });
   const ballot = await client.governanceSubmitPlainBallot({
-    authority: "alice@wonderland",
+    authority: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
     chainId: "chain-0",
     referendumId: "ref-plain",
-    owner: "alice@wonderland",
+    owner: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
     amount: 500n,
     durationBlocks: "600",
     direction: "nay",
@@ -8482,10 +8522,10 @@ test("governanceSubmitPlainBallot accepts decimal Numeric amounts", async () => 
     },
   });
   await client.governanceSubmitPlainBallot({
-    authority: "alice@wonderland",
+    authority: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
     chainId: "chain-0",
     referendumId: "ref-plain-decimal",
-    owner: "alice@wonderland",
+    owner: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
     amount: "12.500",
     durationBlocks: 1,
     direction: "aye",
@@ -8508,10 +8548,10 @@ test("governanceSubmitPlainBallot forwards AbortSignal to fetch", async () => {
   const controller = new AbortController();
   await client.governanceSubmitPlainBallot(
     {
-      authority: "alice@wonderland",
+      authority: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
       chainId: "chain-0",
       referendumId: "ref-plain",
-      owner: "alice@wonderland",
+      owner: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
       amount: "5000",
       durationBlocks: 1_000,
       direction: "Aye",
@@ -8588,10 +8628,10 @@ test("governance helpers reject unsupported option keys", async () => {
     /getGovernanceCouncilCurrent options contains unsupported fields: extra/,
   );
   const ballotPayload = {
-    authority: "alice@wonderland",
+    authority: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
     chainId: "chain-1",
     referendumId: "ref-1",
-    owner: "alice@wonderland",
+    owner: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
     amount: "10",
     durationBlocks: 1,
     direction: "Aye",
@@ -8643,7 +8683,7 @@ test("governanceSubmitZk ballots encode proofs and hints", async () => {
     },
   });
   const zkResult = await client.governanceSubmitZkBallot({
-    authority: "bob@wonderland",
+    authority: "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i",
     chainId: "chain-0",
     electionId: "ref-zk",
     proof: [1, 2, 3],
@@ -8668,7 +8708,7 @@ test("governanceSubmitZk ballots encode proofs and hints", async () => {
   assert.equal(zkResult.accepted, true);
 
   const zkV1Result = await client.governanceSubmitZkBallotV1({
-    authority: "bob@wonderland",
+    authority: "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i",
     chainId: "chain-0",
     electionId: "ref-zk",
     backend: "halo2/ipa",
@@ -8684,7 +8724,7 @@ test("governanceSubmitZk ballots encode proofs and hints", async () => {
   assert.equal(zkV1Result.reason, "build transaction skeleton");
 
   const zkProofResult = await client.governanceSubmitZkBallotProofV1({
-    authority: "bob@wonderland",
+    authority: "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i",
     chainId: "chain-0",
     electionId: "ref-zk",
     ballot: {
@@ -8712,7 +8752,7 @@ test("governanceSubmitZk ballots reject partial lock hints", async () => {
   await assert.rejects(
     () =>
       client.governanceSubmitZkBallot({
-        authority: "bob@wonderland",
+        authority: "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i",
         chainId: "chain-0",
         electionId: "ref-zk",
         proof: [1, 2, 3],
@@ -8735,7 +8775,7 @@ test("governanceSubmitZk ballots reject invalid hex hints", async () => {
   await assert.rejects(
     () =>
       client.governanceSubmitZkBallot({
-        authority: "bob@wonderland",
+        authority: "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i",
         chainId: "chain-0",
         electionId: "ref-zk",
         proof: [1, 2, 3],
@@ -8763,7 +8803,7 @@ test("governanceSubmitZk ballots reject deprecated public input keys", async () 
   await assert.rejects(
     () =>
       client.governanceSubmitZkBallot({
-        authority: "bob@wonderland",
+        authority: "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i",
         chainId: "chain-0",
         electionId: "ref-zk",
         proof: [1, 2, 3],
@@ -8790,7 +8830,7 @@ test("governanceSubmitZk ballots reject noncanonical owners", async () => {
   await assert.rejects(
     () =>
       client.governanceSubmitZkBallot({
-        authority: "bob@wonderland",
+        authority: "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i",
         chainId: "chain-0",
         electionId: "ref-zk",
         proof: [1, 2, 3],
@@ -8817,7 +8857,7 @@ test("governanceSubmitZkBallotV1 rejects partial lock hints", async () => {
   await assert.rejects(
     () =>
       client.governanceSubmitZkBallotV1({
-        authority: "bob@wonderland",
+        authority: "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i",
         chainId: "chain-0",
         electionId: "ref-zk",
         backend: "halo2/ipa",
@@ -8841,7 +8881,7 @@ test("governanceSubmitZkBallotV1 rejects noncanonical owner", async () => {
   await assert.rejects(
     () =>
       client.governanceSubmitZkBallotV1({
-        authority: "bob@wonderland",
+        authority: "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i",
         chainId: "chain-0",
         electionId: "ref-zk",
         backend: "halo2/ipa",
@@ -8867,7 +8907,7 @@ test("governanceSubmitZkBallotV1 rejects invalid hex hints", async () => {
   await assert.rejects(
     () =>
       client.governanceSubmitZkBallotV1({
-        authority: "bob@wonderland",
+        authority: "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i",
         chainId: "chain-0",
         electionId: "ref-zk",
         backend: "halo2/ipa",
@@ -8891,7 +8931,7 @@ test("governanceSubmitZkBallotProofV1 rejects partial lock hints", async () => {
   await assert.rejects(
     () =>
       client.governanceSubmitZkBallotProofV1({
-        authority: "bob@wonderland",
+        authority: "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i",
         chainId: "chain-0",
         electionId: "ref-zk",
         ballot: { owner: SAMPLE_ACCOUNT_FORMS.ih58 },
@@ -8913,7 +8953,7 @@ test("governanceSubmitZkBallotProofV1 rejects noncanonical owner", async () => {
   await assert.rejects(
     () =>
       client.governanceSubmitZkBallotProofV1({
-        authority: "bob@wonderland",
+        authority: "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i",
         chainId: "chain-0",
         electionId: "ref-zk",
         ballot: {
@@ -8946,8 +8986,8 @@ test("getGovernanceCouncilCurrent normalizes roster payload", async () => {
   assert.equal(callCount, 1);
   assert.equal(roster.epoch, 77);
   assert.deepEqual(roster.members, [
-    { account_id: "alice@wonderland" },
-    { account_id: "bob@wonderland" },
+    { account_id: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx" },
+    { account_id: "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i" },
   ]);
 });
 
@@ -10362,7 +10402,7 @@ test("listAccounts encodes iterable params", async () => {
     assert.equal(parsed.searchParams.get("offset"), "5");
     assert.equal(
       parsed.searchParams.get("filter"),
-      JSON.stringify({ Eq: ["id", "alice@wonderland"] }),
+      JSON.stringify({ Eq: ["id", "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx"] }),
     );
     assert.equal(parsed.searchParams.get("sort"), "id:asc");
     assert.equal(parsed.searchParams.get("address_format"), "compressed");
@@ -10376,14 +10416,11 @@ test("listAccounts encodes iterable params", async () => {
   const payload = await client.listAccounts({
     limit: "10",
     offset: 5n,
-    filter: { Eq: ["id", "alice@wonderland"] },
+    filter: { Eq: ["id", "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx"] },
     sort: [{ key: "id", order: "asc" }],
     addressFormat: "compressed",
   });
-  assert.deepEqual(payload, {
-    items: [{ id: "alice@wonderland" }],
-    total: 1,
-  });
+  assert.deepEqual(payload, toriiFixtures.iterable.accountListPage);
 });
 
 test("listAccounts accepts canonical addressFormat alias", async () => {
@@ -10393,14 +10430,14 @@ test("listAccounts accepts canonical addressFormat alias", async () => {
     capturedSearch = parsed.searchParams.get("address_format");
     return createResponse({
       status: 200,
-      jsonData: { items: [{ id: "alice@wonderland" }], total: 1 },
+      jsonData: { items: [{ id: FIXTURE_ALICE_ID }], total: 1 },
       headers: { "content-type": "application/json" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const payload = await client.listAccounts({ addressFormat: "canonical", limit: 1 });
   assert.equal(capturedSearch, "ih58");
-  assert.equal(payload.items[0].id, "alice@wonderland");
+  assert.equal(payload.items[0].id, FIXTURE_ALICE_ID);
 });
 
 test("listAccounts rejects unknown addressFormat values", async () => {
@@ -10539,7 +10576,7 @@ test("queryAccounts rejects non-query iterable fields", async () => {
     },
   });
   await assert.rejects(
-    () => client.queryAccounts({ controllerId: "alice@wonderland" }),
+    () => client.queryAccounts({ controllerId: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx" }),
     /options for \/v1\/accounts\/query contains unsupported fields: controllerId/,
   );
 });
@@ -10844,7 +10881,7 @@ test("iterateAccountsQuery paginates structured filters", async () => {
     const parsed = new URL(url);
     assert.equal(parsed.pathname, "/v1/accounts/query");
     const body = JSON.parse(init.body);
-    assert.deepEqual(body.filter, { Eq: ["id", "snx1alice@wonderland"] });
+    assert.deepEqual(body.filter, { Eq: ["id", SAMPLE_ACCOUNT_FORMS.compressed] });
     const offset = Number(body.pagination?.offset ?? 0);
     const limit = Number(body.pagination?.limit ?? 0);
     if (callCount === 0) {
@@ -10868,7 +10905,7 @@ test("iterateAccountsQuery paginates structured filters", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const seen = [];
   for await (const account of client.iterateAccountsQuery({
-    filter: { Eq: ["id", "snx1alice@wonderland"] },
+    filter: { Eq: ["id", SAMPLE_ACCOUNT_FORMS.compressed] },
     pageSize: 2,
   })) {
     seen.push(account.id);
@@ -11096,7 +11133,7 @@ test("listNfts surfaces permission errors with payload details", async () => {
 test("listAccountPermissions encodes pagination and parses response", async () => {
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
-    assert.equal(parsed.pathname, accountPath("alice@wonderland", "/permissions"));
+    assert.equal(parsed.pathname, accountPath("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", "/permissions"));
     assert.equal(parsed.searchParams.get("limit"), "5");
     assert.equal(parsed.searchParams.get("offset"), "2");
     return createResponse({
@@ -11109,7 +11146,7 @@ test("listAccountPermissions encodes pagination and parses response", async () =
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.listAccountPermissions("alice@wonderland", {
+  const result = await client.listAccountPermissions("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", {
     limit: 5,
     offset: 2,
   });
@@ -11136,7 +11173,7 @@ test("listAccountPermissions rejects non-object options", async () => {
     },
   });
   await assert.rejects(
-    () => client.listAccountPermissions("alice@wonderland", 1),
+    () => client.listAccountPermissions("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", 1),
     /listAccountPermissions options must be an object/,
   );
   assert.equal(fetchCalled, false);
@@ -11156,7 +11193,7 @@ test("listAccountPermissions rejects invalid signals", async () => {
   });
   await assert.rejects(
     () =>
-      client.listAccountPermissions("alice@wonderland", {
+      client.listAccountPermissions("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", {
         // @ts-expect-error intentional invalid signal for runtime guard
         signal: {},
       }),
@@ -11178,7 +11215,7 @@ test("listAccountPermissions forwards AbortSignal instances", async () => {
       });
     },
   });
-  await client.listAccountPermissions("alice@wonderland", {
+  await client.listAccountPermissions("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", {
     limit: 1,
     signal: controller.signal,
   });
@@ -11190,7 +11227,7 @@ test("iterateAccountPermissions paginates account-scoped permissions", async () 
   let callCount = 0;
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
-    assert.equal(parsed.pathname, accountPath("alice@wonderland", "/permissions"));
+    assert.equal(parsed.pathname, accountPath("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", "/permissions"));
     const limit = Number(parsed.searchParams.get("limit"));
     const offset = Number(parsed.searchParams.get("offset") ?? "0");
     callCount += 1;
@@ -11211,7 +11248,7 @@ test("iterateAccountPermissions paginates account-scoped permissions", async () 
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const collected = [];
-  for await (const item of client.iterateAccountPermissions("alice@wonderland", {
+  for await (const item of client.iterateAccountPermissions("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", {
     pageSize: 2,
     maxItems: 3,
   })) {
@@ -11231,7 +11268,7 @@ test("listAccountPermissions validates entry names", async () => {
       }),
   });
   await assert.rejects(
-    () => client.listAccountPermissions("alice@wonderland"),
+    () => client.listAccountPermissions("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx"),
     /account permission list response\.items\[0]\.name/,
   );
 });
@@ -11257,21 +11294,21 @@ test("listAccountPermissions normalizes IH58 and compressed account ids", async 
 test("listAccountAssets encodes pagination params", async () => {
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
-    assert.equal(parsed.pathname, accountPath("alice@wonderland", "/assets"));
+    assert.equal(parsed.pathname, accountPath("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", "/assets"));
     assert.equal(parsed.searchParams.get("limit"), "5");
     assert.equal(parsed.searchParams.get("offset"), "1");
     return createResponse({
       status: 200,
       jsonData: {
-        items: [{ asset_id: "rose#wonderland#alice@wonderland", quantity: "10" }],
+        items: [{ asset_id: `rose#wonderland#${FIXTURE_ALICE_ID}`, quantity: "10" }],
         total: 1,
       },
       headers: { "content-type": "application/json" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const payload = await client.listAccountAssets("alice@wonderland", { limit: 5, offset: 1 });
-  assert.equal(payload.items[0].asset_id, "rose#wonderland#alice@wonderland");
+  const payload = await client.listAccountAssets("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", { limit: 5, offset: 1 });
+  assert.equal(payload.items[0].asset_id, `rose#wonderland#${FIXTURE_ALICE_ID}`);
 });
 
 test("listAccountAssets enforces canonical quantity strings", async () => {
@@ -11280,14 +11317,14 @@ test("listAccountAssets enforces canonical quantity strings", async () => {
       createResponse({
         status: 200,
         jsonData: {
-          items: [{ asset_id: "rose#wonderland#alice@wonderland", quantity: 10 }],
+          items: [{ asset_id: `rose#wonderland#${FIXTURE_ALICE_ID}`, quantity: 10 }],
           total: 1,
         },
         headers: { "content-type": "application/json" },
       }),
   });
   await assert.rejects(
-    () => client.listAccountAssets("alice@wonderland"),
+    () => client.listAccountAssets("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx"),
     /account asset list response\.items\[0]\.quantity/,
   );
 });
@@ -11300,8 +11337,8 @@ test("listAccountAssets rejects camelCase assetId fields", async () => {
         jsonData: {
           items: [
             {
-              asset_id: "rose#wonderland#alice@wonderland",
-              assetId: "rose#wonderland#alice@wonderland",
+              asset_id: `rose#wonderland#${FIXTURE_ALICE_ID}`,
+              assetId: `rose#wonderland#${FIXTURE_ALICE_ID}`,
               quantity: "10",
             },
           ],
@@ -11311,7 +11348,7 @@ test("listAccountAssets rejects camelCase assetId fields", async () => {
       }),
   });
   await assert.rejects(
-    () => client.listAccountAssets("alice@wonderland"),
+    () => client.listAccountAssets("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx"),
     /account asset list response\.items\[0]\.assetId is not supported/,
   );
 });
@@ -11327,7 +11364,7 @@ test("queryAccountAssets posts structured envelope", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await client.queryAccountAssets("alice@wonderland", {
+  await client.queryAccountAssets("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", {
     filter: { Gte: ["quantity", 5] },
     sort: [{ key: "quantity", order: "desc" }],
     fetchSize: 10,
@@ -11349,7 +11386,7 @@ test("queryAccountAssets surfaces errors for invalid filters", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
     () =>
-      client.queryAccountAssets("alice@wonderland", {
+      client.queryAccountAssets("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", {
         filter: { IsNull: ["asset_id"] },
       }),
     (error) => {
@@ -11363,8 +11400,8 @@ test("queryAccountAssets surfaces errors for invalid filters", async () => {
 
 test("iterateAccountAssets walks multiple pages", async () => {
   const responses = [
-    { items: [{ asset_id: "rose##alice", quantity: "5" }], total: 2 },
-    { items: [{ asset_id: "daisy##alice", quantity: "7" }], total: 2 },
+    { items: [{ asset_id: `rose##${FIXTURE_ALICE_ID}`, quantity: "5" }], total: 2 },
+    { items: [{ asset_id: `daisy##${FIXTURE_ALICE_ID}`, quantity: "7" }], total: 2 },
   ];
   let callCount = 0;
   const fetchImpl = async () => {
@@ -11378,7 +11415,7 @@ test("iterateAccountAssets walks multiple pages", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const collected = [];
-  for await (const holding of client.iterateAccountAssets("alice@wonderland", { pageSize: 1 })) {
+  for await (const holding of client.iterateAccountAssets("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", { pageSize: 1 })) {
     collected.push(holding.asset_id);
   }
   assert.deepEqual(collected, ["rose##alice", "daisy##alice"]);
@@ -11388,7 +11425,7 @@ test("iterateAccountAssetsQuery paginates per-account query endpoint", async () 
   let callCount = 0;
   const fetchImpl = async (url, init) => {
     const parsed = new URL(url);
-    assert.equal(parsed.pathname, accountPath("alice@wonderland", "/assets/query"));
+    assert.equal(parsed.pathname, accountPath("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", "/assets/query"));
     const body = JSON.parse(init.body);
     const offset = Number(body.pagination?.offset ?? 0);
     callCount += 1;
@@ -11404,7 +11441,7 @@ test("iterateAccountAssetsQuery paginates per-account query endpoint", async () 
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const seen = [];
-  for await (const holding of client.iterateAccountAssetsQuery("alice@wonderland", {
+  for await (const holding of client.iterateAccountAssetsQuery("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", {
     pageSize: 1,
   })) {
     seen.push(holding.asset_id);
@@ -11420,7 +11457,7 @@ test("iterateAccountAssets enforces credentials when requirePermissions is set",
     },
   });
   assert.throws(
-    () => client.iterateAccountAssets("alice@wonderland", { requirePermissions: true }),
+    () => client.iterateAccountAssets("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", { requirePermissions: true }),
     /iterateAccountAssets requires authToken or apiToken/,
   );
 });
@@ -11437,7 +11474,7 @@ test("iterateAccountAssetsQuery honours requirePermissions with credentials", as
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl, apiToken: "token" });
   const holdings = [];
-  for await (const item of client.iterateAccountAssetsQuery("alice@wonderland", {
+  for await (const item of client.iterateAccountAssetsQuery("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", {
     requirePermissions: true,
   })) {
     holdings.push(item.asset_id);
@@ -11467,7 +11504,7 @@ test("iterateAccountAssets enforces maxItems and offset progression", async () =
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const collected = [];
-  for await (const holding of client.iterateAccountAssets("alice@wonderland", {
+  for await (const holding of client.iterateAccountAssets("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", {
     pageSize: 2,
     maxItems: 3,
   })) {
@@ -11490,7 +11527,7 @@ test("listAccountAssets surfaces permission errors with payload details", async 
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
-    () => client.listAccountAssets("alice@wonderland", { limit: 1 }),
+    () => client.listAccountAssets("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", { limit: 1 }),
     (error) => {
       assert.ok(error instanceof ToriiHttpError);
       assert.equal(error.status, 403);
@@ -11511,7 +11548,7 @@ test("queryAccountAssets surfaces permission errors with payload details", async
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
-    () => client.queryAccountAssets("alice@wonderland", { filter: { Eq: ["asset_id", "rose##alice"] } }),
+    () => client.queryAccountAssets("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", { filter: { Eq: ["asset_id", "rose##alice"] } }),
     (error) => {
       assert.ok(error instanceof ToriiHttpError);
       assert.equal(error.status, 403);
@@ -11525,7 +11562,7 @@ test("queryAccountAssets surfaces permission errors with payload details", async
 test("listAccountTransactions encodes pagination params", async () => {
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
-    assert.equal(parsed.pathname, accountPath("alice@wonderland", "/transactions"));
+    assert.equal(parsed.pathname, accountPath("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", "/transactions"));
     assert.equal(parsed.searchParams.get("limit"), "3");
     assert.equal(parsed.searchParams.get("offset"), "4");
     return createResponse({
@@ -11533,7 +11570,7 @@ test("listAccountTransactions encodes pagination params", async () => {
       jsonData: {
         items: [
           {
-            authority: "alice@wonderland",
+            authority: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
             entrypoint_hash: "abc",
             result_ok: true,
             timestamp_ms: 123,
@@ -11545,7 +11582,7 @@ test("listAccountTransactions encodes pagination params", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const payload = await client.listAccountTransactions("alice@wonderland", {
+  const payload = await client.listAccountTransactions("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", {
     limit: 3,
     offset: 4,
   });
@@ -11565,7 +11602,7 @@ test("listAccountTransactions validates boolean result fields", async () => {
       }),
   });
   await assert.rejects(
-    () => client.listAccountTransactions("alice@wonderland"),
+    () => client.listAccountTransactions("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx"),
     /account transaction list response\.items\[0]\.result_ok/,
   );
 });
@@ -11589,7 +11626,7 @@ test("listAccountTransactions rejects camelCase entrypointHash fields", async ()
       }),
   });
   await assert.rejects(
-    () => client.listAccountTransactions("alice@wonderland"),
+    () => client.listAccountTransactions("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx"),
     /account transaction list response\.items\[0]\.entrypointHash is not supported/,
   );
 });
@@ -11606,13 +11643,13 @@ test("queryAccountTransactions posts structured envelope", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await client.queryAccountTransactions("alice@wonderland", {
-    filter: { Eq: ["authority", "alice@wonderland"] },
+  await client.queryAccountTransactions("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", {
+    filter: { Eq: ["authority", "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx"] },
     sort: [{ key: "timestamp_ms", order: "desc" }],
     fetchSize: 5,
     queryName: "AccountTransactions",
   });
-  assert.deepEqual(capturedBody.filter, { Eq: ["authority", "alice@wonderland"] });
+  assert.deepEqual(capturedBody.filter, { Eq: ["authority", "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx"] });
   assert.deepEqual(capturedBody.sort, [{ key: "timestamp_ms", order: "desc" }]);
   assert.equal(capturedBody.fetch_size, 5);
   assert.equal(capturedBody.query, "AccountTransactions");
@@ -11645,7 +11682,7 @@ test("iterateAccountTransactions paginates results", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const hashes = [];
-  for await (const tx of client.iterateAccountTransactions("alice@wonderland", {
+  for await (const tx of client.iterateAccountTransactions("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", {
     pageSize: 1,
     maxItems: 3,
   })) {
@@ -11659,7 +11696,7 @@ test("iterateAccountTransactionsQuery walks query endpoint", async () => {
   let callCount = 0;
   const fetchImpl = async (url, init) => {
     const parsed = new URL(url);
-    assert.equal(parsed.pathname, accountPath("alice@wonderland", "/transactions/query"));
+    assert.equal(parsed.pathname, accountPath("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", "/transactions/query"));
     const body = JSON.parse(init.body);
     const offset = Number(body.pagination?.offset ?? 0);
     callCount += 1;
@@ -11675,7 +11712,7 @@ test("iterateAccountTransactionsQuery walks query endpoint", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const hashes = [];
-  for await (const tx of client.iterateAccountTransactionsQuery("alice@wonderland", {
+  for await (const tx of client.iterateAccountTransactionsQuery("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", {
     pageSize: 1,
   })) {
     hashes.push(tx.entrypoint_hash);
@@ -11707,8 +11744,8 @@ test("listAccountAssets trims and encodes path segments", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await client.listAccountAssets("  alice@wonderland  ");
-  assert.equal(capturedPath, accountPath("alice@wonderland", "/assets"));
+  await client.listAccountAssets("  34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx  ");
+  assert.equal(capturedPath, accountPath("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", "/assets"));
 });
 
 test("listAssetHolders encodes definition id", async () => {
@@ -11718,7 +11755,7 @@ test("listAssetHolders encodes definition id", async () => {
     return createResponse({
       status: 200,
       jsonData: {
-        items: [{ account_id: "alice@wonderland", quantity: "10" }],
+        items: [{ account_id: FIXTURE_ALICE_ID, quantity: "10" }],
         total: 1,
       },
       headers: { "content-type": "application/json" },
@@ -11726,7 +11763,7 @@ test("listAssetHolders encodes definition id", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const payload = await client.listAssetHolders("rose#wonderland");
-  assert.equal(payload.items[0].account_id, "alice@wonderland");
+  assert.equal(payload.items[0].account_id, FIXTURE_ALICE_ID);
 });
 
 test("listAssetHolders validates holder identifiers", async () => {
@@ -11752,8 +11789,8 @@ test("listAssetHolders rejects camelCase accountId fields", async () => {
         jsonData: {
           items: [
             {
-              account_id: "alice@wonderland",
-              accountId: "alice@wonderland",
+              account_id: FIXTURE_ALICE_ID,
+              accountId: FIXTURE_ALICE_ID,
               quantity: "10",
             },
           ],
@@ -11785,8 +11822,8 @@ test("queryAssetHolders posts encoded definition path", async () => {
 
 test("iterateAssetHolders paginates holder list", async () => {
   const responses = [
-    { items: [{ account_id: "alice@wonderland", quantity: "5" }], total: 2 },
-    { items: [{ account_id: "bob@narnia", quantity: "4" }], total: 2 },
+    { items: [{ account_id: FIXTURE_ALICE_ID, quantity: "5" }], total: 2 },
+    { items: [{ account_id: FIXTURE_BOB_NARNIA_ID, quantity: "4" }], total: 2 },
   ];
   let callCount = 0;
   const fetchImpl = async () => {
@@ -11803,7 +11840,7 @@ test("iterateAssetHolders paginates holder list", async () => {
   for await (const holder of client.iterateAssetHolders("rose#wonderland", { pageSize: 1 })) {
     holders.push(holder.account_id);
   }
-  assert.deepEqual(holders, ["alice@wonderland", "bob@narnia"]);
+  assert.deepEqual(holders, [FIXTURE_ALICE_ID, FIXTURE_BOB_NARNIA_ID]);
 });
 
 test("iterateAssetHoldersQuery paginates query responses", async () => {
@@ -11816,8 +11853,8 @@ test("iterateAssetHoldersQuery paginates query responses", async () => {
     callCount += 1;
     const items =
       offset === 0
-        ? [{ account_id: "alice@wonderland", quantity: "5" }]
-        : [{ account_id: "bob@narnia", quantity: "4" }];
+        ? [{ account_id: FIXTURE_ALICE_ID, quantity: "5" }]
+        : [{ account_id: FIXTURE_BOB_NARNIA_ID, quantity: "4" }];
     return createResponse({
       status: 200,
       jsonData: { items, total: 2 },
@@ -11831,7 +11868,7 @@ test("iterateAssetHoldersQuery paginates query responses", async () => {
   })) {
     ids.push(holder.account_id);
   }
-  assert.deepEqual(ids, ["alice@wonderland", "bob@narnia"]);
+  assert.deepEqual(ids, [FIXTURE_ALICE_ID, FIXTURE_BOB_NARNIA_ID]);
   assert.equal(callCount, 2);
 });
 
@@ -11954,10 +11991,10 @@ test("iterateTriggers paginates list endpoint", async () => {
     const items =
       offset === 0
         ? [
-            { id: "trigger-1", owner: "alice@wonderland" },
-            { id: "trigger-2", owner: "bob@wonderland" },
+            { id: "trigger-1", owner: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx" },
+            { id: "trigger-2", owner: "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i" },
           ]
-        : [{ id: "trigger-3", owner: "carol@wonderland" }];
+        : [{ id: "trigger-3", owner: "34mSYnDgbaJM58rbLoif4Tkp7G7YZ5g3PsY6LcceZ1Kf1tcQGqPbGs7g4fy6LPy8AjNxDXGrg" }];
     return createResponse({
       status: 200,
       jsonData: { items, total: 3 },
@@ -11981,15 +12018,15 @@ test("iterateTriggersQuery paginates query payloads", async () => {
     assert.equal(parsed.pathname, "/v1/triggers/query");
     const body = JSON.parse(init.body);
     const offset = Number(body.pagination?.offset ?? 0);
-    assert.deepEqual(body.filter, { Eq: ["object.authority", "alice@wonderland"] });
+    assert.deepEqual(body.filter, { Eq: ["object.authority", "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx"] });
     callCount += 1;
     const items =
       offset === 0
         ? [
-            { id: "trigger-1", owner: "alice@wonderland" },
-            { id: "trigger-2", owner: "alice@wonderland" },
+            { id: "trigger-1", owner: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx" },
+            { id: "trigger-2", owner: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx" },
           ]
-        : [{ id: "trigger-3", owner: "alice@wonderland" }];
+        : [{ id: "trigger-3", owner: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx" }];
     return createResponse({
       status: 200,
       jsonData: { items, total: 3 },
@@ -11999,7 +12036,7 @@ test("iterateTriggersQuery paginates query payloads", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const ids = [];
   for await (const trigger of client.iterateTriggersQuery({
-    filter: { Eq: ["object.authority", "alice@wonderland"] },
+    filter: { Eq: ["object.authority", "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx"] },
     pageSize: 2,
   })) {
     ids.push(trigger.id);
@@ -13774,7 +13811,7 @@ test("registerContractCode posts manifest JSON", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await client.registerContractCode({
-    authority: "alice@wonderland",
+    authority: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
     privateKey: "ed25519:deadbeef",
     manifest: { code_hash: "a".repeat(64), compiler_fingerprint: "rustc" },
     codeBytes: Buffer.from("hello"),
@@ -13784,7 +13821,7 @@ test("registerContractCode posts manifest JSON", async () => {
   assert.equal(captured.init.headers["Content-Type"], "application/json");
   const body = JSON.parse(captured.init.body);
   assert.deepEqual(body, {
-    authority: "alice@wonderland",
+    authority: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
     private_key: "ed25519:deadbeef",
     manifest: {
       code_hash: "a".repeat(64),
@@ -13815,7 +13852,7 @@ test("deployContract submits base64 payload and returns response", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.deployContract({
-    authority: "alice@wonderland",
+    authority: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
     privateKey: "ed25519:deadbeef",
     codeB64: Buffer.from("payload"),
     manifest: { features_bitmap: 1 },
@@ -13843,7 +13880,7 @@ test("deployContract rejects invalid base64 payloads", async () => {
   await assert.rejects(
     () =>
       client.deployContract({
-        authority: "alice@wonderland",
+        authority: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
         privateKey: "ed25519:deadbeef",
         codeB64: "YmFzZTY0*",
       }),
@@ -13863,7 +13900,7 @@ test("deployContract rejects empty code bytes", async () => {
   await assert.rejects(
     () =>
       client.deployContract({
-        authority: "alice@wonderland",
+        authority: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
         privateKey: "ed25519:deadbeef",
         codeB64: Buffer.alloc(0),
       }),
@@ -13890,17 +13927,17 @@ test("deployContractInstance posts combined payload", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.deployContractInstance({
-    authority: "alice@wonderland",
+    authority: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
     privateKey: "ed25519:deadbeef",
     namespace: "apps",
     contractId: "calc",
     codeB64: "YmFzZTY0",
-    manifest: { access_set_hints: { read_keys: ["account:alice@wonderland"] } },
+    manifest: { access_set_hints: { read_keys: ["account:34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx"] } },
   });
   assert.equal(captured.url, `${BASE_URL}/v1/contracts/instance`);
   const body = JSON.parse(captured.init.body);
   assert.deepEqual(body, {
-    authority: "alice@wonderland",
+    authority: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
     private_key: "ed25519:deadbeef",
     namespace: "apps",
     contract_id: "calc",
@@ -13910,7 +13947,7 @@ test("deployContractInstance posts combined payload", async () => {
       abi_hash: null,
       compiler_fingerprint: null,
       features_bitmap: null,
-      access_set_hints: { read_keys: ["account:alice@wonderland"], write_keys: [] },
+      access_set_hints: { read_keys: ["account:34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx"], write_keys: [] },
       entrypoints: null,
     },
   });
@@ -13929,7 +13966,7 @@ test("activateContractInstance normalizes code hash", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.activateContractInstance({
-    authority: "alice@wonderland",
+    authority: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
     privateKey: "ed25519:deadbeef",
     namespace: "apps",
     contractId: "calc",
@@ -13962,7 +13999,7 @@ test("callContract posts payload metadata and normalizes response", async () => 
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const payload = { value: 7, labels: ["a", "b"] };
   const result = await client.callContract({
-    authority: "alice@wonderland",
+    authority: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
     privateKey: "ed25519:deadbeef",
     namespace: "apps",
     contractId: "calc",
@@ -13974,7 +14011,7 @@ test("callContract posts payload metadata and normalizes response", async () => 
   assert.equal(captured.url, `${BASE_URL}/v1/contracts/call`);
   const body = JSON.parse(captured.init.body);
   assert.deepEqual(body, {
-    authority: "alice@wonderland",
+    authority: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
     private_key: "ed25519:deadbeef",
     namespace: "apps",
     contract_id: "calc",
@@ -14003,7 +14040,7 @@ test("callContract rejects missing gasLimit", async () => {
   await assert.rejects(
     () =>
       client.callContract({
-        authority: "alice@wonderland",
+        authority: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
         privateKey: "ed25519:deadbeef",
         namespace: "apps",
         contractId: "calc",
@@ -14022,7 +14059,7 @@ test("callContract rejects non-object options", async () => {
     () =>
       client.callContract(
         {
-          authority: "alice@wonderland",
+          authority: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
           privateKey: "ed25519:deadbeef",
           namespace: "apps",
           contractId: "calc",
@@ -14044,7 +14081,7 @@ test("callContract rejects unsupported option fields", async () => {
     () =>
       client.callContract(
         {
-          authority: "alice@wonderland",
+          authority: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
           privateKey: "ed25519:deadbeef",
           namespace: "apps",
           contractId: "calc",
@@ -14255,14 +14292,14 @@ test("listTriggers encodes query params and normalizes payload", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const page = await client.listTriggers({
     namespace: "apps",
-    authority: "issuer@wonderland",
+    authority: "34mSYnDgbaJM58rbLoif4Tkp7G87ppQ2nBddonWGhr79Cejim7cD2gzEKthb6WAH4CDJgD86P",
     limit: 5,
     offset: 10,
   });
   const parsed = new URL(capturedUrl);
   assert.equal(parsed.pathname, "/v1/triggers");
   assert.equal(parsed.searchParams.get("namespace"), "apps");
-  assert.equal(parsed.searchParams.get("authority"), "issuer@wonderland");
+  assert.equal(parsed.searchParams.get("authority"), "34mSYnDgbaJM58rbLoif4Tkp7G87ppQ2nBddonWGhr79Cejim7cD2gzEKthb6WAH4CDJgD86P");
   assert.equal(parsed.searchParams.get("limit"), "5");
   assert.equal(parsed.searchParams.get("offset"), "10");
   assert.equal(page.total, 1);
@@ -14584,7 +14621,7 @@ test("listOfflineAllowances normalizes payloads and query params", async () => {
   let capturedUrl;
   const allowanceRecord = {
     certificate: {
-      controller: "alice@wonderland",
+      controller: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
       allowance: { asset: "usd#wonderland", amount: "500" },
     },
     current_commitment: "0xdeadbeef",
@@ -14611,7 +14648,7 @@ test("listOfflineAllowances normalizes payloads and query params", async () => {
         items: [
       {
         certificate_id_hex: "cafebabe",
-        controller_id: "alice@wonderland",
+        controller_id: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
         controller_display: "snx1qqqqqqqq",
         asset_id: "usd#wonderland",
             registered_at_ms: "1234",
@@ -14629,7 +14666,7 @@ test("listOfflineAllowances normalizes payloads and query params", async () => {
       },
           {
             certificate_id_hex: "feedface",
-            controller_id: "bob@wonderland",
+            controller_id: "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i",
             controller_display: "snx1qqqqqqqr",
             asset_id: "usd#wonderland",
             registered_at_ms: 2000,
@@ -14645,7 +14682,7 @@ test("listOfflineAllowances normalizes payloads and query params", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const filter = { Eq: ["controller_id", "alice@wonderland"] };
+  const filter = { Eq: ["controller_id", "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx"] };
   const page = await client.listOfflineAllowances({
     filter,
     sort: "registered_at_ms:desc",
@@ -14664,7 +14701,7 @@ test("listOfflineAllowances normalizes payloads and query params", async () => {
   assert.equal(page.items.length, 2);
   const item = page.items[0];
   assert.equal(item.certificate_id_hex, "cafebabe");
-  assert.equal(item.controller_id, "alice@wonderland");
+  assert.equal(item.controller_id, "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx");
   assert.equal(item.controller_display, "snx1qqqqqqqq");
   assert.equal(item.asset_id, "usd#wonderland");
   assert.equal(item.registered_at_ms, 1234);
@@ -14728,7 +14765,7 @@ test("listOfflineAllowances captures play integrity metadata", async () => {
         items: [
           {
             certificate_id_hex: "cafebabe",
-            controller_id: "alice@wonderland",
+            controller_id: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
             controller_display: "snx1qqqqqqqq",
             asset_id: "usd#wonderland",
             registered_at_ms: "1234",
@@ -14784,7 +14821,7 @@ test("listOfflineAllowances captures hms safety detect metadata", async () => {
         items: [
           {
             certificate_id_hex: "deadbeef",
-            controller_id: "bob@wonderland",
+            controller_id: "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i",
             controller_display: "snx1qqqqqqqq",
             asset_id: "usd#wonderland",
             registered_at_ms: "1234",
@@ -14838,11 +14875,11 @@ test("listOfflineTransfers normalizes payloads and metadata", async () => {
         items: [
           {
             bundle_id_hex: "CAFEBABE",
-            controller_id: "alice@wonderland",
+            controller_id: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
             controller_display: "snx1qqqqqqqq",
-            receiver_id: "merchant@wonderland",
+            receiver_id: "34mSYnDgbaJM58rbLoif4Tkp7G67C73PKjYE6fuJBME5VfWthHXdZoWkGoteTkgG8vKpfRrci",
             receiver_display: "snx1qqqqqqqr",
-            deposit_account_id: "merchant@wonderland",
+            deposit_account_id: "34mSYnDgbaJM58rbLoif4Tkp7G67C73PKjYE6fuJBME5VfWthHXdZoWkGoteTkgG8vKpfRrci",
             deposit_account_display: "snx1qqqqqqqs",
             asset_id: "usd#wonderland",
             receipt_count: "2",
@@ -14867,11 +14904,11 @@ test("listOfflineTransfers normalizes payloads and metadata", async () => {
           },
           {
             bundle_id_hex: "FEEDBEEF",
-            controller_id: "bob@wonderland",
+            controller_id: "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i",
             controller_display: "snx1qqqqqqqt",
-            receiver_id: "merchant@wonderland",
+            receiver_id: "34mSYnDgbaJM58rbLoif4Tkp7G67C73PKjYE6fuJBME5VfWthHXdZoWkGoteTkgG8vKpfRrci",
             receiver_display: "snx1qqqqqqqu",
-            deposit_account_id: "merchant@wonderland",
+            deposit_account_id: "34mSYnDgbaJM58rbLoif4Tkp7G67C73PKjYE6fuJBME5VfWthHXdZoWkGoteTkgG8vKpfRrci",
             deposit_account_display: "snx1qqqqqqqv",
             asset_id: null,
             receipt_count: 1,
@@ -14902,9 +14939,9 @@ test("listOfflineTransfers normalizes payloads and metadata", async () => {
     limit: 5,
     offset: 2,
     sort: "recorded_at_ms:desc",
-    controllerId: "alice@wonderland",
-    receiverId: "merchant@wonderland",
-    depositAccountId: "vault@wonderland",
+    controllerId: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
+    receiverId: "34mSYnDgbaJM58rbLoif4Tkp7G67C73PKjYE6fuJBME5VfWthHXdZoWkGoteTkgG8vKpfRrci",
+    depositAccountId: "34mSYnDgbaJM58rbLoif4Tkp7G6qLzY5gaqJUfCvT4YHbbY5YhYjzprYUUjE9KJ5qNAisCxyW",
     platformPolicy: "PLAY_INTEGRITY",
   });
   assert.ok(capturedUrl, "request not issued");
@@ -14913,15 +14950,15 @@ test("listOfflineTransfers normalizes payloads and metadata", async () => {
   assert.equal(parsed.searchParams.get("limit"), "5");
   assert.equal(parsed.searchParams.get("offset"), "2");
   assert.equal(parsed.searchParams.get("sort"), "recorded_at_ms:desc");
-  assert.equal(parsed.searchParams.get("controller_id"), "alice@wonderland");
-  assert.equal(parsed.searchParams.get("receiver_id"), "merchant@wonderland");
-  assert.equal(parsed.searchParams.get("deposit_account_id"), "vault@wonderland");
+  assert.equal(parsed.searchParams.get("controller_id"), "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx");
+  assert.equal(parsed.searchParams.get("receiver_id"), "34mSYnDgbaJM58rbLoif4Tkp7G67C73PKjYE6fuJBME5VfWthHXdZoWkGoteTkgG8vKpfRrci");
+  assert.equal(parsed.searchParams.get("deposit_account_id"), "34mSYnDgbaJM58rbLoif4Tkp7G6qLzY5gaqJUfCvT4YHbbY5YhYjzprYUUjE9KJ5qNAisCxyW");
   assert.equal(parsed.searchParams.get("platform_policy"), "play_integrity");
   assert.equal(page.total, 2);
   const [transfer, fallback] = page.items;
   assert.equal(transfer.bundle_id_hex, "CAFEBABE");
-  assert.equal(transfer.controller_id, "alice@wonderland");
-  assert.equal(transfer.receiver_id, "merchant@wonderland");
+  assert.equal(transfer.controller_id, "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx");
+  assert.equal(transfer.receiver_id, "34mSYnDgbaJM58rbLoif4Tkp7G67C73PKjYE6fuJBME5VfWthHXdZoWkGoteTkgG8vKpfRrci");
   assert.equal(transfer.asset_id, "usd#wonderland");
   assert.equal(transfer.receipt_count, 2);
   assert.equal(transfer.total_amount, "15");
@@ -14944,7 +14981,7 @@ test("listOfflineTransfers normalizes payloads and metadata", async () => {
 test("issueOfflineCertificate posts draft and parses response", async () => {
   const certId = "deadbeef".repeat(8);
   const draft = {
-    controller: "alice@wonderland",
+    controller: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
     allowance: {
       asset: "usd#wonderland",
       amount: "10",
@@ -14968,7 +15005,7 @@ test("issueOfflineCertificate posts draft and parses response", async () => {
       jsonData: {
         certificate_id_hex: certId,
         certificate: {
-          controller: "alice@wonderland",
+          controller: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
           allowance: {
             asset: "usd#wonderland",
             amount: "10",
@@ -15001,7 +15038,7 @@ test("issueOfflineCertificate posts draft and parses response", async () => {
   assert.ok(body.certificate);
   assert.deepEqual(body.certificate.attestation_report, [4, 5, 6]);
   assert.equal(response.certificate_id_hex, certId);
-  assert.equal(response.certificate.controller, "alice@wonderland");
+  assert.equal(response.certificate.controller, "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx");
 });
 
 test("issueOfflineCertificate rejects invalid Numeric amounts", async () => {
@@ -15012,7 +15049,7 @@ test("issueOfflineCertificate rejects invalid Numeric amounts", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const draft = {
-    controller: "alice@wonderland",
+    controller: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
     allowance: {
       asset: "usd#wonderland",
       amount: "1e-3",
@@ -15045,7 +15082,7 @@ test("issueOfflineCertificateRenewal posts to renewal path", async () => {
       jsonData: {
         certificate_id_hex: certId,
         certificate: {
-          controller: "alice@wonderland",
+          controller: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
           allowance: {
             asset: "usd#wonderland",
             amount: "10",
@@ -15072,7 +15109,7 @@ test("issueOfflineCertificateRenewal posts to renewal path", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await client.issueOfflineCertificateRenewal(certId.toUpperCase(), {
-    controller: "alice@wonderland",
+    controller: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
     allowance: {
       asset: "usd#wonderland",
       amount: "10",
@@ -15111,7 +15148,7 @@ test("listOfflineAllowances encodes convenience query params", async () => {
     },
   });
   await client.listOfflineAllowances({
-    controllerId: "alice@wonderland",
+    controllerId: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
     certificateExpiresBeforeMs: 1_000,
     certificateExpiresAfterMs: 100,
     policyExpiresBeforeMs: 2_000,
@@ -15124,7 +15161,7 @@ test("listOfflineAllowances encodes convenience query params", async () => {
   });
   assert.ok(capturedUrl, "request not issued");
   const parsed = new URL(capturedUrl);
-  assert.equal(parsed.searchParams.get("controller_id"), "alice@wonderland");
+  assert.equal(parsed.searchParams.get("controller_id"), "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx");
   assert.equal(parsed.searchParams.get("certificate_expires_before_ms"), "1000");
   assert.equal(parsed.searchParams.get("certificate_expires_after_ms"), "100");
   assert.equal(parsed.searchParams.get("policy_expires_before_ms"), "2000");
@@ -15262,10 +15299,10 @@ test("queryOfflineAllowances forwards convenience options to query endpoint", as
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const filter = { Eq: ["controller_id", "alice@wonderland"] };
+  const filter = { Eq: ["controller_id", "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx"] };
   await client.queryOfflineAllowances({
-    controllerId: "alice@wonderland",
-    receiverId: "bob@wonderland",
+    controllerId: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
+    receiverId: "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i",
     certificateExpiresBeforeMs: "5000",
     verdictIdHex: "DEADBEEF",
     attestationNonceHex: "CAFEBABE",
@@ -15278,8 +15315,8 @@ test("queryOfflineAllowances forwards convenience options to query endpoint", as
   });
   const parsed = new URL(capturedUrl);
   assert.equal(parsed.pathname, "/v1/offline/allowances/query");
-  assert.equal(parsed.searchParams.get("controller_id"), "alice@wonderland");
-  assert.equal(parsed.searchParams.get("receiver_id"), "bob@wonderland");
+  assert.equal(parsed.searchParams.get("controller_id"), "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx");
+  assert.equal(parsed.searchParams.get("receiver_id"), "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i");
   assert.equal(parsed.searchParams.get("certificate_expires_before_ms"), "5000");
   assert.equal(parsed.searchParams.get("verdict_id_hex"), "deadbeef");
   assert.equal(parsed.searchParams.get("attestation_nonce_hex"), "cafebabe");
@@ -15331,7 +15368,7 @@ test("listOfflineRevocations normalizes payloads and query params", async () => 
         items: [
           {
             verdict_id_hex: "DEADBEEF",
-            issuer_id: "authority@wonderland",
+            issuer_id: "34mSYnDgbaJM58rbLoif4Tkp7G3LK6omG8ADbG9xFzScZtGz4E1xiodxK2zhisn9dsGDuAVgS",
             issuer_display: "snx1qqqqqqqq",
             revoked_at_ms: "1234",
             reason: "compromised_device",
@@ -15364,7 +15401,7 @@ test("listOfflineRevocations normalizes payloads and query params", async () => 
   assert.equal(page.items.length, 1);
   const item = page.items[0];
   assert.equal(item.verdict_id_hex, "deadbeef");
-  assert.equal(item.issuer_id, "authority@wonderland");
+  assert.equal(item.issuer_id, "34mSYnDgbaJM58rbLoif4Tkp7G3LK6omG8ADbG9xFzScZtGz4E1xiodxK2zhisn9dsGDuAVgS");
   assert.equal(item.issuer_display, "snx1qqqqqqqq");
   assert.equal(item.revoked_at_ms, 1234);
   assert.equal(item.reason, "compromised_device");
@@ -15433,7 +15470,7 @@ test("listOfflineSummaries normalizes counters and query params", async () => {
     items: [
       {
         certificate_id_hex: "feedface",
-        controller_id: "alice@wonderland",
+        controller_id: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
         controller_display: "snx1alice",
         summary_hash_hex: "beadbead",
         apple_key_counters: { primary: "4" },
@@ -15460,7 +15497,7 @@ test("listOfflineSummaries normalizes counters and query params", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const filter = { Eq: ["controller_id", "alice@wonderland"] };
+  const filter = { Eq: ["controller_id", "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx"] };
   const page = await client.listOfflineSummaries({
     limit: 10,
     offset: 5,
@@ -15480,7 +15517,7 @@ test("listOfflineSummaries normalizes counters and query params", async () => {
   assert.equal(page.items.length, 1);
   const item = page.items[0];
   assert.equal(item.certificate_id_hex, "feedface");
-  assert.equal(item.controller_id, "alice@wonderland");
+  assert.equal(item.controller_id, "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx");
   assert.equal(item.controller_display, "snx1alice");
   assert.equal(item.summary_hash_hex, "beadbead");
   assert.deepEqual(item.apple_key_counters, { primary: 4 });
@@ -15502,7 +15539,7 @@ test("queryOfflineSummaries posts envelope and normalizes payload", async () => 
     items: [
       {
         certificate_id_hex: "cafebabe",
-        controller_id: "bob@wonderland",
+        controller_id: "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i",
         controller_display: "snx1bob",
         summary_hash_hex: "abbaabba",
         apple_key_counters: { regional: "7" },
@@ -15546,7 +15583,7 @@ test("queryOfflineSummaries posts envelope and normalizes payload", async () => 
   assert.equal(page.total, 1);
   const item = page.items[0];
   assert.equal(item.certificate_id_hex, "cafebabe");
-  assert.equal(item.controller_id, "bob@wonderland");
+  assert.equal(item.controller_id, "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i");
   assert.equal(item.summary_hash_hex, "abbaabba");
   assert.deepEqual(item.apple_key_counters, { regional: 7 });
   assert.deepEqual(item.android_series_counters, { fallback: 2 });
@@ -15660,11 +15697,11 @@ test("queryOfflineTransfers posts envelope and normalizes optional fields", asyn
     items: [
       {
         bundle_id_hex: "ff00",
-        controller_id: "alice@wonderland",
+        controller_id: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
         controller_display: "snx1controller",
-        receiver_id: "bob@wonderland",
+        receiver_id: "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i",
         receiver_display: "snx1receiver",
-        deposit_account_id: "vault@wonderland",
+        deposit_account_id: "34mSYnDgbaJM58rbLoif4Tkp7G6qLzY5gaqJUfCvT4YHbbY5YhYjzprYUUjE9KJ5qNAisCxyW",
         deposit_account_display: "snx1vault",
         status: "Pending",
         recorded_at_ms: 1_000,
@@ -15728,8 +15765,8 @@ test("queryOfflineTransfers posts envelope and normalizes optional fields", asyn
   assert.equal(result.total, 1);
   const transfer = result.items[0];
   assert.equal(transfer.bundle_id_hex, "ff00");
-  assert.equal(transfer.receiver_id, "bob@wonderland");
-  assert.equal(transfer.deposit_account_id, "vault@wonderland");
+  assert.equal(transfer.receiver_id, "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i");
+  assert.equal(transfer.deposit_account_id, "34mSYnDgbaJM58rbLoif4Tkp7G6qLzY5gaqJUfCvT4YHbbY5YhYjzprYUUjE9KJ5qNAisCxyW");
   assert.equal(transfer.asset_id, null);
   assert.equal(transfer.receipt_count, 2);
   assert.equal(transfer.total_amount, "42");
@@ -16161,7 +16198,7 @@ test("getExplorerMetrics rejects unsupported option fields", async () => {
 });
 
 test("getExplorerAccountQr normalizes payloads and accepts address format options", async () => {
-  const accountId = "alice@wonderland";
+  const accountId = "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx";
   let callCount = 0;
   const fetchImpl = async (url, init = {}) => {
     callCount += 1;
@@ -16232,7 +16269,7 @@ test("getExplorerAccountQr rejects non-object options", async () => {
     },
   });
   await assert.rejects(
-    () => client.getExplorerAccountQr("alice@wonderland", 42),
+    () => client.getExplorerAccountQr("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", 42),
     /getExplorerAccountQr options must be an object/,
   );
 });
@@ -16244,7 +16281,7 @@ test("getExplorerAccountQr rejects unsupported option fields", async () => {
     },
   });
   await assert.rejects(
-    () => client.getExplorerAccountQr("alice@wonderland", { addressFormat: "ih58", extra: true }),
+    () => client.getExplorerAccountQr("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", { addressFormat: "ih58", extra: true }),
     /getExplorerAccountQr options contains unsupported fields: extra/,
   );
 });
@@ -16620,7 +16657,7 @@ test("createSnsGovernanceCase posts payload, forwards AbortSignal, and normalize
     status: "open",
     reporter: { role: "registrar", contact: "ops@example.com", referenceTicket: "SUP-1" },
     respondents: [
-      { role: "registrant", accountId: "alice@wonderland", contact: "alice@example.com" },
+      { role: "registrant", accountId: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", contact: "alice@example.com" },
     ],
     allegations: [{ code: "A1", summary: "ownership dispute", policyReference: "policy-1" }],
     evidence: [
@@ -16710,7 +16747,7 @@ test("createSnsGovernanceCase normalizes camelCase payload fields before posting
     priority: "high",
     reason: "abuse-report",
     reporter: { role: "registrar", contact: "ops@example.com", referenceTicket: "SUP-42" },
-    respondents: [{ role: "registrant", accountId: "alice@wonderland" }],
+    respondents: [{ role: "registrant", accountId: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx" }],
     allegations: [{ code: "A1", summary: "ownership dispute", policyReference: "policy-1" }],
     evidence: [
       {
@@ -16740,7 +16777,7 @@ test("createSnsGovernanceCase normalizes camelCase payload fields before posting
     priority: "high",
     reason: "abuse-report",
     reporter: { role: "registrar", contact: "ops@example.com", reference_ticket: "SUP-42" },
-    respondents: [{ role: "registrant", account_id: "alice@wonderland" }],
+    respondents: [{ role: "registrant", account_id: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx" }],
     allegations: [{ code: "A1", summary: "ownership dispute", policy_reference: "policy-1" }],
     evidence: [
       {
@@ -16834,7 +16871,7 @@ test("exportSnsGovernanceCases normalizes filters, options, and response payload
         status: "open",
         reporter: { role: "registrar", contact: "ops@example.com", referenceTicket: "SUP-1" },
         respondents: [
-          { role: "registrant", accountId: "alice@wonderland", contact: "alice@example.com" },
+          { role: "registrant", accountId: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", contact: "alice@example.com" },
         ],
         allegations: [{ code: "A1", summary: "ownership dispute", policyReference: "policy-1" }],
         evidence: [
@@ -17062,8 +17099,8 @@ test("methods surface HTTP errors with body", async () => {
 
 test("http errors expose structured fields", async () => {
   const payload = {
-    code: "ERR_STRICT_ADDRESS_REQUIRED",
-    message: "strict address required",
+    code: "ERR_ACCOUNT_LITERAL_FORMAT",
+    message: "invalid account literal",
   };
   const fetchImpl = async () =>
     createResponse({

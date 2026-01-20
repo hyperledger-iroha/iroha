@@ -5818,25 +5818,18 @@ fileprivate func canonicalizeGovernanceZkOwnerLiteral(_ raw: String, field: Stri
     if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
         throw ToriiClientError.invalidPayload("\(field).owner must be a canonical account id.")
     }
-    let parts = trimmed.split(separator: "@", omittingEmptySubsequences: false)
-    guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else {
+    if trimmed.contains("@") {
         throw ToriiClientError.invalidPayload("\(field).owner must be a canonical account id.")
     }
-    let addressPart = String(parts[0])
-    let domainPart = String(parts[1])
-    let canonicalDomain = try AccountAddress.canonicalizeDomainLabel(domainPart)
     let (address, format) = try AccountAddress.parseAny(
-        addressPart,
+        trimmed,
         expectedPrefix: 0x02F1
     )
     guard format == .ih58 else {
         throw ToriiClientError.invalidPayload("\(field).owner must be a canonical account id.")
     }
-    guard address.matchesDomainLabel(canonicalDomain) else {
-        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical account id.")
-    }
     let ih58 = try address.toIH58(networkPrefix: 0x02F1)
-    return "\(ih58)@\(canonicalDomain)"
+    return ih58
 }
 
 fileprivate func governanceZkHintPresent(_ value: ToriiJSONValue?) -> Bool {

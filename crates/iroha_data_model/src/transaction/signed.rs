@@ -1664,6 +1664,7 @@ impl TransactionResult {
 mod norito_rpc_fixture_tests {
     use super::*;
     use crate::account::address::{AccountAddress, AccountAddressFormat, ChainDiscriminantGuard};
+    use base64::Engine;
     use base64::engine::general_purpose::STANDARD as BASE64;
     use iroha_crypto::Hash;
     use norito::{

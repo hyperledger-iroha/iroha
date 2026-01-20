@@ -69,7 +69,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 |-------|--------|
 | סטיה של fixture | צרו מחדש `fixtures/account/address_vectors.json`, הריצו שוב `cargo xtask address-vectors --verify`, עדכנו חבילות SDK, וצירפו snapshots של `address_fixture.prom` לכרטיס. |
 | רגרסיה ב-SDK/לקוח | פתחו issues שמפנות ל-fixture הקנוני + פלט `iroha address inspect`, וחסמו releases באמצעות CI לפריטי SDK (למשל `ci/check_address_normalize.sh`). |
-| השחתת manifest | בנו מחדש את manifest לפי `address_manifest_ops.md`, הריצו שוב `cargo xtask address-manifest verify`, והשאירו `torii.strict_addresses=true` עד שהטלמטריה מתנקה. |
 | שליחות זדוניות | הגבילו בקצב או חסמו principals פוגעניים, והסלימו ל-Governance אם נדרש tombstone למסננים. |
 
 לאחר שההקלות הוטמעו, הריצו שוב את שאילתת ה-PromQL שלמעלה כדי לוודא ש-`ERR_CHECKSUM_MISMATCH` נשאר באפס (למעט `/tests/*`) במשך לפחות 30 דקות לפני הורדת האירוע.

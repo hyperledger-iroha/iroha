@@ -79,7 +79,7 @@ fn account_definition_test() -> Result<(), Error> {
     let (public_key, _) = KeyPair::random().into_parts();
     // Create an AccountId instance by providing a DomainId instance and the public key
     let longhand_account_id = AccountId::new("looking_glass".parse()?, public_key.clone());
-    // Create an AccountId instance by parsing the serialized account alias format "alias@domain"
+    // Create an AccountId instance by parsing the `<public_key>@<domain>` input form
     let account_id: AccountId = format!("{public_key}@looking_glass")
         .parse()
         .expect("Valid, because before @ is a valid public key and after @ is a valid name i.e. a string with no spaces or forbidden chars");
@@ -111,7 +111,7 @@ fn account_registration_test(config: Config) -> Result<(), Error> {
     // #region register_account_create
     // Generate a new public key for a new account
     let (public_key, _) = KeyPair::random().into_parts();
-    // Create an AccountId instance by parsing the serialized account alias format "alias@domain"
+    // Create an AccountId instance by parsing the `<public_key>@<domain>` input form
     let account_id: AccountId = format!("{public_key}@looking_glass")
         .parse()
         .expect("Valid, because before @ is a valid public key and after @ is a valid name i.e. a string with no spaces or forbidden chars");
@@ -170,7 +170,7 @@ fn asset_registration_test(config: Config) -> Result<(), Error> {
 
     // Generate a new public key for a new account
     let (public_key, _) = KeyPair::random().into_parts();
-    // Create an AccountId instance by parsing the serialized account alias format "alias@domain"
+    // Create an AccountId instance by parsing the `<public_key>@<domain>` input form
     let account_id: AccountId = format!("{public_key}@looking_glass")
         .parse()
         .expect("Valid, because before @ is a valid public key and after @ is a valid name i.e. a string with no spaces or forbidden chars");

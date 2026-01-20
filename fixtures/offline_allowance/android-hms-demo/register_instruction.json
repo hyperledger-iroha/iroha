@@ -2,12 +2,12 @@
   "certificate": {
     "allowance": {
       "amount": "90",
-      "asset": "jpy#sora#34mSYnCXkCzHXm31UDHh7SJfGvDnjswdpXLnF6KZZURvknsyBzZYAp52aomkRNYy7FqmzxDRE@treasury",
+      "asset": "jpy#sora#34mSYnCXkCzHXm31UDHh7SJfGvDnjswdpXLnF6KZZURvknsyBzZYAp52aomkRNYy7FqmzxDRE",
       "commitment_hex": "B263C3FF37FA0478574B9F8A25D955D89178D6E39834328330085BB5AE9D907D"
     },
     "attestation_nonce_hex": "3333333333333333333333333333333333333333333333333333333333333333",
     "attestation_report_b64": "zHfMdw==",
-    "controller": "34mSYnDgbaJM58rbLoif4Tkp7G5jowHzX2wpqErt5uNjSaXGjsQoTGzsyFsSZwxLQRwJhJgfu@wonderland",
+    "controller": "34mSYnDgbaJM58rbLoif4Tkp7G5jowHzX2wpqErt5uNjSaXGjsQoTGzsyFsSZwxLQRwJhJgfu",
     "expires_at_ms": 1745900000000,
     "issued_at_ms": 1730314876000,
     "metadata": {

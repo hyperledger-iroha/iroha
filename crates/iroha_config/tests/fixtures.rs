@@ -512,7 +512,6 @@ fn minimal_config_snapshot() {
                     enabled: false,
                     endpoint: None,
                 },
-                strict_addresses: true,
                 debug_match_filters: false,
                 operator_auth: ToriiOperatorAuth {
                     enabled: false,
@@ -767,6 +766,27 @@ fn minimal_config_snapshot() {
                             ban: None,
                         },
                     },
+                },
+                sorafs_repair: SorafsRepair {
+                    enabled: false,
+                    db_dsn: None,
+                    db_pool_max_connections: 8,
+                    claim_ttl_secs: 900,
+                    heartbeat_interval_secs: 60,
+                    max_attempts: 3,
+                    worker_concurrency: 4,
+                    backoff_initial_secs: 5,
+                    backoff_max_secs: 60,
+                    default_slash_penalty_nano: 1_000_000_000,
+                },
+                sorafs_gc: SorafsGc {
+                    enabled: false,
+                    db_dsn: None,
+                    db_pool_max_connections: 4,
+                    interval_secs: 900,
+                    max_deletions_per_run: 500,
+                    retention_grace_secs: 86400,
+                    pre_admission_sweep: true,
                 },
                 sorafs_quota: SorafsQuota {
                     capacity_declaration: SorafsQuotaWindow {
@@ -1677,10 +1697,10 @@ fn minimal_config_snapshot() {
                 voting_asset_id: xor#sora,
                 citizenship_asset_id: xor#sora,
                 citizenship_bond_amount: 150,
-                citizenship_escrow_account: 34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland,
+                citizenship_escrow_account: 34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs,
                 min_bond_amount: 150,
-                bond_escrow_account: 34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland,
-                slash_receiver_account: 34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland,
+                bond_escrow_account: 34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs,
+                slash_receiver_account: 34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs,
                 slash_double_vote_bps: 2500,
                 slash_invalid_proof_bps: 5000,
                 slash_ineligible_proof_bps: 1500,
@@ -1707,8 +1727,8 @@ fn minimal_config_snapshot() {
                     role_bond_multipliers: {},
                 },
                 viral_incentives: ViralIncentives {
-                    incentive_pool_account: 34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland,
-                    escrow_account: 34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland,
+                    incentive_pool_account: 34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs,
+                    escrow_account: 34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs,
                     reward_asset_definition_id: xor#sora,
                     follow_reward_amount: Numeric {
                         mantissa: 1,
@@ -1805,7 +1825,7 @@ fn minimal_config_snapshot() {
                     max_window_gap: 21600s,
                     reject_zero_capacity: true,
                     submitters: [
-                        34mSYn6ySFTASoiVzNGuyBkedDcPUhgmtD5UQyEPKXz7u1A1NpZLuc7sms8sFTrvTXHfgsaLr@sora,
+                        34mSYn6ySFTASoiVzNGuyBkedDcPUhgmtD5UQyEPKXz7u1A1NpZLuc7sms8sFTrvTXHfgsaLr,
                     ],
                     per_provider_submitters: {},
                 },
@@ -2037,16 +2057,6 @@ fn ivm_memory_budget_profile_override_applies() {
     assert_eq!(
         config.ivm.memory_budget_profile,
         Name::from_str("cpu-balanced").expect("valid profile name")
-    );
-}
-
-#[test]
-fn torii_strict_addresses_enabled_by_default() {
-    let config = load_config_from_fixtures("minimal_with_trusted_peers.toml")
-        .expect("config should be valid");
-    assert!(
-        config.torii.strict_addresses,
-        "torii.strict_addresses should default to true so production clusters reject non-canonical aliases"
     );
 }
 

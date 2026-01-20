@@ -855,8 +855,6 @@ public final class IrohaSDK: @unchecked Sendable {
         if parts.count == 2 {
             let defName = String(parts[0])
             let defDomain = String(parts[1])
-            let accDomain = accountId.split(separator: "@").last.map(String.init) ?? ""
-            if defDomain == accDomain { return "\(defName)##\(accountId)" }
             return "\(defName)#\(defDomain)#\(accountId)"
         }
         return "\(assetDefinitionId)#\(accountId)"

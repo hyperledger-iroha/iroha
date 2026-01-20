@@ -11,7 +11,7 @@ This note captures the security review requested in roadmap item ADDR-7:
 - quantify the collision probability for the Local digest selectors and
   document why Local‑12 (12-byte digest) is acceptable while Local‑8 is not;
 - surface the telemetry/alerting hooks that prove Local‑8 usage has dropped to
-  zero before strict mode is enabled;
+  zero before Local-8 enforcement is activated;
 - call out the checksum, kana/IME safeguards, and manifest immutability
   guarantees that prevent spoofing; and
 - provide an operator checklist that ties the above controls into the existing
@@ -61,10 +61,6 @@ while Local‑8 would have produced a measurable ~2.7 % collision probability.
   the metrics inside `parse_account_literal`
   (`crates/iroha_torii/src/routing.rs:10105`,
   `crates/iroha_telemetry/src/metrics.rs:9352`).
-- `torii_address_strict_mode` (0/1 gauge) mirrors the `torii.strict_addresses`
-  configuration so dashboards/alerts prove when strict mode was disabled for
-  rehearsals or emergency rollbacks. Alerting depends on this flag staying `1`
-  on production clusters whenever Local‑8 is blocked.
 - `cargo xtask address-local8-gate --input <prom-range.json> [--window-days 30] [--json-out <path>]`
   consumes the Prometheus range-query JSON for
   `torii_address_local8_total` and `torii_address_collision_total`, fails when
@@ -74,7 +70,7 @@ while Local‑8 would have produced a measurable ~2.7 % collision probability.
   HTTP API to harvest the 30‑day window for production/staging clusters.
 - `dashboards/grafana/address_ingest.json` charts both counters and tags the
   Local‑8 series with the same `context` label so operators can prove a
-  sustained zero rate ahead of the strict-mode cutover.
+  sustained zero rate ahead of Local-8/Local-12 enforcement gates.
 - `dashboards/alerts/address_ingest_rules.yml` asserts that both
   `torii_address_local8_total` and `torii_address_collision_total` stay zero
   outside the `/tests/*` contexts; the Alertmanager template links back to the
@@ -93,6 +89,7 @@ while Local‑8 would have produced a measurable ~2.7 % collision probability.
 - All domain labels (for both Local selectors and Global registry entries) run
   through Norm v1 (NFC + strict UTS‑46 + ASCII policy)
   (`docs/source/references/address_norm_v1.md:1`), preventing spoofing via
+  confusables and mixed-normalization inputs.
 - Wallet/explorer UX requirements in
   `docs/source/sns/address_display_guidelines.md:34` mandate the dual-format
   display (IH58 + compressed) plus localized copy helpers so operators can
@@ -110,7 +107,7 @@ while Local‑8 would have produced a measurable ~2.7 % collision probability.
   (`docs/source/sns/registry_schema.md:129`), so gateway caches and the DNS
   publishing pipeline can prove that sealed tombstones are never re-allocated.
 - `docs/source/sns/governance_playbook.md` now lists this review as required
-  evidence before enabling strict mode or onboarding new suffixes.
+  evidence before activating Local-8/Local-12 enforcement or onboarding new suffixes.
 
 ## 5. Operator checklist
 
@@ -122,7 +119,7 @@ while Local‑8 would have produced a measurable ~2.7 % collision probability.
    `cargo xtask address-local8-gate --input <file> --json-out artifacts/address_gate.json`.
    Attach the CLI output and JSON report to the readiness ticket; the gate must
    be clean (no increments, no counter resets, >=30 days observed) before
-   strict mode flips on production.
+   Local-8 enforcement is activated in production.
 3. **Attach telemetry:** capture the `address_ingest` dashboard panels for
    `torii_address_local8_total{context!~"/tests/.*"}`,
    `torii_address_collision_total{context!~"/tests/.*",kind="local12_digest"}`,

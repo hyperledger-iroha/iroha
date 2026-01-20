@@ -151,7 +151,6 @@ address-manifest-<REVISION>/
 
 4. **אימות החבילה.** הריצו מחדש את שלבי האימות מול הטיוטה לפני בקשת חתימות.
 5. **פרסום ומעקב.** לאחר חתימת governance, פעלו לפי §3 והשאירו את דגל
-   `strict_addresses` של Torii (`torii.strict_addresses`) בערך ברירת המחדל
    `true` ב‑production לאחר שהמדדים מאשרים אפס שימוש ב‑Local‑8. העבירו ל‑`false`
    רק ב‑dev/test כאשר צריך זמן soak נוסף.
 
@@ -171,7 +170,6 @@ address-manifest-<REVISION>/
 - התראות (ראו `dashboards/alerts/address_ingest_rules.yml`):
   - `AddressLocal8Resurgence` — מפעיל paging בכל עלייה חדשה של Local‑8. התייחסו
     כאל חסם ריליס, עצרו rollouts של strict‑mode וקבעו זמנית
-    `torii.strict_addresses=false` (עוקף ברירת מחדל) עד תיקון הלקוח. החזירו ל‑`true`
     כשהטלמטריה נקייה.
   - `AddressLocal12Collision` — נורה מייד כששתי תוויות Local‑12 מתחככות לאותו digest.
     עצרו קידומי מניפסט, הריצו `scripts/address_local_toolkit.sh` לאימות המיפוי,
@@ -181,7 +179,6 @@ address-manifest-<REVISION>/
     `torii_address_invalid_total` לפי הקשר/סיבה ותאמו עם צוות ה‑SDK לפני החזרת strict‑mode.
 - לוגים: שמרו שורות `manifest_refresh` של Torii ואת מספר טיקט ה‑governance ב‑`notes.md`.
 - Rollback: פרסמו מחדש את החבילה הקודמת (אותם קבצים, טיקט חדש המצביע על rollback)
-  והגדירו זמנית `torii.strict_addresses = false` רק בסביבה המושפעת עד לפתרון,
   ואז החזירו ל‑`true`.
 
 ## 6. מקורות

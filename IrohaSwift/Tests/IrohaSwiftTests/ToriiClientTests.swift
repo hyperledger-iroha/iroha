@@ -540,31 +540,32 @@ final class ToriiClientTests: XCTestCase {
         let keypair = try Keypair(privateKeyBytes: Data(repeating: 1, count: 32))
         let address = try AccountAddress.fromAccount(domain: domain, publicKey: keypair.publicKey)
         let ih58 = try address.toIH58(networkPrefix: 0x02F1)
-        return "\(ih58)@\(domain)"
+        return ih58
     }
 
     private func noncanonicalOwnerLiteral(domain: String = "wonderland") throws -> String {
         let keypair = try Keypair(privateKeyBytes: Data(repeating: 2, count: 32))
         let address = try AccountAddress.fromAccount(domain: domain, publicKey: keypair.publicKey)
         let canonicalHex = try address.canonicalHex()
-        return "\(canonicalHex)@\(domain)"
+        return canonicalHex
     }
 
     @available(iOS 15.0, macOS 12.0, *)
     func testGetAssetsAsync() async throws {
+        let owner = try canonicalOwnerLiteral()
         StubURLProtocol.handler = { request in
             // URL.path always returns decoded path. Check absoluteString to verify encoding.
             XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/alice%40wonderland/assets"))
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
-            [{"asset_id":"rose#wonderland##alice@wonderland","quantity":"10"}]
+            [{"asset_id":"rose#wonderland#\(owner)","quantity":"10"}]
             """.data(using: .utf8)!
             return (response, body)
         }
 
         let balances = try await makeClient().getAssets(accountId: "alice@wonderland")
         XCTAssertEqual(balances.count, 1)
-        XCTAssertEqual(balances.first?.asset_id, "rose#wonderland##alice@wonderland")
+        XCTAssertEqual(balances.first?.asset_id, "rose#wonderland#\(owner)")
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -1108,12 +1109,13 @@ final class ToriiClientTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testIrohaSDKGetAssetsAsyncUsesREST() async throws {
+        let owner = try canonicalOwnerLiteral()
         StubURLProtocol.handler = { request in
             // URL.path always returns decoded path. Check absoluteString to verify encoding.
             XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/alice%40wonderland/assets"))
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
-            [{"asset_id":"rose#wonderland##alice@wonderland","quantity":"10"}]
+            [{"asset_id":"rose#wonderland#\(owner)","quantity":"10"}]
             """.data(using: .utf8)!
             return (response, body)
         }
@@ -1125,17 +1127,18 @@ final class ToriiClientTests: XCTestCase {
 
         let balances = try await sdk.getAssets(accountId: "alice@wonderland")
         XCTAssertEqual(balances.count, 1)
-        XCTAssertEqual(balances.first?.asset_id, "rose#wonderland##alice@wonderland")
+        XCTAssertEqual(balances.first?.asset_id, "rose#wonderland#\(owner)")
     }
 
     @available(iOS 15.0, macOS 12.0, *)
     func testGetAssetsTrimsAndEncodesAccountLiteral() async throws {
+        let owner = try canonicalOwnerLiteral()
         StubURLProtocol.handler = { request in
             // URL.path always returns decoded path. Check absoluteString to verify encoding.
             XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/alice%40wonderland/assets"))
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
-            [{"asset_id":"rose#wonderland##alice@wonderland","quantity":"10"}]
+            [{"asset_id":"rose#wonderland#\(owner)","quantity":"10"}]
             """.data(using: .utf8)!
             return (response, body)
         }
@@ -1146,12 +1149,13 @@ final class ToriiClientTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testGetAssetsEncodesPercentInAccountLiteral() async throws {
+        let owner = try canonicalOwnerLiteral()
         StubURLProtocol.handler = { request in
             // URL.path always returns decoded path. Check absoluteString to verify encoding.
             XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/alice%252Fbob%40wonderland/assets"))
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
-            [{"asset_id":"rose#wonderland##alice@wonderland","quantity":"10"}]
+            [{"asset_id":"rose#wonderland#\(owner)","quantity":"10"}]
             """.data(using: .utf8)!
             return (response, body)
         }
@@ -1186,8 +1190,8 @@ final class ToriiClientTests: XCTestCase {
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
             {
-                "canonical_id":"alice@wonderland",
-                "literal":"alice@wonderland",
+                "canonical_id":"ih58example",
+                "literal":"ih58example",
                 "address_format":"ih58",
                 "network_prefix":0,
                 "error_correction":"M",
@@ -1200,8 +1204,8 @@ final class ToriiClientTests: XCTestCase {
         }
 
         let qr = try await makeClient().getExplorerAccountQr(accountId: "alice@wonderland")
-        XCTAssertEqual(qr.canonicalId, "alice@wonderland")
-        XCTAssertEqual(qr.literal, "alice@wonderland")
+        XCTAssertEqual(qr.canonicalId, "ih58example")
+        XCTAssertEqual(qr.literal, "ih58example")
         XCTAssertEqual(qr.addressFormat, "ih58")
         XCTAssertEqual(qr.preferredFormat, .ih58)
         XCTAssertEqual(qr.networkPrefix, 0)
@@ -1221,8 +1225,8 @@ final class ToriiClientTests: XCTestCase {
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
             {
-                "canonical_id":"alice@wonderland",
-                "literal":"snx1example@wonderland",
+                "canonical_id":"ih58example",
+                "literal":"snx1example",
                 "address_format":"compressed",
                 "network_prefix":1206,
                 "error_correction":"M",
@@ -1238,7 +1242,7 @@ final class ToriiClientTests: XCTestCase {
                                                              addressFormat: .compressed)
         XCTAssertEqual(qr.addressFormat, "compressed")
         XCTAssertEqual(qr.preferredFormat, .compressed)
-        XCTAssertEqual(qr.literal, "snx1example@wonderland")
+        XCTAssertEqual(qr.literal, "snx1example")
         XCTAssertEqual(qr.qrVersion, 6)
     }
 

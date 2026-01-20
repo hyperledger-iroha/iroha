@@ -741,7 +741,6 @@ mod tests {
                 peer_telemetry_urls: Vec::new(),
                 peer_geo: iroha_config::parameters::actual::ToriiPeerGeo::default(),
                 soranet_privacy_ingest: iroha_config::parameters::actual::SoranetPrivacyIngest::default(),
-                strict_addresses: true,
                 debug_match_filters: false,
                 operator_auth: iroha_config::parameters::actual::ToriiOperatorAuth::default(),
                 preauth_max_connections: None,
@@ -821,6 +820,8 @@ mod tests {
                 },
                 sorafs_discovery: iroha_config::parameters::actual::SorafsDiscovery::default(),
                 sorafs_storage: iroha_config::parameters::actual::SorafsStorage::default(),
+                sorafs_repair: iroha_config::parameters::actual::SorafsRepair::default(),
+                sorafs_gc: iroha_config::parameters::actual::SorafsGc::default(),
                 sorafs_quota: iroha_config::parameters::actual::SorafsQuota::default(),
                 sorafs_alias_cache:
                     iroha_config::parameters::actual::SorafsAliasCachePolicy::default(),

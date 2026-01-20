@@ -35,7 +35,7 @@ pub fn visit_submit_offline_to_online_transfer<V: Execute + Visit + ?Sized>(
 
     let mut invoice_ids = std::collections::BTreeSet::new();
     for receipt in transfer.receipts() {
-        if !invoice_ids.insert(receipt.invoice_id.clone()) {
+        if !invoice_ids.insert(receipt.invoice_id()) {
             deny!(
                 executor,
                 ValidationFail::NotPermitted(format!(
@@ -239,7 +239,11 @@ mod tests {
         )
     }
 
-    fn sample_receipt(receiver: &AccountId, amount: Numeric) -> OfflineSpendReceipt {
+    fn sample_receipt(
+        receiver: &AccountId,
+        amount: Numeric,
+        invoice_id: String,
+    ) -> OfflineSpendReceipt {
         let asset = sample_asset(receiver);
         OfflineSpendReceipt::new(
             Hash::new(b"offline-tx"),
@@ -248,7 +252,7 @@ mod tests {
             asset,
             amount,
             1,
-            "inv-001".to_owned(),
+            invoice_id,
             OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof::new(
                 "aa".to_owned(),
                 1,
@@ -266,14 +270,25 @@ mod tests {
         receipt_amounts: &[Numeric],
         claimed_delta: Numeric,
     ) -> SubmitOfflineToOnlineTransfer {
+        build_submit_transfer_with_invoice_ids(receiver, receipt_amounts, claimed_delta, &[])
+    }
+
+    fn build_submit_transfer_with_invoice_ids(
+        receiver: &AccountId,
+        receipt_amounts: &[Numeric],
+        claimed_delta: Numeric,
+        invoice_ids: &[String],
+    ) -> SubmitOfflineToOnlineTransfer {
         let receipts = receipt_amounts
             .iter()
             .cloned()
             .enumerate()
             .map(|(idx, amount)| {
-                let mut receipt = sample_receipt(receiver, amount);
-                receipt.invoice_id = format!("inv-{idx:03}");
-                receipt
+                let invoice_id = invoice_ids
+                    .get(idx)
+                    .cloned()
+                    .unwrap_or_else(|| format!("inv-{idx:03}"));
+                sample_receipt(receiver, amount, invoice_id)
             })
             .collect();
 
@@ -323,12 +338,13 @@ mod tests {
     #[test]
     fn denies_duplicate_invoice_ids() {
         let receiver = sample_account(0x03, "sbp");
-        let mut isi = build_submit_transfer(
+        let invoice_ids = vec!["dup-invoice".to_owned(), "dup-invoice".to_owned()];
+        let isi = build_submit_transfer_with_invoice_ids(
             &receiver,
             &[Numeric::new(10, 0), Numeric::new(20, 0)],
             Numeric::new(30, 0),
+            &invoice_ids,
         );
-        isi.transfer.receipts[1].invoice_id = isi.transfer.receipts[0].invoice_id.clone();
         let mut executor = StubExecutor::new(receiver);
 
         visit_submit_offline_to_online_transfer(&mut executor, &isi);

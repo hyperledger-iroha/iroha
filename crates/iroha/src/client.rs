@@ -20,7 +20,7 @@ pub use iroha_config::client_api::{
     ConfidentialGas as ConfidentialGasDTO, ConfigGetDTO, ConfigUpdateDTO, Logger as LoggerDTO,
 };
 use iroha_config::parameters::actual::SorafsRolloutPhase;
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, SignatureOf};
 use iroha_data_model::{
     block::consensus::{
         EvidenceRecord, SumeragiDaGateReason, SumeragiDaGateSatisfaction, SumeragiQcEntry,
@@ -47,6 +47,7 @@ use rand::Rng;
 use sorafs_manifest::{
     alias_cache::{decode_alias_proof, unix_now_secs},
     pdp::PdpCommitmentV1,
+    repair::{RepairSlashProposalV1, RepairTicketId, RepairWorkerSignaturePayloadV1},
 };
 use sorafs_orchestrator::{
     AnonymityPolicy, OrchestratorConfig, PolicyOverride, RolloutPhase, TransportPolicy,
@@ -336,6 +337,27 @@ impl SorafsReplicationListFilter<'_> {
     }
 }
 
+/// Filters for `/v1/sorafs/audit/repair/status` listing endpoint.
+#[derive(Debug, Default, Clone)]
+pub struct SorafsRepairStatusFilter<'a> {
+    /// Optional status filter (`queued`, `verifying`, `in_progress`, `completed`, `failed`, `escalated`).
+    pub status: Option<&'a str>,
+    /// Optional provider identifier filter (hex-encoded).
+    pub provider_id: Option<&'a str>,
+}
+
+impl SorafsRepairStatusFilter<'_> {
+    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
+        if let Some(status) = self.status {
+            req = req.param("status", &status);
+        }
+        if let Some(provider_id) = self.provider_id {
+            req = req.param("provider", &provider_id);
+        }
+        req
+    }
+}
+
 /// Optional overrides supplied when requesting a `SoraFS` stream token.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SorafsTokenOverrides {
@@ -587,7 +609,7 @@ pub struct UaidPortfolioTotals {
 /// Asset position grouped under a UAID-backed account.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UaidPortfolioAsset {
-    /// Fully-qualified asset identifier (`asset#domain::account@domain`).
+    /// Fully-qualified asset identifier (`asset#domain#account`, or `asset##account` when domains match).
     pub asset_id: String,
     /// Asset definition identifier.
     pub asset_definition_id: String,
@@ -651,9 +673,9 @@ pub struct UaidBindingsResponse {
 /// Preferred textual representation for account identifiers in Torii responses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AddressFormat {
-    /// IH58 literal (`ih…@domain`).
+    /// IH58 literal (`ih…`).
     Ih58,
-    /// Compressed literal (`snx1…@domain`).
+    /// Compressed literal (`snx1…`).
     Compressed,
 }
 
@@ -686,7 +708,7 @@ impl ExplorerAccountQrOptions {
 /// Snapshot returned by `/v1/explorer/accounts/{account_id}/qr`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerAccountQrSnapshot {
-    /// Canonical account identifier (`ih58@domain`).
+    /// Canonical account identifier (IH58).
     pub canonical_id: String,
     /// Rendered literal using the requested address format.
     pub literal: String,
@@ -1322,6 +1344,61 @@ pub struct SorafsPinRegisterArgs<'a> {
     pub alias: Option<SorafsPinAlias<'a>>,
     /// Optional predecessor manifest hash when rotating registrations.
     pub successor_of: Option<[u8; 32]>,
+}
+
+/// Signed request payload for claiming a `SoraFS` repair ticket.
+#[derive(Debug, Clone, JsonSerialize)]
+pub struct SorafsRepairWorkerClaimRequest {
+    /// Repair ticket identifier.
+    pub ticket_id: RepairTicketId,
+    /// Hex-encoded manifest digest (BLAKE3-256).
+    pub manifest_digest_hex: String,
+    /// Repair worker identifier (IH58 account id).
+    pub worker_id: String,
+    /// Unix timestamp (seconds) when the claim was issued.
+    pub claimed_at_unix: u64,
+    /// Idempotency key for the claim.
+    pub idempotency_key: String,
+    /// Signature over `RepairWorkerSignaturePayloadV1`.
+    pub signature: SignatureOf<RepairWorkerSignaturePayloadV1>,
+}
+
+/// Signed request payload for completing a `SoraFS` repair ticket.
+#[derive(Debug, Clone, JsonSerialize)]
+pub struct SorafsRepairWorkerCompleteRequest {
+    /// Repair ticket identifier.
+    pub ticket_id: RepairTicketId,
+    /// Hex-encoded manifest digest (BLAKE3-256).
+    pub manifest_digest_hex: String,
+    /// Repair worker identifier (IH58 account id).
+    pub worker_id: String,
+    /// Unix timestamp (seconds) when remediation completed.
+    pub completed_at_unix: u64,
+    /// Optional resolution notes.
+    pub resolution_notes: Option<String>,
+    /// Idempotency key for the completion request.
+    pub idempotency_key: String,
+    /// Signature over `RepairWorkerSignaturePayloadV1`.
+    pub signature: SignatureOf<RepairWorkerSignaturePayloadV1>,
+}
+
+/// Signed request payload for failing a `SoraFS` repair ticket.
+#[derive(Debug, Clone, JsonSerialize)]
+pub struct SorafsRepairWorkerFailRequest {
+    /// Repair ticket identifier.
+    pub ticket_id: RepairTicketId,
+    /// Hex-encoded manifest digest (BLAKE3-256).
+    pub manifest_digest_hex: String,
+    /// Repair worker identifier (IH58 account id).
+    pub worker_id: String,
+    /// Unix timestamp (seconds) when the failure was recorded.
+    pub failed_at_unix: u64,
+    /// Failure reason.
+    pub reason: String,
+    /// Idempotency key for the failure request.
+    pub idempotency_key: String,
+    /// Signature over `RepairWorkerSignaturePayloadV1`.
+    pub signature: SignatureOf<RepairWorkerSignaturePayloadV1>,
 }
 
 /// Errors returned when executing a `SoraFS` orchestrated fetch.
@@ -3288,6 +3365,36 @@ mod evidence_http_tests {
             store.lock().expect("lock snapshot store").push(snapshot);
             Ok(response.clone())
         }
+    }
+
+    #[test]
+    fn post_account_resolve_builds_request() {
+        let client = client_with_base_url(base_url());
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        let literal = "alice@wonderland";
+
+        with_mock_http(respond_with(&snapshots, response), || {
+            let resp = client
+                .post_account_resolve(literal)
+                .expect("post account resolve");
+            assert_eq!(resp.status(), StatusCode::OK);
+        });
+
+        let store = snapshots.lock().expect("lock snapshot store");
+        assert_eq!(store.len(), 1);
+        let snapshot = &store[0];
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(
+            snapshot.url.as_str(),
+            "http://mock.local/v1/accounts/resolve"
+        );
+        let body = String::from_utf8(snapshot.body.clone()).expect("utf8 body");
+        assert_eq!(body, format!("{{\"literal\":\"{literal}\"}}"));
+        let has_content_type = snapshot.headers.iter().any(|(name, value)| {
+            name.eq_ignore_ascii_case("content-type") && value == APPLICATION_JSON
+        });
+        assert!(has_content_type, "Content-Type header missing");
     }
 
     type SorafsFetchHook = Arc<
@@ -5916,6 +6023,20 @@ impl Client {
             .send()
     }
 
+    /// Convenience: POST `/v1/accounts/resolve` with an account literal.
+    ///
+    /// # Errors
+    /// Returns an error if request construction, NORITO serialization, or the HTTP call fails.
+    pub fn post_account_resolve(&self, literal: &str) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/accounts/resolve");
+        let body = norito::json::to_vec(&norito::json!({ "literal": literal }))?;
+        self.default_request(HttpMethod::POST, url)
+            .header("Content-Type", APPLICATION_JSON)
+            .body(body)
+            .build()?
+            .send()
+    }
+
     /// Convenience: GET `/v1/sorafs/pin` to list manifests in the pin registry.
     ///
     /// # Errors
@@ -6720,6 +6841,108 @@ impl Client {
         filter
             .apply(self.default_request(HttpMethod::GET, url))
             .header("Accept", APPLICATION_JSON)
+            .build()?
+            .send()
+    }
+
+    /// Convenience: GET `/v1/sorafs/audit/repair/status` to list repair tasks.
+    ///
+    /// # Errors
+    /// Returns an error if request construction or the HTTP call fails.
+    pub fn get_sorafs_repair_status_all(
+        &self,
+        filter: &SorafsRepairStatusFilter<'_>,
+    ) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/sorafs/audit/repair/status");
+        filter
+            .apply(self.default_request(HttpMethod::GET, url))
+            .header("Accept", APPLICATION_JSON)
+            .build()?
+            .send()
+    }
+
+    /// Convenience: GET `/v1/sorafs/audit/repair/status/{manifest_hex}` to list repair tasks for a manifest.
+    ///
+    /// # Errors
+    /// Returns an error if request construction or the HTTP call fails.
+    pub fn get_sorafs_repair_status(
+        &self,
+        manifest_digest_hex: &str,
+        filter: &SorafsRepairStatusFilter<'_>,
+    ) -> Result<Response<Vec<u8>>> {
+        let path = format!("v1/sorafs/audit/repair/status/{manifest_digest_hex}");
+        let url = join_torii_url(&self.torii_url, &path);
+        filter
+            .apply(self.default_request(HttpMethod::GET, url))
+            .header("Accept", APPLICATION_JSON)
+            .build()?
+            .send()
+    }
+
+    /// Convenience: POST `/v1/sorafs/audit/repair/claim` to claim a repair ticket.
+    ///
+    /// # Errors
+    /// Returns an error if request construction, serialization, or the HTTP call fails.
+    pub fn post_sorafs_repair_claim(
+        &self,
+        request: &SorafsRepairWorkerClaimRequest,
+    ) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/sorafs/audit/repair/claim");
+        let body = norito::json::to_vec(request)?;
+        self.default_request(HttpMethod::POST, url)
+            .header("Content-Type", APPLICATION_JSON)
+            .body(body)
+            .build()?
+            .send()
+    }
+
+    /// Convenience: POST `/v1/sorafs/audit/repair/complete` to close a repair ticket.
+    ///
+    /// # Errors
+    /// Returns an error if request construction, serialization, or the HTTP call fails.
+    pub fn post_sorafs_repair_complete(
+        &self,
+        request: &SorafsRepairWorkerCompleteRequest,
+    ) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/sorafs/audit/repair/complete");
+        let body = norito::json::to_vec(request)?;
+        self.default_request(HttpMethod::POST, url)
+            .header("Content-Type", APPLICATION_JSON)
+            .body(body)
+            .build()?
+            .send()
+    }
+
+    /// Convenience: POST `/v1/sorafs/audit/repair/fail` to fail a repair ticket.
+    ///
+    /// # Errors
+    /// Returns an error if request construction, serialization, or the HTTP call fails.
+    pub fn post_sorafs_repair_fail(
+        &self,
+        request: &SorafsRepairWorkerFailRequest,
+    ) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/sorafs/audit/repair/fail");
+        let body = norito::json::to_vec(request)?;
+        self.default_request(HttpMethod::POST, url)
+            .header("Content-Type", APPLICATION_JSON)
+            .body(body)
+            .build()?
+            .send()
+    }
+
+    /// Convenience: POST `/v1/sorafs/audit/repair/slash` to submit a repair escalation proposal.
+    ///
+    /// # Errors
+    /// Returns an error if request construction, serialization, or the HTTP call fails.
+    pub fn post_sorafs_repair_slash(
+        &self,
+        proposal: &RepairSlashProposalV1,
+    ) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/sorafs/audit/repair/slash");
+        let body = norito::json::to_vec(proposal)?;
+        self.default_request(HttpMethod::POST, url)
+            .header("Content-Type", APPLICATION_JSON)
+            .body(body)
             .build()?
             .send()
     }
@@ -10159,8 +10382,9 @@ mod tests {
         time::Duration,
     };
 
-    use iroha_crypto::{Hash, HashOf, KeyPair};
+    use iroha_crypto::{Hash, HashOf, KeyPair, SignatureOf};
     use iroha_data_model::{
+        account::AccountAddress,
         block::{
             BlockHeader,
             consensus::{
@@ -10190,8 +10414,13 @@ mod tests {
         peer::PeerId,
     };
     use iroha_telemetry::metrics::GovernanceStatus;
-    use iroha_test_samples::gen_account_in;
+    use iroha_test_samples::{ALICE_ID, gen_account_in};
     use sorafs_car::multi_fetch::{ChunkReceipt, FetchOutcome, FetchProvider, ProviderReport};
+    use sorafs_manifest::repair::{
+        REPAIR_SLASH_PROPOSAL_VERSION_V1, REPAIR_WORKER_SIGNATURE_VERSION_V1,
+        RepairSlashProposalV1, RepairTicketId, RepairWorkerActionV1,
+        RepairWorkerSignaturePayloadV1,
+    };
     use sorafs_orchestrator::{PolicyReport, PolicyStatus, prelude::ChunkStore};
     use tempfile::tempdir;
 
@@ -11892,19 +12121,23 @@ mod tests {
 
     #[test]
     fn get_explorer_account_qr_parses_payload_and_applies_options() {
-        let account_id = "alice@wonderland";
+        let account_id = ALICE_ID.to_string();
+        let address = AccountAddress::from_account_id(&ALICE_ID).expect("address from account");
+        let compressed_literal = address.to_compressed_sora().expect("compressed literal");
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let client = client_with_base_url(base_url());
-        let compressed_payload = r#"{
-  "canonical_id":"alice@wonderland",
-  "literal":"snx1aliceacct@wonderland",
+        let compressed_payload = format!(
+            r#"{{
+  "canonical_id":"{account_id}",
+  "literal":"{compressed_literal}",
   "address_format":"compressed",
   "network_prefix":73,
   "error_correction":"M",
   "modules":192,
   "qr_version":5,
   "svg":"<svg compressed />"
-}"#;
+}}"#
+        );
         let response = json_response(StatusCode::OK, compressed_payload);
         let options = ExplorerAccountQrOptions {
             address_format: Some(AddressFormat::Compressed),
@@ -11915,7 +12148,7 @@ mod tests {
         })
         .expect("explorer QR request succeeds");
         assert_eq!(qr.canonical_id, account_id);
-        assert_eq!(qr.literal, "snx1aliceacct@wonderland");
+        assert_eq!(qr.literal, compressed_literal);
         assert_eq!(qr.address_format, AddressFormat::Compressed);
         assert_eq!(qr.network_prefix, 73);
         assert_eq!(qr.modules, 192);
@@ -11941,16 +12174,18 @@ mod tests {
 
         // Default call should omit the query parameter and decode IH58 payloads.
         let snapshots_default: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let default_payload = r#"{
-  "canonical_id":"alice@wonderland",
-  "literal":"alice@wonderland",
+        let default_payload = format!(
+            r#"{{
+  "canonical_id":"{account_id}",
+  "literal":"{account_id}",
   "address_format":"ih58",
   "network_prefix":73,
   "error_correction":"M",
   "modules":192,
   "qr_version":5,
   "svg":"<svg ih58 />"
-}"#;
+}}"#
+        );
         let default_response = json_response(StatusCode::OK, default_payload);
         let default_qr = with_mock_http(respond_with(&snapshots_default, default_response), || {
             client.get_explorer_account_qr(account_id, None)
@@ -13213,6 +13448,253 @@ mod tests {
             request.uri().query(),
             Some("limit=50&offset=2&status=completed&manifest_digest=abc123")
         );
+    }
+
+    #[test]
+    fn sorafs_repair_filter_sets_query_params() {
+        let client = Client::new(config_factory());
+        let url = join_torii_url(&client.torii_url, "v1/sorafs/audit/repair/status");
+        let filter = SorafsRepairStatusFilter {
+            status: Some("queued"),
+            provider_id: Some("aa"),
+        };
+        let request = filter
+            .apply(client.default_request(HttpMethod::GET, url))
+            .build()
+            .expect("build request");
+        assert_eq!(request.uri().query(), Some("status=queued&provider=aa"));
+    }
+
+    #[test]
+    fn sorafs_repair_status_all_targets_audit_endpoint() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        let filter = SorafsRepairStatusFilter {
+            status: Some("queued"),
+            provider_id: Some("bb"),
+        };
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .get_sorafs_repair_status_all(&filter)
+                .expect("repair status all request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(snapshot.url.path(), "/v1/sorafs/audit/repair/status");
+        assert_eq!(snapshot.url.query(), Some("status=queued&provider=bb"));
+    }
+
+    #[test]
+    fn sorafs_repair_status_scopes_manifest_digest() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        let filter = SorafsRepairStatusFilter {
+            status: Some("completed"),
+            provider_id: None,
+        };
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .get_sorafs_repair_status("deadbeef", &filter)
+                .expect("repair status request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(
+            snapshot.url.path(),
+            "/v1/sorafs/audit/repair/status/deadbeef"
+        );
+        assert_eq!(snapshot.url.query(), Some("status=completed"));
+    }
+
+    #[test]
+    fn sorafs_repair_claim_serializes_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        let key_pair = KeyPair::random();
+        let ticket_id = RepairTicketId("REP-401".to_string());
+        let manifest_digest = [0x11; 32];
+        let provider_id = [0x22; 32];
+        let worker_id = "worker@wonderland".to_string();
+        let idempotency_key = "claim-401".to_string();
+        let claimed_at_unix = 1_700_000_001;
+        let payload = RepairWorkerSignaturePayloadV1 {
+            version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
+            ticket_id: ticket_id.clone(),
+            manifest_digest,
+            provider_id,
+            worker_id: worker_id.clone(),
+            idempotency_key: idempotency_key.clone(),
+            action: RepairWorkerActionV1::Claim { claimed_at_unix },
+        };
+        let signature = SignatureOf::new(key_pair.private_key(), &payload);
+        let request = SorafsRepairWorkerClaimRequest {
+            ticket_id,
+            manifest_digest_hex: hex::encode(manifest_digest),
+            worker_id,
+            claimed_at_unix,
+            idempotency_key,
+            signature,
+        };
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_sorafs_repair_claim(&request)
+                .expect("repair claim request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/sorafs/audit/repair/claim");
+        let body: norito::json::Value =
+            norito::json::from_slice(&snapshot.body).expect("decode request body");
+        let expected = norito::json::to_value(&request).expect("encode request");
+        assert_eq!(body, expected);
+    }
+
+    #[test]
+    fn sorafs_repair_complete_serializes_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        let key_pair = KeyPair::random();
+        let ticket_id = RepairTicketId("REP-402".to_string());
+        let manifest_digest = [0x33; 32];
+        let provider_id = [0x44; 32];
+        let worker_id = "worker@wonderland".to_string();
+        let idempotency_key = "complete-402".to_string();
+        let completed_at_unix = 1_700_000_002;
+        let resolution_notes = Some("repaired".to_string());
+        let payload = RepairWorkerSignaturePayloadV1 {
+            version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
+            ticket_id: ticket_id.clone(),
+            manifest_digest,
+            provider_id,
+            worker_id: worker_id.clone(),
+            idempotency_key: idempotency_key.clone(),
+            action: RepairWorkerActionV1::Complete {
+                completed_at_unix,
+                resolution_notes: resolution_notes.clone(),
+            },
+        };
+        let signature = SignatureOf::new(key_pair.private_key(), &payload);
+        let request = SorafsRepairWorkerCompleteRequest {
+            ticket_id,
+            manifest_digest_hex: hex::encode(manifest_digest),
+            worker_id,
+            completed_at_unix,
+            resolution_notes,
+            idempotency_key,
+            signature,
+        };
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_sorafs_repair_complete(&request)
+                .expect("repair complete request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/sorafs/audit/repair/complete");
+        let body: norito::json::Value =
+            norito::json::from_slice(&snapshot.body).expect("decode request body");
+        let expected = norito::json::to_value(&request).expect("encode request");
+        assert_eq!(body, expected);
+    }
+
+    #[test]
+    fn sorafs_repair_fail_serializes_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        let key_pair = KeyPair::random();
+        let ticket_id = RepairTicketId("REP-403".to_string());
+        let manifest_digest = [0x55; 32];
+        let provider_id = [0x66; 32];
+        let worker_id = "worker@wonderland".to_string();
+        let idempotency_key = "fail-403".to_string();
+        let failed_at_unix = 1_700_000_003;
+        let reason = "checksum_mismatch".to_string();
+        let payload = RepairWorkerSignaturePayloadV1 {
+            version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
+            ticket_id: ticket_id.clone(),
+            manifest_digest,
+            provider_id,
+            worker_id: worker_id.clone(),
+            idempotency_key: idempotency_key.clone(),
+            action: RepairWorkerActionV1::Fail {
+                failed_at_unix,
+                reason: reason.clone(),
+            },
+        };
+        let signature = SignatureOf::new(key_pair.private_key(), &payload);
+        let request = SorafsRepairWorkerFailRequest {
+            ticket_id,
+            manifest_digest_hex: hex::encode(manifest_digest),
+            worker_id,
+            failed_at_unix,
+            reason,
+            idempotency_key,
+            signature,
+        };
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_sorafs_repair_fail(&request)
+                .expect("repair fail request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/sorafs/audit/repair/fail");
+        let body: norito::json::Value =
+            norito::json::from_slice(&snapshot.body).expect("decode request body");
+        let expected = norito::json::to_value(&request).expect("encode request");
+        assert_eq!(body, expected);
+    }
+
+    #[test]
+    fn sorafs_repair_slash_serializes_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        let proposal = RepairSlashProposalV1 {
+            version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
+            ticket_id: RepairTicketId("REP-404".to_string()),
+            provider_id: [0x77; 32],
+            manifest_digest: [0x88; 32],
+            auditor_account: "auditor@wonderland".to_string(),
+            proposed_penalty_nano: 500,
+            submitted_at_unix: 1_700_000_004,
+            rationale: "sla_missed".to_string(),
+        };
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_sorafs_repair_slash(&proposal)
+                .expect("repair slash request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/sorafs/audit/repair/slash");
+        let body: norito::json::Value =
+            norito::json::from_slice(&snapshot.body).expect("decode request body");
+        let expected = norito::json::to_value(&proposal).expect("encode request");
+        assert_eq!(body, expected);
     }
 
     #[test]

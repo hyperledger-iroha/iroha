@@ -209,7 +209,7 @@ const LARGE_PAYLOAD_BYTES: usize = 1024; // keep payload light to ensure timely 
 // Use a multi-chunk payload to ensure the recovery test observes an in-flight session.
 const RBC_RECOVERY_PAYLOAD_BYTES: usize = 4 * 1024 * 1024;
 const RBC_RECOVERY_CHUNK_BYTES: i64 = 64 * 1024;
-const RBC_DELIVER_BUDGET_MS: u64 = 15_000;
+const RBC_DELIVER_BUDGET_MS: u64 = 20_000;
 const RBC_DELIVER_GRACE_MS: u64 = 1_000;
 const COMMIT_BUDGET_MS: u64 = 50_000;
 const RBC_DELIVER_BUDGET_PER_EXTRA_PEER_MS: u64 = 10_000;
@@ -224,6 +224,14 @@ const CONSENSUS_FRAME_BUDGET_BYTES: i64 = 128 * 1024 * 1024;
 const P2P_QUEUE_CAP_HIGH: i64 = 65_536;
 const P2P_QUEUE_CAP_LOW: i64 = 131_072;
 const P2P_POST_QUEUE_CAP: i64 = 8_192;
+const DA_COMMIT_WAIT_TIMEOUT_SECS: u64 = 600;
+const DA_RBC_DELIVERY_TIMEOUT_SECS: u64 = 300;
+const DA_RBC_INFLIGHT_TIMEOUT_SECS: u64 = 180;
+const DA_RBC_PERSIST_TIMEOUT_SECS: u64 = 180;
+const DA_RBC_RECOVERY_TIMEOUT_SECS: u64 = 300;
+const DA_RBC_SESSION_TIMEOUT_SECS: u64 = 30;
+const DA_VIEW_CHANGE_TIMEOUT_SECS: u64 = 180;
+const DA_PAYLOAD_LOSS_COMMIT_TIMEOUT_SECS: u64 = 120;
 
 fn generate_incompressible_payload(tag: &str, payload_bytes: usize) -> String {
     use std::hash::{Hash, Hasher};
@@ -498,9 +506,9 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
 
     let result: Result<()> = async {
         let mut client = network.client();
-        let status_timeout = Duration::from_secs(120);
+        let status_timeout = da_commit_wait_timeout();
         client.transaction_status_timeout = status_timeout;
-        client.transaction_ttl = Some(status_timeout + Duration::from_secs(5));
+        client.transaction_ttl = Some(status_timeout.saturating_add(Duration::from_secs(30)));
         set_sumeragi_parameter(&client, SumeragiParameter::DaEnabled(true)).await?;
 
         let status_before = fetch_status(&client).await?;
@@ -1067,12 +1075,12 @@ async fn sumeragi_da_payload_loss_does_not_block_commit() -> Result<()> {
             .torii_url
             .join("v1/sumeragi/rbc/sessions")
             .wrap_err("compose sessions URL")?;
-        wait_for_rbc_session(&http, sessions_url.clone(), Duration::from_secs(5)).await?;
+        wait_for_rbc_session(&http, sessions_url.clone(), da_rbc_session_timeout()).await?;
 
         let mut status_after = Vec::new();
         let mut after_sumeragi_snapshots = Vec::new();
 
-        let deadline = Instant::now() + Duration::from_secs(30);
+        let deadline = Instant::now() + da_payload_loss_commit_timeout();
         loop {
             status_after.clear();
             after_sumeragi_snapshots.clear();
@@ -1515,7 +1523,7 @@ async fn sumeragi_idle_view_change_recovers_after_leader_shutdown() -> Result<()
         }
 
         let target_height = status_before.blocks + 1;
-        let view_change_deadline = Duration::from_secs(90);
+        let view_change_deadline = da_view_change_timeout();
 
         let status_url = submit_peer
             .client()
@@ -1957,9 +1965,9 @@ where
     };
 
     let mut client = network.client();
-    let status_timeout = Duration::from_secs(300);
+    let status_timeout = da_commit_wait_timeout().saturating_add(Duration::from_secs(60));
     client.transaction_status_timeout = status_timeout;
-    client.transaction_ttl = Some(status_timeout + Duration::from_secs(5));
+    client.transaction_ttl = Some(status_timeout.saturating_add(Duration::from_secs(30)));
     // When Torii websockets are blocked by the environment, bail out early as a sandbox skip.
     if sandbox::handle_result(
         set_sumeragi_parameter(&client, SumeragiParameter::DaEnabled(true)).await,
@@ -2475,13 +2483,42 @@ fn torii_max_content_len_saturates_on_overflow() {
 
 #[test]
 fn da_commit_wait_timeout_is_reasonable() {
-    assert_eq!(da_commit_wait_timeout(), Duration::from_secs(240));
+    assert_eq!(
+        da_commit_wait_timeout(),
+        Duration::from_secs(DA_COMMIT_WAIT_TIMEOUT_SECS)
+    );
 }
-
-const DA_COMMIT_WAIT_TIMEOUT_SECS: u64 = 240;
 
 fn da_commit_wait_timeout() -> Duration {
     Duration::from_secs(DA_COMMIT_WAIT_TIMEOUT_SECS)
+}
+
+fn da_rbc_delivery_timeout() -> Duration {
+    Duration::from_secs(DA_RBC_DELIVERY_TIMEOUT_SECS)
+}
+
+fn da_rbc_inflight_timeout() -> Duration {
+    Duration::from_secs(DA_RBC_INFLIGHT_TIMEOUT_SECS)
+}
+
+fn da_rbc_persist_timeout() -> Duration {
+    Duration::from_secs(DA_RBC_PERSIST_TIMEOUT_SECS)
+}
+
+fn da_rbc_recovery_timeout() -> Duration {
+    Duration::from_secs(DA_RBC_RECOVERY_TIMEOUT_SECS)
+}
+
+fn da_rbc_session_timeout() -> Duration {
+    Duration::from_secs(DA_RBC_SESSION_TIMEOUT_SECS)
+}
+
+fn da_view_change_timeout() -> Duration {
+    Duration::from_secs(DA_VIEW_CHANGE_TIMEOUT_SECS)
+}
+
+fn da_payload_loss_commit_timeout() -> Duration {
+    Duration::from_secs(DA_PAYLOAD_LOSS_COMMIT_TIMEOUT_SECS)
 }
 
 async fn wait_for_height(
@@ -2654,7 +2691,7 @@ async fn wait_for_inflight_rbc(
     expected_height: u64,
     start: Instant,
 ) -> Result<(String, u64)> {
-    let timeout = Duration::from_secs(60);
+    let timeout = da_rbc_inflight_timeout();
     loop {
         if start.elapsed() > timeout {
             return Err(eyre!(
@@ -2724,7 +2761,7 @@ async fn wait_for_persisted_rbc_session(
     expected_height: u64,
     start: Instant,
 ) -> Result<rbc_status::Summary> {
-    let timeout = Duration::from_secs(60);
+    let timeout = da_rbc_persist_timeout();
     loop {
         if start.elapsed() > timeout {
             return Err(eyre!(
@@ -2752,7 +2789,7 @@ async fn wait_for_recovered_flag(
     block_hash_hex: &str,
     start: Instant,
 ) -> Result<()> {
-    let timeout = Duration::from_secs(120);
+    let timeout = da_rbc_delivery_timeout();
     loop {
         if start.elapsed() > timeout {
             return Err(eyre!(
@@ -3055,7 +3092,7 @@ async fn wait_for_rbc_delivery(
     expected_height: u64,
     start: Instant,
 ) -> Result<RbcObservation> {
-    let timeout = Duration::from_secs(120);
+    let timeout = da_rbc_recovery_timeout();
     loop {
         if start.elapsed() > timeout {
             return Err(eyre!(

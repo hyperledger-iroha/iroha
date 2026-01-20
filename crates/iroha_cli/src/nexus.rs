@@ -56,7 +56,7 @@ pub struct PublicLaneStakeArgs {
     #[arg(long, value_name = "LANE", default_value_t = 0)]
     pub lane: u32,
     /// Filter for a specific validator account (optional)
-    #[arg(long, value_name = "ACCOUNT@DOMAIN")]
+    #[arg(long, value_name = "ACCOUNT_ID")]
     pub validator: Option<String>,
     /// Render a compact table instead of raw JSON
     #[arg(long, default_value_t = false)]
@@ -165,9 +165,15 @@ fn public_lane_validators<C: RunContext>(
 
 fn public_lane_stake<C: RunContext>(context: &mut C, args: &PublicLaneStakeArgs) -> Result<()> {
     let client = context.client_from_config();
+    let validator = args
+        .validator
+        .as_deref()
+        .map(|literal| crate::resolve_account_id(context, literal))
+        .transpose()?
+        .map(|account| account.to_string());
     let payload = client.get_public_lane_stake(
         LaneId::new(args.lane),
-        args.validator.as_deref(),
+        validator.as_deref(),
         Some(AddressFormat::from(args.address_format)),
     )?;
     if args.summary {

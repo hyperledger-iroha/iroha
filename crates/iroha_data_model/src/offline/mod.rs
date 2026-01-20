@@ -530,6 +530,11 @@ impl OfflineSpendReceipt {
         &self.amount
     }
 
+    /// Invoice identifier recorded for this receipt.
+    pub fn invoice_id(&self) -> &str {
+        &self.invoice_id
+    }
+
     /// Asset identifier being transferred.
     pub fn asset(&self) -> &AssetId {
         &self.asset
@@ -3373,6 +3378,12 @@ mod tests {
             },
             sender_signature: sample_signature(0x55),
         }
+    }
+
+    #[test]
+    fn invoice_id_accessor_returns_value() {
+        let receipt = sample_receipt();
+        assert_eq!(receipt.invoice_id(), "inv-001");
     }
 
     fn sample_receipt_with_counter(counter: u64) -> OfflineSpendReceipt {

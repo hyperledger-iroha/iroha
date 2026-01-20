@@ -24,6 +24,7 @@ incident retrospectives.
 
 - RBAC tokens: SoraFS instructions remain gated by their dedicated permission tokens (pin register/approve/retire/alias; capacity declare/telemetry/dispute; replication order issue/complete; pricing/credit upsert). Keep grants in sync with governance onboarding/offboarding.
 - Provider binding: every provider id must be bound to an owner account via config/genesis/CLI before issuing orders or telemetry; `gov.sorafs_telemetry.require_submitter/require_nonce` defaults stay on, with global and per-provider submitter allow-lists enforced by the executor.
+- Repair workers: `/v1/sorafs/audit/repair/{claim,heartbeat,complete,fail}` require signed worker requests (including `manifest_digest`) plus `CanOperateSorafsRepair { provider_id }` on-chain permissions. Provider owners are auto-granted and may delegate/revoke; there is no admin-only repair override path in production.
 - SoraNet privacy ingest: `/v1/soranet/privacy/{event,share}` stays disabled until `torii.soranet_privacy_ingest.enabled=true`. Tokens must match `torii.soranet_privacy_ingest.tokens` (`X-SoraNet-Privacy-Token` or `X-API-Token`), submitters must come from `allow_cidrs` (empty list denies), and rate limits apply via `rate_per_sec`/`burst`; rejects emit `soranet_privacy_ingest_reject_total{endpoint,reason}`.
 - Operations: when rotating submitter tokens/allow-lists, update `torii.soranet_privacy_ingest.*` and `gov.sorafs_telemetry` maps together, deploy the config bundle, and confirm a test submission succeeds while rejects counters reset; rotate provider ownership with `RegisterProviderOwner`/`UnregisterProviderOwner` before issuing orders/telemetry.
 
@@ -140,6 +141,37 @@ incident retrospectives.
 
 - Schedule a capacity drill focusing on provider saturation failure.
 - Update replication SLA documentation in `docs/source/sorafs_node_client_protocol.md`.
+
+### Retention / GC Inspection (Read-only)
+
+**Detection**
+
+- Alerts: `SoraFSCapacityPressure` or sustained `torii_sorafs_storage_bytes_used` > 90%.
+- Dashboard: `dashboards/grafana/sorafs_capacity_health.json`.
+
+**Immediate actions**
+
+1. Run a local retention snapshot:
+   ```bash
+   iroha sorafs gc inspect --data-dir /var/lib/sorafs
+   ```
+2. Capture an expired-only view for triage:
+   ```bash
+   iroha sorafs gc dry-run --data-dir /var/lib/sorafs
+   ```
+3. Attach the JSON outputs to the incident ticket for auditability.
+
+**Triage**
+
+- Confirm which manifests report `retention_epoch=0` (no expiry) vs. those with deadlines.
+- If `dry-run` reports expired manifests but capacity remains pinned, verify no
+  active repairs or retention policy overrides block eviction.
+
+**Remediation options**
+
+- The GC CLI is read-only. Do not delete manifests or chunks manually in production.
+- Escalate to governance for retention policy adjustments or capacity expansion
+  when expired data accumulates without automated eviction.
 
 ## Chaos Drill Cadence
 

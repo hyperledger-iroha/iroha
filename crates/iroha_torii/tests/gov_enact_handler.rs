@@ -47,7 +47,6 @@ async fn gov_enact_handler_builds_instruction() {
         queue,
         state,
         MaybeTelemetry::disabled(),
-        false,
         NoritoJson(dto),
     )
     .await

@@ -85,7 +85,6 @@ TRYIT_PROXY_PUBLIC_URL="http://localhost:8787" npm run start
 | `npm run tryit-proxy` завершился с “digest mismatch”. | OpenAPI bundle Torii изменился на стороне источника. | Запустите `npm run sync-openapi -- --latest` (или `--version=<tag>`) и повторите попытку. |
 | Виджеты возвращают `401` или `403`. | Токен отсутствует, истек или имеет недостаточные права. | Используйте OAuth device flow или вставьте валидный bearer токен в sandbox. Для статических токенов нужно экспортировать `DOCS_TRYIT_ALLOW_DEFAULT_BEARER=1`. |
 | `429 Too Many Requests` от прокси. | Превышен лимит запросов на IP. | Увеличьте `TRYIT_PROXY_RATE_LIMIT`/`TRYIT_PROXY_RATE_WINDOW_MS` для доверенных окружений или ограничьте тестовые скрипты. Все отказы по rate limit увеличивают `tryit_proxy_rate_limited_total`. |
-| Ошибки `502/504` с `ERR_STRICT_ADDRESS_REQUIRED` в логах Torii. | Запросы проксируются без поддержки разбора Norito IH58/сжатого формата. | Убедитесь, что целевой билд Torii включает изменения ADDR-5 (см. `crates/iroha_torii/tests/address_parsing.rs`) и что вы указываете правильное окружение. |
 
 ## Наблюдаемость
 

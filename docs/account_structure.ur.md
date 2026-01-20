@@ -538,13 +538,11 @@ reconstruct کیا جا سکے۔
    ساتھ validate کریں۔
 4. **Verify اور publish کرنا.** runbook checklist (hashes، Sigstore، اور
    `sequence` کی monotonicity) follow کریں اور bundle کو SoraFS پر mirror
-   کریں۔ Torii اب default طور پر `torii.strict_addresses = true` استعمال
    کرتا ہے، لہٰذا production clusters bundle landing کے فوراً بعد canonical
    IH58/compressed literals enforce کرتے ہیں۔
 5. **Monitoring اور rollback.** کم از کم 30 دن تک Local‑8 panels کو zero پر
    رکھیں؛ اگر regressions نظر آئیں تو previous manifest bundle دوبارہ
    publish کریں، اور متاثرہ non‑production environment میں عارضی طور پر
-   `torii.strict_addresses=false` سیٹ کریں، جب تک telemetry مستحکم نہ ہو
    جائے۔
 
 اوپر کی تمام steps ADDR‑7c کیلئے لازمی ثبوت ہیں: ایسے manifests جن میں

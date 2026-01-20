@@ -5607,7 +5607,7 @@ pub fn from_compressed_bytes<T: for<'de> NoritoDeserialize<'de>>(
             }
             #[cfg(all(feature = "compression", not(feature = "gpu-compression")))]
             {
-                let mut decoder = zstd::Decoder::new(compressed)?;
+                let decoder = zstd::Decoder::new(compressed)?;
                 // Bound output to the declared payload length (+1 to detect overflow).
                 let mut out = Vec::with_capacity(payload_len);
                 let max_len = payload_len.saturating_add(1);

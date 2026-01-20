@@ -532,8 +532,14 @@ def collect_validators(inline: List[str], file_path: Optional[Path]) -> List[str
             if stripped and not stripped.startswith("#"):
                 append_if_new(validators, stripped)
     for validator in validators:
-        if "@" not in validator:
-            raise ValueError(f"invalid validator `{validator}` (expected account_id form name@domain)")
+        if not validator:
+            raise ValueError("validator account identifier must be non-empty")
+        if "@" in validator:
+            parts = validator.split("@")
+            if len(parts) != 2 or not parts[0] or not parts[1]:
+                raise ValueError(
+                    f"invalid validator `{validator}` (expected IH58/uaid/opaque or <alias|public_key>@domain)"
+                )
     return validators
 
 

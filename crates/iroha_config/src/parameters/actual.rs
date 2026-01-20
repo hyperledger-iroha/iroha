@@ -183,8 +183,10 @@ impl Root {
     /// Check whether the configuration already enables Sora/Nexus-only features.
     #[must_use]
     pub fn uses_sora_features(&self) -> bool {
-        let sorafs =
-            self.torii.sorafs_storage.enabled || self.torii.sorafs_discovery.discovery_enabled;
+        let sorafs = self.torii.sorafs_storage.enabled
+            || self.torii.sorafs_discovery.discovery_enabled
+            || self.torii.sorafs_repair.enabled
+            || self.torii.sorafs_gc.enabled;
         let multilane = self.uses_multilane_catalogs();
 
         sorafs || multilane
@@ -4142,7 +4144,7 @@ pub struct Torii {
     pub api_fee_asset_id: Option<String>,
     /// Optional fee policy: fixed amount per request.
     pub api_fee_amount: Option<u64>,
-    /// Optional fee policy: receiver account id (e.g., "node@domain").
+    /// Optional fee policy: receiver account id (IH58 or `<alias|public_key>@domain`).
     pub api_fee_receiver: Option<String>,
     /// SoraNet privacy ingestion guard rails (auth/rate/namespace).
     pub soranet_privacy_ingest: SoranetPrivacyIngest,
@@ -4152,8 +4154,6 @@ pub struct Torii {
     pub peer_telemetry_urls: Vec<Url>,
     /// Peer telemetry geo lookup configuration.
     pub peer_geo: ToriiPeerGeo,
-    /// Require canonical IH58/compressed account literals at Torii boundaries.
-    pub strict_addresses: bool,
     /// Emit filter-match debug traces (developer diagnostics only).
     pub debug_match_filters: bool,
     /// Operator authentication policy for operator-facing endpoints.
@@ -4233,6 +4233,10 @@ pub struct Torii {
     pub sorafs_discovery: SorafsDiscovery,
     /// Embedded SoraFS storage configuration.
     pub sorafs_storage: SorafsStorage,
+    /// Repair scheduler configuration for SoraFS.
+    pub sorafs_repair: SorafsRepair,
+    /// GC scheduler configuration for SoraFS.
+    pub sorafs_gc: SorafsGc,
     /// Quota configuration for SoraFS control-plane endpoints.
     pub sorafs_quota: SorafsQuota,
     /// Alias cache policy shared across gateways and SDKs.
@@ -4807,6 +4811,81 @@ impl Default for SorafsDiscovery {
 pub struct SorafsAdmission {
     /// Directory containing governance-signed provider admission envelopes.
     pub envelopes_dir: PathBuf,
+}
+
+/// Repair scheduler configuration.
+#[derive(Debug, Clone)]
+pub struct SorafsRepair {
+    /// Enable the repair scheduler.
+    pub enabled: bool,
+    /// Optional Postgres DSN for durable repair storage.
+    pub db_dsn: Option<String>,
+    /// Maximum number of database connections for repair operations.
+    pub db_pool_max_connections: u32,
+    /// Claim TTL for repair tickets (seconds).
+    pub claim_ttl_secs: u64,
+    /// Heartbeat interval/TTL for active claims (seconds).
+    pub heartbeat_interval_secs: u64,
+    /// Maximum number of attempts before escalation.
+    pub max_attempts: u32,
+    /// Concurrent repair workers per node.
+    pub worker_concurrency: usize,
+    /// Initial retry backoff for failed repairs (seconds).
+    pub backoff_initial_secs: u64,
+    /// Maximum retry backoff for failed repairs (seconds).
+    pub backoff_max_secs: u64,
+    /// Default penalty used for scheduler-generated repair slash proposals (nano-XOR).
+    pub default_slash_penalty_nano: u128,
+}
+
+impl Default for SorafsRepair {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::sorafs::repair::ENABLED,
+            db_dsn: None,
+            db_pool_max_connections: defaults::sorafs::repair::DB_POOL_MAX_CONNECTIONS,
+            claim_ttl_secs: defaults::sorafs::repair::CLAIM_TTL_SECS,
+            heartbeat_interval_secs: defaults::sorafs::repair::HEARTBEAT_INTERVAL_SECS,
+            max_attempts: defaults::sorafs::repair::MAX_ATTEMPTS,
+            worker_concurrency: defaults::sorafs::repair::WORKER_CONCURRENCY,
+            backoff_initial_secs: defaults::sorafs::repair::BACKOFF_INITIAL_SECS,
+            backoff_max_secs: defaults::sorafs::repair::BACKOFF_MAX_SECS,
+            default_slash_penalty_nano: defaults::sorafs::repair::DEFAULT_SLASH_PENALTY_NANO,
+        }
+    }
+}
+
+/// GC scheduler configuration.
+#[derive(Debug, Clone)]
+pub struct SorafsGc {
+    /// Enable the GC worker.
+    pub enabled: bool,
+    /// Optional Postgres DSN for GC metadata storage.
+    pub db_dsn: Option<String>,
+    /// Maximum number of database connections for GC operations.
+    pub db_pool_max_connections: u32,
+    /// GC cadence (seconds).
+    pub interval_secs: u64,
+    /// Maximum deletions per GC run.
+    pub max_deletions_per_run: u32,
+    /// Grace window for retention expiry (seconds).
+    pub retention_grace_secs: u64,
+    /// Attempt a GC sweep before rejecting new pins when storage is full.
+    pub pre_admission_sweep: bool,
+}
+
+impl Default for SorafsGc {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::sorafs::gc::ENABLED,
+            db_dsn: None,
+            db_pool_max_connections: defaults::sorafs::gc::DB_POOL_MAX_CONNECTIONS,
+            interval_secs: defaults::sorafs::gc::INTERVAL_SECS,
+            max_deletions_per_run: defaults::sorafs::gc::MAX_DELETIONS_PER_RUN,
+            retention_grace_secs: defaults::sorafs::gc::RETENTION_GRACE_SECS,
+            pre_admission_sweep: defaults::sorafs::gc::PRE_ADMISSION_SWEEP,
+        }
+    }
 }
 
 /// Proof-of-Retrievability coordinator configuration.
@@ -5552,7 +5631,7 @@ pub struct IsoBridgeSigner {
 pub struct IsoAccountAlias {
     /// External IBAN representation.
     pub iban: String,
-    /// Account identifier (`public_key@domain`).
+    /// Account identifier (IH58 or `<alias|public_key>@domain`).
     pub account_id: String,
 }
 

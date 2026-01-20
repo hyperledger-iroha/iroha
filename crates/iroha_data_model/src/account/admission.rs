@@ -1,6 +1,6 @@
 //! Domain-scoped account admission policy.
 //!
-//! Iroha accounts are explicit on-chain entities identified by `AccountId = controller@domain`.
+//! Iroha accounts are explicit on-chain entities identified by canonical IH58 account IDs.
 //! This module defines a domain metadata policy that controls *implicit account creation on
 //! receipt* for Ethereum/Bitcoin-like UX: sending/minting assets (or transferring NFTs)
 //! to a never-before-seen `AccountId` can auto-create the corresponding account object when the

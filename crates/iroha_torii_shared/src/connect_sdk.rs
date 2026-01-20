@@ -254,12 +254,19 @@ mod tests {
 #[cfg(test)]
 mod approve_preimage_tests {
     use super::*;
+    use iroha_crypto::PublicKey;
+    use iroha_data_model::{account::AccountId, domain::DomainId};
     #[test]
     fn preimage_contains_prefix_and_keys() {
         let sid = [1u8; 32];
         let app = [2u8; 32];
         let wal = [3u8; 32];
-        let acc = "alice@wonderland";
+        let domain: DomainId = "wonderland".parse().expect("domain parses");
+        let public_key: PublicKey =
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+                .parse()
+                .expect("public key parses");
+        let acc = AccountId::new(domain, public_key).to_string();
         let perms = PermissionsV1 {
             methods: vec!["SIGN_REQUEST_RAW".into()],
             events: vec![],

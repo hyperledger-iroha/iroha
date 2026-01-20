@@ -1970,7 +1970,7 @@ mod measured_bytes_impls {
     use iroha_data_model::{
         account::{
             AccountController, AccountDetails, AccountId, AccountLabel, AccountRekeyRecord,
-            MultisigMember, MultisigPolicy,
+            MultisigMember, MultisigPolicy, OpaqueAccountId,
         },
         asset::{
             AssetDefinition, AssetDefinitionId, AssetId,
@@ -2259,6 +2259,12 @@ mod measured_bytes_impls {
         }
     }
 
+    impl MeasuredBytes for OpaqueAccountId {
+        fn measured_bytes(&self) -> usize {
+            size_of::<OpaqueAccountId>()
+        }
+    }
+
     impl MeasuredBytes for PublicKey {
         fn measured_bytes(&self) -> usize {
             let payload_len = self.to_bytes().1.len();
@@ -2444,6 +2450,7 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.metadata.measured_bytes_extra());
             total = total.saturating_add(self.label.measured_bytes_extra());
             total = total.saturating_add(self.uaid.measured_bytes_extra());
+            total = total.saturating_add(self.opaque_ids.measured_bytes_extra());
             total
         }
     }
@@ -3789,6 +3796,7 @@ mod tests {
     use iroha_config::parameters::actual::LaneConfig as RuntimeLaneConfig;
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
+        account::OpaqueAccountId,
         block::BlockHeader,
         consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
         nexus::{LaneCatalog, LaneConfig, LaneId},
@@ -3882,6 +3890,15 @@ mod tests {
         assert!(trigger_id.measured_bytes() >= std::mem::size_of::<TriggerId>());
         assert_eq!(repeats.measured_bytes(), std::mem::size_of::<Repeats>());
         assert!(filter.measured_bytes() >= std::mem::size_of::<EventFilterBox>());
+    }
+
+    #[test]
+    fn measured_bytes_cover_opaque_account_id() {
+        let opaque = OpaqueAccountId::from_hash(Hash::new([7_u8; 32]));
+        assert_eq!(
+            opaque.measured_bytes(),
+            std::mem::size_of::<OpaqueAccountId>()
+        );
     }
 
     fn dummy_qc(seed: u8) -> Qc {

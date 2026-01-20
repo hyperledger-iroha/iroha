@@ -119,7 +119,25 @@ Both endpoints are served by the embedded storage worker, so CLI smoke tests and
 3. Attempt to pin a second manifest of similar size. Torii must reject the request with HTTP `400` and an error message containing `storage capacity exceeded`.
 4. Restore the normal capacity limit when finished.
 
-## 5. PoR Sampling Probe
+## 5. Retention / GC Inspection (Read-only)
+
+1. Run a local retention scan against the storage directory:
+
+   ```bash
+   iroha sorafs gc inspect --data-dir ./storage/sorafs
+   ```
+
+2. Inspect only expired manifests (dry-run only, no deletions):
+
+   ```bash
+   iroha sorafs gc dry-run --data-dir ./storage/sorafs
+   ```
+
+3. Use `--now` or `--grace-secs` to pin the evaluation window when comparing reports across hosts or incidents.
+
+The GC CLI is intentionally read-only. Use it to capture retention deadlines and expired-manifest inventory for audit trails; do not remove data manually in production.
+
+## 6. PoR Sampling Probe
 
 1. Pin a manifest.
 2. Request a PoR sample:
@@ -136,7 +154,7 @@ Both endpoints are served by the embedded storage worker, so CLI smoke tests and
 
 3. Verify the response contains `samples` with the requested count and that each proof validates against the stored manifest root.
 
-## 6. Automation Hooks
+## 7. Automation Hooks
 
 - CI / smoke tests can reuse the targeted checks added in:
 

@@ -6,14 +6,14 @@ private func canonicalOwnerLiteral() throws -> String {
     let keypair = try Keypair(privateKeyBytes: Data(repeating: 1, count: 32))
     let address = try AccountAddress.fromAccount(domain: "wonderland", publicKey: keypair.publicKey)
     let ih58 = try address.toIH58(networkPrefix: 0x02F1)
-    return "\(ih58)@wonderland"
+    return ih58
 }
 
 private func noncanonicalOwnerLiteral() throws -> String {
     let keypair = try Keypair(privateKeyBytes: Data(repeating: 2, count: 32))
     let address = try AccountAddress.fromAccount(domain: "wonderland", publicKey: keypair.publicKey)
     let canonicalHex = try address.canonicalHex()
-    return "\(canonicalHex)@wonderland"
+    return canonicalHex
 }
 
 @available(macOS 10.15, iOS 13.0, *)
@@ -22,7 +22,7 @@ private func canonicalAuthorityLiteral(from signingKey: SigningKey,
     let publicKey = try signingKey.publicKey()
     let address = try AccountAddress.fromAccount(domain: domain, publicKey: publicKey)
     let ih58 = try address.toIH58(networkPrefix: 0x02F1)
-    return "\(ih58)@\(domain)"
+    return ih58
 }
 
 final class TransactionEncoderValidationTests: XCTestCase {

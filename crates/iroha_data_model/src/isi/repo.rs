@@ -268,7 +268,7 @@ mod tests {
                 .parse()
                 .unwrap();
         let custodian: AccountId =
-            "ed0120CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC@wonderland"
+            "ed0120CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
                 .parse()
                 .unwrap();
         let cash_leg = RepoCashLeg {

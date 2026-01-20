@@ -68,9 +68,9 @@ final class OfflineSpendReceiptTests: XCTestCase {
         let rawAccountId = AccountId.make(publicKey: publicKey, domain: domain)
         let address = try AccountAddress.fromAccount(domain: domain, publicKey: publicKey, algorithm: "ed25519")
         let ih58 = try address.toIH58(networkPrefix: 0x02F1)
-        let canonicalAccountId = "\(ih58)@\(domain)"
-        let rawAssetId = "xor##\(rawAccountId)"
-        let canonicalAssetId = "xor##\(canonicalAccountId)"
+        let canonicalAccountId = ih58
+        let rawAssetId = "xor#\(domain)#\(rawAccountId)"
+        let canonicalAssetId = "xor#\(domain)#\(canonicalAccountId)"
 
         let allowanceRaw = OfflineAllowanceCommitment(
             assetId: rawAssetId,

@@ -1,7 +1,7 @@
 {
   "fixtures": [
     {
-      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6@wonderland",
+      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6",
       "chain": "00000002",
       "creation_time_ms": 1735000000123,
       "encoded_file": "ivm_transfer.norito",
@@ -16,7 +16,7 @@
       "time_to_live_ms": 5000
     },
     {
-      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6@wonderland",
+      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6",
       "chain": "00000003",
       "creation_time_ms": 1735000100000,
       "encoded_file": "instructions_double_payment.norito",
@@ -31,7 +31,7 @@
       "time_to_live_ms": null
     },
     {
-      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6@wonderland",
+      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6",
       "chain": "00000004",
       "creation_time_ms": 1735000200000,
       "encoded_file": "register_asset_definition.norito",
@@ -46,7 +46,7 @@
       "time_to_live_ms": 10000
     },
     {
-      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6@wonderland",
+      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6",
       "chain": "00000005",
       "creation_time_ms": 1735000300000,
       "encoded_file": "transfer_asset.norito",
@@ -61,7 +61,7 @@
       "time_to_live_ms": 4000
     },
     {
-      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6@wonderland",
+      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6",
       "chain": "00000006",
       "creation_time_ms": 1735000400000,
       "encoded_file": "transfer_domain.norito",
@@ -76,7 +76,7 @@
       "time_to_live_ms": 3000
     },
     {
-      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6@wonderland",
+      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6",
       "chain": "00000007",
       "creation_time_ms": 1735000500000,
       "encoded_file": "transfer_asset_definition.norito",
@@ -91,7 +91,7 @@
       "time_to_live_ms": 2000
     },
     {
-      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6@wonderland",
+      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6",
       "chain": "00000020",
       "creation_time_ms": 1735003300000,
       "encoded_file": "transfer_nft_demo.norito",
@@ -106,7 +106,7 @@
       "time_to_live_ms": null
     },
     {
-      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6@wonderland",
+      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6",
       "chain": "00000008",
       "creation_time_ms": 1735000600000,
       "encoded_file": "mint_asset.norito",
@@ -121,7 +121,7 @@
       "time_to_live_ms": 2500
     },
     {
-      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6@wonderland",
+      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6",
       "chain": "00000009",
       "creation_time_ms": 1735000700000,
       "encoded_file": "burn_asset.norito",
@@ -136,7 +136,7 @@
       "time_to_live_ms": 1500
     },
     {
-      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6@wonderland",
+      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6",
       "chain": "0000000A",
       "creation_time_ms": 1735000800000,
       "encoded_file": "grant_revoke_permission.norito",
@@ -151,7 +151,7 @@
       "time_to_live_ms": 3500
     },
     {
-      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6@wonderland",
+      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6",
       "chain": "0000000B",
       "creation_time_ms": 1735000900000,
       "encoded_file": "grant_revoke_role.norito",
@@ -166,7 +166,7 @@
       "time_to_live_ms": 3200
     },
     {
-      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6@wonderland",
+      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6",
       "chain": "0000000C",
       "creation_time_ms": 1735001000000,
       "encoded_file": "grant_revoke_role_permission.norito",
@@ -181,7 +181,7 @@
       "time_to_live_ms": 3100
     },
     {
-      "authority": "34mSYn4vJFqHoJ1w2PExQcAQZBXyPC3dJGnB96X2tDmy8rm7Pm1dxd5sAVid2cVzpKnQ3nJGv@enterprise",
+      "authority": "34mSYn4vJFqHoJ1w2PExQcAQZBXyPC3dJGnB96X2tDmy8rm7Pm1dxd5sAVid2cVzpKnQ3nJGv",
       "chain": "00000010",
       "creation_time_ms": 1735002100000,
       "encoded_file": "asset_metadata_parity.norito",
@@ -196,7 +196,7 @@
       "time_to_live_ms": null
     },
     {
-      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6@wonderland",
+      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6",
       "chain": "00000011",
       "creation_time_ms": 1735002200000,
       "encoded_file": "set_parameter_next_mode.norito",
@@ -211,7 +211,7 @@
       "time_to_live_ms": null
     },
     {
-      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6@wonderland",
+      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6",
       "chain": "00000012",
       "creation_time_ms": 1735002400000,
       "encoded_file": "executor_upgrade_demo.norito",
@@ -226,7 +226,7 @@
       "time_to_live_ms": null
     },
     {
-      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6@wonderland",
+      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6",
       "chain": "00000013",
       "creation_time_ms": 1735002500000,
       "encoded_file": "register_peer_with_pop_demo.norito",
@@ -241,7 +241,7 @@
       "time_to_live_ms": null
     },
     {
-      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6@wonderland",
+      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6",
       "chain": "00000014",
       "creation_time_ms": 1735002600000,
       "encoded_file": "unregister_peer_demo.norito",
@@ -256,7 +256,7 @@
       "time_to_live_ms": null
     },
     {
-      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6@wonderland",
+      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6",
       "chain": "00000014",
       "creation_time_ms": 1735002600000,
       "encoded_file": "unregister_peer_demo.norito",
@@ -271,7 +271,7 @@
       "time_to_live_ms": null
     },
     {
-      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6@wonderland",
+      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6",
       "chain": "00000015",
       "creation_time_ms": 1735002700000,
       "encoded_file": "register_role_demo.norito",
@@ -286,7 +286,7 @@
       "time_to_live_ms": null
     },
     {
-      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6@wonderland",
+      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6",
       "chain": "0000001B",
       "creation_time_ms": 1735002800000,
       "encoded_file": "register_nft_demo.norito",
@@ -301,7 +301,7 @@
       "time_to_live_ms": null
     },
     {
-      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6@wonderland",
+      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6",
       "chain": "0000001C",
       "creation_time_ms": 1735002900000,
       "encoded_file": "trigger_repetitions_demo.norito",
@@ -316,7 +316,7 @@
       "time_to_live_ms": null
     },
     {
-      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6@wonderland",
+      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6",
       "chain": "0000001E",
       "creation_time_ms": 1735003000000,
       "encoded_file": "register_time_trigger_demo.norito",
@@ -331,7 +331,7 @@
       "time_to_live_ms": null
     },
     {
-      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6@wonderland",
+      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6",
       "chain": "0000001F",
       "creation_time_ms": 1735003100000,
       "encoded_file": "register_precommit_trigger_demo.norito",
@@ -346,7 +346,7 @@
       "time_to_live_ms": null
     },
     {
-      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6@wonderland",
+      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3sQFJepa4BfhD3S8NwAApyRBTcCAmf8EBX6VNPmEqrzn5e6",
       "chain": "0000001E",
       "creation_time_ms": 1735003200000,
       "encoded_file": "register_pipeline_trigger_demo.norito",
@@ -361,7 +361,7 @@
       "time_to_live_ms": null
     },
     {
-      "authority": "B5qiWdbSdEWjajvbR8b2z3Lca1LWGTiw8JxHVkAooMfDnBgLRdeHEF5FJdRyDA747z9uuCj@wonderland",
+      "authority": "B5qiWdbSdEWjajvbR8b2z3Lca1LWGTiw8JxHVkAooMfDnBgLRdeHEF5FJdRyDA747z9uuCj",
       "chain": "00000004",
       "creation_time_ms": 1735000200000,
       "encoded_file": "repo_initiate_tri_party.norito",
@@ -376,7 +376,7 @@
       "time_to_live_ms": 10000
     },
     {
-      "authority": "B5qiWdbSdEWjajvbR8b2z3Lca1LWGTiw8JxHVkAooMfDnBgLRdeHEF5FJdRyDA747z9uuCj@wonderland",
+      "authority": "B5qiWdbSdEWjajvbR8b2z3Lca1LWGTiw8JxHVkAooMfDnBgLRdeHEF5FJdRyDA747z9uuCj",
       "chain": "00000004",
       "creation_time_ms": 1735606000000,
       "encoded_file": "repo_reverse_unwind.norito",
@@ -391,7 +391,7 @@
       "time_to_live_ms": 8000
     },
     {
-      "authority": "B5qiWdbSdEWjajvbR8b2z3Lca1LWGTiw8JxHVkAooMfDnBgLRdeHEF5FJdRyDA747z9uuCj@wonderland",
+      "authority": "B5qiWdbSdEWjajvbR8b2z3Lca1LWGTiw8JxHVkAooMfDnBgLRdeHEF5FJdRyDA747z9uuCj",
       "chain": "00000005",
       "creation_time_ms": 1735000400000,
       "encoded_file": "settlement_dvp_atomic.norito",
@@ -406,7 +406,7 @@
       "time_to_live_ms": 7000
     },
     {
-      "authority": "B5qiWdbSdEWjajvbR8b2z3Lca1LWGTiw8JxHVkAooMfDnBgLRdeHEF5FJdRyDA747z9uuCj@wonderland",
+      "authority": "B5qiWdbSdEWjajvbR8b2z3Lca1LWGTiw8JxHVkAooMfDnBgLRdeHEF5FJdRyDA747z9uuCj",
       "chain": "00000006",
       "creation_time_ms": 1735000500000,
       "encoded_file": "settlement_pvp_net.norito",

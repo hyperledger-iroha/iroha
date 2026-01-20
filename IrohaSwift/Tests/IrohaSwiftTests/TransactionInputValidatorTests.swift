@@ -77,9 +77,9 @@ final class TransactionInputValidatorTests: XCTestCase {
     }
 
     func testSanitizeMetadataTargetRejectsAssetNameWithReservedCharacters() {
-        XCTAssertThrowsError(try TransactionInputValidator.sanitizeMetadataTarget(.asset("ro$se##alice@wonderland"))) { error in
+        XCTAssertThrowsError(try TransactionInputValidator.sanitizeMetadataTarget(.asset("ro$se#wonderland#alice@wonderland"))) { error in
             XCTAssertEqual(error as? TransactionInputError,
-                           .malformedAssetId("ro$se##alice@wonderland"))
+                           .malformedAssetId("ro$se#wonderland#alice@wonderland"))
         }
     }
 
@@ -91,8 +91,26 @@ final class TransactionInputValidatorTests: XCTestCase {
         XCTAssertEqual(domainTarget.objectId, "wonderland")
     }
 
-    func testSanitizeAssetIdAllowsSharedDomainShorthand() throws {
-        let target = try TransactionInputValidator.sanitizeMetadataTarget(.asset("xor##alice@wonderland"))
-        XCTAssertEqual(target.objectId, "xor##alice@wonderland")
+    func testSanitizeAssetIdRejectsSharedDomainShorthand() {
+        XCTAssertThrowsError(try TransactionInputValidator.sanitizeMetadataTarget(.asset("xor##alice@wonderland"))) { error in
+            XCTAssertEqual(error as? TransactionInputError,
+                           .malformedAssetId("xor##alice@wonderland"))
+        }
+    }
+
+    func testValidateAcceptsIh58Authority() throws {
+        let publicKey = Data(repeating: 0xAB, count: 32)
+        let ih58 = try AccountId.makeIH58(publicKey: publicKey, domain: "wonderland")
+        let ids = try TransactionInputValidator.validate(chainId: "0000",
+                                                         authorityId: ih58)
+        XCTAssertEqual(ids.authorityId, ih58)
+    }
+
+    func testValidateAcceptsUaidAuthority() throws {
+        let uaidHex = String(repeating: "0", count: 63) + "f"
+        let literal = "uaid:\(uaidHex)"
+        let ids = try TransactionInputValidator.validate(chainId: "0000",
+                                                         authorityId: literal)
+        XCTAssertEqual(ids.authorityId, literal)
     }
 }

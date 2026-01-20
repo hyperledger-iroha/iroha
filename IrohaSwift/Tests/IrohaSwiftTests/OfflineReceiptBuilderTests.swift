@@ -820,9 +820,9 @@ final class OfflineReceiptBuilderTests: XCTestCase {
         let receiptA = try makePoseidonSampleReceipt(seed: "a", counter: 5)
         let receiptB = try makePoseidonSampleReceipt(seed: "b", counter: 6)
         XCTAssertEqual(receiptA.to,
-                       "34mSYnDgbaJM58rbLoif4Tkp7G4W3U2rSG53UYJcVJdDp1azVQYq5hvtBqjCfTWooQiJrr13j@wonderland")
+                       "34mSYnDgbaJM58rbLoif4Tkp7G4W3U2rSG53UYJcVJdDp1azVQYq5hvtBqjCfTWooQiJrr13j")
         XCTAssertEqual(receiptB.to,
-                       "34mSYnDgbaJM58rbLoif4Tkp7G4W3U2rSG53UYJcVJdDp1azVQYq5hvtBqjCfTWooQiJrr13j@wonderland")
+                       "34mSYnDgbaJM58rbLoif4Tkp7G4W3U2rSG53UYJcVJdDp1azVQYq5hvtBqjCfTWooQiJrr13j")
         XCTAssertEqual(receiptA.txId.hexUppercased(),
                        "CBC9BA205005B3C4801668402BE63A9CF861473E6619DB0C97BA185A65EB1457")
         XCTAssertEqual(receiptB.txId.hexUppercased(),
@@ -1062,7 +1062,7 @@ final class OfflineReceiptBuilderTests: XCTestCase {
         let address = try AccountAddress.fromAccount(domain: "wonderland",
                                                      publicKey: publicKey)
         let ih58 = try address.toIH58(networkPrefix: 0x02F1)
-        return "\(ih58)@wonderland"
+        return ih58
     }
 
     private func waitForAuditEntries(_ logger: OfflineAuditLogger,

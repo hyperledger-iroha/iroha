@@ -207,6 +207,7 @@ fn create_implicit_account(
         metadata,
         label: None,
         uaid: None,
+        opaque_ids: Vec::new(),
     };
     let (account_id, account_value) = account.clone().into_key_value();
     state_transaction

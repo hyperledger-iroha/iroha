@@ -85,7 +85,6 @@ TRYIT_PROXY_PUBLIC_URL="http://localhost:8787" npm run start
 | ينتهي `npm run tryit-proxy` برسالة “digest mismatch”. | حزمة OpenAPI الخاصة بـ Torii تغيرت في المنبع. | شغل `npm run sync-openapi -- --latest` (أو `--version=<tag>`) ثم أعد المحاولة. |
 | الأدوات تعيد `401` أو `403`. | الرمز مفقود أو منتهي أو يمتلك صلاحيات غير كافية. | استخدم تدفق جهاز OAuth أو الصق رمز bearer صالحا في sandbox. للرموز الثابتة يجب تصدير `DOCS_TRYIT_ALLOW_DEFAULT_BEARER=1`. |
 | `429 Too Many Requests` من الوكيل. | تم تجاوز حد المعدل لكل IP. | ارفع `TRYIT_PROXY_RATE_LIMIT`/`TRYIT_PROXY_RATE_WINDOW_MS` للبيئات الموثوقة أو خفف من نصوص الاختبار. جميع حالات الرفض بسبب حد المعدل تزيد `tryit_proxy_rate_limited_total`. |
-| أخطاء `502/504` مع `ERR_STRICT_ADDRESS_REQUIRED` في سجلات Torii. | تم تمرير الطلبات دون دعم تحليل Norito IH58/المضغوط. | تأكد من أن إصدار Torii المستهدف يتضمن تغييرات ADDR-5 (انظر `crates/iroha_torii/tests/address_parsing.rs`) وأنك تشير إلى البيئة الصحيحة. |
 
 ## قابلية المراقبة
 

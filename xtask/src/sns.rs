@@ -609,10 +609,24 @@ fn validate_pricing_tier(
 }
 
 fn ensure_account_literal(literal: &str, field: &str, prefix: &str, errors: &mut Vec<String>) {
-    if !literal.contains('@') {
+    let trimmed = literal.trim();
+    if trimmed.is_empty() {
         errors.push(format!(
-            "{prefix}: {field} `{literal}` must be account@domain"
+            "{prefix}: {field} must be a non-empty account identifier"
         ));
+        return;
+    }
+    if trimmed.chars().any(char::is_whitespace) {
+        errors.push(format!(
+            "{prefix}: {field} `{literal}` must not contain whitespace"
+        ));
+    }
+    if let Some((head, tail)) = trimmed.split_once('@') {
+        if head.is_empty() || tail.is_empty() || trimmed.matches('@').count() != 1 {
+            errors.push(format!(
+                "{prefix}: {field} `{literal}` must be IH58/uaid/opaque or `<alias|public_key>@domain`"
+            ));
+        }
     }
 }
 

@@ -20,7 +20,7 @@ pub enum DenylistKind {
     Url(String),
     /// Canonical account identifier (AccountAddress encoding).
     AccountId(String),
-    /// Routing alias in `alias@domain` form.
+    /// Routing alias in `<alias>@<domain>` form.
     AccountAlias(String),
     /// Perceptual hash/embedding family identifier.
     PerceptualFamily {
@@ -259,7 +259,7 @@ impl DenylistEntryBuilder {
         self
     }
 
-    /// Attaches an optional alias (for example, `alias@domain`) to the entry.
+    /// Attaches an optional alias (for example, `<alias>@<domain>`) to the entry.
     #[must_use]
     pub fn alias<S: Into<String>>(mut self, alias: S) -> Self {
         self.alias = Some(alias.into());

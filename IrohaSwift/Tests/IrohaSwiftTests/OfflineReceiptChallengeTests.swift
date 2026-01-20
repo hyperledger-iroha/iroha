@@ -12,7 +12,7 @@ final class OfflineReceiptChallengeTests: XCTestCase {
                 chainId: " ",
                 invoiceId: "inv-empty",
                 receiverAccountId: "alice@wonderland",
-                assetId: "xor##alice@wonderland",
+                assetId: "xor#wonderland#alice@wonderland",
                 amount: "1",
                 issuedAtMs: 1_700_000_000_000,
                 nonceHex: nonce
@@ -32,7 +32,7 @@ final class OfflineReceiptChallengeTests: XCTestCase {
                 chainId: "testnet",
                 invoiceId: "inv-frac",
                 receiverAccountId: "alice@wonderland",
-                assetId: "xor##alice@wonderland",
+                assetId: "xor#wonderland#alice@wonderland",
                 amount: "1.5",
                 issuedAtMs: 1_700_000_000_000,
                 nonceHex: nonce
@@ -47,7 +47,7 @@ final class OfflineReceiptChallengeTests: XCTestCase {
                 chainId: "testnet",
                 invoiceId: "inv-frac",
                 receiverAccountId: "alice@wonderland",
-                assetId: "xor##alice@wonderland",
+                assetId: "xor#wonderland#alice@wonderland",
                 amount: "1.5",
                 issuedAtMs: 1_700_000_000_000,
                 nonceHex: nonce,
@@ -67,8 +67,8 @@ final class OfflineReceiptChallengeTests: XCTestCase {
         let result = try OfflineReceiptChallenge.encode(
             chainId: "testnet",
             invoiceId: "inv-swift-tests",
-            receiverAccountId: "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
-            assetId: "xor##34mSYn6ySFTASoiVzNGuyBkedDbYTxqhobNmoDbzdhfaNtveqVrm8N49uoqtcRNvAUcapufe1@sora",
+            receiverAccountId: "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+            assetId: "xor#sora#34mSYn6ySFTASoiVzNGuyBkedDbYTxqhobNmoDbzdhfaNtveqVrm8N49uoqtcRNvAUcapufe1",
             amount: "250",
             issuedAtMs: 1_700_000_000_000,
             nonceHex: nonce
@@ -93,9 +93,9 @@ final class OfflineReceiptChallengeTests: XCTestCase {
         let rawAccountId = AccountId.make(publicKey: publicKey, domain: domain)
         let address = try AccountAddress.fromAccount(domain: domain, publicKey: publicKey, algorithm: "ed25519")
         let ih58 = try address.toIH58(networkPrefix: 0x02F1)
-        let canonicalAccountId = "\(ih58)@\(domain)"
-        let rawAssetId = "xor##\(rawAccountId)"
-        let canonicalAssetId = "xor##\(canonicalAccountId)"
+        let canonicalAccountId = ih58
+        let rawAssetId = "xor#\(domain)#\(rawAccountId)"
+        let canonicalAssetId = "xor#\(domain)#\(canonicalAccountId)"
         let nonceHex = IrohaHash.hash(Data("receipt-nonce".utf8)).hexUppercased()
 
         let rawPreimage = OfflineReceiptChallengePreimage(

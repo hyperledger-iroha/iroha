@@ -320,7 +320,7 @@ final class ConnectViewModel: ObservableObject {
           }
           if let pjson = try? bridge.decodeControlApprovePermissionsJson(data) { self.approvePermsJson = pjson }
           if let prjson = try? bridge.decodeControlApproveProofJson(data) { self.approveProofJson = prjson }
-          // Fallback: parse name@domain when JSON absent
+          // Fallback: parse <alias>@<domain> when JSON absent
           if self.lastApproveAccountName.isEmpty && self.lastApproveAccountDomain.isEmpty {
             let raw = self.lastApproveAccount
             if let at = raw.firstIndex(of: "@") {
