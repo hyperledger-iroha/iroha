@@ -4274,6 +4274,7 @@ impl Actor {
             .get(&key)
             .is_some_and(|session| session.delivered || session.is_invalid())
         {
+            self.subsystems.da_rbc.rbc.ready_deferral.remove(&key);
             self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
         }
         if roster_updated && self.subsystems.da_rbc.rbc.pending.contains_key(&key) {
@@ -4610,6 +4611,7 @@ impl Actor {
                 .rbc
                 .ready_rebroadcast_last_sent
                 .remove(key);
+            self.subsystems.da_rbc.rbc.ready_deferral.remove(key);
             self.subsystems.da_rbc.rbc.deliver_deferral.remove(key);
             self.subsystems
                 .da_rbc
@@ -4662,6 +4664,7 @@ impl Actor {
                 .rbc
                 .ready_rebroadcast_last_sent
                 .remove(key);
+            self.subsystems.da_rbc.rbc.ready_deferral.remove(key);
             self.subsystems.da_rbc.rbc.deliver_deferral.remove(key);
             self.subsystems
                 .da_rbc

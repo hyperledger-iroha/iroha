@@ -232,7 +232,36 @@ impl Actor {
         );
         self.pending.missing_block_requests = requests;
         if deferred {
-            if let Some(stats) = self.pending.missing_block_requests.get_mut(&block_hash) {
+            let view_change_state =
+                self.pending
+                    .missing_block_requests
+                    .get(&block_hash)
+                    .map(|stats| {
+                        let view_change_due = stats
+                            .view_change_window
+                            .filter(|window| *window != Duration::ZERO)
+                            .is_some_and(|window| {
+                                !stats.view_change_triggered_in_view()
+                                    && now.saturating_duration_since(stats.first_seen) >= window
+                            });
+                        (view_change_due, stats.first_seen, stats.attempts)
+                    });
+            let should_defer = view_change_state.is_some_and(|(due, _, _)| due)
+                && self.should_defer_missing_block_view_change(&block_hash, height, view);
+            if should_defer {
+                let queue_depths = super::status::worker_queue_depth_snapshot();
+                if let Some((_due, first_seen, attempts)) = view_change_state {
+                    debug!(
+                        height,
+                        view,
+                        dwell_ms = now.saturating_duration_since(first_seen).as_millis(),
+                        attempts,
+                        block_payload_rx_depth = queue_depths.block_payload_rx,
+                        rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                        "missing block dwell exceeded view-change window; deferring view change while payload backlog is unresolved"
+                    );
+                }
+            } else if let Some(stats) = self.pending.missing_block_requests.get_mut(&block_hash) {
                 if stats.mark_view_change_if_due(now) {
                     let dwell_ms = now.saturating_duration_since(stats.first_seen).as_millis();
                     let since_last_ms = now
@@ -617,6 +646,13 @@ impl Actor {
         height: u64,
         view: u64,
     ) -> bool {
+        let queue_depths = super::status::worker_queue_depth_snapshot();
+        if queue_depths.block_payload_rx > 0 || queue_depths.rbc_chunk_rx > 0 {
+            return true;
+        }
+        if self.has_unresolved_rbc_backlog() {
+            return true;
+        }
         if !self.runtime_da_enabled() {
             return false;
         }
