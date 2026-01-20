@@ -7,7 +7,7 @@ use iroha::{
         AccountAddressError, AccountAddressFormat, AddressDomainKind, ParsedAccountAddress,
         parse_account_address,
     },
-    data_model::{account::AccountId, domain::DomainId},
+    data_model::domain::DomainId,
 };
 use norito::json::{self, JsonSerialize};
 use std::{

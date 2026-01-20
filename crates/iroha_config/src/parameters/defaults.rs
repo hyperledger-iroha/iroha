@@ -1026,10 +1026,14 @@ pub mod sorafs {
 
     /// Defaults for the SoraFS repair scheduler configuration.
     pub mod repair {
+        use std::path::PathBuf;
+
         /// Enable the repair scheduler (disabled by default).
         pub const ENABLED: bool = false;
-        /// Maximum number of database connections in the repair pool.
-        pub const DB_POOL_MAX_CONNECTIONS: u32 = 8;
+        /// Optional directory for durable repair state.
+        pub fn state_dir() -> Option<PathBuf> {
+            None
+        }
         /// Default claim lease TTL for repair tickets (seconds).
         pub const CLAIM_TTL_SECS: u64 = 15 * 60;
         /// Heartbeat interval/TTL for active repair claims (seconds).
@@ -1048,10 +1052,14 @@ pub mod sorafs {
 
     /// Defaults for the SoraFS GC scheduler configuration.
     pub mod gc {
+        use std::path::PathBuf;
+
         /// Enable the GC worker (disabled by default).
         pub const ENABLED: bool = false;
-        /// Maximum number of database connections in the GC pool.
-        pub const DB_POOL_MAX_CONNECTIONS: u32 = 4;
+        /// Optional directory for durable GC state.
+        pub fn state_dir() -> Option<PathBuf> {
+            None
+        }
         /// GC cadence (seconds).
         pub const INTERVAL_SECS: u64 = 15 * 60;
         /// Maximum deletions per GC run.

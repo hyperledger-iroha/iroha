@@ -4,6 +4,7 @@ Last update: 2026-01-20
 
 - SoraFS repair API: added Torii contract tests for worker endpoints (report/claim/heartbeat/complete/fail) and status snapshots.
 - SoraFS CLI: added help smoke coverage for `iroha sorafs repair` and `iroha sorafs gc`.
+- SoraFS incentives state: embed domain hints so IH58 account IDs roundtrip, and install a domain-selector resolver while parsing JSON snapshots and CLI tests.
 - Accounts/UAID: enforce UAID→account 1:1 index, reject duplicate UAIDs on registration, and switch UAID portfolio/reward selection to the index with new unit coverage.
 - Account address parsing: accept full-width `ｓｎｘ１` sentinel for compressed Sora literals alongside ASCII `snx1`.
 - Tests: `cargo test -p iroha_data_model compressed_fullwidth_sentinel_accepts` (ok; waited for build dir lock).
@@ -23,8 +24,8 @@ Last update: 2026-01-20
 - SoraFS repair events: record ordered RepairTaskEventV1 transitions in the scheduler and surface them in repair status responses.
 - SoraFS repair watchdog: enforce SLA/attempt caps, requeue expired leases with backoff, emit draft slash proposals, and prioritize claimable tasks by SLA/severity/provider backlog.
 - Norito derive: fix AoS enum `[u8; N]` length prefixing for u8 array variants and add an unpacked AoS enum roundtrip test.
-- Tests: `cargo test -p iroha_torii sorafs_repair_endpoints` (failed: `iroha_torii` tests no longer compile; missing imports in `crates/iroha_torii/src/lib.rs` test helpers and stale `gov`/`routing` test call signatures).
-- Tests: `cargo test -p iroha_cli sorafs_repair_help_is_accessible` (failed: `iroha_cli` compile errors in `crates/iroha_cli/src/main_shared.rs` JSON map literal, missing `FromStr` imports, and updated `sns` arg signatures).
+- Tests: `cargo test -p iroha_torii sorafs_repair_worker_endpoints_drive_state` (ok).
+- Tests: `cargo test -p iroha_cli sorafs_` (ok).
 - Tests: `cargo clippy -p sorafs_node --all-targets -- -D warnings` (ok).
 - Tests: `cargo test -p norito enum_aos` (ok; warning about unused_mut in `crates/norito/src/core.rs:5610`).
 - Format: `cargo fmt --all` (warned about nightly-only rustfmt options in stable toolchain).
@@ -35,7 +36,6 @@ Last update: 2026-01-20
 - Tests: `cargo test -p sorafs_node node_handle_manages_repair_queue` (ok).
 - Tests: `cargo test -p sorafs_node` (failed: `store::tests::ingest_manifest_persists_metadata_and_chunks` expected manifest hash `57950a...` vs `010203`).
 - Tests: `cargo test -p iroha_torii repair_query_tests` (ok).
-- Tests: `cargo test -p iroha_torii repair_worker_handlers_drive_state_transitions` (failed to compile `iroha_core`: `Storage<AccountId, Owned<AccountDetails>>` missing `iter`, plus type inference errors in `crates/iroha_core/src/state.rs:7515`).
 - Build: `cargo check -p iroha_executor` (ok).
 - Build: `cargo check -p iroha_core` (ok).
 - Tests: `cargo test --workspace` (aborted per user request).

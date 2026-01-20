@@ -15,7 +15,6 @@ use clap::{Args, Subcommand};
 use eyre::{Result, WrapErr, eyre};
 use iroha::da::{self, DaIngestParams, DaRentLedgerPlan};
 use iroha::data_model::{
-    account::AccountId,
     asset::AssetDefinitionId,
     da::{
         ingest::DaIngestReceipt,
