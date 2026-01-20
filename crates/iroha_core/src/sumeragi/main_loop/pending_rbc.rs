@@ -381,6 +381,7 @@ impl Actor {
                     ),
                     PendingRbcDropReason::Cap => {}
                 }
+                self.release_pending_rbc_dedup(&eviction.removed);
                 Self::record_pending_drop(
                     self.telemetry_handle(),
                     eviction.reason,
