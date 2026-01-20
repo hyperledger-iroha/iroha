@@ -641,11 +641,15 @@ impl Actor {
     }
 
     fn should_defer_missing_block_view_change(
-        &self,
+        &mut self,
         block_hash: &HashOf<BlockHeader>,
         height: u64,
         view: u64,
     ) -> bool {
+        let now = Instant::now();
+        if self.queue_drop_backpressure_active(now, self.payload_rebroadcast_cooldown()) {
+            return true;
+        }
         let queue_depths = super::status::worker_queue_depth_snapshot();
         if queue_depths.block_payload_rx > 0 || queue_depths.rbc_chunk_rx > 0 {
             return true;
@@ -655,6 +659,30 @@ impl Actor {
         }
         if !self.runtime_da_enabled() {
             return false;
+        }
+        let lower = height.saturating_sub(1);
+        let upper = height.saturating_add(1);
+        let rbc_backlog_near_height = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .iter()
+            .any(|(key, session)| {
+                key.1 >= lower && key.1 <= upper && !session.is_invalid() && !session.delivered
+            });
+        if rbc_backlog_near_height {
+            return true;
+        }
+        let pending_backlog_near_height = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .pending
+            .keys()
+            .any(|key| key.1 >= lower && key.1 <= upper);
+        if pending_backlog_near_height {
+            return true;
         }
         let key = (*block_hash, height, view);
         if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {

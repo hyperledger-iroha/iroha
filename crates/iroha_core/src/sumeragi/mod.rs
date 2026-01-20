@@ -1979,6 +1979,57 @@ mod tests {
     }
 
     #[test]
+    fn try_incoming_rbc_chunk_releases_dedup_on_queue_full() {
+        let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, _block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(1);
+        let (vote_tx, _vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let vote_dedup = Arc::new(Mutex::new(DedupCache::new(4, VOTE_DEDUP_CACHE_TTL)));
+        let block_payload_dedup = Arc::new(Mutex::new(BlockPayloadDedupCache::new(
+            4,
+            BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
+        )));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx.clone(),
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([9u8; 32]));
+        let rbc_chunk = RbcChunk {
+            block_hash,
+            height: 1,
+            view: 0,
+            epoch: 0,
+            idx: 0,
+            bytes: vec![1, 2, 3],
+        };
+        rbc_chunk_tx
+            .send(inbound(BlockMessage::RbcChunk(rbc_chunk.clone())))
+            .expect("fill queue");
+        assert!(
+            !handle.try_incoming_block_message(BlockMessage::RbcChunk(rbc_chunk.clone())),
+            "queue full should reject"
+        );
+        let _ = rbc_chunk_rx.try_recv().expect("drain queue");
+        assert!(
+            handle.try_incoming_block_message(BlockMessage::RbcChunk(rbc_chunk)),
+            "dedup should allow retry after drop"
+        );
+        let received = rbc_chunk_rx.try_recv().expect("queued chunk");
+        assert!(matches!(received.message, BlockMessage::RbcChunk(_)));
+    }
+
+    #[test]
     fn try_incoming_block_message_wakes_worker_on_accept() {
         let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (block_tx, _block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -5916,6 +5967,14 @@ where
         }
     }
 
+    fn remove(&mut self, key: &T) -> bool {
+        let Some(entry) = self.entries.remove(key) else {
+            return false;
+        };
+        self.lru.remove(&(entry.order, key.clone()));
+        true
+    }
+
     fn next_order(&mut self) -> u64 {
         let order = self.next_order;
         self.next_order = self.next_order.wrapping_add(1);
@@ -6005,6 +6064,17 @@ impl BlockPayloadDedupCache {
             BlockPayloadDedupKey::RbcDeliver { .. } => self.rbc_deliver.insert(key, now),
             BlockPayloadDedupKey::BlockSyncUpdate { .. } => self.block_sync_update.insert(key, now),
             BlockPayloadDedupKey::RbcChunk { .. } => self.rbc_chunk.insert(key, now),
+        }
+    }
+
+    fn remove(&mut self, key: &BlockPayloadDedupKey) -> bool {
+        match *key {
+            BlockPayloadDedupKey::BlockCreated { .. } => self.block_created.remove(key),
+            BlockPayloadDedupKey::Proposal { .. } => self.proposal.remove(key),
+            BlockPayloadDedupKey::RbcReady { .. } => self.rbc_ready.remove(key),
+            BlockPayloadDedupKey::RbcDeliver { .. } => self.rbc_deliver.remove(key),
+            BlockPayloadDedupKey::BlockSyncUpdate { .. } => self.block_sync_update.remove(key),
+            BlockPayloadDedupKey::RbcChunk { .. } => self.rbc_chunk.remove(key),
         }
     }
 
@@ -6172,6 +6242,14 @@ impl SumeragiHandle {
             status::record_dedup_evictions(kind, outcome.evicted_capacity, outcome.evicted_expired);
         }
         outcome.inserted
+    }
+
+    fn release_block_payload_dedup(&self, key: &BlockPayloadDedupKey) {
+        let mut guard = self
+            .block_payload_dedup
+            .lock()
+            .expect("block payload dedup cache poisoned");
+        guard.remove(key);
     }
 
     /// Enqueue an incoming block-synchronization or consensus message.
@@ -6556,14 +6634,16 @@ impl SumeragiHandle {
                 let block_hash = chunk.block_hash;
                 let idx = chunk.idx;
                 let bytes_hash = CryptoHash::new(&chunk.bytes);
-                let duplicate = !self.dedup_block_payload(BlockPayloadDedupKey::RbcChunk {
+                let dedup_key = BlockPayloadDedupKey::RbcChunk {
                     height,
                     view,
                     epoch,
                     block_hash,
                     idx,
                     bytes_hash,
-                });
+                };
+                let inserted = self.dedup_block_payload(dedup_key);
+                let duplicate = !inserted;
                 if duplicate {
                     iroha_logger::debug!(
                         height,
@@ -6575,12 +6655,17 @@ impl SumeragiHandle {
                     );
                     return false;
                 }
-                enqueue_blocking(
+                let accepted = enqueue_blocking(
                     &self.rbc_chunks,
                     InboundBlockMessage::new(BlockMessage::RbcChunk(chunk), sender),
                     "RbcChunk",
                     status::WorkerQueueKind::RbcChunks,
-                )
+                );
+                if !accepted {
+                    // Allow rebroadcasts to be enqueued if the queue was full.
+                    self.release_block_payload_dedup(&dedup_key);
+                }
+                accepted
             }
             BlockMessage::FetchPendingBlock(request) => enqueue_blocking(
                 &self.block_payload,
@@ -7032,6 +7117,7 @@ impl SumeragiStartArgs {
             background_post_tx,
             da_spool_dir,
             vote_dedup,
+            block_payload_dedup,
             vote_rx,
             block_payload_rx,
             block_rx,
@@ -7080,6 +7166,7 @@ struct SumeragiWorker {
     background_post_tx: Option<mpsc::SyncSender<BackgroundPost>>,
     da_spool_dir: PathBuf,
     vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>>,
+    block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>>,
     vote_rx: mpsc::Receiver<InboundBlockMessage>,
     block_payload_rx: mpsc::Receiver<InboundBlockMessage>,
     block_rx: mpsc::Receiver<InboundBlockMessage>,
@@ -8076,6 +8163,7 @@ impl SumeragiWorker {
             rbc_store,
             da_spool_dir,
             vote_dedup: _vote_dedup,
+            block_payload_dedup,
         } = self;
         let fallback_block_time = config.npos.block_time;
         let fallback_commit_time = config.npos.timeouts.commit;
@@ -8132,6 +8220,7 @@ impl SumeragiWorker {
             rbc_store,
             background_post_tx,
             Some(wake_tx.clone()),
+            block_payload_dedup,
             rbc_status_handle,
         ) {
             Ok(actor) => Box::new(actor),

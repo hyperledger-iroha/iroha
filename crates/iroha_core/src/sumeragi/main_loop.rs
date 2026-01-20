@@ -9,7 +9,7 @@ use std::{
     num::NonZeroUsize,
     ops::Bound::{Excluded, Unbounded},
     path::{Path, PathBuf},
-    sync::{Arc, mpsc},
+    sync::{Arc, Mutex, mpsc},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -184,6 +184,8 @@ const REBROADCAST_COOLDOWN_FLOOR: Duration = Duration::from_millis(200);
 const REBROADCAST_COOLDOWN_MULTIPLIER: u32 = 2;
 /// Payload rebroadcasts (block payloads/RBC chunks) are heavier, so keep them slower.
 const PAYLOAD_REBROADCAST_COOLDOWN_MULTIPLIER: u32 = 2;
+/// Cap the number of missing READY senders logged per deferral.
+const READY_MISSING_LOG_LIMIT: usize = 8;
 /// EMA smoothing factor for pacemaker phase latencies.
 pub(super) const PACEMAKER_PHASE_EMA_ALPHA: f64 = 0.2;
 /// Log when the gap between tick invocations exceeds this threshold.
@@ -3668,6 +3670,7 @@ pub(super) struct Actor {
     kura: Arc<Kura>,
     network: IrohaNetwork,
     subsystems: ActorSubsystems,
+    block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>>,
     #[allow(dead_code)] // Retained until background broadcast wiring consumes the gossiper handle.
     peers_gossiper: PeersGossiperHandle,
     #[allow(dead_code)] // Retained until Genesis gossip orchestration consumes the handle.
@@ -3723,6 +3726,7 @@ pub(super) struct Actor {
     tick_timing: TickTimingMonitor,
     last_qc_rebuild: Instant,
     relay_backpressure: RelayBackpressure,
+    queue_drop_backpressure: QueueDropBackpressure,
     new_view_rebroadcast_log: NewViewRebroadcastThrottle,
     proposal_rebroadcast_log: PayloadRebroadcastThrottle,
     payload_rebroadcast_log: PayloadRebroadcastThrottle,
@@ -6771,6 +6775,7 @@ impl Actor {
         rbc_store: Option<RbcStoreConfig>,
         background_post_tx: Option<mpsc::SyncSender<BackgroundPost>>,
         wake_tx: Option<mpsc::SyncSender<()>>,
+        block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>>,
         rbc_status_handle: rbc_status::Handle,
     ) -> Result<Self> {
         let consensus_frame_cap = frame_plaintext_cap(consensus_frame_cap);
@@ -7211,6 +7216,7 @@ impl Actor {
             kura,
             network,
             subsystems,
+            block_payload_dedup,
             peers_gossiper,
             genesis_network,
             block_count,
@@ -7256,6 +7262,7 @@ impl Actor {
             tick_timing: TickTimingMonitor::new(now),
             last_qc_rebuild: initial_qc_rebuild,
             relay_backpressure: RelayBackpressure::default(),
+            queue_drop_backpressure: QueueDropBackpressure::default(),
             new_view_rebroadcast_log: NewViewRebroadcastThrottle::default(),
             proposal_rebroadcast_log: PayloadRebroadcastThrottle::default(),
             payload_rebroadcast_log: PayloadRebroadcastThrottle::default(),
@@ -9613,6 +9620,34 @@ impl Actor {
                         total,
                         self.payload_rebroadcast_cooldown(),
                     ) {
+                        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(key.1);
+                        let signature_topology =
+                            topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
+                        let (missing_ready_total, missing_ready, missing_ready_peers) = {
+                            let ready_senders: BTreeSet<_> = session
+                                .ready_signatures
+                                .iter()
+                                .map(|entry| entry.sender)
+                                .collect();
+                            let mut missing_ready_total = 0usize;
+                            let mut missing_ready = Vec::new();
+                            let mut missing_ready_peers = Vec::new();
+                            for (idx, peer) in signature_topology.as_ref().iter().enumerate() {
+                                let idx = match ValidatorIndex::try_from(idx) {
+                                    Ok(idx) => idx,
+                                    Err(_) => continue,
+                                };
+                                if ready_senders.contains(&idx) {
+                                    continue;
+                                }
+                                missing_ready_total = missing_ready_total.saturating_add(1);
+                                if missing_ready.len() < READY_MISSING_LOG_LIMIT {
+                                    missing_ready.push(idx);
+                                    missing_ready_peers.push(peer.clone());
+                                }
+                            }
+                            (missing_ready_total, missing_ready, missing_ready_peers)
+                        };
                         info!(
                             height = key.1,
                             view = key.2,
@@ -9621,6 +9656,9 @@ impl Actor {
                             roster_len,
                             ready = ready_count,
                             required = ready_threshold,
+                            missing_ready_total,
+                            missing_ready = ?missing_ready,
+                            missing_ready_peers = ?missing_ready_peers,
                             received = received_chunks,
                             total,
                             "deferring local RBC READY: awaiting chunks or READY quorum"
@@ -10577,6 +10615,33 @@ impl Actor {
                 self.subsystems.da_rbc.rbc.sessions.insert(key, session);
                 return Ok(());
             }
+            let (_, mode_tag, prf_seed) = self.consensus_context_for_height(key.1);
+            let signature_topology = topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
+            let (missing_ready_total, missing_ready, missing_ready_peers) = {
+                let ready_senders: BTreeSet<_> = session
+                    .ready_signatures
+                    .iter()
+                    .map(|entry| entry.sender)
+                    .collect();
+                let mut missing_ready_total = 0usize;
+                let mut missing_ready = Vec::new();
+                let mut missing_ready_peers = Vec::new();
+                for (idx, peer) in signature_topology.as_ref().iter().enumerate() {
+                    let idx = match ValidatorIndex::try_from(idx) {
+                        Ok(idx) => idx,
+                        Err(_) => continue,
+                    };
+                    if ready_senders.contains(&idx) {
+                        continue;
+                    }
+                    missing_ready_total = missing_ready_total.saturating_add(1);
+                    if missing_ready.len() < READY_MISSING_LOG_LIMIT {
+                        missing_ready.push(idx);
+                        missing_ready_peers.push(peer.clone());
+                    }
+                }
+                (missing_ready_total, missing_ready, missing_ready_peers)
+            };
             iroha_logger::info!(
                 height = key.1,
                 view = key.2,
@@ -10586,6 +10651,9 @@ impl Actor {
                 roster_len,
                 ready = ready_count,
                 required,
+                missing_ready_total,
+                missing_ready = ?missing_ready,
+                missing_ready_peers = ?missing_ready_peers,
                 senders = ?session
                     .ready_signatures
                     .iter()
@@ -10760,6 +10828,10 @@ impl Actor {
         self.relay_backpressure.active(now, cooldown)
     }
 
+    fn queue_drop_backpressure_active(&mut self, now: Instant, cooldown: Duration) -> bool {
+        self.queue_drop_backpressure.active(now, cooldown)
+    }
+
     fn quorum_timeout(&self, da_enabled: bool) -> Duration {
         let view = self.state.view();
         let block_time = self.block_time_for_mode(&view, self.consensus_mode);
@@ -10823,6 +10895,11 @@ impl Actor {
             return false;
         }
         if self.subsystems.commit.inflight.is_some() {
+            return false;
+        }
+        if !self.pending.missing_block_requests.is_empty() {
+            // Avoid view-change churn while we're still synchronizing missing payloads.
+            self.queue_ready_since = None;
             return false;
         }
         if self.queue.active_len() == 0 {
@@ -10894,6 +10971,16 @@ impl Actor {
                 Some(now)
             }
         };
+        if !proposal_seen {
+            // Avoid rotating the leader before the pacemaker has attempted a proposal.
+            let last_attempt = self.subsystems.propose.last_pacemaker_attempt;
+            let attempted = queue_since
+                .and_then(|since| last_attempt.map(|attempt| attempt >= since))
+                .unwrap_or(false);
+            if !attempted {
+                return false;
+            }
+        }
         let timeout = idle_view_timeout(
             proposal_seen,
             self.commit_quorum_timeout(),
@@ -11584,6 +11671,30 @@ mod relay_drop_counters_tests {
     }
 }
 
+#[cfg(test)]
+mod queue_drop_backpressure_tests {
+    use std::time::{Duration, Instant};
+
+    use super::QueueDropBackpressure;
+    use crate::sumeragi::status;
+    use crate::sumeragi::status::WorkerQueueKind;
+
+    #[test]
+    fn queue_drop_backpressure_tracks_recent_drops() {
+        status::reset_worker_loop_snapshot_for_tests();
+        let mut backpressure = QueueDropBackpressure::new();
+        let now = Instant::now();
+        assert!(!backpressure.active(now, Duration::from_secs(1)));
+
+        status::record_worker_queue_drop(WorkerQueueKind::BlockPayload);
+        let after_drop = now + Duration::from_millis(1);
+        assert!(backpressure.active(after_drop, Duration::from_secs(5)));
+
+        let later = after_drop + Duration::from_secs(6);
+        assert!(!backpressure.active(later, Duration::from_secs(5)));
+    }
+}
+
 #[derive(Debug)]
 struct RelayBackpressure {
     last_drop_count: u64,
@@ -11620,6 +11731,53 @@ impl RelayBackpressure {
 }
 
 impl Default for RelayBackpressure {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug)]
+struct QueueDropBackpressure {
+    last_drop_count: u64,
+    last_drop_at: Option<Instant>,
+}
+
+impl QueueDropBackpressure {
+    fn new() -> Self {
+        Self {
+            last_drop_count: Self::drop_count(),
+            last_drop_at: None,
+        }
+    }
+
+    fn drop_count() -> u64 {
+        let dropped = super::status::snapshot()
+            .worker_loop
+            .queue_diagnostics
+            .dropped_total;
+        dropped
+            .block_payload_rx
+            .saturating_add(dropped.rbc_chunk_rx)
+    }
+
+    fn active(&mut self, now: Instant, cooldown: Duration) -> bool {
+        let current = Self::drop_count();
+        if current > self.last_drop_count {
+            self.last_drop_count = current;
+            self.last_drop_at = Some(now);
+        }
+        self.last_drop_at
+            .is_some_and(|last| now.saturating_duration_since(last) < cooldown)
+    }
+
+    #[cfg(test)]
+    fn reset_to_current(&mut self) {
+        self.last_drop_count = Self::drop_count();
+        self.last_drop_at = None;
+    }
+}
+
+impl Default for QueueDropBackpressure {
     fn default() -> Self {
         Self::new()
     }
