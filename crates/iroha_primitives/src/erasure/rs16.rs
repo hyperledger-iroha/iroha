@@ -522,6 +522,7 @@ mod tests {
     fn simd_backends_match_scalar() {
         let data = sample_symbols(6, 128);
         let scalar = encode_parity_with_backend(&data, 4, Backend::Scalar).expect("scalar");
+        let _ = &scalar;
         #[cfg(all(
             feature = "simd-accel",
             any(target_arch = "x86", target_arch = "x86_64")

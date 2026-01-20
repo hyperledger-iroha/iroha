@@ -417,6 +417,7 @@ mod tests {
             metadata: Metadata::default(),
             label: None,
             uaid: None,
+            opaque_ids: Vec::new(),
         };
 
         let definition_id: AssetDefinitionId = "rose#wonderland"
@@ -477,6 +478,7 @@ mod tests {
             metadata: Metadata::default(),
             label: None,
             uaid: None,
+            opaque_ids: Vec::new(),
         };
 
         let definition_id: AssetDefinitionId = "rose#wonderland"

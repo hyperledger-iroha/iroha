@@ -103,9 +103,9 @@ fn encoded_issuer_filter(literal: &str) -> String {
 #[tokio::test]
 async fn transactions_endpoint_accepts_encoded_account_segments() {
     let app = test_router();
-    let (canonical, ih58, compressed) = account_segments();
+    let (canonical, canonical_hex, compressed) = account_segments();
 
-    for segment in [canonical, ih58, compressed] {
+    for segment in [canonical, canonical_hex, compressed] {
         let resp = app
             .clone()
             .oneshot(
@@ -246,14 +246,10 @@ async fn transactions_endpoint_rejects_unknown_address_format() {
 }
 
 #[tokio::test]
-async fn strict_mode_rejects_public_key_segments() {
-    let (app, metrics) = test_router_with_metrics(true);
+async fn transactions_endpoint_accepts_public_key_segments() {
+    let (app, metrics) = test_router_with_metrics();
     let literal = format!("{ACCOUNT_SIGNATORY}@wonderland");
-    let reason = "ERR_STRICT_ADDRESS_REQUIRED";
-    let before = metrics
-        .torii_address_invalid_total
-        .with_label_values(&[ACCOUNTS_TRANSACTIONS_CTX, reason])
-        .get();
+    let before = counter_total(&metrics.torii_address_invalid_total);
 
     let resp = app
         .clone()
@@ -265,23 +261,26 @@ async fn strict_mode_rejects_public_key_segments() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        matches!(
+            resp.status(),
+            StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
+        ),
+        "unexpected status {} for public-key segment {literal}",
+        resp.status()
+    );
 
-    let after = metrics
-        .torii_address_invalid_total
-        .with_label_values(&[ACCOUNTS_TRANSACTIONS_CTX, reason])
-        .get();
+    let after = counter_total(&metrics.torii_address_invalid_total);
     assert_eq!(
-        after,
-        before + 1,
-        "strict address rejects should increment invalid counter"
+        after, before,
+        "public-key segments must not increment invalid counter"
     );
 }
 
 #[tokio::test]
 async fn invalid_account_segments_increment_metric() {
-    let (app, metrics) = test_router_with_metrics(false);
-    let literal = "snx1baddigest@wonderland";
+    let (app, metrics) = test_router_with_metrics();
+    let literal = "snx1baddigest";
     let reason = AccountId::parse(literal)
         .expect_err("literal must fail to parse")
         .reason();
@@ -315,8 +314,8 @@ async fn invalid_account_segments_increment_metric() {
 
 #[tokio::test]
 async fn local8_segments_increment_invalid_metric() {
-    let (app, metrics) = test_router_with_metrics(false);
-    let literal = "sn1short@wonderland";
+    let (app, metrics) = test_router_with_metrics();
+    let literal = "sn1short";
     let reason = AccountId::parse(literal)
         .expect_err("short Local-8 literal must fail to parse")
         .reason();
@@ -351,9 +350,9 @@ async fn local8_segments_increment_invalid_metric() {
 #[tokio::test]
 async fn transactions_query_endpoint_accepts_encoded_account_segments() {
     let app = test_router();
-    let (canonical, ih58, compressed) = account_segments();
+    let (canonical, canonical_hex, compressed) = account_segments();
 
-    for segment in [canonical, ih58, compressed] {
+    for segment in [canonical, canonical_hex, compressed] {
         let resp = app
             .clone()
             .oneshot(
@@ -380,7 +379,7 @@ async fn transactions_query_endpoint_accepts_encoded_account_segments() {
 #[tokio::test]
 async fn transactions_query_endpoint_rejects_invalid_account_segment() {
     let app = test_router();
-    let literal = "snx1invalid@wonderland";
+    let literal = "snx1invalid";
     let resp = app
         .clone()
         .oneshot(
@@ -398,8 +397,8 @@ async fn transactions_query_endpoint_rejects_invalid_account_segment() {
 
 #[tokio::test]
 async fn transactions_query_invalid_segments_increment_metric() {
-    let (app, metrics) = test_router_with_metrics(false);
-    let literal = "snx1baddigest@wonderland";
+    let (app, metrics) = test_router_with_metrics();
+    let literal = "snx1baddigest";
     let reason = AccountId::parse(literal)
         .expect_err("literal must fail to parse")
         .reason();
@@ -455,7 +454,7 @@ async fn transactions_query_rejects_unknown_address_format() {
 
 #[tokio::test]
 async fn transactions_query_rejects_checksum_mismatch() {
-    let (app, metrics) = test_router_with_metrics(false);
+    let (app, metrics) = test_router_with_metrics();
     let bad_literal = tampered_tx_query_literal();
     let reason = AccountAddressErrorCode::ChecksumMismatch.as_str();
     let counter = metrics
@@ -485,7 +484,7 @@ async fn transactions_query_rejects_checksum_mismatch() {
 
 #[tokio::test]
 async fn transactions_query_placeholder_literal_rejected_without_shim() {
-    let (app, metrics) = test_router_with_metrics(false);
+    let (app, metrics) = test_router_with_metrics();
     let literal = "ignored@wonderland";
     let reason = AccountId::parse(literal)
         .expect_err("placeholder literal should fail checksum validation")
@@ -517,7 +516,7 @@ async fn transactions_query_placeholder_literal_rejected_without_shim() {
 
 #[tokio::test]
 async fn transactions_query_valid_literals_do_not_bump_invalid_metrics() {
-    let (app, metrics) = test_router_with_metrics(false);
+    let (app, metrics) = test_router_with_metrics();
     let envelope =
         query_envelope_with_account_filter("authority", &fixtures::TX_QUERY_ACCOUNT.canonical);
     let before = counter_total(&metrics.torii_address_invalid_total);
@@ -559,9 +558,9 @@ async fn transactions_query_valid_literals_do_not_bump_invalid_metrics() {
 #[tokio::test]
 async fn assets_endpoint_accepts_encoded_account_segments() {
     let app = test_router();
-    let (canonical, ih58, compressed) = account_segments();
+    let (canonical, canonical_hex, compressed) = account_segments();
 
-    for segment in [canonical, ih58, compressed] {
+    for segment in [canonical, canonical_hex, compressed] {
         let resp = app
             .clone()
             .oneshot(
@@ -613,7 +612,7 @@ async fn assets_endpoint_accepts_default_domain_without_suffix() {
 #[tokio::test]
 async fn assets_endpoint_rejects_invalid_segment() {
     let app = test_router();
-    let literal = "snx1invalid@wonderland";
+    let literal = "snx1invalid";
     let resp = app
         .clone()
         .oneshot(
@@ -629,8 +628,8 @@ async fn assets_endpoint_rejects_invalid_segment() {
 
 #[tokio::test]
 async fn assets_endpoint_invalid_segments_increment_metric() {
-    let (app, metrics) = test_router_with_metrics(false);
-    let literal = "snx1baddigest@wonderland";
+    let (app, metrics) = test_router_with_metrics();
+    let literal = "snx1baddigest";
     let reason = AccountId::parse(literal)
         .expect_err("literal must fail to parse")
         .reason();
@@ -663,14 +662,10 @@ async fn assets_endpoint_invalid_segments_increment_metric() {
 }
 
 #[tokio::test]
-async fn assets_endpoint_strict_mode_rejects_public_key_segments() {
-    let (app, metrics) = test_router_with_metrics(true);
+async fn assets_endpoint_accepts_public_key_segments() {
+    let (app, metrics) = test_router_with_metrics();
     let literal = format!("{ACCOUNT_SIGNATORY}@wonderland");
-    let reason = "ERR_STRICT_ADDRESS_REQUIRED";
-    let before = metrics
-        .torii_address_invalid_total
-        .with_label_values(&[ACCOUNTS_ASSETS_CTX, reason])
-        .get();
+    let before = counter_total(&metrics.torii_address_invalid_total);
 
     let resp = app
         .clone()
@@ -682,25 +677,28 @@ async fn assets_endpoint_strict_mode_rejects_public_key_segments() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        matches!(
+            resp.status(),
+            StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
+        ),
+        "unexpected status {} for public-key asset segment {literal}",
+        resp.status()
+    );
 
-    let after = metrics
-        .torii_address_invalid_total
-        .with_label_values(&[ACCOUNTS_ASSETS_CTX, reason])
-        .get();
+    let after = counter_total(&metrics.torii_address_invalid_total);
     assert_eq!(
-        after,
-        before + 1,
-        "strict address rejects should increment invalid counter for assets endpoint"
+        after, before,
+        "public-key asset segments must not increment invalid counter"
     );
 }
 
 #[tokio::test]
 async fn assets_query_endpoint_accepts_encoded_account_segments() {
     let app = test_router();
-    let (canonical, ih58, compressed) = account_segments();
+    let (canonical, canonical_hex, compressed) = account_segments();
 
-    for segment in [canonical, ih58, compressed] {
+    for segment in [canonical, canonical_hex, compressed] {
         let resp = app
             .clone()
             .oneshot(
@@ -726,8 +724,8 @@ async fn assets_query_endpoint_accepts_encoded_account_segments() {
 
 #[tokio::test]
 async fn assets_query_endpoint_invalid_segments_increment_metric() {
-    let (app, metrics) = test_router_with_metrics(false);
-    let literal = "snx1baddigest@wonderland";
+    let (app, metrics) = test_router_with_metrics();
+    let literal = "snx1baddigest";
     let reason = AccountId::parse(literal)
         .expect_err("literal must fail to parse")
         .reason();
@@ -762,14 +760,10 @@ async fn assets_query_endpoint_invalid_segments_increment_metric() {
 }
 
 #[tokio::test]
-async fn assets_query_endpoint_strict_mode_rejects_public_key_segments() {
-    let (app, metrics) = test_router_with_metrics(true);
+async fn assets_query_endpoint_accepts_public_key_segments() {
+    let (app, metrics) = test_router_with_metrics();
     let literal = format!("{ACCOUNT_SIGNATORY}@wonderland");
-    let reason = "ERR_STRICT_ADDRESS_REQUIRED";
-    let before = metrics
-        .torii_address_invalid_total
-        .with_label_values(&[ACCOUNTS_ASSETS_QUERY_CTX, reason])
-        .get();
+    let before = counter_total(&metrics.torii_address_invalid_total);
 
     let resp = app
         .clone()
@@ -783,25 +777,28 @@ async fn assets_query_endpoint_strict_mode_rejects_public_key_segments() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        matches!(
+            resp.status(),
+            StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
+        ),
+        "unexpected status {} for public-key assets/query segment {literal}",
+        resp.status()
+    );
 
-    let after = metrics
-        .torii_address_invalid_total
-        .with_label_values(&[ACCOUNTS_ASSETS_QUERY_CTX, reason])
-        .get();
+    let after = counter_total(&metrics.torii_address_invalid_total);
     assert_eq!(
-        after,
-        before + 1,
-        "strict address rejects should increment invalid counter for assets/query"
+        after, before,
+        "public-key assets/query segments must not increment invalid counter"
     );
 }
 
 #[tokio::test]
 async fn permissions_endpoint_accepts_encoded_account_segments() {
     let app = test_router();
-    let (canonical, ih58, compressed) = account_segments();
+    let (canonical, canonical_hex, compressed) = account_segments();
 
-    for segment in [canonical, ih58, compressed] {
+    for segment in [canonical, canonical_hex, compressed] {
         let resp = app
             .clone()
             .oneshot(
@@ -852,8 +849,8 @@ async fn permissions_endpoint_accepts_default_domain_without_suffix() {
 
 #[tokio::test]
 async fn permissions_endpoint_invalid_segments_increment_metric() {
-    let (app, metrics) = test_router_with_metrics(false);
-    let literal = "snx1baddigest@wonderland";
+    let (app, metrics) = test_router_with_metrics();
+    let literal = "snx1baddigest";
     let reason = AccountId::parse(literal)
         .expect_err("literal must fail to parse")
         .reason();
@@ -888,9 +885,9 @@ async fn permissions_endpoint_invalid_segments_increment_metric() {
 #[tokio::test]
 async fn explorer_domains_query_accepts_encoded_account_params() {
     let app = test_router();
-    let (canonical, ih58, compressed) = account_segments();
+    let (canonical, canonical_hex, compressed) = account_segments();
 
-    for literal in [canonical, ih58, compressed] {
+    for literal in [canonical, canonical_hex, compressed] {
         let resp = app
             .clone()
             .oneshot(
@@ -914,8 +911,8 @@ async fn explorer_domains_query_accepts_encoded_account_params() {
 
 #[tokio::test]
 async fn explorer_domains_query_invalid_account_param_records_metric() {
-    let (app, metrics) = test_router_with_metrics(false);
-    let literal = "snx1invalid@wonderland";
+    let (app, metrics) = test_router_with_metrics();
+    let literal = "snx1invalid";
     let reason = AccountId::parse(literal)
         .expect_err("literal must fail to parse")
         .reason();
@@ -951,9 +948,9 @@ async fn explorer_domains_query_invalid_account_param_records_metric() {
 #[tokio::test]
 async fn explorer_account_detail_accepts_encoded_account_segments() {
     let app = test_router();
-    let (canonical, ih58, compressed) = account_segments();
+    let (canonical, canonical_hex, compressed) = account_segments();
 
-    for literal in [canonical, ih58, compressed] {
+    for literal in [canonical, canonical_hex, compressed] {
         let resp = app
             .clone()
             .oneshot(
@@ -977,8 +974,8 @@ async fn explorer_account_detail_accepts_encoded_account_segments() {
 
 #[tokio::test]
 async fn explorer_account_detail_invalid_segments_increment_metric() {
-    let (app, metrics) = test_router_with_metrics(false);
-    let literal = "snx1invalid@wonderland";
+    let (app, metrics) = test_router_with_metrics();
+    let literal = "snx1invalid";
     let reason = AccountId::parse(literal)
         .expect_err("literal must fail to parse")
         .reason();
@@ -1013,7 +1010,7 @@ async fn explorer_account_detail_invalid_segments_increment_metric() {
 
 #[tokio::test]
 async fn explorer_transactions_accepts_address_format_param() {
-    let (app, metrics) = test_router_with_metrics(false);
+    let (app, metrics) = test_router_with_metrics();
     let counter = metrics
         .torii_address_format_total
         .with_label_values(&["/v1/explorer/transactions", "compressed"]);
@@ -1063,7 +1060,7 @@ async fn explorer_transactions_rejects_unknown_address_format() {
 
 #[tokio::test]
 async fn explorer_instructions_accepts_address_format_param() {
-    let (app, metrics) = test_router_with_metrics(false);
+    let (app, metrics) = test_router_with_metrics();
     let counter = metrics
         .torii_address_format_total
         .with_label_values(&["/v1/explorer/instructions", "compressed"]);
@@ -1096,7 +1093,7 @@ async fn explorer_instructions_accepts_address_format_param() {
 
 #[tokio::test]
 async fn explorer_transaction_detail_accepts_address_format_param() {
-    let (app, metrics) = test_router_with_metrics(false);
+    let (app, metrics) = test_router_with_metrics();
     let counter = metrics
         .torii_address_format_total
         .with_label_values(&["/v1/explorer/transactions/{hash}", "compressed"]);
@@ -1138,7 +1135,7 @@ async fn explorer_transaction_detail_rejects_unknown_address_format() {
 
 #[tokio::test]
 async fn explorer_instruction_detail_accepts_address_format_param() {
-    let (app, metrics) = test_router_with_metrics(false);
+    let (app, metrics) = test_router_with_metrics();
     let counter = metrics
         .torii_address_format_total
         .with_label_values(&["/v1/explorer/instructions/{hash}/{index}", "compressed"]);
@@ -1382,7 +1379,7 @@ async fn asset_holders_query_rejects_unknown_address_format() {
 
 #[tokio::test]
 async fn repo_agreements_endpoint_accepts_address_format_param() {
-    let (app, metrics) = test_router_with_metrics(false);
+    let (app, metrics) = test_router_with_metrics();
     let counter = metrics
         .torii_address_format_total
         .with_label_values(&[REPO_AGREEMENTS_ENDPOINT, "compressed"]);
@@ -1427,7 +1424,7 @@ async fn repo_agreements_endpoint_rejects_unknown_address_format() {
 
 #[tokio::test]
 async fn repo_agreements_query_accepts_address_format_param() {
-    let (app, metrics) = test_router_with_metrics(false);
+    let (app, metrics) = test_router_with_metrics();
     let counter = metrics
         .torii_address_format_total
         .with_label_values(&[REPO_AGREEMENTS_QUERY_ENDPOINT, "compressed"]);
@@ -1479,9 +1476,9 @@ async fn repo_agreements_query_rejects_unknown_address_format() {
 #[tokio::test]
 async fn repo_agreements_query_filter_accepts_encoded_literals() {
     let app = test_router();
-    let (canonical, ih58, compressed) = account_segments();
+    let (canonical, canonical_hex, compressed) = account_segments();
 
-    for literal in [canonical, ih58, compressed] {
+    for literal in [canonical, canonical_hex, compressed] {
         let body = query_envelope_with_account_filter("initiator", &literal);
         let resp = app
             .clone()
@@ -1538,8 +1535,8 @@ async fn repo_agreements_query_filter_accepts_default_domain_literals() {
 
 #[tokio::test]
 async fn repo_agreements_query_filter_rejects_invalid_literal() {
-    let (app, metrics) = test_router_with_metrics(false);
-    let literal = "snx1baddigest@wonderland";
+    let (app, metrics) = test_router_with_metrics();
+    let literal = "snx1baddigest";
     let reason = AccountId::parse(literal)
         .expect_err("literal must fail")
         .reason();
@@ -1571,8 +1568,8 @@ async fn repo_agreements_query_filter_rejects_invalid_literal() {
 
 #[tokio::test]
 async fn repo_agreements_query_filter_rejects_local8_literal() {
-    let (app, metrics) = test_router_with_metrics(false);
-    let literal = "sn1short@wonderland";
+    let (app, metrics) = test_router_with_metrics();
+    let literal = "sn1short";
     let reason = AccountId::parse(literal)
         .expect_err("literal must fail")
         .reason();
@@ -1605,9 +1602,9 @@ async fn repo_agreements_query_filter_rejects_local8_literal() {
 #[tokio::test]
 async fn offline_allowances_endpoint_accepts_controller_literals() {
     let app = test_router();
-    let (canonical, ih58, compressed) = account_segments();
+    let (canonical, canonical_hex, compressed) = account_segments();
 
-    for literal in [canonical, ih58, compressed] {
+    for literal in [canonical, canonical_hex, compressed] {
         let resp = app
             .clone()
             .oneshot(
@@ -1662,7 +1659,7 @@ async fn offline_allowances_endpoint_accepts_default_domain_literals() {
 
 #[tokio::test]
 async fn offline_allowances_endpoint_accepts_address_format_param() {
-    let (app, metrics) = test_router_with_metrics(false);
+    let (app, metrics) = test_router_with_metrics();
     let counter = metrics
         .torii_address_format_total
         .with_label_values(&[OFFLINE_ALLOWANCES_ENDPOINT, "compressed"]);
@@ -1706,14 +1703,10 @@ async fn offline_allowances_endpoint_rejects_unknown_address_format() {
 }
 
 #[tokio::test]
-async fn offline_allowances_endpoint_strict_mode_rejects_public_key_controller() {
-    let (app, metrics) = test_router_with_metrics(true);
+async fn offline_allowances_endpoint_accepts_public_key_controller() {
+    let (app, metrics) = test_router_with_metrics();
     let literal = format!("{ACCOUNT_SIGNATORY}@wonderland");
-    let reason = "ERR_STRICT_ADDRESS_REQUIRED";
-    let counter = metrics
-        .torii_address_invalid_total
-        .with_label_values(&[OFFLINE_ALLOWANCES_ENDPOINT, reason]);
-    let before = counter.get();
+    let before = counter_total(&metrics.torii_address_invalid_total);
 
     let resp = app
         .clone()
@@ -1727,17 +1720,24 @@ async fn offline_allowances_endpoint_strict_mode_rejects_public_key_controller()
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        matches!(
+            resp.status(),
+            StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
+        ),
+        "unexpected status {} for public-key controller literal {literal}",
+        resp.status()
+    );
+    let after = counter_total(&metrics.torii_address_invalid_total);
     assert_eq!(
-        counter.get(),
-        before + 1,
-        "strict address rejects should increment invalid counter"
+        after, before,
+        "public-key controller literals must not increment invalid counter"
     );
 }
 
 #[tokio::test]
 async fn offline_allowances_query_accepts_address_format_param() {
-    let (app, metrics) = test_router_with_metrics(false);
+    let (app, metrics) = test_router_with_metrics();
     let counter = metrics
         .torii_address_format_total
         .with_label_values(&[OFFLINE_ALLOWANCES_QUERY_ENDPOINT, "compressed"]);
@@ -1819,9 +1819,9 @@ async fn offline_allowances_query_rejects_unknown_address_format() {
 #[tokio::test]
 async fn offline_transfers_endpoint_accepts_controller_literals() {
     let app = test_router();
-    let (canonical, ih58, compressed) = account_segments();
+    let (canonical, canonical_hex, compressed) = account_segments();
 
-    for literal in [canonical, ih58, compressed] {
+    for literal in [canonical, canonical_hex, compressed] {
         let resp = app
             .clone()
             .oneshot(
@@ -1876,7 +1876,7 @@ async fn offline_transfers_endpoint_accepts_default_domain_literals() {
 
 #[tokio::test]
 async fn offline_transfers_endpoint_accepts_address_format_param() {
-    let (app, metrics) = test_router_with_metrics(false);
+    let (app, metrics) = test_router_with_metrics();
     let counter = metrics
         .torii_address_format_total
         .with_label_values(&[OFFLINE_TRANSFERS_ENDPOINT, "compressed"]);
@@ -1921,7 +1921,7 @@ async fn offline_transfers_endpoint_rejects_unknown_address_format() {
 
 #[tokio::test]
 async fn offline_transfers_query_accepts_address_format_param() {
-    let (app, metrics) = test_router_with_metrics(false);
+    let (app, metrics) = test_router_with_metrics();
     let counter = metrics
         .torii_address_format_total
         .with_label_values(&[OFFLINE_TRANSFERS_QUERY_ENDPOINT, "compressed"]);
@@ -2003,9 +2003,9 @@ async fn offline_transfers_query_rejects_unknown_address_format() {
 #[tokio::test]
 async fn offline_summaries_endpoint_accepts_controller_literals() {
     let app = test_router();
-    let (canonical, ih58, compressed) = account_segments();
+    let (canonical, canonical_hex, compressed) = account_segments();
 
-    for literal in [canonical, ih58, compressed] {
+    for literal in [canonical, canonical_hex, compressed] {
         let resp = app
             .clone()
             .oneshot(
@@ -2060,7 +2060,7 @@ async fn offline_summaries_endpoint_accepts_default_domain_literals() {
 
 #[tokio::test]
 async fn offline_summaries_endpoint_accepts_address_format_param() {
-    let (app, metrics) = test_router_with_metrics(false);
+    let (app, metrics) = test_router_with_metrics();
     let counter = metrics
         .torii_address_format_total
         .with_label_values(&[OFFLINE_SUMMARIES_ENDPOINT, "compressed"]);
@@ -2105,7 +2105,7 @@ async fn offline_summaries_endpoint_rejects_unknown_address_format() {
 
 #[tokio::test]
 async fn offline_summaries_query_accepts_address_format_param() {
-    let (app, metrics) = test_router_with_metrics(false);
+    let (app, metrics) = test_router_with_metrics();
     let counter = metrics
         .torii_address_format_total
         .with_label_values(&[OFFLINE_SUMMARIES_QUERY_ENDPOINT, "compressed"]);
@@ -2186,7 +2186,7 @@ async fn offline_summaries_query_rejects_unknown_address_format() {
 
 #[tokio::test]
 async fn offline_revocations_endpoint_accepts_address_format_param() {
-    let (app, metrics) = test_router_with_metrics(false);
+    let (app, metrics) = test_router_with_metrics();
     let counter = metrics
         .torii_address_format_total
         .with_label_values(&[OFFLINE_REVOCATIONS_ENDPOINT, "compressed"]);
@@ -2232,9 +2232,9 @@ async fn offline_revocations_endpoint_rejects_unknown_address_format() {
 #[tokio::test]
 async fn offline_revocations_endpoint_accepts_filter_literals() {
     let app = test_router();
-    let (canonical, ih58, compressed) = account_segments();
+    let (canonical, canonical_hex, compressed) = account_segments();
 
-    for literal in [canonical, ih58, compressed] {
+    for literal in [canonical, canonical_hex, compressed] {
         let filter = encoded_issuer_filter(&literal);
         let resp = app
             .clone()
@@ -2287,8 +2287,8 @@ async fn offline_revocations_endpoint_accepts_default_domain_filter_literals() {
 
 #[tokio::test]
 async fn offline_revocations_endpoint_filter_rejects_invalid_literal() {
-    let (app, metrics) = test_router_with_metrics(false);
-    let literal = "snx1baddigest@wonderland";
+    let (app, metrics) = test_router_with_metrics();
+    let literal = "snx1baddigest";
     let reason = AccountId::parse(literal)
         .expect_err("literal must fail to parse")
         .reason();
@@ -2318,7 +2318,7 @@ async fn offline_revocations_endpoint_filter_rejects_invalid_literal() {
 
 #[tokio::test]
 async fn offline_revocations_query_accepts_address_format_param() {
-    let (app, metrics) = test_router_with_metrics(false);
+    let (app, metrics) = test_router_with_metrics();
     let counter = metrics
         .torii_address_format_total
         .with_label_values(&[OFFLINE_REVOCATIONS_QUERY_ENDPOINT, "compressed"]);
@@ -2370,7 +2370,7 @@ async fn offline_revocations_query_rejects_unknown_address_format() {
 #[tokio::test]
 async fn offline_revocations_query_filter_accepts_encoded_literals() {
     let app = test_router();
-    let (_, ih58, compressed) = account_segments();
+    let (_, canonical_hex, compressed) = account_segments();
 
     for literal in [ih58, compressed] {
         let body = query_envelope_with_account_filter("issuer_id", &literal);
@@ -2429,8 +2429,8 @@ async fn offline_revocations_query_filter_accepts_default_domain_literals() {
 
 #[tokio::test]
 async fn offline_revocations_query_filter_rejects_invalid_literal() {
-    let (app, metrics) = test_router_with_metrics(false);
-    let literal = "snx1baddigest@wonderland";
+    let (app, metrics) = test_router_with_metrics();
+    let literal = "snx1baddigest";
     let reason = AccountId::parse(literal)
         .expect_err("literal must fail")
         .reason();
@@ -2462,8 +2462,8 @@ async fn offline_revocations_query_filter_rejects_invalid_literal() {
 
 #[tokio::test]
 async fn offline_revocations_query_filter_rejects_local8_literal() {
-    let (app, metrics) = test_router_with_metrics(false);
-    let literal = "sn1short@wonderland";
+    let (app, metrics) = test_router_with_metrics();
+    let literal = "sn1short";
     let reason = AccountId::parse(literal)
         .expect_err("literal must fail")
         .reason();
@@ -2535,9 +2535,9 @@ async fn kaigi_relays_endpoint_rejects_unknown_address_format() {
 #[tokio::test]
 async fn kaigi_relay_detail_accepts_encoded_segments() {
     let app = test_router();
-    let (canonical, ih58, compressed) = account_segments();
+    let (canonical, canonical_hex, compressed) = account_segments();
 
-    for literal in [canonical, ih58, compressed] {
+    for literal in [canonical, canonical_hex, compressed] {
         let resp = app
             .clone()
             .oneshot(
@@ -2562,7 +2562,7 @@ async fn kaigi_relay_detail_accepts_encoded_segments() {
 #[tokio::test]
 async fn kaigi_relay_detail_rejects_invalid_segment() {
     let app = test_router();
-    let literal = "snx1invalid@wonderland";
+    let literal = "snx1invalid";
     let resp = app
         .clone()
         .oneshot(
@@ -2578,8 +2578,8 @@ async fn kaigi_relay_detail_rejects_invalid_segment() {
 
 #[tokio::test]
 async fn kaigi_relay_detail_invalid_segment_increments_metric() {
-    let (app, metrics) = test_router_with_metrics(false);
-    let literal = "snx1invalid@wonderland";
+    let (app, metrics) = test_router_with_metrics();
+    let literal = "snx1invalid";
     let reason = AccountId::parse(literal)
         .expect_err("literal must fail to parse")
         .reason();
@@ -2604,8 +2604,8 @@ async fn kaigi_relay_detail_invalid_segment_increments_metric() {
 
 #[tokio::test]
 async fn kaigi_relay_detail_local8_segment_increments_invalid_metric() {
-    let (app, metrics) = test_router_with_metrics(false);
-    let literal = "sn1short@wonderland";
+    let (app, metrics) = test_router_with_metrics();
+    let literal = "sn1short";
     let reason = AccountId::parse(literal)
         .expect_err("literal must fail to parse")
         .reason();
@@ -2647,7 +2647,7 @@ async fn kaigi_relay_detail_rejects_unknown_address_format() {
 
 #[tokio::test]
 async fn kaigi_relay_detail_address_format_metric_tracks_selection() {
-    let (app, metrics) = test_router_with_metrics(false);
+    let (app, metrics) = test_router_with_metrics();
     let counter = metrics
         .torii_address_format_total
         .with_label_values(&[KAIGI_RELAY_DETAIL_ENDPOINT, "compressed"]);
@@ -2680,9 +2680,9 @@ async fn kaigi_relay_detail_address_format_metric_tracks_selection() {
 #[tokio::test]
 async fn nexus_public_lane_stake_accepts_validator_literals() {
     let app = test_router();
-    let (canonical, ih58, compressed) = account_segments();
+    let (canonical, canonical_hex, compressed) = account_segments();
 
-    for literal in [canonical, ih58, compressed] {
+    for literal in [canonical, canonical_hex, compressed] {
         let resp = app
             .clone()
             .oneshot(
@@ -2709,7 +2709,7 @@ async fn nexus_public_lane_stake_accepts_validator_literals() {
 #[tokio::test]
 async fn nexus_public_lane_stake_rejects_invalid_validator_literal() {
     let app = test_router();
-    let literal = "snx1invalid@wonderland";
+    let literal = "snx1invalid";
     let resp = app
         .clone()
         .oneshot(
@@ -2755,13 +2755,10 @@ async fn nexus_public_lane_stake_accepts_default_domain_validator_literals() {
 }
 
 #[tokio::test]
-async fn nexus_public_lane_stake_strict_mode_rejects_public_key_validator() {
-    let (app, metrics) = test_router_with_metrics(true);
+async fn nexus_public_lane_stake_accepts_public_key_validator() {
+    let (app, metrics) = test_router_with_metrics();
     let literal = format!("{ACCOUNT_SIGNATORY}@wonderland");
-    let counter = metrics
-        .torii_address_invalid_total
-        .with_label_values(&[NEXUS_PUBLIC_LANE_STAKE_CTX, "ERR_STRICT_ADDRESS_REQUIRED"]);
-    let before = counter.get();
+    let before = counter_total(&metrics.torii_address_invalid_total);
 
     let resp = app
         .clone()
@@ -2775,18 +2772,25 @@ async fn nexus_public_lane_stake_strict_mode_rejects_public_key_validator() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        matches!(
+            resp.status(),
+            StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
+        ),
+        "unexpected status {} for public-key validator literal {literal}",
+        resp.status()
+    );
+    let after = counter_total(&metrics.torii_address_invalid_total);
     assert_eq!(
-        counter.get(),
-        before + 1,
-        "strict mode rejects should bump invalid counter"
+        after, before,
+        "public-key validator literals must not increment invalid counter"
     );
 }
 
 #[tokio::test]
 async fn nexus_public_lane_stake_invalid_literal_increments_metric() {
-    let (app, metrics) = test_router_with_metrics(false);
-    let literal = "snx1invalid@wonderland";
+    let (app, metrics) = test_router_with_metrics();
+    let literal = "snx1invalid";
     let reason = AccountId::parse(literal)
         .expect_err("literal must fail")
         .reason();
@@ -2813,8 +2817,8 @@ async fn nexus_public_lane_stake_invalid_literal_increments_metric() {
 
 #[tokio::test]
 async fn nexus_public_lane_stake_local8_literal_increments_invalid_metric() {
-    let (app, metrics) = test_router_with_metrics(false);
-    let literal = "sn1short@wonderland";
+    let (app, metrics) = test_router_with_metrics();
+    let literal = "sn1short";
     let reason = AccountId::parse(literal)
         .expect_err("literal must fail")
         .reason();
@@ -2841,7 +2845,7 @@ async fn nexus_public_lane_stake_local8_literal_increments_invalid_metric() {
 
 #[tokio::test]
 async fn nexus_public_lane_stake_accepts_address_format_param() {
-    let (app, metrics) = test_router_with_metrics(false);
+    let (app, metrics) = test_router_with_metrics();
     let counter = metrics
         .torii_address_format_total
         .with_label_values(&[NEXUS_PUBLIC_LANE_STAKE_ENDPOINT, "compressed"]);
@@ -2890,7 +2894,7 @@ async fn nexus_public_lane_stake_rejects_unknown_address_format() {
 
 #[tokio::test]
 async fn nexus_public_lane_validators_accepts_address_format_param() {
-    let (app, metrics) = test_router_with_metrics(false);
+    let (app, metrics) = test_router_with_metrics();
     let counter = metrics
         .torii_address_format_total
         .with_label_values(&[NEXUS_PUBLIC_LANE_VALIDATORS_ENDPOINT, "compressed"]);
@@ -2938,18 +2942,17 @@ async fn nexus_public_lane_validators_rejects_unknown_address_format() {
 }
 
 fn test_router() -> Router {
-    build_test_router(false).0
+    build_test_router().0
 }
 
-fn test_router_with_metrics(strict_addresses: bool) -> (Router, Arc<Metrics>) {
-    build_test_router(strict_addresses)
+fn test_router_with_metrics() -> (Router, Arc<Metrics>) {
+    build_test_router()
 }
 
-fn build_test_router(strict_addresses: bool) -> (Router, Arc<Metrics>) {
+fn build_test_router() -> (Router, Arc<Metrics>) {
     use iroha_data_model::Registrable;
 
-    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    cfg.torii.strict_addresses = strict_addresses;
+    let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -3030,19 +3033,10 @@ fn account_segments() -> (String, String, String) {
     let public_key: PublicKey = ACCOUNT_SIGNATORY.parse().expect("key parses");
     let account = AccountId::new(domain.clone(), public_key);
     let address = AccountAddress::from_account_id(&account).expect("address encode");
-    let domain_label = domain.to_string();
     let canonical = account.to_string();
-    let ih58 = format!(
-        "{}@{}",
-        address.to_ih58(IH58_PREFIX).expect("ih58 encode"),
-        domain_label
-    );
-    let compressed = format!(
-        "{}@{}",
-        address.to_compressed_sora().expect("compressed encode"),
-        domain_label
-    );
-    (canonical, ih58, compressed)
+    let canonical_hex = account.to_canonical_hex().expect("canonical hex encoding");
+    let compressed = address.to_compressed_sora().expect("compressed encode");
+    (canonical, canonical_hex, compressed)
 }
 
 fn default_domain_segments_without_domain() -> (String, String) {
@@ -3067,15 +3061,11 @@ fn default_domain_segments_without_domain() -> (String, String) {
 }
 
 fn tampered_tx_query_literal() -> String {
-    let (bad_prefix, domain) = fixtures::TX_QUERY_ACCOUNT
-        .compressed
-        .split_once('@')
-        .expect("compressed literal must contain domain separator");
-    let mut mutated = bad_prefix.to_string();
+    let mut mutated = fixtures::TX_QUERY_ACCOUNT.compressed.clone();
     let last = mutated.pop().unwrap_or('0');
     let replacement = if last == 'a' { 'b' } else { 'a' };
     mutated.push(replacement);
-    format!("{mutated}@{domain}")
+    mutated
 }
 
 fn counter_total(counter: &prometheus::IntCounterVec) -> u64 {

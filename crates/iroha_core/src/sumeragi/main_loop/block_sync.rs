@@ -219,7 +219,7 @@ impl Actor {
             );
             return Ok(());
         }
-        let (consensus_mode, mode_tag, prf_seed, local_height, genesis_bootstrap) = {
+        let (consensus_mode, mode_tag, prf_seed, local_height) = {
             let view = self.state.view();
             let consensus_mode = super::effective_consensus_mode_for_height(
                 &view,
@@ -232,8 +232,12 @@ impl Actor {
             };
             let prf_seed = Some(super::prf_seed_for_height(&view, block_height));
             let local_height = u64::try_from(view.height()).unwrap_or(u64::MAX);
-            let genesis_bootstrap = local_height <= 1;
-            (consensus_mode, mode_tag, prf_seed, local_height, genesis_bootstrap)
+            (
+                consensus_mode,
+                mode_tag,
+                prf_seed,
+                local_height,
+            )
         };
         let expected_epoch = self.epoch_for_height(block_height);
         let has_commit_votes = !commit_votes.is_empty();
@@ -276,15 +280,14 @@ impl Actor {
         );
         let cert_hint = incoming_qc.as_ref();
         let checkpoint_hint = validator_checkpoint.as_ref();
-        // Allow NPoS bootstrap to accept next-height block sync updates without roster artifacts.
+        // Allow next-height block sync updates without roster artifacts; missing-block requests
+        // already opt into the uncertified path.
         let allow_uncertified = match consensus_mode {
             ConsensusMode::Permissioned => {
                 block_height == local_height.saturating_add(1) || requested_missing_block
             }
             ConsensusMode::Npos => {
-                requested_missing_block
-                    || (genesis_bootstrap
-                        && block_height == local_height.saturating_add(1))
+                block_height == local_height.saturating_add(1) || requested_missing_block
             }
         };
         let Some(selection) = select_block_sync_roster(

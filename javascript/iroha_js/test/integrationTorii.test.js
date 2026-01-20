@@ -6067,7 +6067,7 @@ function buildIsoPacs008Fields(overrides) {
     instigatingAgent: { bic: "DEUTDEFF", lei: "529900ODI3047E2LIV03" },
     instructedAgent: { bic: "COBADEFF" },
     debtorAccount: { iban: "DE89370400440532013000" },
-    creditorAccount: { otherId: "alice@wonderland" },
+    creditorAccount: { otherId: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx" },
     purposeCode: "SECU",
     supplementaryData: {
       suite: "js-integration",

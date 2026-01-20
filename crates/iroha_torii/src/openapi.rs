@@ -4068,13 +4068,81 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/sorafs/audit/repair/claim".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Claim repair ticket.",
+            "Claim a SoraFS repair ticket (requires manifest_digest_hex, idempotency key, and worker signature).",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/audit/repair/heartbeat".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Repair heartbeat.",
+            "Record a SoraFS repair worker heartbeat (requires manifest_digest_hex, idempotency key, and worker signature).",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/audit/repair/complete".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Complete repair ticket.",
+            "Complete a SoraFS repair ticket (requires manifest_digest_hex, idempotency key, and worker signature).",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/audit/repair/fail".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Fail repair ticket.",
+            "Fail a SoraFS repair ticket (requires manifest_digest_hex, idempotency key, and worker signature).",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    let repair_status_query_params = vec![
+        string_query_param(
+            "status",
+            "Filter by repair status (queued, verifying, in_progress, completed, failed, escalated).",
+        ),
+        string_query_param("provider", "Filter by provider id (hex)."),
+    ];
+    paths.insert(
+        "/v1/sorafs/audit/repair/status".to_owned(),
+        Value::Object(json_get_operation(
+            "SoraFS",
+            "List repair status.",
+            "List SoraFS repair status across manifests.",
+            "#/components/schemas/JsonValue",
+            repair_status_query_params.clone(),
+        )),
+    );
+    paths.insert(
         "/v1/sorafs/audit/repair/status/{manifest_hex}".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
             "Fetch repair status.",
             "Fetch repair status for a manifest.",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("manifest_hex", "Manifest hash (hex).")],
+            vec![
+                string_path_param("manifest_hex", "Manifest hash (hex)."),
+                string_query_param(
+                    "status",
+                    "Filter by repair status (queued, verifying, in_progress, completed, failed, escalated).",
+                ),
+                string_query_param("provider", "Filter by provider id (hex)."),
+            ],
         )),
     );
     paths.insert(
@@ -8642,7 +8710,7 @@ fn openapi_schemas() -> Map {
             "properties": {
                 "relay_id": {
                     "type": "string",
-                    "description": "Relay account identifier (`account@domain`)."
+                    "description": "Relay account identifier (IH58 or `<alias|public_key>@domain`)."
                 },
                 "domain": {
                     "type": "string",

@@ -2,11 +2,8 @@ import XCTest
 @testable import IrohaSwift
 
 final class OfflineNoritoEncodingTests: XCTestCase {
-    func testAssetIdParseAcceptsShorthandDefinition() throws {
-        let parts = try OfflineAssetIdParts.parse("xor##alice@wonderland")
-        XCTAssertEqual(parts, OfflineAssetIdParts(accountId: "alice@wonderland",
-                                                  definitionName: "xor",
-                                                  definitionDomain: "wonderland"))
+    func testAssetIdParseRejectsShorthandDefinition() {
+        assertInvalidAssetId("xor##alice@wonderland")
     }
 
     func testAssetIdParseAcceptsExplicitDefinition() throws {
@@ -14,6 +11,23 @@ final class OfflineNoritoEncodingTests: XCTestCase {
         XCTAssertEqual(parts, OfflineAssetIdParts(accountId: "alice@wonderland",
                                                   definitionName: "rose",
                                                   definitionDomain: "wonderland"))
+    }
+
+    func testAssetIdParseAcceptsExplicitDefinitionWithIh58Account() throws {
+        let keypair = try Keypair(privateKeyBytes: Data(repeating: 1, count: 32))
+        let address = try AccountAddress.fromAccount(domain: "wonderland", publicKey: keypair.publicKey)
+        let ih58 = try address.toIH58(networkPrefix: 0x02F1)
+        let parts = try OfflineAssetIdParts.parse("rose#wonderland#\(ih58)")
+        XCTAssertEqual(parts, OfflineAssetIdParts(accountId: ih58,
+                                                  definitionName: "rose",
+                                                  definitionDomain: "wonderland"))
+    }
+
+    func testAssetIdParseRejectsShorthandWithIh58Account() throws {
+        let keypair = try Keypair(privateKeyBytes: Data(repeating: 2, count: 32))
+        let address = try AccountAddress.fromAccount(domain: "wonderland", publicKey: keypair.publicKey)
+        let ih58 = try address.toIH58(networkPrefix: 0x02F1)
+        assertInvalidAssetId("xor##\(ih58)")
     }
 
     func testAssetIdParseRejectsEmptyAccountName() {

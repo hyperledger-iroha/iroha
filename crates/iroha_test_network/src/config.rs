@@ -73,7 +73,12 @@ fn sanitize_strings(value: &mut Value) {
 }
 
 fn sanitize_account_id(id: &AccountId) -> AccountId {
-    sanitize_account_id_str(&id.to_string())
+    let raw = id.to_string();
+    if !raw.chars().any(char::is_whitespace) {
+        // Avoid reparsing IH58 addresses unless we actually sanitize.
+        return id.clone();
+    }
+    sanitize_account_id_str(&raw)
         .parse()
         .expect("sanitized AccountId should parse")
 }
@@ -579,6 +584,7 @@ fn populate_genesis_results(
         metadata: Metadata::default(),
         label: None,
         uaid: None,
+        opaque_ids: Vec::new(),
     };
     let world = World::with(
         Vec::<iroha_data_model::domain::Domain>::new(),
@@ -633,7 +639,7 @@ fn apply_preexec_nexus_overrides(
 ) -> Result<(), Report> {
     let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
     let gas_account_id = AccountId::new(ivm_domain, genesis_key_pair.public_key().clone());
-    let gas_account = gas_account_id.to_string();
+    let gas_account = format!("{}@{}", gas_account_id.signatory(), gas_account_id.domain());
 
     let mut nexus = nexus_config.cloned().unwrap_or_default();
     if let Some(policies) = block_policies
@@ -1000,6 +1006,7 @@ mod tests {
             metadata: Metadata::default(),
             label: None,
             uaid: None,
+            opaque_ids: Vec::new(),
         };
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -1215,6 +1222,7 @@ mod tests {
             metadata: Metadata::default(),
             label: None,
             uaid: None,
+            opaque_ids: Vec::new(),
         };
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();

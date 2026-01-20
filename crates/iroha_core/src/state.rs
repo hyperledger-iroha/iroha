@@ -27,7 +27,7 @@ use iroha_crypto::{
 use iroha_data_model::{
     IntoKeyValue,
     account::{
-        AccountController, AccountEntry, AccountValue,
+        AccountController, AccountDomainSelector, AccountEntry, AccountValue, OpaqueAccountId,
         rekey::{AccountLabel, AccountRekeyRecord},
     },
     asset::{Asset, AssetEntry, AssetValue, Mintable},
@@ -108,9 +108,8 @@ use iroha_data_model::{
     transaction::signed::{SignedTransaction, TransactionEntrypoint},
 };
 use iroha_executor_data_model::permission::{
-    asset_definition::CanRegisterAssetDefinition,
-    nexus::CanUseFeeSponsor,
-    trigger::{CanExecuteTrigger, CanRegisterTrigger},
+    asset_definition::CanRegisterAssetDefinition, sorafs::CanOperateSorafsRepair,
+    trigger::CanExecuteTrigger,
 };
 use iroha_logger::prelude::*;
 use iroha_primitives::{
@@ -197,6 +196,28 @@ pub(crate) mod storage_transactions;
 
 const DEFAULT_GAS_LIMIT_PER_BLOCK: u64 = 1_680_000;
 const DEFAULT_TRIGGER_GAS_LIMIT: u64 = 50_000_000;
+
+pub(crate) fn account_label_is_pii(label: &AccountLabel) -> bool {
+    let raw = label.label.as_ref();
+    if raw.is_empty() {
+        return false;
+    }
+    let mut digits = 0usize;
+    for (idx, ch) in raw.chars().enumerate() {
+        if idx == 0 && ch == '+' {
+            continue;
+        }
+        if ch.is_ascii_digit() {
+            digits += 1;
+            continue;
+        }
+        if matches!(ch, '-' | '.') {
+            continue;
+        }
+        return false;
+    }
+    matches!(digits, 8..=15)
+}
 
 pub(crate) fn current_axt_slot_from_block(header: &BlockHeader, slot_length_ms: NonZeroU64) -> u64 {
     header.creation_time_ms / slot_length_ms.get()
@@ -301,7 +322,11 @@ macro_rules! build_world_block {
             domain_endorsements: $state.domain_endorsements.$method(),
             domain_endorsements_by_domain: $state.domain_endorsements_by_domain.$method(),
             domains: $state.domains.$method(),
+            domain_selectors: $state.domain_selectors.$method(),
             accounts: $state.accounts.$method(),
+            uaid_accounts: $state.uaid_accounts.$method(),
+            account_aliases: $state.account_aliases.$method(),
+            opaque_uaids: $state.opaque_uaids.$method(),
             account_rekey_records: $state.account_rekey_records.$method(),
             asset_definitions: $state.asset_definitions.$method(),
             assets: $state.assets.$method(),
@@ -417,7 +442,11 @@ macro_rules! build_world_transaction {
             domain_endorsements: $state.domain_endorsements.transaction(),
             domain_endorsements_by_domain: $state.domain_endorsements_by_domain.transaction(),
             domains: $state.domains.transaction(),
+            domain_selectors: $state.domain_selectors.transaction(),
             accounts: $state.accounts.transaction(),
+            uaid_accounts: $state.uaid_accounts.transaction(),
+            account_aliases: $state.account_aliases.transaction(),
+            opaque_uaids: $state.opaque_uaids.transaction(),
             account_rekey_records: $state.account_rekey_records.transaction(),
             asset_definitions: $state.asset_definitions.transaction(),
             assets: $state.assets.transaction(),
@@ -710,6 +739,24 @@ struct AccountPermissionSummary {
     fee_sponsors: std::collections::BTreeSet<iroha_data_model::account::AccountId>,
 }
 
+fn parse_permission_account_field(
+    world: &impl WorldReadOnly,
+    payload: &iroha_primitives::json::Json,
+    field: &str,
+) -> Option<iroha_data_model::account::AccountId> {
+    let value = norito::json::parse_value(payload.get()).ok()?;
+    let map = match value {
+        norito::json::Value::Object(map) => map,
+        _ => return None,
+    };
+    let entry = map.get(field)?;
+    let literal = match entry {
+        norito::json::Value::String(value) => value.as_str(),
+        _ => return None,
+    };
+    crate::block::parse_account_literal_with_world(world, literal)
+}
+
 impl AccountPermissionSummary {
     fn clear(&mut self) {
         self.hydrated = false;
@@ -719,15 +766,13 @@ impl AccountPermissionSummary {
         self.fee_sponsors.clear();
     }
 
-    fn apply_grant(&mut self, permission: &Permission) {
+    fn apply_grant(&mut self, world: &impl WorldReadOnly, permission: &Permission) {
         match permission.name() {
             "CanRegisterTrigger" => {
-                if let Ok(decoded) = permission
-                    .payload()
-                    .try_into_any_norito::<CanRegisterTrigger>()
+                if let Some(authority) =
+                    parse_permission_account_field(world, permission.payload(), "authority")
                 {
-                    self.reg_trigger_authorities
-                        .insert(decoded.authority.clone());
+                    self.reg_trigger_authorities.insert(authority);
                 }
             }
             "CanExecuteTrigger" => {
@@ -747,11 +792,10 @@ impl AccountPermissionSummary {
                 }
             }
             "CanUseFeeSponsor" => {
-                if let Ok(decoded) = permission
-                    .payload()
-                    .try_into_any_norito::<CanUseFeeSponsor>()
+                if let Some(sponsor) =
+                    parse_permission_account_field(world, permission.payload(), "sponsor")
                 {
-                    self.fee_sponsors.insert(decoded.sponsor.clone());
+                    self.fee_sponsors.insert(sponsor);
                 }
             }
             _ => {}
@@ -806,13 +850,14 @@ impl PermissionCheckCache {
 
     fn on_account_permission_grant(
         &mut self,
+        world: &impl WorldReadOnly,
         account: &iroha_data_model::account::AccountId,
         permission: &Permission,
     ) {
         if let Some(summary) = self.summary_mut(account)
             && summary.hydrated
         {
-            summary.apply_grant(permission);
+            summary.apply_grant(world, permission);
         }
     }
 
@@ -820,15 +865,19 @@ impl PermissionCheckCache {
         self.mark_dirty(account);
     }
 
-    fn on_role_permission_grant<'a, I>(&mut self, accounts: I, permission: &Permission)
-    where
+    fn on_role_permission_grant<'a, I>(
+        &mut self,
+        world: &impl WorldReadOnly,
+        accounts: I,
+        permission: &Permission,
+    ) where
         I: IntoIterator<Item = &'a iroha_data_model::account::AccountId>,
     {
         for account in accounts {
             if let Some(summary) = self.summary_mut(account)
                 && summary.hydrated
             {
-                summary.apply_grant(permission);
+                summary.apply_grant(world, permission);
             }
         }
     }
@@ -843,6 +892,7 @@ impl PermissionCheckCache {
     #[allow(single_use_lifetimes)]
     fn on_role_assigned<'a>(
         &mut self,
+        world: &impl WorldReadOnly,
         account: &iroha_data_model::account::AccountId,
         permissions: impl IntoIterator<Item = &'a Permission>,
     ) {
@@ -850,7 +900,7 @@ impl PermissionCheckCache {
             && summary.hydrated
         {
             for permission in permissions {
-                summary.apply_grant(permission);
+                summary.apply_grant(world, permission);
             }
         }
     }
@@ -1205,8 +1255,20 @@ pub struct World {
     pub(crate) peers: Cell<Peers>,
     /// Registered domains.
     pub(crate) domains: Storage<DomainId, Domain>,
+    /// Index from account address selector to domain (for address resolution).
+    #[norito(skip)]
+    pub(crate) domain_selectors: Storage<AccountDomainSelector, DomainId>,
     /// Registered accounts.
     pub(crate) accounts: Storage<AccountId, AccountValue>,
+    /// Index from UAID to bound account (1:1).
+    #[norito(skip)]
+    pub(crate) uaid_accounts: Storage<UniversalAccountId, AccountId>,
+    /// Index from account alias to canonical account id.
+    #[norito(skip)]
+    pub(crate) account_aliases: Storage<AccountLabel, AccountId>,
+    /// Index from opaque identifiers to UAIDs.
+    #[norito(skip)]
+    pub(crate) opaque_uaids: Storage<OpaqueAccountId, UniversalAccountId>,
     /// Stable account labels and signatory history.
     pub(crate) account_rekey_records: Storage<AccountLabel, AccountRekeyRecord>,
     /// Registered asset definitions.
@@ -1504,8 +1566,16 @@ pub struct WorldBlock<'world> {
         StorageBlock<'world, DomainId, Vec<HashOf<DomainEndorsement>>>,
     /// Registered domains.
     pub(crate) domains: StorageBlock<'world, DomainId, Domain>,
+    /// Index from account address selector to domain (for address resolution).
+    pub(crate) domain_selectors: StorageBlock<'world, AccountDomainSelector, DomainId>,
     /// Registered accounts.
     pub(crate) accounts: StorageBlock<'world, AccountId, AccountValue>,
+    /// Index from UAID to bound account (1:1).
+    pub(crate) uaid_accounts: StorageBlock<'world, UniversalAccountId, AccountId>,
+    /// Index from account alias to canonical account id.
+    pub(crate) account_aliases: StorageBlock<'world, AccountLabel, AccountId>,
+    /// Index from opaque identifiers to UAIDs.
+    pub(crate) opaque_uaids: StorageBlock<'world, OpaqueAccountId, UniversalAccountId>,
     /// Stable account labels and signatory history.
     pub(crate) account_rekey_records: StorageBlock<'world, AccountLabel, AccountRekeyRecord>,
     /// Registered asset definitions.
@@ -1809,8 +1879,18 @@ pub struct WorldTransaction<'block, 'world> {
         StorageTransaction<'block, 'world, DomainId, Vec<HashOf<DomainEndorsement>>>,
     /// Registered domains.
     pub(crate) domains: StorageTransaction<'block, 'world, DomainId, Domain>,
+    /// Index from account address selector to domain (for address resolution).
+    pub(crate) domain_selectors:
+        StorageTransaction<'block, 'world, AccountDomainSelector, DomainId>,
     /// Registered accounts.
     pub(crate) accounts: StorageTransaction<'block, 'world, AccountId, AccountValue>,
+    /// Index from UAID to bound account (1:1).
+    pub(crate) uaid_accounts: StorageTransaction<'block, 'world, UniversalAccountId, AccountId>,
+    /// Index from account alias to canonical account id.
+    pub(crate) account_aliases: StorageTransaction<'block, 'world, AccountLabel, AccountId>,
+    /// Index from opaque identifiers to UAIDs.
+    pub(crate) opaque_uaids:
+        StorageTransaction<'block, 'world, OpaqueAccountId, UniversalAccountId>,
     /// Stable account labels and signatory history.
     pub(crate) account_rekey_records:
         StorageTransaction<'block, 'world, AccountLabel, AccountRekeyRecord>,
@@ -2125,8 +2205,16 @@ pub struct WorldView<'world> {
     pub(crate) peers: CellView<'world, Peers>,
     /// Registered domains.
     pub(crate) domains: StorageView<'world, DomainId, Domain>,
+    /// Index from account address selector to domain (for address resolution).
+    pub(crate) domain_selectors: StorageView<'world, AccountDomainSelector, DomainId>,
     /// Registered accounts.
     pub(crate) accounts: StorageView<'world, AccountId, AccountValue>,
+    /// Index from UAID to bound account (1:1).
+    pub(crate) uaid_accounts: StorageView<'world, UniversalAccountId, AccountId>,
+    /// Index from account alias to canonical account id.
+    pub(crate) account_aliases: StorageView<'world, AccountLabel, AccountId>,
+    /// Index from opaque identifiers to UAIDs.
+    pub(crate) opaque_uaids: StorageView<'world, OpaqueAccountId, UniversalAccountId>,
     /// Stable account labels and signatory history.
     pub(crate) account_rekey_records: StorageView<'world, AccountLabel, AccountRekeyRecord>,
     /// Registered asset definitions.
@@ -5782,10 +5870,11 @@ mod storage_migration_tests {
         let domain_id: DomainId = "space.migration".parse().expect("domain id");
         let signatory = KeyPair::random();
         let account_id = AccountId::new(domain_id, signatory.public_key().clone());
-        let details = AccountDetails::new(Metadata::default(), None, Some(uaid));
+        let details = AccountDetails::new(Metadata::default(), None, Some(uaid), Vec::new());
         world
             .accounts
             .insert(account_id.clone(), AccountValue::new(details));
+        world.uaid_accounts.insert(uaid, account_id.clone());
 
         let manifest = AssetPermissionManifest {
             version: ManifestVersion::V1,
@@ -5848,10 +5937,11 @@ mod storage_migration_tests {
         let domain_id: DomainId = "space.scheduler".parse().expect("domain id");
         let signatory = KeyPair::random();
         let account_id = AccountId::new(domain_id, signatory.public_key().clone());
-        let details = AccountDetails::new(Metadata::default(), None, Some(uaid));
+        let details = AccountDetails::new(Metadata::default(), None, Some(uaid), Vec::new());
         world
             .accounts
             .insert(account_id.clone(), AccountValue::new(details));
+        world.uaid_accounts.insert(uaid, account_id.clone());
 
         let manifest = AssetPermissionManifest {
             version: ManifestVersion::V1,
@@ -5907,6 +5997,199 @@ mod storage_migration_tests {
         assert!(
             view.world().uaid_dataspaces().get(&uaid).is_none(),
             "scheduler removes bindings once manifest expires"
+        );
+    }
+
+    #[test]
+    fn uaid_index_rejects_duplicates() {
+        let mut world = World::default();
+
+        let uaid = UniversalAccountId::from_hash(Hash::new("uaid::dup-index"));
+        let domain_id: DomainId = "uaid.index".parse().expect("domain id");
+        let first = AccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
+        let second = AccountId::new(domain_id, KeyPair::random().public_key().clone());
+
+        let first_details = AccountDetails::new(Metadata::default(), None, Some(uaid), Vec::new());
+        let second_details = AccountDetails::new(Metadata::default(), None, Some(uaid), Vec::new());
+        world
+            .accounts
+            .insert(first.clone(), AccountValue::new(first_details));
+        world
+            .accounts
+            .insert(second.clone(), AccountValue::new(second_details));
+
+        let err = world
+            .rebuild_uaid_account_index()
+            .expect_err("duplicate UAID should be rejected");
+        assert!(
+            err.contains("UAID"),
+            "error should reference UAID conflict: {err}"
+        );
+    }
+
+    #[test]
+    fn domain_selector_index_tracks_default_and_local_domains() {
+        let mut world = World::default();
+        let owner_domain: DomainId = "owners".parse().expect("owner domain");
+        let owner = AccountId::new(owner_domain, KeyPair::random().public_key().clone());
+        let default_domain: DomainId = iroha_data_model::account::address::DEFAULT_DOMAIN_NAME
+            .parse()
+            .expect("default domain id");
+        let local_domain: DomainId = "wonderland".parse().expect("local domain id");
+
+        world.domains.insert(
+            default_domain.clone(),
+            Domain {
+                id: default_domain.clone(),
+                logo: None,
+                metadata: Metadata::default(),
+                owned_by: owner.clone(),
+            },
+        );
+        world.domains.insert(
+            local_domain.clone(),
+            Domain {
+                id: local_domain.clone(),
+                logo: None,
+                metadata: Metadata::default(),
+                owned_by: owner,
+            },
+        );
+
+        world
+            .rebuild_domain_selector_index()
+            .expect("domain selector rebuild");
+
+        let default_selector =
+            iroha_data_model::account::AccountDomainSelector::from_domain(&default_domain)
+                .expect("default selector");
+        let selectors = world.domain_selectors.view();
+        assert_eq!(selectors.get(&default_selector), Some(&default_domain));
+
+        let local_selector =
+            iroha_data_model::account::AccountDomainSelector::from_domain(&local_domain)
+                .expect("local selector");
+        assert_eq!(selectors.get(&local_selector), Some(&local_domain));
+
+        world
+            .rebuild_domain_selector_index()
+            .expect("domain selector rebuild (deterministic)");
+        let selectors = world.domain_selectors.view();
+        assert_eq!(selectors.get(&default_selector), Some(&default_domain));
+        assert_eq!(selectors.get(&local_selector), Some(&local_domain));
+    }
+
+    #[test]
+    fn account_alias_index_rejects_duplicates() {
+        let mut world = World::default();
+
+        let domain_id: DomainId = "alias.world".parse().expect("domain id");
+        let label = AccountLabel::new(
+            domain_id.clone(),
+            "primary".parse::<Name>().expect("label name"),
+        );
+        let first = AccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
+        let second = AccountId::new(domain_id, KeyPair::random().public_key().clone());
+
+        let first_details =
+            AccountDetails::new(Metadata::default(), Some(label.clone()), None, Vec::new());
+        let second_details =
+            AccountDetails::new(Metadata::default(), Some(label.clone()), None, Vec::new());
+        world
+            .accounts
+            .insert(first.clone(), AccountValue::new(first_details));
+        world
+            .accounts
+            .insert(second.clone(), AccountValue::new(second_details));
+
+        let err = world
+            .rebuild_account_alias_index()
+            .expect_err("duplicate alias should be rejected");
+        assert!(
+            err.contains("Account alias"),
+            "error should reference alias conflict: {err}"
+        );
+    }
+
+    #[test]
+    fn account_alias_index_rejects_phone_like_labels() {
+        let mut world = World::default();
+
+        let domain_id: DomainId = "alias.world".parse().expect("domain id");
+        let label = AccountLabel::new(
+            domain_id.clone(),
+            "+819398553445".parse::<Name>().expect("label name"),
+        );
+        let account_id = AccountId::new(domain_id, KeyPair::random().public_key().clone());
+
+        let details = AccountDetails::new(Metadata::default(), Some(label), None, Vec::new());
+        world
+            .accounts
+            .insert(account_id, AccountValue::new(details));
+
+        let err = world
+            .rebuild_account_alias_index()
+            .expect_err("PII-like alias should be rejected");
+        assert!(
+            err.contains("raw PII"),
+            "error should mention raw PII: {err}"
+        );
+    }
+
+    #[test]
+    fn opaque_id_index_rejects_missing_uaid() {
+        let mut world = World::default();
+        let domain_id: DomainId = "opaque.world".parse().expect("domain id");
+        let account_id = AccountId::new(domain_id, KeyPair::random().public_key().clone());
+        let opaque = OpaqueAccountId::from_hash(Hash::new("opaque::missing-uaid"));
+        let details = AccountDetails::new(Metadata::default(), None, None, vec![opaque]);
+        world
+            .accounts
+            .insert(account_id.clone(), AccountValue::new(details));
+
+        let err = world
+            .rebuild_opaque_uaid_index()
+            .expect_err("opaque IDs without UAID should be rejected");
+        assert!(
+            err.contains("without a UAID"),
+            "error should mention missing UAID: {err}"
+        );
+    }
+
+    #[test]
+    fn opaque_id_index_rejects_duplicate_entries() {
+        let mut world = World::default();
+        let domain_id: DomainId = "opaque.dupes".parse().expect("domain id");
+        let uaid = UniversalAccountId::from_hash(Hash::new("uaid::opaque-dupe"));
+        let opaque = OpaqueAccountId::from_hash(Hash::new("opaque::dupe"));
+
+        let first = AccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
+        let second = AccountId::new(domain_id, KeyPair::random().public_key().clone());
+
+        let first_details =
+            AccountDetails::new(Metadata::default(), None, Some(uaid), vec![opaque]);
+        let second_details = AccountDetails::new(
+            Metadata::default(),
+            None,
+            Some(UniversalAccountId::from_hash(Hash::new(
+                "uaid::opaque-dupe-2",
+            ))),
+            vec![opaque],
+        );
+
+        world
+            .accounts
+            .insert(first.clone(), AccountValue::new(first_details));
+        world
+            .accounts
+            .insert(second.clone(), AccountValue::new(second_details));
+
+        let err = world
+            .rebuild_opaque_uaid_index()
+            .expect_err("duplicate opaque IDs should be rejected");
+        assert!(
+            err.contains("Opaque identifier"),
+            "error should reference opaque conflict: {err}"
         );
     }
 }
@@ -6965,8 +7248,11 @@ impl DetachedStateTransactionDelta {
                     ))
                 })?;
                 let _ = role_ref.permissions.insert(perm.clone());
-                stx.perm_cache
-                    .on_role_permission_grant(affected_accounts.iter(), &perm);
+                stx.perm_cache.on_role_permission_grant(
+                    &stx.world,
+                    affected_accounts.iter(),
+                    &perm,
+                );
                 let role_event = role.clone();
                 let perm_event = perm.clone();
                 stx.world.emit_events(Some(RoleEvent::PermissionAdded(
@@ -6998,7 +7284,8 @@ impl DetachedStateTransactionDelta {
             for (acc, perm) in self.perm_grants {
                 let _ = stx.world.account(&acc)?;
                 let _ = stx.world.add_account_permission(&acc, perm.clone());
-                stx.perm_cache.on_account_permission_grant(&acc, &perm);
+                stx.perm_cache
+                    .on_account_permission_grant(&stx.world, &acc, &perm);
                 let perm_event = perm.clone();
                 stx.world.emit_events(Some(AccountEvent::PermissionAdded(
                     AccountPermissionChanged {
@@ -7036,7 +7323,8 @@ impl DetachedStateTransactionDelta {
                         role: role.clone(),
                     })));
                 if let Some(permissions) = role_permissions_snapshot {
-                    stx.perm_cache.on_role_assigned(&acc, permissions.iter());
+                    stx.perm_cache
+                        .on_role_assigned(&stx.world, &acc, permissions.iter());
                 } else {
                     stx.perm_cache.on_role_revoked(&acc);
                 }
@@ -7396,9 +7684,10 @@ impl World {
             .map(IntoKeyValue::into_key_value)
             .collect();
         let nfts = nfts.into_iter().map(IntoKeyValue::into_key_value).collect();
-        Self {
+        let mut world = Self {
             domains,
             accounts,
+            uaid_accounts: Storage::default(),
             account_rekey_records,
             asset_definitions,
             assets,
@@ -7434,7 +7723,20 @@ impl World {
             council: Storage::default(),
             parliament_bodies: Storage::default(),
             ..Self::new()
-        }
+        };
+        world
+            .rebuild_domain_selector_index()
+            .expect("duplicate domain selector in world constructor");
+        world
+            .rebuild_uaid_account_index()
+            .expect("duplicate UAID in world constructor");
+        world
+            .rebuild_account_alias_index()
+            .expect("duplicate account alias in world constructor");
+        world
+            .rebuild_opaque_uaid_index()
+            .expect("duplicate opaque id in world constructor");
+        world
     }
 
     /// Creates a [`World`] populated with assets and pre-defined roles.
@@ -7463,6 +7765,103 @@ impl World {
             world.roles.insert(role.id.clone(), role);
         }
         world
+    }
+
+    fn rebuild_uaid_account_index(&mut self) -> Result<(), String> {
+        let mut index = BTreeMap::new();
+        let view = self.accounts.view();
+        for (account_id, value) in view.iter() {
+            let Some(uaid) = value.as_ref().uaid() else {
+                continue;
+            };
+            if let Some(existing) = index.get(uaid) {
+                return Err(format!("UAID {uaid} already bound to account {existing}"));
+            }
+            index.insert(*uaid, account_id.clone());
+        }
+        self.uaid_accounts = index.into_iter().collect();
+        Ok(())
+    }
+
+    fn rebuild_domain_selector_index(&mut self) -> Result<(), String> {
+        let mut index = BTreeMap::new();
+        let view = self.domains.view();
+        for (domain_id, _) in view.iter() {
+            let selector =
+                AccountDomainSelector::from_domain(domain_id).map_err(|err| err.to_string())?;
+            if let Some(existing) = index.get(&selector) {
+                if existing != domain_id {
+                    return Err(format!(
+                        "Domain selector {selector:?} already bound to domain {existing}"
+                    ));
+                }
+                continue;
+            }
+            index.insert(selector, domain_id.clone());
+        }
+        self.domain_selectors = index.into_iter().collect();
+        Ok(())
+    }
+
+    fn rebuild_account_alias_index(&mut self) -> Result<(), String> {
+        let mut index = BTreeMap::new();
+        let view = self.accounts.view();
+        for (account_id, value) in view.iter() {
+            let Some(label) = value.as_ref().label() else {
+                continue;
+            };
+            if account_label_is_pii(label) {
+                return Err(format!(
+                    "Account alias {label:?} looks like raw PII; use UAID/opaque identifiers"
+                ));
+            }
+            if let Some(existing) = index.get(label) {
+                if existing != account_id {
+                    return Err(format!(
+                        "Account alias {label:?} already bound to account {existing}"
+                    ));
+                }
+                continue;
+            }
+            index.insert(label.clone(), account_id.clone());
+        }
+        self.account_aliases = index.into_iter().collect();
+        Ok(())
+    }
+
+    fn rebuild_opaque_uaid_index(&mut self) -> Result<(), String> {
+        let mut index = BTreeMap::new();
+        let view = self.accounts.view();
+        for (account_id, value) in view.iter() {
+            let details = value.as_ref();
+            if details.opaque_ids().is_empty() {
+                continue;
+            }
+            let Some(uaid) = details.uaid() else {
+                return Err(format!(
+                    "Account {account_id} defines opaque identifiers without a UAID"
+                ));
+            };
+            let mut seen = BTreeSet::new();
+            for opaque in details.opaque_ids() {
+                if !seen.insert(*opaque) {
+                    return Err(format!(
+                        "Account {account_id} contains duplicate opaque identifier {opaque}"
+                    ));
+                }
+                if let Some(existing) = index.get(opaque) {
+                    if existing != uaid {
+                        return Err(format!(
+                            "Opaque identifier {opaque} already bound to UAID {existing}"
+                        ));
+                    }
+                    continue;
+                }
+                index.insert(*opaque, *uaid);
+            }
+        }
+        self.opaque_uaids = index.into_iter().collect();
+        Ok(())
     }
 
     fn rebuild_offline_transfer_indexes(&mut self) {
@@ -7534,7 +7933,11 @@ impl World {
             domain_endorsements: self.domain_endorsements.view(),
             domain_endorsements_by_domain: self.domain_endorsements_by_domain.view(),
             domains: self.domains.view(),
+            domain_selectors: self.domain_selectors.view(),
             accounts: self.accounts.view(),
+            uaid_accounts: self.uaid_accounts.view(),
+            account_aliases: self.account_aliases.view(),
+            opaque_uaids: self.opaque_uaids.view(),
             account_rekey_records: self.account_rekey_records.view(),
             asset_definitions: self.asset_definitions.view(),
             assets: self.assets.view(),
@@ -7650,6 +8053,8 @@ pub trait WorldReadOnly {
     fn peers(&self) -> &Peers;
     /// Domain storage (read-only).
     fn domains(&self) -> &impl StorageReadOnly<DomainId, Domain>;
+    /// Domain selector index for account address resolution.
+    fn domain_selectors(&self) -> &impl StorageReadOnly<AccountDomainSelector, DomainId>;
     /// Endorsement committees (read-only).
     fn domain_committees(&self) -> &impl StorageReadOnly<String, DomainCommittee>;
     /// Per-domain endorsement policies (read-only).
@@ -7666,6 +8071,12 @@ pub trait WorldReadOnly {
     ) -> &impl StorageReadOnly<DomainId, Vec<HashOf<DomainEndorsement>>>;
     /// Account storage (read-only).
     fn accounts(&self) -> &impl StorageReadOnly<AccountId, AccountValue>;
+    /// UAID to account index (read-only).
+    fn uaid_accounts(&self) -> &impl StorageReadOnly<UniversalAccountId, AccountId>;
+    /// Account alias index (read-only).
+    fn account_aliases(&self) -> &impl StorageReadOnly<AccountLabel, AccountId>;
+    /// Opaque identifier to UAID index (read-only).
+    fn opaque_uaids(&self) -> &impl StorageReadOnly<OpaqueAccountId, UniversalAccountId>;
     /// Account label/signatory registry (read-only).
     fn account_rekey_records(&self) -> &impl StorageReadOnly<AccountLabel, AccountRekeyRecord>;
     /// Asset definition storage (read-only).
@@ -8257,6 +8668,9 @@ macro_rules! impl_world_ro {
             fn domains(&self) -> &impl StorageReadOnly<DomainId, Domain> {
                 &self.domains
             }
+            fn domain_selectors(&self) -> &impl StorageReadOnly<AccountDomainSelector, DomainId> {
+                &self.domain_selectors
+            }
             fn domain_committees(&self) -> &impl StorageReadOnly<String, DomainCommittee> {
                 &self.domain_committees
             }
@@ -8277,6 +8691,17 @@ macro_rules! impl_world_ro {
             }
             fn accounts(&self) -> &impl StorageReadOnly<AccountId, AccountValue> {
                 &self.accounts
+            }
+            fn uaid_accounts(&self) -> &impl StorageReadOnly<UniversalAccountId, AccountId> {
+                &self.uaid_accounts
+            }
+            fn account_aliases(&self) -> &impl StorageReadOnly<AccountLabel, AccountId> {
+                &self.account_aliases
+            }
+            fn opaque_uaids(
+                &self,
+            ) -> &impl StorageReadOnly<OpaqueAccountId, UniversalAccountId> {
+                &self.opaque_uaids
             }
             fn account_rekey_records(
                 &self,
@@ -8758,7 +9183,11 @@ impl<'world> WorldBlock<'world> {
             domain_endorsements,
             domain_endorsements_by_domain,
             domains,
+            domain_selectors,
             accounts,
+            uaid_accounts,
+            account_aliases,
+            opaque_uaids,
             account_rekey_records,
             asset_definitions,
             assets,
@@ -8951,7 +9380,11 @@ impl<'world> WorldBlock<'world> {
         asset_metadata.commit();
         asset_definitions.commit();
         accounts.commit();
+        uaid_accounts.commit();
+        account_aliases.commit();
+        opaque_uaids.commit();
         domains.commit();
+        domain_selectors.commit();
         peers.commit();
         parameters.commit();
     }
@@ -9096,11 +9529,10 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
 
     /// Recompute dataspace bindings for the provided UAID based on the current manifest set.
     pub(crate) fn rebuild_space_directory_bindings(&mut self, uaid: UniversalAccountId) {
-        let accounts = self.accounts_with_uaid(uaid);
-        if accounts.is_empty() {
+        let Some(account_id) = self.uaid_accounts.get(&uaid).cloned() else {
             self.uaid_dataspaces.remove(uaid);
             return;
-        }
+        };
 
         let Some(manifests) = self.space_directory_manifests.get(&uaid) else {
             self.uaid_dataspaces.remove(uaid);
@@ -9129,9 +9561,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                 );
                 continue;
             }
-            for account_id in &accounts {
-                bindings.bind_account(*dataspace, account_id.clone());
-            }
+            bindings.bind_account(*dataspace, account_id.clone());
         }
 
         if bindings.is_empty() {
@@ -9303,19 +9733,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             version,
             entries: snapshot_entries,
         })
-    }
-
-    fn accounts_with_uaid(&self, uaid: UniversalAccountId) -> Vec<AccountId> {
-        self.accounts
-            .iter()
-            .filter(|(_, value)| {
-                value
-                    .as_ref()
-                    .uaid()
-                    .is_some_and(|present| *present == uaid)
-            })
-            .map(|(account_id, _)| account_id.clone())
-            .collect()
     }
 
     pub(crate) fn expire_space_directory_manifest_record(
@@ -9703,7 +10120,11 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             domain_endorsements,
             domain_endorsements_by_domain,
             domains,
+            domain_selectors,
             accounts,
+            uaid_accounts,
+            account_aliases,
+            opaque_uaids,
             account_rekey_records,
             asset_definitions,
             assets,
@@ -9884,7 +10305,11 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         assets.apply();
         asset_definitions.apply();
         accounts.apply();
+        uaid_accounts.apply();
+        account_aliases.apply();
+        opaque_uaids.apply();
         domains.apply();
+        domain_selectors.apply();
         peers.apply();
         parameters.apply();
     }
@@ -13640,9 +14065,30 @@ impl State {
                         "skipping SoraFS provider binding from configuration because an owner is already set"
                     );
                 }
-                Some(_) => {}
+                Some(_) => {
+                    let permission = Permission::from(CanOperateSorafsRepair {
+                        provider_id: *provider,
+                    });
+                    let existing = {
+                        let view = self.world.account_permissions.view();
+                        view.get(owner).cloned()
+                    };
+                    let mut perms = existing.unwrap_or_else(Permissions::new);
+                    perms.insert(permission);
+                    self.world.account_permissions.insert(owner.clone(), perms);
+                }
                 None => {
                     self.world.provider_owners.insert(*provider, owner.clone());
+                    let permission = Permission::from(CanOperateSorafsRepair {
+                        provider_id: *provider,
+                    });
+                    let existing = {
+                        let view = self.world.account_permissions.view();
+                        view.get(owner).cloned()
+                    };
+                    let mut perms = existing.unwrap_or_else(Permissions::new);
+                    perms.insert(permission);
+                    self.world.account_permissions.insert(owner.clone(), perms);
                 }
             }
         }
@@ -17514,8 +17960,8 @@ mod permission_cache_tests {
             let mut block = state.block(next_header);
             let mut stx = block.transaction();
             let mut summary = AccountPermissionSummary::default();
-            summary.apply_grant(&Permission::from(permission_register.clone()));
-            summary.apply_grant(&Permission::from(permission_execute.clone()));
+            summary.apply_grant(&stx.world, &Permission::from(permission_register.clone()));
+            summary.apply_grant(&stx.world, &Permission::from(permission_execute.clone()));
             stx.perm_cache.insert_summary(registrar.clone(), summary);
             assert!(
                 stx.can_register_trigger_for(&registrar, &owner),
@@ -18819,18 +19265,19 @@ impl StateTransaction<'_, '_> {
     }
 
     fn build_permission_summary(&mut self, account: &AccountId) -> AccountPermissionSummary {
+        let world = &self.world;
         let mut summary = AccountPermissionSummary::default();
         let mut merge_permission = |permission: &Permission| {
-            summary.apply_grant(permission);
+            summary.apply_grant(world, permission);
         };
-        if let Some(perms) = self.world.account_permissions.get(account) {
+        if let Some(perms) = world.account_permissions.get(account) {
             for permission in perms {
                 merge_permission(permission);
             }
         }
-        let role_ids: Vec<RoleId> = self.world.account_roles_iter(account).cloned().collect();
+        let role_ids: Vec<RoleId> = world.account_roles_iter(account).cloned().collect();
         for role_id in role_ids {
-            if let Some(role) = self.world.roles.get(&role_id) {
+            if let Some(role) = world.roles.get(&role_id) {
                 for permission in &role.permissions {
                     merge_permission(permission);
                 }
@@ -19465,7 +19912,11 @@ pub(crate) mod deserialize {
             parameters,
             peers,
             domains,
+            domain_selectors: Storage::default(),
             accounts,
+            uaid_accounts: Storage::default(),
+            account_aliases: Storage::default(),
+            opaque_uaids: Storage::default(),
             account_rekey_records,
             asset_definitions,
             assets,
@@ -19570,6 +20021,30 @@ pub(crate) mod deserialize {
             consensus_evidence: Storage::default(),
             external_event_buf,
         };
+        world
+            .rebuild_domain_selector_index()
+            .map_err(|message| json::Error::InvalidField {
+                field: "domain_selectors".into(),
+                message,
+            })?;
+        world
+            .rebuild_uaid_account_index()
+            .map_err(|message| json::Error::InvalidField {
+                field: "uaid_accounts".into(),
+                message,
+            })?;
+        world
+            .rebuild_account_alias_index()
+            .map_err(|message| json::Error::InvalidField {
+                field: "account_aliases".into(),
+                message,
+            })?;
+        world
+            .rebuild_opaque_uaid_index()
+            .map_err(|message| json::Error::InvalidField {
+                field: "opaque_uaids".into(),
+                message,
+            })?;
         world.rebuild_offline_transfer_indexes();
         Ok(world)
     }
@@ -20187,6 +20662,40 @@ mod tests {
         AcceptedTransaction::new_unchecked(Cow::Owned(tx))
     }
 
+    #[test]
+    fn permission_summary_resolves_accounts_from_payload() {
+        use iroha_data_model::permission::Permission;
+        use iroha_executor_data_model::permission::{
+            nexus::CanUseFeeSponsor, trigger::CanRegisterTrigger,
+        };
+
+        let (account_id, _keypair) = gen_account_in("wonderland");
+        let domain_id = account_id.domain().clone();
+        let world = World::with(
+            [Domain::new(domain_id.clone()).build(&account_id)],
+            [Account::new(account_id.clone()).build(&account_id)],
+            [],
+        );
+        let world_view = world.view();
+
+        let mut summary = AccountPermissionSummary::default();
+        summary.apply_grant(
+            &world_view,
+            &Permission::from(CanRegisterTrigger {
+                authority: account_id.clone(),
+            }),
+        );
+        summary.apply_grant(
+            &world_view,
+            &Permission::from(CanUseFeeSponsor {
+                sponsor: account_id.clone(),
+            }),
+        );
+
+        assert!(summary.reg_trigger_authorities.contains(&account_id));
+        assert!(summary.fee_sponsors.contains(&account_id));
+    }
+
     fn dataspace_catalog_for_lane_catalog(catalog: &LaneCatalog) -> DataSpaceCatalog {
         let mut ids: BTreeSet<DataSpaceId> = catalog
             .lanes()
@@ -20300,6 +20809,85 @@ mod tests {
         assert_eq!(snapshot.prev_commit_topology().len(), 0);
         let domain_count = snapshot.world().domains().iter().count();
         assert_eq!(domain_count, 0);
+    }
+
+    #[test]
+    fn world_rebuild_account_indexes_populates_storage() {
+        let mut world = World::default();
+        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let keypair = KeyPair::random();
+        let owner_id = AccountId::new(domain_id.clone(), keypair.public_key().clone());
+        let domain = iroha_data_model::domain::Domain {
+            id: domain_id.clone(),
+            logo: None,
+            metadata: Metadata::default(),
+            owned_by: owner_id.clone(),
+        };
+        world.domains.insert(domain_id.clone(), domain);
+
+        let label = AccountLabel::new(domain_id.clone(), "alice".parse().expect("label"));
+        let uaid = UniversalAccountId::from_hash(Hash::new("uaid-index"));
+        let opaque = OpaqueAccountId::from_hash(Hash::new("opaque-index"));
+        let details = iroha_data_model::account::AccountDetails::new(
+            Metadata::default(),
+            Some(label.clone()),
+            Some(uaid),
+            vec![opaque],
+        );
+        world
+            .accounts
+            .insert(owner_id.clone(), AccountValue::new(details));
+
+        world
+            .rebuild_domain_selector_index()
+            .expect("domain selector rebuild");
+        world
+            .rebuild_uaid_account_index()
+            .expect("UAID index rebuild");
+        world
+            .rebuild_account_alias_index()
+            .expect("account alias rebuild");
+        world
+            .rebuild_opaque_uaid_index()
+            .expect("opaque UAID rebuild");
+
+        let selector = AccountDomainSelector::from_domain(&domain_id).expect("domain selector");
+        assert_eq!(
+            world.domain_selectors.view().get(&selector),
+            Some(&domain_id)
+        );
+        assert_eq!(world.uaid_accounts.view().get(&uaid), Some(&owner_id));
+        assert_eq!(world.account_aliases.view().get(&label), Some(&owner_id));
+        assert_eq!(world.opaque_uaids.view().get(&opaque), Some(&uaid));
+    }
+
+    #[test]
+    fn set_gov_seeds_sorafs_provider_permissions() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new(World::default(), Arc::clone(&kura), query_handle);
+
+        let provider_id = ProviderId::new([9_u8; 32]);
+        let keypair = KeyPair::random();
+        let domain_id: DomainId = "providers".parse().expect("domain id");
+        let owner_id = AccountId::new(domain_id, keypair.public_key().clone());
+
+        let mut gov = iroha_config::parameters::actual::Governance::default();
+        gov.sorafs_provider_owners
+            .insert(provider_id, owner_id.clone());
+        state.set_gov(gov);
+
+        let owners = state.world.provider_owners.view();
+        assert_eq!(owners.get(&provider_id), Some(&owner_id));
+
+        let perms = state.world.account_permissions.view();
+        let expected = Permission::from(CanOperateSorafsRepair { provider_id });
+        assert!(
+            perms
+                .get(&owner_id)
+                .is_some_and(|perms| perms.contains(&expected)),
+            "expected owner permission to be seeded"
+        );
     }
 
     #[test]
@@ -25001,6 +25589,7 @@ mod tests {
                 expiry_slot: Some(5),
             },
         };
+        let merchant_id = gen_account_in("wonderland").0;
         let handle_fragment = AxtHandleFragment {
             handle: AssetHandle {
                 scope: vec!["transfer".into()],
@@ -25029,7 +25618,7 @@ mod tests {
                 op: SpendOp {
                     kind: "transfer".into(),
                     from: authority.to_string(),
-                    to: "merchant@wonder".into(),
+                    to: merchant_id.to_string(),
                     amount: "10".into(),
                 },
             },
@@ -25773,7 +26362,7 @@ mod tests {
         let handle = iroha_data_model::nexus::AssetHandle {
             scope: vec!["transfer".into()],
             subject: HandleSubject {
-                account: "alice@wonderland".into(),
+                account: ALICE_ID.to_string(),
                 origin_dsid: Some(dsid),
             },
             budget: HandleBudget {
@@ -25807,8 +26396,8 @@ mod tests {
                     asset_dsid: dsid,
                     op: SpendOp {
                         kind: "transfer".into(),
-                        from: "alice@wonderland".into(),
-                        to: "bob@wonderland".into(),
+                        from: ALICE_ID.to_string(),
+                        to: BOB_ID.to_string(),
                         amount: "5".into(),
                     },
                 },
@@ -25865,7 +26454,7 @@ mod tests {
         let handle = iroha_data_model::nexus::AssetHandle {
             scope: vec!["transfer".into()],
             subject: iroha_data_model::nexus::HandleSubject {
-                account: "alice@wonderland".into(),
+                account: ALICE_ID.to_string(),
                 origin_dsid: Some(dsid),
             },
             budget: iroha_data_model::nexus::HandleBudget {
@@ -25899,8 +26488,8 @@ mod tests {
                     asset_dsid: dsid,
                     op: SpendOp {
                         kind: "transfer".into(),
-                        from: "alice@wonderland".into(),
-                        to: "bob@wonderland".into(),
+                        from: ALICE_ID.to_string(),
+                        to: BOB_ID.to_string(),
                         amount: "5".into(),
                     },
                 },
@@ -25960,8 +26549,8 @@ mod tests {
                     asset_dsid: dsid,
                     op: SpendOp {
                         kind: "transfer".into(),
-                        from: "alice@wonderland".into(),
-                        to: "bob@wonderland".into(),
+                        from: ALICE_ID.to_string(),
+                        to: BOB_ID.to_string(),
                         amount: "4".into(),
                     },
                 },
@@ -26076,6 +26665,7 @@ mod tests {
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@wonder"
                 .parse()
                 .expect("account id");
+        let merchant_id = gen_account_in("wonderland").0;
         let dsid = DataSpaceId::new(81);
         let lane = LaneId::new(0);
         let manifest_root = [0x77; 32];
@@ -26170,7 +26760,7 @@ mod tests {
                 op: SpendOp {
                     kind: "transfer".into(),
                     from: authority.to_string(),
-                    to: "merchant@wonderland".into(),
+                    to: merchant_id.to_string(),
                     amount: "5".into(),
                 },
             },
@@ -27046,7 +27636,8 @@ mod tests {
 
         let _guard = crate::sumeragi::witness::exec_witness_guard();
         crate::sumeragi::witness::start_block();
-        let asset_id = AssetId::from_str("rose#wonderland#alice@wonderland").unwrap();
+        let asset_id =
+            AssetId::from_str(&format!("rose#wonderland#{}", ALICE_ID.to_string())).unwrap();
         crate::sumeragi::witness::record_write_asset(
             &asset_id,
             &iroha_primitives::numeric::Numeric::from(42u32),

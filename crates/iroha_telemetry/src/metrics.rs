@@ -7138,8 +7138,6 @@ pub struct Metrics {
     pub torii_address_collision_domain_total: IntCounterVec,
     /// Torii address_format selections grouped by endpoint/format.
     pub torii_address_format_total: IntCounterVec,
-    /// Torii strict-address toggle (1 = strict IH58/compressed only, 0 = relaxed).
-    pub torii_address_strict_mode: IntGauge,
     /// Torii Norito RPC decode failures grouped by payload kind/reason.
     pub torii_norito_decode_failures_total: IntCounterVec,
     /// Torii pre-auth: active connections tracked by scheme (http/ws)
@@ -12307,11 +12305,6 @@ impl Default for Metrics {
             &["endpoint", "format"],
         )
         .expect("Infallible");
-        let torii_address_strict_mode = IntGauge::new(
-            "torii_address_strict_mode",
-            "Torii strict-address toggle (1=strict canonical-only, 0=relaxed)",
-        )
-        .expect("Infallible");
         let torii_norito_decode_failures_total = IntCounterVec::new(
             Opts::new(
                 "torii_norito_decode_failures_total",
@@ -12339,7 +12332,6 @@ impl Default for Metrics {
         register_guarded(&registry, &torii_address_collision_total);
         register_guarded(&registry, &torii_address_collision_domain_total);
         register_guarded(&registry, &torii_address_format_total);
-        register_guarded(&registry, &torii_address_strict_mode);
         register_guarded(&registry, &torii_norito_decode_failures_total);
         register_guarded(&registry, &torii_connect_sessions_total);
         register_guarded(&registry, &torii_connect_sessions_active);
@@ -13734,7 +13726,6 @@ impl Default for Metrics {
             torii_address_collision_total,
             torii_address_collision_domain_total,
             torii_address_format_total,
-            torii_address_strict_mode,
             torii_norito_decode_failures_total,
             torii_proof_throttled_total,
             torii_contract_throttled_total,
@@ -15541,12 +15532,6 @@ impl Metrics {
             .inc();
     }
 
-    /// Record whether Torii enforces strict IH58/compressed literals.
-    pub fn set_torii_address_strict_mode(&self, strict: bool) {
-        let value = i64::from(strict);
-        self.torii_address_strict_mode.set(value);
-    }
-
     /// Record proof endpoint request outcome and payload size.
     pub fn record_torii_proof_request(
         &self,
@@ -16069,15 +16054,6 @@ mod test {
                 .get(),
             1
         );
-    }
-
-    #[test]
-    fn strict_mode_gauge_tracks_config() {
-        let metrics = Metrics::default();
-        metrics.set_torii_address_strict_mode(true);
-        assert_eq!(metrics.torii_address_strict_mode.get(), 1);
-        metrics.set_torii_address_strict_mode(false);
-        assert_eq!(metrics.torii_address_strict_mode.get(), 0);
     }
 
     #[test]

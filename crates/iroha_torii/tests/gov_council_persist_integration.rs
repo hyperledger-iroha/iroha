@@ -15,6 +15,7 @@ use iroha_core::{
     queue::Queue,
     state::{State, World},
 };
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::account::AccountId;
 use norito::json;
 use tower::ServiceExt as _;
@@ -96,6 +97,7 @@ async fn persist_vrf_council_and_get_current_matches() {
         .map(|h| *h.as_ref())
         .unwrap_or([0u8; 32]);
     let seed = parliament::compute_seed(&chain_id_value, epoch, &beacon_bytes);
+    let domain: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
 
     // Build 5 candidates (Normal variant)
     let mut candidates = Vec::new();
@@ -103,8 +105,9 @@ async fn persist_vrf_council_and_get_current_matches() {
         let (pk, sk) =
             iroha_crypto::BlsNormal::keypair(iroha_crypto::KeyGenOption::UseSeed(vec![i; 4]));
         let pk_b64 = base64::engine::general_purpose::STANDARD.encode(pk.to_bytes());
-        let account_id = format!("node-{i}@wonderland");
-        let account: iroha_data_model::account::AccountId = account_id.parse().unwrap();
+        let keypair = KeyPair::from_seed(vec![i; 32], Algorithm::Ed25519);
+        let account = AccountId::new(domain.clone(), keypair.public_key().clone());
+        let account_id = account.to_string();
         let input = parliament::build_input(&seed, &account);
         let (_y, pi) =
             iroha_crypto::vrf::prove_normal_with_chain(&sk, chain_id_str.as_bytes(), &input);

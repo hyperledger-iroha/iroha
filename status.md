@@ -1,7 +1,33 @@
 # Status
 
-Last update: 2026-01-19
+Last update: 2026-01-20
 
+- Accounts/UAID: enforce UAID→account 1:1 index, reject duplicate UAIDs on registration, and switch UAID portfolio/reward selection to the index with new unit coverage.
+- Offline receipts: added `OfflineSpendReceipt::invoice_id()` accessor + unit test and switched executor validation/tests to use it so non-transparent builds compile.
+- Roadmap: added account identity refactor tasks (IH58-only canonical IDs, alias/UAID unification, PII-safe tokens, no compatibility shims).
+- SoraFS config: added `sorafs.repair`/`sorafs.gc` defaults and wiring, updated defaults/samples (`defaults/nexus`, `configs/soranexus/testus`), plus config docs (all locales).
+- SoraFS repair status: added deterministic sorted/filtered status listing (status/provider filters) and a global list endpoint; OpenAPI updated.
+- SoraFS repair workers: added claim/heartbeat/complete/fail endpoints with idempotency + lease validation, NodeHandle/repair scheduler tracking, OpenAPI entries, and repair plan doc updates.
+- SoraFS repair auth: enforced worker signatures + `CanOperateSorafsRepair`, updated Torii DTOs/OpenAPI, guardrail checks, and SoraFS auth/runbook docs; added Torii auth tests.
+- SoraFS repair audit schema: worker signatures now cover manifest digests, repair worker requests carry `manifest_digest_hex`, and canonical repair/GC audit payload structs with Norito roundtrip tests are defined; docs updated.
+- SoraFS repair CLI: added `iroha sorafs repair` list/claim/complete/fail/escalate subcommands plus client helpers for repair status/worker/slash endpoints; repair plan docs updated.
+- SoraFS GC CLI: added `iroha sorafs gc` inspect/dry-run reporting for retention state (read-only).
+- Format: `cargo fmt --all` (warned about nightly-only rustfmt options in stable toolchain).
+- Tests: `cargo test -p iroha_config sorafs_repair_and_gc_parse_clamps_values` (ok).
+- Tests: `cargo test -p sorafs_node repair_and_gc_configs_preserve_fields` (ok).
+- Tests: `cargo test -p sorafs_node node_handle_threads_repair_and_gc_config` (ok).
+- Tests: `cargo test -p sorafs_node list_tasks_` (ok).
+- Tests: `cargo test -p sorafs_node node_handle_manages_repair_queue` (ok).
+- Tests: `cargo test -p sorafs_node` (failed: `store::tests::ingest_manifest_persists_metadata_and_chunks` expected manifest hash `57950a...` vs `010203`).
+- Tests: `cargo test -p iroha_torii repair_query_tests` (ok).
+- Tests: `cargo test -p iroha_torii repair_worker_handlers_drive_state_transitions` (failed to compile `iroha_core`: `Storage<AccountId, Owned<AccountDetails>>` missing `iter`, plus type inference errors in `crates/iroha_core/src/state.rs:7515`).
+- Build: `cargo check -p iroha_executor` (ok).
+- Build: `cargo check -p iroha_core` (ok).
+- Tests: `cargo test --workspace` (aborted per user request).
+- Tests: `cargo test -p iroha_torii da::` (ok).
+- Tests: `cargo test -p iroha_primitives rs16::` (ok).
+- Tests: `cargo test -p sorafs_car --bin da_reconstruct --features da_harness` (ok).
+- Torii test configs updated for new SoraFS repair/GC fields and network `connect_startup_delay`; DA reconstruct harness manifest now supplies Taikai metadata.
 - Genesis: consensus handshake metadata now refreshes during manifest parse/normalize to keep fingerprints aligned with effective parameters (added `build_and_sign_refreshes_stale_consensus_fingerprint` test).
 - Config: fixed `connect_startup_delay` initialization in torii test utils and p2p start wiring.
 - Tests: `cargo test -p integration_tests genesis_asset_minted_across_peers -- --nocapture` (ok).

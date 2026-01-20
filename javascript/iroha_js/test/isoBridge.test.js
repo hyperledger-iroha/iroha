@@ -29,9 +29,9 @@ test("buildPacs008Message renders minimal document", () => {
     instigatingAgent: { bic: "DEUTDEFF", lei: "529900ODI3047E2LIV03" },
     instructedAgent: { bic: "COBADEFF" },
     debtorAccount: { iban: "DE89370400440532013000" },
-    creditorAccount: { otherId: "alice@wonderland" },
+    creditorAccount: { otherId: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx" },
     purposeCode: "SECU",
-    supplementaryData: { account_id: "alice@wonderland", leg: "delivery" },
+    supplementaryData: { account_id: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", leg: "delivery" },
   });
 
   assert.match(xml, /<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs\.008\.001\.10">/);
@@ -40,10 +40,10 @@ test("buildPacs008Message renders minimal document", () => {
   assert.match(xml, /<IntrBkSttlmAmt Ccy="EUR">25\.00<\/IntrBkSttlmAmt>/);
   assert.match(xml, /<IntrBkSttlmDt>2026-02-02<\/IntrBkSttlmDt>/);
   assert.match(xml, /<IBAN>DE89370400440532013000<\/IBAN>/);
-  assert.match(xml, /<Othr><Id>alice@wonderland<\/Id><\/Othr>/);
+  assert.match(xml, /<Othr><Id>34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx<\/Id><\/Othr>/);
   assert.match(xml, /<Purp><Cd>SECU<\/Cd><\/Purp>/);
   assert.ok(
-    xml.includes("&quot;account_id&quot;:&quot;alice@wonderland&quot;"),
+    xml.includes("&quot;account_id&quot;:&quot;34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx&quot;"),
     "supplementary data should encode account_id",
   );
   assert.ok(
@@ -422,7 +422,7 @@ test("buildPacs008Message renders debtor/creditor parties and agents", () => {
     debtor: {
       name: "Wonderland Asset Manager",
       lei: "529900ODI3047E2LIV03",
-      identifier: "alice@wonderland",
+      identifier: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
       identifierScheme: "NORITO_ACCOUNT_ID",
     },
     creditor: {
@@ -438,7 +438,7 @@ test("buildPacs008Message renders debtor/creditor parties and agents", () => {
   );
   assert.match(
     xml,
-    /<Dbtr><Nm>Wonderland Asset Manager<\/Nm><Id><OrgId><LEI>529900ODI3047E2LIV03<\/LEI><Othr><Id>alice@wonderland<\/Id><SchmeNm><Prtry>NORITO_ACCOUNT_ID<\/Prtry><\/SchmeNm><\/Othr><\/OrgId><\/Id><\/Dbtr>/,
+    /<Dbtr><Nm>Wonderland Asset Manager<\/Nm><Id><OrgId><LEI>529900ODI3047E2LIV03<\/LEI><Othr><Id>34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx<\/Id><SchmeNm><Prtry>NORITO_ACCOUNT_ID<\/Prtry><\/SchmeNm><\/Othr><\/OrgId><\/Id><\/Dbtr>/,
   );
   assert.match(
     xml,

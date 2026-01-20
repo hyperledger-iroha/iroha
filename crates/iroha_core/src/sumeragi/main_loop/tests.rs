@@ -1524,6 +1524,7 @@ async fn test_actor_harness_with_config_and_height_and_kura(
         require_sm_openssl_preview_match:
             iroha_config::parameters::defaults::network::REQUIRE_SM_OPENSSL_PREVIEW_MATCH,
         idle_timeout: iroha_config::parameters::defaults::network::IDLE_TIMEOUT,
+        connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
         peer_gossip_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
         trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
@@ -2321,6 +2322,43 @@ fn seed_genesis_block_for_state(state: &State) -> HashOf<BlockHeader> {
         .expect("store genesis block");
     state_block.commit().expect("genesis commit must succeed");
     genesis_hash
+}
+
+fn seed_block_for_state(
+    state: &State,
+    height: u64,
+    prev_hash: HashOf<BlockHeader>,
+) -> HashOf<BlockHeader> {
+    let header = BlockHeader::new(
+        NonZeroU64::new(height).expect("height must be non-zero"),
+        Some(prev_hash),
+        None,
+        None,
+        0,
+        0,
+    );
+    let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let block = BlockBuilder::new(header).build_with_signature(0, leader.private_key());
+    let block_hash = block.hash();
+    let topology = {
+        let view = state.view();
+        if view.commit_topology().is_empty() {
+            view.world().peers().iter().cloned().collect()
+        } else {
+            view.commit_topology().iter().cloned().collect()
+        }
+    };
+    let mut state_block = state.block(block.header());
+    let valid =
+        crate::block::ValidBlock::validate_unchecked(block, &mut state_block).unpack(|_| {});
+    let committed = valid.commit_unchecked().unpack(|_| {});
+    let _ = state_block.apply_without_execution(&committed, topology);
+    state_block
+        .kura()
+        .store_block(Arc::new(committed.clone().into()))
+        .expect("store block");
+    state_block.commit().expect("block commit must succeed");
+    block_hash
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -3526,6 +3564,107 @@ async fn block_sync_update_accepts_uncertified_next_height_in_npos_genesis_boots
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn block_sync_update_accepts_uncertified_next_height_in_npos_after_bootstrap() {
+    use crate::sumeragi::status;
+
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let genesis_hash = seed_genesis_block_for_state(&actor.state);
+    let _ = seed_block_for_state(&actor.state, 2, genesis_hash);
+    let (committed_height, committed_hash) = {
+        let view = actor.state.view();
+        (
+            u64::try_from(view.height()).unwrap_or(u64::MAX),
+            view.latest_block_hash(),
+        )
+    };
+    let block_height = committed_height.saturating_add(1).max(1);
+    let view_index = 0_u64;
+
+    let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(block_height);
+    let signature_topology =
+        super::topology_for_view(&topology, block_height, view_index, mode_tag, prf_seed);
+    let leader_peer = signature_topology
+        .as_ref()
+        .first()
+        .expect("signer in topology");
+    let leader_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == leader_peer.public_key())
+        .expect("signer keypair exists in harness");
+    let leader_idx = signature_topology
+        .position(leader_kp.public_key())
+        .expect("signer index in topology");
+    let parent_hash = if block_height == 1 {
+        None
+    } else {
+        committed_hash
+    };
+    let mut block = heartbeat_block_for_state(
+        actor.state.as_ref(),
+        &actor.common_config.chain,
+        block_height,
+        view_index,
+        parent_hash,
+        leader_kp,
+        u64::try_from(leader_idx).expect("signer index fits u64"),
+    );
+    let required = signature_topology.min_votes_for_commit().max(1);
+    for (idx, peer) in signature_topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .take(required)
+    {
+        if idx == leader_idx {
+            continue;
+        }
+        let kp = harness
+            .key_pairs
+            .iter()
+            .find(|kp| kp.public_key() == peer.public_key())
+            .expect("signer keypair exists in harness");
+        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        block
+            .add_signature(BlockSignature::new(
+                u64::try_from(idx).expect("signer index fits u64"),
+                sig,
+            ))
+            .expect("signature added");
+    }
+
+    let update = super::message::BlockSyncUpdate::from(&block);
+    actor
+        .handle_block_sync_update(update, None)
+        .expect("block sync update");
+
+    assert!(
+        actor.vote_roster_cache.contains_key(&block.hash()),
+        "block sync roster should be cached for vote validation"
+    );
+    let pending = actor.pending.pending_blocks.get(&block.hash());
+    assert!(pending.is_some(), "pending block should be inserted");
+    assert!(
+        pending.is_some_and(|pending| !pending.aborted),
+        "pending block should not be marked aborted"
+    );
+    assert!(
+        actor.block_known_locally(block.hash()),
+        "block sync should accept next-height payloads under NPOS after bootstrap"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn rbc_roster_for_session_uses_active_topology_in_npos_bootstrap() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
@@ -3539,10 +3678,8 @@ async fn rbc_roster_for_session_uses_active_topology_in_npos_bootstrap() {
     };
     let height = committed_height.saturating_add(1).max(1);
     let view = 0_u64;
-    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([
-        0xA7;
-        Hash::LENGTH
-    ]));
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA7; Hash::LENGTH]));
     let key = (block_hash, height, view);
 
     let expected = actor.effective_commit_topology();
@@ -18667,6 +18804,7 @@ async fn stale_pending_block_requeues_transactions() {
         require_sm_openssl_preview_match:
             iroha_config::parameters::defaults::network::REQUIRE_SM_OPENSSL_PREVIEW_MATCH,
         idle_timeout: iroha_config::parameters::defaults::network::IDLE_TIMEOUT,
+        connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
         peer_gossip_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
         trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
@@ -24892,13 +25030,19 @@ async fn trigger_view_change_retains_aborted_pending_payloads_with_da() {
         .pending_blocks
         .get(&stale_block_0.hash())
         .expect("stale pending block should be retained");
-    assert!(stale_pending_0.aborted, "stale pending block should be aborted");
+    assert!(
+        stale_pending_0.aborted,
+        "stale pending block should be aborted"
+    );
     let stale_pending_1 = actor
         .pending
         .pending_blocks
         .get(&stale_block_1.hash())
         .expect("stale pending block should be retained");
-    assert!(stale_pending_1.aborted, "stale pending block should be aborted");
+    assert!(
+        stale_pending_1.aborted,
+        "stale pending block should be aborted"
+    );
     assert!(
         actor
             .pending
@@ -41096,6 +41240,7 @@ async fn proposal_assembly_defers_without_draining_queue_and_preserves_view_when
         require_sm_openssl_preview_match:
             iroha_config::parameters::defaults::network::REQUIRE_SM_OPENSSL_PREVIEW_MATCH,
         idle_timeout: iroha_config::parameters::defaults::network::IDLE_TIMEOUT,
+        connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
         peer_gossip_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
         trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,

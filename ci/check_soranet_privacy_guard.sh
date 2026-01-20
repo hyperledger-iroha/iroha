@@ -24,6 +24,21 @@ for fn in "${endpoints[@]}"; do
 	fi
 done
 
+repair_handlers=(
+	"handler_post_sorafs_repair_claim"
+	"handler_post_sorafs_repair_heartbeat"
+	"handler_post_sorafs_repair_complete"
+	"handler_post_sorafs_repair_fail"
+)
+
+for fn in "${repair_handlers[@]}"; do
+	pattern="(?s)fn[[:space:]]+${fn}.*enforce_sorafs_repair_worker_auth"
+	if ! rg --pcre2 --multiline -n "${pattern}" "${TARGET}" >/dev/null; then
+		echo "error: ${fn} must call enforce_sorafs_repair_worker_auth to keep SoraFS repair worker actions authenticated." >&2
+		exit 1
+	fi
+done
+
 if ! rg -q "soranet_privacy_ingest" "${DOC_PATH}"; then
 	echo "error: ${DOC_PATH} is missing the torii.soranet_privacy_ingest docs; update the config reference when changing SoraNet privacy authz." >&2
 	exit 1
@@ -43,14 +58,14 @@ for doc_key in "sorafs.storage.pin" "governance.sorafs_telemetry"; do
 	fi
 done
 
-for runbook_key in "X-SoraNet-Privacy-Token" "per_provider_submitters" "sorafs.storage.pin"; do
+for runbook_key in "X-SoraNet-Privacy-Token" "per_provider_submitters" "sorafs.storage.pin" "CanOperateSorafsRepair"; do
 	if ! rg -q "${runbook_key}" "${RUNBOOK_PATH}"; then
 		echo "error: ${RUNBOOK_PATH} is missing ${runbook_key} guidance; update the authz runbook alongside code changes." >&2
 		exit 1
 	fi
 done
 
-for playbook_key in "Auth & Governance Checklist" "torii.soranet_privacy_ingest" "gov.sorafs_telemetry"; do
+for playbook_key in "Auth & Governance Checklist" "torii.soranet_privacy_ingest" "gov.sorafs_telemetry" "CanOperateSorafsRepair"; do
 	if ! rg -q "${playbook_key}" "${OPS_PLAYBOOK_PATH}"; then
 		echo "error: ${OPS_PLAYBOOK_PATH} is missing ${playbook_key} coverage; align the ops playbook with authz changes." >&2
 		exit 1

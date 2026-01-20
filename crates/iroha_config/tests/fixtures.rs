@@ -512,7 +512,6 @@ fn minimal_config_snapshot() {
                     enabled: false,
                     endpoint: None,
                 },
-                strict_addresses: true,
                 debug_match_filters: false,
                 operator_auth: ToriiOperatorAuth {
                     enabled: false,
@@ -767,6 +766,26 @@ fn minimal_config_snapshot() {
                             ban: None,
                         },
                     },
+                },
+                sorafs_repair: SorafsRepair {
+                    enabled: false,
+                    db_dsn: None,
+                    db_pool_max_connections: 8,
+                    claim_ttl_secs: 900,
+                    heartbeat_interval_secs: 60,
+                    max_attempts: 3,
+                    worker_concurrency: 4,
+                    backoff_initial_secs: 5,
+                    backoff_max_secs: 60,
+                },
+                sorafs_gc: SorafsGc {
+                    enabled: false,
+                    db_dsn: None,
+                    db_pool_max_connections: 4,
+                    interval_secs: 900,
+                    max_deletions_per_run: 500,
+                    retention_grace_secs: 86400,
+                    pre_admission_sweep: true,
                 },
                 sorafs_quota: SorafsQuota {
                     capacity_declaration: SorafsQuotaWindow {
@@ -2037,16 +2056,6 @@ fn ivm_memory_budget_profile_override_applies() {
     assert_eq!(
         config.ivm.memory_budget_profile,
         Name::from_str("cpu-balanced").expect("valid profile name")
-    );
-}
-
-#[test]
-fn torii_strict_addresses_enabled_by_default() {
-    let config = load_config_from_fixtures("minimal_with_trusted_peers.toml")
-        .expect("config should be valid");
-    assert!(
-        config.torii.strict_addresses,
-        "torii.strict_addresses should default to true so production clusters reject non-canonical aliases"
     );
 }
 

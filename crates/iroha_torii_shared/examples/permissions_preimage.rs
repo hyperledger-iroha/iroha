@@ -4,7 +4,8 @@
 //! Run:
 //!   cargo run -p `iroha_torii_shared` --example `permissions_preimage`
 
-use iroha_crypto::{Algorithm, Signature};
+use iroha_crypto::{Algorithm, KeyPair, Signature};
+use iroha_data_model::{account::AccountId, domain::DomainId};
 use iroha_torii_shared::{connect as proto, connect_sdk as sdk};
 
 fn hex(bytes: &[u8]) -> String {
@@ -22,7 +23,9 @@ fn main() {
     let sid = [0x11u8; 32];
     let app_pk = [0x22u8; 32];
     let wallet_pk = [0x33u8; 32];
-    let account_id = "alice@wonderland".to_string();
+    let domain: DomainId = "wonderland".parse().expect("domain parses");
+    let keypair = KeyPair::from_seed(vec![0xAB; 32], Algorithm::Ed25519);
+    let account_id = AccountId::new(domain, keypair.public_key().clone()).to_string();
 
     // Request permissions in Open (app → wallet)
     let req_perms = proto::PermissionsV1 {

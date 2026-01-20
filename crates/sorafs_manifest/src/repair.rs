@@ -24,8 +24,16 @@ pub const REPAIR_TASK_VERSION_V1: u8 = 1;
 pub const REPAIR_SLASH_PROPOSAL_VERSION_V1: u8 = 1;
 /// Schema version for [`RepairTaskEventV1`].
 pub const REPAIR_TASK_EVENT_VERSION_V1: u8 = 1;
+/// Schema version for [`RepairAuditEventV1`].
+pub const REPAIR_AUDIT_EVENT_VERSION_V1: u8 = 1;
+/// Schema version for [`GcAuditPayloadV1`].
+pub const GC_AUDIT_PAYLOAD_VERSION_V1: u8 = 1;
+/// Schema version for [`GcAuditEventV1`].
+pub const GC_AUDIT_EVENT_VERSION_V1: u8 = 1;
 /// Schema version for [`SignedAuditorRequestV1`].
 pub const SIGNED_AUDITOR_REQUEST_VERSION_V1: u8 = 1;
+/// Schema version for [`RepairWorkerSignaturePayloadV1`].
+pub const REPAIR_WORKER_SIGNATURE_VERSION_V1: u8 = 1;
 
 /// Maximum length permitted for ticket identifiers and string fields.
 const MAX_STRING_BYTES: usize = 256;
@@ -73,6 +81,127 @@ impl RepairTicketId {
 impl fmt::Display for RepairTicketId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
+    }
+}
+
+/// Worker actions supported by the repair scheduler.
+#[derive(
+    Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+)]
+#[norito(tag = "action", content = "details")]
+pub enum RepairWorkerActionV1 {
+    /// Claim a queued repair ticket.
+    #[norito(rename = "claim")]
+    Claim {
+        /// Unix timestamp when the claim was issued.
+        claimed_at_unix: u64,
+    },
+    /// Emit a worker heartbeat extending the lease.
+    #[norito(rename = "heartbeat")]
+    Heartbeat {
+        /// Unix timestamp when the heartbeat was issued.
+        heartbeat_at_unix: u64,
+    },
+    /// Mark the ticket as completed.
+    #[norito(rename = "complete")]
+    Complete {
+        /// Unix timestamp when the repair completed.
+        completed_at_unix: u64,
+        /// Optional resolution notes.
+        #[norito(default)]
+        resolution_notes: Option<String>,
+    },
+    /// Mark the ticket as failed.
+    #[norito(rename = "fail")]
+    Fail {
+        /// Unix timestamp when the failure was recorded.
+        failed_at_unix: u64,
+        /// Failure reason.
+        reason: String,
+    },
+}
+
+/// Canonical payload signed by repair workers to authenticate actions.
+#[derive(
+    Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+)]
+pub struct RepairWorkerSignaturePayloadV1 {
+    /// Schema version (`REPAIR_WORKER_SIGNATURE_VERSION_V1`).
+    pub version: u8,
+    /// Ticket identifier associated with the action.
+    pub ticket_id: RepairTicketId,
+    /// Manifest digest under repair.
+    pub manifest_digest: [u8; 32],
+    /// Provider identifier owning the ticket.
+    pub provider_id: [u8; 32],
+    /// Worker account identifier (IH58 form).
+    pub worker_id: String,
+    /// Idempotency key for the action.
+    pub idempotency_key: String,
+    /// Worker action details.
+    pub action: RepairWorkerActionV1,
+}
+
+impl RepairWorkerSignaturePayloadV1 {
+    /// Validate the worker signature payload.
+    pub fn validate(&self) -> Result<(), RepairValidationError> {
+        if self.version != REPAIR_WORKER_SIGNATURE_VERSION_V1 {
+            return Err(RepairValidationError::UnsupportedVersion {
+                field: "RepairWorkerSignaturePayloadV1",
+                version: self.version,
+            });
+        }
+        self.ticket_id.validate()?;
+        ensure_digest(&self.manifest_digest, "manifest_digest")?;
+        ensure_digest(&self.provider_id, "provider_id")?;
+        validate_non_empty_string(&self.worker_id, "worker_id")?;
+        if self.worker_id.len() > MAX_STRING_BYTES {
+            return Err(RepairValidationError::StringTooLong {
+                field: "worker_id",
+                length: self.worker_id.len(),
+                max: MAX_STRING_BYTES,
+            });
+        }
+        validate_non_empty_string(&self.idempotency_key, "idempotency_key")?;
+        if self.idempotency_key.len() > MAX_STRING_BYTES {
+            return Err(RepairValidationError::StringTooLong {
+                field: "idempotency_key",
+                length: self.idempotency_key.len(),
+                max: MAX_STRING_BYTES,
+            });
+        }
+        match &self.action {
+            RepairWorkerActionV1::Claim { claimed_at_unix } => {
+                ensure_timestamp(*claimed_at_unix, "claimed_at_unix")?;
+            }
+            RepairWorkerActionV1::Heartbeat { heartbeat_at_unix } => {
+                ensure_timestamp(*heartbeat_at_unix, "heartbeat_at_unix")?;
+            }
+            RepairWorkerActionV1::Complete {
+                completed_at_unix,
+                resolution_notes,
+            } => {
+                ensure_timestamp(*completed_at_unix, "completed_at_unix")?;
+                if let Some(notes) = resolution_notes {
+                    validate_optional_string(notes, "resolution_notes")?;
+                }
+            }
+            RepairWorkerActionV1::Fail {
+                failed_at_unix,
+                reason,
+            } => {
+                ensure_timestamp(*failed_at_unix, "failed_at_unix")?;
+                validate_non_empty_string(reason, "reason")?;
+                if reason.len() > MAX_STRING_BYTES {
+                    return Err(RepairValidationError::StringTooLong {
+                        field: "reason",
+                        length: reason.len(),
+                        max: MAX_STRING_BYTES,
+                    });
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -523,8 +652,18 @@ impl RepairTaskRecordV1 {
 }
 
 /// Slash proposal generated after a repair escalation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-#[norito(rename_all = "snake_case")]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    JsonSerialize,
+    JsonDeserialize,
+)]
+#[norito(tag = "status", content = "value", rename_all = "snake_case")]
 pub enum RepairTaskStatusV1 {
     /// Ticket queued awaiting verification.
     Queued,
@@ -555,7 +694,9 @@ impl fmt::Display for RepairTaskStatusV1 {
 }
 
 /// Append-only event emitted whenever a repair ticket changes status.
-#[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+)]
 pub struct RepairTaskEventV1 {
     /// Schema version (`REPAIR_TASK_EVENT_VERSION_V1`).
     pub version: u8,
@@ -592,6 +733,66 @@ impl RepairTaskEventV1 {
         }
         Ok(())
     }
+}
+
+/// Header metadata for audit trail payloads (ordering + signer + digest).
+#[derive(
+    Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+)]
+pub struct SorafsAuditHeaderV1 {
+    /// Monotonic sequence number used for deterministic ordering.
+    pub sequence: u64,
+    /// Unix timestamp (seconds) when the audit event was recorded.
+    pub occurred_at_unix: u64,
+    /// Account identifier that signed the audit payload.
+    pub signer: String,
+    /// Digest of the payload encoded with Norito.
+    pub payload_digest: [u8; 32],
+}
+
+/// Canonical audit event emitted for repair status transitions.
+#[derive(
+    Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+)]
+pub struct RepairAuditEventV1 {
+    /// Schema version (`REPAIR_AUDIT_EVENT_VERSION_V1`).
+    pub version: u8,
+    /// Shared audit header (ordering + signer + digest).
+    pub header: SorafsAuditHeaderV1,
+    /// Repair task transition payload.
+    pub payload: RepairTaskEventV1,
+}
+
+/// Canonical GC audit payload emitted when retention evicts data.
+#[derive(
+    Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+)]
+pub struct GcAuditPayloadV1 {
+    /// Schema version (`GC_AUDIT_PAYLOAD_VERSION_V1`).
+    pub version: u8,
+    /// Manifest digest evicted by the GC sweep.
+    pub manifest_digest: [u8; 32],
+    /// Provider identifier associated with the eviction.
+    pub provider_id: [u8; 32],
+    /// Unix timestamp (seconds) when eviction completed.
+    pub evicted_at_unix: u64,
+    /// Total bytes freed by the eviction.
+    pub freed_bytes: u64,
+    /// Reason label for the eviction.
+    pub reason: String,
+}
+
+/// Canonical audit event emitted for GC/retention actions.
+#[derive(
+    Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+)]
+pub struct GcAuditEventV1 {
+    /// Schema version (`GC_AUDIT_EVENT_VERSION_V1`).
+    pub version: u8,
+    /// Shared audit header (ordering + signer + digest).
+    pub header: SorafsAuditHeaderV1,
+    /// GC eviction payload.
+    pub payload: GcAuditPayloadV1,
 }
 
 /// Slash proposal generated after a repair escalation.
@@ -880,6 +1081,7 @@ fn ensure_digest(digest: &[u8; 32], field: &'static str) -> Result<(), RepairVal
 #[cfg(test)]
 mod tests {
     use super::*;
+    use norito::codec::{Decode, Encode};
 
     fn provider_id() -> [u8; 32] {
         [0xAA; 32]
@@ -1076,5 +1278,118 @@ mod tests {
             envelope.validate(),
             Err(RepairValidationError::EnvelopeAccountMismatch { .. })
         ));
+    }
+
+    #[test]
+    fn worker_signature_payload_validation_succeeds() {
+        let payload = RepairWorkerSignaturePayloadV1 {
+            version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
+            ticket_id: RepairTicketId("REP-500".into()),
+            manifest_digest: manifest_digest(),
+            provider_id: provider_id(),
+            worker_id: "ed25519:worker@sora".into(),
+            idempotency_key: "claim-500".into(),
+            action: RepairWorkerActionV1::Claim {
+                claimed_at_unix: 1_704_361_700,
+            },
+        };
+        assert!(payload.validate().is_ok());
+    }
+
+    #[test]
+    fn worker_signature_payload_rejects_blank_reason() {
+        let payload = RepairWorkerSignaturePayloadV1 {
+            version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
+            ticket_id: RepairTicketId("REP-501".into()),
+            manifest_digest: manifest_digest(),
+            provider_id: provider_id(),
+            worker_id: "ed25519:worker@sora".into(),
+            idempotency_key: "fail-501".into(),
+            action: RepairWorkerActionV1::Fail {
+                failed_at_unix: 1_704_361_800,
+                reason: " ".into(),
+            },
+        };
+        assert!(matches!(
+            payload.validate(),
+            Err(RepairValidationError::BlankString { field: "reason" })
+        ));
+    }
+
+    #[test]
+    fn worker_signature_payload_rejects_empty_manifest_digest() {
+        let payload = RepairWorkerSignaturePayloadV1 {
+            version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
+            ticket_id: RepairTicketId("REP-502".into()),
+            manifest_digest: [0u8; 32],
+            provider_id: provider_id(),
+            worker_id: "ed25519:worker@sora".into(),
+            idempotency_key: "claim-502".into(),
+            action: RepairWorkerActionV1::Claim {
+                claimed_at_unix: 1_704_361_900,
+            },
+        };
+        assert!(matches!(
+            payload.validate(),
+            Err(RepairValidationError::EmptyString {
+                field: "manifest_digest"
+            })
+        ));
+    }
+
+    #[test]
+    fn repair_audit_event_roundtrips() {
+        let payload = RepairTaskEventV1 {
+            version: REPAIR_TASK_EVENT_VERSION_V1,
+            ticket_id: RepairTicketId("REP-600".into()),
+            status: RepairTaskStatusV1::Queued,
+            occurred_at_unix: 1_704_400_000,
+            actor: Some("worker#sora".into()),
+            message: Some("queued".into()),
+        };
+        let digest = iroha_crypto::Hash::new(payload.encode());
+        let header = SorafsAuditHeaderV1 {
+            sequence: 7,
+            occurred_at_unix: 1_704_400_000,
+            signer: "auditor#sora".into(),
+            payload_digest: *digest.as_ref(),
+        };
+        let event = RepairAuditEventV1 {
+            version: REPAIR_AUDIT_EVENT_VERSION_V1,
+            header,
+            payload,
+        };
+        let bytes = event.encode();
+        let mut input = bytes.as_slice();
+        let decoded = RepairAuditEventV1::decode(&mut input).expect("decode repair audit event");
+        assert_eq!(decoded, event);
+    }
+
+    #[test]
+    fn gc_audit_event_roundtrips() {
+        let payload = GcAuditPayloadV1 {
+            version: GC_AUDIT_PAYLOAD_VERSION_V1,
+            manifest_digest: manifest_digest(),
+            provider_id: provider_id(),
+            evicted_at_unix: 1_704_400_100,
+            freed_bytes: 4_096,
+            reason: "retention_expired".into(),
+        };
+        let digest = iroha_crypto::Hash::new(payload.encode());
+        let header = SorafsAuditHeaderV1 {
+            sequence: 8,
+            occurred_at_unix: 1_704_400_100,
+            signer: "operator#sora".into(),
+            payload_digest: *digest.as_ref(),
+        };
+        let event = GcAuditEventV1 {
+            version: GC_AUDIT_EVENT_VERSION_V1,
+            header,
+            payload,
+        };
+        let bytes = event.encode();
+        let mut input = bytes.as_slice();
+        let decoded = GcAuditEventV1::decode(&mut input).expect("decode gc audit event");
+        assert_eq!(decoded, event);
     }
 }

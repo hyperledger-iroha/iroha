@@ -31,6 +31,26 @@ discovery_enabled = true
 known_capabilities = ["torii_gateway", "chunk_range_fetch"]
 admission_envelopes_dir = "configs/soranexus/testus/sorafs_admission"
 
+[sorafs.repair]
+enabled = false
+# db_dsn = "postgres://sorafs/sorafs_repair"
+db_pool_max_connections = 8
+claim_ttl_secs = 900
+heartbeat_interval_secs = 60
+max_attempts = 3
+worker_concurrency = 4
+backoff_initial_secs = 5
+backoff_max_secs = 60
+
+[sorafs.gc]
+enabled = false
+# db_dsn = "postgres://sorafs/sorafs_gc"
+db_pool_max_connections = 4
+interval_secs = 900
+max_deletions_per_run = 500
+retention_grace_secs = 86400
+pre_admission_sweep = true
+
 [sumeragi]
 da_enabled = true
 

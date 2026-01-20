@@ -232,7 +232,7 @@ test("Local-8 payloads emit dedicated error code", () => {
     },
   );
 
-  const literal = `0x${Buffer.from(truncated).toString("hex")}@wonderland`;
+  const literal = `0x${Buffer.from(truncated).toString("hex")}`;
   assert.throws(
     () => inspectAccountId(literal),
     (error) =>

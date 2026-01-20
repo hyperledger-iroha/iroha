@@ -364,7 +364,8 @@ mod tests {
             manifest::{ChunkCommitment, ChunkRole, DaManifestV1},
             types::{
                 BlobClass, BlobCodec, BlobDigest, ChunkDigest, DaRentQuote, ErasureProfile,
-                ExtraMetadata, FecScheme, RetentionPolicy, StorageTicketId,
+                ExtraMetadata, FecScheme, MetadataEntry, MetadataVisibility, RetentionPolicy,
+                StorageTicketId,
             },
         },
         nexus::LaneId,
@@ -747,6 +748,30 @@ mod tests {
         let total_stripes = plan.chunks.len().div_ceil(data_shards) as u32;
         let shards_per_stripe =
             u32::from(profile.data_shards.saturating_add(profile.parity_shards));
+        let metadata = ExtraMetadata {
+            items: vec![
+                MetadataEntry::new(
+                    "taikai.event_id",
+                    b"demo-event".to_vec(),
+                    MetadataVisibility::Public,
+                ),
+                MetadataEntry::new(
+                    "taikai.stream_id",
+                    b"demo-stream".to_vec(),
+                    MetadataVisibility::Public,
+                ),
+                MetadataEntry::new(
+                    "taikai.rendition_id",
+                    b"demo-rendition".to_vec(),
+                    MetadataVisibility::Public,
+                ),
+                MetadataEntry::new(
+                    "taikai.segment.sequence",
+                    b"1".to_vec(),
+                    MetadataVisibility::Public,
+                ),
+            ],
+        };
         DaManifestV1 {
             version: DaManifestV1::VERSION,
             client_blob_id: BlobDigest::new(*plan.payload_digest.as_bytes()),
@@ -766,7 +791,7 @@ mod tests {
             rent_quote: DaRentQuote::default(),
             chunks,
             ipa_commitment: BlobDigest::new([0u8; 32]),
-            metadata: ExtraMetadata::default(),
+            metadata,
             issued_at_unix: 0,
         }
     }

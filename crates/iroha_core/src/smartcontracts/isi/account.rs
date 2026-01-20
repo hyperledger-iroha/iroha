@@ -378,6 +378,7 @@ pub mod query {
                     metadata: details.metadata,
                     label: details.label,
                     uaid: details.uaid,
+                    opaque_ids: details.opaque_ids,
                 };
                 filter.applies(&account).then_some(account)
             }))
@@ -415,6 +416,7 @@ pub mod query {
                     metadata: details.metadata,
                     label: details.label,
                     uaid: details.uaid,
+                    opaque_ids: details.opaque_ids,
                 };
                 filter.applies(&account).then_some(account)
             }))

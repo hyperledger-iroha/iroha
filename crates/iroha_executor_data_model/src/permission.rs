@@ -404,6 +404,7 @@ pub mod governance {
 /// Permission tokens governing `SoraFS` operations.
 pub mod sorafs {
     use super::*;
+    use iroha_data_model::sorafs::prelude::ProviderId;
 
     permission! {
         /// Permission to register a `SoraFS` manifest pin.
@@ -469,6 +470,15 @@ pub mod sorafs {
         /// Permission to upsert `SoraFS` provider credit records.
         #[derive(Copy)]
         pub struct CanUpsertSorafsProviderCredit;
+    }
+
+    permission! {
+        /// Permission to operate `SoraFS` repair tickets for a provider.
+        #[derive(Copy)]
+        pub struct CanOperateSorafsRepair {
+            /// Provider identifier governed by this permission.
+            pub provider_id: ProviderId,
+        }
     }
 
     permission! {

@@ -1031,8 +1031,14 @@ mod tests {
         );
         mailbox.fill_slots(&budgets);
 
-        let selected =
-            select_next_tier(now, &mailbox, &budgets, &loop_state.last_served, &cfg, false);
+        let selected = select_next_tier(
+            now,
+            &mailbox,
+            &budgets,
+            &loop_state.last_served,
+            &cfg,
+            false,
+        );
         assert_eq!(selected, Some(PriorityTier::BlockPayload));
     }
 
@@ -6996,10 +7002,7 @@ fn drain_mailbox<A: WorkerActor>(
     stats: &mut WorkerIterationStats,
     last_served: &mut [Instant; PRIORITY_TIER_COUNT],
 ) {
-    let vote_burst = cfg
-        .vote_rx_drain_max_messages
-        .min(VOTE_BURST_CAP)
-        .max(1);
+    let vote_burst = cfg.vote_rx_drain_max_messages.min(VOTE_BURST_CAP).max(1);
     loop {
         if iter_start.elapsed() >= cfg.time_budget {
             stats.budget_exceeded = true;

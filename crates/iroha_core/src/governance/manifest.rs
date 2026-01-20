@@ -1184,6 +1184,7 @@ mod tests {
         nexus::{LaneCatalog, LaneConfig},
         prelude::Name,
     };
+    use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;
     use tempfile::tempdir;
 
@@ -1531,9 +1532,12 @@ mod tests {
             .insert("parliament".to_string(), ConfigGovernanceModule::default());
         let dir = tempdir().expect("tmp dir");
         let path = dir.path().join("gov.manifest.json");
+        let alice = ALICE_ID.to_string();
         fs::write(
             &path,
-            r#"{"lane":"gov","governance":"parliament","validators":["sora@wonderland"],"quorum":2}"#,
+            format!(
+                r#"{{"lane":"gov","governance":"parliament","validators":["{alice}"],"quorum":2}}"#
+            ),
         )
         .expect("write manifest");
         let registry_cfg = LaneRegistry {
@@ -1564,24 +1568,28 @@ mod tests {
             .insert("parliament".to_string(), ConfigGovernanceModule::default());
         let dir = tempdir().expect("tmp dir");
         let path = dir.path().join("gov.manifest.json");
+        let alice = ALICE_ID.to_string();
+        let bob = BOB_ID.to_string();
         fs::write(
             &path,
-            r#"{
+            format!(
+                r#"{{
                 "lane": "gov",
                 "governance": "parliament",
-                "validators": ["  sora@wonderland  ", "   sora@wonderland  ", "kagami@wonderland"],
+                "validators": ["  {alice}  ", "   {alice}  ", "{bob}"],
                 "quorum": 2,
                 "protected_namespaces": [" treasury ", "compliance"],
-                "hooks": {
-                    "runtime_upgrade": {
+                "hooks": {{
+                    "runtime_upgrade": {{
                         "allow": true,
                         "require_metadata": true,
                         "metadata_key": "gov_upgrade_id",
                         "allowed_ids": [" upgrade-q1 "]
-                    },
-                    "custom_hook": {"uri":"https://example.com"}
-                }
-            }"#,
+                    }},
+                    "custom_hook": {{"uri":"https://example.com"}}
+                }}
+            }}"#
+            ),
         )
         .expect("write manifest");
         let registry_cfg = LaneRegistry {
@@ -1647,12 +1655,16 @@ mod tests {
             .insert("parliament".to_string(), ConfigGovernanceModule::default());
 
         let dir = tempdir().expect("tmp dir");
-        let manifest_body = r#"{
+        let alice = ALICE_ID.to_string();
+        let bob = BOB_ID.to_string();
+        let manifest_body = format!(
+            r#"{{
             "lane": "%ALIAS%",
             "governance": "parliament",
-            "validators": ["alice@wonderland", "bob@wonderland"],
+            "validators": ["{alice}", "{bob}"],
             "quorum": 2
-        }"#;
+        }}"#
+        );
         for alias in ["core", "payments"] {
             let path = dir.path().join(format!("{alias}.manifest.json"));
             let body = manifest_body.replace("%ALIAS%", alias);

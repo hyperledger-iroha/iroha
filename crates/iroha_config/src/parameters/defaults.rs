@@ -1024,6 +1024,42 @@ pub mod sorafs {
         }
     }
 
+    /// Defaults for the SoraFS repair scheduler configuration.
+    pub mod repair {
+        /// Enable the repair scheduler (disabled by default).
+        pub const ENABLED: bool = false;
+        /// Maximum number of database connections in the repair pool.
+        pub const DB_POOL_MAX_CONNECTIONS: u32 = 8;
+        /// Default claim lease TTL for repair tickets (seconds).
+        pub const CLAIM_TTL_SECS: u64 = 15 * 60;
+        /// Heartbeat interval/TTL for active repair claims (seconds).
+        pub const HEARTBEAT_INTERVAL_SECS: u64 = 60;
+        /// Maximum number of repair attempts before escalation.
+        pub const MAX_ATTEMPTS: u32 = 3;
+        /// Concurrent repair workers per node.
+        pub const WORKER_CONCURRENCY: usize = 4;
+        /// Initial retry backoff for repair workers (seconds).
+        pub const BACKOFF_INITIAL_SECS: u64 = 5;
+        /// Maximum retry backoff for repair workers (seconds).
+        pub const BACKOFF_MAX_SECS: u64 = 60;
+    }
+
+    /// Defaults for the SoraFS GC scheduler configuration.
+    pub mod gc {
+        /// Enable the GC worker (disabled by default).
+        pub const ENABLED: bool = false;
+        /// Maximum number of database connections in the GC pool.
+        pub const DB_POOL_MAX_CONNECTIONS: u32 = 4;
+        /// GC cadence (seconds).
+        pub const INTERVAL_SECS: u64 = 15 * 60;
+        /// Maximum deletions per GC run.
+        pub const MAX_DELETIONS_PER_RUN: u32 = 500;
+        /// Grace window for retention expiry (seconds).
+        pub const RETENTION_GRACE_SECS: u64 = 24 * 60 * 60;
+        /// Attempt a GC sweep before rejecting new pins when storage is full.
+        pub const PRE_ADMISSION_SWEEP: bool = true;
+    }
+
     /// Defaults for the Proof-of-Retrievability coordinator runtime.
     pub mod por {
         use std::path::PathBuf;
@@ -1439,8 +1475,6 @@ pub mod torii {
     pub fn zk_prover_allowed_circuits() -> Vec<String> {
         Vec::new()
     }
-    /// Require canonical IH58/compressed addresses at Torii boundaries.
-    pub const STRICT_ADDRESSES: bool = true;
     /// Emit Torii filter debug traces (developer diagnostics only).
     pub const DEBUG_MATCH_FILTERS: bool = false;
     /// Default Torii API version used when clients omit the header.

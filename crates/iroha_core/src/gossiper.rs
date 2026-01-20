@@ -1442,6 +1442,7 @@ mod tests {
             require_sm_handshake_match: defaults::network::REQUIRE_SM_HANDSHAKE_MATCH,
             require_sm_openssl_preview_match: defaults::network::REQUIRE_SM_OPENSSL_PREVIEW_MATCH,
             idle_timeout: defaults::network::IDLE_TIMEOUT,
+            connect_startup_delay: defaults::network::CONNECT_STARTUP_DELAY,
             peer_gossip_period: defaults::network::PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: defaults::network::PEER_GOSSIP_PERIOD,
             trust_gossip: defaults::network::TRUST_GOSSIP,
