@@ -100,6 +100,7 @@ pub(super) struct ProposalBackpressure {
     pub(super) active_pending: bool,
     pub(super) rbc_backlog: bool,
     pub(super) relay_backpressure: bool,
+    pub(super) consensus_queue_backpressure: bool,
 }
 
 impl ProposalBackpressure {
@@ -108,12 +109,26 @@ impl ProposalBackpressure {
             || self.active_pending
             || self.rbc_backlog
             || self.relay_backpressure
+            || self.consensus_queue_backpressure
     }
 
     pub(super) fn only_queue_saturation(self) -> bool {
         self.queue_state.is_saturated()
-            && !(self.active_pending || self.rbc_backlog || self.relay_backpressure)
+            && !(self.active_pending
+                || self.rbc_backlog
+                || self.relay_backpressure
+                || self.consensus_queue_backpressure)
     }
+}
+
+fn consensus_queue_backpressure(
+    depths: status::WorkerQueueDepthSnapshot,
+    block_payload_cap: usize,
+    rbc_chunk_cap: usize,
+) -> bool {
+    let block_payload_cap = u64::try_from(block_payload_cap.max(1)).unwrap_or(u64::MAX);
+    let rbc_chunk_cap = u64::try_from(rbc_chunk_cap.max(1)).unwrap_or(u64::MAX);
+    depths.block_payload_rx >= block_payload_cap || depths.rbc_chunk_rx >= rbc_chunk_cap
 }
 
 fn da_payload_budget(
@@ -1292,6 +1307,12 @@ impl Actor {
         let queue_state = self.subsystems.propose.backpressure_gate.state();
         let active_pending = self.has_blocking_pending_blocks();
         let mut rbc_backlog = self.has_unresolved_rbc_backlog();
+        let queue_depths = status::worker_queue_depth_snapshot();
+        let consensus_queue_backpressure = consensus_queue_backpressure(
+            queue_depths,
+            self.config.msg_channel_cap_block_payload,
+            self.config.msg_channel_cap_rbc_chunks,
+        );
         let relay_backpressure = if self.backpressure_override_due(now) {
             // Liveness override: don't let prolonged relay/RBC backpressure stall proposals.
             rbc_backlog = false;
@@ -1304,6 +1325,7 @@ impl Actor {
             active_pending,
             rbc_backlog,
             relay_backpressure,
+            consensus_queue_backpressure,
         }
     }
 
@@ -1311,6 +1333,147 @@ impl Actor {
         max_in_block
             .get()
             .saturating_mul(self.config.proposal_queue_scan_multiplier.get())
+    }
+
+    fn maybe_rebroadcast_cached_proposal(
+        &mut self,
+        height: u64,
+        view: u64,
+        highest_qc: crate::sumeragi::consensus::QcHeaderRef,
+        pending_queue_len: usize,
+        now: Instant,
+    ) {
+        let Some(proposal) = self
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(height, view)
+            .cloned()
+        else {
+            return;
+        };
+
+        let (pending_block, block_hash) = {
+            let Some(pending) = self.pending.pending_blocks.values().find(|pending| {
+                !pending.aborted
+                    && pending.height == height
+                    && pending.view == view
+                    && pending.payload_hash == proposal.payload_hash
+            }) else {
+                trace!(
+                    height,
+                    view,
+                    payload = %proposal.payload_hash,
+                    "skipping cached proposal rebroadcast: pending block not found"
+                );
+                return;
+            };
+            (pending.block.clone(), pending.block.hash())
+        };
+
+        let proposal_roster = self
+            .roster_from_commit_qc_history_roll_forward(height, Some(highest_qc.subject_block_hash))
+            .unwrap_or_else(|| self.effective_commit_topology());
+        if proposal_roster.is_empty() {
+            trace!(
+                height,
+                view, "skipping cached proposal rebroadcast: empty commit topology"
+            );
+            return;
+        }
+        let mut topology = super::network_topology::Topology::new(proposal_roster);
+        let leader_index = match self.leader_index_for(&mut topology, height, view) {
+            Ok(idx) => idx,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    height, view, "failed to compute leader index for cached proposal rebroadcast"
+                );
+                return;
+            }
+        };
+
+        let Some(local_pos) = topology.position(self.common_config.peer.id().public_key()) else {
+            trace!(
+                height,
+                view, "skipping cached proposal rebroadcast: local peer not in validator set"
+            );
+            return;
+        };
+        if local_pos != leader_index {
+            trace!(
+                height,
+                view,
+                local_idx = local_pos,
+                leader_index,
+                "skipping cached proposal rebroadcast: local peer is not leader"
+            );
+            return;
+        }
+
+        let cooldown = self.payload_rebroadcast_cooldown();
+        if self.relay_backpressure_active(now, cooldown) {
+            trace!(
+                height,
+                view, "skipping cached proposal rebroadcast due to relay backpressure"
+            );
+            return;
+        }
+        if !self
+            .proposal_rebroadcast_log
+            .allow(block_hash, now, cooldown)
+        {
+            trace!(
+                height,
+                view,
+                block = %block_hash,
+                cooldown_ms = cooldown.as_millis(),
+                "skipping cached proposal rebroadcast due to cooldown"
+            );
+            return;
+        }
+
+        let local_peer_id = self.common_config.peer.id().clone();
+        let proposal_msg = BlockMessage::Proposal(proposal);
+        for peer in topology.iter() {
+            if peer == &local_peer_id {
+                continue;
+            }
+            self.schedule_background(BackgroundRequest::Post {
+                peer: peer.clone(),
+                msg: proposal_msg.clone(),
+            });
+        }
+
+        let block_created = super::message::BlockCreated {
+            block: pending_block,
+        };
+        let block_msg = BlockMessage::BlockCreated(block_created);
+        for peer in topology.iter() {
+            if peer == &local_peer_id {
+                continue;
+            }
+            self.schedule_background(BackgroundRequest::Post {
+                peer: peer.clone(),
+                msg: block_msg.clone(),
+            });
+        }
+
+        if pending_queue_len > 0 {
+            iroha_logger::info!(
+                height,
+                view,
+                block = %block_hash,
+                "rebroadcasting cached proposal"
+            );
+        } else {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                "rebroadcasting cached proposal"
+            );
+        }
     }
 
     pub(super) fn on_pacemaker_backpressure_deferral(
@@ -1335,6 +1498,55 @@ impl Actor {
             relay_backpressure,
             "Pacemaker deferred proposal assembly due to backpressure"
         );
+    }
+
+    fn maybe_rebroadcast_new_view_votes(&mut self, height: u64, now: Instant) {
+        if self.is_observer() {
+            return;
+        }
+        let target = self
+            .subsystems
+            .propose
+            .new_view_tracker
+            .entries
+            .iter()
+            .rev()
+            .find(|((entry_height, _), _)| *entry_height == height)
+            .map(|(key, entry)| (*key, entry.highest_qc.subject_block_hash));
+        let Some(((target_height, target_view), block_hash)) = target else {
+            return;
+        };
+        let cooldown = self.rebroadcast_cooldown();
+        if !self.new_view_rebroadcast_log.allow(
+            block_hash,
+            target_height,
+            target_view,
+            now,
+            cooldown,
+        ) {
+            trace!(
+                height = target_height,
+                view = target_view,
+                block = ?block_hash,
+                cooldown_ms = cooldown.as_millis(),
+                "skipping NEW_VIEW vote rebroadcast due to cooldown"
+            );
+            return;
+        }
+        let rebroadcasted = self.rebroadcast_block_votes(
+            crate::sumeragi::consensus::Phase::NewView,
+            block_hash,
+            target_height,
+            target_view,
+        );
+        if rebroadcasted == 0 {
+            debug!(
+                height = target_height,
+                view = target_view,
+                block = ?block_hash,
+                "no NEW_VIEW votes available for rebroadcast"
+            );
+        }
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1625,6 +1837,7 @@ impl Actor {
                     "deferring proposal: awaiting NEW_VIEW quorum"
                 );
             }
+            self.maybe_rebroadcast_new_view_votes(tracked_height, now);
             return false;
         };
 
@@ -1675,6 +1888,15 @@ impl Actor {
             .get_proposal(height, view_idx)
             .is_some()
         {
+            // Rebroadcast cached proposals when the leader is still responsible for the slot so
+            // peers that missed the initial messages can recover without forcing a view change.
+            self.maybe_rebroadcast_cached_proposal(
+                height,
+                view_idx,
+                highest_qc,
+                pending_queue_len,
+                now,
+            );
             if pending_queue_len > 0 {
                 iroha_logger::info!(
                     height,
@@ -2120,7 +2342,12 @@ impl Actor {
 
 #[cfg(test)]
 mod tests {
-    use super::{da_payload_budget, trim_batch_for_size_cap};
+    use super::{
+        ProposalBackpressure, consensus_queue_backpressure, da_payload_budget,
+        trim_batch_for_size_cap,
+    };
+    use crate::queue::BackpressureState;
+    use crate::sumeragi::status;
     use std::num::NonZeroUsize;
 
     #[test]
@@ -2142,6 +2369,21 @@ mod tests {
     fn da_payload_budget_honors_pending_caps() {
         let budget = da_payload_budget(256 * 1024, 4 * 1024, 1, None, 64 * 1024);
         assert_eq!(budget, 4 * 1024);
+    }
+
+    #[test]
+    fn consensus_queue_backpressure_flags_full_queues() {
+        let mut depths = status::WorkerQueueDepthSnapshot::default();
+        depths.block_payload_rx = 2;
+        assert!(consensus_queue_backpressure(depths, 2, 10));
+
+        depths.block_payload_rx = 1;
+        depths.rbc_chunk_rx = 5;
+        assert!(consensus_queue_backpressure(depths, 10, 5));
+
+        depths.block_payload_rx = 1;
+        depths.rbc_chunk_rx = 4;
+        assert!(!consensus_queue_backpressure(depths, 10, 5));
     }
 
     #[test]
@@ -2175,5 +2417,43 @@ mod tests {
         assert_eq!(txs.len(), 1);
         assert_eq!(routes.len(), 1);
         assert_eq!(sizes.len(), 1);
+    }
+
+    #[test]
+    fn consensus_queue_backpressure_trips_on_payload_or_rbc_queue() {
+        let depths = super::status::WorkerQueueDepthSnapshot {
+            block_payload_rx: 4,
+            ..super::status::WorkerQueueDepthSnapshot::default()
+        };
+        assert!(consensus_queue_backpressure(depths, 4, 8));
+
+        let depths = super::status::WorkerQueueDepthSnapshot {
+            rbc_chunk_rx: 8,
+            ..super::status::WorkerQueueDepthSnapshot::default()
+        };
+        assert!(consensus_queue_backpressure(depths, 4, 8));
+
+        let depths = super::status::WorkerQueueDepthSnapshot {
+            block_payload_rx: 3,
+            rbc_chunk_rx: 7,
+            ..super::status::WorkerQueueDepthSnapshot::default()
+        };
+        assert!(!consensus_queue_backpressure(depths, 4, 8));
+    }
+
+    #[test]
+    fn proposal_backpressure_defers_on_consensus_queue_backpressure() {
+        let backpressure = ProposalBackpressure {
+            queue_state: BackpressureState::Healthy {
+                queued: 0,
+                capacity: NonZeroUsize::new(1).expect("non-zero"),
+            },
+            active_pending: false,
+            rbc_backlog: false,
+            relay_backpressure: false,
+            consensus_queue_backpressure: true,
+        };
+        assert!(backpressure.should_defer());
+        assert!(!backpressure.only_queue_saturation());
     }
 }

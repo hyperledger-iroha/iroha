@@ -5,6 +5,31 @@ use iroha_logger::prelude::*;
 use super::*;
 
 impl Actor {
+    pub(super) fn rbc_availability_unresolved_for_reschedule(
+        &self,
+        key: super::rbc_store::SessionKey,
+        commit_topology: &super::network_topology::Topology,
+    ) -> bool {
+        if !self.runtime_da_enabled() {
+            return false;
+        }
+        if self.subsystems.da_rbc.rbc.pending.contains_key(&key) {
+            return true;
+        }
+        let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) else {
+            return false;
+        };
+        if session.is_invalid() {
+            return false;
+        }
+        let missing_chunks =
+            session.total_chunks() != 0 && session.received_chunks() < session.total_chunks();
+        let required = self.rbc_deliver_quorum(commit_topology);
+        let ready_quorum = session.ready_signatures.len() >= required;
+        let payload_available = self.block_payload_available_locally(key.0) || session.delivered;
+        missing_chunks || !ready_quorum || !payload_available
+    }
+
     #[allow(clippy::too_many_lines)]
     pub(super) fn reschedule_stale_pending_blocks(&mut self) -> bool {
         if self.pending.pending_blocks.is_empty() {
@@ -158,6 +183,18 @@ impl Actor {
                     )
                 };
             if missing_quorum_stale(pending_age, quorum_timeout, quorum_reached) {
+                let rbc_key = (*hash, pending.height, pending.view);
+                if self.rbc_availability_unresolved_for_reschedule(rbc_key, &commit_topology) {
+                    debug!(
+                        height = pending.height,
+                        view = pending.view,
+                        block = %hash,
+                        pending_age_ms = pending_age.as_millis(),
+                        quorum_timeout_ms = quorum_timeout.as_millis(),
+                        "deferring quorum reschedule while RBC availability is unresolved"
+                    );
+                    continue;
+                }
                 if matches!(pending.last_gate, Some(GateReason::MissingLocalData))
                     && pending_age < availability_timeout
                 {

@@ -97,19 +97,74 @@ fn start_network(
     sandbox::start_network_blocking_or_skip(builder, context)
 }
 
-#[test]
-fn commit_time() -> eyre::Result<()> {
+#[allow(clippy::float_cmp)]
+#[tokio::test]
+async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
     let builder = builder_with_full_telemetry()
         .with_peers(4)
-        .with_default_pipeline_time();
-    let Some((network, rt)) = start_network(builder, stringify!(commit_time))? else {
+        .with_pipeline_time(std::time::Duration::from_secs(2));
+    let Some(network) =
+        sandbox::start_network_async_or_skip(builder, stringify!(telemetry_permissioned_smoke))
+            .await?
+    else {
         return Ok(());
     };
 
+    // misc_measurements (genesis metrics) before submitting extra transactions
+    let metrics = reqwest::get(network.client().torii_url.join("/metrics").unwrap())
+        .await?
+        .text()
+        .await?;
+    println!("{metrics}");
+    let metrics = MetricsReader::new(&metrics);
+
+    let keys = metrics
+        .keys()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    for key in TELEMETRY_REQUIRED_KEYS {
+        assert!(
+            keys.contains(key),
+            "missing metric key {key}; available keys: {keys:?}"
+        );
+    }
+
+    assert_eq!(metrics.get("tx_amount_sum"), 57.0);
+    assert_eq!(metrics.get("tx_amount_count"), 2.0);
+    assert_eq!(metrics.get("tx_amount_bucket{le=\"0\"}"), 0.0);
+    assert_eq!(metrics.get("tx_amount_bucket{le=\"1000\"}"), 2.0);
+    assert_eq!(metrics.get("domains"), 3.0);
+    assert_eq!(metrics.get("accounts{domain=\"genesis\"}"), 1.0);
+    assert_eq!(metrics.get("accounts{domain=\"wonderland\"}"), 2.0);
+    assert_eq!(
+        metrics.get("accounts{domain=\"garden_of_live_flowers\"}"),
+        1.0
+    );
+
+    // fetch_online_peers
+    for peer in network.peers() {
+        let others: HashSet<_> = network
+            .peers()
+            .iter()
+            .filter(|x| x.id() != peer.id())
+            .map(|x| Peer::new(x.p2p_address(), x.id()))
+            .collect();
+
+        let response_body = reqwest::get(peer.client().torii_url.join("/peers").unwrap())
+            .await?
+            .text()
+            .await?;
+        let response: HashSet<Peer> = norito::json::from_str(&response_body)
+            .map_err(|err| eyre::Report::msg(format!("decode peers response: {err}")))?;
+
+        assert_eq!(response, others);
+    }
+
+    // commit_time
     network
         .client()
         .submit_blocking(Log::new(Level::INFO, "mewo".to_owned()))?;
-    rt.block_on(network.ensure_blocks_with(|x| x.non_empty >= 2))?;
+    network.ensure_blocks_with(|x| x.non_empty >= 2).await?;
 
     for client in network
         .peers()
@@ -149,82 +204,6 @@ fn status_reports_npos_mode_tag_on_start() -> eyre::Result<()> {
         "expected /status mode_tag to be {NPOS_TAG}, got {}",
         sumeragi.mode_tag
     );
-
-    Ok(())
-}
-
-#[allow(clippy::float_cmp)]
-#[tokio::test]
-async fn misc_measurements() -> eyre::Result<()> {
-    let builder = builder_with_full_telemetry();
-    let Some(network) =
-        sandbox::start_network_async_or_skip(builder, stringify!(misc_measurements)).await?
-    else {
-        return Ok(());
-    };
-
-    let metrics = reqwest::get(network.client().torii_url.join("/metrics").unwrap())
-        .await?
-        .text()
-        .await?;
-    println!("{metrics}");
-    let metrics = MetricsReader::new(&metrics);
-
-    let keys = metrics
-        .keys()
-        .map(String::as_str)
-        .collect::<std::collections::BTreeSet<_>>();
-    for key in TELEMETRY_REQUIRED_KEYS {
-        assert!(
-            keys.contains(key),
-            "missing metric key {key}; available keys: {keys:?}"
-        );
-    }
-
-    // genesis measurements
-    assert_eq!(metrics.get("tx_amount_sum"), 57.0);
-    assert_eq!(metrics.get("tx_amount_count"), 2.0);
-    assert_eq!(metrics.get("tx_amount_bucket{le=\"0\"}"), 0.0);
-    assert_eq!(metrics.get("tx_amount_bucket{le=\"1000\"}"), 2.0);
-    assert_eq!(metrics.get("domains"), 3.0);
-    assert_eq!(metrics.get("accounts{domain=\"genesis\"}"), 1.0);
-    assert_eq!(metrics.get("accounts{domain=\"wonderland\"}"), 2.0);
-    assert_eq!(
-        metrics.get("accounts{domain=\"garden_of_live_flowers\"}"),
-        1.0
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn fetch_online_peers() -> eyre::Result<()> {
-    let builder = builder_with_full_telemetry()
-        .with_peers(4)
-        .with_default_pipeline_time();
-    let Some(network) =
-        sandbox::start_network_async_or_skip(builder, stringify!(fetch_online_peers)).await?
-    else {
-        return Ok(());
-    };
-
-    for peer in network.peers() {
-        let others: HashSet<_> = network
-            .peers()
-            .iter()
-            .filter(|x| x.id() != peer.id())
-            .map(|x| Peer::new(x.p2p_address(), x.id()))
-            .collect();
-
-        let response_body = reqwest::get(peer.client().torii_url.join("/peers").unwrap())
-            .await?
-            .text()
-            .await?;
-        let response: HashSet<Peer> = norito::json::from_str(&response_body)
-            .map_err(|err| eyre::Report::msg(format!("decode peers response: {err}")))?;
-
-        assert_eq!(response, others);
-    }
 
     Ok(())
 }

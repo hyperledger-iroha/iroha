@@ -85,6 +85,12 @@ fn roster_has_duplicates(roster: &[PeerId]) -> bool {
     false
 }
 
+fn normalize_rbc_block_header(mut header: BlockHeader) -> BlockHeader {
+    // Result merkle root is excluded from consensus hashing, so ignore it for RBC header matching.
+    header.result_merkle_root = None;
+    header
+}
+
 #[derive(Debug)]
 pub(super) struct RbcPersistWork {
     pub(super) key: SessionKey,
@@ -380,7 +386,8 @@ pub(super) fn rbc_chunk_target_count(roster_len: usize, fanout_cap: Option<NonZe
     };
     // Ensure a commit quorum of peers receives chunks even if the leader is excluded.
     let min_targets = commit_quorum.min(peers);
-    let desired = fanout_cap.map_or(min_targets, |cap| cap.get().min(peers));
+    // Default to the full roster so RBC can reach READY quorum even with up to f faulty peers.
+    let desired = fanout_cap.map_or(peers, |cap| cap.get().min(peers));
     desired.max(min_targets)
 }
 
@@ -562,12 +569,12 @@ mod tests {
     }
 
     #[test]
-    fn rbc_chunk_target_count_respects_minimums() {
+    fn rbc_chunk_target_count_defaults_to_full_roster() {
         let roster_len: usize = 7;
         let peers = roster_len.saturating_sub(1);
         let commit_quorum = ((roster_len.saturating_sub(1)) / 3).saturating_mul(2) + 1;
         let expected_min = commit_quorum.min(peers);
-        assert_eq!(rbc_chunk_target_count(roster_len, None), expected_min);
+        assert_eq!(rbc_chunk_target_count(roster_len, None), peers);
         assert_eq!(
             rbc_chunk_target_count(roster_len, NonZeroUsize::new(1)),
             expected_min
@@ -1316,7 +1323,7 @@ impl Actor {
         }
 
         let payload_bytes = block_payload_bytes(block);
-        let session = match Self::build_rbc_session_from_payload(
+        let mut session = match Self::build_rbc_session_from_payload(
             &payload_bytes,
             payload_hash,
             self.config.rbc_chunk_max_bytes,
@@ -1334,8 +1341,44 @@ impl Actor {
             }
         };
 
+        session.block_header = Some(block.header());
+        let roster = self.rbc_roster_for_session(key);
+        if !roster.is_empty() {
+            let mut topology = super::network_topology::Topology::new(roster.clone());
+            match self.leader_index_for(&mut topology, key.1, key.2) {
+                Ok(leader_index) => {
+                    let leader_index = u64::try_from(leader_index).unwrap_or(u64::MAX);
+                    if let Some(signature) = block
+                        .signatures()
+                        .find(|signature| signature.index() == leader_index)
+                    {
+                        session.leader_signature = Some(signature.clone());
+                    } else {
+                        debug!(
+                            height = key.1,
+                            view = key.2,
+                            expected = leader_index,
+                            "leader signature missing while seeding RBC session"
+                        );
+                    }
+                }
+                Err(err) => {
+                    debug!(
+                        height = key.1,
+                        view = key.2,
+                        ?err,
+                        "failed to derive leader index while seeding RBC session"
+                    );
+                }
+            }
+        }
+
         self.subsystems.da_rbc.rbc.sessions.insert(key, session);
-        self.ensure_rbc_session_roster(key);
+        if roster.is_empty() {
+            self.ensure_rbc_session_roster(key);
+        } else {
+            self.record_rbc_session_roster(key, roster, RbcRosterSource::Derived);
+        }
         self.flush_pending_rbc(key)?;
         if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
             self.update_rbc_status_entry(key, &session, false);
@@ -1344,6 +1387,32 @@ impl Actor {
         self.publish_rbc_backlog_snapshot();
         self.maybe_emit_rbc_ready(key)?;
         Ok(())
+    }
+
+    pub(super) fn ensure_rbc_session_from_pending_block(
+        &mut self,
+        key: SessionKey,
+    ) -> Result<bool> {
+        if self.subsystems.da_rbc.rbc.sessions.contains_key(&key) {
+            return Ok(true);
+        }
+        let (block, payload_hash) = {
+            let Some(pending) = self.pending.pending_blocks.get(&key.0) else {
+                return Ok(false);
+            };
+            if pending.height != key.1 || pending.view != key.2 {
+                return Ok(false);
+            }
+            if matches!(
+                pending.validation_status,
+                super::pending_block::ValidationStatus::Invalid
+            ) {
+                return Ok(false);
+            }
+            (pending.block.clone(), pending.payload_hash)
+        };
+        self.seed_rbc_session_from_block(key, &block, payload_hash)?;
+        Ok(self.subsystems.da_rbc.rbc.sessions.contains_key(&key))
     }
 
     /// When a full block payload is available alongside a `BlockCreated` message, ingest it into
@@ -2111,7 +2180,9 @@ impl Actor {
                 }
             }
             if let Some(existing) = session.block_header {
-                if existing != init.block_header {
+                let existing = normalize_rbc_block_header(existing);
+                let incoming = normalize_rbc_block_header(init.block_header);
+                if existing != incoming {
                     warn!(
                         height = init.height,
                         view = init.view,
@@ -2420,7 +2491,13 @@ impl Actor {
                 session.expected_chunk_root = Some(init.chunk_root);
             }
             session.epoch = init.epoch;
-            session.block_header = Some(init.block_header);
+            let mut merged_header = init.block_header;
+            if merged_header.result_merkle_root.is_none() {
+                merged_header.result_merkle_root = session
+                    .block_header
+                    .and_then(|header| header.result_merkle_root);
+            }
+            session.block_header = Some(merged_header);
             session.leader_signature = Some(init.leader_signature);
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
             self.flush_pending_rbc(key)?;
@@ -2457,7 +2534,13 @@ impl Actor {
             }
         };
         let mut session = session;
-        session.block_header = Some(init.block_header);
+        let mut merged_header = init.block_header;
+        if merged_header.result_merkle_root.is_none() {
+            merged_header.result_merkle_root = session
+                .block_header
+                .and_then(|header| header.result_merkle_root);
+        }
+        session.block_header = Some(merged_header);
         session.leader_signature = Some(init.leader_signature);
         if self
             .subsystems
@@ -2798,89 +2881,93 @@ impl Actor {
         let ready_sender = ready.sender;
         let ready_view = ready.view;
         if !self.subsystems.da_rbc.rbc.sessions.contains_key(&key) {
-            let max_bytes = self.pending_rbc_caps().1;
-            let ready_bytes = rbc_ready_stash_bytes(&ready);
-            let (accepted, dropped_bytes, pending_chunks, pending_bytes) = {
-                let Some(pending) = self.pending_rbc_slot(key) else {
-                    let dropped_bytes = u64::try_from(ready_bytes).unwrap_or(u64::MAX);
-                    Self::record_pending_drop_counts(
-                        self.telemetry_handle(),
-                        PendingRbcDropReason::SessionLimit,
-                        1,
+            if self.ensure_rbc_session_from_pending_block(key)? {
+                // Session reconstructed from pending block; continue to process READY normally.
+            } else {
+                let max_bytes = self.pending_rbc_caps().1;
+                let ready_bytes = rbc_ready_stash_bytes(&ready);
+                let (accepted, dropped_bytes, pending_chunks, pending_bytes) = {
+                    let Some(pending) = self.pending_rbc_slot(key) else {
+                        let dropped_bytes = u64::try_from(ready_bytes).unwrap_or(u64::MAX);
+                        Self::record_pending_drop_counts(
+                            self.telemetry_handle(),
+                            PendingRbcDropReason::SessionLimit,
+                            1,
+                            dropped_bytes,
+                        );
+                        warn!(
+                            ?key,
+                            limit = self.config.rbc_pending_session_limit,
+                            ready_sender,
+                            ready_view,
+                            dropped_bytes,
+                            "dropping pending RBC READY: stash session limit reached before INIT"
+                        );
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::RbcReady,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::StashSessionLimit,
+                        );
+                        self.request_missing_block_after_rbc_drop(
+                            key,
+                            PendingRbcDropReason::SessionLimit,
+                            "rbc_ready_stash_limit",
+                        );
+                        return Ok(());
+                    };
+                    let (accepted, dropped_bytes) =
+                        pending.push_ready_capped(ready, max_bytes, Instant::now());
+                    (
+                        accepted,
                         dropped_bytes,
+                        pending.pending_chunks(),
+                        pending.pending_bytes(),
+                    )
+                };
+                if accepted {
+                    status::inc_pending_rbc_stash(
+                        status::PendingRbcStashKind::Ready,
+                        Some(status::PendingRbcStashReason::InitMissing),
                     );
-                    warn!(
+                    info!(
                         ?key,
-                        limit = self.config.rbc_pending_session_limit,
+                        pending_chunks,
+                        pending_bytes,
                         ready_sender,
                         ready_view,
-                        dropped_bytes,
-                        "dropping pending RBC READY: stash session limit reached before INIT"
+                        "stashed RBC READY until INIT arrives"
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::RbcReady,
+                        super::status::ConsensusMessageOutcome::Deferred,
+                        super::status::ConsensusMessageReason::InitMissing,
+                    );
+                    self.request_missing_block_for_pending_rbc(key, "rbc_ready_stash", None);
+                } else {
+                    warn!(
+                        ?key,
+                        max_bytes, "dropping pending RBC READY: stash limits exceeded before INIT"
+                    );
+                    Self::record_pending_drop_counts(
+                        self.telemetry_handle(),
+                        PendingRbcDropReason::Cap,
+                        1,
+                        u64::try_from(dropped_bytes).unwrap_or(u64::MAX),
                     );
                     self.record_consensus_message_handling(
                         super::status::ConsensusMessageKind::RbcReady,
                         super::status::ConsensusMessageOutcome::Dropped,
-                        super::status::ConsensusMessageReason::StashSessionLimit,
+                        super::status::ConsensusMessageReason::StashCap,
                     );
                     self.request_missing_block_after_rbc_drop(
                         key,
-                        PendingRbcDropReason::SessionLimit,
-                        "rbc_ready_stash_limit",
+                        PendingRbcDropReason::Cap,
+                        "rbc_ready_stash_cap",
                     );
-                    return Ok(());
-                };
-                let (accepted, dropped_bytes) =
-                    pending.push_ready_capped(ready, max_bytes, Instant::now());
-                (
-                    accepted,
-                    dropped_bytes,
-                    pending.pending_chunks(),
-                    pending.pending_bytes(),
-                )
-            };
-            if accepted {
-                status::inc_pending_rbc_stash(
-                    status::PendingRbcStashKind::Ready,
-                    Some(status::PendingRbcStashReason::InitMissing),
-                );
-                info!(
-                    ?key,
-                    pending_chunks,
-                    pending_bytes,
-                    ready_sender,
-                    ready_view,
-                    "stashed RBC READY until INIT arrives"
-                );
-                self.record_consensus_message_handling(
-                    super::status::ConsensusMessageKind::RbcReady,
-                    super::status::ConsensusMessageOutcome::Deferred,
-                    super::status::ConsensusMessageReason::InitMissing,
-                );
-                self.request_missing_block_for_pending_rbc(key, "rbc_ready_stash", None);
-            } else {
-                warn!(
-                    ?key,
-                    max_bytes, "dropping pending RBC READY: stash limits exceeded before INIT"
-                );
-                Self::record_pending_drop_counts(
-                    self.telemetry_handle(),
-                    PendingRbcDropReason::Cap,
-                    1,
-                    u64::try_from(dropped_bytes).unwrap_or(u64::MAX),
-                );
-                self.record_consensus_message_handling(
-                    super::status::ConsensusMessageKind::RbcReady,
-                    super::status::ConsensusMessageOutcome::Dropped,
-                    super::status::ConsensusMessageReason::StashCap,
-                );
-                self.request_missing_block_after_rbc_drop(
-                    key,
-                    PendingRbcDropReason::Cap,
-                    "rbc_ready_stash_cap",
-                );
+                }
+                self.publish_rbc_backlog_snapshot();
+                return Ok(());
             }
-            self.publish_rbc_backlog_snapshot();
-            return Ok(());
         }
         let mut topology_peers = self.rbc_session_roster(key);
         let mut roster_source = self
@@ -3506,83 +3593,88 @@ impl Actor {
         }
         let key = Self::session_key(&deliver.block_hash, deliver.height, deliver.view);
         if !self.subsystems.da_rbc.rbc.sessions.contains_key(&key) {
-            let max_bytes = self.pending_rbc_caps().1;
-            let deliver_bytes = rbc_deliver_stash_bytes(&deliver);
-            let (accepted, dropped_bytes, pending_chunks, pending_bytes) = {
-                let Some(pending) = self.pending_rbc_slot(key) else {
-                    let dropped_bytes = u64::try_from(deliver_bytes).unwrap_or(u64::MAX);
-                    Self::record_pending_drop_counts(
-                        self.telemetry_handle(),
-                        PendingRbcDropReason::SessionLimit,
-                        1,
+            if self.ensure_rbc_session_from_pending_block(key)? {
+                // Session reconstructed from pending block; continue to process DELIVER normally.
+            } else {
+                let max_bytes = self.pending_rbc_caps().1;
+                let deliver_bytes = rbc_deliver_stash_bytes(&deliver);
+                let (accepted, dropped_bytes, pending_chunks, pending_bytes) = {
+                    let Some(pending) = self.pending_rbc_slot(key) else {
+                        let dropped_bytes = u64::try_from(deliver_bytes).unwrap_or(u64::MAX);
+                        Self::record_pending_drop_counts(
+                            self.telemetry_handle(),
+                            PendingRbcDropReason::SessionLimit,
+                            1,
+                            dropped_bytes,
+                        );
+                        warn!(
+                            ?key,
+                            limit = self.config.rbc_pending_session_limit,
+                            dropped_bytes,
+                            "dropping pending RBC DELIVER: stash session limit reached before INIT"
+                        );
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::RbcDeliver,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::StashSessionLimit,
+                        );
+                        self.request_missing_block_after_rbc_drop(
+                            key,
+                            PendingRbcDropReason::SessionLimit,
+                            "rbc_deliver_stash_limit",
+                        );
+                        return Ok(());
+                    };
+                    let (accepted, dropped_bytes) =
+                        pending.push_deliver_capped(deliver, max_bytes, Instant::now());
+                    (
+                        accepted,
                         dropped_bytes,
+                        pending.pending_chunks(),
+                        pending.pending_bytes(),
+                    )
+                };
+                if accepted {
+                    status::inc_pending_rbc_stash(
+                        status::PendingRbcStashKind::Deliver,
+                        Some(status::PendingRbcStashReason::InitMissing),
                     );
+                    debug!(
+                        ?key,
+                        pending_chunks, pending_bytes, "stashed RBC DELIVER until INIT arrives"
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::RbcDeliver,
+                        super::status::ConsensusMessageOutcome::Deferred,
+                        super::status::ConsensusMessageReason::InitMissing,
+                    );
+                    self.request_missing_block_for_pending_rbc(key, "rbc_deliver_stash", None);
+                } else {
                     warn!(
                         ?key,
-                        limit = self.config.rbc_pending_session_limit,
-                        dropped_bytes,
-                        "dropping pending RBC DELIVER: stash session limit reached before INIT"
+                        max_bytes,
+                        "dropping pending RBC DELIVER: stash limits exceeded before INIT"
+                    );
+                    Self::record_pending_drop_counts(
+                        self.telemetry_handle(),
+                        PendingRbcDropReason::Cap,
+                        1,
+                        u64::try_from(dropped_bytes).unwrap_or(u64::MAX),
                     );
                     self.record_consensus_message_handling(
                         super::status::ConsensusMessageKind::RbcDeliver,
                         super::status::ConsensusMessageOutcome::Dropped,
-                        super::status::ConsensusMessageReason::StashSessionLimit,
+                        super::status::ConsensusMessageReason::StashCap,
                     );
                     self.request_missing_block_after_rbc_drop(
                         key,
-                        PendingRbcDropReason::SessionLimit,
-                        "rbc_deliver_stash_limit",
+                        PendingRbcDropReason::Cap,
+                        "rbc_deliver_stash_cap",
                     );
-                    return Ok(());
-                };
-                let (accepted, dropped_bytes) =
-                    pending.push_deliver_capped(deliver, max_bytes, Instant::now());
-                (
-                    accepted,
-                    dropped_bytes,
-                    pending.pending_chunks(),
-                    pending.pending_bytes(),
-                )
-            };
-            if accepted {
-                status::inc_pending_rbc_stash(
-                    status::PendingRbcStashKind::Deliver,
-                    Some(status::PendingRbcStashReason::InitMissing),
-                );
-                debug!(
-                    ?key,
-                    pending_chunks, pending_bytes, "stashed RBC DELIVER until INIT arrives"
-                );
-                self.record_consensus_message_handling(
-                    super::status::ConsensusMessageKind::RbcDeliver,
-                    super::status::ConsensusMessageOutcome::Deferred,
-                    super::status::ConsensusMessageReason::InitMissing,
-                );
-                self.request_missing_block_for_pending_rbc(key, "rbc_deliver_stash", None);
-            } else {
-                warn!(
-                    ?key,
-                    max_bytes, "dropping pending RBC DELIVER: stash limits exceeded before INIT"
-                );
-                Self::record_pending_drop_counts(
-                    self.telemetry_handle(),
-                    PendingRbcDropReason::Cap,
-                    1,
-                    u64::try_from(dropped_bytes).unwrap_or(u64::MAX),
-                );
-                self.record_consensus_message_handling(
-                    super::status::ConsensusMessageKind::RbcDeliver,
-                    super::status::ConsensusMessageOutcome::Dropped,
-                    super::status::ConsensusMessageReason::StashCap,
-                );
-                self.request_missing_block_after_rbc_drop(
-                    key,
-                    PendingRbcDropReason::Cap,
-                    "rbc_deliver_stash_cap",
-                );
+                }
+                self.publish_rbc_backlog_snapshot();
+                return Ok(());
             }
-            self.publish_rbc_backlog_snapshot();
-            return Ok(());
         }
         let mut topology_peers = self.rbc_session_roster(key);
         let mut roster_source = self

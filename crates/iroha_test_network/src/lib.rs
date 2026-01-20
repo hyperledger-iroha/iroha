@@ -85,8 +85,8 @@ use tracing::{Instrument, debug, error, info, info_span, warn};
 use crate::config::ensure_genesis_results;
 pub use crate::config::genesis as genesis_factory;
 const DEFAULT_BLOCK_SYNC: Duration = Duration::from_millis(150);
-// Keep the localnet pipeline time aligned with DA-safe defaults to avoid stalls.
-const LOCALNET_PIPELINE_TIME: Duration = Duration::from_secs(6);
+// Fast localnet pipeline time for test networks; callers can opt into Sumeragi defaults.
+const LOCALNET_PIPELINE_TIME: Duration = Duration::from_secs(1);
 // Sumeragi defaults, used only when the builder is explicitly told to keep them.
 const DEFAULT_BLOCK_TIME: Duration = Duration::from_secs(2);
 const DEFAULT_COMMIT_TIME: Duration = Duration::from_secs(4);
@@ -3154,7 +3154,7 @@ impl Default for NetworkBuilder {
 impl NetworkBuilder {
     /// Constructor
     pub fn new() -> Self {
-        // Default to a DA-safe localnet pipeline; use `with_default_pipeline_time` to
+        // Default to a fast localnet pipeline; use `with_default_pipeline_time` to
         // avoid injecting explicit on-chain timings when defaults are sufficient.
         let mut builder = Self {
             env: Environment::new(),
@@ -3508,7 +3508,7 @@ impl NetworkBuilder {
         let sumeragi_overrides = sumeragi_parameters.clone();
 
         // Determine the effective pipeline time we report to tests.
-        // By default we inject a DA-safe localnet pipeline into genesis; callers can opt out
+        // By default we inject a fast localnet pipeline into genesis; callers can opt out
         // via `with_default_pipeline_time`, which keeps the baked-in Sumeragi defaults
         // (2s block, 4s commit) without extra on-chain overrides.
         let (block_time, commit_time) = if let Some(duration) = pipeline_time {

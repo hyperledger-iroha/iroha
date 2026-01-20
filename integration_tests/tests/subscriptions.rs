@@ -146,12 +146,12 @@ async fn wait_for_invoice_status(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[allow(clippy::too_many_lines)]
-async fn subscription_usage_arrears_billing_charges_usage() -> Result<()> {
+async fn subscription_scenarios() -> Result<()> {
     let Some(network) = sandbox::start_network_async_or_skip(
         NetworkBuilder::new()
             .with_peers(4)
-            .with_default_pipeline_time(),
-        stringify!(subscription_usage_arrears_billing_charges_usage),
+            .with_pipeline_time(std::time::Duration::from_secs(2)),
+        stringify!(subscription_scenarios),
     )
     .await?
     else {
@@ -160,6 +160,19 @@ async fn subscription_usage_arrears_billing_charges_usage() -> Result<()> {
     let client = network.client();
     network.ensure_blocks_with(|h| h.total >= 1).await?;
 
+    subscription_usage_arrears_billing_charges_usage_scenario(&network, &client).await?;
+    subscription_fixed_advance_billing_charges_future_period_scenario(&network, &client).await?;
+    subscription_retry_grace_failure_marks_past_due_scenario(&network, &client).await?;
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_lines)]
+async fn subscription_usage_arrears_billing_charges_usage_scenario(
+    network: &sandbox::SerializedNetwork,
+    client: &Client,
+) -> Result<()> {
+    let client = client.clone();
     run_or_skip(
         stringify!(subscription_usage_arrears_billing_charges_usage),
         || async {
@@ -407,22 +420,12 @@ async fn subscription_usage_arrears_billing_charges_usage() -> Result<()> {
     .await
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[allow(clippy::too_many_lines)]
-async fn subscription_fixed_advance_billing_charges_future_period() -> Result<()> {
-    let Some(network) = sandbox::start_network_async_or_skip(
-        NetworkBuilder::new()
-            .with_peers(4)
-            .with_default_pipeline_time(),
-        stringify!(subscription_fixed_advance_billing_charges_future_period),
-    )
-    .await?
-    else {
-        return Ok(());
-    };
-    let client = network.client();
-    network.ensure_blocks_with(|h| h.total >= 1).await?;
-
+async fn subscription_fixed_advance_billing_charges_future_period_scenario(
+    network: &sandbox::SerializedNetwork,
+    client: &Client,
+) -> Result<()> {
+    let client = client.clone();
     run_or_skip(
         stringify!(subscription_fixed_advance_billing_charges_future_period),
         || async {
@@ -612,22 +615,12 @@ async fn subscription_fixed_advance_billing_charges_future_period() -> Result<()
     .await
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[allow(clippy::too_many_lines)]
-async fn subscription_retry_grace_failure_marks_past_due() -> Result<()> {
-    let Some(network) = sandbox::start_network_async_or_skip(
-        NetworkBuilder::new()
-            .with_peers(4)
-            .with_default_pipeline_time(),
-        stringify!(subscription_retry_grace_failure_marks_past_due),
-    )
-    .await?
-    else {
-        return Ok(());
-    };
-    let client = network.client();
-    network.ensure_blocks_with(|h| h.total >= 1).await?;
-
+async fn subscription_retry_grace_failure_marks_past_due_scenario(
+    network: &sandbox::SerializedNetwork,
+    client: &Client,
+) -> Result<()> {
+    let client = client.clone();
     run_or_skip(
         stringify!(subscription_retry_grace_failure_marks_past_due),
         || async {

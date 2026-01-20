@@ -20,67 +20,26 @@ use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use tokio::{task::spawn_blocking, time::Instant};
 
-fn produce_instructions() -> Vec<InstructionBox> {
+fn produce_instructions(prefix: &str) -> (Vec<InstructionBox>, BTreeSet<String>) {
     let domains = (0..4)
-        .map(|domain_index: usize| Domain::new(domain_index.to_string().parse().expect("Valid")));
-
-    domains
+        .map(|domain_index: usize| format!("{prefix}{domain_index}"))
+        .collect::<Vec<_>>();
+    let expected = domains.iter().cloned().collect::<BTreeSet<_>>();
+    let instructions = domains
         .into_iter()
+        .map(|name| Domain::new(name.parse().expect("Valid")))
         .map(Register::domain)
         .map(InstructionBox::from)
-        .collect::<Vec<_>>()
-}
-
-#[tokio::test]
-#[allow(clippy::large_futures)]
-async fn instruction_execution_should_produce_events() -> Result<()> {
-    if sandbox::handle_result(
-        transaction_execution_should_produce_events(
-            stringify!(instruction_execution_should_produce_events),
-            produce_instructions(),
-        )
-        .await,
-        stringify!(instruction_execution_should_produce_events),
-    )?
-    .is_none()
-    {
-        return Ok(());
-    }
-
-    Ok(())
-}
-
-#[tokio::test]
-#[allow(clippy::large_futures)]
-async fn ivm_execution_should_produce_events() -> Result<()> {
-    // Exercise the same event flow using the instruction path to ensure the
-    // event plumbing stays healthy in CI environments where the IVM may be
-    // unavailable or slow to start.
-    if sandbox::handle_result(
-        transaction_execution_should_produce_events(
-            stringify!(ivm_execution_should_produce_events),
-            produce_instructions(),
-        )
-        .await,
-        stringify!(ivm_execution_should_produce_events),
-    )?
-    .is_none()
-    {
-        return Ok(());
-    }
-
-    Ok(())
+        .collect::<Vec<_>>();
+    (instructions, expected)
 }
 
 async fn transaction_execution_should_produce_events(
     context: &'static str,
+    network: &Network,
     executable: impl Into<Executable> + Send,
+    mut expected_domains: BTreeSet<String>,
 ) -> Result<()> {
-    let Some(network) =
-        sandbox::start_network_async_or_skip(NetworkBuilder::new().with_peers(4), context).await?
-    else {
-        return Ok(());
-    };
     // Wait for Torii to come up before subscribing to events.
     let status = get_status_with_retry_async(&network.client())
         .await
@@ -108,7 +67,6 @@ async fn transaction_execution_should_produce_events(
             .ensure_blocks_with(|h| h.non_empty > baseline_non_empty)
             .await?;
 
-        let mut expected_domains: BTreeSet<String> = (0..4).map(|i| i.to_string()).collect();
         let mut unexpected_domains = Vec::new();
         let deadline = Instant::now() + network.sync_timeout();
 
@@ -163,24 +121,15 @@ fn unwrap_data_event(event: EventBox) -> DataEvent {
     }
 }
 
-#[tokio::test]
 #[allow(clippy::too_many_lines)]
-async fn produce_multiple_events() -> Result<()> {
-    let Some(network) = sandbox::start_network_async_or_skip(
-        NetworkBuilder::new().with_peers(4),
-        stringify!(produce_multiple_events),
-    )
-    .await?
-    else {
-        return Ok(());
-    };
+async fn produce_multiple_events_scenario(network: &Network) -> Result<()> {
     let status = get_status_with_retry_async(&network.client())
         .await
         .map_err(|err| err.wrap_err("produce_multiple_events: wait for status"))?;
     let baseline_non_empty = status.blocks_non_empty;
 
     // Register role
-    let role_id = "TEST_ROLE".parse::<RoleId>()?;
+    let role_id = "TEST_ROLE_EVENTS".parse::<RoleId>()?;
     let permission_1 = CanModifyAccountMetadata {
         account: ALICE_ID.clone(),
     };
@@ -364,4 +313,58 @@ async fn produce_multiple_events() -> Result<()> {
 
     events_stream.close().await;
     result
+}
+
+#[tokio::test]
+#[allow(clippy::large_futures, clippy::too_many_lines)]
+async fn data_event_scenarios() -> Result<()> {
+    let Some(network) =
+        sandbox::start_network_async_or_skip(NetworkBuilder::new().with_peers(4), "data_events")
+            .await?
+    else {
+        return Ok(());
+    };
+
+    let (instructions, expected) = produce_instructions("instr");
+    if sandbox::handle_result(
+        transaction_execution_should_produce_events(
+            stringify!(instruction_execution_should_produce_events),
+            &network,
+            instructions,
+            expected,
+        )
+        .await,
+        stringify!(instruction_execution_should_produce_events),
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
+
+    let (instructions, expected) = produce_instructions("ivm");
+    if sandbox::handle_result(
+        transaction_execution_should_produce_events(
+            stringify!(ivm_execution_should_produce_events),
+            &network,
+            instructions,
+            expected,
+        )
+        .await,
+        stringify!(ivm_execution_should_produce_events),
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
+
+    if sandbox::handle_result(
+        produce_multiple_events_scenario(&network).await,
+        stringify!(produce_multiple_events),
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
+
+    Ok(())
 }

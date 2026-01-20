@@ -123,7 +123,7 @@ async fn post_and_get_contract_manifest_via_torii() -> Result<()> {
                 last_status_error = Some(err.to_string());
             }
         }
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
     let status = status.ok_or_else(|| {
         eyre!(
@@ -174,7 +174,7 @@ async fn post_and_get_contract_manifest_via_torii() -> Result<()> {
             got_txt = Some(body);
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
     let got_txt = got_txt.ok_or_else(|| {
         eyre!(
