@@ -4800,8 +4800,10 @@ pub fn read_config_and_genesis(
     }
     config.apply_storage_budget();
 
-    let sorafs_enabled =
-        config.torii.sorafs_storage.enabled || config.torii.sorafs_discovery.discovery_enabled;
+    let sorafs_enabled = config.torii.sorafs_storage.enabled
+        || config.torii.sorafs_discovery.discovery_enabled
+        || config.torii.sorafs_repair.enabled
+        || config.torii.sorafs_gc.enabled;
     let nexus_requires_router = nexus_topology_is_custom(&config.nexus);
     let nexus_lane_overrides = config.nexus.has_lane_overrides();
     let requires_sora_profile = sorafs_enabled || nexus_requires_router || nexus_lane_overrides;

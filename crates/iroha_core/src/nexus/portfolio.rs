@@ -3,7 +3,6 @@
 use std::collections::BTreeMap;
 
 use iroha_data_model::{
-    account::AccountValue,
     asset::AssetValue,
     nexus::{
         DataSpaceCatalog, DataSpaceId, UniversalAccountId,
@@ -31,29 +30,38 @@ pub fn collect_portfolio(
     let mut grouped: BTreeMap<DataSpaceId, Vec<AccountPortfolio>> = BTreeMap::new();
     let mut totals = PortfolioTotals::default();
 
-    for (account_id, stored) in state.world().accounts().iter() {
-        if !account_has_uaid(stored, uaid) {
-            continue;
-        }
+    let Some(account_id) = state.world().uaid_accounts().get(&uaid).cloned() else {
+        return UniversalPortfolio {
+            uaid,
+            dataspaces: Vec::new(),
+            totals,
+        };
+    };
+    let Some(stored) = state.world().accounts().get(&account_id) else {
+        return UniversalPortfolio {
+            uaid,
+            dataspaces: Vec::new(),
+            totals,
+        };
+    };
 
-        let label = stored.clone().into_inner().label;
-        let mut assets = account_assets(state.world(), account_id);
-        assets.sort_by(|a, b| a.asset_id.cmp(&b.asset_id));
+    let label = stored.clone().into_inner().label;
+    let mut assets = account_assets(state.world(), &account_id);
+    assets.sort_by(|a, b| a.asset_id.cmp(&b.asset_id));
 
-        let dataspace_id = resolve_account_dataspace(directory, default_dataspace, account_id);
+    let dataspace_id = resolve_account_dataspace(directory, default_dataspace, &account_id);
 
-        totals.accounts += 1;
-        totals.positions += assets.len() as u64;
+    totals.accounts = 1;
+    totals.positions = assets.len() as u64;
 
-        grouped
-            .entry(dataspace_id)
-            .or_default()
-            .push(AccountPortfolio {
-                account_id: account_id.clone(),
-                label,
-                assets,
-            });
-    }
+    grouped
+        .entry(dataspace_id)
+        .or_default()
+        .push(AccountPortfolio {
+            account_id,
+            label,
+            assets,
+        });
 
     let dataspaces = grouped
         .into_iter()
@@ -84,13 +92,6 @@ fn resolve_account_dataspace(
     directory
         .and_then(|bindings| bindings.dataspace_for_account(account_id))
         .unwrap_or(default_dataspace)
-}
-
-fn account_has_uaid(stored: &AccountValue, uaid: UniversalAccountId) -> bool {
-    stored
-        .as_ref()
-        .uaid()
-        .is_some_and(|present| *present == uaid)
 }
 
 fn account_assets(
@@ -152,7 +153,7 @@ mod tests {
         prelude::*,
     };
     use iroha_primitives::numeric::Numeric;
-    use iroha_test_samples::{ALICE_ID, BOB_ID};
+    use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
 
     use super::*;
@@ -163,54 +164,36 @@ mod tests {
     };
 
     #[test]
-    fn aggregates_accounts_by_uaid() {
+    fn aggregates_account_by_uaid() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query);
 
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::portfolio"));
-        let first_account = iroha_test_samples::ALICE_ID.clone();
-        let second_account = BOB_ID.clone();
-        let domain_id = first_account.domain().clone();
+        let account = iroha_test_samples::ALICE_ID.clone();
+        let domain_id = account.domain().clone();
         let def_id: AssetDefinitionId = format!("cash#{domain_id}").parse().unwrap();
 
         seed_world(
             &mut state,
             &domain_id,
             &def_id,
-            &[
-                (first_account.clone(), uaid, 777u64),
-                (second_account.clone(), uaid, 42u64),
-            ],
+            &[(account.clone(), uaid, 777u64)],
             None,
         );
 
         let snapshot = collect_portfolio(&state.view(), uaid);
-        assert_eq!(snapshot.totals.accounts, 2);
-        assert_eq!(snapshot.totals.positions, 2);
+        assert_eq!(snapshot.totals.accounts, 1);
+        assert_eq!(snapshot.totals.positions, 1);
         assert_eq!(snapshot.dataspaces.len(), 1);
         let dataspace = &snapshot.dataspaces[0];
         assert_eq!(dataspace.dataspace_id, DataSpaceId::GLOBAL);
-        assert_eq!(dataspace.accounts.len(), 2);
-        let observed_ids: Vec<_> = dataspace
-            .accounts
-            .iter()
-            .map(|entry| entry.account_id.clone())
-            .collect();
-        let mut sorted_ids = observed_ids.clone();
-        sorted_ids.sort();
+        assert_eq!(dataspace.accounts.len(), 1);
+        assert_eq!(dataspace.accounts[0].account_id, account);
         assert_eq!(
-            observed_ids, sorted_ids,
-            "accounts sorted lexicographically"
+            dataspace.accounts[0].assets[0].quantity,
+            Numeric::from(777u64)
         );
-
-        let holdings: std::collections::BTreeMap<_, _> = dataspace
-            .accounts
-            .iter()
-            .map(|entry| (entry.account_id.clone(), entry.assets[0].quantity.clone()))
-            .collect();
-        assert_eq!(holdings.get(&first_account), Some(&Numeric::from(777u64)));
-        assert_eq!(holdings.get(&second_account), Some(&Numeric::from(42u64)));
     }
 
     #[test]
@@ -220,9 +203,8 @@ mod tests {
         let mut state = State::new_for_testing(World::default(), kura, query);
 
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::split"));
-        let first_account = iroha_test_samples::ALICE_ID.clone();
-        let second_account = BOB_ID.clone();
-        let domain_id = first_account.domain().clone();
+        let account = iroha_test_samples::ALICE_ID.clone();
+        let domain_id = account.domain().clone();
         let def_id: AssetDefinitionId = format!("cash#{domain_id}").parse().unwrap();
 
         let second_dataspace = DataSpaceId::new(11);
@@ -245,30 +227,19 @@ mod tests {
             &mut state,
             &domain_id,
             &def_id,
-            &[
-                (first_account.clone(), uaid, 5u64),
-                (second_account.clone(), uaid, 10u64),
-            ],
-            Some(&[
-                (first_account.clone(), uaid, DataSpaceId::GLOBAL),
-                (second_account.clone(), uaid, second_dataspace),
-            ]),
+            &[(account.clone(), uaid, 5u64)],
+            Some(&[(account.clone(), uaid, second_dataspace)]),
         );
 
         let snapshot = collect_portfolio(&state.view(), uaid);
-        assert_eq!(snapshot.totals.accounts, 2);
-        assert_eq!(snapshot.dataspaces.len(), 2);
+        assert_eq!(snapshot.totals.accounts, 1);
+        assert_eq!(snapshot.dataspaces.len(), 1);
 
-        let global_slice = &snapshot.dataspaces[0];
-        assert_eq!(global_slice.dataspace_id, DataSpaceId::GLOBAL);
-        assert_eq!(global_slice.accounts.len(), 1);
-        assert_eq!(global_slice.accounts[0].account_id, first_account);
-
-        let second_slice = &snapshot.dataspaces[1];
-        assert_eq!(second_slice.dataspace_id, second_dataspace);
-        assert_eq!(second_slice.dataspace_alias.as_deref(), Some("cbdc"));
-        assert_eq!(second_slice.accounts.len(), 1);
-        assert_eq!(second_slice.accounts[0].account_id, second_account);
+        let slice = &snapshot.dataspaces[0];
+        assert_eq!(slice.dataspace_id, second_dataspace);
+        assert_eq!(slice.dataspace_alias.as_deref(), Some("cbdc"));
+        assert_eq!(slice.accounts.len(), 1);
+        assert_eq!(slice.accounts[0].account_id, account);
     }
 
     fn seed_world(
@@ -293,10 +264,12 @@ mod tests {
             world.asset_definitions.insert(def_id.clone(), definition);
 
             for (account_id, uaid, amount) in accounts {
-                let details = AccountDetails::new(Metadata::default(), None, Some(*uaid));
+                let details =
+                    AccountDetails::new(Metadata::default(), None, Some(*uaid), Vec::new());
                 world
                     .accounts
                     .insert(account_id.clone(), Owned::new(details));
+                world.uaid_accounts.insert(*uaid, account_id.clone());
                 world.assets.insert(
                     AssetId::new(def_id.clone(), account_id.clone()),
                     Owned::new(Numeric::from(*amount)),

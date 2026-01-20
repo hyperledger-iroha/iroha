@@ -2,12 +2,12 @@
   "certificate": {
     "allowance": {
       "amount": "175",
-      "asset": "xor##34mSYn6ySFTASoiVzNGuyBkedDbKQRNTpa3DfNLhn4kq9ipU2oSBaURPCt9KAYi6WHs5NmGuM@sora",
+      "asset": "xor##34mSYn6ySFTASoiVzNGuyBkedDbKQRNTpa3DfNLhn4kq9ipU2oSBaURPCt9KAYi6WHs5NmGuM",
       "commitment_hex": "66092937B1D159C6A060B87A82784A099EAB18596EA5386C6B39D34318275127"
     },
     "attestation_nonce_hex": null,
     "attestation_report_b64": "3YjdiA==",
-    "controller": "34mSYnDgbaJM58rbLoif4Tkp7G3Gd9suBTsJvKNFkYKvje2hpP717N9P7Tm8Lwr5p618i8sN9@wonderland",
+    "controller": "34mSYnDgbaJM58rbLoif4Tkp7G3Gd9suBTsJvKNFkYKvje2hpP717N9P7Tm8Lwr5p618i8sN9",
     "expires_at_ms": 1745900000000,
     "issued_at_ms": 1730314876000,
     "metadata": {

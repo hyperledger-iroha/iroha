@@ -19,7 +19,7 @@
         {
           "Register": {
             "Account": {
-              "id": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
+              "id": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
               "label": null,
               "metadata": {
                 "key": "value"
@@ -64,7 +64,7 @@
         {
           "Register": {
             "Account": {
-              "id": "34mSYmj74pAZ6nNwwEsmGKGrHErCPMWtqeBwWhHkT9WcsndXbe2FjCNWFYCn5FiW5fdUcsbQD@garden_of_live_flowers",
+              "id": "34mSYmj74pAZ6nNwwEsmGKGrHErCPMWtqeBwWhHkT9WcsndXbe2FjCNWFYCn5FiW5fdUcsbQD",
               "label": null,
               "metadata": {
                 
@@ -187,7 +187,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "rose##34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
+              "destination": "rose##34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
               "object": "13"
             }
           }
@@ -195,7 +195,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "cabbage#garden_of_live_flowers#34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
+              "destination": "cabbage#garden_of_live_flowers#34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
               "object": "44"
             }
           }
@@ -203,16 +203,16 @@
         {
           "Transfer": {
             "AssetDefinition": {
-              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
+              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
               "object": "rose#wonderland",
-              "source": "34mSYmtx2t7jKZDQcTrSU7yorGiJwwSUFobo5VMF2KJf9y8mowRLZiyJFEzmF6FMtDomAk9RV@genesis"
+              "source": "34mSYmtx2t7jKZDQcTrSU7yorGiJwwSUFobo5VMF2KJf9y8mowRLZiyJFEzmF6FMtDomAk9RV"
             }
           }
         },
         {
           "Grant": {
             "Permission": {
-              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
+              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
               "object": {
                 "name": "CanSetParameters"
               }
@@ -222,7 +222,7 @@
         {
           "Grant": {
             "Permission": {
-              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
+              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
               "object": {
                 "name": "CanRegisterDomain"
               }
@@ -232,7 +232,7 @@
         {
           "Grant": {
             "Permission": {
-              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
+              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
               "object": {
                 "name": "CanRegisterAssetDefinition"
               }
@@ -242,7 +242,7 @@
         {
           "Grant": {
             "Permission": {
-              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
+              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
               "object": {
                 "name": "CanRegisterAccount"
               }
@@ -284,7 +284,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "sample##34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
+              "destination": "sample##34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
               "object": "100"
             }
           }
@@ -428,7 +428,7 @@
         {
           "Register": {
             "Account": {
-              "id": "34mSYn9S1PeuZ5MzswzhvR2aSz3BRmzoPgUrmwuesJsQvMumSjTSrsNMhxV29uqZfWBY3QVuM@ivm",
+              "id": "34mSYn9S1PeuZ5MzswzhvR2aSz3BRmzoPgUrmwuesJsQvMumSjTSrsNMhxV29uqZfWBY3QVuM",
               "label": null,
               "metadata": {
                 
@@ -462,7 +462,7 @@
         {
           "Register": {
             "Account": {
-              "id": "28H3gJnePjJz7zBehK6Up8EHPYAGjKzNdmpoS5hQVm2sZpvdL3bkpcivTmkQR7JAmEfjLLD1xkbyatFEUAazH5P5euq6LsR@nexus",
+              "id": "28H3gJnePjJz7zBehK6Up8EHPYAGjKzNdmpoS5hQVm2sZpvdL3bkpcivTmkQR7JAmEfjLLD1xkbyatFEUAazH5P5euq6LsR",
               "label": null,
               "metadata": {
                 
@@ -474,7 +474,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "xor##28H3gJnePjJz7zBehK6Up8EHPYAGjKzNdmpoS5hQVm2sZpvdL3bkpcivTmkQR7JAmEfjLLD1xkbyatFEUAazH5P5euq6LsR@nexus",
+              "destination": "xor##28H3gJnePjJz7zBehK6Up8EHPYAGjKzNdmpoS5hQVm2sZpvdL3bkpcivTmkQR7JAmEfjLLD1xkbyatFEUAazH5P5euq6LsR",
               "object": "10000"
             }
           }
@@ -496,14 +496,14 @@
             "metadata": {
               
             },
-            "stake_account": "28H3gJnePjJz7zBehK6Up8EHPYAGjKzNdmpoS5hQVm2sZpvdL3bkpcivTmkQR7JAmEfjLLD1xkbyatFEUAazH5P5euq6LsR@nexus",
-            "validator": "28H3gJnePjJz7zBehK6Up8EHPYAGjKzNdmpoS5hQVm2sZpvdL3bkpcivTmkQR7JAmEfjLLD1xkbyatFEUAazH5P5euq6LsR@nexus"
+            "stake_account": "28H3gJnePjJz7zBehK6Up8EHPYAGjKzNdmpoS5hQVm2sZpvdL3bkpcivTmkQR7JAmEfjLLD1xkbyatFEUAazH5P5euq6LsR",
+            "validator": "28H3gJnePjJz7zBehK6Up8EHPYAGjKzNdmpoS5hQVm2sZpvdL3bkpcivTmkQR7JAmEfjLLD1xkbyatFEUAazH5P5euq6LsR"
           }
         },
         {
           "ActivatePublicLaneValidator": {
             "lane_id": 0,
-            "validator": "28H3gJnePjJz7zBehK6Up8EHPYAGjKzNdmpoS5hQVm2sZpvdL3bkpcivTmkQR7JAmEfjLLD1xkbyatFEUAazH5P5euq6LsR@nexus"
+            "validator": "28H3gJnePjJz7zBehK6Up8EHPYAGjKzNdmpoS5hQVm2sZpvdL3bkpcivTmkQR7JAmEfjLLD1xkbyatFEUAazH5P5euq6LsR"
           }
         }
       ],

@@ -73,7 +73,6 @@ translation_last_reviewed: 2026-01-01
 |-----------|-----------|
 | انحراف fixture | اعد توليد `fixtures/account/address_vectors.json`, اعد تشغيل `cargo xtask address-vectors --verify`, حدث حزم SDK, وارفق لقطات `address_fixture.prom` بالتذكرة. |
 | تراجع SDK/عميل | افتح قضايا تشير الى fixture القياسي + خرج `iroha address inspect`, وامنع الاصدارات عبر CI تكافؤ SDK (مثل `ci/check_address_normalize.sh`). |
-| فساد manifest | اعادة بناء manifest عبر `address_manifest_ops.md`, اعد تشغيل `cargo xtask address-manifest verify`, وابق `torii.strict_addresses=true` حتى تصبح القياسات نظيفة. |
 | ارساليات خبيثة | طبق rate-limit او احظر principals المخالفين، وصعد الى Governance اذا تطلب الامر tombstone للمحددات. |
 
 بعد تطبيق التخفيفات، اعد تشغيل استعلام PromQL اعلاه لتاكيد ان `ERR_CHECKSUM_MISMATCH` يبقى عند الصفر (باستثناء `/tests/*`) لمدة 30 دقيقة على الاقل قبل خفض الحادث.

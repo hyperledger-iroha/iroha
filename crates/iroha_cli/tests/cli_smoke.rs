@@ -423,6 +423,16 @@ fn sorafs_fetch_help_is_accessible() {
 }
 
 #[test]
+fn sorafs_repair_help_is_accessible() {
+    expect_subcommand_help(&["sorafs", "repair", "--help"], "Repair queue helpers");
+}
+
+#[test]
+fn sorafs_gc_help_is_accessible() {
+    expect_subcommand_help(&["sorafs", "gc", "--help"], "GC inspection helpers");
+}
+
+#[test]
 fn sorafs_reserve_quote_outputs_breakdown() {
     let output = command()
         .args([

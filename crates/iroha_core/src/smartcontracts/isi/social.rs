@@ -616,17 +616,11 @@ fn select_account_for_uaid(
     world: &WorldTransaction<'_, '_>,
     uaid: UniversalAccountId,
 ) -> Result<AccountId, Error> {
-    let mut accounts: Vec<_> = world
-        .accounts
-        .iter()
-        .filter(|(_, value)| value.as_ref().uaid() == Some(&uaid))
-        .map(|(id, _)| id.clone())
-        .collect();
-    if accounts.is_empty() {
-        return Err(validation_err("no account registered for UAID"));
-    }
-    accounts.sort();
-    Ok(accounts.swap_remove(0))
+    world
+        .uaid_accounts
+        .get(&uaid)
+        .cloned()
+        .ok_or_else(|| validation_err("no account registered for UAID"))
 }
 
 const fn current_day(timestamp_ms: u64) -> u64 {
@@ -635,4 +629,45 @@ const fn current_day(timestamp_ms: u64) -> u64 {
 
 fn validation_err(message: impl Into<String>) -> Error {
     Error::InvariantViolation(message.into().into_boxed_str())
+}
+
+#[cfg(test)]
+mod tests {
+    use iroha_crypto::{Hash, KeyPair};
+    use iroha_data_model::{block::BlockHeader, prelude::*};
+    use iroha_test_samples::ALICE_ID;
+    use nonzero_ext::nonzero;
+
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
+
+    #[test]
+    fn select_account_for_uaid_uses_index() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query);
+
+        let domain_id: DomainId = "uaid.reward".parse().expect("domain id");
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::reward"));
+        let keypair = KeyPair::random();
+        let account_id = AccountId::new(domain_id.clone(), keypair.public_key().clone());
+        let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Register::domain(Domain::new(domain_id))
+            .execute(&ALICE_ID, &mut tx)
+            .expect("register domain");
+        Register::account(new_account)
+            .execute(&ALICE_ID, &mut tx)
+            .expect("register account");
+
+        let selected = select_account_for_uaid(&tx.world, uaid).expect("select account");
+        assert_eq!(selected, account_id);
+    }
 }

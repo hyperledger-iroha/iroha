@@ -2896,7 +2896,7 @@ fn derive_enum_serialize(
                                     if __norito_packed {
                                         writer.write_all(&#b[..])?;
                                     } else {
-                                        let __len_bytes = core::mem::size_of_val(&#b);
+                                        let __len_bytes = core::mem::size_of_val(#b);
                                         #[cfg(feature = "compact-len")]
                                         { norito::core::write_len(&mut writer, __len_bytes as u64)?; }
                                         #[cfg(not(feature = "compact-len"))]
@@ -3138,7 +3138,7 @@ fn derive_enum_serialize(
                                 if __norito_packed {
                                     writer.write_all(&#name[..])?;
                                 } else {
-                                    let __len_bytes = core::mem::size_of_val(&#name);
+                                    let __len_bytes = core::mem::size_of_val(#name);
                                     #[cfg(feature = "compact-len")]
                                     { norito::core::write_len(&mut writer, __len_bytes as u64)?; }
                                     #[cfg(not(feature = "compact-len"))]

@@ -44,7 +44,6 @@ deteccoes Local-8 e zero colisoes Local-12 por >=30 dias.
 
 1. Rode o script em um job dedicado e envie as saidas.
 2. Bloqueie merges quando `audit.json` reportar selectores Local (`domain.kind = local12`).
-3. Quando os dashboards mostrarem zero uso legitimo, deixe `torii.strict_addresses`
    no valor padrao `true` (so altere para `false` em clusters dev/test ao diagnosticar
    regressoes) e adicione
    `iroha address normalize --fail-on-warning --only-local` ao CI para que regressos

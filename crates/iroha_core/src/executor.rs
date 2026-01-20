@@ -570,7 +570,8 @@ impl Executor {
         };
 
         let sink_account: AccountId = cfg.fee_sink_account_id.parse().map_err(|_| {
-            let reason = "invalid nexus fee sink account id; expected `alias@domain`".to_owned();
+            let reason =
+                "invalid nexus fee sink account id; expected account identifier".to_owned();
             sumeragi_status::record_nexus_fee_event(NexusFeeEvent::ConfigInvalid {
                 reason: reason.clone(),
             });
@@ -1036,7 +1037,7 @@ impl Executor {
                             .parse()
                             .map_err(|_| {
                                 ValidationFail::InternalError(
-                                    "invalid pipeline.gas.tech_account_id; expected `alias@domain`"
+                                    "invalid pipeline.gas.tech_account_id; expected account identifier"
                                         .to_owned(),
                                 )
                             })?;
@@ -1252,7 +1253,7 @@ impl Executor {
                         .parse()
                         .map_err(|_| {
                             ValidationFail::InternalError(
-                                "invalid pipeline.gas.tech_account_id; expected `alias@domain`"
+                                "invalid pipeline.gas.tech_account_id; expected account identifier"
                                     .to_owned(),
                             )
                         })?;
@@ -2455,6 +2456,8 @@ mod tests {
         use iroha_schema::Ident;
         use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 
+        let (sink_id, _sink_kp) = gen_account_in("wonderland");
+        let (sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
         let domain: Domain = Domain::new("wonderland".parse().expect("domain id")).build(&ALICE_ID);
         let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let world = World::with([domain], [alice_account], []);
@@ -2588,7 +2591,11 @@ mod tests {
         crate::sumeragi::status::reset_nexus_economics_for_tests();
         let domain: Domain = Domain::new("wonderland".parse().expect("domain id")).build(&ALICE_ID);
         let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let world = World::with([domain], [alice_account], []);
+        let (sink_id, _sink_kp) = gen_account_in("wonderland");
+        let (sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
+        let sink_account = Account::new(sink_id.clone()).build(&sink_id);
+        let sponsor_account = Account::new(sponsor_id.clone()).build(&sponsor_id);
+        let world = World::with([domain], [alice_account, sink_account, sponsor_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
@@ -2597,12 +2604,12 @@ mod tests {
         nexus.fees.base_fee = 1;
         nexus.fees.sponsorship_enabled = false;
         nexus.fees.fee_asset_id = "xor#wonderland".to_string();
-        nexus.fees.fee_sink_account_id = "sink@wonderland".to_string();
+        nexus.fees.fee_sink_account_id = sink_id.to_string();
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();
         metadata.insert(
             Name::from_str("fee_sponsor").expect("static name"),
-            Json::new("sponsor@wonderland"),
+            Json::new(sponsor_id.to_string()),
         );
         let chain: iroha_data_model::ChainId = "test-chain".parse().unwrap();
         let tx = TransactionBuilder::new(chain, ALICE_ID.clone())
@@ -2630,6 +2637,7 @@ mod tests {
         crate::sumeragi::status::reset_nexus_economics_for_tests();
         let (authority_id, authority_kp) = gen_account_in("wonderland");
         let (sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
+        let (sink_id, _sink_kp) = gen_account_in("wonderland");
         let domain: Domain =
             Domain::new("wonderland".parse().expect("domain id")).build(&authority_id);
         let authority_account = Account::new(authority_id.clone()).build(&authority_id);
@@ -2643,7 +2651,7 @@ mod tests {
         nexus.fees.base_fee = 1;
         nexus.fees.sponsorship_enabled = true;
         nexus.fees.fee_asset_id = "xor#wonderland".to_string();
-        nexus.fees.fee_sink_account_id = "sink@wonderland".to_string();
+        nexus.fees.fee_sink_account_id = sink_id.to_string();
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();
         metadata.insert(

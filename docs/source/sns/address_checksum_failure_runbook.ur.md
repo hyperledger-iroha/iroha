@@ -113,7 +113,6 @@ IH58/کمپریسڈ چیک سم فیلیرز (`ERR_CHECKSUM_MISMATCH` / `Checksu
 |------|---------|
 | فکسچر ڈرفٹ | `fixtures/account/address_vectors.json` دوبارہ بنائیں، `cargo xtask address-vectors --verify` اور `ci/account_fixture_metrics.sh` چلائیں، اور SDK ریلیزز کو تازہ بنڈل پر منتقل کریں۔ تبدیلی کو `status.md` اور گورننس ٹریکر میں نوٹ کریں۔ |
 | SDK/کلائنٹ ریگریشن | متاثرہ SDK کے خلاف بگ فائل کریں، کینو نیکل فکسچر اور `iroha address inspect` آؤٹ پٹ کا حوالہ دیں، اور ریلیز کو `ci/check_address_normalize.sh` یا متعلقہ parity جاب کے پیچھے گیٹ کریں۔ |
-| Manifest کرپشن | Manifest رن بک کے مطابق بنڈل دوبارہ تیار کریں، `cargo xtask address-manifest verify` چلائیں، اور جب تک ٹیلی میٹری مستحکم نہ ہو `torii.strict_addresses=true` فعال رکھیں۔ |
 | بدنیتی ٹریفک | Torii سطح پر JWT/app IDs فلٹر کریں، گیٹ وے پر تھروٹل لگائیں، اور خراب ایڈریسز کو گورننس انسیڈنٹ ٹریکر میں درج کریں تاکہ ضرورت پڑنے پر Local سلیکٹر tombstone کیے جا سکیں۔ |
 
 اصلاحات کے بعد PromQL کو دوبارہ چلائیں تاکہ `ERR_CHECKSUM_MISMATCH` کم از کم

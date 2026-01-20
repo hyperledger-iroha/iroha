@@ -5,6 +5,7 @@ use std::{fs, path::PathBuf};
 use eyre::{Result, WrapErr};
 use iroha::{
     client::Client,
+    data_model::account::AccountId,
     subscriptions::{
         SubscriptionActionRequest, SubscriptionCancelMode, SubscriptionCreateRequest,
         SubscriptionListParams, SubscriptionPlanCreateRequest, SubscriptionPlanListParams,
@@ -52,11 +53,26 @@ impl Run for PlanCommand {
     }
 }
 
+fn resolve_account_id_arg<C: RunContext>(context: &C, literal: &str, flag: &str) -> Result<AccountId> {
+    crate::resolve_account_id(context, literal)
+        .wrap_err_with(|| format!("failed to resolve {flag}"))
+}
+
+fn resolve_optional_account_id<C: RunContext>(
+    context: &C,
+    literal: Option<&str>,
+    flag: &str,
+) -> Result<Option<AccountId>> {
+    literal
+        .map(|value| resolve_account_id_arg(context, value, flag))
+        .transpose()
+}
+
 #[derive(clap::Args, Debug)]
 pub struct PlanCreateArgs {
-    /// Authority `AccountId` (plan provider).
-    #[arg(long, value_name = "ACCOUNT@DOMAIN")]
-    pub authority: iroha::data_model::account::AccountId,
+    /// Authority account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain).
+    #[arg(long, value_name = "ACCOUNT_ID")]
+    pub authority: String,
     /// Hex-encoded private key for signing.
     #[arg(long, value_name = "HEX")]
     pub private_key: String,
@@ -72,7 +88,8 @@ impl Run for PlanCreateArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
         let plan = load_plan(context, self.plan_json.as_ref())?;
-        let request = self.to_request(plan)?;
+        let authority = resolve_account_id_arg(context, &self.authority, "--authority")?;
+        let request = self.to_request(authority, plan)?;
         let response = client.create_subscription_plan(&request)?;
         context.print_data(&response)
     }
@@ -81,11 +98,12 @@ impl Run for PlanCreateArgs {
 impl PlanCreateArgs {
     fn to_request(
         &self,
+        authority: AccountId,
         plan: iroha::data_model::subscription::SubscriptionPlan,
     ) -> Result<SubscriptionPlanCreateRequest> {
         let private_key: PrivateKey = self.private_key.parse().wrap_err("invalid --private-key")?;
         Ok(SubscriptionPlanCreateRequest {
-            authority: self.authority.clone(),
+            authority,
             private_key: iroha::data_model::prelude::ExposedPrivateKey(private_key),
             plan_id: self.plan_id.clone(),
             plan,
@@ -96,7 +114,7 @@ impl PlanCreateArgs {
 #[derive(clap::Args, Debug)]
 pub struct PlanListArgs {
     /// Filter by plan provider (account id).
-    #[arg(long, value_name = "ACCOUNT@DOMAIN")]
+    #[arg(long, value_name = "ACCOUNT_ID")]
     pub provider: Option<String>,
     /// Limit number of results.
     #[arg(long)]
@@ -109,16 +127,18 @@ pub struct PlanListArgs {
 impl Run for PlanListArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
-        let params = self.to_params();
+        let provider = resolve_optional_account_id(context, self.provider.as_deref(), "--provider")?
+            .map(|account| account.to_string());
+        let params = self.to_params(provider);
         let response = client.list_subscription_plans(&params)?;
         context.print_data(&response)
     }
 }
 
 impl PlanListArgs {
-    fn to_params(&self) -> SubscriptionPlanListParams {
+    fn to_params(&self, provider: Option<String>) -> SubscriptionPlanListParams {
         SubscriptionPlanListParams {
-            provider: self.provider.clone(),
+            provider,
             limit: self.limit,
             offset: self.offset,
         }
@@ -155,31 +175,36 @@ impl Run for SubscriptionCommand {
             SubscriptionCommand::Get(args) => args.run(context),
             SubscriptionCommand::Pause(args) => {
                 let client: Client = context.client_from_config();
-                let request = args.to_request()?;
+                let authority = resolve_account_id_arg(context, &args.authority, "--authority")?;
+                let request = args.to_request(authority)?;
                 let response = client.pause_subscription(&args.subscription_id, &request)?;
                 context.print_data(&response)
             }
             SubscriptionCommand::Resume(args) => {
                 let client: Client = context.client_from_config();
-                let request = args.to_request()?;
+                let authority = resolve_account_id_arg(context, &args.authority, "--authority")?;
+                let request = args.to_request(authority)?;
                 let response = client.resume_subscription(&args.subscription_id, &request)?;
                 context.print_data(&response)
             }
             SubscriptionCommand::Cancel(args) => {
                 let client: Client = context.client_from_config();
-                let request = args.to_request()?;
+                let authority = resolve_account_id_arg(context, &args.authority, "--authority")?;
+                let request = args.to_request(authority)?;
                 let response = client.cancel_subscription(&args.subscription_id, &request)?;
                 context.print_data(&response)
             }
             SubscriptionCommand::Keep(args) => {
                 let client: Client = context.client_from_config();
-                let request = args.to_request()?;
+                let authority = resolve_account_id_arg(context, &args.authority, "--authority")?;
+                let request = args.to_request(authority)?;
                 let response = client.keep_subscription(&args.subscription_id, &request)?;
                 context.print_data(&response)
             }
             SubscriptionCommand::ChargeNow(args) => {
                 let client: Client = context.client_from_config();
-                let request = args.to_request()?;
+                let authority = resolve_account_id_arg(context, &args.authority, "--authority")?;
+                let request = args.to_request(authority)?;
                 let response = client.charge_subscription_now(&args.subscription_id, &request)?;
                 context.print_data(&response)
             }
@@ -190,9 +215,9 @@ impl Run for SubscriptionCommand {
 
 #[derive(clap::Args, Debug)]
 pub struct SubscriptionCreateArgs {
-    /// Authority `AccountId` (subscriber).
-    #[arg(long, value_name = "ACCOUNT@DOMAIN")]
-    pub authority: iroha::data_model::account::AccountId,
+    /// Authority account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain).
+    #[arg(long, value_name = "ACCOUNT_ID")]
+    pub authority: String,
     /// Hex-encoded private key for signing.
     #[arg(long, value_name = "HEX")]
     pub private_key: String,
@@ -219,17 +244,18 @@ pub struct SubscriptionCreateArgs {
 impl Run for SubscriptionCreateArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
-        let request = self.to_request()?;
+        let authority = resolve_account_id_arg(context, &self.authority, "--authority")?;
+        let request = self.to_request(authority)?;
         let response = client.create_subscription(&request)?;
         context.print_data(&response)
     }
 }
 
 impl SubscriptionCreateArgs {
-    fn to_request(&self) -> Result<SubscriptionCreateRequest> {
+    fn to_request(&self, authority: AccountId) -> Result<SubscriptionCreateRequest> {
         let private_key: PrivateKey = self.private_key.parse().wrap_err("invalid --private-key")?;
         Ok(SubscriptionCreateRequest {
-            authority: self.authority.clone(),
+            authority,
             private_key: iroha::data_model::prelude::ExposedPrivateKey(private_key),
             subscription_id: self.subscription_id.clone(),
             plan_id: self.plan_id.clone(),
@@ -244,10 +270,10 @@ impl SubscriptionCreateArgs {
 #[derive(clap::Args, Debug)]
 pub struct SubscriptionListArgs {
     /// Filter by subscriber account.
-    #[arg(long, value_name = "ACCOUNT@DOMAIN")]
+    #[arg(long, value_name = "ACCOUNT_ID")]
     pub owned_by: Option<String>,
     /// Filter by plan provider account.
-    #[arg(long, value_name = "ACCOUNT@DOMAIN")]
+    #[arg(long, value_name = "ACCOUNT_ID")]
     pub provider: Option<String>,
     /// Filter by status (active, paused, `past_due`, canceled, suspended).
     #[arg(long)]
@@ -263,17 +289,23 @@ pub struct SubscriptionListArgs {
 impl Run for SubscriptionListArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
-        let params = self.to_params();
+        let owned_by =
+            resolve_optional_account_id(context, self.owned_by.as_deref(), "--owned-by")?
+                .map(|account| account.to_string());
+        let provider =
+            resolve_optional_account_id(context, self.provider.as_deref(), "--provider")?
+                .map(|account| account.to_string());
+        let params = self.to_params(owned_by, provider);
         let response = client.list_subscriptions(&params)?;
         context.print_data(&response)
     }
 }
 
 impl SubscriptionListArgs {
-    fn to_params(&self) -> SubscriptionListParams {
+    fn to_params(&self, owned_by: Option<String>, provider: Option<String>) -> SubscriptionListParams {
         SubscriptionListParams {
-            owned_by: self.owned_by.clone(),
-            provider: self.provider.clone(),
+            owned_by,
+            provider,
             status: self.status.clone(),
             limit: self.limit,
             offset: self.offset,
@@ -301,9 +333,9 @@ pub struct SubscriptionActionArgs {
     /// Subscription NFT id.
     #[arg(long, value_name = "NFT_ID")]
     pub subscription_id: iroha::data_model::nft::NftId,
-    /// Authority `AccountId` (subscriber).
-    #[arg(long, value_name = "ACCOUNT@DOMAIN")]
-    pub authority: iroha::data_model::account::AccountId,
+    /// Authority account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain).
+    #[arg(long, value_name = "ACCOUNT_ID")]
+    pub authority: String,
     /// Hex-encoded private key for signing.
     #[arg(long, value_name = "HEX")]
     pub private_key: String,
@@ -316,10 +348,10 @@ pub struct SubscriptionActionArgs {
 }
 
 impl SubscriptionActionArgs {
-    fn to_request(&self) -> Result<SubscriptionActionRequest> {
+    fn to_request(&self, authority: AccountId) -> Result<SubscriptionActionRequest> {
         let private_key: PrivateKey = self.private_key.parse().wrap_err("invalid --private-key")?;
         Ok(SubscriptionActionRequest {
-            authority: self.authority.clone(),
+            authority,
             private_key: iroha::data_model::prelude::ExposedPrivateKey(private_key),
             charge_at_ms: self.charge_at_ms,
             cancel_mode: self
@@ -334,9 +366,9 @@ pub struct SubscriptionUsageArgs {
     /// Subscription NFT id.
     #[arg(long, value_name = "NFT_ID")]
     pub subscription_id: iroha::data_model::nft::NftId,
-    /// Authority `AccountId` (usage reporter).
-    #[arg(long, value_name = "ACCOUNT@DOMAIN")]
-    pub authority: iroha::data_model::account::AccountId,
+    /// Authority account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain).
+    #[arg(long, value_name = "ACCOUNT_ID")]
+    pub authority: String,
     /// Hex-encoded private key for signing.
     #[arg(long, value_name = "HEX")]
     pub private_key: String,
@@ -354,17 +386,18 @@ pub struct SubscriptionUsageArgs {
 impl Run for SubscriptionUsageArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
-        let request = self.to_request()?;
+        let authority = resolve_account_id_arg(context, &self.authority, "--authority")?;
+        let request = self.to_request(authority)?;
         let response = client.record_subscription_usage(&self.subscription_id, &request)?;
         context.print_data(&response)
     }
 }
 
 impl SubscriptionUsageArgs {
-    fn to_request(&self) -> Result<SubscriptionUsageRequest> {
+    fn to_request(&self, authority: AccountId) -> Result<SubscriptionUsageRequest> {
         let private_key: PrivateKey = self.private_key.parse().wrap_err("invalid --private-key")?;
         Ok(SubscriptionUsageRequest {
-            authority: self.authority.clone(),
+            authority,
             private_key: iroha::data_model::prelude::ExposedPrivateKey(private_key),
             unit_key: self.unit_key.clone(),
             delta: self.delta.clone(),
@@ -488,13 +521,13 @@ mod tests {
         let plan = sample_plan(provider.clone(), asset_definition);
         let (private_key, private_key_str) = sample_private_key();
         let args = PlanCreateArgs {
-            authority: provider.clone(),
+            authority: provider.to_string(),
             private_key: private_key_str,
             plan_id: plan_id.clone(),
             plan_json: None,
         };
 
-        let request = args.to_request(plan.clone()).expect("request");
+        let request = args.to_request(provider.clone(), plan.clone()).expect("request");
         assert_eq!(request.authority, provider);
         assert_eq!(request.plan_id, plan_id);
         assert_eq!(request.plan, plan);
@@ -509,7 +542,7 @@ mod tests {
             limit: Some(5),
             offset: 2,
         };
-        let params = args.to_params();
+        let params = args.to_params(args.provider.clone());
         assert_eq!(params.provider.as_deref(), Some(provider.as_str()));
         assert_eq!(params.limit, Some(5));
         assert_eq!(params.offset, 2);
@@ -524,7 +557,7 @@ mod tests {
         let usage_trigger_id: TriggerId = "sub-1-usage".parse().expect("usage trigger");
         let (private_key, private_key_str) = sample_private_key();
         let args = SubscriptionCreateArgs {
-            authority: subscriber.clone(),
+            authority: subscriber.to_string(),
             private_key: private_key_str,
             subscription_id: subscription_id.clone(),
             plan_id: plan_id.clone(),
@@ -534,7 +567,7 @@ mod tests {
             grant_usage_to_provider: Some(true),
         };
 
-        let request = args.to_request().expect("request");
+        let request = args.to_request(subscriber.clone()).expect("request");
         assert_eq!(request.authority, subscriber);
         assert_eq!(request.subscription_id, subscription_id);
         assert_eq!(request.plan_id, plan_id);
@@ -556,7 +589,7 @@ mod tests {
             limit: Some(10),
             offset: 4,
         };
-        let params = args.to_params();
+        let params = args.to_params(args.owned_by.clone(), args.provider.clone());
         assert_eq!(params.owned_by.as_deref(), Some(owned_by.as_str()));
         assert_eq!(params.provider.as_deref(), Some(provider.as_str()));
         assert_eq!(params.status.as_deref(), Some("active"));
@@ -571,13 +604,13 @@ mod tests {
         let (private_key, private_key_str) = sample_private_key();
         let args = SubscriptionActionArgs {
             subscription_id,
-            authority: subscriber.clone(),
+            authority: subscriber.to_string(),
             private_key: private_key_str,
             charge_at_ms: Some(500),
             cancel_at_period_end: false,
         };
 
-        let request = args.to_request().expect("request");
+        let request = args.to_request(subscriber.clone()).expect("request");
         assert_eq!(request.authority, subscriber);
         assert_eq!(request.charge_at_ms, Some(500));
         assert_eq!(request.private_key, ExposedPrivateKey(private_key));
@@ -592,14 +625,14 @@ mod tests {
         let (private_key, private_key_str) = sample_private_key();
         let args = SubscriptionUsageArgs {
             subscription_id,
-            authority: subscriber.clone(),
+            authority: subscriber.to_string(),
             private_key: private_key_str,
             unit_key: unit_key.clone(),
             delta: Numeric::new(4_u32, 0),
             usage_trigger_id: Some(usage_trigger_id.clone()),
         };
 
-        let request = args.to_request().expect("request");
+        let request = args.to_request(subscriber.clone()).expect("request");
         assert_eq!(request.authority, subscriber);
         assert_eq!(request.unit_key, unit_key);
         assert_eq!(request.delta, Numeric::new(4_u32, 0));

@@ -35,9 +35,7 @@ test("normalizeAccountId canonicalizes domain labels with UTS-46 rules", () => {
     publicKey: SAMPLE_KEY,
   });
   const normalized = normalizeAccountId(`${account.toIH58()}@Exämple`, "accountId");
-  assert(normalized.endsWith("@xn--exmple-cua"));
-  const [signatory] = normalized.split("@");
-  assert.ok(signatory.length > 0, "normalized signatory should not be empty");
+  assert.equal(normalized, account.toIH58());
 });
 
 test("normalizeAccountId accepts default-domain literal without suffix", () => {
@@ -51,8 +49,8 @@ test("normalizeAccountId accepts default-domain literal without suffix", () => {
     `${literalWithoutDomain}@${DEFAULT_DOMAIN_NAME}`,
     "accountId",
   );
+  assert.equal(normalized, literalWithoutDomain);
   assert.equal(normalized, normalizedWithDomain);
-  assert.ok(normalized.endsWith(`@${DEFAULT_DOMAIN_NAME}`));
 });
 
 const maybeTestCompressed = process.env.IROHA_JS_DISABLE_NATIVE === "1" ? test.skip : test;
@@ -65,40 +63,36 @@ maybeTestCompressed("normalizeAccountId accepts compressed default-domain litera
   const compressed = address.toCompressedSora();
   const normalized = normalizeAccountId(compressed, "accountId");
 
-  assert.ok(normalized.endsWith(`@${DEFAULT_DOMAIN_NAME}`));
-  const [normalizedSignatory] = normalized.split("@");
-  const parsed = AccountAddress.parseAny(normalizedSignatory, undefined, DEFAULT_DOMAIN_NAME).address;
+  const parsed = AccountAddress.parseAny(normalized, undefined, DEFAULT_DOMAIN_NAME).address;
   assert.deepEqual(
     Buffer.from(parsed.canonicalBytes()),
     Buffer.from(address.canonicalBytes()),
   );
 });
 
-test("normalizeAccountId rejects compressed literal without suffix for non-default domain", () => {
+test("normalizeAccountId canonicalizes compressed literal without suffix for non-default domain", () => {
   const address = AccountAddress.fromAccount({
     domain: "wonderland",
     publicKey: SAMPLE_KEY,
   });
   const compressed = address.toCompressedSora();
 
-  assert.throws(
-    () => normalizeAccountId(compressed, "accountId"),
-    (error) =>
-      error instanceof ValidationError &&
-      error.code === ValidationErrorCode.INVALID_ACCOUNT_ID,
+  const normalized = normalizeAccountId(compressed, "accountId");
+  const parsed = AccountAddress.parseAny(normalized, undefined, "wonderland").address;
+  assert.deepEqual(
+    Buffer.from(parsed.canonicalBytes()),
+    Buffer.from(address.canonicalBytes()),
   );
 });
 
-test("normalizeAccountId still rejects non-default literal without suffix", () => {
+test("normalizeAccountId canonicalizes non-default IH58 literal without suffix", () => {
   const address = AccountAddress.fromAccount({
     domain: "wonderland",
     publicKey: SAMPLE_KEY,
   });
   const literalWithoutDomain = address.toIH58();
-  assert.throws(
-    () => normalizeAccountId(literalWithoutDomain, "accountId"),
-    (error) => error instanceof ValidationError && error.code === ValidationErrorCode.INVALID_ACCOUNT_ID,
-  );
+  const normalized = normalizeAccountId(literalWithoutDomain, "accountId");
+  assert.equal(normalized, literalWithoutDomain);
 });
 
 test("normalizeAccountId rejects invalid domain labels", () => {

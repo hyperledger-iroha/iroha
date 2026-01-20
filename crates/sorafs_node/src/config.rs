@@ -270,6 +270,194 @@ impl StorageConfigBuilder {
     }
 }
 
+/// Repair scheduler configuration resolved from the runtime config.
+#[derive(Debug, Clone)]
+pub struct RepairConfig {
+    enabled: bool,
+    db_dsn: Option<String>,
+    db_pool_max_connections: u32,
+    claim_ttl_secs: u64,
+    heartbeat_interval_secs: u64,
+    max_attempts: u32,
+    worker_concurrency: usize,
+    backoff_initial_secs: u64,
+    backoff_max_secs: u64,
+    default_slash_penalty_nano: u128,
+}
+
+impl RepairConfig {
+    /// Whether the repair scheduler is enabled.
+    #[must_use]
+    pub fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Optional Postgres DSN for durable repair storage.
+    #[must_use]
+    pub fn db_dsn(&self) -> Option<&str> {
+        self.db_dsn.as_deref()
+    }
+
+    /// Maximum number of database connections for repair operations.
+    #[must_use]
+    pub fn db_pool_max_connections(&self) -> u32 {
+        self.db_pool_max_connections
+    }
+
+    /// Claim TTL for repair tickets (seconds).
+    #[must_use]
+    pub fn claim_ttl_secs(&self) -> u64 {
+        self.claim_ttl_secs
+    }
+
+    /// Heartbeat interval/TTL for active claims (seconds).
+    #[must_use]
+    pub fn heartbeat_interval_secs(&self) -> u64 {
+        self.heartbeat_interval_secs
+    }
+
+    /// Maximum number of attempts before escalation.
+    #[must_use]
+    pub fn max_attempts(&self) -> u32 {
+        self.max_attempts
+    }
+
+    /// Concurrent repair workers per node.
+    #[must_use]
+    pub fn worker_concurrency(&self) -> usize {
+        self.worker_concurrency
+    }
+
+    /// Initial retry backoff for failed repairs (seconds).
+    #[must_use]
+    pub fn backoff_initial_secs(&self) -> u64 {
+        self.backoff_initial_secs
+    }
+
+    /// Maximum retry backoff for failed repairs (seconds).
+    #[must_use]
+    pub fn backoff_max_secs(&self) -> u64 {
+        self.backoff_max_secs
+    }
+
+    /// Default penalty used for scheduler-generated slash proposals (nano-XOR).
+    #[must_use]
+    pub fn default_slash_penalty_nano(&self) -> u128 {
+        self.default_slash_penalty_nano
+    }
+}
+
+impl Default for RepairConfig {
+    fn default() -> Self {
+        Self::from(&actual::SorafsRepair::default())
+    }
+}
+
+impl From<actual::SorafsRepair> for RepairConfig {
+    fn from(value: actual::SorafsRepair) -> Self {
+        Self::from(&value)
+    }
+}
+
+impl From<&actual::SorafsRepair> for RepairConfig {
+    fn from(value: &actual::SorafsRepair) -> Self {
+        Self {
+            enabled: value.enabled,
+            db_dsn: value.db_dsn.clone(),
+            db_pool_max_connections: value.db_pool_max_connections,
+            claim_ttl_secs: value.claim_ttl_secs,
+            heartbeat_interval_secs: value.heartbeat_interval_secs,
+            max_attempts: value.max_attempts,
+            worker_concurrency: value.worker_concurrency,
+            backoff_initial_secs: value.backoff_initial_secs,
+            backoff_max_secs: value.backoff_max_secs,
+            default_slash_penalty_nano: value.default_slash_penalty_nano,
+        }
+    }
+}
+
+/// GC scheduler configuration resolved from the runtime config.
+#[derive(Debug, Clone)]
+pub struct GcConfig {
+    enabled: bool,
+    db_dsn: Option<String>,
+    db_pool_max_connections: u32,
+    interval_secs: u64,
+    max_deletions_per_run: u32,
+    retention_grace_secs: u64,
+    pre_admission_sweep: bool,
+}
+
+impl GcConfig {
+    /// Whether the GC worker is enabled.
+    #[must_use]
+    pub fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Optional Postgres DSN for GC metadata storage.
+    #[must_use]
+    pub fn db_dsn(&self) -> Option<&str> {
+        self.db_dsn.as_deref()
+    }
+
+    /// Maximum number of database connections for GC operations.
+    #[must_use]
+    pub fn db_pool_max_connections(&self) -> u32 {
+        self.db_pool_max_connections
+    }
+
+    /// GC cadence (seconds).
+    #[must_use]
+    pub fn interval_secs(&self) -> u64 {
+        self.interval_secs
+    }
+
+    /// Maximum deletions per GC run.
+    #[must_use]
+    pub fn max_deletions_per_run(&self) -> u32 {
+        self.max_deletions_per_run
+    }
+
+    /// Grace window for retention expiry (seconds).
+    #[must_use]
+    pub fn retention_grace_secs(&self) -> u64 {
+        self.retention_grace_secs
+    }
+
+    /// Whether a GC sweep is attempted before rejecting new pins.
+    #[must_use]
+    pub fn pre_admission_sweep(&self) -> bool {
+        self.pre_admission_sweep
+    }
+}
+
+impl Default for GcConfig {
+    fn default() -> Self {
+        Self::from(&actual::SorafsGc::default())
+    }
+}
+
+impl From<actual::SorafsGc> for GcConfig {
+    fn from(value: actual::SorafsGc) -> Self {
+        Self::from(&value)
+    }
+}
+
+impl From<&actual::SorafsGc> for GcConfig {
+    fn from(value: &actual::SorafsGc) -> Self {
+        Self {
+            enabled: value.enabled,
+            db_dsn: value.db_dsn.clone(),
+            db_pool_max_connections: value.db_pool_max_connections,
+            interval_secs: value.interval_secs,
+            max_deletions_per_run: value.max_deletions_per_run,
+            retention_grace_secs: value.retention_grace_secs,
+            pre_admission_sweep: value.pre_admission_sweep,
+        }
+    }
+}
+
 /// Optional overrides for provider advert telemetry.
 #[derive(Debug, Clone)]
 pub struct AdvertOverrides {
@@ -504,5 +692,52 @@ mod tests {
             penalty.cooldown_secs,
             u64::from(defaults.cooldown_windows).saturating_mul(60 * 60)
         );
+    }
+
+    #[test]
+    fn repair_and_gc_configs_preserve_fields() {
+        let repair = actual::SorafsRepair {
+            enabled: true,
+            db_dsn: Some("postgres://sorafs/repair".into()),
+            db_pool_max_connections: 20,
+            claim_ttl_secs: 900,
+            heartbeat_interval_secs: 45,
+            max_attempts: 6,
+            worker_concurrency: 12,
+            backoff_initial_secs: 7,
+            backoff_max_secs: 120,
+            default_slash_penalty_nano: 5_000,
+        };
+
+        let cfg = RepairConfig::from(&repair);
+        assert!(cfg.enabled());
+        assert_eq!(cfg.db_dsn(), Some("postgres://sorafs/repair"));
+        assert_eq!(cfg.db_pool_max_connections(), 20);
+        assert_eq!(cfg.claim_ttl_secs(), 900);
+        assert_eq!(cfg.heartbeat_interval_secs(), 45);
+        assert_eq!(cfg.max_attempts(), 6);
+        assert_eq!(cfg.worker_concurrency(), 12);
+        assert_eq!(cfg.backoff_initial_secs(), 7);
+        assert_eq!(cfg.backoff_max_secs(), 120);
+        assert_eq!(cfg.default_slash_penalty_nano(), 5_000);
+
+        let gc = actual::SorafsGc {
+            enabled: true,
+            db_dsn: Some("postgres://sorafs/gc".into()),
+            db_pool_max_connections: 10,
+            interval_secs: 300,
+            max_deletions_per_run: 2_000,
+            retention_grace_secs: 86_400,
+            pre_admission_sweep: false,
+        };
+
+        let gc_cfg = GcConfig::from(&gc);
+        assert!(gc_cfg.enabled());
+        assert_eq!(gc_cfg.db_dsn(), Some("postgres://sorafs/gc"));
+        assert_eq!(gc_cfg.db_pool_max_connections(), 10);
+        assert_eq!(gc_cfg.interval_secs(), 300);
+        assert_eq!(gc_cfg.max_deletions_per_run(), 2_000);
+        assert_eq!(gc_cfg.retention_grace_secs(), 86_400);
+        assert!(!gc_cfg.pre_admission_sweep());
     }
 }

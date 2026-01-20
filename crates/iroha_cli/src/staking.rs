@@ -12,7 +12,7 @@ use iroha::data_model::{
     prelude::AccountId,
 };
 use iroha_primitives::numeric::Numeric;
-use std::{fs, path::PathBuf, str::FromStr};
+use std::{fs, path::PathBuf};
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -39,11 +39,11 @@ pub struct RegisterArgs {
     /// Lane id to register against
     #[arg(long)]
     pub lane_id: u32,
-    /// Validator account id (stake-elected lane)
-    #[arg(long, value_name = "ACCOUNT@DOMAIN")]
+    /// Validator account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
+    #[arg(long, value_name = "ACCOUNT_ID")]
     pub validator: String,
     /// Optional staking account (defaults to validator)
-    #[arg(long, value_name = "ACCOUNT@DOMAIN")]
+    #[arg(long, value_name = "ACCOUNT_ID")]
     pub stake_account: Option<String>,
     /// Initial self-bond (integer, uses the staking asset scale)
     #[arg(long, value_name = "AMOUNT")]
@@ -56,9 +56,9 @@ pub struct RegisterArgs {
 impl Run for RegisterArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let lane_id = LaneId::new(self.lane_id);
-        let validator = parse_account_id(&self.validator, "--validator")?;
+        let validator = parse_account_id(context, &self.validator, "--validator")?;
         let stake_account = match self.stake_account {
-            Some(value) => parse_account_id(&value, "--stake-account")?,
+            Some(value) => parse_account_id(context, &value, "--stake-account")?,
             None => validator.clone(),
         };
         let metadata = load_metadata(self.metadata.as_ref())?;
@@ -79,15 +79,15 @@ pub struct ActivateArgs {
     /// Lane id containing the pending validator
     #[arg(long)]
     pub lane_id: u32,
-    /// Validator account id
-    #[arg(long, value_name = "ACCOUNT@DOMAIN")]
+    /// Validator account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
+    #[arg(long, value_name = "ACCOUNT_ID")]
     pub validator: String,
 }
 
 impl Run for ActivateArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let lane_id = LaneId::new(self.lane_id);
-        let validator = parse_account_id(&self.validator, "--validator")?;
+        let validator = parse_account_id(context, &self.validator, "--validator")?;
         let instruction: InstructionBox = ActivatePublicLaneValidator { lane_id, validator }.into();
         context.finish(vec![instruction])
     }
@@ -98,8 +98,8 @@ pub struct ExitArgs {
     /// Lane id containing the validator
     #[arg(long)]
     pub lane_id: u32,
-    /// Validator account id
-    #[arg(long, value_name = "ACCOUNT@DOMAIN")]
+    /// Validator account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
+    #[arg(long, value_name = "ACCOUNT_ID")]
     pub validator: String,
     /// Release timestamp in milliseconds (must not precede current block timestamp)
     #[arg(long, value_name = "MILLIS")]
@@ -109,7 +109,7 @@ pub struct ExitArgs {
 impl Run for ExitArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let lane_id = LaneId::new(self.lane_id);
-        let validator = parse_account_id(&self.validator, "--validator")?;
+        let validator = parse_account_id(context, &self.validator, "--validator")?;
         let instruction: InstructionBox = ExitPublicLaneValidator {
             lane_id,
             validator,
@@ -120,8 +120,8 @@ impl Run for ExitArgs {
     }
 }
 
-fn parse_account_id(value: &str, flag: &str) -> Result<AccountId> {
-    AccountId::from_str(value)
+fn parse_account_id<C: RunContext>(context: &C, value: &str, flag: &str) -> Result<AccountId> {
+    crate::resolve_account_id(context, value)
         .map_err(|err| eyre!("invalid account id passed to {flag}: {err}"))
 }
 

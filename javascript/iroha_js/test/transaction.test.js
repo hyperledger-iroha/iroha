@@ -13,23 +13,39 @@ import {
   buildRegisterAssetDefinitionMintAndTransferTransaction,
 } from "../src/transaction.js";
 import { ToriiClient } from "../src/toriiClient.js";
+import { AccountAddress } from "../src/address.js";
 import { makeNativeTest } from "./helpers/native.js";
 
 const BASE_URL = "http://localhost:8080";
 const AUTHORITY_ID_RAW =
   "ED0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245@wonderland";
-const AUTHORITY_ID =
-  "34mSYnDgbaJM58rbLoif4Tkp7G8Y5nHVgN4msza9MxHNAxLyVUNWFijRCZkkDnFVEME45izNT@wonderland";
+const AUTHORITY_ID = ih58FromEd25519AccountId(AUTHORITY_ID_RAW);
 const AUTHORITY_ID_INPUT = AUTHORITY_ID_RAW.toLowerCase();
 const PRIVATE_KEY = Buffer.alloc(32, 0x11);
 const ASSET_ID = `rose##${AUTHORITY_ID}`;
 const ASSET_ID_INPUT = `rose##${AUTHORITY_ID_INPUT}`;
-const NEW_ACCOUNT_ID =
+const NEW_ACCOUNT_ID_RAW =
   "ED0120C0F6FA775885F8FFB5F203C10EAA90E1B49FB4CD39C0F95CCA1E5A02B5E45F61@wonderland";
-const NEW_ACCOUNT_ID_INPUT = NEW_ACCOUNT_ID.toLowerCase();
+const NEW_ACCOUNT_ID = ih58FromEd25519AccountId(NEW_ACCOUNT_ID_RAW);
+const NEW_ACCOUNT_ID_INPUT = NEW_ACCOUNT_ID_RAW.toLowerCase();
 const ASSET_DEFINITION_ID = "rose#wonderland";
 const ASSET_DEFINITION_ID_INPUT = ASSET_DEFINITION_ID.toLowerCase();
 const test = makeNativeTest(baseTest);
+
+function ih58FromEd25519AccountId(raw) {
+  const atIndex = raw.lastIndexOf("@");
+  if (atIndex === -1) {
+    throw new Error("expected <signatory>@<domain> format");
+  }
+  const signatory = raw.slice(0, atIndex).trim().toUpperCase();
+  const domain = raw.slice(atIndex + 1).trim();
+  if (!signatory.startsWith("ED0120")) {
+    throw new Error("expected ed25519 multihash signatory");
+  }
+  const publicKeyHex = signatory.slice(6);
+  const publicKey = Buffer.from(publicKeyHex, "hex");
+  return AccountAddress.fromAccount({ domain, publicKey }).toIH58();
+}
 
 test("hashSignedTransaction delegates to native binding and returns hex", () => {
   const input = Buffer.from([0xde, 0xad]);
@@ -528,8 +544,9 @@ test("buildRegisterAccountAndTransferTransaction expands registration and transf
 
 test("buildRegisterAccountAndTransferTransaction supports transfer arrays", () => {
   const captures = [];
-  const secondAccountId =
+  const secondAccountIdRaw =
     "ED0120935DC855E1977DB7CF24E7C4E0015CBAC9D4A2DDB814C3F23A4A032B11D8EBFD@wonderland";
+  const secondAccountId = ih58FromEd25519AccountId(secondAccountIdRaw);
   withNativeBinding(
     {
       buildTransaction: (_chain, authority, instructions) => {
@@ -547,7 +564,7 @@ test("buildRegisterAccountAndTransferTransaction supports transfer arrays", () =
         account: { accountId: NEW_ACCOUNT_ID_INPUT },
         transfers: [
           { sourceAssetId: ASSET_ID, quantity: "2", destinationAccountId: NEW_ACCOUNT_ID_INPUT },
-          { sourceAssetId: ASSET_ID, quantity: "1", destinationAccountId: secondAccountId },
+          { sourceAssetId: ASSET_ID, quantity: "1", destinationAccountId: secondAccountIdRaw },
         ],
         privateKey: PRIVATE_KEY,
       }),
@@ -813,8 +830,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
   const captures = [];
   const secondAccountIdRaw =
     "ED0120A4353E54CDB155483A4A52DEA5FE335DBA74DEFF0E977B5D5F2C3960F4660E21@wonderland";
-  const secondAccountId =
-    "34mSYnDgbaJM58rbLoif4Tkp7G6sNmuWGM7kusVkmxrHraDMMBo8YhaHY9QEsJcW752nFYoVi@wonderland";
+  const secondAccountId = ih58FromEd25519AccountId(secondAccountIdRaw);
   const secondAccountIdInput = secondAccountIdRaw.toLowerCase();
   withNativeBinding(
     {

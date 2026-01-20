@@ -552,15 +552,14 @@ mod tests {
     #[test]
     fn shield_gas_charges_commitment() {
         use iroha_data_model::{
-            confidential::ConfidentialEncryptedPayload,
-            isi::zk::Shield,
-            prelude::{AccountId, AssetDefinitionId},
+            confidential::ConfidentialEncryptedPayload, isi::zk::Shield, prelude::AssetDefinitionId,
         };
+        use iroha_test_samples::ALICE_ID;
 
         crate::test_alias::ensure();
         super::configure_confidential_gas(super::ConfidentialGasSchedule::default());
         let asset: AssetDefinitionId = "shield#domain".parse().unwrap();
-        let account: AccountId = "alice@domain".parse().unwrap();
+        let account = ALICE_ID.clone();
         let shield = Shield::new(
             asset,
             account,

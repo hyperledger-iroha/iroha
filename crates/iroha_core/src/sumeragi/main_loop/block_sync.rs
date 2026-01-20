@@ -282,7 +282,8 @@ impl Actor {
         );
         let cert_hint = incoming_qc.as_ref();
         let checkpoint_hint = validator_checkpoint.as_ref();
-        // Allow NPoS bootstrap to accept next-height block sync updates without roster artifacts.
+        // Allow next-height block sync updates without roster artifacts; missing-block requests
+        // already opt into the uncertified path.
         let allow_uncertified = match consensus_mode {
             ConsensusMode::Permissioned => {
                 block_height == local_height.saturating_add(1) || requested_missing_block

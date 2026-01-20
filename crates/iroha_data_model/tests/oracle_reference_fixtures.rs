@@ -284,8 +284,8 @@ fn write_fixture<T: JsonSerialize>(path: &Path, value: &T) {
 
 fn sample_providers() -> Vec<AccountId> {
     [
-        "34mSYnLrmfrui7Ba2h9RbAPY1hHa7ZCvLRLUSYBujVoUYk1eeBFAZPChUmyGTH47EtrQxAFVA@validators",
-        "34mSYnLrmfrui7Ba2h9RbAPY1hHNEQje517tbXn44vUUkA7F8361DR6aQeHKSaNSKFruciKzA@validators",
+        "34mSYnLrmfrui7Ba2h9RbAPY1hHa7ZCvLRLUSYBujVoUYk1eeBFAZPChUmyGTH47EtrQxAFVA",
+        "34mSYnLrmfrui7Ba2h9RbAPY1hHNEQje517tbXn44vUUkA7F8361DR6aQeHKSaNSKFruciKzA",
     ]
     .into_iter()
     .map(|id| AccountId::from_str(id).expect("account id"))

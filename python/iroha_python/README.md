@@ -21,7 +21,7 @@ from iroha_python import (
 )
 
 pair = derive_ed25519_keypair_from_seed(b"demo-seed")
-authority = pair.default_account_id("wonderland")
+authority = pair.default_account_id("wonderland")  # Canonical IH58 account id
 instruction = Instruction.register_domain("wonderland")
 
 client = ToriiClient("http://127.0.0.1:8080", auth_token="dev-token")

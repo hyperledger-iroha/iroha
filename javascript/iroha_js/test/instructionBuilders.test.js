@@ -135,7 +135,7 @@ function canonicalizeAssetIdUsingNorito(assetId) {
   return canonicalizeValue(decoded).Mint.Asset.destination;
 }
 
-function buildLocal8Literal(address, domain) {
+function buildLocal8Literal(address) {
   const canonicalHex = address.canonicalHex();
   const payload = Buffer.from(canonicalHex.slice(2), "hex");
   const digestStart = 2;
@@ -143,15 +143,18 @@ function buildLocal8Literal(address, domain) {
     payload.subarray(0, digestStart + 8),
     payload.subarray(digestStart + 12),
   ]);
-  return `0x${truncated.toString("hex")}@${domain}`;
+  return `0x${truncated.toString("hex")}`;
 }
 
-const ACCOUNT_SIGNATORY_CANONICAL_HEX =
-  "0x0201b8ae571b79c5a80f5834da2b000120ce7fa46c9dce7ea4b125e2e36bdb63ea33073e7590ac92816ae1e861b7048b03";
 const ACCOUNT_SIGNATORY =
   "ED0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
-const ACCOUNT_ID = `${ACCOUNT_SIGNATORY}@wonderland`;
-const ACCOUNT_ID_INPUT = `${ACCOUNT_SIGNATORY_CANONICAL_HEX.toUpperCase()}@wonderland`;
+const ACCOUNT_PUBLIC_KEY = hexToBytes(ACCOUNT_SIGNATORY.slice(6));
+const ACCOUNT_ADDRESS = AccountAddress.fromAccount({
+  domain: DOMAIN_ID,
+  publicKey: ACCOUNT_PUBLIC_KEY,
+});
+const ACCOUNT_ID = ACCOUNT_ADDRESS.toIH58();
+const ACCOUNT_ID_INPUT = `${ACCOUNT_SIGNATORY}@${DOMAIN_ID}`;
 const ACCOUNT_ID_CANONICAL = hasNoritoBinding()
   ? canonicalizeAccountIdUsingNorito(ACCOUNT_ID)
   : ACCOUNT_ID;
@@ -170,10 +173,10 @@ const SAMPLE_ACCOUNT_ADDRESS = AccountAddress.fromAccount({
   domain: DOMAIN_ID,
   publicKey: SAMPLE_PUBLIC_KEY,
 });
-const SAMPLE_ACCOUNT_IH58_LITERAL = `${SAMPLE_ACCOUNT_ADDRESS.toIH58()}@${DOMAIN_ID}`;
-const SAMPLE_ACCOUNT_COMPRESSED_LITERAL = `${SAMPLE_ACCOUNT_ADDRESS.toCompressedSora()}@${DOMAIN_ID}`;
+const SAMPLE_ACCOUNT_IH58_LITERAL = SAMPLE_ACCOUNT_ADDRESS.toIH58();
+const SAMPLE_ACCOUNT_COMPRESSED_LITERAL = SAMPLE_ACCOUNT_ADDRESS.toCompressedSora();
 const SAMPLE_ACCOUNT_CANONICAL = exportedNormalizeAccountId(SAMPLE_ACCOUNT_IH58_LITERAL);
-const SAMPLE_ACCOUNT_LOCAL8_LITERAL = buildLocal8Literal(SAMPLE_ACCOUNT_ADDRESS, DOMAIN_ID);
+const SAMPLE_ACCOUNT_LOCAL8_LITERAL = buildLocal8Literal(SAMPLE_ACCOUNT_ADDRESS);
 
 function toByteArray(bytes) {
   return Array.from(Buffer.from(bytes));

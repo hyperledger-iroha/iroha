@@ -8426,6 +8426,19 @@ pub mod isi {
                 }
                 .into());
             }
+            let selector =
+                iroha_data_model::account::AccountDomainSelector::from_domain(&canonical_id)
+                    .map_err(|err| {
+                        InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(err.code_str().into()),
+                        )
+                    })?;
+            if let Some(existing) = state_transaction.world.domain_selectors.get(&selector) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!("Domain selector {selector:?} already bound to domain {existing}")
+                        .into(),
+                ));
+            }
 
             let mut domain = new_domain.build(authority);
             domain.id = canonical_id.clone();
@@ -8451,6 +8464,16 @@ pub mod isi {
                     id: IdBox::DomainId(canonical_id.clone()),
                 }
                 .into());
+            }
+            if world
+                .domain_selectors
+                .insert(selector, canonical_id.clone())
+                .is_some()
+            {
+                world.domains.remove(canonical_id.clone());
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "Domain selector already registered".to_owned().into(),
+                ));
             }
 
             world.emit_events(Some(DomainEvent::Created(event_domain)));
@@ -9126,10 +9149,22 @@ pub mod isi {
                     continue;
                 };
                 if let Some(label) = account_value.label().cloned() {
-                    state_transaction.world.account_rekey_records.remove(label);
+                    state_transaction
+                        .world
+                        .account_rekey_records
+                        .remove(label.clone());
+                    state_transaction.world.account_aliases.remove(label);
                 }
                 if let Some(uaid) = account_value.uaid().copied() {
+                    state_transaction.world.uaid_accounts.remove(uaid);
+                    for opaque in account_value.opaque_ids() {
+                        state_transaction.world.opaque_uaids.remove(*opaque);
+                    }
                     state_transaction.rebuild_space_directory_bindings(uaid);
+                } else {
+                    for opaque in account_value.opaque_ids() {
+                        state_transaction.world.opaque_uaids.remove(*opaque);
+                    }
                 }
             }
 
@@ -9156,6 +9191,14 @@ pub mod isi {
                     .remove(asset_definition_id.clone());
             }
 
+            let selector = iroha_data_model::account::AccountDomainSelector::from_domain(
+                &domain_id,
+            )
+            .map_err(|err| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    err.code_str().into(),
+                ))
+            })?;
             if state_transaction
                 .world
                 .domains
@@ -9164,6 +9207,7 @@ pub mod isi {
             {
                 return Err(FindError::Domain(domain_id).into());
             }
+            state_transaction.world.domain_selectors.remove(selector);
 
             state_transaction
                 .world

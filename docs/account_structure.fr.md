@@ -530,11 +530,9 @@ la piste d’audit puisse être reconstruite offline.
    demander les signatures.
 4. **Vérifier et publier.** Suivre la checklist du runbook (hashes, Sigstore,
    monotonie de `sequence`) avant de répliquer le bundle vers SoraFS. Torii
-   utilise maintenant `torii.strict_addresses = true` par défaut, de sorte que
    les clusters de production exigent immédiatement des littéraux
    IH58/compressés canoniques après la mise à jour du bundle.
 5. **Surveiller et, si besoin, revenir en arrière.** Garder les panneaux
    Local‑8 à zéro pendant 30 jours ; en cas de régression, republier le bundle
    de manifests précédent et, uniquement sur les environnements non
-   productifs, basculer temporairement `torii.strict_addresses=false` jusqu’à
    stabilisation de la télémétrie.

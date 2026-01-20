@@ -44,7 +44,6 @@ change-management ticket کے ساتھ منسلک کریں اور Grafana screen
 
 1. اسکرپٹ کو dedicated job میں چلائیں اور outputs اپ لوڈ کریں۔
 2. جب `audit.json` Local selectors رپورٹ کرے (`domain.kind = local12`) تو merges روک دیں۔
-3. جب dashboards صفر legitimate usage دکھائیں تو `torii.strict_addresses` کو
    default `true` پر رکھیں (صرف dev/test میں regressions کی تشخیص کے وقت `false` کریں) اور
    `iroha address normalize --fail-on-warning --only-local` کو CI میں شامل کریں تاکہ
    regressions production تک پہنچنے سے پہلے فیل ہوں۔

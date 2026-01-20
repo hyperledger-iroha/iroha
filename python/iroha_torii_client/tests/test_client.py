@@ -22,9 +22,7 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
     decode_pdp_commitment_header,
 )
 
-CANONICAL_OWNER = (
-    "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9@wonderland"
-)
+CANONICAL_OWNER = "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9"
 
 
 class StubResponse(requests.Response):
@@ -313,8 +311,8 @@ def test_get_explorer_account_qr_parses_payload_and_params() -> None:
     session.queue(
         StubResponse(
             payload={
-                "canonical_id": "alice@wonderland",
-                "literal": "ih58:alice@wonderland",
+                "canonical_id": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
+                "literal": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
                 "address_format": "ih58",
                 "network_prefix": 26,
                 "error_correction": "quartile",
@@ -326,11 +324,11 @@ def test_get_explorer_account_qr_parses_payload_and_params() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    qr = client.get_explorer_account_qr("alice@wonderland", address_format="compressed")
+    qr = client.get_explorer_account_qr("RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9", address_format="compressed")
 
     assert qr == ExplorerAccountQr(
-        canonical_id="alice@wonderland",
-        literal="ih58:alice@wonderland",
+        canonical_id="RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
+        literal="RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
         address_format="ih58",
         network_prefix=26,
         error_correction="quartile",
@@ -340,7 +338,9 @@ def test_get_explorer_account_qr_parses_payload_and_params() -> None:
     )
     call = session.calls[0]
     assert call["method"] == "GET"
-    assert call["url"].endswith("/v1/explorer/accounts/alice%40wonderland/qr")
+    assert call["url"].endswith(
+        "/v1/explorer/accounts/RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9/qr"
+    )
     assert call["params"] == {"address_format": "compressed"}
     assert call["headers"]["Accept"] == "application/json"
 
@@ -350,8 +350,8 @@ def test_get_explorer_account_qr_normalizes_payload_variants() -> None:
     session.queue(
         StubResponse(
             payload={
-                "canonicalId": "bob@wonderland",
-                "literal": "snx1:bob@wonderland",
+                "canonicalId": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
+                "literal": "snx1bobacct",
                 "addressFormat": "compressed",
                 "networkPrefix": 27,
                 "errorCorrection": "medium",
@@ -363,11 +363,11 @@ def test_get_explorer_account_qr_normalizes_payload_variants() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    qr = client.get_explorer_account_qr("bob@wonderland")
+    qr = client.get_explorer_account_qr("34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r")
 
     assert qr == ExplorerAccountQr(
-        canonical_id="bob@wonderland",
-        literal="snx1:bob@wonderland",
+        canonical_id="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
+        literal="snx1bobacct",
         address_format="compressed",
         network_prefix=27,
         error_correction="medium",
@@ -498,7 +498,7 @@ def test_list_runtime_upgrades_parses_records() -> None:
                                 "end_height": 20,
                             },
                             "status": {"ActivatedAt": 12},
-                            "proposer": "alice@wonderland",
+                            "proposer": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
                             "created_height": 8,
                         },
                     },
@@ -516,7 +516,7 @@ def test_list_runtime_upgrades_parses_records() -> None:
                                 "end_height": 40,
                             },
                             "status": {"Proposed": None},
-                            "proposer": "bob@wonderland",
+                            "proposer": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
                             "created_height": 25,
                         },
                     },
@@ -617,7 +617,7 @@ def test_get_uaid_portfolio_parses_payload() -> None:
                         "dataspace_alias": "treasury",
                         "accounts": [
                             {
-                                "account_id": "alice@wonderland",
+                                "account_id": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
                                 "label": "primary",
                                 "assets": [
                                     {
@@ -662,7 +662,7 @@ def test_get_uaid_bindings_applies_address_format() -> None:
                     {
                         "dataspace_id": 9,
                         "dataspace_alias": "alpha",
-                        "accounts": ["alice@wonderland", " bob@wonderland "],
+                        "accounts": ["RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9", " 34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r "],
                     }
                 ],
             }
@@ -672,7 +672,7 @@ def test_get_uaid_bindings_applies_address_format() -> None:
 
     bindings = client.get_uaid_bindings(uaid_literal, address_format="compressed")
 
-    assert bindings.dataspaces[0].accounts == ["alice@wonderland", "bob@wonderland"]
+    assert bindings.dataspaces[0].accounts == ["RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9", "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r"]
     assert session.calls[0]["params"] == {"address_format": "compressed"}
 
 
@@ -694,7 +694,7 @@ def test_get_uaid_manifests_parses_payload_and_filters() -> None:
                             "activated_epoch": 12,
                             "revocation": {"epoch": 44, "reason": "duplicate"},
                         },
-                        "accounts": ["alice@wonderland"],
+                        "accounts": ["RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9"],
                         "manifest": {
                             "version": "1.0",
                             "uaid": uaid_literal,
@@ -703,7 +703,7 @@ def test_get_uaid_manifests_parses_payload_and_filters() -> None:
                             "activation_epoch": 12,
                             "entries": [
                                 {
-                                    "scope": {"accounts": ["alice@wonderland"]},
+                                    "scope": {"accounts": ["RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9"]},
                                     "effect": {"action": "allow"},
                                     "notes": "demo",
                                 }
@@ -1984,8 +1984,8 @@ def test_list_offline_allowances_parses_payload() -> None:
                 "items": [
                     {
                         "certificate_id_hex": "cafebabe",
-                        "controller_id": "alice@wonderland",
-                        "controller_display": "alice@wonderland",
+                        "controller_id": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
+                        "controller_display": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
                         "asset_id": "rose#wonderland",
                         "registered_at_ms": 10,
                         "expires_at_ms": 20,
@@ -1998,7 +1998,7 @@ def test_list_offline_allowances_parses_payload() -> None:
                         "deadline_state": "warning",
                         "deadline_ms": 99,
                         "deadline_ms_remaining": -5,
-                        "record": {"certificate": {"controller": "alice@wonderland"}},
+                        "record": {"certificate": {"controller": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9"}},
                     }
                 ],
             }
@@ -2006,7 +2006,7 @@ def test_list_offline_allowances_parses_payload() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    page = client.list_offline_allowances(controller_id="alice@wonderland", include_expired=True)
+    page = client.list_offline_allowances(controller_id="RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9", include_expired=True)
 
     assert page.total == 1
     assert len(page.items) == 1
@@ -2015,9 +2015,9 @@ def test_list_offline_allowances_parses_payload() -> None:
     assert item.deadline is not None
     assert item.deadline.kind == "policy"
     assert item.deadline.ms_remaining == -5
-    assert item.record["certificate"]["controller"] == "alice@wonderland"
+    assert item.record["certificate"]["controller"] == "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9"
     assert session.calls[0]["params"] == {
-        "controller_id": "alice@wonderland",
+        "controller_id": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
         "include_expired": True,
     }
 
@@ -2027,7 +2027,7 @@ def test_query_offline_allowances_posts_payload() -> None:
     session.queue(StubResponse(payload={"items": [], "total": 0}))
     client = ToriiClient("http://node.test", session=session)
 
-    page = client.query_offline_allowances({"filter": {"controller_id": "alice@wonderland"}})
+    page = client.query_offline_allowances({"filter": {"controller_id": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9"}})
 
     assert page.total == 0
     call = session.calls[0]
@@ -2035,7 +2035,7 @@ def test_query_offline_allowances_posts_payload() -> None:
     assert call["url"].endswith("/v1/offline/allowances/query")
     assert call["headers"]["Content-Type"] == "application/json"
     assert json.loads(call["data"].decode("utf-8")) == {
-        "filter": {"controller_id": "alice@wonderland"}
+        "filter": {"controller_id": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9"}
     }
 
 
@@ -2048,12 +2048,12 @@ def test_list_offline_transfers_parses_payload() -> None:
                 "items": [
                     {
                         "bundle_id_hex": "bead",
-                        "controller_id": "alice@wonderland",
-                        "controller_display": "alice@wonderland",
-                        "receiver_id": "bob@wonderland",
-                        "receiver_display": "bob@wonderland",
-                        "deposit_account_id": "depot@wonderland",
-                        "deposit_account_display": "depot@wonderland",
+                        "controller_id": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
+                        "controller_display": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
+                        "receiver_id": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
+                        "receiver_display": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
+                        "deposit_account_id": "3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF",
+                        "deposit_account_display": "3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF",
                         "asset_id": "rose#wonderland",
                         "certificate_id_hex": "cafebabe",
                         "certificate_expires_at_ms": 100,
@@ -2124,8 +2124,8 @@ def test_list_offline_summaries_parses_payload() -> None:
                 "items": [
                     {
                         "certificate_id_hex": "c0de",
-                        "controller_id": "alice@wonderland",
-                        "controller_display": "alice@wonderland",
+                        "controller_id": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
+                        "controller_display": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
                         "summary_hash_hex": "f00d",
                         "apple_key_counters": {"k1": 1},
                         "android_series_counters": {"p0": 2},
@@ -2255,7 +2255,7 @@ def test_submit_zk_ballot_rejects_deprecated_public_inputs() -> None:
 
     with pytest.raises(RuntimeError, match="durationBlocks"):
         client.submit_zk_ballot(
-            authority="alice@wonderland",
+            authority="RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
             chain_id="chain",
             election_id="election-1",
             proof_b64="AAAA",
@@ -2282,7 +2282,7 @@ def test_submit_zk_ballot_normalizes_public_inputs() -> None:
     client = ToriiClient("http://node.test", session=session)
 
     client.submit_zk_ballot(
-        authority="alice@wonderland",
+        authority="RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
         chain_id="chain",
         election_id="election-1",
         proof_b64="AAAA",
@@ -2308,7 +2308,7 @@ def test_submit_zk_ballot_rejects_invalid_hex_hints() -> None:
 
     with pytest.raises(RuntimeError, match="root_hint"):
         client.submit_zk_ballot(
-            authority="alice@wonderland",
+            authority="RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
             chain_id="chain",
             election_id="election-1",
             proof_b64="AAAA",
@@ -2328,7 +2328,7 @@ def test_submit_zk_ballot_rejects_incomplete_lock_hints() -> None:
 
     with pytest.raises(RuntimeError, match="owner, amount, duration_blocks"):
         client.submit_zk_ballot(
-            authority="alice@wonderland",
+            authority="RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
             chain_id="chain",
             election_id="election-1",
             proof_b64="AAAA",
@@ -2343,12 +2343,12 @@ def test_submit_zk_ballot_rejects_noncanonical_owner() -> None:
 
     with pytest.raises(RuntimeError, match="canonical account id"):
         client.submit_zk_ballot(
-            authority="alice@wonderland",
+            authority="RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
             chain_id="chain",
             election_id="election-1",
             proof_b64="AAAA",
             public={
-                "owner": "0xdead@wonderland",
+                "owner": "snx1dead",
                 "amount": "100",
                 "duration_blocks": 5,
             },
@@ -2362,7 +2362,7 @@ def test_submit_zk_ballot_v1_rejects_incomplete_lock_hints() -> None:
 
     with pytest.raises(RuntimeError, match="owner, amount, duration_blocks"):
         client.submit_zk_ballot_v1(
-            authority="alice@wonderland",
+            authority="RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
             chain_id="chain",
             election_id="election-1",
             backend="halo2/ipa",
@@ -2378,12 +2378,12 @@ def test_submit_zk_ballot_v1_rejects_noncanonical_owner() -> None:
 
     with pytest.raises(RuntimeError, match="canonical account id"):
         client.submit_zk_ballot_v1(
-            authority="alice@wonderland",
+            authority="RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
             chain_id="chain",
             election_id="election-1",
             backend="halo2/ipa",
             envelope_b64="AAAA",
-            owner="0xdead@wonderland",
+            owner="snx1dead",
             amount="100",
             duration_blocks=5,
         )
@@ -2395,7 +2395,7 @@ def test_submit_zk_ballot_v1_normalizes_hex_hints() -> None:
     client = ToriiClient("http://node.test", session=session)
 
     client.submit_zk_ballot_v1(
-        authority="alice@wonderland",
+        authority="RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
         chain_id="chain",
         election_id="election-1",
         backend="halo2/ipa",
@@ -2416,7 +2416,7 @@ def test_submit_zk_ballot_v1_rejects_invalid_hex_hints() -> None:
 
     with pytest.raises(RuntimeError, match="root_hint"):
         client.submit_zk_ballot_v1(
-            authority="alice@wonderland",
+            authority="RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
             chain_id="chain",
             election_id="election-1",
             backend="halo2/ipa",
@@ -2433,7 +2433,7 @@ def test_list_subscription_plans_encodes_params() -> None:
                 "items": [
                     {
                         "plan_id": "plan#subs",
-                        "plan": {"provider": "alice@wonderland", "pricing": {"kind": "fixed"}},
+                        "plan": {"provider": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9", "pricing": {"kind": "fixed"}},
                     }
                 ],
                 "total": 1,
@@ -2442,13 +2442,13 @@ def test_list_subscription_plans_encodes_params() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    page = client.list_subscription_plans(provider="alice@wonderland", limit=10, offset=5)
+    page = client.list_subscription_plans(provider="RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9", limit=10, offset=5)
 
     assert page.total == 1
     assert page.items[0].plan_id == "plan#subs"
-    assert page.items[0].plan["provider"] == "alice@wonderland"
+    assert page.items[0].plan["provider"] == "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9"
     assert session.calls[0]["params"] == {
-        "provider": "alice@wonderland",
+        "provider": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
         "limit": 10,
         "offset": 5,
     }
@@ -2468,19 +2468,19 @@ def test_create_subscription_plan_posts_payload() -> None:
     client = ToriiClient("http://node.test", session=session)
 
     result = client.create_subscription_plan(
-        authority="alice@wonderland",
+        authority="RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
         private_key="ed25519:priv",
         plan_id="plan#subs",
-        plan={"provider": "alice@wonderland"},
+        plan={"provider": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9"},
     )
 
     assert result.ok is True
     assert result.plan_id == "plan#subs"
     payload = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert payload["authority"] == "alice@wonderland"
+    assert payload["authority"] == "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9"
     assert payload["private_key"] == "ed25519:priv"
     assert payload["plan_id"] == "plan#subs"
-    assert payload["plan"]["provider"] == "alice@wonderland"
+    assert payload["plan"]["provider"] == "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9"
 
 
 def test_list_subscriptions_encodes_params() -> None:
@@ -2493,7 +2493,7 @@ def test_list_subscriptions_encodes_params() -> None:
                         "subscription_id": "sub-1$subscriptions",
                         "subscription": {"status": "active"},
                         "invoice": {"amount": "120"},
-                        "plan": {"provider": "alice@wonderland"},
+                        "plan": {"provider": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9"},
                     }
                 ],
                 "total": 1,
@@ -2503,8 +2503,8 @@ def test_list_subscriptions_encodes_params() -> None:
     client = ToriiClient("http://node.test", session=session)
 
     page = client.list_subscriptions(
-        owned_by="bob@wonderland",
-        provider="alice@wonderland",
+        owned_by="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
+        provider="RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
         status="ACTIVE",
         limit=25,
         offset=0,
@@ -2514,8 +2514,8 @@ def test_list_subscriptions_encodes_params() -> None:
     assert page.items[0].subscription_id == "sub-1$subscriptions"
     assert page.items[0].subscription["status"] == "active"
     assert session.calls[0]["params"] == {
-        "owned_by": "bob@wonderland",
-        "provider": "alice@wonderland",
+        "owned_by": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
+        "provider": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
         "status": "active",
         "limit": 25,
         "offset": 0,
@@ -2546,7 +2546,7 @@ def test_create_subscription_posts_payload() -> None:
     client = ToriiClient("http://node.test", session=session)
 
     result = client.create_subscription(
-        authority="bob@wonderland",
+        authority="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
         private_key="ed25519:priv",
         subscription_id="sub-1$subscriptions",
         plan_id="plan#subs",
@@ -2558,7 +2558,7 @@ def test_create_subscription_posts_payload() -> None:
 
     assert result.subscription_id == "sub-1$subscriptions"
     payload = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert payload["authority"] == "bob@wonderland"
+    assert payload["authority"] == "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r"
     assert payload["private_key"] == "ed25519:priv"
     assert payload["billing_trigger_id"] == "sub-bill"
     assert payload["usage_trigger_id"] == "sub-usage"
@@ -2573,7 +2573,7 @@ def test_get_subscription_encodes_path_and_parses_response() -> None:
             payload={
                 "subscription_id": "sub-1$subscriptions",
                 "subscription": {"status": "active"},
-                "plan": {"provider": "alice@wonderland"},
+                "plan": {"provider": "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9"},
             }
         )
     )
@@ -2602,23 +2602,23 @@ def test_subscription_actions_post_payloads() -> None:
     session.queue(StubResponse(payload={"ok": True, "subscription_id": "sub-1", "tx_hash_hex": "d"}))
     client = ToriiClient("http://node.test", session=session)
 
-    client.pause_subscription("sub-1", authority="bob@wonderland", private_key="ed25519:priv")
+    client.pause_subscription("sub-1", authority="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r", private_key="ed25519:priv")
     client.resume_subscription(
         "sub-1",
-        authority="bob@wonderland",
+        authority="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
         private_key="ed25519:priv",
         charge_at_ms=1_704_067_200_000,
     )
-    client.cancel_subscription("sub-1", authority="bob@wonderland", private_key="ed25519:priv")
+    client.cancel_subscription("sub-1", authority="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r", private_key="ed25519:priv")
     client.charge_subscription_now(
         "sub-1",
-        authority="bob@wonderland",
+        authority="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
         private_key="ed25519:priv",
         charge_at_ms=1_704_067_200_000,
     )
 
     pause_body = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert pause_body["authority"] == "bob@wonderland"
+    assert pause_body["authority"] == "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r"
     resume_body = json.loads(session.calls[1]["data"].decode("utf-8"))
     assert resume_body["charge_at_ms"] == 1_704_067_200_000
     cancel_body = json.loads(session.calls[2]["data"].decode("utf-8"))
@@ -2634,7 +2634,7 @@ def test_record_subscription_usage_posts_payload() -> None:
 
     result = client.record_subscription_usage(
         "sub-1",
-        authority="alice@wonderland",
+        authority="RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9",
         private_key="ed25519:priv",
         unit_key="compute_ms",
         delta=3600,

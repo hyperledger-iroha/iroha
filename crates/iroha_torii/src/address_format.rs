@@ -5,7 +5,7 @@ use crate::Result;
 /// Preferred textual encoding for account identifiers in Torii responses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AddressFormatPreference {
-    /// IH58 literal (`{ih58}@domain`).
+    /// IH58 literal (`{ih58}`).
     Ih58,
     /// Compressed `snx1` literal.
     Compressed,
@@ -39,7 +39,7 @@ impl AddressFormatPreference {
             Self::Compressed => account_id
                 .to_account_address()
                 .and_then(|address| address.to_compressed_sora())
-                .map(|compressed| format!("{compressed}@{}", account_id.domain()))
+                .map(|compressed| compressed)
                 .unwrap_or_else(|err| {
                     iroha_logger::error!(
                         %err,
@@ -51,7 +51,7 @@ impl AddressFormatPreference {
         }
     }
 
-    /// Render a canonical literal string (IH58@domain) according to the preference.
+    /// Render a canonical literal string (IH58) according to the preference.
     pub fn display_from_literal(self, literal: &str) -> String {
         match self {
             Self::Ih58 => literal.to_string(),
@@ -69,7 +69,7 @@ impl AddressFormatPreference {
                 };
                 match parsed.account_id().to_account_address() {
                     Ok(address) => match address.to_compressed_sora() {
-                        Ok(compressed) => format!("{compressed}@{}", parsed.account_id().domain()),
+                        Ok(compressed) => compressed,
                         Err(err) => {
                             iroha_logger::warn!(
                                 %literal,
@@ -135,7 +135,7 @@ mod tests {
         let compressed_literal = ALICE_ID
             .to_account_address()
             .and_then(|addr| addr.to_compressed_sora())
-            .map(|compressed| format!("{compressed}@{}", ALICE_ID.domain()))
+            .map(|compressed| compressed)
             .expect("compressed literal should encode");
 
         assert_eq!(

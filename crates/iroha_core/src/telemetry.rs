@@ -5978,13 +5978,6 @@ impl Telemetry {
         }
     }
 
-    /// Record whether Torii endpoints enforce strict address literal parsing.
-    pub fn set_torii_address_strict_mode(&self, strict: bool) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.set_torii_address_strict_mode(strict);
-        }
-    }
-
     /// Record a DA rent quote projection for observability.
     pub fn record_da_rent_quote(
         &self,

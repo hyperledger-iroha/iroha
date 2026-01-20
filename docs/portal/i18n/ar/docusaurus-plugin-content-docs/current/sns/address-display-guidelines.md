@@ -209,7 +209,6 @@ payload bit: │version  │ class  │  norm  │ext │
 ان تمتلك النطاقات العالمية ادخالات سجل مطابقة. اعتبر مخرجات CLI الاشعار الموجه
 للمشغل لهذا التجميد - نفس سلسلة التحذير تستخدم عبر tooltips في SDK والاتمتة
 للحفاظ على التوافق مع معايير الخروج في خارطة الطريق. يستخدم Torii الان افتراضيا
-`torii.strict_addresses=true`؛ لا تضعه على `false` الا في عناقيد dev/test عند
 تشخيص regressions. استمر في عكس `torii_address_domain_total{domain_kind}` الى
 Grafana (`dashboards/grafana/address_ingest.json`) حتى يتمكن حزمة دليل ADDR-7 من
 اثبات ان `domain_kind="local12"` بقيت صفرا خلال نافذة 30 يوما المطلوبة قبل ان
@@ -218,7 +217,6 @@ Grafana (`dashboards/grafana/address_ingest.json`) حتى يتمكن حزمة د
 
 - `AddressLocal8Resurgence` يستدعي عندما يبلغ سياق عن زيادة Local-8 جديدة. اوقف
   عمليات rollout للوضع الصارم، حدد سطح SDK المخالف في لوحة المتابعة، واضبط
-  مؤقتا `torii.strict_addresses=false` حتى يعود المؤشر الى الصفر، ثم استعد
   الافتراضي (`true`).
 - `AddressLocal12Collision` يعمل عندما يقوم اسمان Local-12 بعمل hash الى نفس
   digest. اوقف ترويج manifests، شغل عدة Local -> Global لتدقيق ربط digests، و

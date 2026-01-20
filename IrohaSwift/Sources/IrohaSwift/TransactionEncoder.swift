@@ -22,7 +22,7 @@ public enum TransactionInputError: Error, LocalizedError, Equatable {
         case let .emptyAccountId(field):
             return "Account id for \(field) must not be empty."
         case let .malformedAccountId(field, value):
-            return "Account id for \(field) must include a name and domain separated by '@' with no whitespace or reserved characters (@, #, $) in either component (received '\(value)')."
+            return "Account id for \(field) must be IH58/compressed/0x, uaid:/opaque:, or '<alias|public_key>@<domain>' with no whitespace or reserved characters (#, $) in the components (received '\(value)')."
         case .emptyAssetDefinitionId:
             return "Asset definition id must not be empty."
         case let .malformedAssetDefinitionId(value):
@@ -34,7 +34,7 @@ public enum TransactionInputError: Error, LocalizedError, Equatable {
         case .emptyAssetId:
             return "Asset id must not be empty."
         case let .malformedAssetId(value):
-            return "Asset id must follow 'asset#domain#account@domain' (or 'asset##account@domain' when the asset and account domains match) with no whitespace or reserved characters (@, #, $) in the asset name/domain components (received '\(value)')."
+            return "Asset id must follow 'asset#domain#account' with no whitespace or reserved characters (@, #, $) in the asset name/domain components (received '\(value)')."
         case let .invalidZkBallotPublicInputs(reason):
             return "Governance ZK public inputs are invalid: \(reason)"
         }
@@ -94,17 +94,84 @@ struct TransactionInputValidator {
         if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
             throw TransactionInputError.malformedAccountId(field: field, value: trimmed)
         }
-        let components = trimmed.split(separator: "@", omittingEmptySubsequences: false)
-        guard components.count == 2,
-              !components[0].isEmpty,
-              !components[1].isEmpty else {
+        if trimmed.contains("#") || trimmed.contains("$") {
             throw TransactionInputError.malformedAccountId(field: field, value: trimmed)
         }
-        if containsReservedIdCharacters(String(components[0]))
-            || containsReservedIdCharacters(String(components[1])) {
+        let lowered = trimmed.lowercased()
+        if lowered.hasPrefix("uaid:") {
+            return try canonicalizeUaidLiteral(trimmed, field: field)
+        }
+        if lowered.hasPrefix("opaque:") {
+            return try canonicalizeOpaqueLiteral(trimmed, field: field)
+        }
+        if trimmed.contains("@") {
+            let components = trimmed.split(separator: "@", omittingEmptySubsequences: false)
+            guard components.count == 2,
+                  !components[0].isEmpty,
+                  !components[1].isEmpty else {
+                throw TransactionInputError.malformedAccountId(field: field, value: trimmed)
+            }
+            let addressPart = String(components[0])
+            let domainPart = String(components[1])
+            if containsReservedIdCharacters(addressPart)
+                || containsReservedIdCharacters(domainPart) {
+                throw TransactionInputError.malformedAccountId(field: field, value: trimmed)
+            }
+            let canonicalDomain = try AccountAddress.canonicalizeDomainLabel(domainPart)
+            if let parsed = try? AccountAddress.parseAny(addressPart,
+                                                        expectedPrefix: AccountId.defaultNetworkPrefix) {
+                guard parsed.0.matchesDomainLabel(canonicalDomain) else {
+                    throw TransactionInputError.malformedAccountId(field: field, value: trimmed)
+                }
+                return try parsed.0.toIH58(networkPrefix: AccountId.defaultNetworkPrefix)
+            }
+            return "\(addressPart)@\(canonicalDomain)"
+        }
+        do {
+            let parsed = try AccountAddress.parseAny(trimmed,
+                                                     expectedPrefix: AccountId.defaultNetworkPrefix)
+            return try parsed.0.toIH58(networkPrefix: AccountId.defaultNetworkPrefix)
+        } catch {
             throw TransactionInputError.malformedAccountId(field: field, value: trimmed)
         }
-        return trimmed
+    }
+
+    private static func canonicalizeUaidLiteral(_ raw: String, field: String) throws -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 5 else {
+            throw TransactionInputError.malformedAccountId(field: field, value: raw)
+        }
+        let rawHex = String(trimmed.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard rawHex.count == 64 else {
+            throw TransactionInputError.malformedAccountId(field: field, value: raw)
+        }
+        let hexSet = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
+        let allHex = rawHex.unicodeScalars.allSatisfy { hexSet.contains($0) }
+        guard allHex else {
+            throw TransactionInputError.malformedAccountId(field: field, value: raw)
+        }
+        let lastChar = rawHex.lowercased().suffix(1)
+        guard ["1", "3", "5", "7", "9", "b", "d", "f"].contains(String(lastChar)) else {
+            throw TransactionInputError.malformedAccountId(field: field, value: raw)
+        }
+        return "uaid:\(rawHex.lowercased())"
+    }
+
+    private static func canonicalizeOpaqueLiteral(_ raw: String, field: String) throws -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 7 else {
+            throw TransactionInputError.malformedAccountId(field: field, value: raw)
+        }
+        let rawHex = String(trimmed.dropFirst(7)).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard rawHex.count == 64 else {
+            throw TransactionInputError.malformedAccountId(field: field, value: raw)
+        }
+        let hexSet = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
+        let allHex = rawHex.unicodeScalars.allSatisfy { hexSet.contains($0) }
+        guard allHex else {
+            throw TransactionInputError.malformedAccountId(field: field, value: raw)
+        }
+        return "opaque:\(rawHex.lowercased())"
     }
 
     private static func sanitizeAssetDefinitionId(_ assetDefinitionId: String) throws -> String {
@@ -163,11 +230,12 @@ struct TransactionInputValidator {
         if containsReservedIdCharacters(String(assetName)) {
             throw TransactionInputError.malformedAssetId(trimmed)
         }
-        if !definitionDomain.isEmpty {
-            _ = try sanitizeDomainId(String(definitionDomain), field: "assetId")
+        guard !definitionDomain.isEmpty else {
+            throw TransactionInputError.malformedAssetId(trimmed)
         }
-        _ = try sanitizeAccountId(ownerAccount, field: "assetId")
-        return trimmed
+        let canonicalDomain = try sanitizeDomainId(String(definitionDomain), field: "assetId")
+        let canonicalAccount = try sanitizeAccountId(ownerAccount, field: "assetId")
+        return "\(assetName)#\(canonicalDomain)#\(canonicalAccount)"
     }
 
     static func sanitizeMetadataTarget(_ target: MetadataTarget) throws -> MetadataTarget {
@@ -805,17 +873,13 @@ struct SwiftTransactionEncoder {
                 "owner must be a canonical account id"
             )
         }
-        let parts = trimmed.split(separator: "@", omittingEmptySubsequences: false)
-        guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else {
+        if trimmed.contains("@") {
             throw TransactionInputError.invalidZkBallotPublicInputs(
                 "owner must be a canonical account id"
             )
         }
-        let addressPart = String(parts[0])
-        let domainPart = String(parts[1])
-        let canonicalDomain = try AccountAddress.canonicalizeDomainLabel(domainPart)
         let (address, format) = try AccountAddress.parseAny(
-            addressPart,
+            trimmed,
             expectedPrefix: 0x02F1
         )
         guard format == .ih58 else {
@@ -823,13 +887,8 @@ struct SwiftTransactionEncoder {
                 "owner must be a canonical account id"
             )
         }
-        guard address.matchesDomainLabel(canonicalDomain) else {
-            throw TransactionInputError.invalidZkBallotPublicInputs(
-                "owner must be a canonical account id"
-            )
-        }
         let ih58 = try address.toIH58(networkPrefix: 0x02F1)
-        return "\(ih58)@\(canonicalDomain)"
+        return ih58
     }
 
     private static func zkHintPresent(_ value: ToriiJSONValue?) -> Bool {

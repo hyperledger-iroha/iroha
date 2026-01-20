@@ -330,11 +330,13 @@ message instead of a stack trace.
 
 The SoraFS subcommands under `iroha sorafs …` expose structured JSON for pin
 registry listings (`pin list`), alias enumeration (`alias list`), replication
-order listings (`replication list`), and storage stats (`storage show`). Each of
-these accepts pagination parameters (`--limit`, `--offset`) and filters (for
-example `--alias-namespace`, `--manifest-digest`). When multiple arguments are
-present the CLI constructs the appropriate request payload and prints the raw
-JSON response, making it simple to pipe into `jq` or save as audit evidence.
+order listings (`replication list`), repair queue listings (`repair list`), and
+storage stats (`storage show`). Pin/alias/replication list commands accept
+pagination parameters (`--limit`, `--offset`) and filters (for example
+`--alias-namespace`, `--manifest-digest`); `repair list` adds status/provider
+filters for audit queries. GC helpers (`gc inspect`, `gc dry-run`) scan the local
+storage directory to report retention deadlines and expired manifests without
+performing deletions.
 
 ### Pin Registry REST Endpoints
 
@@ -390,8 +392,17 @@ The `iroha` CLI wraps the REST endpoints for day-to-day operations:
   bound aliases and replication orders.
 - `iroha sorafs alias list --namespace=docs` and
   `iroha sorafs replication list --status=pending` mirror the REST filters.
+- `iroha sorafs repair list --status=queued` mirrors the repair queue filters,
+  while `repair claim|complete|fail|escalate` submit signed worker actions or
+  slash proposals to Torii.
+- Repair listings and worker queue selection are ordered by SLA deadline, failure severity, and provider backlog with deterministic tie-breakers (queued time, manifest digest, ticket id).
+- Repair status responses include an `events` array containing base64 Norito
+  `RepairTaskEventV1` entries ordered by occurrence for audit trails; the list
+  is capped to the most recent transitions.
 - `iroha sorafs storage pin --manifest=manifest.to --payload=payload.bin`
   submits a Norito manifest and payload to the storage façade for pinning.
+- `iroha sorafs gc inspect|dry-run --data-dir=/var/lib/sorafs` emits read-only
+  retention reports from the local manifest store for audit evidence.
 
 Every command prints the raw Norito JSON response, which makes it trivial to
 feed into scripting or capture in attestation logs.

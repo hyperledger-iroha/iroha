@@ -13,7 +13,6 @@ Docs/DevRel, and Storage can rehearse the cutover before the Q2 2026 gate.
 
 The plan assumes:
 
-- Torii exposes `/v1/sorafs/*` with `torii.strict_addresses = true`.
 - The packaging helpers under `ci/` and `docs/portal/scripts/` are available.
 - Governance has issued the `docs:portal` alias proof bundle (binary Norito).
 - SoraDNS entries for `docs.sora` already point at the gateway anycast pool.

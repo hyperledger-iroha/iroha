@@ -91,7 +91,6 @@ Para rutas solo JSON, el sandbox Try it embebido suele ser mas rapido: introduce
 | `npm run tryit-proxy` sale con "digest mismatch". | El bundle OpenAPI de Torii cambio upstream. | Ejecuta `npm run sync-openapi -- --latest` (o `--version=<tag>`) y reintenta. |
 | Los widgets devuelven `401` o `403`. | Token ausente, caducado o con permisos insuficientes. | Usa el flujo de dispositivo OAuth o pega un bearer token valido en el sandbox. Para tokens estaticos debes exportar `DOCS_TRYIT_ALLOW_DEFAULT_BEARER=1`. |
 | `429 Too Many Requests` desde el proxy. | Se excedio el limite de tasa por IP. | Aumenta `TRYIT_PROXY_RATE_LIMIT`/`TRYIT_PROXY_RATE_WINDOW_MS` para entornos de confianza o limita scripts de prueba. Todos los rechazos por rate limit incrementan `tryit_proxy_rate_limited_total`. |
-| Errores `502/504` con `ERR_STRICT_ADDRESS_REQUIRED` en los logs de Torii. | Solicitudes reenviadas sin soporte de parseo IH58/comprimido de Norito. | Confirma que el build objetivo de Torii incluye los cambios ADDR-5 (ver `crates/iroha_torii/tests/address_parsing.rs`) y que apuntas al entorno correcto. |
 
 ## Observabilidad
 

@@ -2971,16 +2971,30 @@ fn config_requires_sora_profile(config_layers: &[Table]) -> bool {
     if let Some(config) = config {
         let sorafs_storage = config.torii.sorafs_storage.enabled;
         let sorafs_discovery = config.torii.sorafs_discovery.discovery_enabled;
+        let sorafs_repair = config.torii.sorafs_repair.enabled;
+        let sorafs_gc = config.torii.sorafs_gc.enabled;
         let nexus_requires_router = config.nexus.uses_multilane_catalogs();
         let nexus_lane_overrides = config.nexus.has_lane_overrides();
-        sorafs_storage || sorafs_discovery || nexus_requires_router || nexus_lane_overrides
+        sorafs_storage
+            || sorafs_discovery
+            || sorafs_repair
+            || sorafs_gc
+            || nexus_requires_router
+            || nexus_lane_overrides
     } else {
         let sorafs_storage =
             read_bool(&merged, &["torii", "sorafs_storage", "enabled"]).unwrap_or(false);
         let sorafs_discovery =
             read_bool(&merged, &["torii", "sorafs_discovery", "discovery_enabled"])
                 .unwrap_or(false);
-        sorafs_storage || sorafs_discovery || raw_nexus_overrides(&merged)
+        let sorafs_repair =
+            read_bool(&merged, &["torii", "sorafs_repair", "enabled"]).unwrap_or(false);
+        let sorafs_gc = read_bool(&merged, &["torii", "sorafs_gc", "enabled"]).unwrap_or(false);
+        sorafs_storage
+            || sorafs_discovery
+            || sorafs_repair
+            || sorafs_gc
+            || raw_nexus_overrides(&merged)
     }
 }
 
@@ -3596,10 +3610,7 @@ impl NetworkBuilder {
                 "xor#nexus".parse().expect("stake asset definition");
             let gas_account_id =
                 AccountId::new(ivm_domain.clone(), genesis_key_pair.public_key().clone());
-            let gas_account_address = gas_account_id
-                .to_canonical_hex()
-                .unwrap_or_else(|_| genesis_key_pair.public_key().to_string());
-            let gas_account_str = format!("{gas_account_address}@{ivm_domain}");
+            let gas_account_str = format!("{}@{ivm_domain}", genesis_key_pair.public_key());
 
             let mut bootstrap_layer = Table::new();
             let mut writer = TomlWriter::new(&mut bootstrap_layer);

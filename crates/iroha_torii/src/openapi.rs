@@ -3246,6 +3246,17 @@ fn account_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/accounts/resolve".to_owned(),
+        Value::Object(json_post_operation(
+            "Accounts",
+            "Resolve account literals.",
+            "Resolve account literals into canonical IH58 identifiers.",
+            "#/components/schemas/AccountResolveRequest",
+            "#/components/schemas/AccountResolveResponse",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
         "/v1/accounts/onboard".to_owned(),
         Value::Object(json_post_operation(
             "Accounts",
@@ -4068,13 +4079,81 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/sorafs/audit/repair/claim".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Claim repair ticket.",
+            "Claim a SoraFS repair ticket (requires manifest_digest_hex, idempotency key, and worker signature).",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/audit/repair/heartbeat".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Repair heartbeat.",
+            "Record a SoraFS repair worker heartbeat (requires manifest_digest_hex, idempotency key, and worker signature).",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/audit/repair/complete".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Complete repair ticket.",
+            "Complete a SoraFS repair ticket (requires manifest_digest_hex, idempotency key, and worker signature).",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/audit/repair/fail".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Fail repair ticket.",
+            "Fail a SoraFS repair ticket (requires manifest_digest_hex, idempotency key, and worker signature).",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    let repair_status_query_params = vec![
+        string_query_param(
+            "status",
+            "Filter by repair status (queued, verifying, in_progress, completed, failed, escalated).",
+        ),
+        string_query_param("provider", "Filter by provider id (hex)."),
+    ];
+    paths.insert(
+        "/v1/sorafs/audit/repair/status".to_owned(),
+        Value::Object(json_get_operation(
+            "SoraFS",
+            "List repair status.",
+            "List SoraFS repair status across manifests (each entry includes Norito base64 record + ordered event log).",
+            "#/components/schemas/JsonValue",
+            repair_status_query_params.clone(),
+        )),
+    );
+    paths.insert(
         "/v1/sorafs/audit/repair/status/{manifest_hex}".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
             "Fetch repair status.",
-            "Fetch repair status for a manifest.",
+            "Fetch repair status for a manifest (each entry includes Norito base64 record + ordered event log).",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("manifest_hex", "Manifest hash (hex).")],
+            vec![
+                string_path_param("manifest_hex", "Manifest hash (hex)."),
+                string_query_param(
+                    "status",
+                    "Filter by repair status (queued, verifying, in_progress, completed, failed, escalated).",
+                ),
+                string_query_param("provider", "Filter by provider id (hex)."),
+            ],
         )),
     );
     paths.insert(
@@ -7214,6 +7293,47 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "AccountResolveRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["literal"],
+            "additionalProperties": false,
+            "properties": {
+                "literal": {
+                    "type": "string",
+                    "description": "Account literal to resolve."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountResolveResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["account_id", "domain", "source"],
+            "additionalProperties": false,
+            "properties": {
+                "account_id": {
+                    "type": "string",
+                    "description": "Canonical IH58 account identifier."
+                },
+                "domain": {
+                    "type": "string",
+                    "description": "Resolved domain label."
+                },
+                "source": {
+                    "type": "string",
+                    "description": "Resolution source (encoded, alias, public_key, uaid, opaque)."
+                },
+                "format": {
+                    "type": "string",
+                    "enum": ["ih58", "compressed", "canonical_hex"],
+                    "description": "Address format when source is encoded."
+                }
+            }
+        }),
+    );
+    schemas.insert(
         "OfflineAllowanceItem".to_owned(),
         norito::json!({
             "type": "object",
@@ -8642,7 +8762,7 @@ fn openapi_schemas() -> Map {
             "properties": {
                 "relay_id": {
                     "type": "string",
-                    "description": "Relay account identifier (`account@domain`)."
+                    "description": "Relay account identifier (IH58 or `<alias|public_key>@domain`)."
                 },
                 "domain": {
                     "type": "string",
@@ -9695,6 +9815,7 @@ mod tests {
         assert!(paths.contains_key("/v1/gov/proposals/deploy-contract"));
         assert!(paths.contains_key("/v1/runtime/abi/active"));
         assert!(paths.contains_key("/v1/accounts"));
+        assert!(paths.contains_key("/v1/accounts/resolve"));
         assert!(paths.contains_key("/v1/assets/definitions"));
         assert!(paths.contains_key("/v1/explorer/accounts"));
         assert!(paths.contains_key("/v1/sorafs/providers"));

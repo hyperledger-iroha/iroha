@@ -22,11 +22,11 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
 
     // Prepare VM with CoreHost
     let from: AccountId =
-        "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonder"
+        "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
             .parse()
             .unwrap();
     let to: AccountId =
-        "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonder"
+        "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"
             .parse()
             .unwrap();
     let mut vm = IVM::new(50_000_000);

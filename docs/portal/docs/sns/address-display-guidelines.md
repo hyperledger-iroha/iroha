@@ -212,7 +212,6 @@ gate to hard-fail on mainnet, followed by Local-12 once global domains have
 matching registry entries. Consider the CLI output the operator-facing notice
 for this freeze—the same warning string is used across SDK tooltips and
 automation to keep parity with the roadmap exit criteria. Torii now defaults to
-`torii.strict_addresses=true`; only override it to `false` on dev/test clusters
 when diagnosing regressions. Keep mirroring `torii_address_domain_total{domain_kind}`
 into Grafana (`dashboards/grafana/address_ingest.json`) so the ADDR-7 evidence pack
 can prove `domain_kind="local12"` stayed at zero for the required 30-day window before
@@ -220,7 +219,6 @@ can prove `domain_kind="local12"` stayed at zero for the required 30-day window 
 
 - `AddressLocal8Resurgence` pages whenever a context reports a fresh Local-8
   increment. Halt strict-mode rollouts, locate the offending SDK surface in the
-  dashboard, and, if needed, temporarily set `torii.strict_addresses=false`
   until the signal returns to zero—then restore the default (`true`).
 - `AddressLocal12Collision` fires when two Local-12 labels hash to the same
   digest. Pause manifest promotions, run the Local → Global toolkit to audit

@@ -23,7 +23,7 @@ public final class MultisigRegisterInstruction implements InstructionTemplate {
         Map.copyOf(Objects.requireNonNull(argumentOrder, "argument order must not be null"));
   }
 
-  /** Controller account backing the multisig. Must live in the signatory domain. */
+  /** Controller account backing the multisig. */
   public String accountId() {
     return accountId;
   }
@@ -152,15 +152,6 @@ public final class MultisigRegisterInstruction implements InstructionTemplate {
       if (spec == null) {
         throw new IllegalStateException("spec must be set");
       }
-      final String specDomain = ensureSpecDomain(spec);
-      final String controllerDomain = domainOf(accountId, "accountId");
-      if (!specDomain.equals(controllerDomain)) {
-        throw new IllegalStateException(
-            "multisig controller must belong to domain '"
-                + specDomain
-                + "' to match signatories, found "
-                + controllerDomain);
-      }
       // TODO: reject deterministic derived controller ids once the seed helper is exposed.
       return new MultisigRegisterInstruction(this, argumentOrder);
     }
@@ -185,37 +176,4 @@ public final class MultisigRegisterInstruction implements InstructionTemplate {
     return accountId.trim();
   }
 
-  private static String ensureSpecDomain(final MultisigSpec spec) {
-    String domain = null;
-    for (final String signatory : spec.signatories().keySet()) {
-      final String current = domainOf(signatory, "signatory");
-      if (domain == null) {
-        domain = current;
-        continue;
-      }
-      if (!domain.equals(current)) {
-        throw new IllegalStateException(
-            "multisig signatories must share a domain; expected "
-                + domain
-                + " but found "
-                + current
-                + " for "
-                + signatory);
-      }
-    }
-    if (domain == null) {
-      throw new IllegalStateException("multisig specs require at least one signatory");
-    }
-    return domain;
-  }
-
-  private static String domainOf(final String accountId, final String context) {
-    final String normalized = normalizeAccount(accountId, context);
-    final int at = normalized.indexOf('@');
-    if (at <= 0 || at >= normalized.length() - 1) {
-      throw new IllegalArgumentException(
-          context + " must include a domain in the form account@domain: " + accountId);
-    }
-    return normalized.substring(at + 1);
-  }
 }

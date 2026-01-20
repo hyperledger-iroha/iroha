@@ -80,7 +80,6 @@ For JSON-only routes the embedded Try it sandbox is often faster: enter the path
 | `npm run tryit-proxy` exits with “digest mismatch”. | The Torii OpenAPI bundle changed upstream. | Run `npm run sync-openapi -- --latest` (or `--version=<tag>`) and retry. |
 | Widgets return `401` or `403`. | Token missing, expired, or insufficient scopes. | Use the OAuth device flow or paste a valid bearer token into the sandbox. For static tokens you must export `DOCS_TRYIT_ALLOW_DEFAULT_BEARER=1`. |
 | `429 Too Many Requests` from the proxy. | Per-IP rate limit exceeded. | Raise `TRYIT_PROXY_RATE_LIMIT`/`TRYIT_PROXY_RATE_WINDOW_MS` for trusted environments or throttle test scripts. All rate-limit rejections increment `tryit_proxy_rate_limited_total`. |
-| `502/504` errors with `ERR_STRICT_ADDRESS_REQUIRED` in Torii logs. | Requests forwarded without Norito IH58/compressed parsing support. | Confirm the target Torii build includes ADDR-5 changes (see `crates/iroha_torii/tests/address_parsing.rs`) and that you are pointing to the correct environment. |
 
 ## Observability
 

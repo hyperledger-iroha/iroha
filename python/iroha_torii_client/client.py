@@ -6593,16 +6593,12 @@ class ToriiClient:
             raise RuntimeError(f"{context}.owner must be a canonical account id")
         if any(ch.isspace() for ch in trimmed):
             raise RuntimeError(f"{context}.owner must be a canonical account id")
-        parts = trimmed.split("@")
-        if len(parts) != 2 or not parts[0] or not parts[1]:
+        if "@" in trimmed:
             raise RuntimeError(f"{context}.owner must be a canonical account id")
-        address_part, domain_part = parts
-        if domain_part.isascii() and domain_part.lower() != domain_part:
-            raise RuntimeError(f"{context}.owner must be a canonical account id")
-        if address_part.lower().startswith(("0x", "snx1")):
+        if trimmed.lower().startswith(("0x", "snx1")):
             raise RuntimeError(f"{context}.owner must be a canonical account id")
         try:
-            _decode_ih58_string(address_part)
+            _decode_ih58_string(trimmed)
         except ValueError as exc:
             raise RuntimeError(f"{context}.owner must be a canonical account id") from exc
 

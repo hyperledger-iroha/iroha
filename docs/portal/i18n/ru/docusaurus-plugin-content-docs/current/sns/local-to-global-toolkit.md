@@ -44,7 +44,6 @@ Local-8 детекций и ноль Local-12 коллизий минимум з
 
 1. Запустите скрипт в отдельном job и загрузите outputs.
 2. Блокируйте merges, когда `audit.json` сообщает Local selectors (`domain.kind = local12`).
-3. Когда dashboards показывают нулевое легитимное использование, оставьте `torii.strict_addresses`
    со значением по умолчанию `true` (меняйте на `false` только в dev/test при диагностике регрессий) и
    добавьте `iroha address normalize --fail-on-warning --only-local` в CI, чтобы попытки регрессии
    падали до production.

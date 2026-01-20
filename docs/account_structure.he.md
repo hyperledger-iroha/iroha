@@ -134,7 +134,7 @@ pub struct Common {
   multihash קלט: `e701210279BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798`  
   IH-B32: `ih1qqqq7wqfpqfumuen7l8wthtz45p3ftn58pvrs9xlumvkuu2xet8egzkcklqtestc32u8`  
   CAIP-10: `iroha:0x0001:ih1qqqq7wqfpqfumuen7l8wthtz45p3ftn58pvrs9xlumvkuu2xet8egzkcklqtestc32u8`  
-  סגנון שרשרת: `ih:iroha-dev:e701210279BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798@treasury`  
+  סגנון שרשרת: `ih:iroha-dev:e701210279BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798`  
   אליאס IH58: קידומת `0x0001`, בתים של החשבון `blake2b-256(multihash)`.
 - **מקרה כשל:** פענוח הכתובת הראשונה בצומת שבו `chain_discriminant = 0x0001` חייב להניב `ChainMismatch` לפני שמנסים לנתב דומיין. שינוי תו כלשהו יפיל את סכום הביקורת של Bech32m.
 
@@ -207,7 +207,6 @@ enum GlobalDomainAuthority {
    - Torii מקבל בקשות ב-IH-B32 ומשיב בצורתו הקנונית.
    - גלו מוני API כדי שמפעילים יוכלו לוודא אימוץ IH-B32.
 3. **שלב 2 – אכיפה**
-   - CLI,‏ ארנקים ו-SDKים פלטים כתובות IH-B32 בלבד. ספקו דגל `strict_addresses` (`torii.strict_addresses`) כדי שקסטודיאנים יוכלו לאכוף קלט קנוני בתרגולי סימולציה.
 4. **שלב 3 – ברירת מחדל**
    - הסירו אליאסים מעבריים ודרשו IH-B32 בכל גבול.
 
@@ -219,7 +218,6 @@ enum GlobalDomainAuthority {
 - **חוזה רשומה:** JSON חתום (ואפשרית שורש Merkle) המפרסם `{discriminant, ih58_prefix, chain_alias, endpoints}` עם TTL של 24 שעות וסבב מפתחות.
 - **מדיניות דומיינים:** `Name` ב-ASCII כיום; אם מפעילים ‎i18n, יישמו UTS-46 לנרמול ו-UTS-39 לזיהוי דמויי-תווים. אכפו אורך תווית מרבי (63) ואורך כולל (255).
 - **עזרי טקסט:** ספקו קודקים IH-B32 ↔ CAIP-10 ↔ IH58 ב-Rust,‏ TypeScript/JavaScript,‏ Python ו-Kotlin עם וקטורי בדיקה משותפים.
-- **אינטגרציית Torii:** הטמינו מניפסטים של Nexus בהתאם ל-TTL, הפיקו `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` באופן דטרמיניסטי, וחשפו את מתג `strict_addresses` לצד מוני טלמטריה.
 - **בדיקות:** הוסיפו בדיקות יחידה לסיבובי קידוד/פענוח, כשלי שרשרת שגויה וחיפושי מניפסט; הוסיפו כיסוי אינטגרציה ב-Torii וב-SDKים לזרימות IH-B32 מקצה לקצה.
 
 ## חלופות שנשקלו

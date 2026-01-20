@@ -26,6 +26,7 @@ use iroha_schema::{Ident, IntoSchema, MetaMap, Metadata, TypeId, VecMeta};
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use norito::{
     NoritoDeserialize, NoritoSerialize,
+    codec::{Decode, Encode},
     core::{self as ncore, Archived},
 };
 use thiserror::Error;
@@ -206,6 +207,7 @@ const IH58_CHECKSUM_PREFIX: &[u8] = b"IH58PRE";
 const HEADER_VERSION_V1: u8 = 0;
 const HEADER_NORM_VERSION_V1: u8 = 1;
 const COMPRESSED_SENTINEL: &str = "snx1";
+const COMPRESSED_SENTINEL_FULLWIDTH: &str = "ｓｎｘ１";
 const COMPRESSED_CHECKSUM_LEN: usize = 6;
 const BECH32M_CONST: u32 = 0x2bc8_30a3;
 
@@ -256,7 +258,7 @@ pub enum AccountAddressFormat {
         #[doc = "Network prefix encoded in the IH58 string."]
         network_prefix: u16,
     },
-    /// Sora-only compressed alphabet using the `snx1` sentinel.
+    /// Sora-only compressed alphabet using the `snx1` (ASCII) or `ｓｎｘ１` (full-width) sentinel.
     Compressed,
     /// Canonical hexadecimal encoding prefixed with `0x`.
     CanonicalHex,
@@ -281,6 +283,63 @@ impl AddressDomainKind {
             Self::Default => "default",
             Self::LocalDigest12 => "local12",
             Self::GlobalRegistry => "global",
+        }
+    }
+}
+
+/// Stable selector key embedded into account addresses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "kind", content = "value", rename_all = "snake_case")
+)]
+pub enum AccountDomainSelector {
+    /// Selector referencing the configured default domain.
+    Default,
+    /// Selector carrying the 12-byte local digest derived from a domain label.
+    LocalDigest12([u8; 12]),
+    /// Selector pointing at a global registry entry.
+    GlobalRegistry(u32),
+}
+
+impl AccountDomainSelector {
+    /// Derive the selector key for a canonical domain identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AccountAddressError`] when the domain label cannot be normalized.
+    pub fn from_domain(domain: &DomainId) -> Result<Self, AccountAddressError> {
+        DomainSelector::from_domain(domain).map(Self::from_selector)
+    }
+
+    /// Classify the selector into its coarse-grained kind.
+    #[must_use]
+    pub const fn kind(self) -> AddressDomainKind {
+        match self {
+            Self::Default => AddressDomainKind::Default,
+            Self::LocalDigest12(_) => AddressDomainKind::LocalDigest12,
+            Self::GlobalRegistry(_) => AddressDomainKind::GlobalRegistry,
+        }
+    }
+
+    /// Borrow the local digest when present.
+    #[must_use]
+    pub const fn local12(self) -> Option<[u8; 12]> {
+        match self {
+            Self::LocalDigest12(bytes) => Some(bytes),
+            _ => None,
+        }
+    }
+
+    fn from_selector(selector: DomainSelector) -> Self {
+        match selector {
+            DomainSelector::Default => Self::Default,
+            DomainSelector::Local12(bytes) => Self::LocalDigest12(bytes),
+            DomainSelector::Global { registry_id } => Self::GlobalRegistry(registry_id),
         }
     }
 }
@@ -374,6 +433,12 @@ impl AccountAddress {
         }
     }
 
+    /// Return the canonical selector key embedded in this address.
+    #[must_use]
+    pub fn domain_selector(&self) -> AccountDomainSelector {
+        AccountDomainSelector::from_selector(self.domain)
+    }
+
     /// Return the raw Local-12 selector digest when the address targets a non-default domain.
     #[must_use]
     pub fn local12_digest(&self) -> Option<[u8; 12]> {
@@ -381,6 +446,12 @@ impl AccountAddress {
             DomainSelector::Local12(bytes) => Some(*bytes),
             _ => None,
         }
+    }
+
+    fn strip_compressed_sentinel(input: &str) -> Option<&str> {
+        input
+            .strip_prefix(COMPRESSED_SENTINEL)
+            .or_else(|| input.strip_prefix(COMPRESSED_SENTINEL_FULLWIDTH))
     }
 
     /// Decode an IH58 representation back into an address payload.
@@ -441,10 +512,8 @@ impl AccountAddress {
     /// Returns [`AccountAddressError`] if the string lacks the compressed sentinel,
     /// has an invalid alphabet symbol, or the checksum does not validate.
     pub fn from_compressed_sora(encoded: &str) -> Result<Self, AccountAddressError> {
-        if !encoded.starts_with(COMPRESSED_SENTINEL) {
-            return Err(AccountAddressError::MissingCompressedSentinel);
-        }
-        let payload = &encoded[COMPRESSED_SENTINEL.len()..];
+        let payload = Self::strip_compressed_sentinel(encoded)
+            .ok_or(AccountAddressError::MissingCompressedSentinel)?;
         let digits = compressed_to_digits(payload)?;
         if digits.len() <= COMPRESSED_CHECKSUM_LEN {
             return Err(AccountAddressError::CompressedTooShort);
@@ -476,7 +545,7 @@ impl AccountAddress {
         if trimmed.is_empty() {
             return Err(AccountAddressError::InvalidLength);
         }
-        if trimmed.starts_with(COMPRESSED_SENTINEL) {
+        if Self::strip_compressed_sentinel(trimmed).is_some() {
             let address = Self::from_compressed_sora(trimmed)?;
             return Ok((address, AccountAddressFormat::Compressed));
         }
@@ -533,6 +602,21 @@ impl AccountAddress {
     pub fn canonical_hex(&self) -> Result<String, AccountAddressError> {
         let canonical = self.canonical_bytes()?;
         Ok(format!("0x{}", hex::encode(canonical)))
+    }
+
+    /// Convert this address into an [`AccountId`] using the resolved domain.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AccountAddressError`] when the provided domain does not match the selector
+    /// embedded in the address or when the controller payload cannot be decoded.
+    pub fn to_account_id(&self, domain: &DomainId) -> Result<AccountId, AccountAddressError> {
+        self.ensure_domain_matches(domain)?;
+        let controller = self.to_account_controller()?;
+        Ok(AccountId {
+            domain: domain.clone(),
+            controller,
+        })
     }
 
     pub(crate) fn ensure_domain_matches(
@@ -703,7 +787,7 @@ impl AddressClass {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DomainSelector {
     Default,
     Local12([u8; 12]),
@@ -1172,7 +1256,7 @@ pub enum AccountAddressErrorCode {
     UnexpectedTrailingBytes,
     /// IH58 prefix encoding was malformed.
     InvalidIh58PrefixEncoding,
-    /// Compressed form missing `snx1` sentinel.
+    /// Compressed form missing `snx1` or `ｓｎｘ１` sentinel.
     MissingCompressedSentinel,
     /// Compressed form shorter than minimal payload.
     CompressedTooShort,
@@ -1302,7 +1386,9 @@ pub enum AccountAddressError {
     #[error("invalid IH58 prefix encoding: {0}")]
     InvalidIh58PrefixEncoding(u8),
     /// Compressed form is missing the required `snx1` sentinel prefix.
-    #[error("compressed Sora address must start with \"{COMPRESSED_SENTINEL}\"")]
+    #[error(
+        "compressed Sora address must start with \"{COMPRESSED_SENTINEL}\" or \"{COMPRESSED_SENTINEL_FULLWIDTH}\""
+    )]
     MissingCompressedSentinel,
     /// Compressed form is too short to contain payload and checksum.
     #[error("compressed Sora address too short")]
@@ -2062,6 +2148,19 @@ mod tests {
     }
 
     #[test]
+    fn account_address_to_account_id_roundtrip() {
+        let account = AccountId::new(domain("wonderland"), ed25519_pk());
+        let address = AccountAddress::from_account_id(&account).expect("encode account id");
+        let roundtrip = address
+            .to_account_id(account.domain())
+            .expect("domain matches selector");
+        assert_eq!(roundtrip, account);
+
+        let other_domain = domain("garden");
+        assert!(address.to_account_id(&other_domain).is_err());
+    }
+
+    #[test]
     fn ih58_round_trip_recovers_canonical_payload() {
         let _guard = guard_default_label();
         let account = AccountId::new(default_domain_id(), ed25519_pk());
@@ -2198,19 +2297,26 @@ mod tests {
     }
 
     #[test]
-    fn compressed_fullwidth_sentinel_rejected() {
+    fn compressed_fullwidth_sentinel_accepts() {
         let _guard = guard_default_label();
         let address = account_address_for_seed(1);
         let compressed = address.to_compressed_sora().expect("compressed encode");
         let payload = &compressed[COMPRESSED_SENTINEL.len()..];
         let sentinel = ascii_str_to_fullwidth(COMPRESSED_SENTINEL).expect("sentinel converts");
-        let tampered = format!("{sentinel}{payload}");
-        let err = AccountAddress::from_compressed_sora(&tampered)
-            .expect_err("full-width sentinel rejected");
-        assert!(matches!(
-            err,
-            AccountAddressError::MissingCompressedSentinel
-        ));
+        let fullwidth = format!("{sentinel}{payload}");
+        let decoded =
+            AccountAddress::from_compressed_sora(&fullwidth).expect("full-width sentinel accepted");
+        assert_eq!(
+            decoded.canonical_bytes().unwrap(),
+            address.canonical_bytes().unwrap()
+        );
+        let (parsed, format) =
+            AccountAddress::parse_any(&fullwidth, None).expect("full-width sentinel parse_any");
+        assert_eq!(format, AccountAddressFormat::Compressed);
+        assert_eq!(
+            parsed.canonical_bytes().unwrap(),
+            address.canonical_bytes().unwrap()
+        );
     }
 
     #[test]

@@ -484,7 +484,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             peer_telemetry_urls: Vec::new(),
             peer_geo: A::ToriiPeerGeo::default(),
             soranet_privacy_ingest: A::SoranetPrivacyIngest::default(),
-            strict_addresses: false,
             debug_match_filters: false,
             operator_auth: A::ToriiOperatorAuth::default(),
             preauth_max_connections: None,
@@ -583,6 +582,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             },
             sorafs_discovery: Default::default(),
             sorafs_storage: iroha_config::parameters::actual::SorafsStorage::default(),
+            sorafs_repair: Default::default(),
+            sorafs_gc: Default::default(),
             sorafs_quota: Default::default(),
             sorafs_alias_cache: Default::default(),
             sorafs_gateway: A::SorafsGateway {

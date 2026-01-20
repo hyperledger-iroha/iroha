@@ -138,10 +138,10 @@ impl FromStr for AssetId {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (definition_id_candidate, account_id_candidate) =
             s.rsplit_once('#').ok_or(ParseError {
-                reason: "Asset ID should have format `asset#domain#account@domain`, or `asset##account@domain` for the same domains",
-            })?;
+            reason: "Asset ID should have format `asset#domain#account`, or `asset##account` for the same domains",
+        })?;
         let account_id = account_id_candidate.parse::<AccountId>().map_err(|_| ParseError {
-            reason: "Failed to parse `account@domain` part in `asset#domain#account@domain`. `account` should have multihash format e.g. `ed0120...`",
+            reason: "Failed to parse `account` part in `asset#domain#account` or `asset##account`",
         })?;
         let domain_complement = if definition_id_candidate.ends_with('#') {
             account_id.domain.name.as_ref()
@@ -149,7 +149,7 @@ impl FromStr for AssetId {
             ""
         };
         let definition_id = format!("{definition_id_candidate}{domain_complement}").parse().map_err(|_| ParseError {
-            reason: "Failed to parse `asset#domain` (or `asset#`) part in `asset#domain#account@domain` (or `asset##account@domain`)",
+            reason: "Failed to parse `asset#domain` (or `asset#`) part in `asset#domain#account` (or `asset##account`)",
         })?;
         Ok(Self::new(definition_id, account_id))
     }
@@ -172,6 +172,6 @@ mod tests {
         let s = format!("{id:?}");
         // Should contain the account and asset parts and not crash
         assert!(s.contains("xor"));
-        assert!(s.contains("@domain"));
+        assert!(s.contains('#'));
     }
 }
