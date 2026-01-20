@@ -1384,6 +1384,21 @@ impl Actor {
                 });
 
             self.prune_descendants_not_on_tip(pending_height, block_hash);
+            let obsolete_missing: Vec<_> = self
+                .pending
+                .missing_block_requests
+                .iter()
+                .filter(|(_, stats)| stats.height <= pending_height)
+                .map(|(hash, _)| *hash)
+                .collect();
+            for hash in obsolete_missing {
+                let reason = if hash == block_hash {
+                    MissingBlockClearReason::PayloadAvailable
+                } else {
+                    MissingBlockClearReason::Obsolete
+                };
+                self.clear_missing_block_request(&hash, reason);
+            }
 
             // Drop stale pending blocks and cached proposals/QCs at or below the committed height
             // to avoid resurrecting divergent chains in later views.
@@ -3960,6 +3975,7 @@ impl Actor {
             .copied()
             .collect();
         for key in deferral_keys {
+            self.subsystems.da_rbc.rbc.ready_deferral.remove(&key);
             self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
         }
         self.subsystems

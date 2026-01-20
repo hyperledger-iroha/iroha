@@ -13056,6 +13056,103 @@ async fn defer_qc_if_block_missing_uses_rebroadcast_cooldown() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn defer_qc_if_block_missing_defers_view_change_on_payload_backlog() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da_enabled = true;
+    let mut harness = test_actor_harness_with_config(2, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    super::status::reset_worker_loop_snapshot_for_tests();
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let mut block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x95; Hash::LENGTH]));
+    if actor.block_known_locally(block_hash) {
+        block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x96; Hash::LENGTH]));
+    }
+    let height = 2u64;
+    let view = 0u64;
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let signers = BTreeSet::new();
+
+    assert!(
+        actor.defer_qc_if_block_missing(
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            &signers,
+            &topology,
+        ),
+        "missing payload should defer QC aggregation"
+    );
+
+    let window = actor
+        .pending
+        .missing_block_requests
+        .get(&block_hash)
+        .and_then(|stats| stats.view_change_window)
+        .expect("view-change window should be configured");
+    let stats = actor
+        .pending
+        .missing_block_requests
+        .get_mut(&block_hash)
+        .expect("missing-block request recorded");
+    stats.first_seen = Instant::now()
+        .checked_sub(window + Duration::from_millis(1))
+        .unwrap_or_else(Instant::now);
+
+    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::BlockPayload);
+    assert!(
+        actor.defer_qc_if_block_missing(
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            &signers,
+            &topology,
+        ),
+        "missing payload should remain deferred"
+    );
+    let stats = actor
+        .pending
+        .missing_block_requests
+        .get(&block_hash)
+        .expect("missing-block request recorded");
+    assert!(
+        stats.view_change_triggered_view.is_none(),
+        "view change should be deferred while payload backlog is active"
+    );
+
+    super::status::record_worker_queue_drain(super::status::WorkerQueueKind::BlockPayload, 1);
+    assert!(
+        actor.defer_qc_if_block_missing(
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            &signers,
+            &topology,
+        ),
+        "missing payload should remain deferred until QC aggregation succeeds"
+    );
+    let stats = actor
+        .pending
+        .missing_block_requests
+        .get(&block_hash)
+        .expect("missing-block request recorded");
+    assert_eq!(
+        stats.view_change_triggered_view,
+        Some(view),
+        "view change should arm once backlog clears and dwell exceeds window"
+    );
+
+    super::status::reset_worker_loop_snapshot_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn rbc_chunk_commit_pipeline_runs_on_completion() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
@@ -26473,6 +26570,41 @@ async fn apply_commit_outcome_updates_view_change_install() {
     actor.subsystems.commit.inflight = Some(inflight);
     let (result_tx, result_rx) = mpsc::sync_channel(1);
     actor.subsystems.commit.result_rx = Some(result_rx);
+    let now = Instant::now();
+    let stale_hash =
+        HashOf::from_untyped_unchecked(Hash::prehashed([0xA5; Hash::LENGTH]));
+    let future_hash =
+        HashOf::from_untyped_unchecked(Hash::prehashed([0xB4; Hash::LENGTH]));
+    actor.pending.missing_block_requests.insert(
+        stale_hash,
+        MissingBlockRequest {
+            height: 1,
+            view: 0,
+            phase: Phase::Commit,
+            priority: MissingBlockPriority::Consensus,
+            retry_window: Duration::from_secs(1),
+            view_change_window: Some(Duration::from_secs(1)),
+            first_seen: now,
+            last_requested: now,
+            view_change_triggered_view: None,
+            attempts: 0,
+        },
+    );
+    actor.pending.missing_block_requests.insert(
+        future_hash,
+        MissingBlockRequest {
+            height: 2,
+            view: 0,
+            phase: Phase::Commit,
+            priority: MissingBlockPriority::Consensus,
+            retry_window: Duration::from_secs(1),
+            view_change_window: Some(Duration::from_secs(1)),
+            first_seen: now,
+            last_requested: now,
+            view_change_triggered_view: None,
+            attempts: 0,
+        },
+    );
     result_tx
         .send(commit::CommitResult {
             id: 1,
@@ -26487,6 +26619,14 @@ async fn apply_commit_outcome_updates_view_change_install() {
     assert!(
         actor.poll_commit_results(),
         "commit outcome should be applied"
+    );
+    assert!(
+        !actor.pending.missing_block_requests.contains_key(&stale_hash),
+        "stale missing block requests should be cleared after commit"
+    );
+    assert!(
+        actor.pending.missing_block_requests.contains_key(&future_hash),
+        "future missing block requests should be retained after commit"
     );
 
     let snapshot = super::status::snapshot();
@@ -41749,6 +41889,73 @@ async fn rbc_deliver_deferral_throttles_until_cooldown_or_progress() {
             cooldown
         ),
         "deferral should emit after cooldown"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rbc_ready_deferral_throttles_until_cooldown_or_progress() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let key = session_key();
+    let now = Instant::now();
+    let cooldown = Duration::from_secs(5);
+    let reason = super::RbcReadyDeferralReason::CommitRosterMissing;
+
+    assert!(actor.should_emit_rbc_ready_deferral(key, now, reason, 0, 0, 0, 1, cooldown));
+    assert!(
+        !actor.should_emit_rbc_ready_deferral(
+            key,
+            now + Duration::from_secs(1),
+            reason,
+            0,
+            0,
+            0,
+            1,
+            cooldown
+        ),
+        "ready deferral should throttle until cooldown expires"
+    );
+    assert!(
+        actor.should_emit_rbc_ready_deferral(
+            key,
+            now + Duration::from_secs(1),
+            reason,
+            1,
+            0,
+            0,
+            1,
+            cooldown
+        ),
+        "ready deferral should emit after READY progress"
+    );
+    assert!(
+        actor.should_emit_rbc_ready_deferral(
+            key,
+            now + Duration::from_secs(2),
+            super::RbcReadyDeferralReason::CommitRosterUnverified,
+            1,
+            0,
+            0,
+            1,
+            cooldown
+        ),
+        "ready deferral should emit after reason changes"
+    );
+    assert!(
+        actor.should_emit_rbc_ready_deferral(
+            key,
+            now + cooldown + Duration::from_millis(1),
+            super::RbcReadyDeferralReason::CommitRosterUnverified,
+            1,
+            0,
+            0,
+            1,
+            cooldown
+        ),
+        "ready deferral should emit after cooldown"
     );
 
     harness.shutdown.send();
