@@ -8,17 +8,12 @@ use eyre::{Result, WrapErr};
 use iroha::data_model::{
     metadata::Metadata,
     prelude::{
-        AccountId, DomainId, KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier,
-        KaigiPrivacyMode, KaigiRelayHealthStatus, KaigiRelayManifest, KaigiRoomPolicy, NewKaigi,
+        DomainId, KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiPrivacyMode,
+        KaigiRelayHealthStatus, KaigiRelayManifest, KaigiRoomPolicy, NewKaigi,
     },
 };
 use iroha_crypto::Hash;
-use std::{
-    fs,
-    path::PathBuf,
-    str::FromStr,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{fs, path::PathBuf, time::{SystemTime, UNIX_EPOCH}};
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
@@ -60,7 +55,7 @@ pub struct CreateArgs {
     /// Call name within the domain (e.g. `daily-sync`).
     #[arg(long, value_name = "NAME")]
     pub call_name: String,
-    /// Host account identifier responsible for the call.
+    /// Host account identifier responsible for the call (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain).
     #[arg(long, value_name = "ACCOUNT-ID")]
     pub host: String,
     /// Optional human friendly title.
@@ -75,7 +70,7 @@ pub struct CreateArgs {
     /// Gas rate charged per minute (defaults to 0).
     #[arg(long, value_name = "U64", default_value_t = 0)]
     pub gas_rate_per_minute: u64,
-    /// Optional billing account that will cover usage.
+    /// Optional billing account that will cover usage (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain).
     #[arg(long, value_name = "ACCOUNT-ID")]
     pub billing_account: Option<String>,
     /// Optional scheduled start timestamp (milliseconds since epoch).
@@ -98,14 +93,18 @@ pub struct CreateArgs {
 impl Run for CreateArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let call_id = parse_call_id(&self.domain, &self.call_name)?;
-        let host = AccountId::from_str(&self.host).wrap_err("invalid host account id")?;
+        let host =
+            crate::resolve_account_id(context, &self.host).wrap_err("failed to resolve host account")?;
         let mut template = NewKaigi::with_defaults(call_id, host.clone());
         template.title = self.title;
         template.description = self.description;
         template.max_participants = self.max_participants;
         template.gas_rate_per_minute = self.gas_rate_per_minute;
         template.billing_account = match self.billing_account {
-            Some(ref id) => Some(AccountId::from_str(id).wrap_err("invalid billing account id")?),
+            Some(ref id) => Some(
+                crate::resolve_account_id(context, id)
+                    .wrap_err("failed to resolve billing account")?,
+            ),
             None => None,
         };
         template.scheduled_start_ms = self.scheduled_start_ms;
@@ -133,7 +132,7 @@ pub struct QuickstartArgs {
     /// Call name within the domain (defaults to a timestamp-based identifier).
     #[arg(long, value_name = "NAME")]
     pub call_name: Option<String>,
-    /// Host account identifier responsible for the call (defaults to the CLI config account).
+    /// Host account identifier responsible for the call (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain).
     #[arg(long, value_name = "ACCOUNT-ID")]
     pub host: Option<String>,
     /// Privacy mode for the session (defaults to `transparent`).
@@ -168,7 +167,8 @@ impl Run for QuickstartArgs {
         let call_label = resolve_call_label(self.call_name)?;
         let call_id = parse_call_id(&self.domain, &call_label)?;
         let host = match self.host {
-            Some(id) => AccountId::from_str(&id).wrap_err("invalid host account id")?,
+            Some(id) => crate::resolve_account_id(context, &id)
+                .wrap_err("failed to resolve host account")?,
             None => context.config().account.clone(),
         };
         let mut template = NewKaigi::with_defaults(call_id.clone(), host.clone());
@@ -305,7 +305,7 @@ pub struct JoinArgs {
     /// Call name within the domain.
     #[arg(long, value_name = "NAME")]
     pub call_name: String,
-    /// Participant account joining the call.
+    /// Participant account joining the call (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain).
     #[arg(long, value_name = "ACCOUNT-ID")]
     pub participant: String,
     /// Commitment hash (hex) for privacy mode joins.
@@ -331,8 +331,8 @@ pub struct JoinArgs {
 impl Run for JoinArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let call_id = parse_call_id(&self.domain, &self.call_name)?;
-        let participant =
-            AccountId::from_str(&self.participant).wrap_err("invalid participant account id")?;
+        let participant = crate::resolve_account_id(context, &self.participant)
+            .wrap_err("failed to resolve participant account")?;
         let nullifier_issued_at_ms = self.nullifier_issued_at_ms;
 
         let commitment = match self.commitment_hex {
@@ -409,7 +409,7 @@ pub struct LeaveArgs {
     /// Call name within the domain.
     #[arg(long, value_name = "NAME")]
     pub call_name: String,
-    /// Participant account leaving the call.
+    /// Participant account leaving the call (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain).
     #[arg(long, value_name = "ACCOUNT-ID")]
     pub participant: String,
     /// Commitment hash (hex) identifying the participant in privacy mode.
@@ -432,8 +432,8 @@ pub struct LeaveArgs {
 impl Run for LeaveArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let call_id = parse_call_id(&self.domain, &self.call_name)?;
-        let participant =
-            AccountId::from_str(&self.participant).wrap_err("invalid participant account id")?;
+        let participant = crate::resolve_account_id(context, &self.participant)
+            .wrap_err("failed to resolve participant account")?;
         let nullifier_issued_at_ms = self.nullifier_issued_at_ms;
 
         let commitment = self
@@ -552,7 +552,7 @@ pub struct ReportRelayHealthArgs {
     /// Call name within the domain.
     #[arg(long, value_name = "NAME")]
     pub call_name: String,
-    /// Relay account identifier being reported.
+    /// Relay account identifier being reported (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain).
     #[arg(long, value_name = "ACCOUNT-ID")]
     pub relay: String,
     /// Observed health status for the relay.
@@ -569,7 +569,8 @@ pub struct ReportRelayHealthArgs {
 impl Run for ReportRelayHealthArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let call_id = parse_call_id(&self.domain, &self.call_name)?;
-        let relay_id = AccountId::from_str(&self.relay).wrap_err("invalid relay account id")?;
+        let relay_id =
+            crate::resolve_account_id(context, &self.relay).wrap_err("failed to resolve relay account")?;
         let status: KaigiRelayHealthStatus = self.status.into();
 
         context.finish([iroha::data_model::isi::Instruction::into_instruction_box(

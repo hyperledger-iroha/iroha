@@ -26,9 +26,7 @@ use iroha_executor_data_model::permission::{
     asset::CanTransferAsset, asset_definition::CanRegisterAssetDefinition,
 };
 use iroha_test_network::*;
-use iroha_test_samples::{
-    ALICE_ID, SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR, gen_account_in,
-};
+use iroha_test_samples::{ALICE_ID, gen_account_in};
 use toml::Value as TomlValue;
 
 static GENESIS_STATUS: OnceLock<std::result::Result<(), ()>> = OnceLock::new();
@@ -775,6 +773,10 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
         };
         last_non_empty_height = status.blocks_non_empty;
 
+        wait_for_asset_value(&mut clients, &rate, &numeric!(20), "seed rate asset")?;
+        wait_for_asset_value(&mut clients, &seller_btc, &numeric!(10), "seed seller btc")?;
+        wait_for_asset_value(&mut clients, &buyer_eth, &numeric!(200), "seed buyer eth")?;
+
         let alice_id = ALICE_ID.clone();
         {
             let mut alice_can_transfer_asset =
@@ -815,34 +817,9 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
             alice_can_transfer_asset(buyer_eth.clone(), buyer_keypair)?;
         }
 
-        let rate: u32 = {
-            let mut fetch_asset = |asset_id: &AssetId| -> Option<iroha_data_model::asset::Asset> {
-                let client = clients.next();
-                match client.query_single(FindAssetById::new(asset_id.clone())) {
-                    Ok(asset) => Some(asset),
-                    Err(QueryError::Validation(ValidationFail::QueryFailed(
-                        QueryExecutionFail::Find(FindError::Asset(_))
-                        | QueryExecutionFail::NotFound,
-                    ))) => None,
-                    Err(err) => panic!("query should succeed: {err:?}"),
-                }
-            };
-
-            let mut assert_balance = |asset_id: AssetId, expected: Numeric| {
-                let got = fetch_asset(&asset_id).expect("asset should exist");
-                assert_eq!(*got.value(), expected);
-            };
-            // before: seller has $BTC10 and buyer has $ETH200
-            assert_balance(seller_btc.clone(), numeric!(10));
-            assert_balance(buyer_eth.clone(), numeric!(200));
-
-            let rate_numeric = fetch_asset(&rate).expect("asset should exist");
-            rate_numeric
-                .value()
-                .clone()
-                .try_into()
-                .expect("numeric should be u32 originally")
-        };
+        let rate: u32 = asset_value(&mut clients, &rate)?
+            .try_into()
+            .expect("numeric should be u32 originally");
         let transfer_instructions: [InstructionBox; 2] = [
             Transfer::asset_numeric(seller_btc.clone(), 10_u32, buyer_id.clone()).into(),
             Transfer::asset_numeric(buyer_eth.clone(), 10_u32 * rate, seller_id.clone()).into(),

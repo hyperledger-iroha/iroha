@@ -88,7 +88,9 @@ impl Run for AllowanceCommand {
                 let builder = client.query(FindOfflineAllowances);
                 let builder = apply_allowance_common_args(builder, &args.common.common)?;
                 let mut entries = builder.execute_all()?;
-                apply_allowance_filters(&mut entries, &args)?;
+                let controller =
+                    resolve_optional_account(context, args.controller.as_deref(), "--controller")?;
+                apply_allowance_filters(&mut entries, &args, controller.as_ref())?;
                 if args.summary {
                     let now_ms = current_timestamp_ms()?;
                     let rows: Vec<_> = entries
@@ -133,9 +135,9 @@ pub struct AllowanceListArgs {
     /// Common list/query controls (filters, pagination, selectors)
     #[command(flatten)]
     pub common: crate::list_support::AllArgs,
-    /// Optional controller filter (account id)
-    #[arg(long, value_name = "ACCOUNT@DOMAIN")]
-    pub controller: Option<AccountId>,
+    /// Optional controller filter (account identifier)
+    #[arg(long, value_name = "ACCOUNT_ID")]
+    pub controller: Option<String>,
     /// Optional verdict identifier filter (hex)
     #[arg(long, value_name = "HEX")]
     pub verdict_id: Option<Hash>,
@@ -185,13 +187,17 @@ impl Run for TransferCommand {
             TransferCommand::List(args) => {
                 let client = context.client_from_config();
                 let mut applied_filters = TransferFilterFlags::default();
-                let mut entries = if let Some(controller) = args.controller.clone() {
+                let controller =
+                    resolve_optional_account(context, args.controller.as_deref(), "--controller")?;
+                let receiver =
+                    resolve_optional_account(context, args.receiver.as_deref(), "--receiver")?;
+                let mut entries = if let Some(controller) = controller.clone() {
                     applied_filters.controller = true;
                     let builder =
                         client.query(FindOfflineToOnlineTransfersByController { controller });
                     let builder = apply_transfer_common_args(builder, &args.common.common)?;
                     builder.execute_all()?
-                } else if let Some(receiver) = args.receiver.clone() {
+                } else if let Some(receiver) = receiver.clone() {
                     applied_filters.receiver = true;
                     let builder = client.query(FindOfflineToOnlineTransfersByReceiver { receiver });
                     let builder = apply_transfer_common_args(builder, &args.common.common)?;
@@ -215,7 +221,13 @@ impl Run for TransferCommand {
                     let builder = apply_transfer_common_args(builder, &args.common.common)?;
                     builder.execute_all()?
                 };
-                apply_transfer_filters(&mut entries, &args, applied_filters)?;
+                apply_transfer_filters(
+                    &mut entries,
+                    &args,
+                    applied_filters,
+                    controller.as_ref(),
+                    receiver.as_ref(),
+                )?;
                 if let Some(path) = args.audit_log.as_ref() {
                     let audit_entries: Vec<_> =
                         entries.iter().map(OfflineAuditLogEntry::from).collect();
@@ -359,12 +371,12 @@ pub struct TransferListArgs {
     /// Common list/query controls (filters, pagination, selectors)
     #[command(flatten)]
     pub common: crate::list_support::AllArgs,
-    /// Optional controller filter (account id)
-    #[arg(long, value_name = "ACCOUNT@DOMAIN")]
-    pub controller: Option<AccountId>,
-    /// Optional receiver filter (account id)
-    #[arg(long, value_name = "ACCOUNT@DOMAIN")]
-    pub receiver: Option<AccountId>,
+    /// Optional controller filter (account identifier)
+    #[arg(long, value_name = "ACCOUNT_ID")]
+    pub controller: Option<String>,
+    /// Optional receiver filter (account identifier)
+    #[arg(long, value_name = "ACCOUNT_ID")]
+    pub receiver: Option<String>,
     /// Optional lifecycle status filter
     #[arg(long, value_enum)]
     pub status: Option<TransferStatusArg>,
@@ -617,6 +629,17 @@ fn apply_allowance_common_args<'a>(
     apply_common_args(builder, common)
 }
 
+fn resolve_optional_account<C: RunContext>(
+    context: &C,
+    literal: Option<&str>,
+    flag: &str,
+) -> Result<Option<AccountId>> {
+    literal
+        .map(|value| crate::resolve_account_id(context, value))
+        .transpose()
+        .wrap_err_with(|| format!("failed to resolve {flag}"))
+}
+
 fn apply_revocation_common_args<'a>(
     builder: QueryBuilder<'a, Client, FindOfflineVerdictRevocations, OfflineVerdictRevocation>,
     common: &'a crate::list_support::CommonArgs,
@@ -627,8 +650,9 @@ fn apply_revocation_common_args<'a>(
 fn apply_allowance_filters(
     entries: &mut Vec<OfflineAllowanceRecord>,
     args: &AllowanceListArgs,
+    controller: Option<&AccountId>,
 ) -> Result<()> {
-    if let Some(controller) = &args.controller {
+    if let Some(controller) = controller {
         entries.retain(|record| &record.certificate.controller == controller);
     }
     if let Some(verdict) = args.verdict_id.as_ref() {
@@ -1058,6 +1082,8 @@ fn apply_transfer_filters(
     entries: &mut Vec<OfflineTransferRecord>,
     args: &TransferListArgs,
     applied: TransferFilterFlags,
+    controller: Option<&AccountId>,
+    receiver: Option<&AccountId>,
 ) -> Result<()> {
     if args.require_verdict && args.only_missing_verdict {
         return Err(eyre!(
@@ -1071,12 +1097,12 @@ fn apply_transfer_filters(
     }
 
     if !applied.controller
-        && let Some(controller) = &args.controller
+        && let Some(controller) = controller
     {
         entries.retain(|record| &record.controller == controller);
     }
     if !applied.receiver
-        && let Some(receiver) = &args.receiver
+        && let Some(receiver) = receiver
     {
         entries.retain(|record| &record.transfer.receiver == receiver);
     }
@@ -2066,7 +2092,7 @@ mod tests {
         let mut entries = vec![sample_allowance_record()];
         let mut args = default_allowance_list_args();
         args.verdict_id = Some(Hash::new(b"verdict"));
-        apply_allowance_filters(&mut entries, &args).expect("filters");
+        apply_allowance_filters(&mut entries, &args, None).expect("filters");
         assert_eq!(entries.len(), 1);
     }
 
@@ -2077,7 +2103,7 @@ mod tests {
         let mut entries = vec![record];
         let mut args = default_allowance_list_args();
         args.include_expired = false;
-        apply_allowance_filters(&mut entries, &args).expect("filters");
+        apply_allowance_filters(&mut entries, &args, None).expect("filters");
         assert!(entries.is_empty());
     }
 
@@ -2088,20 +2114,20 @@ mod tests {
         let mut entries = vec![record.clone()];
         let mut args = default_allowance_list_args();
         args.certificate_expires_before_ms = Some(record.certificate.expires_at_ms - 1);
-        apply_allowance_filters(&mut entries, &args).expect("filters");
+        apply_allowance_filters(&mut entries, &args, None).expect("filters");
         assert!(entries.is_empty());
 
         let mut entries = vec![record.clone()];
         let mut args = default_allowance_list_args();
         args.certificate_expires_after_ms = Some(record.certificate.expires_at_ms + 1);
-        apply_allowance_filters(&mut entries, &args).expect("filters");
+        apply_allowance_filters(&mut entries, &args, None).expect("filters");
         assert!(entries.is_empty());
 
         let mut entries = vec![record];
         let mut args = default_allowance_list_args();
         args.certificate_expires_before_ms = Some(1_900_000_000_000);
         args.certificate_expires_after_ms = Some(1_700_000_000_000);
-        apply_allowance_filters(&mut entries, &args).expect("filters");
+        apply_allowance_filters(&mut entries, &args, None).expect("filters");
         assert_eq!(entries.len(), 1);
     }
 
@@ -2113,20 +2139,20 @@ mod tests {
         let mut entries = vec![record.clone()];
         let mut args = default_allowance_list_args();
         args.policy_expires_before_ms = Some(1_900_000_000_000);
-        apply_allowance_filters(&mut entries, &args).expect("filters");
+        apply_allowance_filters(&mut entries, &args, None).expect("filters");
         assert!(entries.is_empty());
 
         let mut entries = vec![record.clone()];
         let mut args = default_allowance_list_args();
         args.policy_expires_after_ms = Some(2_100_000_000_000);
-        apply_allowance_filters(&mut entries, &args).expect("filters");
+        apply_allowance_filters(&mut entries, &args, None).expect("filters");
         assert!(entries.is_empty());
 
         let mut entries = vec![record];
         let mut args = default_allowance_list_args();
         args.policy_expires_before_ms = Some(2_000_000_000_000);
         args.policy_expires_after_ms = Some(1_800_000_000_000);
-        apply_allowance_filters(&mut entries, &args).expect("filters");
+        apply_allowance_filters(&mut entries, &args, None).expect("filters");
         assert_eq!(entries.len(), 1);
     }
 
@@ -2204,7 +2230,14 @@ mod tests {
         ];
         let mut args = default_transfer_list_args();
         args.platform_policy = Some(PlatformPolicyArg::PlayIntegrity);
-        apply_transfer_filters(&mut entries, &args, TransferFilterFlags::default()).unwrap();
+        apply_transfer_filters(
+            &mut entries,
+            &args,
+            TransferFilterFlags::default(),
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(entries.len(), 1);
         let snapshot = entries[0].platform_snapshot.as_ref().expect("snapshot");
         assert_eq!(

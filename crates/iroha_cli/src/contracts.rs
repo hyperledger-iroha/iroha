@@ -85,7 +85,7 @@ impl Run for CodeBytesGetArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct DeployArgs {
-    /// Authority `AccountId` (e.g., alice@wonderland)
+    /// Authority account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
     #[arg(long)]
     pub authority: String,
     /// Hex-encoded private key for signing
@@ -103,8 +103,8 @@ impl Run for DeployArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
         // Parse authority and key
-        let authority: iroha::data_model::account::AccountId =
-            self.authority.parse().wrap_err("invalid --authority")?;
+        let authority =
+            crate::resolve_account_id(context, &self.authority).wrap_err("failed to resolve --authority")?;
         let private_key: iroha_crypto::PrivateKey =
             self.private_key.parse().wrap_err("invalid --private-key")?;
         // Obtain base64 code
@@ -124,7 +124,7 @@ impl Run for DeployArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct DeployActivateArgs {
-    /// Authority `AccountId` (e.g., alice@wonderland)
+    /// Authority account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
     #[arg(long)]
     pub authority: String,
     /// Hex-encoded private key for signing and manifest provenance
@@ -152,7 +152,8 @@ pub struct DeployActivateArgs {
 
 impl Run for DeployActivateArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let _authority: AccountId = self.authority.parse().wrap_err("invalid --authority")?;
+        let _authority =
+            crate::resolve_account_id(context, &self.authority).wrap_err("failed to resolve --authority")?;
         let private_key: PrivateKey = self.private_key.parse().wrap_err("invalid --private-key")?;
         let keypair =
             KeyPair::from_private_key(private_key.clone()).wrap_err("derive keypair failed")?;
@@ -471,7 +472,7 @@ mod tests {
 
 #[derive(clap::Args, Debug)]
 pub struct SimulateArgs {
-    /// Authority `AccountId` used for the simulation
+    /// Authority account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
     #[arg(long)]
     pub authority: String,
     /// Hex-encoded private key used to sign the simulated transaction
@@ -496,7 +497,8 @@ pub struct SimulateArgs {
 
 impl Run for SimulateArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let authority: AccountId = self.authority.parse().wrap_err("invalid --authority")?;
+        let authority =
+            crate::resolve_account_id(context, &self.authority).wrap_err("failed to resolve --authority")?;
         let private_key: PrivateKey = self.private_key.parse().wrap_err("invalid --private-key")?;
         let code = load_code_bytes(self.code_file.clone(), self.code_b64.clone())?;
         let summary = program_summary_from_bytes(&code)?;

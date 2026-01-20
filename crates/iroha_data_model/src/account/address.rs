@@ -435,7 +435,7 @@ impl AccountAddress {
     /// Return the canonical selector key embedded in this address.
     #[must_use]
     pub fn domain_selector(&self) -> AccountDomainSelector {
-        AccountDomainSelector::from_selector(self.domain.clone())
+        AccountDomainSelector::from_selector(self.domain)
     }
 
     /// Return the raw Local-12 selector digest when the address targets a non-default domain.
@@ -782,7 +782,7 @@ impl AddressClass {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DomainSelector {
     Default,
     Local12([u8; 12]),

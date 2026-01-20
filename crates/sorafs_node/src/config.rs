@@ -696,17 +696,18 @@ mod tests {
 
     #[test]
     fn repair_and_gc_configs_preserve_fields() {
-        let mut repair = actual::SorafsRepair::default();
-        repair.enabled = true;
-        repair.db_dsn = Some("postgres://sorafs/repair".into());
-        repair.db_pool_max_connections = 20;
-        repair.claim_ttl_secs = 900;
-        repair.heartbeat_interval_secs = 45;
-        repair.max_attempts = 6;
-        repair.worker_concurrency = 12;
-        repair.backoff_initial_secs = 7;
-        repair.backoff_max_secs = 120;
-        repair.default_slash_penalty_nano = 5_000;
+        let repair = actual::SorafsRepair {
+            enabled: true,
+            db_dsn: Some("postgres://sorafs/repair".into()),
+            db_pool_max_connections: 20,
+            claim_ttl_secs: 900,
+            heartbeat_interval_secs: 45,
+            max_attempts: 6,
+            worker_concurrency: 12,
+            backoff_initial_secs: 7,
+            backoff_max_secs: 120,
+            default_slash_penalty_nano: 5_000,
+        };
 
         let cfg = RepairConfig::from(&repair);
         assert!(cfg.enabled());
@@ -720,14 +721,15 @@ mod tests {
         assert_eq!(cfg.backoff_max_secs(), 120);
         assert_eq!(cfg.default_slash_penalty_nano(), 5_000);
 
-        let mut gc = actual::SorafsGc::default();
-        gc.enabled = true;
-        gc.db_dsn = Some("postgres://sorafs/gc".into());
-        gc.db_pool_max_connections = 10;
-        gc.interval_secs = 300;
-        gc.max_deletions_per_run = 2_000;
-        gc.retention_grace_secs = 86_400;
-        gc.pre_admission_sweep = false;
+        let gc = actual::SorafsGc {
+            enabled: true,
+            db_dsn: Some("postgres://sorafs/gc".into()),
+            db_pool_max_connections: 10,
+            interval_secs: 300,
+            max_deletions_per_run: 2_000,
+            retention_grace_secs: 86_400,
+            pre_admission_sweep: false,
+        };
 
         let gc_cfg = GcConfig::from(&gc);
         assert!(gc_cfg.enabled());
