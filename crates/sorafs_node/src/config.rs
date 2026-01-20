@@ -1,6 +1,6 @@
 //! Storage configuration helpers for the embedded SoraFS worker.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use iroha_config::parameters::actual;
 
@@ -338,6 +338,15 @@ impl RepairConfig {
     pub fn default_slash_penalty_nano(&self) -> u128 {
         self.default_slash_penalty_nano
     }
+
+    /// Apply a default state directory when one is not provided.
+    #[must_use]
+    pub fn with_default_state_dir(mut self, data_dir: &Path) -> Self {
+        if self.state_dir.is_none() {
+            self.state_dir = Some(data_dir.join("repair"));
+        }
+        self
+    }
 }
 
 impl Default for RepairConfig {
@@ -414,6 +423,15 @@ impl GcConfig {
     #[must_use]
     pub fn pre_admission_sweep(&self) -> bool {
         self.pre_admission_sweep
+    }
+
+    /// Apply a default state directory when one is not provided.
+    #[must_use]
+    pub fn with_default_state_dir(mut self, data_dir: &Path) -> Self {
+        if self.state_dir.is_none() {
+            self.state_dir = Some(data_dir.join("gc"));
+        }
+        self
     }
 }
 
@@ -682,8 +700,7 @@ mod tests {
     fn repair_and_gc_configs_preserve_fields() {
         let repair = actual::SorafsRepair {
             enabled: true,
-            db_dsn: Some("postgres://sorafs/repair".into()),
-            db_pool_max_connections: 20,
+            state_dir: Some(PathBuf::from("/tmp/repair_state")),
             claim_ttl_secs: 900,
             heartbeat_interval_secs: 45,
             max_attempts: 6,
@@ -695,8 +712,7 @@ mod tests {
 
         let cfg = RepairConfig::from(&repair);
         assert!(cfg.enabled());
-        assert_eq!(cfg.db_dsn(), Some("postgres://sorafs/repair"));
-        assert_eq!(cfg.db_pool_max_connections(), 20);
+        assert_eq!(cfg.state_dir(), Some(&PathBuf::from("/tmp/repair_state")));
         assert_eq!(cfg.claim_ttl_secs(), 900);
         assert_eq!(cfg.heartbeat_interval_secs(), 45);
         assert_eq!(cfg.max_attempts(), 6);
@@ -707,8 +723,7 @@ mod tests {
 
         let gc = actual::SorafsGc {
             enabled: true,
-            db_dsn: Some("postgres://sorafs/gc".into()),
-            db_pool_max_connections: 10,
+            state_dir: Some(PathBuf::from("/tmp/gc_state")),
             interval_secs: 300,
             max_deletions_per_run: 2_000,
             retention_grace_secs: 86_400,
@@ -717,11 +732,21 @@ mod tests {
 
         let gc_cfg = GcConfig::from(&gc);
         assert!(gc_cfg.enabled());
-        assert_eq!(gc_cfg.db_dsn(), Some("postgres://sorafs/gc"));
-        assert_eq!(gc_cfg.db_pool_max_connections(), 10);
+        assert_eq!(gc_cfg.state_dir(), Some(&PathBuf::from("/tmp/gc_state")));
         assert_eq!(gc_cfg.interval_secs(), 300);
         assert_eq!(gc_cfg.max_deletions_per_run(), 2_000);
         assert_eq!(gc_cfg.retention_grace_secs(), 86_400);
         assert!(!gc_cfg.pre_admission_sweep());
+    }
+
+    #[test]
+    fn repair_and_gc_default_state_dirs_follow_storage_root() {
+        let data_dir = PathBuf::from("/var/lib/sorafs");
+        let repair = RepairConfig::from(&actual::SorafsRepair::default())
+            .with_default_state_dir(&data_dir);
+        let gc = GcConfig::from(&actual::SorafsGc::default()).with_default_state_dir(&data_dir);
+
+        assert_eq!(repair.state_dir(), Some(&data_dir.join("repair")));
+        assert_eq!(gc.state_dir(), Some(&data_dir.join("gc")));
     }
 }

@@ -1,12 +1,12 @@
 package org.hyperledger.iroha.android.client;
 
 import java.net.URI;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.Base64;
 import java.util.Map;
 import java.util.Objects;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
+import org.hyperledger.iroha.android.norito.NoritoException;
+import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 
 /** Builds Torii HTTP requests for submitting signed transactions. */
@@ -24,14 +24,19 @@ final class ToriiRequestBuilder {
     Objects.requireNonNull(baseUri, "baseUri");
     Objects.requireNonNull(transaction, "transaction");
     final URI target = resolve(baseUri, SUBMIT_PATH);
-    final String json = serializeTransaction(transaction);
+    final byte[] norito;
+    try {
+      norito = SignedTransactionEncoder.encodeVersioned(transaction);
+    } catch (final NoritoException ex) {
+      throw new IllegalStateException("Failed to encode signed transaction", ex);
+    }
     final TransportRequest.Builder builder =
         TransportRequest.builder()
             .setUri(target)
             .setMethod("POST")
-            .addHeader("Content-Type", "application/json")
-            .addHeader("Accept", "application/json")
-            .setBody(json.getBytes(StandardCharsets.UTF_8));
+            .addHeader("Content-Type", "application/x-norito")
+            .addHeader("Accept", "application/x-norito, application/json")
+            .setBody(norito);
     applyHeaders(builder, extraHeaders);
     applyTimeout(builder, timeout);
     return builder.build();
@@ -56,23 +61,6 @@ final class ToriiRequestBuilder {
     return builder.build();
   }
 
-  private static String serializeTransaction(final SignedTransaction transaction) {
-    final Base64.Encoder encoder = Base64.getEncoder();
-    final String payload = encoder.encodeToString(transaction.encodedPayload());
-    final String signature = encoder.encodeToString(transaction.signature());
-    final String publicKey = encoder.encodeToString(transaction.publicKey());
-    final String schema = transaction.schemaName();
-    return "{\"payload\":\""
-        + payload
-        + "\",\"signature\":\""
-        + signature
-        + "\",\"public_key\":\""
-        + publicKey
-        + "\",\"schema\":\""
-        + escapeJson(schema)
-        + "\"}";
-  }
-
   private static URI resolve(final URI baseUri, final String path) {
     final String base = baseUri.toString();
     final String normalizedPath = path.startsWith("/") ? path.substring(1) : path;
@@ -80,32 +68,6 @@ final class ToriiRequestBuilder {
         ? base + normalizedPath
         : base + "/" + normalizedPath;
     return URI.create(joined);
-  }
-
-  private static String escapeJson(final String input) {
-    if (input == null) {
-      return "";
-    }
-    final StringBuilder builder = new StringBuilder(input.length());
-    for (char c : input.toCharArray()) {
-      switch (c) {
-        case '\\' -> builder.append("\\\\");
-        case '"' -> builder.append("\\\"");
-        case '\b' -> builder.append("\\b");
-        case '\f' -> builder.append("\\f");
-        case '\n' -> builder.append("\\n");
-        case '\r' -> builder.append("\\r");
-        case '\t' -> builder.append("\\t");
-        default -> {
-          if (c < 0x20) {
-            builder.append(String.format("\\u%04x", (int) c));
-          } else {
-            builder.append(c);
-          }
-        }
-      }
-    }
-    return builder.toString();
   }
 
   private static void applyHeaders(

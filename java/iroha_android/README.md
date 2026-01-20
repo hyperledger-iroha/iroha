@@ -731,6 +731,11 @@ through `ClientResponse.hashHex()`. Callers can forward the returned hash to
 reimplementing the hashing logic, and the same canonical value is preserved when
 pending transactions are replayed from `PendingTransactionQueue`.
 
+Torii now returns a Norito-encoded transaction submission receipt (payload +
+signature) on `/v1/pipeline/transactions`. The Android SDK surfaces the raw
+receipt bytes via `ClientResponse.body()` so callers can decode them with their
+Norito tooling when they need the receipt fields.
+
 ### Torii Reject Codes
 
 Torii attaches an `x-iroha-reject-code` header when admission fails. Both the

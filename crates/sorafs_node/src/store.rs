@@ -11,7 +11,10 @@ use std::{
     fs::{self, File},
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    sync::RwLock,
+    sync::{
+        RwLock,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -38,6 +41,8 @@ const MANIFEST_FILE_NAME: &str = "manifest.to";
 const METADATA_FILE_NAME: &str = "metadata.to";
 const CHUNKS_DIR_NAME: &str = "chunks";
 const ATOMIC_EXT: &str = "tmp";
+const GC_TRASH_DIR_NAME: &str = "gc_trash";
+static GC_TRASH_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Errors raised by the SoraFS storage backend.
 #[derive(Debug, Error)]
@@ -165,6 +170,7 @@ pub struct StoredManifest {
     chunk_profile_handle: String,
     stripe_layout: Option<DaStripeLayout>,
     stored_at_unix_secs: u64,
+    retention_epoch: u64,
     chunk_files: Vec<ChunkFileRecord>,
     por_tree: StoredPorTree,
     manifest_path: PathBuf,
@@ -189,6 +195,8 @@ pub struct StoredManifestParts {
     pub stripe_layout: Option<DaStripeLayout>,
     /// UNIX timestamp (seconds) when the manifest was persisted.
     pub stored_at_unix_secs: u64,
+    /// Unix retention epoch for garbage collection (0 if not retained).
+    pub retention_epoch: u64,
     /// Records describing each stored chunk file.
     pub chunk_files: Vec<ChunkFileRecord>,
     /// Proof-of-retrievability Merkle tree snapshot.
@@ -214,6 +222,7 @@ impl StoredManifest {
             chunk_profile_handle: parts.chunk_profile_handle,
             stripe_layout: parts.stripe_layout,
             stored_at_unix_secs: parts.stored_at_unix_secs,
+            retention_epoch: parts.retention_epoch,
             chunk_files: parts.chunk_files,
             por_tree: parts.por_tree,
             manifest_path: parts.manifest_path,
@@ -266,6 +275,12 @@ impl StoredManifest {
     #[must_use]
     pub fn stored_at_unix_secs(&self) -> u64 {
         self.stored_at_unix_secs
+    }
+
+    /// Retention epoch applied to the manifest (0 when unbounded).
+    #[must_use]
+    pub fn retention_epoch(&self) -> u64 {
+        self.retention_epoch
     }
 
     /// Number of chunks stored for the manifest.
@@ -657,6 +672,8 @@ struct ManifestIndexEntry {
     chunk_profile_handle: String,
     chunk_count: u32,
     stored_at_unix_secs: u64,
+    #[norito(default)]
+    retention_epoch: u64,
 }
 
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
@@ -670,6 +687,8 @@ struct StoredManifestRecord {
     #[norito(default)]
     stripe_layout: Option<DaStripeLayout>,
     stored_at_unix_secs: u64,
+    #[norito(default)]
+    retention_epoch: u64,
     chunk_files: Vec<StoredChunkRecord>,
     por_tree: StoredPorTree,
 }
@@ -791,6 +810,71 @@ impl StorageBackend {
             .values()
             .cloned()
             .collect()
+    }
+
+    /// Evict a stored manifest and reclaim its payload bytes.
+    pub fn evict_manifest(&self, manifest_id: &str) -> Result<u64, StorageError> {
+        let mut state = self.state.write().expect("storage state poisoned");
+        let stored = state
+            .manifests
+            .get(manifest_id)
+            .ok_or_else(|| StorageError::ManifestNotFound {
+                manifest_id: manifest_id.to_owned(),
+            })?
+            .clone();
+        let manifest_dir = stored
+            .manifest_path()
+            .parent()
+            .expect("manifest path must have parent")
+            .to_path_buf();
+        let mut new_index = state.index.clone();
+        new_index.entries.retain(|entry| entry.manifest_id != manifest_id);
+        new_index.total_bytes = state.total_bytes.saturating_sub(stored.content_length());
+
+        let index_bytes = norito::to_bytes(&new_index).map_err(StorageError::Norito)?;
+        write_atomic(&self.index_path, &index_bytes)?;
+
+        state.index = new_index;
+        state.total_bytes = state.total_bytes.saturating_sub(stored.content_length());
+        state.manifests.remove(manifest_id);
+        drop(state);
+
+        let trash_path = self.gc_trash_path(manifest_id);
+        if let Some(parent) = trash_path.parent() {
+            if let Err(err) = fs::create_dir_all(parent) {
+                iroha_logger::warn!(
+                    %err,
+                    manifest_id = %manifest_id,
+                    path = %parent.display(),
+                    "failed to prepare GC trash directory"
+                );
+            }
+        }
+        if let Err(err) = fs::rename(&manifest_dir, &trash_path) {
+            iroha_logger::warn!(
+                %err,
+                manifest_id = %manifest_id,
+                path = %manifest_dir.display(),
+                "failed to move manifest into GC trash; deleting in place"
+            );
+            if let Err(err) = fs::remove_dir_all(&manifest_dir) {
+                iroha_logger::warn!(
+                    %err,
+                    manifest_id = %manifest_id,
+                    path = %manifest_dir.display(),
+                    "failed to delete manifest directory"
+                );
+            }
+        } else if let Err(err) = fs::remove_dir_all(&trash_path) {
+            iroha_logger::warn!(
+                %err,
+                manifest_id = %manifest_id,
+                path = %trash_path.display(),
+                "failed to purge GC trash directory"
+            );
+        }
+
+        Ok(stored.content_length())
     }
 
     /// Persist stripe layout and chunk roles for an existing manifest.
@@ -961,6 +1045,7 @@ impl StorageBackend {
         }
 
         let stored_at_unix_secs = unix_timestamp();
+        let retention_epoch = manifest.pin_policy.retention_epoch;
         let chunk_count = plan.chunks.len() as u32;
 
         let metadata_record = StoredManifestRecord {
@@ -972,6 +1057,7 @@ impl StorageBackend {
             chunk_profile_handle: canonical_profile_handle(manifest),
             stripe_layout,
             stored_at_unix_secs,
+            retention_epoch,
             chunk_files: chunk_records.clone(),
             por_tree: StoredPorTree::from(&por_tree),
         };
@@ -998,6 +1084,7 @@ impl StorageBackend {
             chunk_profile_handle: canonical_profile_handle(manifest),
             chunk_count,
             stored_at_unix_secs,
+            retention_epoch,
         });
 
         let index_bytes = match norito::to_bytes(&new_index) {
@@ -1231,6 +1318,7 @@ impl StoredManifest {
             chunk_profile_handle: record.chunk_profile_handle,
             stripe_layout: record.stripe_layout,
             stored_at_unix_secs: record.stored_at_unix_secs,
+            retention_epoch: record.retention_epoch,
             chunk_files,
             por_tree: record.por_tree,
             manifest_path,
@@ -1267,6 +1355,7 @@ impl StoredManifest {
             chunk_profile_handle: self.chunk_profile_handle.clone(),
             stripe_layout: self.stripe_layout,
             stored_at_unix_secs: self.stored_at_unix_secs,
+            retention_epoch: self.retention_epoch,
             chunk_files,
             por_tree: self.por_tree.clone(),
         }
@@ -1325,6 +1414,15 @@ fn write_manifest_metadata(
     let metadata_bytes = norito::to_bytes(record)?;
     write_atomic(metadata_path, &metadata_bytes)?;
     Ok(())
+}
+
+impl StorageBackend {
+    fn gc_trash_path(&self, manifest_id: &str) -> PathBuf {
+        let counter = GC_TRASH_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
+        let name = format!("{manifest_id}-{pid}-{counter}");
+        self.root_dir.join(GC_TRASH_DIR_NAME).join(name)
+    }
 }
 
 struct ManifestPayload<'a> {
@@ -1765,6 +1863,89 @@ mod tests {
 
         let decoded = stored.load_manifest().expect("load manifest");
         assert_eq!(decoded, manifest);
+    }
+
+    #[test]
+    fn retention_epoch_persists_in_metadata() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
+
+        let payload = b"retention epoch persistence";
+        let plan = single_file_plan(payload).expect("plan");
+        let mut policy = PinPolicy::default();
+        policy.retention_epoch = 123_456;
+
+        let manifest = ManifestBuilder::new()
+            .root_cid(vec![0xFA, 0xCE])
+            .dag_codec(DagCodecId(0x71))
+            .chunking_from_profile(
+                sorafs_chunker::ChunkProfile::DEFAULT,
+                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
+            )
+            .content_length(plan.content_length)
+            .car_digest(blake3::hash(payload).into())
+            .car_size(plan.content_length)
+            .pin_policy(policy)
+            .build()
+            .expect("manifest");
+
+        let mut reader = &payload[..];
+        let manifest_id = backend
+            .ingest_manifest(&manifest, &plan, &mut reader)
+            .expect("ingest");
+
+        let stored = backend.manifest(&manifest_id).expect("stored");
+        assert_eq!(stored.retention_epoch(), 123_456);
+
+        let reloaded = StorageBackend::new(temp_config(&temp_dir)).expect("reload");
+        let stored_reloaded = reloaded.manifest(&manifest_id).expect("stored manifest");
+        assert_eq!(stored_reloaded.retention_epoch(), 123_456);
+    }
+
+    #[test]
+    fn evict_manifest_removes_files_and_updates_index() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
+
+        let payload = b"payload for eviction";
+        let plan = single_file_plan(payload).expect("plan");
+        let manifest = ManifestBuilder::new()
+            .root_cid(vec![0x10, 0x20, 0x30])
+            .dag_codec(DagCodecId(0x71))
+            .chunking_from_profile(
+                sorafs_chunker::ChunkProfile::DEFAULT,
+                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
+            )
+            .content_length(plan.content_length)
+            .car_digest(blake3::hash(payload).into())
+            .car_size(plan.content_length)
+            .pin_policy(PinPolicy::default())
+            .build()
+            .expect("manifest");
+
+        let mut reader = &payload[..];
+        let manifest_id = backend
+            .ingest_manifest(&manifest, &plan, &mut reader)
+            .expect("ingest");
+
+        let stored = backend.manifest(&manifest_id).expect("stored");
+        let manifest_dir = stored
+            .manifest_path()
+            .parent()
+            .expect("manifest dir");
+        assert!(manifest_dir.exists());
+
+        let freed = backend
+            .evict_manifest(&manifest_id)
+            .expect("evict manifest");
+        assert_eq!(freed, plan.content_length);
+        assert!(backend.manifest(&manifest_id).is_none());
+        assert_eq!(backend.manifest_count(), 0);
+        assert_eq!(backend.total_bytes(), 0);
+        assert!(!manifest_dir.exists());
+
+        let reloaded = StorageBackend::new(temp_config(&temp_dir)).expect("reload");
+        assert_eq!(reloaded.manifest_count(), 0);
     }
 
     #[test]

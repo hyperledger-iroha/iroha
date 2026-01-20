@@ -393,8 +393,8 @@ time samples alongside the Connect evidence.
 
 Roadmap item **ADDR-6b** calls for parity across SDKs when surfacing the new
 `/v1/explorer/accounts/{account_id}/qr` endpoint. Python now ships the typed
-`ExplorerAccountQrSnapshot` DTO so wallets/tools can fetch the canonical IH58 or
-compressed literal plus the ready-to-embed SVG payload:
+`ExplorerAccountQrSnapshot` DTO so wallets/tools can fetch the preferred IH58 or
+second-best compressed (`snx1`) literal plus the ready-to-embed SVG payload:
 
 ```python
 from iroha_python import create_torii_client
@@ -402,7 +402,7 @@ from iroha_python import create_torii_client
 client = create_torii_client("http://127.0.0.1:8080", auth_token="admin-token")
 snapshot = client.get_explorer_account_qr_typed(
     "makoto@sora",
-    address_format="compressed",  # omit to use IH58 by default
+    address_format="compressed",  # omit to use preferred IH58 output; compressed (`snx1`) is second-best for Sora-only UX
 )
 
 print("Literal:", snapshot.literal)

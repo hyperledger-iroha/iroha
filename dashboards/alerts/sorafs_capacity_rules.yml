@@ -49,6 +49,38 @@ groups:
             Review torii_sorafs_registry_orders_total{status="expired"} to
             identify the provider and manifest combinations that need manual
             intervention.
+      - alert: SoraFSGCErrorRuns
+        expr: increase(torii_sorafs_gc_runs_total{result="error"}[15m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS GC sweeps reporting errors"
+          description: |
+            GC sweeps reported errors within the last 15 minutes. Check
+            torii_sorafs_gc_runs_total{result="error"} and logs for failed
+            evictions or storage access issues before capacity pressure builds.
+      - alert: SoraFSGCStalled
+        expr: torii_sorafs_gc_expired_manifests > 0 and sum(increase(torii_sorafs_gc_evictions_total[30m])) == 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS retention expiry backlog is not clearing"
+          description: |
+            At least one manifest is past retention expiry, but no GC evictions
+            were recorded for 30 minutes. Investigate GC scheduling, repair
+            backlogs, and retention grace settings.
+      - alert: SoraFSGCBlocked
+        expr: increase(torii_sorafs_gc_blocked_total[15m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS GC evictions blocked"
+          description: |
+            GC reported blocked evictions in the last 15 minutes (reason={{ $labels.reason }}).
+            Resolve active repairs or policy constraints preventing retention cleanup.
       - alert: SoraFSReserveLedgerTopUpRequired
         expr: sorafs_reserve_ledger_top_up_shortfall_xor > 0
         for: 0m

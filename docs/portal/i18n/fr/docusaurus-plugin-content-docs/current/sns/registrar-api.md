@@ -225,7 +225,7 @@ Les controles en echec renvoient `sns_err_governance_missing`.
 
 1. Le client interroge `/v1/sns/policies/{suffix_id}` pour recuperer les prix, la grace et les tiers disponibles.
 2. Le client construit `RegisterNameRequestV1`:
-   - `selector` derive de label IH58/compresse.
+   - `selector` derive du label IH58 (prefere) ou compresse (second choix).
    - `term_years` dans les limites de la politique.
    - `payment` referencant le transfert du splitter tresorerie/steward.
 3. Torii valide:

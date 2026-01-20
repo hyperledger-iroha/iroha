@@ -6238,8 +6238,25 @@ public struct ToriiGovernanceUnlockStatsResponse: Decodable, Sendable {
 }
 
 public struct ToriiSubmitTransactionResponse: Decodable, Sendable {
-    public let hash: String?
-    public let accepted: Bool?
+    public struct Payload: Decodable, Sendable {
+        public let txHash: String
+        public let submittedAtMs: UInt64
+        public let submittedAtHeight: UInt64
+        public let signer: String
+
+        private enum CodingKeys: String, CodingKey {
+            case txHash = "tx_hash"
+            case submittedAtMs = "submitted_at_ms"
+            case submittedAtHeight = "submitted_at_height"
+            case signer
+        }
+    }
+
+    public let payload: Payload
+    public let signature: String
+
+    /// Convenience accessor for transaction hash.
+    public var hash: String { payload.txHash }
 }
 
 public struct ToriiPipelineTransactionStatus: Decodable, Sendable {
@@ -8772,7 +8789,10 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                   mode: PipelineEndpointMode,
                                   idempotencyKey: String? = nil) async throws -> ToriiSubmitTransactionResponse? {
         let paths = pipelineEndpoints(for: mode)
-        var headers: [String: String] = ["Content-Type": "application/x-norito"]
+        var headers: [String: String] = [
+            "Content-Type": "application/x-norito",
+            "Accept": "application/x-norito, application/json"
+        ]
         if let key = idempotencyKey, !key.isEmpty {
             headers["Idempotency-Key"] = key
         }
@@ -8783,6 +8803,14 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         let (responseData, response) = try await send(request)
         try ensureStatus(response, in: 200..<300)
         guard !responseData.isEmpty else { return nil }
+        let contentType = response.value(forHTTPHeaderField: "Content-Type")?.lowercased() ?? ""
+        if contentType.contains("application/x-norito") {
+            guard let jsonString = NoritoNativeBridge.shared.decodeTransactionReceipt(responseData),
+                  let jsonData = jsonString.data(using: .utf8) else {
+                throw ToriiClientError.invalidPayload("failed to decode Norito receipt")
+            }
+            return try decodeJSON(ToriiSubmitTransactionResponse.self, from: jsonData)
+        }
         return try decodeJSON(ToriiSubmitTransactionResponse.self, from: responseData)
     }
 
@@ -8791,7 +8819,8 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         let paths = pipelineEndpoints(for: mode)
         let request = try makeRequest(
             path: paths.status,
-            queryItems: [URLQueryItem(name: "hash", value: hashHex)]
+            queryItems: [URLQueryItem(name: "hash", value: hashHex)],
+            headers: ["Accept": "application/json"]
         )
         let (data, response) = try await send(request)
         if response.statusCode == 404 { return nil }

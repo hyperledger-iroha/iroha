@@ -56,7 +56,7 @@ client = create_torii_client(
 ## Account addresses
 
 The `iroha_python.address` module mirrors the Rust codecs so applications can
-switch between canonical bytes, IH58 strings, and the Sora-only compressed
+switch between canonical bytes, IH58 strings, and the Sora-only compressed (`snx1`, second-best)
 alphabet without writing bespoke conversions:
 
 ```python
@@ -76,8 +76,8 @@ print(formats["compressed_warning"])
 > ℹ️ Follow the dual-format UX checklist described in
 > [`docs/source/sns/address_display_guidelines.md`](../../docs/source/sns/address_display_guidelines.md)
 > whenever you surface addresses in SDK samples or operator tooling: IH58 remains the default share
-> target, compressed strings need an inline warning, and QR payloads should always encode the IH58
-> value.
+> target, compressed (`snx1`, second-best) strings need an inline warning, and QR payloads should
+> always encode the IH58 value.
 
 ## CUDA helpers
 
@@ -328,7 +328,9 @@ draft.register_domain("wonderland") \
 
 pair = Ed25519KeyPair.from_private_key(bytes([1] * 32))
 envelope = draft.sign_with_keypair(pair)
-client.submit_transaction_envelope(envelope)
+receipt = client.submit_transaction_envelope(envelope)
+if isinstance(receipt, dict):
+    print("Submitted tx:", receipt.get("payload", {}).get("tx_hash"))
 ```
 
 Apply metadata updates or transfer ownership without dropping to raw Norito:

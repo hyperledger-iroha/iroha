@@ -27,9 +27,9 @@ the encoder. Call
 to receive an `ExplorerAccountQrSnapshot`, which includes the canonical account id,
 the Norito literal used for the QR payload, the network prefix, error‑correction
 setting, module count, QR version, and the inline SVG rendering emitted by Torii.
-Passing `address_format="compressed"` mirrors the IH58/compressed toggle described
-in the ADDR‑6b roadmap item, letting Python tooling generate the same QR payloads
-as the JS and Swift SDKs.
+Passing `address_format="compressed"` mirrors the second-best Sora-only toggle
+described in the ADDR‑6b roadmap item; omit it to keep the preferred IH58 output
+while still matching the QR payloads used by the JS and Swift SDKs.
 
 ## ISO 20022 bridge helpers
 

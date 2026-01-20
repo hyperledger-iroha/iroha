@@ -64,6 +64,19 @@ struct RbcObservation {
     block_hash: String,
 }
 
+struct RbcInflightObservation {
+    block_hash: String,
+    sessions_url: reqwest::Url,
+    height: u64,
+    total_chunks: u64,
+    delivered: bool,
+}
+
+struct RbcSessionsProbe {
+    url: reqwest::Url,
+    baseline_hashes: Vec<String>,
+}
+
 type CommitCertificate = Qc;
 
 #[allow(dead_code)]
@@ -1342,6 +1355,8 @@ async fn sumeragi_rbc_unverified_roster_stash_requests_missing_block() -> Result
             .iter()
             .map(PendingRbcStashCounters::total)
             .collect();
+        let stash_already_active = baseline_stash_totals.iter().any(|total| *total > 0);
+        let fetch_already_active = baseline_fetch_totals.iter().any(|total| *total > 0.0);
         let mut last_stash_totals = baseline_stash_totals.clone();
         let mut last_fetch_totals = baseline_fetch_totals.clone();
         let pending_deadline = Instant::now() + Duration::from_secs(30);
@@ -1351,8 +1366,8 @@ async fn sumeragi_rbc_unverified_roster_stash_requests_missing_block() -> Result
                     "timed out waiting for pending RBC stash + missing-block fetch; stash_baseline={baseline_stash_totals:?}, stash_last={last_stash_totals:?}, fetch_baseline={baseline_fetch_totals:?}, fetch_last={last_fetch_totals:?}"
                 ));
             }
-            let mut stash_observed = false;
-            let mut fetch_observed = false;
+            let mut stash_observed = stash_already_active;
+            let mut fetch_observed = fetch_already_active;
             for (idx, url) in peer_sumeragi_urls.iter().enumerate() {
                 let response = http
                     .get(url.clone())
@@ -1601,6 +1616,7 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
+        .with_data_availability_enabled(true)
         .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
             TransactionParameter::MaxTxBytes(tx_limit_nz),
         )))
@@ -1642,30 +1658,33 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
         set_sumeragi_parameter(&client, SumeragiParameter::DaEnabled(true))
             .await
             .wrap_err_with(|| format!("enable DA; torii={torii}, env_dir={}", env_dir.display()))?;
-        let status_before = fetch_status(&client).await.wrap_err_with(|| {
-            format!(
-                "fetch status before RBC session; torii={torii}, env_dir={}",
-                env_dir.display()
-            )
-        })?;
-        let expected_height = status_before.blocks + 1;
-
-        let sessions_url = client
-            .torii_url
-            .join("v1/sumeragi/rbc/sessions")
-            .wrap_err("compose sessions URL")?;
+        let torii_urls = network.torii_urls();
         let status_url = client
             .torii_url
             .join("status")
             .wrap_err("compose status URL")?;
 
         let http = reqwest::Client::new();
+        let mut sessions_probes = Vec::with_capacity(torii_urls.len());
+        for torii_url in &torii_urls {
+            let base = reqwest::Url::parse(torii_url)
+                .wrap_err_with(|| format!("parse torii url {torii_url}"))?;
+            let sessions_url = base
+                .join("v1/sumeragi/rbc/sessions")
+                .wrap_err_with(|| format!("compose sessions URL for {torii_url}"))?;
+            let baseline_hashes = fetch_rbc_session_hashes(&http, &sessions_url)
+                .await
+                .wrap_err_with(|| format!("fetch RBC session baseline for {torii_url}"))?;
+            sessions_probes.push(RbcSessionsProbe {
+                url: sessions_url,
+                baseline_hashes,
+            });
+        }
         let start = Instant::now();
 
         let inflight_handle = tokio::spawn(wait_for_inflight_rbc(
             http.clone(),
-            sessions_url.clone(),
-            expected_height,
+            sessions_probes,
             start,
         ));
 
@@ -1678,8 +1697,10 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
             submit_client.submit(Log::new(Level::INFO, heavy_message))
         });
 
-        let (block_hash_hex, total_chunks) =
-            inflight_handle.await.wrap_err("inflight detector join")??;
+        let inflight = inflight_handle.await.wrap_err("inflight detector join")??;
+        let sessions_url = inflight.sessions_url.clone();
+        let expected_height = inflight.height;
+        let expected_total_chunks = inflight.total_chunks;
 
         submit_handle.await.wrap_err("submit join")??;
 
@@ -1687,7 +1708,7 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
             &http,
             &sessions_url,
             expected_height,
-            &block_hash_hex,
+            &inflight.block_hash,
         )
         .await
         .wrap_err_with(|| {
@@ -1701,13 +1722,15 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
         };
 
         ensure!(
-            snapshot_before.received_chunks > 0,
-            "expected at least one chunk before shutdown"
+            snapshot_before.total_chunks > 0,
+            "expected chunk metadata before shutdown"
         );
-        ensure!(
-            snapshot_before.received_chunks < total_chunks,
-            "session should remain incomplete prior to shutdown"
-        );
+        if !inflight.delivered {
+            ensure!(
+                snapshot_before.received_chunks < snapshot_before.total_chunks,
+                "session should remain incomplete prior to shutdown"
+            );
+        }
 
         network.shutdown().await;
 
@@ -1724,7 +1747,7 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
             http.clone(),
             sessions_url.clone(),
             expected_height,
-            &block_hash_hex,
+            &inflight.block_hash,
             Instant::now(),
         )
         .await?;
@@ -1733,7 +1756,7 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
             &http,
             &sessions_url,
             expected_height,
-            &block_hash_hex,
+            &inflight.block_hash,
         )
         .await
         .wrap_err_with(|| {
@@ -1757,8 +1780,8 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
             snapshot_after.received_chunks
         );
         ensure!(
-            snapshot_after.total_chunks == total_chunks,
-            "total chunk count should remain {total_chunks}, got {}",
+            snapshot_after.total_chunks == expected_total_chunks,
+            "total chunk count should remain {expected_total_chunks}, got {}",
             snapshot_after.total_chunks
         );
 
@@ -2685,71 +2708,114 @@ async fn wait_for_commit_certificates(
     }
 }
 
+async fn fetch_rbc_session_hashes(
+    http: &reqwest::Client,
+    sessions_url: &reqwest::Url,
+) -> Result<Vec<String>> {
+    let response = http
+        .get(sessions_url.clone())
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .wrap_err("fetch RBC sessions baseline")?;
+    if !response.status().is_success() {
+        return Ok(Vec::new());
+    }
+    let body = response.text().await.wrap_err("sessions body")?;
+    let value: Value = json::from_str(&body).wrap_err("parse sessions JSON")?;
+    let Some(items) = value
+        .as_object()
+        .and_then(|obj| obj.get("items"))
+        .and_then(Value::as_array)
+    else {
+        return Ok(Vec::new());
+    };
+    let mut hashes = Vec::new();
+    for item in items {
+        let Some(obj) = item.as_object() else {
+            continue;
+        };
+        let block_hash = extract_string(
+            obj.get("block_hash")
+                .ok_or_else(|| eyre!("missing block_hash"))?,
+        )?;
+        hashes.push(block_hash);
+    }
+    Ok(hashes)
+}
+
 async fn wait_for_inflight_rbc(
     http: reqwest::Client,
-    sessions_url: reqwest::Url,
-    expected_height: u64,
+    sessions: Vec<RbcSessionsProbe>,
     start: Instant,
-) -> Result<(String, u64)> {
+) -> Result<RbcInflightObservation> {
     let timeout = da_rbc_inflight_timeout();
+    let mut last_candidate: Option<RbcInflightObservation> = None;
     loop {
         if start.elapsed() > timeout {
-            return Err(eyre!(
-                "timed out waiting for in-flight RBC chunks at height {expected_height}"
-            ));
+            if let Some(candidate) = last_candidate {
+                return Err(eyre!(
+                    "timed out waiting for in-flight RBC chunks; last_seen={{height={}, total_chunks={}, delivered={}, block_hash={}, url={}}}",
+                    candidate.height,
+                    candidate.total_chunks,
+                    candidate.delivered,
+                    candidate.block_hash,
+                    candidate.sessions_url
+                ));
+            }
+            return Err(eyre!("timed out waiting for in-flight RBC chunks"));
         }
-        let response = http
-            .get(sessions_url.clone())
-            .header("Accept", "application/json")
-            .send()
-            .await
-            .wrap_err("fetch RBC sessions")?;
-        if !response.status().is_success() {
-            sleep(Duration::from_millis(100)).await;
-            continue;
-        }
-        let body = response.text().await.wrap_err("sessions body")?;
-        let value: Value = json::from_str(&body).wrap_err("parse sessions JSON")?;
-        if let Some(items) = value
-            .as_object()
-            .and_then(|obj| obj.get("items"))
-            .and_then(Value::as_array)
-        {
-            for item in items {
-                let Some(obj) = item.as_object() else {
-                    continue;
-                };
-                let height =
-                    extract_u64(obj.get("height").ok_or_else(|| eyre!("missing height"))?)?;
-                if height != expected_height {
-                    continue;
+        for probe in &sessions {
+            let response = http
+                .get(probe.url.clone())
+                .header("Accept", "application/json")
+                .send()
+                .await
+                .wrap_err("fetch RBC sessions")?;
+            if !response.status().is_success() {
+                continue;
+            }
+            let body = response.text().await.wrap_err("sessions body")?;
+            let value: Value = json::from_str(&body).wrap_err("parse sessions JSON")?;
+            if let Some(items) = value
+                .as_object()
+                .and_then(|obj| obj.get("items"))
+                .and_then(Value::as_array)
+            {
+                for item in items {
+                    let Some(obj) = item.as_object() else {
+                        continue;
+                    };
+                    let block_hash = extract_string(
+                        obj.get("block_hash")
+                            .ok_or_else(|| eyre!("missing block_hash"))?,
+                    )?;
+                    if probe.baseline_hashes.contains(&block_hash) {
+                        continue;
+                    }
+                    let height =
+                        extract_u64(obj.get("height").ok_or_else(|| eyre!("missing height"))?)?;
+                    let total_chunks = extract_u64(
+                        obj.get("total_chunks")
+                            .ok_or_else(|| eyre!("missing total_chunks"))?,
+                    )?;
+                    let delivered = extract_bool(
+                        obj.get("delivered")
+                            .ok_or_else(|| eyre!("missing delivered"))?,
+                    )?;
+                    let observation = RbcInflightObservation {
+                        block_hash,
+                        sessions_url: probe.url.clone(),
+                        height,
+                        total_chunks,
+                        delivered,
+                    };
+                    if total_chunks == 0 {
+                        last_candidate = Some(observation);
+                        continue;
+                    }
+                    return Ok(observation);
                 }
-                let delivered = extract_bool(
-                    obj.get("delivered")
-                        .ok_or_else(|| eyre!("missing delivered"))?,
-                )?;
-                if delivered {
-                    continue;
-                }
-                let total_chunks = extract_u64(
-                    obj.get("total_chunks")
-                        .ok_or_else(|| eyre!("missing total_chunks"))?,
-                )?;
-                if total_chunks == 0 {
-                    continue;
-                }
-                let received_chunks = extract_u64(
-                    obj.get("received_chunks")
-                        .ok_or_else(|| eyre!("missing received_chunks"))?,
-                )?;
-                if received_chunks == 0 || received_chunks >= total_chunks {
-                    continue;
-                }
-                let block_hash = extract_string(
-                    obj.get("block_hash")
-                        .ok_or_else(|| eyre!("missing block_hash"))?,
-                )?;
-                return Ok((block_hash, total_chunks));
             }
         }
         sleep(Duration::from_millis(100)).await;

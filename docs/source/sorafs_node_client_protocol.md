@@ -403,6 +403,9 @@ The `iroha` CLI wraps the REST endpoints for day-to-day operations:
   submits a Norito manifest and payload to the storage façade for pinning.
 - `iroha sorafs gc inspect|dry-run --data-dir=/var/lib/sorafs` emits read-only
   retention reports from the local manifest store for audit evidence.
+- GC eviction sweeps emit `GcAuditEventV1` payloads into the governance DAG, so
+  operators can archive retention evidence alongside repair and settlement
+  artefacts.
 
 Every command prints the raw Norito JSON response, which makes it trivial to
 feed into scripting or capture in attestation logs.
@@ -428,6 +431,8 @@ the SLO work in SF-7:
 - `torii_sorafs_registry_*` gauges expose manifest counts, alias inventory, and
   replication order backlog so dashboards can track governance health without
   scraping JSON endpoints.【crates/iroha_telemetry/src/metrics.rs:5278】
+- `torii_sorafs_gc_*` counters/gauges surface retention sweeps, bytes freed,
+  blocked evictions, and expired-manifest age for capacity dashboards.
 - `torii_sorafs_alias_cache_refresh_total{result,reason}` and
   `torii_sorafs_alias_cache_age_seconds` capture the alias cache evaluation
   path surfaced above, allowing operators to alert on stale/expired proofs.

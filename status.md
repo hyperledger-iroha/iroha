@@ -2,6 +2,9 @@
 
 Last update: 2026-01-20
 
+- SDKs: Torii pipeline submissions now prefer Norito receipts across JS/Python/Swift, Android submit helpers send Norito payloads, and SDK docs/examples now reference receipt payload hashes.
+- Tests: not run (SDK updates only).
+- Docs/UX strings: clarified IH58 as the preferred account format and `snx1` as the second-best option across the Account Structure RFC, data-model specs, SDK/CLI help text, Torii/OpenAPI docs, portal docs/images, and translations.
 - Sumeragi worker loop now refreshes drain budgets and tick gaps each iteration from current on-chain timing to avoid stale startup timeouts; added `run_worker_loop_refreshes_config_each_iteration`.
 - Tests: `cargo test -p iroha_core run_worker_loop_refreshes_config_each_iteration` (ok).
 - Sumeragi quorum timeout now uses pending-block progress age (touched by RBC chunk/READY/DELIVER + votes) so healthy consensus activity does not trigger view changes; pending blocks track progress timestamps and tests/docs updated.
@@ -26,9 +29,15 @@ Last update: 2026-01-20
 - SoraFS repair CLI: added `iroha sorafs repair` list/claim/complete/fail/escalate subcommands plus client helpers for repair status/worker/slash endpoints; repair plan docs updated.
 - SoraFS GC CLI: added `iroha sorafs gc` inspect/dry-run reporting for retention state (read-only).
 - Docs: added GC inspection/dry-run guidance to SoraFS ops playbook, node-ops runbook, and node-client protocol CLI helpers (including portal mirrors).
-- SoraFS repair store: introduced a repair-store abstraction with CAS updates and canonical Norito payload bytes (in-memory backend; Postgres wiring TODO).
+- SoraFS repair store: file-backed Norito snapshot (`repair_state.to`) with versioned schema, CAS updates, PoR history persistence, and corrupt-store archiving fallback.
 - SoraFS repair events: record ordered RepairTaskEventV1 transitions in the scheduler and surface them in repair status responses.
 - SoraFS repair watchdog: enforce SLA/attempt caps, requeue expired leases with backoff, emit draft slash proposals, and prioritize claimable tasks by SLA/severity/provider backlog.
+- SoraFS repair worker: integrate repair chunk fetch/verify with the storage scheduler budgets to avoid starving normal pin traffic.
+- SoraFS GC: persist `retention_epoch` in manifest metadata and index expiry scans; deterministic GC sweeper evicts expired manifests with pre-admission retry, skips active repairs, and publishes GC audit events.
+- SoraFS PoR: skip scheduling PoR challenges once manifests are past `retention_epoch + retention_grace_secs`.
+- Torii: added a GC sweeper runtime alongside the repair worker runtime and wired GC metrics/OTel counters.
+- Telemetry: added SoraFS GC Prometheus/OTel metrics plus GC panels in the capacity health dashboard and GC alerts (stall/blocked) with ops/docs updates (including portal mirrors).
+- Tests: not run for the SoraFS GC/retention and repair scheduler integration changes.
 - Norito derive: fix AoS enum `[u8; N]` length prefixing for u8 array variants and add an unpacked AoS enum roundtrip test.
 - Tests: `cargo test -p iroha_torii sorafs_repair_worker_endpoints_drive_state` (ok).
 - Tests: `cargo test -p iroha_cli sorafs_` (ok).

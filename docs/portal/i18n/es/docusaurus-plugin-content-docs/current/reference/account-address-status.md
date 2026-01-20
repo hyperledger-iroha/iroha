@@ -9,7 +9,7 @@ title: Cumplimiento de direcciones de cuenta
 description: Resumen del flujo de trabajo del fixture ADDR-2 y como los equipos de SDK se mantienen sincronizados.
 ---
 
-El paquete canonico ADDR-2 (`fixtures/account/address_vectors.json`) captura fixtures IH58, compressed (half/full width), multisignature y negativos. Cada superficie de SDK + Torii se apoya en el mismo JSON para detectar cualquier deriva del codec antes de que llegue a produccion. Esta pagina refleja el brief de estado interno (`docs/source/account_address_status.md` en el repositorio raiz) para que los lectores del portal consulten el flujo sin buscar en el mono-repo.
+El paquete canonico ADDR-2 (`fixtures/account/address_vectors.json`) captura fixtures IH58 (preferred), compressed (`snx1`, second-best; half/full width), multisignature y negativos. Cada superficie de SDK + Torii se apoya en el mismo JSON para detectar cualquier deriva del codec antes de que llegue a produccion. Esta pagina refleja el brief de estado interno (`docs/source/account_address_status.md` en el repositorio raiz) para que los lectores del portal consulten el flujo sin buscar en el mono-repo.
 
 ## Regenerar o verificar el paquete
 

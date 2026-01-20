@@ -55,6 +55,23 @@ const ISO_STATUS_VALUES = new Map([
 ]);
 const PACS002_STATUS_CODES = new Set(["ACTC", "ACSP", "ACSC", "ACWC", "PDNG", "RJCT"]);
 
+function resolveNativeBinding() {
+  return globalThis.__IROHA_NATIVE_BINDING__ ?? getNativeBinding();
+}
+
+function decodeTransactionReceiptPayload(payload) {
+  const native = resolveNativeBinding();
+  if (!native || typeof native.decodeTransactionReceiptJson !== "function") {
+    return null;
+  }
+  try {
+    const json = native.decodeTransactionReceiptJson(payload);
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
 const HEADER_SORA_PROOF = "sora-proof";
 const HEADER_SORA_NAME = "sora-name";
 const HEADER_SORA_PROOF_STATUS = "sora-proof-status";
@@ -2777,15 +2794,26 @@ export class ToriiClient {
   /**
    * Submit a Norito-encoded transaction payload.
    * @param {ArrayBufferView | ArrayBuffer | Buffer} payload
-   * @returns {Promise<any>} Parsed JSON if Torii returns a body; otherwise null.
+   * @returns {Promise<any>} Submission receipt (decoded from Norito) or JSON when present; otherwise null.
    */
   async submitTransaction(payload) {
     const response = await this._request("POST", "/v1/pipeline/transactions", {
-      headers: { "Content-Type": "application/x-norito" },
+      headers: {
+        "Content-Type": "application/x-norito",
+        Accept: "application/x-norito, application/json",
+      },
       body: toBuffer(payload),
       retryProfile: "pipeline",
     });
     await this._expectStatus(response, [200, 201, 202, 204]);
+    const contentType = this._getHeader(response, "content-type");
+    if (contentType && contentType.toLowerCase().includes("application/x-norito")) {
+      const body = Buffer.from(await response.arrayBuffer());
+      if (body.length === 0) {
+        return null;
+      }
+      return decodeTransactionReceiptPayload(body);
+    }
     return this._maybeJson(response);
   }
 

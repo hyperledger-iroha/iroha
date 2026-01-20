@@ -3,7 +3,7 @@ import React, {useState} from 'react';
 const SAMPLE_ADDRESS = {
   ih58: 'snx1tbi91zEgr5Xm@wonderland',
   compressed: 'ｲﾛﾊsnx1@wonderland',
-  warning: 'Compressed addresses are Sora-only; share with caution.',
+  warning: 'Compressed addresses are Sora-only and second-best; prefer IH58.',
   domain: 'wonderland',
   implicitDefault: true,
 };
@@ -44,11 +44,11 @@ export default function ExplorerAddressCard() {
       </div>
       <div className="card__body" aria-describedby={domainHelperId}>
         <dl>
-          <dt>IH58 literal</dt>
+          <dt>IH58 literal (preferred)</dt>
           <dd>
             <code>{SAMPLE_ADDRESS.ih58}</code>
           </dd>
-          <dt>Compressed Sora-only literal</dt>
+          <dt>Compressed Sora-only literal (second-best)</dt>
           <dd>
             <code>{SAMPLE_ADDRESS.compressed}</code>
             <div className="text--warning">{SAMPLE_ADDRESS.warning}</div>
@@ -60,23 +60,23 @@ export default function ExplorerAddressCard() {
             className="button button--primary"
             data-copy-mode="ih58"
             aria-pressed="false"
-            aria-label="Copy IH58 address (safe to share)"
+            aria-label="Copy IH58 address (preferred, safe to share)"
             onClick={() => handleCopy('ih58', SAMPLE_ADDRESS.ih58, null)}>
-            Copy IH58
+            Copy IH58 (preferred)
           </button>
           <button
             className="button button--secondary"
             data-copy-mode="compressed"
             aria-pressed="false"
-            aria-label="Copy compressed Sora-only address (warn recipients)"
+            aria-label="Copy compressed Sora-only address (second-best; warn recipients)"
             onClick={() => handleCopy('compressed', SAMPLE_ADDRESS.compressed, SAMPLE_ADDRESS.warning)}>
-            Copy compressed
+            Copy compressed (`snx1`, second-best)
           </button>
         </div>
 
         <figure className="margin-top--md" role="img" aria-label={`IH58 QR for ${SAMPLE_ADDRESS.ih58}`}>
           <img src="/img/sns/address_copy_ios.svg" alt="IH58 QR reference" />
-          <figcaption>QR payloads must encode IH58 strings.</figcaption>
+          <figcaption>QR payloads must encode IH58 strings (preferred).</figcaption>
         </figure>
         <output
           aria-live="polite"

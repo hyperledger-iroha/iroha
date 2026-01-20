@@ -13,14 +13,15 @@ the Prometheus metrics emitted by `iroha_telemetry::metrics::Metrics`.
 
 | Route | Method | Feature Gate | Description | Response |
 |-------|--------|--------------|-------------|----------|
-| `/v1/kaigi/relays` | GET | `app_api` + `telemetry` | Lists registered relays with their domain, bandwidth class, HPKE fingerprint, and latest health sample. Supports `address_format=ih58\|compressed` to control how `relay_id` literals are rendered. | `KaigiRelaySummaryListDto` |
+| `/v1/kaigi/relays` | GET | `app_api` + `telemetry` | Lists registered relays with their domain, bandwidth class, HPKE fingerprint, and latest health sample. Supports `address_format=ih58\|compressed` (IH58 preferred; compressed (`snx1`) is second-best Sora-only) to control how `relay_id` literals are rendered. | `KaigiRelaySummaryListDto` |
 | `/v1/kaigi/relays/{relay_id}` | GET | `app_api` + `telemetry` | Returns metadata for a single relay, including base64 HPKE key material, latest health report metadata, and per-domain counters. `address_format=…` mirrors the list handler and also controls the `reported_by` literal. | `KaigiRelayDetailDto` |
 | `/v1/kaigi/relays/health` | GET | `app_api` + `telemetry` | Aggregated relay health totals across all domains plus per-domain metrics. | `KaigiRelayHealthSnapshotDto` |
 | `/v1/kaigi/relays/events` | GET (SSE) | `app_api` + `telemetry` | Server-Sent Events stream emitting relay registration and health update notifications. | SSE events with JSON payloads (see below) |
 
 > **Address formatting (`ADDR-5`):** Both the list and single-relay endpoints
 > accept an optional `address_format` query parameter. The value defaults to
-> `ih58` and may be set to `compressed` to emit `snx1…@domain` literals in the
+> the preferred `ih58` and may be set to `compressed` to emit second-best
+> `snx1…@domain` literals in the
 > `relay_id` and `reported_by` fields, matching the other Torii `address_format`
 > surfaces and the metrics counters that back the Local-8 cutover dashboards.
 

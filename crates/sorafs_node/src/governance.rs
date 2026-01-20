@@ -8,9 +8,12 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use hex::ToHex;
 use norito::json::{self, Map as JsonMap, Value as JsonValue};
-use sorafs_manifest::deal::{DealSettlementStatusV1, DealSettlementV1};
+use sorafs_manifest::{
+    deal::{DealSettlementStatusV1, DealSettlementV1},
+    repair::{GcAuditEventV1, RepairAuditEventV1, RepairSlashProposalV1, RepairTaskStatusV1},
+};
 
-use crate::{GovernancePublishError, GovernancePublisher};
+use crate::{GovernancePublishError, GovernancePublisher, RepairSlashStage};
 
 static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -31,12 +34,60 @@ impl FilesystemGovernancePublisher {
         self.root.join("settlements")
     }
 
+    fn repairs_root(&self) -> PathBuf {
+        self.root.join("repairs")
+    }
+
+    fn repair_audit_root(&self) -> PathBuf {
+        self.repairs_root().join("audit")
+    }
+
+    fn repair_slash_root(&self) -> PathBuf {
+        self.repairs_root().join("slash")
+    }
+
+    fn gc_audit_root(&self) -> PathBuf {
+        self.root.join("gc").join("audit")
+    }
+
     fn base_path(&self, settlement: &DealSettlementV1, digest_hex: &str) -> PathBuf {
         let deal_hex = settlement.deal_id.encode_hex::<String>();
         let status = status_label(settlement.status);
         let digest_prefix = &digest_hex[..16];
         let base = format!("{:020}_{}_{}", settlement.settled_at, status, digest_prefix);
         self.settlements_root().join(deal_hex).join(base)
+    }
+
+    fn repair_audit_path(&self, event: &RepairAuditEventV1, digest_hex: &str) -> PathBuf {
+        let sequence = format!("{:020}", event.header.sequence);
+        let status = repair_status_label(event.payload.status);
+        let ticket = sanitize_label(event.payload.ticket_id.0.as_str());
+        let digest_prefix = &digest_hex[..16];
+        let base = format!("{sequence}_{status}_{ticket}_{digest_prefix}");
+        self.repair_audit_root().join(base)
+    }
+
+    fn repair_slash_path(
+        &self,
+        proposal: &RepairSlashProposalV1,
+        stage: RepairSlashStage,
+        digest_hex: &str,
+    ) -> PathBuf {
+        let submitted = format!("{:020}", proposal.submitted_at_unix);
+        let ticket = sanitize_label(proposal.ticket_id.0.as_str());
+        let stage_label = stage.as_str();
+        let digest_prefix = &digest_hex[..16];
+        let base = format!("{submitted}_{stage_label}_{ticket}_{digest_prefix}");
+        self.repair_slash_root().join(base)
+    }
+
+    fn gc_audit_path(&self, event: &GcAuditEventV1, digest_hex: &str) -> PathBuf {
+        let sequence = format!("{:020}", event.header.sequence);
+        let reason = sanitize_label(event.payload.reason.as_str());
+        let manifest_hex = hex::encode(event.payload.manifest_digest);
+        let digest_prefix = &digest_hex[..16];
+        let base = format!("{sequence}_{reason}_{manifest_hex}_{digest_prefix}");
+        self.gc_audit_root().join(base)
     }
 }
 
@@ -46,6 +97,29 @@ fn status_label(status: DealSettlementStatusV1) -> &'static str {
         DealSettlementStatusV1::Cancelled => "cancelled",
         DealSettlementStatusV1::Slashed => "slashed",
     }
+}
+
+fn repair_status_label(status: RepairTaskStatusV1) -> &'static str {
+    match status {
+        RepairTaskStatusV1::Queued => "queued",
+        RepairTaskStatusV1::InProgress => "in_progress",
+        RepairTaskStatusV1::Verifying => "verifying",
+        RepairTaskStatusV1::Completed => "completed",
+        RepairTaskStatusV1::Failed => "failed",
+        RepairTaskStatusV1::Escalated => "escalated",
+    }
+}
+
+fn sanitize_label(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    out
 }
 
 fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
@@ -169,6 +243,134 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
 
         Ok(())
     }
+
+    fn publish_repair_audit_event(
+        &self,
+        event: &RepairAuditEventV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError> {
+        let digest = blake3::hash(encoded);
+        let digest_hex = digest.to_hex().to_string();
+        let base_path = self.repair_audit_path(event, &digest_hex);
+
+        let encoded_path = base_path.with_extension("to");
+        write_atomic(&encoded_path, encoded)?;
+        write_digest_sidecar(&encoded_path, encoded)?;
+
+        let mut payload = JsonMap::new();
+        payload.insert(
+            "event".into(),
+            json::to_value(event)
+                .map_err(|err| GovernancePublishError::other(format!("serialize audit event: {err}")))?,
+        );
+
+        let mut metadata = JsonMap::new();
+        metadata.insert(
+            "status".into(),
+            JsonValue::from(repair_status_label(event.payload.status)),
+        );
+        metadata.insert("encoded_blake3".into(), JsonValue::from(digest_hex.clone()));
+        metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
+        metadata.insert(
+            "encoded_base64".into(),
+            JsonValue::from(BASE64_STANDARD.encode(encoded)),
+        );
+        payload.insert("metadata".into(), JsonValue::Object(metadata));
+
+        let json_body = json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
+            GovernancePublishError::other(format!("serialize repair audit json: {err}"))
+        })?;
+
+        let json_path = base_path.with_extension("json");
+        write_atomic(&json_path, json_body.as_bytes())?;
+        write_digest_sidecar(&json_path, json_body.as_bytes())?;
+
+        Ok(())
+    }
+
+    fn publish_repair_slash_proposal(
+        &self,
+        proposal: &RepairSlashProposalV1,
+        encoded: &[u8],
+        stage: RepairSlashStage,
+    ) -> Result<(), GovernancePublishError> {
+        let digest = blake3::hash(encoded);
+        let digest_hex = digest.to_hex().to_string();
+        let base_path = self.repair_slash_path(proposal, stage, &digest_hex);
+
+        let encoded_path = base_path.with_extension("to");
+        write_atomic(&encoded_path, encoded)?;
+        write_digest_sidecar(&encoded_path, encoded)?;
+
+        let mut payload = JsonMap::new();
+        payload.insert(
+            "proposal".into(),
+            json::to_value(proposal).map_err(|err| {
+                GovernancePublishError::other(format!("serialize slash proposal: {err}"))
+            })?,
+        );
+
+        let mut metadata = JsonMap::new();
+        metadata.insert("stage".into(), JsonValue::from(stage.as_str()));
+        metadata.insert("encoded_blake3".into(), JsonValue::from(digest_hex.clone()));
+        metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
+        metadata.insert(
+            "encoded_base64".into(),
+            JsonValue::from(BASE64_STANDARD.encode(encoded)),
+        );
+        payload.insert("metadata".into(), JsonValue::Object(metadata));
+
+        let json_body = json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
+            GovernancePublishError::other(format!("serialize slash proposal json: {err}"))
+        })?;
+
+        let json_path = base_path.with_extension("json");
+        write_atomic(&json_path, json_body.as_bytes())?;
+        write_digest_sidecar(&json_path, json_body.as_bytes())?;
+
+        Ok(())
+    }
+
+    fn publish_gc_audit_event(
+        &self,
+        event: &GcAuditEventV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError> {
+        let digest = blake3::hash(encoded);
+        let digest_hex = digest.to_hex().to_string();
+        let base_path = self.gc_audit_path(event, &digest_hex);
+
+        let encoded_path = base_path.with_extension("to");
+        write_atomic(&encoded_path, encoded)?;
+        write_digest_sidecar(&encoded_path, encoded)?;
+
+        let mut payload = JsonMap::new();
+        payload.insert(
+            "event".into(),
+            json::to_value(event)
+                .map_err(|err| GovernancePublishError::other(format!("serialize gc event: {err}")))?,
+        );
+
+        let mut metadata = JsonMap::new();
+        metadata.insert("reason".into(), JsonValue::from(event.payload.reason.clone()));
+        metadata.insert("encoded_blake3".into(), JsonValue::from(digest_hex.clone()));
+        metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
+        metadata.insert(
+            "encoded_base64".into(),
+            JsonValue::from(BASE64_STANDARD.encode(encoded)),
+        );
+        payload.insert("metadata".into(), JsonValue::Object(metadata));
+
+        let json_body = json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
+            GovernancePublishError::other(format!("serialize gc audit json: {err}"))
+        })?;
+
+        let json_path = base_path.with_extension("json");
+        write_atomic(&json_path, json_body.as_bytes())?;
+        write_digest_sidecar(&json_path, json_body.as_bytes())?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -178,6 +380,12 @@ mod tests {
     use norito::codec::Encode;
     use sorafs_manifest::deal::{
         DEAL_LEDGER_VERSION_V1, DEAL_SETTLEMENT_VERSION_V1, DealLedgerSnapshotV1,
+    };
+    use sorafs_manifest::repair::{
+        GC_AUDIT_EVENT_VERSION_V1, GC_AUDIT_PAYLOAD_VERSION_V1, REPAIR_AUDIT_EVENT_VERSION_V1,
+        REPAIR_SLASH_PROPOSAL_VERSION_V1, REPAIR_TASK_EVENT_VERSION_V1, GcAuditEventV1,
+        GcAuditPayloadV1, RepairAuditEventV1, RepairTaskEventV1, RepairTaskStatusV1,
+        RepairTicketId, SorafsAuditHeaderV1,
     };
     use tempfile::tempdir;
 
@@ -299,5 +507,154 @@ mod tests {
                 .ends_with(".norito.to.tmp-42-7"),
             "tmp path should append to existing extensions"
         );
+    }
+
+    #[test]
+    fn filesystem_publisher_writes_repair_audit_files() {
+        let temp = tempdir().expect("tempdir");
+        let publisher =
+            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
+
+        let payload = RepairTaskEventV1 {
+            version: REPAIR_TASK_EVENT_VERSION_V1,
+            ticket_id: RepairTicketId("REP-901".into()),
+            status: RepairTaskStatusV1::Queued,
+            occurred_at_unix: 1_700_000_111,
+            actor: Some("auditor#sora".into()),
+            message: Some("queued".into()),
+        };
+        let digest = iroha_crypto::Hash::new(payload.encode());
+        let header = SorafsAuditHeaderV1 {
+            sequence: 42,
+            occurred_at_unix: payload.occurred_at_unix,
+            signer: "auditor#sora".into(),
+            payload_digest: *digest.as_ref(),
+        };
+        let event = RepairAuditEventV1 {
+            version: REPAIR_AUDIT_EVENT_VERSION_V1,
+            header,
+            payload,
+        };
+        let encoded = Encode::encode(&event);
+
+        publisher
+            .publish_repair_audit_event(&event, &encoded)
+            .expect("publish repair audit");
+
+        let dir = temp.path().join("repairs").join("audit");
+        let entries = fs::read_dir(&dir)
+            .expect("directory exists")
+            .map(|entry| entry.expect("dir entry").path())
+            .collect::<Vec<_>>();
+        assert_eq!(entries.len(), 4, "expected encoded + json + digests");
+
+        let json_path = entries
+            .iter()
+            .find(|path| path.extension().map(|ext| ext == "json").unwrap_or(false))
+            .expect("json artefact present");
+        let json_bytes = fs::read(json_path).expect("read json");
+        let value: JsonValue = norito::json::from_slice(&json_bytes).expect("json should parse");
+        let status = value
+            .get("metadata")
+            .and_then(|meta| meta.get("status"))
+            .and_then(JsonValue::as_str)
+            .expect("status");
+        assert_eq!(status, "queued");
+    }
+
+    #[test]
+    fn filesystem_publisher_writes_repair_slash_files() {
+        let temp = tempdir().expect("tempdir");
+        let publisher =
+            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
+
+        let proposal = RepairSlashProposalV1 {
+            version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
+            ticket_id: RepairTicketId("REP-902".into()),
+            provider_id: [0x11; 32],
+            manifest_digest: [0x22; 32],
+            auditor_account: "auditor#sora".into(),
+            proposed_penalty_nano: 50_000,
+            submitted_at_unix: 1_700_000_222,
+            rationale: "missed SLA".into(),
+        };
+        let encoded = Encode::encode(&proposal);
+
+        publisher
+            .publish_repair_slash_proposal(&proposal, &encoded, RepairSlashStage::Drafted)
+            .expect("publish repair slash");
+
+        let dir = temp.path().join("repairs").join("slash");
+        let entries = fs::read_dir(&dir)
+            .expect("directory exists")
+            .map(|entry| entry.expect("dir entry").path())
+            .collect::<Vec<_>>();
+        assert_eq!(entries.len(), 4, "expected encoded + json + digests");
+
+        let json_path = entries
+            .iter()
+            .find(|path| path.extension().map(|ext| ext == "json").unwrap_or(false))
+            .expect("json artefact present");
+        let json_bytes = fs::read(json_path).expect("read json");
+        let value: JsonValue = norito::json::from_slice(&json_bytes).expect("json should parse");
+        let stage = value
+            .get("metadata")
+            .and_then(|meta| meta.get("stage"))
+            .and_then(JsonValue::as_str)
+            .expect("stage");
+        assert_eq!(stage, "drafted");
+    }
+
+    #[test]
+    fn filesystem_publisher_writes_gc_audit_files() {
+        let temp = tempdir().expect("tempdir");
+        let publisher =
+            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
+
+        let payload = GcAuditPayloadV1 {
+            version: GC_AUDIT_PAYLOAD_VERSION_V1,
+            manifest_digest: [0x33; 32],
+            provider_id: [0x44; 32],
+            evicted_at_unix: 1_700_000_333,
+            freed_bytes: 4_096,
+            reason: "retention_expired".into(),
+        };
+        let digest = iroha_crypto::Hash::new(payload.encode());
+        let header = SorafsAuditHeaderV1 {
+            sequence: 7,
+            occurred_at_unix: payload.evicted_at_unix,
+            signer: "sorafs-gc".into(),
+            payload_digest: *digest.as_ref(),
+        };
+        let event = GcAuditEventV1 {
+            version: GC_AUDIT_EVENT_VERSION_V1,
+            header,
+            payload,
+        };
+        let encoded = Encode::encode(&event);
+
+        publisher
+            .publish_gc_audit_event(&event, &encoded)
+            .expect("publish gc audit");
+
+        let dir = temp.path().join("gc").join("audit");
+        let entries = fs::read_dir(&dir)
+            .expect("directory exists")
+            .map(|entry| entry.expect("dir entry").path())
+            .collect::<Vec<_>>();
+        assert_eq!(entries.len(), 4, "expected encoded + json + digests");
+
+        let json_path = entries
+            .iter()
+            .find(|path| path.extension().map(|ext| ext == "json").unwrap_or(false))
+            .expect("json artefact present");
+        let json_bytes = fs::read(json_path).expect("read json");
+        let value: JsonValue = norito::json::from_slice(&json_bytes).expect("json should parse");
+        let reason = value
+            .get("metadata")
+            .and_then(|meta| meta.get("reason"))
+            .and_then(JsonValue::as_str)
+            .expect("reason");
+        assert_eq!(reason, "retention_expired");
     }
 }

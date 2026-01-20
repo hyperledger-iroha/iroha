@@ -225,7 +225,7 @@ Torii は以下を確認して証明を検証します:
 
 1. クライアントは `/v1/sns/policies/{suffix_id}` を取得し、価格、猶予、利用可能な tier を確認。
 2. クライアントは `RegisterNameRequestV1` を構築:
-   - `selector` は IH58/圧縮ラベルから導出。
+   - `selector` は IH58（推奨）/圧縮（次善）ラベルから導出。
    - `term_years` はポリシー範囲内。
    - `payment` は treasury/steward splitter 送金を参照。
 3. Torii が検証:

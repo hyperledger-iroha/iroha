@@ -21,9 +21,9 @@ Las billeteras, exploradores y ejemplos de SDK deben tratar las direcciones de
 cuenta como payloads inmutables. El ejemplo de billetera retail de Android en
 `examples/android/retail-wallet` ahora demuestra el patron de UX requerido:
 
-- **Dos objetivos de copia.** Envia dos botones de copia explicitos: IH58 (por
-  defecto) y la forma comprimida solo Sora (`snx1...`). IH58 siempre es seguro
-  para compartir externamente y alimenta el payload del QR. La variante
+- **Dos objetivos de copia.** Envia dos botones de copia explicitos: IH58
+  (preferido) y la forma comprimida solo Sora (`snx1...`, segunda mejor opción).
+  IH58 siempre es seguro para compartir externamente y alimenta el payload del QR. La variante
   comprimida debe incluir una advertencia en linea porque solo funciona dentro
   de apps con soporte de Sora. El ejemplo de billetera retail de Android
   conecta ambos botones Material y sus tooltips en

@@ -140,6 +140,8 @@ pub struct Common {
 
 Rust data model ایک واحد canonical binary representation `AccountAddress`
 expose کرتا ہے، جسے متعدد human‑facing formats میں ظاہر کیا جا سکتا ہے:
+IH58 شیئرنگ اور canonical output کیلئے preferred فارمیٹ ہے؛ compressed (`snx1`)
+فارم Sora‑only اور second‑best آپشن ہے۔
 
 - **IH58 (Iroha Base58):** Base58 envelope جس میں chain discriminant embed
   ہوتا ہے؛ decoders prefix validate کرنے کے بعد payload کو canonical form
@@ -346,7 +348,7 @@ SDKs اور operator workflows میں مستقل (consistent) رہیں۔
 
 unit tests (`account::address::tests::parse_any_accepts_all_formats`) V1
 ویکٹرز کو `AccountAddress::parse_any` کے ذریعے assert کرتے ہیں، جس سے
-tooling canonical payload پر hex، IH58 اور compressed تمام فارمیٹس میں
+tooling canonical payload پر hex، IH58 اور compressed (`snx1`) تمام فارمیٹس میں
 اعتماد کر سکتی ہے۔  
 extended fixture set کو دوبارہ generate کرنے کیلئے:
 
@@ -354,7 +356,7 @@ extended fixture set کو دوبارہ generate کرنے کیلئے:
 cargo run -p iroha_data_model --example address_vectors
 ```
 
-| Domain      | Seed byte | Canonical hex                                                                 | Compressed |
+| Domain      | Seed byte | Canonical hex                                                                 | Compressed (`snx1`) |
 |-------------|-----------|-------------------------------------------------------------------------------|------------|
 | default     | `0x00`    | `0x0200000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201` | `snx12QGﾈkﾀｱﾚiﾉﾘuﾛWRヱﾏxﾁSuﾁepnhｽvｶrﾓｶ9Tｹｿp3ﾇVWｳｲｾU4N5E5` |
 | treasury    | `0x01`    | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a20fd68c8329fe3bbfbecd26a2d72878cd827f8` | `snx15ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾘｻYﾃhﾓMQ9CBEﾅﾊﾈｷﾉVRｺnKRwTﾋｼqﾅWrﾎU7ｼiﾍQt1TPGNJ` |
@@ -539,7 +541,7 @@ reconstruct کیا جا سکے۔
 4. **Verify اور publish کرنا.** runbook checklist (hashes، Sigstore، اور
    `sequence` کی monotonicity) follow کریں اور bundle کو SoraFS پر mirror
    کرتا ہے، لہٰذا production clusters bundle landing کے فوراً بعد canonical
-   IH58/compressed literals enforce کرتے ہیں۔
+   IH58 (preferred)/snx1 (second-best) literals enforce کرتے ہیں۔
 5. **Monitoring اور rollback.** کم از کم 30 دن تک Local‑8 panels کو zero پر
    رکھیں؛ اگر regressions نظر آئیں تو previous manifest bundle دوبارہ
    publish کریں، اور متاثرہ non‑production environment میں عارضی طور پر

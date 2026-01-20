@@ -769,8 +769,7 @@ fn minimal_config_snapshot() {
                 },
                 sorafs_repair: SorafsRepair {
                     enabled: false,
-                    db_dsn: None,
-                    db_pool_max_connections: 8,
+                    state_dir: None,
                     claim_ttl_secs: 900,
                     heartbeat_interval_secs: 60,
                     max_attempts: 3,
@@ -781,8 +780,7 @@ fn minimal_config_snapshot() {
                 },
                 sorafs_gc: SorafsGc {
                     enabled: false,
-                    db_dsn: None,
-                    db_pool_max_connections: 4,
+                    state_dir: None,
                     interval_secs: 900,
                     max_deletions_per_run: 500,
                     retention_grace_secs: 86400,

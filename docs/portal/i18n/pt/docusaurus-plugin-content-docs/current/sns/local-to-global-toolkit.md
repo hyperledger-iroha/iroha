@@ -14,7 +14,7 @@ Esta pagina espelha `docs/source/sns/local_to_global_toolkit.md` do mono-repo. E
 
 - `scripts/address_local_toolkit.sh` encapsula a CLI `iroha` para produzir:
   - `audit.json` -- saida estruturada de `iroha address audit --format json`.
-  - `normalized.txt` -- literais IH58/compressed convertidos para cada selector de dominio Local.
+  - `normalized.txt` -- literais IH58 (preferido) / compressed (`snx1`) (segunda melhor opcao) convertidos para cada selector de dominio Local.
 - Combine o script com o dashboard de ingest de enderecos (`dashboards/grafana/address_ingest.json`)
   e as regras do Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) para provar que o cutover Local-8 /
   Local-12 e seguro. Observe os paineis de colisao Local-8 e Local-12 e os alertas
@@ -31,7 +31,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 
 Opcoes:
 
-- `--format compressed` para saida `snx1...` em vez de IH58.
+- `--format compressed (`snx1`)` para saida `snx1...` em vez de IH58.
 - `--no-append-domain` para emitir literais sem dominio.
 - `--audit-only` para pular a etapa de conversao.
 - `--allow-errors` para continuar a varredura quando linhas malformadas aparecerem (igual ao comportamento da CLI).

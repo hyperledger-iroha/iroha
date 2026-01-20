@@ -14,6 +14,7 @@ import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.client.transport.UrlConnectionTransportExecutor;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
+import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchOptions;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchRequest;
 import org.hyperledger.iroha.android.sorafs.GatewayProvider;
@@ -60,7 +61,11 @@ public final class HttpClientTransportHarnessTests {
       final SignedTransaction transaction = sampleTransaction((byte) 0x01);
       final String hashHex = SignedTransactionHasher.hashHex(transaction);
 
-      server.enqueueSubmitResponse(MockResponse.json(202, "{\"status\":\"Accepted\"}"));
+      server.enqueueSubmitResponse(
+          MockResponse.bytes(
+              202,
+              new byte[] {0x01, 0x02, 0x03},
+              Map.of("Content-Type", "application/x-norito")));
       server.enqueueStatusResponse(hashHex, MockResponse.json(202, statusPayload("Pending")));
       server.enqueueStatusResponse(hashHex, MockResponse.json(200, statusPayload("Committed")));
 
@@ -82,8 +87,8 @@ public final class HttpClientTransportHarnessTests {
       final var submission = submissions.get(0);
       assert "/v1/pipeline/transactions".equals(submission.path())
           : "Submission should target Torii pipeline route";
-      assert submission.bodyUtf8().contains("\"schema\"")
-          : "Serialized payload should include schema";
+      assert Arrays.equals(submission.body(), SignedTransactionEncoder.encodeVersioned(transaction))
+          : "Serialized payload should match Norito encoding";
       assert "Bearer harness".equals(submission.header("Authorization").orElse(null))
           : "Custom headers must be forwarded";
       assert server.statusRequests().size() >= 2 : "Status polling should reach the mock server";

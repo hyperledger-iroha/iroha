@@ -71,6 +71,7 @@ __all__ = [
     "hash_blake2b_32",
     "sign_ed25519",
     "sign_sm2",
+    "decode_transaction_receipt_json",
     "verify_signed_transaction_versioned",
     "verify_ed25519",
     "verify_sm2",
@@ -100,6 +101,12 @@ def signed_transaction_envelope_from_json(payload: str) -> SignedTransactionEnve
     """Reconstruct a `SignedTransactionEnvelope` from its JSON representation."""
 
     return SignedTransactionEnvelope.from_json(payload)
+
+
+def decode_transaction_receipt_json(payload: bytes) -> str:
+    """Decode a Norito-framed transaction receipt into a JSON string."""
+
+    return _crypto.decode_transaction_receipt_json(payload)
 
 
 def _normalize_bytes(value: Any, name: str, *, expected_len: Optional[int] = None) -> bytes:

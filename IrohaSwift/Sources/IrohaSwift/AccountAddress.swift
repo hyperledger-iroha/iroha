@@ -102,7 +102,7 @@ public enum AccountAddressFormat: Equatable, Sendable {
     case canonicalHex
 }
 
-/// Structured representation of IH58/compressed outputs used by wallet/explorer UX.
+/// Structured representation of IH58 (preferred)/snx1 (second-best) outputs used by wallet/explorer UX.
 public struct AccountAddressDisplayFormats: Equatable {
     public let ih58: String
     public let compressed: String
@@ -283,7 +283,7 @@ public struct AccountAddress {
         return try encodeCompressedString(canonical: canonical, fullWidth: true)
     }
 
-    /// Returns both IH58 and compressed representations plus the UX warning required by
+    /// Returns both IH58 (preferred) and compressed (`snx1`, second-best) representations plus the UX warning required by
     /// `docs/source/sns/address_display_guidelines.md`.
     public func displayFormats(networkPrefix: UInt16 = 753) throws -> AccountAddressDisplayFormats {
         let canonical = try canonicalBytes()

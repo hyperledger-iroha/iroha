@@ -60,7 +60,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 | الميثاق + ملاحق KPI | `docs/source/sns/governance_addenda/` | مواثيق موقعة مع تحكم بالنسخ، ومواثيق KPI، وقرارات الحوكمة المشار اليها بتصويتات CLI. |
 | مخطط السجل | [`registry-schema.md`](./registry-schema.md) | تراكيب Norito المرجعية (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`). |
 | عقد المسجل | [`registrar-api.md`](./registrar-api.md) | حمولات REST/gRPC، مقاييس `sns_registrar_status_total`، وتوقعات حوكمة hooks. |
-| دليل UX للعناوين | [`address-display-guidelines.md`](./address-display-guidelines.md) | عروض IH58/المضغوطة المرجعية التي تعكسها المحافظ/المستكشفات. |
+| دليل UX للعناوين | [`address-display-guidelines.md`](./address-display-guidelines.md) | عروض IH58 (المفضلة) والمضغوطة (الخيار الثاني) المرجعية التي تعكسها المحافظ/المستكشفات. |
 | وثائق SoraDNS / GAR | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | اشتقاق المضيفات الحتمي، سير عمل tailer للشفافية، وقواعد التنبيه. |
 | مذكرات تنظيمية | `docs/source/sns/regulatory/` | ملاحظات استقبال حسب الولاية (مثل EU DSA)، اقرارات steward، ملاحق قوالب. |
 | سجل drills | `ops/drill-log.md` | سجل لتجارب الفوضى وIR المطلوبة قبل الخروج من المراحل. |
