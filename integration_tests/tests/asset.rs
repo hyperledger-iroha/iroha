@@ -245,10 +245,7 @@ fn quiet_network_builder() -> NetworkBuilder {
     sumeragi.insert("rbc_pending_ttl_ms".into(), TomlValue::Integer(120_000));
     sumeragi.insert("rbc_session_ttl_secs".into(), TomlValue::Integer(240));
     // Increase DA quorum/availability timeouts to tolerate slower CI and local hosts.
-    sumeragi.insert(
-        "da_quorum_timeout_multiplier".into(),
-        TomlValue::Integer(6),
-    );
+    sumeragi.insert("da_quorum_timeout_multiplier".into(), TomlValue::Integer(6));
     sumeragi.insert(
         "da_availability_timeout_multiplier".into(),
         TomlValue::Integer(3),

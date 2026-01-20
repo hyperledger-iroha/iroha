@@ -2,6 +2,12 @@
 
 Last update: 2026-01-20
 
+- Sumeragi worker loop now refreshes drain budgets and tick gaps each iteration from current on-chain timing to avoid stale startup timeouts; added `run_worker_loop_refreshes_config_each_iteration`.
+- Tests: `cargo test -p iroha_core run_worker_loop_refreshes_config_each_iteration` (ok).
+- Sumeragi quorum timeout now uses pending-block progress age (touched by RBC chunk/READY/DELIVER + votes) so healthy consensus activity does not trigger view changes; pending blocks track progress timestamps and tests/docs updated.
+- Tests: `cargo test -p iroha_core pending_block_progress_age_resets_on_touch -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_core touch_pending_progress_updates_pending_age -- --nocapture` (ok).
+- Localnet: re-run NPoS 1 Hz / 100-block stall check with status polling after the progress-age change (pending).
 - Sumeragi pacemaker: idle view changes now pause when consensus block-payload/RBC-chunk queues are saturated to avoid churn under payload backlog; added `force_view_change_if_idle_skips_when_consensus_queue_backpressure`.
 - Consensus ingress: dedup BlockSyncUpdate + RBC chunk payloads (and record evictions) to reduce block-payload/RBC-chunk queue saturation; bump block-payload/RBC dedup cache cap to 8192; added `incoming_block_message_drops_duplicate_block_sync_update` + `incoming_block_message_drops_duplicate_rbc_chunk`.
 - Tests: `cargo test -p iroha_core incoming_block_message_drops_duplicate_block_sync_update -- --nocapture` (ok; initial build waited on Cargo lock).

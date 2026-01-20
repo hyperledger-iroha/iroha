@@ -3398,6 +3398,29 @@ impl Actor {
         self.rbc_rebroadcast_active_with_tip(key, tip_height, tip_hash)
     }
 
+    fn touch_pending_progress(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        now: Instant,
+    ) {
+        if let Some(pending) = self.pending.pending_blocks.get_mut(&block_hash) {
+            if !pending.aborted && pending.height == height && pending.view == view {
+                pending.touch_progress(now);
+            }
+        }
+        if let Some(inflight) = self.subsystems.commit.inflight.as_mut() {
+            if inflight.block_hash == block_hash
+                && !inflight.pending.aborted
+                && inflight.pending.height == height
+                && inflight.pending.view == view
+            {
+                inflight.pending.touch_progress(now);
+            }
+        }
+    }
+
     fn has_unresolved_rbc_backlog(&self) -> bool {
         if !self.runtime_da_enabled() {
             return false;
@@ -3661,6 +3684,8 @@ pub(super) struct Actor {
     background_post_tx: Option<mpsc::SyncSender<BackgroundPost>>,
     wake_tx: Option<mpsc::SyncSender<()>>,
     phase_tracker: PhaseTracker,
+    /// Tracks when queued work first appeared for the current height/view.
+    queue_ready_since: Option<QueueReadySince>,
     phase_ema: PhaseEma,
     evidence_store: EvidenceStore,
     invalid_sig_log: InvalidSigThrottle,
@@ -5588,7 +5613,12 @@ impl Actor {
         let mut roster = self.roster_for_vote_with_mode(key.0, key.1, key.2, consensus_mode);
         if roster.is_empty() {
             let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
-            if key.1 <= committed_height.saturating_add(1) {
+            let committed_epoch = self.epoch_for_height(committed_height);
+            let session_epoch = self.epoch_for_height(key.1);
+            let payload_known = self.block_known_locally(key.0);
+            let allow_fallback = key.1 <= committed_height.saturating_add(1)
+                || (payload_known && session_epoch == committed_epoch);
+            if allow_fallback {
                 let view = self.state.view();
                 let fallback = derive_active_topology_for_mode(
                     &view,
@@ -5598,6 +5628,14 @@ impl Actor {
                 );
                 drop(view);
                 if !fallback.is_empty() {
+                    if payload_known && key.1 > committed_height.saturating_add(1) {
+                        debug!(
+                            height = key.1,
+                            committed_height,
+                            committed_epoch,
+                            "using active topology for RBC roster beyond committed height within epoch"
+                        );
+                    }
                     roster = fallback;
                 }
             }
@@ -6357,6 +6395,29 @@ impl Actor {
                 .get()
                 .is_some_and(|pending| pending == hash)
             || self.kura.get_block_height_by_hash(hash).is_some()
+    }
+
+    fn block_payload_available_for_progress(&self, hash: HashOf<BlockHeader>) -> bool {
+        if let Some(pending) = self.pending.pending_blocks.get(&hash) {
+            return !matches!(pending.validation_status, ValidationStatus::Invalid);
+        }
+        if let Some(inflight) = self.subsystems.commit.inflight.as_ref()
+            && inflight.block_hash == hash
+        {
+            return !matches!(
+                inflight.pending.validation_status,
+                ValidationStatus::Invalid
+            );
+        }
+        if self
+            .pending
+            .pending_processing
+            .get()
+            .is_some_and(|pending| pending == hash)
+        {
+            return true;
+        }
+        self.kura.get_block_height_by_hash(hash).is_some()
     }
 
     fn block_known_locally(&self, hash: HashOf<BlockHeader>) -> bool {
@@ -7144,6 +7205,7 @@ impl Actor {
             background_post_tx,
             wake_tx,
             phase_tracker: PhaseTracker::new(now),
+            queue_ready_since: None,
             phase_ema: PhaseEma::new(&pacemaker_timeouts),
             evidence_store: EvidenceStore::new(),
             invalid_sig_log: InvalidSigThrottle::default(),
@@ -7874,6 +7936,46 @@ impl Actor {
         }
 
         next_due
+    }
+
+    pub(super) fn refresh_worker_loop_config(&mut self, cfg: &mut super::WorkerLoopConfig) {
+        let view = self.state.view();
+        let mode = super::effective_consensus_mode(&view, self.consensus_mode);
+        let params = view.world.parameters().sumeragi();
+        let block_time = self.block_time_for_mode(&view, mode);
+        let commit_time = self.commit_timeout_for_mode(&view, mode);
+        let da_enabled = params.da_enabled();
+        drop(view);
+
+        let time_budget = super::worker_time_budget(
+            block_time,
+            commit_time,
+            da_enabled,
+            self.da_quorum_timeout_multiplier(),
+        );
+        let vote_rx_drain_budget = super::vote_rx_drain_budget(
+            block_time,
+            commit_time,
+            da_enabled,
+            self.da_quorum_timeout_multiplier(),
+            Duration::from_secs(8),
+        )
+        .max(time_budget);
+        let non_vote_drain_budget = super::cap_drain_budget(block_time / 2, time_budget);
+        let rbc_chunk_drain_budget = super::cap_rbc_drain_budget(block_time / 2, time_budget);
+        let block_rx_drain_budget = super::cap_drain_budget(block_time / 4, time_budget);
+        let starve_max = block_time.max(commit_time).max(time_budget);
+        let tick_min_gap = super::idle_tick_gap(block_time, commit_time, time_budget);
+
+        cfg.time_budget = time_budget;
+        cfg.vote_rx_drain_budget = vote_rx_drain_budget;
+        cfg.block_payload_rx_drain_budget = non_vote_drain_budget;
+        cfg.block_rx_drain_budget = block_rx_drain_budget;
+        cfg.rbc_chunk_rx_drain_budget = rbc_chunk_drain_budget;
+        cfg.tick_min_gap = tick_min_gap;
+        cfg.tick_max_gap = time_budget;
+        cfg.block_rx_starve_max = starve_max;
+        cfg.non_vote_starve_max = starve_max;
     }
 
     pub(super) fn next_tick_deadline(&self, now: Instant) -> Option<Instant> {
@@ -8876,6 +8978,29 @@ impl Actor {
             }
             other => other,
         };
+        let bypass_queue = matches!(
+            &request,
+            BackgroundRequest::Post {
+                msg: BlockMessage::Proposal(_),
+                ..
+            }
+                | BackgroundRequest::Post {
+                    msg: BlockMessage::BlockCreated(_),
+                    ..
+                }
+                | BackgroundRequest::Broadcast {
+                    msg: BlockMessage::Proposal(_),
+                }
+                | BackgroundRequest::Broadcast {
+                    msg: BlockMessage::BlockCreated(_),
+                }
+        );
+        if bypass_queue {
+            if !self.config.debug_disable_background_worker {
+                self.dispatch_background_fallback(request);
+            }
+            return;
+        }
         let dispatched = {
             #[cfg(feature = "telemetry")]
             {
@@ -10507,6 +10632,7 @@ impl Actor {
         }
         if self.queue.active_len() == 0 {
             // Skip idle view-change churn when no work is queued.
+            self.queue_ready_since = None;
             return false;
         }
         let rbc_backlog = self.has_unresolved_rbc_backlog();
@@ -10518,6 +10644,10 @@ impl Actor {
             u64::try_from(self.config.msg_channel_cap_rbc_chunks.max(1)).unwrap_or(u64::MAX);
         let consensus_queue_backpressure = queue_depths.block_payload_rx >= block_payload_cap
             || queue_depths.rbc_chunk_rx >= rbc_chunk_cap;
+        let consensus_queue_backlog = queue_depths.vote_rx > 0
+            || queue_depths.block_payload_rx > 0
+            || queue_depths.rbc_chunk_rx > 0
+            || queue_depths.block_rx > 0;
 
         let committed_qc = self.latest_committed_qc();
         let committed_height = committed_qc.as_ref().map_or_else(
@@ -10531,7 +10661,7 @@ impl Actor {
 
         let current_view = self.phase_tracker.current_view(height).unwrap_or(0);
 
-        let age = if let Some(age) = self.phase_tracker.view_age(height, now) {
+        let view_age = if let Some(age) = self.phase_tracker.view_age(height, now) {
             age
         } else {
             // Seed view tracking if we never observed a view-change for this height yet.
@@ -10547,19 +10677,55 @@ impl Actor {
             .propose
             .proposals_seen
             .contains(&(height, current_view));
+        let queue_since = match self.queue_ready_since {
+            Some(entry) if entry.height == height && entry.view == current_view => {
+                Some(entry.since)
+            }
+            _ => {
+                self.queue_ready_since = Some(QueueReadySince {
+                    height,
+                    view: current_view,
+                    since: now,
+                });
+                None
+            }
+        };
+        let queue_since = match queue_since {
+            Some(since) => Some(since),
+            None => {
+                if !proposal_seen {
+                    return false;
+                }
+                Some(now)
+            }
+        };
         let timeout = idle_view_timeout(
             proposal_seen,
             self.commit_quorum_timeout(),
             self.subsystems.propose.pacemaker.propose_interval,
             self.runtime_da_enabled(),
         );
+        let age = if proposal_seen {
+            view_age
+        } else {
+            now.saturating_duration_since(queue_since.unwrap_or(now))
+        };
         let timed_out = idle_round_timed_out(true, age, timeout);
-        if rbc_backlog || relay_backpressure || consensus_queue_backpressure {
+        if rbc_backlog
+            || relay_backpressure
+            || consensus_queue_backpressure
+            || consensus_queue_backlog
+        {
             if timed_out {
                 debug!(
                     rbc_backlog,
                     relay_backpressure,
                     consensus_queue_backpressure,
+                    consensus_queue_backlog,
+                    vote_rx_depth = queue_depths.vote_rx,
+                    block_payload_rx_depth = queue_depths.block_payload_rx,
+                    rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                    block_rx_depth = queue_depths.block_rx,
                     "skipping idle view-change despite timeout due to unresolved backpressure"
                 );
             } else {
@@ -10571,6 +10737,9 @@ impl Actor {
                 }
                 if consensus_queue_backpressure {
                     trace!("skipping idle view-change due to consensus queue backpressure");
+                }
+                if consensus_queue_backlog {
+                    trace!("skipping idle view-change due to consensus queue backlog");
                 }
             }
             return false;
@@ -10590,6 +10759,11 @@ impl Actor {
             rbc_backlog,
             relay_backpressure,
             consensus_queue_backpressure,
+            consensus_queue_backlog,
+            vote_rx_depth = queue_depths.vote_rx,
+            block_payload_rx_depth = queue_depths.block_payload_rx,
+            rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+            block_rx_depth = queue_depths.block_rx,
             "no proposal observed before cutoff; rotating leader via view change"
         );
         self.trigger_view_change_with_cause(height, current_view, ViewChangeCause::MissingQc);
@@ -11464,6 +11638,13 @@ pub(super) struct PhaseTracker {
     round_start: Instant,
     last_marker: Instant,
     recorded: PhaseRecordFlags,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct QueueReadySince {
+    height: u64,
+    view: u64,
+    since: Instant,
 }
 
 impl PhaseTracker {
