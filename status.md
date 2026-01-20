@@ -2,8 +2,13 @@
 
 Last update: 2026-01-20
 
+- SoraFS repair API: added Torii contract tests for worker endpoints (report/claim/heartbeat/complete/fail) and status snapshots.
+- SoraFS CLI: added help smoke coverage for `iroha sorafs repair` and `iroha sorafs gc`.
 - Accounts/UAID: enforce UAID→account 1:1 index, reject duplicate UAIDs on registration, and switch UAID portfolio/reward selection to the index with new unit coverage.
+- Account address parsing: accept full-width `ｓｎｘ１` sentinel for compressed Sora literals alongside ASCII `snx1`.
+- Tests: `cargo test -p iroha_data_model compressed_fullwidth_sentinel_accepts` (ok; waited for build dir lock).
 - CLI account literals: resolve account identifiers through `/v1/accounts/resolve` across commands (contracts, DA/SoraFS ledgers, Kaigi, staking, ZK, subscriptions, offline filters, multisig/trigger inputs) and refresh CLI harness tests to use canonical account IDs.
+- CLI SNS/SoraFS: catalog policy verification and gateway denylist validation now resolve account literals via `/v1/accounts/resolve`; vote CLI tests use canonical fixtures.
 - Offline receipts: added `OfflineSpendReceipt::invoice_id()` accessor + unit test and switched executor validation/tests to use it so non-transparent builds compile.
 - Roadmap: added account identity refactor tasks (IH58-only canonical IDs, alias/UAID unification, PII-safe tokens, no compatibility shims).
 - SoraFS config: added `sorafs.repair`/`sorafs.gc` defaults and wiring, updated defaults/samples (`defaults/nexus`, `configs/soranexus/testus`), plus config docs (all locales).
@@ -18,6 +23,8 @@ Last update: 2026-01-20
 - SoraFS repair events: record ordered RepairTaskEventV1 transitions in the scheduler and surface them in repair status responses.
 - SoraFS repair watchdog: enforce SLA/attempt caps, requeue expired leases with backoff, emit draft slash proposals, and prioritize claimable tasks by SLA/severity/provider backlog.
 - Norito derive: fix AoS enum `[u8; N]` length prefixing for u8 array variants and add an unpacked AoS enum roundtrip test.
+- Tests: `cargo test -p iroha_torii sorafs_repair_endpoints` (failed: `iroha_torii` tests no longer compile; missing imports in `crates/iroha_torii/src/lib.rs` test helpers and stale `gov`/`routing` test call signatures).
+- Tests: `cargo test -p iroha_cli sorafs_repair_help_is_accessible` (failed: `iroha_cli` compile errors in `crates/iroha_cli/src/main_shared.rs` JSON map literal, missing `FromStr` imports, and updated `sns` arg signatures).
 - Tests: `cargo clippy -p sorafs_node --all-targets -- -D warnings` (ok).
 - Tests: `cargo test -p norito enum_aos` (ok; warning about unused_mut in `crates/norito/src/core.rs:5610`).
 - Format: `cargo fmt --all` (warned about nightly-only rustfmt options in stable toolchain).

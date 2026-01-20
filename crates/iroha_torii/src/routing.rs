@@ -10345,7 +10345,7 @@ mod repair_worker_tests {
                     },
                 ),
             };
-            handle_post_sorafs_repair_claim(
+            let _ = handle_post_sorafs_repair_claim(
                 MaybeTelemetry::disabled(),
                 node.clone(),
                 NoritoJson(claim),
@@ -10372,7 +10372,7 @@ mod repair_worker_tests {
                     },
                 ),
             };
-            handle_post_sorafs_repair_heartbeat(
+            let _ = handle_post_sorafs_repair_heartbeat(
                 MaybeTelemetry::disabled(),
                 node.clone(),
                 NoritoJson(heartbeat),
@@ -10401,7 +10401,7 @@ mod repair_worker_tests {
                     },
                 ),
             };
-            handle_post_sorafs_repair_complete(
+            let _ = handle_post_sorafs_repair_complete(
                 MaybeTelemetry::disabled(),
                 node.clone(),
                 NoritoJson(complete),
@@ -10428,7 +10428,7 @@ mod repair_worker_tests {
                     },
                 ),
             };
-            handle_post_sorafs_repair_claim(
+            let _ = handle_post_sorafs_repair_claim(
                 MaybeTelemetry::disabled(),
                 node.clone(),
                 NoritoJson(claim_b),
@@ -10457,7 +10457,7 @@ mod repair_worker_tests {
                     },
                 ),
             };
-            handle_post_sorafs_repair_fail(
+            let _ = handle_post_sorafs_repair_fail(
                 MaybeTelemetry::disabled(),
                 node.clone(),
                 NoritoJson(fail),
@@ -18248,7 +18248,6 @@ mod app_api_integration_tests {
                         axum::extract::Path(def_id),
                         crate::utils::extractors::NoritoJson(env),
                         telemetry,
-                        false,
                     )
                     .await
                 }
@@ -18544,7 +18543,6 @@ mod app_api_integration_tests {
                         axum::extract::Path(def_id),
                         crate::utils::extractors::NoritoJson(env),
                         telemetry,
-                        false,
                     )
                     .await
                 }
@@ -18592,7 +18590,6 @@ mod app_api_integration_tests {
                         axum::extract::Path(def_id),
                         crate::utils::extractors::NoritoJson(env),
                         telemetry,
-                        false,
                     )
                     .await
                 }
@@ -19053,7 +19050,6 @@ mod app_api_integration_tests {
                             axum::extract::Path(def_id),
                             crate::utils::extractors::NoritoJson(env),
                             telemetry,
-                            false,
                         )
                         .await
                     }
@@ -27081,7 +27077,6 @@ async fn repo_agreements_list_filters_by_id() {
         fixture.state.clone(),
         NoritoQuery(params),
         MaybeTelemetry::disabled(),
-        true,
     )
     .await
     .unwrap()
@@ -27116,7 +27111,6 @@ async fn repo_agreements_query_supports_sorting() {
         fixture.state.clone(),
         NoritoJson(envelope),
         MaybeTelemetry::disabled(),
-        true,
     )
     .await
     .unwrap()
@@ -27142,7 +27136,6 @@ async fn repo_agreements_list_rejects_unknown_address_format() {
         fixture.state,
         NoritoQuery(params),
         MaybeTelemetry::disabled(),
-        true,
     )
     .await;
     let err = match result {
@@ -27171,7 +27164,6 @@ async fn repo_agreements_list_respects_compressed_address_format() {
         fixture.state,
         NoritoQuery(params),
         MaybeTelemetry::disabled(),
-        true,
     )
     .await
     .unwrap()
@@ -27215,7 +27207,6 @@ async fn repo_agreements_list_filter_accepts_compressed_accounts() {
         fixture.state.clone(),
         NoritoQuery(params),
         MaybeTelemetry::disabled(),
-        true,
     )
     .await
     .unwrap()
@@ -27253,7 +27244,6 @@ async fn repo_agreements_query_filter_accepts_compressed_accounts() {
         fixture.state,
         NoritoJson(envelope),
         MaybeTelemetry::disabled(),
-        true,
     )
     .await
     .unwrap()
@@ -27490,7 +27480,6 @@ mod pagination_enforcement_tests {
             axum::extract::Path(TEST_ACCOUNT.to_string()),
             crate::NoritoQuery(params),
             MaybeTelemetry::disabled(),
-            false,
         )
         .await;
 
@@ -27603,7 +27592,6 @@ mod pagination_enforcement_tests {
             state,
             crate::NoritoQuery(params),
             MaybeTelemetry::disabled(),
-            false,
         )
         .await;
 
@@ -27634,7 +27622,6 @@ mod pagination_enforcement_tests {
             state,
             NoritoJson(envelope),
             MaybeTelemetry::disabled(),
-            false,
         )
         .await;
 
@@ -27702,7 +27689,6 @@ mod pagination_enforcement_tests {
             state,
             crate::NoritoQuery(params),
             MaybeTelemetry::disabled(),
-            false,
         )
         .await;
 
@@ -27733,7 +27719,6 @@ mod pagination_enforcement_tests {
             state,
             NoritoJson(envelope),
             MaybeTelemetry::disabled(),
-            false,
         )
         .await;
 
@@ -27756,7 +27741,6 @@ mod pagination_enforcement_tests {
             state,
             crate::NoritoQuery(params),
             MaybeTelemetry::disabled(),
-            false,
         )
         .await;
 
@@ -27787,7 +27771,6 @@ mod pagination_enforcement_tests {
             state,
             NoritoJson(envelope),
             MaybeTelemetry::disabled(),
-            false,
         )
         .await;
 
@@ -27810,7 +27793,6 @@ mod pagination_enforcement_tests {
             state,
             crate::NoritoQuery(params),
             MaybeTelemetry::disabled(),
-            false,
         )
         .await;
 
@@ -27841,7 +27823,6 @@ mod pagination_enforcement_tests {
             state,
             NoritoJson(envelope),
             MaybeTelemetry::disabled(),
-            false,
         )
         .await;
 
@@ -27864,7 +27845,6 @@ mod pagination_enforcement_tests {
             state,
             crate::NoritoQuery(params),
             MaybeTelemetry::disabled(),
-            false,
         )
         .await;
 
@@ -27895,7 +27875,6 @@ mod pagination_enforcement_tests {
             state,
             NoritoJson(envelope),
             MaybeTelemetry::disabled(),
-            false,
         )
         .await;
 
@@ -27918,7 +27897,6 @@ mod pagination_enforcement_tests {
             state,
             crate::NoritoQuery(params),
             MaybeTelemetry::disabled(),
-            false,
         )
         .await;
 
@@ -27949,7 +27927,6 @@ mod pagination_enforcement_tests {
             state,
             NoritoJson(envelope),
             MaybeTelemetry::disabled(),
-            false,
         )
         .await;
 
@@ -27975,7 +27952,6 @@ mod pagination_enforcement_tests {
             state,
             crate::NoritoQuery(params),
             MaybeTelemetry::disabled(),
-            false,
         )
         .await;
 
@@ -28006,7 +27982,6 @@ mod pagination_enforcement_tests {
             state,
             NoritoJson(envelope),
             MaybeTelemetry::disabled(),
-            false,
         )
         .await;
 
@@ -29370,7 +29345,6 @@ mod accounts_query_tests {
             state,
             crate::utils::extractors::NoritoJson(env),
             crate::routing::MaybeTelemetry::for_tests(),
-            false,
         )
         .await
         .expect("handler ok")
@@ -38317,7 +38291,6 @@ mod adapter_filter_tests {
             &mut expr,
             &MaybeTelemetry::for_tests(),
             ENDPOINT_OFFLINE_ALLOWANCES_LIST,
-            true,
         )
         .unwrap();
 
@@ -38345,7 +38318,6 @@ mod adapter_filter_tests {
                 0,
                 &telemetry,
                 ENDPOINT_OFFLINE_ALLOWANCES_LIST,
-                false
             )
             .is_err()
         );
@@ -38361,7 +38333,6 @@ mod adapter_filter_tests {
                 0,
                 &telemetry,
                 ENDPOINT_OFFLINE_ALLOWANCES_LIST,
-                false
             )
             .is_err()
         );
@@ -38386,7 +38357,6 @@ mod adapter_filter_tests {
             1_720_000_000_000,
             &telemetry,
             ENDPOINT_OFFLINE_ALLOWANCES_LIST,
-            false,
         )
         .expect("filters");
         assert!(filters.matches(&record));
@@ -38400,7 +38370,6 @@ mod adapter_filter_tests {
             1_720_000_000_000,
             &telemetry,
             ENDPOINT_OFFLINE_ALLOWANCES_LIST,
-            false,
         )
         .expect("filters");
         assert!(!filters.matches(&record));
@@ -38415,7 +38384,6 @@ mod adapter_filter_tests {
             1_720_000_000_000,
             &telemetry,
             ENDPOINT_OFFLINE_ALLOWANCES_LIST,
-            false,
         )
         .expect("filters");
         assert!(!filters.matches(&record));
@@ -38440,7 +38408,6 @@ mod adapter_filter_tests {
             1_720_000_000_000,
             &telemetry,
             ENDPOINT_OFFLINE_ALLOWANCES_LIST,
-            false,
         )
         .expect("filters");
         assert!(filters.matches(&record));
@@ -38454,7 +38421,6 @@ mod adapter_filter_tests {
             1_720_000_000_000,
             &telemetry,
             ENDPOINT_OFFLINE_ALLOWANCES_LIST,
-            false,
         )
         .expect("filters");
         assert!(!filters.matches(&record));
@@ -38468,7 +38434,6 @@ mod adapter_filter_tests {
             1_720_000_000_000,
             &telemetry,
             ENDPOINT_OFFLINE_ALLOWANCES_LIST,
-            false,
         )
         .expect("filters");
         assert!(!filters.matches(&record));
@@ -38492,7 +38457,6 @@ mod adapter_filter_tests {
             record.certificate.expires_at_ms - 1,
             &telemetry,
             ENDPOINT_OFFLINE_ALLOWANCES_LIST,
-            false,
         )
         .expect("filters");
         let expected_controller = record.certificate.controller.to_string();
@@ -38512,7 +38476,6 @@ mod adapter_filter_tests {
                 0,
                 &telemetry,
                 ENDPOINT_OFFLINE_ALLOWANCES_LIST,
-                false
             )
             .is_err()
         );
@@ -38530,7 +38493,6 @@ mod adapter_filter_tests {
             now_ms,
             &telemetry,
             ENDPOINT_OFFLINE_ALLOWANCES_LIST,
-            false,
         )
         .expect("filters");
         assert!(!filters.matches(&record));
@@ -38544,7 +38506,6 @@ mod adapter_filter_tests {
             now_ms,
             &telemetry,
             ENDPOINT_OFFLINE_ALLOWANCES_LIST,
-            false,
         )
         .expect("filters");
         assert!(filters.matches(&record));
@@ -38716,7 +38677,6 @@ mod adapter_filter_tests {
             &params,
             &telemetry,
             ENDPOINT_OFFLINE_TRANSFERS_LIST,
-            false,
         )
         .expect("filters");
         assert!(filters.matches(&record));
@@ -38730,7 +38690,6 @@ mod adapter_filter_tests {
             &params,
             &telemetry,
             ENDPOINT_OFFLINE_TRANSFERS_LIST,
-            false,
         )
         .expect("filters");
         assert!(!filters.matches(&record));
@@ -38743,7 +38702,6 @@ mod adapter_filter_tests {
             &params,
             &telemetry,
             ENDPOINT_OFFLINE_TRANSFERS_LIST,
-            false,
         )
         .expect("filters");
         assert!(!filters.matches(&record));
@@ -38756,7 +38714,6 @@ mod adapter_filter_tests {
             &params,
             &telemetry,
             ENDPOINT_OFFLINE_TRANSFERS_LIST,
-            false,
         )
         .expect("filters");
         assert!(!filters.matches(&record));
@@ -38776,7 +38733,6 @@ mod adapter_filter_tests {
                 &params,
                 &telemetry,
                 ENDPOINT_OFFLINE_TRANSFERS_LIST,
-                false
             )
             .is_err()
         );
@@ -38791,7 +38747,6 @@ mod adapter_filter_tests {
                 &params,
                 &telemetry,
                 ENDPOINT_OFFLINE_TRANSFERS_LIST,
-                false
             )
             .is_err()
         );
@@ -38805,7 +38760,6 @@ mod adapter_filter_tests {
                 &params,
                 &telemetry,
                 ENDPOINT_OFFLINE_TRANSFERS_LIST,
-                false
             )
             .is_err()
         );
@@ -38819,7 +38773,6 @@ mod adapter_filter_tests {
                 &params,
                 &telemetry,
                 ENDPOINT_OFFLINE_TRANSFERS_LIST,
-                false
             )
             .is_err()
         );
@@ -38849,7 +38802,6 @@ mod adapter_filter_tests {
             &params,
             &telemetry,
             ENDPOINT_OFFLINE_TRANSFERS_LIST,
-            false,
         )
         .expect("filters");
         assert!(filters.matches(&record));
@@ -38863,7 +38815,6 @@ mod adapter_filter_tests {
                 &params,
                 &telemetry,
                 ENDPOINT_OFFLINE_TRANSFERS_LIST,
-                false
             )
             .is_err()
         );
@@ -38890,7 +38841,6 @@ mod adapter_filter_tests {
             &mut expr,
             &MaybeTelemetry::for_tests(),
             ENDPOINT_OFFLINE_TRANSFERS_LIST,
-            true,
         )
         .unwrap();
 
@@ -38930,7 +38880,6 @@ mod adapter_filter_tests {
             &mut expr,
             &MaybeTelemetry::for_tests(),
             ENDPOINT_OFFLINE_SUMMARIES_LIST,
-            true,
         )
         .unwrap();
 

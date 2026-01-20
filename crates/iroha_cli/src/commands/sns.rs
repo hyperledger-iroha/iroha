@@ -540,9 +540,14 @@ impl Run for GetPolicyArgs {
         context.print_data(&policy)?;
         match suffix_catalog().get(self.suffix_id) {
             Some(entry) => {
-                entry.verify_policy(&policy).wrap_err_with(|| {
-                    format!("catalog mismatch for suffix id {}", self.suffix_id)
-                })?;
+                {
+                    let resolve = |literal: &str| crate::resolve_account_id(context, literal);
+                    entry
+                        .verify_policy(&policy, &resolve)
+                        .wrap_err_with(|| {
+                            format!("catalog mismatch for suffix id {}", self.suffix_id)
+                        })?;
+                }
                 context.println(format!(
                     "Catalog entry `{}` verified (status: {}, catalog version {}).",
                     entry.suffix,
@@ -758,10 +763,11 @@ impl CatalogPriceTier {
 }
 
 impl CatalogReservedLabel {
-    fn to_model(&self) -> Result<ReservedNameV1> {
+    fn to_model(&self, resolve: &dyn Fn(&str) -> Result<AccountId>) -> Result<ReservedNameV1> {
         let assigned = match self.assigned_to.as_deref() {
-            Some(literal) if !literal.trim().is_empty() => {
-                Some(AccountId::from_str(literal).wrap_err_with(|| {
+            Some(raw) if !raw.trim().is_empty() => {
+                let literal = raw.trim();
+                Some(resolve(literal).wrap_err_with(|| {
                     format!(
                         "invalid account `{literal}` in reserved label `{}`",
                         self.label
@@ -798,7 +804,11 @@ fn parse_auction_kind(value: &str) -> Result<AuctionKind> {
 
 impl SuffixCatalogEntry {
     #[allow(clippy::too_many_lines)]
-    fn verify_policy(&self, policy: &SuffixPolicyV1) -> Result<()> {
+    fn verify_policy(
+        &self,
+        policy: &SuffixPolicyV1,
+        resolve: &dyn Fn(&str) -> Result<AccountId>,
+    ) -> Result<()> {
         let mut mismatches = Vec::new();
         let catalog_suffix = self.suffix.trim_start_matches('.').to_lowercase();
         let policy_suffix = policy.suffix.to_lowercase();
@@ -807,8 +817,9 @@ impl SuffixCatalogEntry {
                 "suffix differs (catalog `{catalog_suffix}`, policy `{policy_suffix}`)"
             ));
         }
-        let expected_steward = AccountId::from_str(&self.steward_account)
-            .wrap_err_with(|| format!("invalid steward account `{}`", self.steward_account))?;
+        let expected_steward = resolve(self.steward_account.trim()).wrap_err_with(|| {
+            format!("invalid steward account `{}`", self.steward_account)
+        })?;
         if policy.steward != expected_steward {
             mismatches.push(format!(
                 "steward differs (catalog `{expected_steward}`, policy `{}`)",
@@ -859,13 +870,14 @@ impl SuffixCatalogEntry {
                 self.referral_cap_bps, policy.referral_cap_bps
             ));
         }
-        let expected_fund_splitter = AccountId::from_str(&self.fund_splitter_account)
-            .wrap_err_with(|| {
+        let expected_fund_splitter = resolve(self.fund_splitter_account.trim()).wrap_err_with(
+            || {
                 format!(
                     "invalid fund_splitter_account `{}`",
                     self.fund_splitter_account
                 )
-            })?;
+            },
+        )?;
         if policy.fund_splitter_account != expected_fund_splitter {
             mismatches.push(format!(
                 "fund_splitter_account differs (catalog `{expected_fund_splitter}`, policy `{}`)",
@@ -888,7 +900,7 @@ impl SuffixCatalogEntry {
         let mut catalog_reserved = self
             .reserved_labels
             .iter()
-            .map(CatalogReservedLabel::to_model)
+            .map(|label| label.to_model(resolve))
             .collect::<Result<Vec<_>>>()?;
         let mut policy_reserved = policy.reserved_labels.clone();
         catalog_reserved.sort_by(|a, b| a.normalized_label.cmp(&b.normalized_label));
@@ -928,13 +940,20 @@ mod catalog_tests {
     use super::*;
     use iroha::data_model::sns::fixtures;
 
+    fn resolve_catalog_account(literal: &str) -> Result<AccountId> {
+        AccountId::from_str(literal)
+            .wrap_err_with(|| format!("invalid catalog account `{literal}`"))
+    }
+
     #[test]
     fn catalog_entry_matches_default_policy() {
         let entry = suffix_catalog()
             .get(0x0001)
             .expect("catalog contains .sora");
         let policy = fixtures::default_policy();
-        entry.verify_policy(&policy).expect("catalog should align");
+        entry
+            .verify_policy(&policy, &resolve_catalog_account)
+            .expect("catalog should align");
     }
 
     #[test]
@@ -947,7 +966,7 @@ mod catalog_tests {
             tier.base_price.amount = tier.base_price.amount.saturating_add(1);
         }
         let err = entry
-            .verify_policy(&policy)
+            .verify_policy(&policy, &resolve_catalog_account)
             .expect_err("mismatch must trigger error");
         assert!(
             err.to_string().contains("pricing tiers differ"),
@@ -1154,6 +1173,11 @@ mod tests {
         (*ALICE_ID).clone()
     }
 
+    fn resolve_account_literal(literal: &str) -> Result<AccountId> {
+        AccountId::from_str(literal)
+            .wrap_err_with(|| format!("invalid test account literal `{literal}`"))
+    }
+
     fn base_register_args() -> RegisterArgs {
         RegisterArgs {
             label: "Makoto".into(),
@@ -1181,7 +1205,9 @@ mod tests {
     #[test]
     fn build_request_defaults_owner_and_controller() {
         let args = base_register_args();
-        let request = args.build_request(&default_owner()).expect("request");
+        let request = args
+            .build_request(&default_owner(), &resolve_account_literal)
+            .expect("request");
         assert_eq!(request.owner, *ALICE_ID);
         assert_eq!(request.controllers.len(), 1);
         assert_eq!(
@@ -1224,7 +1250,9 @@ mod tests {
             term_years: 2,
             payment: sample_payment_options(),
         };
-        let payload = args.build_request(&default_owner()).expect("renew payload");
+        let payload = args
+            .build_request(&default_owner(), &resolve_account_literal)
+            .expect("renew payload");
         assert_eq!(payload.term_years, 2);
         assert_eq!(payload.payment.gross_amount, 120);
     }
@@ -1238,7 +1266,9 @@ mod tests {
             new_owner: new_owner.clone(),
             governance_json: gov.path().to_path_buf(),
         };
-        let payload = args.build_request().expect("transfer payload");
+        let payload = args
+            .build_request(&resolve_account_literal)
+            .expect("transfer payload");
         assert_eq!(payload.new_owner, new_owner.parse().unwrap());
         assert_eq!(payload.governance.proposal_id, "proposal-1");
     }

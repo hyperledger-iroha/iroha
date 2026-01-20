@@ -6372,9 +6372,10 @@ mod tests {
         let key_pair = KeyPair::from_seed(vec![9_u8; 32], Algorithm::Ed25519);
         let account = AccountId::new(domain.clone(), key_pair.public_key().clone());
         let canonical = account.canonical_ih58().expect("canonical ih58");
+        let domain_literal = domain.to_string();
         let body = norito::json::to_vec(&norito::json!({
             "account_id": canonical,
-            "domain": domain.to_string(),
+            "domain": domain_literal,
             "source": "alias",
         }))
         .expect("response body");

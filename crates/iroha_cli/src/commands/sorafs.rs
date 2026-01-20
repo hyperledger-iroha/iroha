@@ -103,7 +103,7 @@ use time::{Duration as TimeDelta, OffsetDateTime, format_description::well_known
 use tokio::runtime::Runtime;
 
 use iroha_data_model::{
-    account::{AccountAddress, AccountId},
+    account::AccountId,
     asset::{AssetDefinitionId, AssetId},
     isi::{InstructionBox, Transfer},
     metadata::Metadata,
@@ -7563,10 +7563,12 @@ pub struct GatewayMerkleSnapshotArgs {
 impl Run for GatewayMerkleSnapshotArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let entries = read_gateway_denylist(&self.denylist_path)?;
-        let summary = build_gateway_merkle_snapshot(&entries)?;
+        let resolve = |literal: &str| crate::resolve_account_id(context, literal);
+        let summary = build_gateway_merkle_snapshot(&entries, &resolve)?;
 
         write_gateway_merkle_snapshot(&summary, &self.json_out, self.norito_out.as_deref())?;
 
+        drop(resolve);
         context.println(format!(
             "denylist Merkle root: {} (leaves={})",
             summary.root_hex, summary.leaf_count
@@ -7632,7 +7634,8 @@ pub struct GatewayMerkleProofArgs {
 impl Run for GatewayMerkleProofArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let entries = read_gateway_denylist(&self.denylist_path)?;
-        let leaves = build_gateway_merkle_leaves(&entries)?;
+        let resolve = |literal: &str| crate::resolve_account_id(context, literal);
+        let leaves = build_gateway_merkle_leaves(&entries, &resolve)?;
         let index = self.resolve_entry_index(&leaves)?;
         let hashes: Vec<[u8; 32]> = leaves.iter().map(|leaf| leaf.hash).collect();
         let levels = build_merkle_levels(&hashes)?;
@@ -7649,6 +7652,7 @@ impl Run for GatewayMerkleProofArgs {
             entry: entry.clone(),
             proof: proof_nodes,
         };
+        drop(resolve);
 
         if let Some(parent) = self.json_out.parent() {
             fs::create_dir_all(parent).wrap_err_with(|| {
@@ -8683,11 +8687,14 @@ impl Run for GatewayLintDenylistArgs {
         }
 
         let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();
-        for (index, entry) in entries.iter().enumerate() {
-            let validation = entry
-                .validate()
-                .wrap_err_with(|| format!("validation failed for entry #{index}"))?;
-            *counts.entry(validation.kind.as_str()).or_default() += 1;
+        {
+            let resolve = |literal: &str| crate::resolve_account_id(context, literal);
+            for (index, entry) in entries.iter().enumerate() {
+                let validation = entry
+                    .validate(&resolve)
+                    .wrap_err_with(|| format!("validation failed for entry #{index}"))?;
+                *counts.entry(validation.kind.as_str()).or_default() += 1;
+            }
         }
 
         context.println(format_args!(
@@ -8712,14 +8719,15 @@ impl Run for GatewayUpdateDenylistArgs {
             ));
         }
 
-        let mut entries = load_canonical_denylist(&self.base_path)?;
+        let resolve = |literal: &str| crate::resolve_account_id(context, literal);
+        let mut entries = load_canonical_denylist(&self.base_path, &resolve)?;
         let mut added = 0_usize;
         let mut replaced = 0_usize;
 
         for path in &self.add_paths {
             let records = read_gateway_denylist(path)?;
             for (index, record) in records.into_iter().enumerate() {
-                let descriptor = descriptor_for_record(&record, index, path)
+                let descriptor = descriptor_for_record(&record, index, path, &resolve)
                     .wrap_err("failed to build descriptor")?;
                 if let Some(existing) = entries.get_mut(&descriptor) {
                     if self.allow_replacement {
@@ -8765,7 +8773,7 @@ impl Run for GatewayUpdateDenylistArgs {
             ));
         }
 
-        let summary = build_gateway_merkle_snapshot(&updated)?;
+        let summary = build_gateway_merkle_snapshot(&updated, &resolve)?;
         let rendered = norito::json::to_json_pretty(&updated)
             .wrap_err("failed to render updated denylist JSON")?;
         let output_path = self.output_path.unwrap_or_else(|| self.base_path.clone());
@@ -8806,6 +8814,7 @@ impl Run for GatewayUpdateDenylistArgs {
                 &output_path,
                 self.label.as_deref(),
                 generated_at,
+                &resolve,
             )?;
             ensure_parent_dir(path)?;
             let rendered = norito::json::to_json_pretty(&summary)
@@ -8815,6 +8824,7 @@ impl Run for GatewayUpdateDenylistArgs {
             })?;
         }
 
+        drop(resolve);
         context.println(format_args!(
             "updated denylist wrote {} entries (added {added}, replaced {replaced}, removed {removed}) to {}",
             updated.len(),
@@ -9145,11 +9155,14 @@ fn read_gateway_denylist(path: &Path) -> Result<Vec<GatewayDenylistRecord>> {
         .wrap_err_with(|| format!("failed to parse denylist JSON `{}`", path.display()))
 }
 
-fn load_canonical_denylist(path: &Path) -> Result<BTreeMap<String, GatewayDenylistRecord>> {
+fn load_canonical_denylist(
+    path: &Path,
+    resolve: &dyn Fn(&str) -> Result<AccountId>,
+) -> Result<BTreeMap<String, GatewayDenylistRecord>> {
     let records = read_gateway_denylist(path)?;
     let mut map = BTreeMap::new();
     for (index, record) in records.into_iter().enumerate() {
-        let descriptor = descriptor_for_record(&record, index, path)?;
+        let descriptor = descriptor_for_record(&record, index, path, resolve)?;
         if map.insert(descriptor.clone(), record).is_some() {
             return Err(eyre!(
                 "duplicate denylist descriptor `{descriptor}` in `{}` (entry #{index})",
@@ -9164,8 +9177,9 @@ fn descriptor_for_record(
     record: &GatewayDenylistRecord,
     index: usize,
     source: &Path,
+    resolve: &dyn Fn(&str) -> Result<AccountId>,
 ) -> Result<String> {
-    let validation = record.validate().wrap_err_with(|| {
+    let validation = record.validate(resolve).wrap_err_with(|| {
         format!(
             "validation failed for entry #{index} in `{}`",
             source.display()
@@ -9221,6 +9235,7 @@ fn ensure_parent_dir(path: &Path) -> Result<()> {
 
 fn build_gateway_merkle_leaves(
     entries: &[GatewayDenylistRecord],
+    resolve: &dyn Fn(&str) -> Result<AccountId>,
 ) -> Result<Vec<GatewayMerkleLeaf>> {
     if entries.is_empty() {
         return Err(eyre!("denylist contains no entries"));
@@ -9229,7 +9244,7 @@ fn build_gateway_merkle_leaves(
     let mut leaves = Vec::with_capacity(entries.len());
     for (index, record) in entries.iter().enumerate() {
         let validation = record
-            .validate()
+            .validate(resolve)
             .wrap_err_with(|| format!("validation failed for entry #{index}"))?;
         let leaf = gateway_leaf_from_record(record, &validation)
             .wrap_err_with(|| format!("failed to canonicalise entry #{index}"))?;
@@ -9600,8 +9615,9 @@ fn find_merkle_entry_by_descriptor(
 
 fn build_gateway_merkle_snapshot(
     entries: &[GatewayDenylistRecord],
+    resolve: &dyn Fn(&str) -> Result<AccountId>,
 ) -> Result<GatewayMerkleSnapshotSummary> {
-    let leaves = build_gateway_merkle_leaves(entries)?;
+    let leaves = build_gateway_merkle_leaves(entries, resolve)?;
     let hashes: Vec<[u8; 32]> = leaves.iter().map(|leaf| leaf.hash).collect();
     let levels = build_merkle_levels(&hashes)?;
     let root = levels
@@ -9650,6 +9666,7 @@ fn build_denylist_evidence(
     source_path: &Path,
     label: Option<&str>,
     generated_at: OffsetDateTime,
+    resolve: &dyn Fn(&str) -> Result<AccountId>,
 ) -> Result<GatewayDenylistEvidenceReport> {
     let mut kind_counts: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut tier_counts: BTreeMap<&'static str, TierAccumulator> = BTreeMap::new();
@@ -9657,7 +9674,7 @@ fn build_denylist_evidence(
 
     for (index, record) in entries.iter().enumerate() {
         let validation = record
-            .validate()
+            .validate(resolve)
             .wrap_err_with(|| format!("validation failed for entry #{index}"))?;
         *kind_counts.entry(validation.kind.as_str()).or_default() += 1;
         tier_counts
@@ -9869,12 +9886,14 @@ impl Run for GatewayEvidenceArgs {
             norito::json::from_slice(&bytes).wrap_err("failed to parse denylist JSON")?;
         let digest_hex = blake3::hash(&bytes).to_hex().to_string();
         let generated_at = OffsetDateTime::now_utc();
+        let resolve = |literal: &str| crate::resolve_account_id(context, literal);
         let report = build_denylist_evidence(
             &entries,
             &digest_hex,
             &self.denylist_path,
             self.label.as_deref(),
             generated_at,
+            &resolve,
         )?;
 
         if let Some(parent) = self.output_path.parent() {
@@ -9888,6 +9907,7 @@ impl Run for GatewayEvidenceArgs {
                 self.output_path.display()
             )
         })?;
+        drop(resolve);
         context.println(format_args!(
             "wrote denylist evidence for {} entries to {} (digest {})",
             report.source.entry_count,
@@ -10151,7 +10171,7 @@ const PERMANENT_NEEDS_REFERENCE: bool =
     defaults::sorafs::gateway::denylist::REQUIRE_GOVERNANCE_REFERENCE;
 
 impl GatewayDenylistRecord {
-    fn validate(&self) -> Result<GatewayRecordValidation> {
+    fn validate(&self, resolve: &dyn Fn(&str) -> Result<AccountId>) -> Result<GatewayRecordValidation> {
         ensure_optional_non_empty(self.jurisdiction.as_deref(), "jurisdiction")?;
         ensure_optional_non_empty(self.reason.as_deref(), "reason")?;
         ensure_optional_non_empty(self.alias.as_deref(), "alias")?;
@@ -10194,11 +10214,11 @@ impl GatewayDenylistRecord {
                     .as_deref()
                     .ok_or_else(|| eyre!("`account_id` is required for account_id entries"))?;
                 let trimmed = value.trim();
-                if AccountId::from_str(trimmed).is_err() {
-                    AccountAddress::parse_any(trimmed, None)
-                        .map(|_| ())
-                        .wrap_err("failed to parse `account_id` as AccountAddress")?;
+                if trimmed.is_empty() {
+                    return Err(eyre!("`account_id` must not be empty"));
                 }
+                // Resolve via `/v1/accounts/resolve` to accept alias/UAID/opaque literals.
+                resolve(trimmed).wrap_err("failed to resolve `account_id`")?;
                 if let Some(alias) = self.account_alias.as_deref()
                     && alias.trim().is_empty()
                 {
@@ -10465,6 +10485,11 @@ mod gateway_tests {
     use std::fs;
     use tempfile::TempDir;
 
+    fn resolve_account_literal(literal: &str) -> Result<AccountId> {
+        AccountId::from_str(literal)
+            .wrap_err_with(|| format!("invalid test account literal `{literal}`"))
+    }
+
     #[test]
     fn sample_denylist_is_valid() {
         let json = include_str!("../../../../docs/source/sorafs_gateway_denylist_sample.json");
@@ -10472,7 +10497,9 @@ mod gateway_tests {
             norito::json::from_str(json).expect("parse sample denylist");
         assert!(!entries.is_empty(), "sample denylist should not be empty");
         for entry in entries {
-            entry.validate().expect("sample entry validation");
+            entry
+                .validate(&resolve_account_literal)
+                .expect("sample entry validation");
         }
     }
 
@@ -10540,7 +10567,7 @@ mod gateway_tests {
             emergency_canon: None,
             governance_reference: None,
         };
-        assert!(record.validate().is_err());
+        assert!(record.validate(&resolve_account_literal).is_err());
     }
 
     #[test]
@@ -10573,6 +10600,7 @@ mod gateway_tests {
             Path::new("denylist.json"),
             Some("test-bundle"),
             timestamp,
+            &resolve_account_literal,
         )
         .expect("evidence");
         assert_eq!(report.source.entry_count, 2);
@@ -10609,7 +10637,8 @@ mod gateway_tests {
         "#;
         let entries: Vec<GatewayDenylistRecord> =
             norito::json::from_str(json).expect("parse fixture");
-        let leaves = build_gateway_merkle_leaves(&entries).expect("canonical leaves");
+        let leaves = build_gateway_merkle_leaves(&entries, &resolve_account_literal)
+            .expect("canonical leaves");
         let hashes: Vec<[u8; 32]> = leaves.iter().map(|leaf| leaf.hash).collect();
         let levels = build_merkle_levels(&hashes).expect("build levels");
         let root_hex = levels
@@ -10661,7 +10690,8 @@ mod gateway_tests {
         "#;
         let entries: Vec<GatewayDenylistRecord> =
             norito::json::from_str(json).expect("parse fixture");
-        let leaves = build_gateway_merkle_leaves(&entries).expect("canonical leaves");
+        let leaves = build_gateway_merkle_leaves(&entries, &resolve_account_literal)
+            .expect("canonical leaves");
         let hashes: Vec<[u8; 32]> = leaves.iter().map(|leaf| leaf.hash).collect();
         let levels = build_merkle_levels(&hashes).expect("build levels");
         let root = levels
@@ -11885,6 +11915,11 @@ mod tests {
         (canonical, ih58, compressed)
     }
 
+    fn resolve_account_literal(literal: &str) -> Result<AccountId> {
+        AccountId::from_str(literal)
+            .wrap_err_with(|| format!("invalid test account literal `{literal}`"))
+    }
+
     #[test]
     fn parse_xor_amount_decimal_handles_fractional_inputs() {
         let amount = parse_xor_amount_decimal("12.3456").expect("parse succeeds");
@@ -12070,14 +12105,18 @@ mod tests {
     fn gateway_denylist_record_accepts_ih58_literals() {
         let (_, ih58, _) = sample_account_literals();
         let record = denylist_record_for_account(&ih58);
-        record.validate().expect("ih58 literal accepted");
+        record
+            .validate(&resolve_account_literal)
+            .expect("ih58 literal accepted");
     }
 
     #[test]
     fn gateway_denylist_record_accepts_compressed_literals() {
         let (_, _, compressed) = sample_account_literals();
         let record = denylist_record_for_account(&compressed);
-        record.validate().expect("compressed literal accepted");
+        record
+            .validate(&resolve_account_literal)
+            .expect("compressed literal accepted");
     }
 
     pub(super) struct TestContext {

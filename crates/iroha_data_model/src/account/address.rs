@@ -207,6 +207,7 @@ const IH58_CHECKSUM_PREFIX: &[u8] = b"IH58PRE";
 const HEADER_VERSION_V1: u8 = 0;
 const HEADER_NORM_VERSION_V1: u8 = 1;
 const COMPRESSED_SENTINEL: &str = "snx1";
+const COMPRESSED_SENTINEL_FULLWIDTH: &str = "ｓｎｘ１";
 const COMPRESSED_CHECKSUM_LEN: usize = 6;
 const BECH32M_CONST: u32 = 0x2bc8_30a3;
 
@@ -257,7 +258,7 @@ pub enum AccountAddressFormat {
         #[doc = "Network prefix encoded in the IH58 string."]
         network_prefix: u16,
     },
-    /// Sora-only compressed alphabet using the `snx1` sentinel.
+    /// Sora-only compressed alphabet using the `snx1` (ASCII) or `ｓｎｘ１` (full-width) sentinel.
     Compressed,
     /// Canonical hexadecimal encoding prefixed with `0x`.
     CanonicalHex,
@@ -447,6 +448,12 @@ impl AccountAddress {
         }
     }
 
+    fn strip_compressed_sentinel(input: &str) -> Option<&str> {
+        input
+            .strip_prefix(COMPRESSED_SENTINEL)
+            .or_else(|| input.strip_prefix(COMPRESSED_SENTINEL_FULLWIDTH))
+    }
+
     /// Decode an IH58 representation back into an address payload.
     ///
     /// If `expected_prefix` is provided, the decoded network prefix must match.
@@ -505,10 +512,8 @@ impl AccountAddress {
     /// Returns [`AccountAddressError`] if the string lacks the compressed sentinel,
     /// has an invalid alphabet symbol, or the checksum does not validate.
     pub fn from_compressed_sora(encoded: &str) -> Result<Self, AccountAddressError> {
-        if !encoded.starts_with(COMPRESSED_SENTINEL) {
-            return Err(AccountAddressError::MissingCompressedSentinel);
-        }
-        let payload = &encoded[COMPRESSED_SENTINEL.len()..];
+        let payload = Self::strip_compressed_sentinel(encoded)
+            .ok_or(AccountAddressError::MissingCompressedSentinel)?;
         let digits = compressed_to_digits(payload)?;
         if digits.len() <= COMPRESSED_CHECKSUM_LEN {
             return Err(AccountAddressError::CompressedTooShort);
@@ -540,7 +545,7 @@ impl AccountAddress {
         if trimmed.is_empty() {
             return Err(AccountAddressError::InvalidLength);
         }
-        if trimmed.starts_with(COMPRESSED_SENTINEL) {
+        if Self::strip_compressed_sentinel(trimmed).is_some() {
             let address = Self::from_compressed_sora(trimmed)?;
             return Ok((address, AccountAddressFormat::Compressed));
         }
@@ -1251,7 +1256,7 @@ pub enum AccountAddressErrorCode {
     UnexpectedTrailingBytes,
     /// IH58 prefix encoding was malformed.
     InvalidIh58PrefixEncoding,
-    /// Compressed form missing `snx1` sentinel.
+    /// Compressed form missing `snx1` or `ｓｎｘ１` sentinel.
     MissingCompressedSentinel,
     /// Compressed form shorter than minimal payload.
     CompressedTooShort,
@@ -1381,7 +1386,9 @@ pub enum AccountAddressError {
     #[error("invalid IH58 prefix encoding: {0}")]
     InvalidIh58PrefixEncoding(u8),
     /// Compressed form is missing the required `snx1` sentinel prefix.
-    #[error("compressed Sora address must start with \"{COMPRESSED_SENTINEL}\"")]
+    #[error(
+        "compressed Sora address must start with \"{COMPRESSED_SENTINEL}\" or \"{COMPRESSED_SENTINEL_FULLWIDTH}\""
+    )]
     MissingCompressedSentinel,
     /// Compressed form is too short to contain payload and checksum.
     #[error("compressed Sora address too short")]
@@ -2290,19 +2297,26 @@ mod tests {
     }
 
     #[test]
-    fn compressed_fullwidth_sentinel_rejected() {
+    fn compressed_fullwidth_sentinel_accepts() {
         let _guard = guard_default_label();
         let address = account_address_for_seed(1);
         let compressed = address.to_compressed_sora().expect("compressed encode");
         let payload = &compressed[COMPRESSED_SENTINEL.len()..];
         let sentinel = ascii_str_to_fullwidth(COMPRESSED_SENTINEL).expect("sentinel converts");
-        let tampered = format!("{sentinel}{payload}");
-        let err = AccountAddress::from_compressed_sora(&tampered)
-            .expect_err("full-width sentinel rejected");
-        assert!(matches!(
-            err,
-            AccountAddressError::MissingCompressedSentinel
-        ));
+        let fullwidth = format!("{sentinel}{payload}");
+        let decoded = AccountAddress::from_compressed_sora(&fullwidth)
+            .expect("full-width sentinel accepted");
+        assert_eq!(
+            decoded.canonical_bytes().unwrap(),
+            address.canonical_bytes().unwrap()
+        );
+        let (parsed, format) =
+            AccountAddress::parse_any(&fullwidth, None).expect("full-width sentinel parse_any");
+        assert_eq!(format, AccountAddressFormat::Compressed);
+        assert_eq!(
+            parsed.canonical_bytes().unwrap(),
+            address.canonical_bytes().unwrap()
+        );
     }
 
     #[test]
